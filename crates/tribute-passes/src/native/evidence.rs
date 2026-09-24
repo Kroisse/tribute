@@ -203,7 +203,10 @@ fn op_idx_const(
     op_name: Symbol,
 ) -> arith::Const {
     let op_idx = compute_op_idx(ability::ability_name(ctx, ability_ref), Some(op_name));
-    arith::r#const(ctx, loc, i32_ty, Attribute::Int(op_idx as i128))
+    arith::Const::operands()
+        .value(Attribute::Int(op_idx as i128))
+        .results(i32_ty)
+        .build(ctx, loc)
 }
 
 fn core_ptr_type(ctx: &mut IrContext) -> TypeRef {
@@ -223,9 +226,15 @@ fn lower_evidence_dispatch_operand(
     if crate::closure_lower::is_closure_struct_type_ref(ctx, ctx.value_ty(value))
         || get_physical_closure_convention(ctx, ctx.value_ty(value)).is_some()
     {
-        tribute_rt::into_raw(ctx, loc, value, ptr_ty).op_ref()
+        tribute_rt::IntoRaw::operands(value)
+            .results(ptr_ty)
+            .build(ctx, loc)
+            .op_ref()
     } else {
-        core::unrealized_conversion_cast(ctx, loc, value, ptr_ty).op_ref()
+        core::UnrealizedConversionCast::operands(value)
+            .results(ptr_ty)
+            .build(ctx, loc)
+            .op_ref()
     }
 }
 
@@ -268,13 +277,10 @@ impl RewritePattern for LowerEffectExtendToNative {
         operands.push(tr_dispatch);
         operands.push(handler_dispatch);
 
-        let extend_call = func::call(
-            ctx,
-            loc,
-            operands,
-            [ptr_ty],
-            Symbol::new(evidence_abi::EXTEND),
-        );
+        let extend_call = func::Call::operands(operands)
+            .callee(Symbol::new(evidence_abi::EXTEND))
+            .results([ptr_ty])
+            .build(ctx, loc);
         let new_result = extend_call.result(ctx);
         rewriter.insert_op(extend_call.op_ref());
         rewriter.erase_op(vec![new_result]);
@@ -306,13 +312,10 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
         let ability_id_val = ability_id_op.result(ctx);
         rewriter.insert_op(ability_id_op.op_ref());
 
-        let dispatch_closure = func::call(
-            ctx,
-            loc,
-            [dispatch_op.evidence(ctx), ability_id_val],
-            [ptr_ty],
-            Symbol::new(evidence_abi::LOOKUP_TR),
-        );
+        let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id_val])
+            .callee(Symbol::new(evidence_abi::LOOKUP_TR))
+            .results([ptr_ty])
+            .build(ctx, loc);
         let dispatch_val = dispatch_closure.result(ctx);
         rewriter.insert_op(dispatch_closure.op_ref());
 
@@ -320,11 +323,19 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
         let op_idx_val = op_idx_op.result(ctx);
         rewriter.insert_op(op_idx_op.op_ref());
 
-        let fn_ptr_get = adt::struct_get(ctx, loc, dispatch_val, i32_ty, closure_ty, 0);
+        let fn_ptr_get = adt::StructGet::operands(dispatch_val)
+            .r#type(closure_ty)
+            .field(0)
+            .results(i32_ty)
+            .build(ctx, loc);
         let fn_ptr = fn_ptr_get.result(ctx);
         rewriter.insert_op(fn_ptr_get.op_ref());
 
-        let env_get = adt::struct_get(ctx, loc, dispatch_val, anyref_ty, closure_ty, 1);
+        let env_get = adt::StructGet::operands(dispatch_val)
+            .r#type(closure_ty)
+            .field(1)
+            .results(anyref_ty)
+            .build(ctx, loc);
         let env_val = env_get.result(ctx);
         rewriter.insert_op(env_get.op_ref());
 
@@ -402,13 +413,10 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let ability_id_val = ability_id_op.result(ctx);
         rewriter.insert_op(ability_id_op.op_ref());
 
-        let prompt = func::call(
-            ctx,
-            loc,
-            [dispatch_op.evidence(ctx), ability_id_val],
-            [i32_ty],
-            Symbol::new(evidence_abi::LOOKUP),
-        );
+        let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id_val])
+            .callee(Symbol::new(evidence_abi::LOOKUP))
+            .results([i32_ty])
+            .build(ctx, loc);
         let prompt_val = prompt.result(ctx);
         rewriter.insert_op(prompt.op_ref());
 
@@ -416,19 +424,19 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let op_idx_val = op_idx_op.result(ctx);
         rewriter.insert_op(op_idx_op.op_ref());
 
-        let fn_ptr_get =
-            adt::struct_get(ctx, loc, dispatch_op.dispatch(ctx), i32_ty, closure_ty, 0);
+        let fn_ptr_get = adt::StructGet::operands(dispatch_op.dispatch(ctx))
+            .r#type(closure_ty)
+            .field(0)
+            .results(i32_ty)
+            .build(ctx, loc);
         let fn_ptr = fn_ptr_get.result(ctx);
         rewriter.insert_op(fn_ptr_get.op_ref());
 
-        let env_get = adt::struct_get(
-            ctx,
-            loc,
-            dispatch_op.dispatch(ctx),
-            anyref_ty,
-            closure_ty,
-            1,
-        );
+        let env_get = adt::StructGet::operands(dispatch_op.dispatch(ctx))
+            .r#type(closure_ty)
+            .field(1)
+            .results(anyref_ty)
+            .build(ctx, loc);
         let env_val = env_get.result(ctx);
         rewriter.insert_op(env_get.op_ref());
 
@@ -472,7 +480,10 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
             let result_types = ctx.op_result_types(op).to_vec();
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 let old_result = ctx.op_result(op, 0);
-                let call = func::call(ctx, loc, [], [ptr_ty], Symbol::new(evidence_abi::EMPTY));
+                let call = func::Call::operands([])
+                    .callee(Symbol::new(evidence_abi::EMPTY))
+                    .results([ptr_ty])
+                    .build(ctx, loc);
                 let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);
@@ -500,7 +511,10 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                     ));
                 }
                 let old_result = ctx.op_result(op, 0);
-                let call = func::call(ctx, loc, [], [ptr_ty], Symbol::new(evidence_abi::EMPTY));
+                let call = func::Call::operands([])
+                    .callee(Symbol::new(evidence_abi::EMPTY))
+                    .results([ptr_ty])
+                    .build(ctx, loc);
                 let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
                 ctx.replace_all_uses(old_result, new_result);

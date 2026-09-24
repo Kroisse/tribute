@@ -182,7 +182,9 @@ fn lower_terminal_never_if(
     let else_blocks = inline_region_blocks(ctx, else_region, parent_region, insert_before);
     ctx.remove_op(scf_op);
 
-    let cond_br = cf::cond_br(ctx, loc, cond, then_blocks[0], else_blocks[0]);
+    let cond_br = cf::CondBr::operands(cond)
+        .successors(then_blocks[0], else_blocks[0])
+        .build(ctx, loc);
     ctx.push_op(block, cond_br.op_ref());
 
     for &branch in then_blocks.iter().chain(&else_blocks) {
@@ -251,7 +253,9 @@ fn lower_scf_if(
     replace_yield_with_br(ctx, &else_blocks, merge_block, loc);
 
     // Add cf.cond_br to the original block
-    let cond_br = cf::cond_br(ctx, loc, cond, then_entry, else_entry);
+    let cond_br = cf::CondBr::operands(cond)
+        .successors(then_entry, else_entry)
+        .build(ctx, loc);
     ctx.push_op(block, cond_br.op_ref());
 
     // Recursively transform then/else blocks (they may contain nested scf ops)
@@ -313,7 +317,9 @@ fn lower_scf_loop(
     replace_continue_break(ctx, &body_blocks, header_block, exit_block, loc);
 
     // Add cf.br from entry block to header with init values
-    let br_to_header = cf::br(ctx, loc, init_values, header_block);
+    let br_to_header = cf::Br::operands(init_values)
+        .successors(header_block)
+        .build(ctx, loc);
     ctx.push_op(block, br_to_header.op_ref());
 
     // Recursively transform body blocks
@@ -500,12 +506,9 @@ fn lower_scf_switch(
             ops: SmallVec::new(),
             parent_region: None,
         });
-        let br = cf::br(
-            ctx,
-            loc,
-            std::iter::empty::<crate::refs::ValueRef>(),
-            merge_block,
-        );
+        let br = cf::Br::operands(std::iter::empty::<crate::refs::ValueRef>())
+            .successors(merge_block)
+            .build(ctx, loc);
         ctx.push_op(default_block, br.op_ref());
         // Insert into parent region before merge
         let merge_pos = ctx
@@ -558,12 +561,9 @@ impl SwitchDispatch<'_> {
 
         if cases.is_empty() {
             // No cases: branch directly to default
-            let br = cf::br(
-                ctx,
-                loc,
-                std::iter::empty::<crate::refs::ValueRef>(),
-                default_entry,
-            );
+            let br = cf::Br::operands(std::iter::empty::<crate::refs::ValueRef>())
+                .successors(default_entry)
+                .build(ctx, loc);
             ctx.push_op(block, br.op_ref());
         } else {
             // Build chained comparisons
@@ -575,7 +575,10 @@ impl SwitchDispatch<'_> {
                 let is_last = i == cases.len() - 1;
 
                 // Create comparison: discriminant == case_value
-                let case_const = arith::r#const(ctx, loc, disc_ty, case_attr.clone());
+                let case_const = arith::Const::operands()
+                    .value(case_attr.clone())
+                    .results(disc_ty)
+                    .build(ctx, loc);
                 ctx.push_op(current_block, case_const.op_ref());
 
                 let cmp = arith::Cmpi::operands(discriminant, case_const.result(ctx))
@@ -609,7 +612,9 @@ impl SwitchDispatch<'_> {
                     next_block
                 };
 
-                let cond_br = cf::cond_br(ctx, loc, cmp.result(ctx), case_entry, else_target);
+                let cond_br = cf::CondBr::operands(cmp.result(ctx))
+                    .successors(case_entry, else_target)
+                    .build(ctx, loc);
                 ctx.push_op(current_block, cond_br.op_ref());
 
                 if !is_last {
@@ -642,7 +647,7 @@ fn replace_yield_with_br(
                     .copied()
                     .take(target_arg_count)
                     .collect();
-                let br = cf::br(ctx, loc, values, target);
+                let br = cf::Br::operands(values).successors(target).build(ctx, loc);
 
                 // Replace yield with br in-place
                 crate::rewrite::erase_op(ctx, op);
@@ -670,14 +675,14 @@ fn replace_continue_break(
             if scf::Continue::matches(ctx, op) {
                 let cont_op = scf::Continue::from_op(ctx, op).unwrap();
                 let values: Vec<_> = cont_op.values(ctx).to_vec();
-                let br = cf::br(ctx, loc, values, header);
+                let br = cf::Br::operands(values).successors(header).build(ctx, loc);
                 crate::rewrite::erase_op(ctx, op);
                 ctx.push_op(block, br.op_ref());
             } else if scf::Break::matches(ctx, op) {
                 let break_op = scf::Break::from_op(ctx, op).unwrap();
                 let value = break_op.value(ctx);
                 let values = (exit_arg_count != 0).then_some(value);
-                let br = cf::br(ctx, loc, values, exit);
+                let br = cf::Br::operands(values).successors(exit).build(ctx, loc);
                 crate::rewrite::erase_op(ctx, op);
                 ctx.push_op(block, br.op_ref());
             } else {
@@ -857,7 +862,10 @@ mod tests {
             parent_region: None,
         });
 
-        let cond_const = arith::r#const(ctx, loc, i1_ty, Attribute::Bool(true));
+        let cond_const = arith::Const::operands()
+            .value(Attribute::Bool(true))
+            .results(i1_ty)
+            .build(ctx, loc);
         ctx.push_op(entry, cond_const.op_ref());
 
         let then_block = ctx.create_block(BlockData {
@@ -866,7 +874,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let then_yield = scf::r#yield(ctx, loc, std::iter::empty());
+        let then_yield = scf::Yield::operands(std::iter::empty()).build(ctx, loc);
         ctx.push_op(then_block, then_yield.op_ref());
         let then_region = ctx.create_region(RegionData {
             location: loc,
@@ -880,7 +888,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_yield = scf::r#yield(ctx, loc, std::iter::empty());
+        let else_yield = scf::Yield::operands(std::iter::empty()).build(ctx, loc);
         ctx.push_op(else_block, else_yield.op_ref());
         let else_region = ctx.create_region(RegionData {
             location: loc,
@@ -891,7 +899,7 @@ mod tests {
         let if_op = resultless_if(ctx, loc, cond_const.result(ctx), then_region, else_region);
         ctx.push_op(entry, if_op.op_ref());
 
-        let ret = func::r#return(ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body_region = ctx.create_region(RegionData {
@@ -899,7 +907,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, Symbol::new(name), fn_ty, body_region)
+        func::Func::operands()
+            .sym_name(Symbol::new(name))
+            .r#type(fn_ty)
+            .regions(body_region)
+            .build(ctx, loc)
     }
 
     #[test]
@@ -917,7 +929,10 @@ mod tests {
         });
 
         // %cond = arith.const true
-        let cond_const = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Bool(true));
+        let cond_const = arith::Const::operands()
+            .value(Attribute::Bool(true))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond_const.op_ref());
 
         // then region: yield 42
@@ -927,10 +942,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let then_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let then_val = arith::Const::operands()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let then_v = then_val.result(&ctx);
         ctx.push_op(then_block, then_val.op_ref());
-        let then_yield = scf::r#yield(&mut ctx, loc, [then_v]);
+        let then_yield = scf::Yield::operands([then_v]).build(&mut ctx, loc);
         ctx.push_op(then_block, then_yield.op_ref());
         let then_region = ctx.create_region(RegionData {
             location: loc,
@@ -945,10 +963,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let else_val = arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let else_v = else_val.result(&ctx);
         ctx.push_op(else_block, else_val.op_ref());
-        let else_yield = scf::r#yield(&mut ctx, loc, [else_v]);
+        let else_yield = scf::Yield::operands([else_v]).build(&mut ctx, loc);
         ctx.push_op(else_block, else_yield.op_ref());
         let else_region = ctx.create_region(RegionData {
             location: loc,
@@ -958,12 +979,15 @@ mod tests {
 
         // scf.if
         let cond_v = cond_const.result(&ctx);
-        let if_op = scf::r#if(&mut ctx, loc, cond_v, i32_ty, then_region, else_region);
+        let if_op = scf::If::operands(cond_v)
+            .results(i32_ty)
+            .regions(then_region, else_region)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, if_op.op_ref());
 
         // Use the if result
         let if_result = if_op.result(&ctx);
-        let ret = func::r#return(&mut ctx, loc, [if_result]);
+        let ret = func::Return::operands([if_result]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body_region = ctx.create_region(RegionData {
@@ -971,7 +995,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, body_region);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(body_region)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         // Lower scf to cf
@@ -1063,7 +1091,10 @@ mod tests {
             parent_region: None,
         });
 
-        let cond_const = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Bool(true));
+        let cond_const = arith::Const::operands()
+            .value(Attribute::Bool(true))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond_const.op_ref());
 
         // then/else: yield nothing
@@ -1073,7 +1104,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let then_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
+        let then_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(then_block, then_yield.op_ref());
         let then_region = ctx.create_region(RegionData {
             location: loc,
@@ -1087,7 +1118,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let else_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
+        let else_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(else_block, else_yield.op_ref());
         let else_region = ctx.create_region(RegionData {
             location: loc,
@@ -1099,7 +1130,7 @@ mod tests {
         let if_op = resultless_if(&mut ctx, loc, cond_v, then_region, else_region);
         ctx.push_op(entry, if_op.op_ref());
 
-        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body_region = ctx.create_region(RegionData {
@@ -1107,7 +1138,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, body_region);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(body_region)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);
@@ -1774,7 +1809,10 @@ mod tests {
         });
 
         // init value
-        let init = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let init = arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, init.op_ref());
 
         // Loop body: loop_arg -> break(loop_arg)
@@ -1788,7 +1826,7 @@ mod tests {
             parent_region: None,
         });
         let loop_arg = ctx.block_arg(body_block, 0);
-        let break_op = scf::r#break(&mut ctx, loc, loop_arg);
+        let break_op = scf::Break::operands(loop_arg).build(&mut ctx, loc);
         ctx.push_op(body_block, break_op.op_ref());
         let body_region = ctx.create_region(RegionData {
             location: loc,
@@ -1797,11 +1835,14 @@ mod tests {
         });
 
         let init_v = init.result(&ctx);
-        let loop_op = scf::r#loop(&mut ctx, loc, [init_v], i32_ty, body_region);
+        let loop_op = scf::Loop::operands([init_v])
+            .results(i32_ty)
+            .regions(body_region)
+            .build(&mut ctx, loc);
         let loop_result = loop_op.result(&ctx);
         ctx.push_op(entry, loop_op.op_ref());
 
-        let ret = func::r#return(&mut ctx, loc, [loop_result]);
+        let ret = func::Return::operands([loop_result]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let func_body = ctx.create_region(RegionData {
@@ -1809,7 +1850,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, func_body);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(func_body)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);
@@ -1841,7 +1886,10 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let init = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let init = arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, init.op_ref());
 
         let body_block = ctx.create_block(BlockData {
@@ -1854,7 +1902,7 @@ mod tests {
             parent_region: None,
         });
         let loop_arg = ctx.block_arg(body_block, 0);
-        let break_op = scf::r#break(&mut ctx, loc, loop_arg);
+        let break_op = scf::Break::operands(loop_arg).build(&mut ctx, loc);
         ctx.push_op(body_block, break_op.op_ref());
         let body_region = ctx.create_region(RegionData {
             location: loc,
@@ -1865,7 +1913,7 @@ mod tests {
         let init_v = init.result(&ctx);
         let loop_op = resultless_loop(&mut ctx, loc, [init_v], body_region);
         ctx.push_op(entry, loop_op.op_ref());
-        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let func_body = ctx.create_region(RegionData {
@@ -1873,7 +1921,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, func_body);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(func_body)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);
@@ -1923,7 +1975,10 @@ mod tests {
             parent_region: None,
         });
 
-        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let disc = arith::Const::operands()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, disc.op_ref());
 
         // Case 0: resultless yield
@@ -1933,14 +1988,17 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let case0_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
+        let case0_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(case0_block, case0_yield.op_ref());
         let case0_region = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![case0_block],
             parent_op: None,
         });
-        let case0_op = scf::case(&mut ctx, loc, Attribute::Int(0), case0_region);
+        let case0_op = scf::Case::operands()
+            .value(Attribute::Int(0))
+            .regions(case0_region)
+            .build(&mut ctx, loc);
 
         // Case 1: resultless yield
         let case1_block = ctx.create_block(BlockData {
@@ -1949,14 +2007,17 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let case1_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
+        let case1_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(case1_block, case1_yield.op_ref());
         let case1_region = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![case1_block],
             parent_op: None,
         });
-        let case1_op = scf::case(&mut ctx, loc, Attribute::Int(1), case1_region);
+        let case1_op = scf::Case::operands()
+            .value(Attribute::Int(1))
+            .regions(case1_region)
+            .build(&mut ctx, loc);
 
         // Default: resultless yield
         let default_block = ctx.create_block(BlockData {
@@ -1965,14 +2026,16 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let default_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
+        let default_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(default_block, default_yield.op_ref());
         let default_region = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![default_block],
             parent_op: None,
         });
-        let default_op = scf::default(&mut ctx, loc, default_region);
+        let default_op = scf::Default::operands()
+            .regions(default_region)
+            .build(&mut ctx, loc);
 
         // Switch body region containing case and default ops
         let switch_body_block = ctx.create_block(BlockData {
@@ -1991,10 +2054,12 @@ mod tests {
         });
 
         let disc_v = disc.result(&ctx);
-        let switch = scf::switch(&mut ctx, loc, disc_v, switch_body);
+        let switch = scf::Switch::operands(disc_v)
+            .regions(switch_body)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, switch.op_ref());
 
-        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let func_body = ctx.create_region(RegionData {
@@ -2002,7 +2067,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, func_body);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(func_body)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);
@@ -2037,7 +2106,10 @@ mod tests {
             parent_region: None,
         });
 
-        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let disc = arith::Const::operands()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, disc.op_ref());
 
         // Case 0: void yield (no values)
@@ -2047,14 +2119,17 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let case0_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
+        let case0_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(case0_block, case0_yield.op_ref());
         let case0_region = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![case0_block],
             parent_op: None,
         });
-        let case0_op = scf::case(&mut ctx, loc, Attribute::Int(0), case0_region);
+        let case0_op = scf::Case::operands()
+            .value(Attribute::Int(0))
+            .regions(case0_region)
+            .build(&mut ctx, loc);
 
         // Case 1: resultless yield
         let case1_block = ctx.create_block(BlockData {
@@ -2063,14 +2138,17 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let case1_yield = scf::r#yield(&mut ctx, loc, std::iter::empty());
+        let case1_yield = scf::Yield::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(case1_block, case1_yield.op_ref());
         let case1_region = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![case1_block],
             parent_op: None,
         });
-        let case1_op = scf::case(&mut ctx, loc, Attribute::Int(1), case1_region);
+        let case1_op = scf::Case::operands()
+            .value(Attribute::Int(1))
+            .regions(case1_region)
+            .build(&mut ctx, loc);
 
         // Switch body
         let switch_body_block = ctx.create_block(BlockData {
@@ -2088,10 +2166,12 @@ mod tests {
         });
 
         let disc_v = disc.result(&ctx);
-        let switch = scf::switch(&mut ctx, loc, disc_v, switch_body);
+        let switch = scf::Switch::operands(disc_v)
+            .regions(switch_body)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, switch.op_ref());
 
-        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let func_body = ctx.create_region(RegionData {
@@ -2099,7 +2179,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, func_body);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(func_body)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);
@@ -2133,7 +2217,10 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let disc = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let disc = arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, disc.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
@@ -2147,14 +2234,18 @@ mod tests {
             .build(&mut ctx);
         let switch = ctx.create_op(switch_data);
         ctx.push_op(entry, switch);
-        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let func_body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, func_body);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(func_body)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);
@@ -2176,10 +2267,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let val = arith::Const::operands()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let val_v = val.result(&ctx);
         ctx.push_op(entry, val.op_ref());
-        let ret = func::r#return(&mut ctx, loc, [val_v]);
+        let ret = func::Return::operands([val_v]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -2187,7 +2281,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, body);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);
@@ -2212,7 +2310,10 @@ mod tests {
             parent_region: None,
         });
 
-        let cond = arith::r#const(&mut ctx, loc, i1_ty, Attribute::Bool(true));
+        let cond = arith::Const::operands()
+            .value(Attribute::Bool(true))
+            .results(i1_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, cond.op_ref());
 
         // then: yield 1
@@ -2222,10 +2323,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let t_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let t_val = arith::Const::operands()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let t_v = t_val.result(&ctx);
         ctx.push_op(then_block, t_val.op_ref());
-        let t_yield = scf::r#yield(&mut ctx, loc, [t_v]);
+        let t_yield = scf::Yield::operands([t_v]).build(&mut ctx, loc);
         ctx.push_op(then_block, t_yield.op_ref());
         let then_region = ctx.create_region(RegionData {
             location: loc,
@@ -2240,10 +2344,13 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let e_val = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(2));
+        let e_val = arith::Const::operands()
+            .value(Attribute::Int(2))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let e_v = e_val.result(&ctx);
         ctx.push_op(else_block, e_val.op_ref());
-        let e_yield = scf::r#yield(&mut ctx, loc, [e_v]);
+        let e_yield = scf::Yield::operands([e_v]).build(&mut ctx, loc);
         ctx.push_op(else_block, e_yield.op_ref());
         let else_region = ctx.create_region(RegionData {
             location: loc,
@@ -2252,7 +2359,10 @@ mod tests {
         });
 
         let cond_v = cond.result(&ctx);
-        let if_op = scf::r#if(&mut ctx, loc, cond_v, i32_ty, then_region, else_region);
+        let if_op = scf::If::operands(cond_v)
+            .results(i32_ty)
+            .regions(then_region, else_region)
+            .build(&mut ctx, loc);
         let if_result = if_op.result(&ctx);
         ctx.push_op(entry, if_op.op_ref());
 
@@ -2261,7 +2371,7 @@ mod tests {
         let add_result = add.result(&ctx);
         ctx.push_op(entry, add.op_ref());
 
-        let ret = func::r#return(&mut ctx, loc, [add_result]);
+        let ret = func::Return::operands([add_result]).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
 
         let body = ctx.create_region(RegionData {
@@ -2269,7 +2379,11 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let func_op = func::func(&mut ctx, loc, Symbol::new("test"), fn_ty, body);
+        let func_op = func::Func::operands()
+            .sym_name(Symbol::new("test"))
+            .r#type(fn_ty)
+            .regions(body)
+            .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         lower_scf_to_cf(&mut ctx, module);

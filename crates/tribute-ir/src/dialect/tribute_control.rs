@@ -3153,7 +3153,10 @@ mod tests {
             ctx.push_op(body_block, *op);
         }
         let body = region(ctx, loc, body_block);
-        let module = core::module(ctx, loc, Symbol::new("test"), body);
+        let module = core::Module::operands()
+            .sym_name(Symbol::new("test"))
+            .regions(body)
+            .build(ctx, loc);
         Module::new(ctx, module.op_ref()).expect("core.module")
     }
 
@@ -3169,7 +3172,7 @@ mod tests {
         let ret = Return::operands(value).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = region(ctx, loc, entry);
-        Func::builder()
+        Func::operands()
             .sym_name(Symbol::from_dynamic(symbol))
             .r#type(ty)
             .regions(body)
@@ -3196,7 +3199,7 @@ mod tests {
         let entry = block(&mut ctx, loc, &[i32_ty]);
         let x = ctx.block_arg(entry, 0);
 
-        let function_ref = FuncRef::builder()
+        let function_ref = FuncRef::operands()
             .func_ref(Symbol::new("id"))
             .results(direct)
             .build(&mut ctx, loc);
@@ -3250,7 +3253,7 @@ mod tests {
         let handler_yield = Yield::operands(resumed_value).build(&mut ctx, loc);
         ctx.push_op(handler_block, handler_yield.op_ref());
         let handler_body = region(&mut ctx, loc, handler_block);
-        let handler = Handler::builder()
+        let handler = Handler::operands()
             .ability_ref(ability)
             .op_name(Symbol::new("get"))
             .kind(Symbol::new("op"))
@@ -3261,7 +3264,7 @@ mod tests {
         let handlers_block = block(&mut ctx, loc, &[]);
         ctx.push_op(handlers_block, handler.op_ref());
         let handlers = region(&mut ctx, loc, handlers_block);
-        let handle = Handle::builder()
+        let handle = Handle::operands()
             .results(i32_ty)
             .regions(handle_body, completion, handlers)
             .build(&mut ctx, loc);
@@ -3270,7 +3273,7 @@ mod tests {
         let ret = Return::operands(handle_result).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let control_body = region(&mut ctx, loc, entry);
-        let control = Func::builder()
+        let control = Func::operands()
             .sym_name(Symbol::new("control"))
             .r#type(direct)
             .regions(control_body)

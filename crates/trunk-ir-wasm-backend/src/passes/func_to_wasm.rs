@@ -199,19 +199,23 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
     let location = ctx.op(module.op()).location;
 
     // Create wasm.table for closure functions
-    let table_op = wasm_dialect::table(
-        ctx,
-        location,
-        Symbol::new("funcref"),
-        table_size,
-        Some(table_size),
-    );
+    let table_op = wasm_dialect::Table::operands()
+        .reftype(Symbol::new("funcref"))
+        .min(table_size)
+        .max(Some(table_size))
+        .build(ctx, location);
 
     // Create wasm.ref_func operations for each function in the element segment
     let funcref_ty = intern_funcref_type(ctx);
     let func_ref_ops: Vec<OpRef> = funcs
         .iter()
-        .map(|func_sym| wasm_dialect::ref_func(ctx, location, funcref_ty, *func_sym).op_ref())
+        .map(|func_sym| {
+            wasm_dialect::RefFunc::operands()
+                .func_name(*func_sym)
+                .results(funcref_ty)
+                .build(ctx, location)
+                .op_ref()
+        })
         .collect();
 
     // Create the funcs region for wasm.elem
@@ -231,7 +235,11 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
     });
 
     // Create wasm.elem with table 0 and offset 0
-    let elem_op = wasm_dialect::elem(ctx, location, Some(0), Some(0), funcs_region);
+    let elem_op = wasm_dialect::Elem::operands()
+        .table(Some(0))
+        .offset(Some(0))
+        .regions(funcs_region)
+        .build(ctx, location);
 
     // Prepend table and elem operations to the module body.
     // We insert before the first op in the block (if any), or push at the end.
@@ -464,7 +472,12 @@ impl RewritePattern for FuncFuncPattern {
         }
 
         let new_op = match body {
-            Some(body) => wasm_dialect::func(ctx, loc, sym_name, func_type, body).op_ref(),
+            Some(body) => wasm_dialect::Func::operands()
+                .sym_name(sym_name)
+                .r#type(func_type)
+                .regions(body)
+                .build(ctx, loc)
+                .op_ref(),
             None => {
                 let data = OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
                     .attr("sym_name", Attribute::Symbol(sym_name))
@@ -500,7 +513,10 @@ impl RewritePattern for FuncCallPattern {
         // such as `adt.typeref` must not survive into the backend.
         let result_types: Vec<TypeRef> = rewriter.result_types(ctx, op);
 
-        let new_op = wasm_dialect::call(ctx, loc, args, result_types, callee);
+        let new_op = wasm_dialect::Call::operands(args)
+            .callee(callee)
+            .results(result_types)
+            .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -548,15 +564,12 @@ impl RewritePattern for FuncCallIndirectPattern {
         {
             return false;
         }
-        let new_op = wasm_dialect::call_indirect(
-            ctx,
-            loc,
-            all_operands,
-            result_types,
-            0,
-            0,
-            Some(signature),
-        );
+        let new_op = wasm_dialect::CallIndirect::operands(all_operands)
+            .type_idx(0)
+            .table(0)
+            .signature(Some(signature))
+            .results(result_types)
+            .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -579,7 +592,7 @@ impl RewritePattern for FuncReturnPattern {
         let loc = ctx.op(op).location;
         let values: Vec<_> = ctx.op_operands(op).to_vec();
 
-        let new_op = wasm_dialect::r#return(ctx, loc, values);
+        let new_op = wasm_dialect::Return::operands(values).build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -603,7 +616,9 @@ impl RewritePattern for FuncTailCallPattern {
         let callee = tail_call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
 
-        let new_op = wasm_dialect::return_call(ctx, loc, args, callee);
+        let new_op = wasm_dialect::ReturnCall::operands(args)
+            .callee(callee)
+            .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -663,7 +678,11 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         }
 
         let loc = ctx.op(op).location;
-        let new_op = wasm_dialect::return_call_indirect(ctx, loc, operands, 0, 0, Some(signature));
+        let new_op = wasm_dialect::ReturnCallIndirect::operands(operands)
+            .type_idx(0)
+            .table(0)
+            .signature(Some(signature))
+            .build(ctx, loc);
         ctx.op_mut(new_op.op_ref())
             .attributes
             .extend(converted_attrs);
@@ -688,7 +707,7 @@ impl RewritePattern for FuncUnreachablePattern {
 
         let loc = ctx.op(op).location;
 
-        let new_op = wasm_dialect::unreachable(ctx, loc);
+        let new_op = wasm_dialect::Unreachable::operands().build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -725,7 +744,10 @@ impl RewritePattern for FuncConstantPattern {
 
         let loc = ctx.op(op).location;
         let i32_ty = intern_i32_type(ctx);
-        let new_op = wasm_dialect::i32_const(ctx, loc, i32_ty, table_idx as i32);
+        let new_op = wasm_dialect::I32Const::operands()
+            .value(table_idx as i32)
+            .results(i32_ty)
+            .build(ctx, loc);
 
         rewriter.replace_op(new_op.op_ref());
         true

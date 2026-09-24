@@ -107,12 +107,18 @@ impl RewritePattern for LowerClosureNewArena {
             .expect("closure.new result type must contain a valid func type (from func.constant)");
 
         // Generate: %funcref = func.constant @func_ref : func_type
-        let constant_op = func::constant(ctx, loc, func_ty, func_ref);
+        let constant_op = func::Constant::operands()
+            .func_ref(func_ref)
+            .results(func_ty)
+            .build(ctx, loc);
         let funcref = ctx.op_result(constant_op.op_ref(), 0);
 
         // Generate: %closure = adt.struct_new(%funcref, %env) : closure_struct_type
         let struct_ty = closure_struct_type_ref(ctx);
-        let struct_new_op = adt::struct_new(ctx, loc, vec![funcref, env], struct_ty, struct_ty);
+        let struct_new_op = adt::StructNew::operands(vec![funcref, env])
+            .r#type(struct_ty)
+            .results(struct_ty)
+            .build(ctx, loc);
         if get_physical_closure_convention(ctx, result_ty).is_some() {
             set_closure_callable_type(ctx, struct_new_op.op_ref(), result_ty);
         }
@@ -197,16 +203,22 @@ impl RewritePattern for LowerClosureCallArena {
         };
 
         // Generate: %table_idx = closure.func %closure
-        let table_idx_op = closure::func(ctx, loc, callee, i32_ty);
+        let table_idx_op = closure::Func::operands(callee)
+            .results(i32_ty)
+            .build(ctx, loc);
         let table_idx = ctx.op_result(table_idx_op.op_ref(), 0);
 
         // Generate: %env = closure.env %closure
-        let env_op = closure::env(ctx, loc, callee, anyref_ty);
+        let env_op = closure::Env::operands(callee)
+            .results(anyref_ty)
+            .build(ctx, loc);
         let env = ctx.op_result(env_op.op_ref(), 0);
 
         let mut new_args = args;
         for &(index, expected) in &contract.argument_casts {
-            let cast = core::unrealized_conversion_cast(ctx, loc, new_args[index], expected);
+            let cast = core::UnrealizedConversionCast::operands(new_args[index])
+                .results(expected)
+                .build(ctx, loc);
             rewriter.insert_op(cast.op_ref());
             new_args[index] = cast.result(ctx);
         }
@@ -266,11 +278,17 @@ impl RewritePattern for LowerClosureTailCallArena {
         else {
             return false;
         };
-        let func_ref = closure::func(ctx, location, callee, i32_ty);
-        let environment = closure::env(ctx, location, callee, anyref_ty);
+        let func_ref = closure::Func::operands(callee)
+            .results(i32_ty)
+            .build(ctx, location);
+        let environment = closure::Env::operands(callee)
+            .results(anyref_ty)
+            .build(ctx, location);
         let mut args = args.to_vec();
         for (index, expected) in contract.argument_casts {
-            let cast = core::unrealized_conversion_cast(ctx, location, args[index], expected);
+            let cast = core::UnrealizedConversionCast::operands(args[index])
+                .results(expected)
+                .build(ctx, location);
             rewriter.insert_op(cast.op_ref());
             args[index] = cast.result(ctx);
         }
@@ -435,7 +453,11 @@ impl RewritePattern for LowerClosureFuncArena {
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let struct_ty = closure_struct_type_ref(ctx);
 
-        let get_op = adt::struct_get(ctx, loc, closure_value, i32_ty, struct_ty, 0);
+        let get_op = adt::StructGet::operands(closure_value)
+            .r#type(struct_ty)
+            .field(0)
+            .results(i32_ty)
+            .build(ctx, loc);
         rewriter.replace_op(get_op.op_ref());
         true
     }
@@ -464,7 +486,11 @@ impl RewritePattern for LowerClosureEnvArena {
         let result_ty = ctx.op_result_types(op)[0];
         let struct_ty = closure_struct_type_ref(ctx);
 
-        let get_op = adt::struct_get(ctx, loc, closure_value, result_ty, struct_ty, 1);
+        let get_op = adt::StructGet::operands(closure_value)
+            .r#type(struct_ty)
+            .field(1)
+            .results(result_ty)
+            .build(ctx, loc);
         rewriter.replace_op(get_op.op_ref());
         true
     }

@@ -2,20 +2,19 @@
 
 #[trunk_ir::dialect]
 mod scf {
-    fn r#if(cond: ()) -> Option<result> {
+    fn r#if(cond: Value<_>) -> Option<Value<_>> {
         #[region(then_region)]
         {}
         #[region(else_region)]
         {}
     }
 
-    fn switch(discriminant: ()) {
+    fn switch(discriminant: Value<_>) {
         #[region(body)]
         {}
     }
 
-    #[attr(value: any)]
-    fn case() {
+    fn case(value: Attr<_>) {
         #[region(body)]
         {}
     }
@@ -25,16 +24,16 @@ mod scf {
         {}
     }
 
-    fn r#yield(#[rest] values: ()) {}
+    fn r#yield(values: Variadic<_>) {}
 
-    fn r#loop(#[rest] init: ()) -> Option<result> {
+    fn r#loop(init: Variadic<_>) -> Option<Value<_>> {
         #[region(body)]
         {}
     }
 
-    fn r#continue(#[rest] values: ()) {}
+    fn r#continue(values: Variadic<_>) {}
 
-    fn r#break(value: ()) {}
+    fn r#break(value: Value<_>) {}
 }
 
 // =========================================================================

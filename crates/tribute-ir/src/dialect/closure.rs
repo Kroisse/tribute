@@ -5,12 +5,11 @@ mod closure {
     // Types
     struct Closure<FuncType>;
 
-    #[attr(func_ref: Symbol)]
-    fn new(env: ()) -> result {}
+    fn new(func_ref: Attr<Symbol>, env: Value<_>) -> Value<_> {}
 
-    fn func(closure: ()) -> result {}
+    fn func(closure: Value<_>) -> Value<_> {}
 
-    fn env(closure: ()) -> result {}
+    fn env(closure: Value<_>) -> Value<_> {}
 
     /// High-level lambda: captures + body region → closure value.
     ///
@@ -18,7 +17,7 @@ mod closure {
     /// Captured values are referenced from the parent scope (NOT isolated from above).
     /// A downstream `lower_closure_lambda` pass extracts the body into a top-level
     /// `func.func` and replaces this op with `closure.new`.
-    fn lambda(#[rest] captures: ()) -> result {
+    fn lambda(captures: Variadic<_>) -> Value<_> {
         #[region(body)]
         {}
     }
@@ -305,11 +304,17 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create an env value via arith.const
-        let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let env_op = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
 
         // Create closure.new with func_ref attribute
-        let op = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("my_func"));
+        let op = super::New::operands(env_val)
+            .func_ref(Symbol::new("my_func"))
+            .results(closure_ty)
+            .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let op2 = super::New::from_op(&ctx, op.op_ref()).expect("should match closure.new");
@@ -335,13 +340,21 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a closure value
-        let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let env_op = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
-        let closure_op = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));
+        let closure_op = super::New::operands(env_val)
+            .func_ref(Symbol::new("f"))
+            .results(closure_ty)
+            .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
 
         // Create closure.func
-        let func_op = super::func(&mut ctx, loc, closure_val, i32_ty);
+        let func_op = super::Func::operands(closure_val)
+            .results(i32_ty)
+            .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let func_op2 =
@@ -368,13 +381,21 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a closure value
-        let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let env_op = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
-        let closure_op = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));
+        let closure_op = super::New::operands(env_val)
+            .func_ref(Symbol::new("f"))
+            .results(closure_ty)
+            .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
 
         // Create closure.env
-        let env_result_op = super::env(&mut ctx, loc, closure_val, i32_ty);
+        let env_result_op = super::Env::operands(closure_val)
+            .results(i32_ty)
+            .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let env_result_op2 =
@@ -404,7 +425,10 @@ mod tests {
         let closure_ty = make_closure_type(&mut ctx);
 
         // Create a capture value
-        let cap_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(7));
+        let cap_op = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(7))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let cap_val = cap_op.result(&ctx);
 
         // Build body region: ^bb0(%x: i32): func.return %x
@@ -418,7 +442,7 @@ mod tests {
             parent_region: None,
         });
         let x_val = ctx.block_arg(entry, 0);
-        let ret_op = func::r#return(&mut ctx, loc, [x_val]);
+        let ret_op = func::Return::operands([x_val]).build(&mut ctx, loc);
         ctx.push_op(entry, ret_op.op_ref());
 
         let body_region = ctx.create_region(RegionData {
@@ -428,7 +452,10 @@ mod tests {
         });
 
         // Create closure.lambda [%cap] { body } -> closure_ty
-        let lambda_op = super::lambda(&mut ctx, loc, vec![cap_val], closure_ty, body_region);
+        let lambda_op = super::Lambda::operands(vec![cap_val])
+            .results(closure_ty)
+            .regions(body_region)
+            .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let lambda_op2 =
@@ -468,7 +495,10 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create an arith.const — should not match closure ops
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         assert!(super::New::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Func::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Env::from_op(&ctx, c.op_ref()).is_err());
@@ -481,10 +511,16 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
         let closure_ty = make_closure_type(&mut ctx);
 
-        let env_op = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(0));
+        let env_op = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
 
-        let closure_new = super::new(&mut ctx, loc, env_val, closure_ty, Symbol::new("f"));
+        let closure_new = super::New::operands(env_val)
+            .func_ref(Symbol::new("f"))
+            .results(closure_ty)
+            .build(&mut ctx, loc);
 
         assert!(super::New::matches(&ctx, closure_new.op_ref()));
         assert!(!super::Func::matches(&ctx, closure_new.op_ref()));

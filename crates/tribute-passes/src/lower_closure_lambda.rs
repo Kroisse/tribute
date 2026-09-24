@@ -222,7 +222,11 @@ fn lower_single_lambda(
     )
     .as_type_ref();
 
-    let func_op = func::func(ctx, location, lifted_name, func_ty, func_body_region);
+    let func_op = func::Func::operands()
+        .sym_name(lifted_name)
+        .r#type(func_ty)
+        .regions(func_body_region)
+        .build(ctx, location);
     if let Some(convention) = convention {
         set_calling_convention(ctx, func_op.op_ref(), convention);
         ctx.op_mut(func_op.op_ref()).attributes.insert(
@@ -240,18 +244,27 @@ fn lower_single_lambda(
 
     // Pack captures into env struct (or null).
     let closure_env = if captures.is_empty() {
-        let null_op = adt::ref_null(ctx, location, anyref_ty, anyref_ty);
+        let null_op = adt::RefNull::operands()
+            .r#type(anyref_ty)
+            .results(anyref_ty)
+            .build(ctx, location);
         ctx.insert_op_before(parent_block, lambda_ref, null_op.op_ref());
         null_op.result(ctx)
     } else {
         let env_ty = env_struct_ty.unwrap();
-        let struct_op = adt::struct_new(ctx, location, captures.clone(), env_ty, env_ty);
+        let struct_op = adt::StructNew::operands(captures.clone())
+            .r#type(env_ty)
+            .results(env_ty)
+            .build(ctx, location);
         ctx.insert_op_before(parent_block, lambda_ref, struct_op.op_ref());
         struct_op.result(ctx)
     };
 
     // Create closure.new replacing the lambda.
-    let closure_new_op = closure::new(ctx, location, closure_env, result_ty, lifted_name);
+    let closure_new_op = closure::New::operands(closure_env)
+        .func_ref(lifted_name)
+        .results(result_ty)
+        .build(ctx, location);
     if let Some(convention) = convention {
         set_calling_convention(ctx, closure_new_op.op_ref(), convention);
     }
@@ -339,13 +352,20 @@ fn build_lifted_body(
     // Insert env extraction ops at the start of the new entry block.
     let raw_env_val = ctx.block_arg(new_entry, environment_index as u32);
     if let Some(env_ty) = env_struct_ty {
-        let cast_op = adt::ref_cast(ctx, location, raw_env_val, env_ty, env_ty);
+        let cast_op = adt::RefCast::operands(raw_env_val)
+            .r#type(env_ty)
+            .results(env_ty)
+            .build(ctx, location);
         ctx.push_op(new_entry, cast_op.op_ref());
         let env_val = cast_op.result(ctx);
 
         for (i, &cap_val) in captures.iter().enumerate() {
             let cap_ty = capture_types[i];
-            let get_op = adt::struct_get(ctx, location, env_val, cap_ty, env_ty, i as u32);
+            let get_op = adt::StructGet::operands(env_val)
+                .r#type(env_ty)
+                .field(i as u32)
+                .results(cap_ty)
+                .build(ctx, location);
             ctx.push_op(new_entry, get_op.op_ref());
             mapping.map_value(cap_val, get_op.result(ctx));
         }
@@ -545,7 +565,7 @@ mod tests {
             parent_region: None,
         });
         let x_val = ctx.block_arg(lambda_entry, 0);
-        let ret_op = func::r#return(&mut ctx, loc, [x_val]);
+        let ret_op = func::Return::operands([x_val]).build(&mut ctx, loc);
         ctx.push_op(lambda_entry, ret_op.op_ref());
 
         let lambda_body_region = ctx.create_region(RegionData {
@@ -560,13 +580,10 @@ mod tests {
             tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
 
         // closure.lambda [] { ... } -> closure_ty
-        let lambda_op = closure::lambda(
-            &mut ctx,
-            loc,
-            Vec::<ValueRef>::new(),
-            closure_ty,
-            lambda_body_region,
-        );
+        let lambda_op = closure::Lambda::operands(Vec::<ValueRef>::new())
+            .results(closure_ty)
+            .regions(lambda_body_region)
+            .build(&mut ctx, loc);
         set_calling_convention(&mut ctx, lambda_op.op_ref(), CallingConvention::Direct);
 
         // Wrap in a func.func
@@ -585,13 +602,11 @@ mod tests {
         });
         let outer_func_ty =
             func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]).as_type_ref();
-        let outer_func = func::func(
-            &mut ctx,
-            loc,
-            Symbol::new("test_fn"),
-            outer_func_ty,
-            outer_body,
-        );
+        let outer_func = func::Func::operands()
+            .sym_name(Symbol::new("test_fn"))
+            .r#type(outer_func_ty)
+            .regions(outer_body)
+            .build(&mut ctx, loc);
         ctx.push_op(module_block, outer_func.op_ref());
 
         // Run the pass.
@@ -660,10 +675,12 @@ mod tests {
                 ops: Default::default(),
                 parent_region: None,
             });
-            let cast = core::unrealized_conversion_cast(&mut ctx, loc, outer_evidence, anyref_ty);
+            let cast = core::UnrealizedConversionCast::operands(outer_evidence)
+                .results(anyref_ty)
+                .build(&mut ctx, loc);
             ctx.push_op(lambda_entry, cast.op_ref());
             let cast_result = cast.result(&ctx);
-            let ret = func::r#return(&mut ctx, loc, [cast_result]);
+            let ret = func::Return::operands([cast_result]).build(&mut ctx, loc);
             ctx.push_op(lambda_entry, ret.op_ref());
             let lambda_body = ctx.create_region(RegionData {
                 location: loc,
@@ -687,13 +704,10 @@ mod tests {
                     closure_type.attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(index));
             }
             let lambda_ty = ctx.intern_type(closure_type.build());
-            let lambda = closure::lambda(
-                &mut ctx,
-                loc,
-                Vec::<ValueRef>::new(),
-                lambda_ty,
-                lambda_body,
-            );
+            let lambda = closure::Lambda::operands(Vec::<ValueRef>::new())
+                .results(lambda_ty)
+                .regions(lambda_body)
+                .build(&mut ctx, loc);
             set_calling_convention(&mut ctx, lambda.op_ref(), CallingConvention::Cps);
             ctx.push_op(outer_entry, lambda.op_ref());
 
@@ -703,7 +717,11 @@ mod tests {
                 parent_op: None,
             });
             let outer_ty = func::func_sig(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
-            let outer = func::func(&mut ctx, loc, Symbol::new("test_fn"), outer_ty, outer_body);
+            let outer = func::Func::operands()
+                .sym_name(Symbol::new("test_fn"))
+                .r#type(outer_ty)
+                .regions(outer_body)
+                .build(&mut ctx, loc);
             ctx.push_op(module_block, outer.op_ref());
 
             let before = print_module(&ctx, module.op());
@@ -756,7 +774,7 @@ mod tests {
         ctx.push_op(lambda_entry, add_op.op_ref());
         let add_result = add_op.result(&ctx);
 
-        let ret_op = func::r#return(&mut ctx, loc, [add_result]);
+        let ret_op = func::Return::operands([add_result]).build(&mut ctx, loc);
         ctx.push_op(lambda_entry, ret_op.op_ref());
 
         let lambda_body_region = ctx.create_region(RegionData {
@@ -770,7 +788,10 @@ mod tests {
             tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
 
         // closure.lambda [%a] { ... }
-        let lambda_op = closure::lambda(&mut ctx, loc, vec![a_val], closure_ty, lambda_body_region);
+        let lambda_op = closure::Lambda::operands(vec![a_val])
+            .results(closure_ty)
+            .regions(lambda_body_region)
+            .build(&mut ctx, loc);
         set_calling_convention(&mut ctx, lambda_op.op_ref(), CallingConvention::Direct);
         ctx.push_op(outer_entry, lambda_op.op_ref());
 
@@ -780,13 +801,11 @@ mod tests {
             parent_op: None,
         });
         let outer_func_ty = func::func_sig(&mut ctx, [i32_ty], [anyref_ty]).as_type_ref();
-        let outer_func = func::func(
-            &mut ctx,
-            loc,
-            Symbol::new("test_fn"),
-            outer_func_ty,
-            outer_body,
-        );
+        let outer_func = func::Func::operands()
+            .sym_name(Symbol::new("test_fn"))
+            .r#type(outer_func_ty)
+            .regions(outer_body)
+            .build(&mut ctx, loc);
         ctx.push_op(module_block, outer_func.op_ref());
 
         // Run the pass.

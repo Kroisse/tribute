@@ -57,7 +57,10 @@ fn box_value(
         .checked_add(RC_HEADER_SIZE)
         .expect("allocation size overflow: payload_size + RC_HEADER_SIZE exceeds u64::MAX");
     let alloc_size_i64 = i64::try_from(alloc_size).expect("allocation size does not fit in i64");
-    let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size_i64);
+    let size_op = clif::Iconst::operands()
+        .value(alloc_size_i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     let size_val = size_op.result(ctx);
     ops.push(size_op.op_ref());
 
@@ -70,38 +73,60 @@ fn box_value(
     ops.push(call_op.op_ref());
 
     // 3. Store refcount = 1
-    let rc_one = clif::iconst(ctx, loc, i32_ty, 1);
+    let rc_one = clif::Iconst::operands()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, loc);
     let rc_one_val = rc_one.result(ctx);
     ops.push(rc_one.op_ref());
-    let store_rc = clif::store(ctx, loc, rc_one_val, raw_ptr, REFCOUNT_OFFSET as i32);
+    let store_rc = clif::Store::operands(rc_one_val, raw_ptr)
+        .offset(REFCOUNT_OFFSET as i32)
+        .build(ctx, loc);
     ops.push(store_rc.op_ref());
 
     // 4. Store rtti_idx
-    let rtti_val = clif::iconst(ctx, loc, i32_ty, rtti_idx as i64);
+    let rtti_val = clif::Iconst::operands()
+        .value(rtti_idx as i64)
+        .results(i32_ty)
+        .build(ctx, loc);
     let rtti_val_v = rtti_val.result(ctx);
     ops.push(rtti_val.op_ref());
-    let store_rtti = clif::store(ctx, loc, rtti_val_v, raw_ptr, RTTI_IDX_OFFSET as i32);
+    let store_rtti = clif::Store::operands(rtti_val_v, raw_ptr)
+        .offset(RTTI_IDX_OFFSET as i32)
+        .build(ctx, loc);
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw_ptr + 8
-    let hdr_size = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_size = clif::Iconst::operands()
+        .value(RC_HEADER_SIZE as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     let hdr_size_val = hdr_size.result(ctx);
     ops.push(hdr_size.op_ref());
-    let payload_ptr = clif::iadd(ctx, loc, raw_ptr, hdr_size_val, ptr_ty);
+    let payload_ptr = clif::Iadd::operands(raw_ptr, hdr_size_val)
+        .results(ptr_ty)
+        .build(ctx, loc);
     let payload_ptr_val = payload_ptr.result(ctx);
     ops.push(payload_ptr.op_ref());
 
     // 6. Store value at payload offset 0
-    let store_val = clif::store(ctx, loc, value, payload_ptr_val, 0);
+    let store_val = clif::Store::operands(value, payload_ptr_val)
+        .offset(0)
+        .build(ctx, loc);
     ops.push(store_val.op_ref());
 
     // 7. Identity pass-through so the last op produces the result with the desired type.
     //    Cranelift will optimize away iadd(ptr, 0).
-    let zero_op = clif::iconst(ctx, loc, ptr_ty, 0);
+    let zero_op = clif::Iconst::operands()
+        .value(0)
+        .results(ptr_ty)
+        .build(ctx, loc);
     let zero_val = zero_op.result(ctx);
     ops.push(zero_op.op_ref());
 
-    let identity_op = clif::iadd(ctx, loc, payload_ptr_val, zero_val, result_ty);
+    let identity_op = clif::Iadd::operands(payload_ptr_val, zero_val)
+        .results(result_ty)
+        .build(ctx, loc);
     ops.push(identity_op.op_ref());
 
     ops
@@ -184,12 +209,9 @@ impl RewritePattern for IntoRawPattern {
         let Ok(into_raw) = tribute_rt::IntoRaw::from_op(ctx, op) else {
             return false;
         };
-        let cast = core::unrealized_conversion_cast(
-            ctx,
-            ctx.op(op).location,
-            into_raw.value(ctx),
-            self.ptr_ty,
-        );
+        let cast = core::UnrealizedConversionCast::operands(into_raw.value(ctx))
+            .results(self.ptr_ty)
+            .build(ctx, ctx.op(op).location);
         rewriter.replace_op(cast.op_ref());
         true
     }
@@ -378,7 +400,10 @@ impl RewritePattern for UnboxIntPattern {
             return true;
         }
 
-        let load_op = clif::load(ctx, loc, value, self.i32_ty, 0);
+        let load_op = clif::Load::operands(value)
+            .offset(0)
+            .results(self.i32_ty)
+            .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
         true
     }
@@ -406,7 +431,10 @@ impl RewritePattern for UnboxNatPattern {
             return true;
         }
 
-        let load_op = clif::load(ctx, loc, value, self.i32_ty, 0);
+        let load_op = clif::Load::operands(value)
+            .offset(0)
+            .results(self.i32_ty)
+            .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
         true
     }
@@ -434,7 +462,10 @@ impl RewritePattern for UnboxBoolPattern {
             return true;
         }
 
-        let load_op = clif::load(ctx, loc, value, self.i32_ty, 0);
+        let load_op = clif::Load::operands(value)
+            .offset(0)
+            .results(self.i32_ty)
+            .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
         true
     }
@@ -462,7 +493,10 @@ impl RewritePattern for UnboxFloatPattern {
             return true;
         }
 
-        let load_op = clif::load(ctx, loc, value, self.f64_ty, 0);
+        let load_op = clif::Load::operands(value)
+            .offset(0)
+            .results(self.f64_ty)
+            .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
         true
     }

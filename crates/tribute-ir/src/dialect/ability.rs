@@ -15,8 +15,15 @@ mod ability {
     /// ```
     ///
     /// This final form is resultless and lowers to `effect.dispatch_cps`.
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn perform(evidence: (), dispatch: (), resume: (), #[rest] values: ()) {}
+    fn perform(
+        ability_ref: Attr<Type>,
+        op_name: Attr<Symbol>,
+        evidence: Value<_>,
+        dispatch: Value<_>,
+        resume: Value<_>,
+        values: Variadic<_>,
+    ) {
+    }
 
     /// Resultless proper-tail handler delimiter emitted by
     /// `tribute_control_to_cps`.
@@ -28,8 +35,12 @@ mod ability {
     /// shares it across every pair. The body entry block receives the extended
     /// evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
-    #[attr(ability_refs: any)]
-    fn handle_dispatch(evidence: (), prompt_tag: (), #[rest] dispatchers: ()) {
+    fn handle_dispatch(
+        ability_refs: Attr<_>,
+        evidence: Value<_>,
+        prompt_tag: Value<_>,
+        dispatchers: Variadic<_>,
+    ) {
         #[region(body)]
         {}
     }
@@ -45,8 +56,7 @@ mod ability {
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
-    #[attr(ability_ref: Type, op_name: Symbol)]
-    fn call(#[rest] values: ()) -> result {}
+    fn call(ability_ref: Attr<Type>, op_name: Attr<Symbol>, values: Variadic<_>) -> Value<_> {}
 }
 
 // === Hash-Based Dispatch ===
@@ -141,7 +151,10 @@ pub fn ability_id_const(
     ability_ref: TypeRef,
 ) -> arith::Const {
     let ability_id = compute_ability_id(ctx, ability_ref);
-    arith::r#const(ctx, loc, i32_ty, Attribute::Int(ability_id as i128))
+    arith::Const::operands()
+        .value(Attribute::Int(ability_id as i128))
+        .results(i32_ty)
+        .build(ctx, loc)
 }
 
 fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {

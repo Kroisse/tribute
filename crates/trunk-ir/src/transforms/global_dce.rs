@@ -427,14 +427,19 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret = func::r#return(ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, sym_name, fn_ty, body).op_ref()
+        func::Func::operands()
+            .sym_name(sym_name)
+            .r#type(fn_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     fn build_func_with_call(ctx: &mut IrContext, loc: Location, name: &str, callee: &str) -> OpRef {
@@ -448,17 +453,25 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let call = func::call(ctx, loc, std::iter::empty(), [i32_ty], sym_callee);
+        let call = func::Call::operands(std::iter::empty())
+            .callee(sym_callee)
+            .results([i32_ty])
+            .build(ctx, loc);
         let call_result = call.result(ctx);
         ctx.push_op(entry, call.op_ref());
-        let ret = func::r#return(ctx, loc, [call_result]);
+        let ret = func::Return::operands([call_result]).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, sym_name, fn_ty, body).op_ref()
+        func::Func::operands()
+            .sym_name(sym_name)
+            .r#type(fn_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
@@ -550,16 +563,24 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_op = func::constant(&mut ctx, loc, fn_ty, Symbol::new("callback"));
+        let const_op = func::Constant::operands()
+            .func_ref(Symbol::new("callback"))
+            .results(fn_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, const_op.op_ref());
-        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        let main = func::func(&mut ctx, loc, Symbol::new("main"), fn_ty, body).op_ref();
+        let main = func::Func::operands()
+            .sym_name(Symbol::new("main"))
+            .r#type(fn_ty)
+            .regions(body)
+            .build(&mut ctx, loc)
+            .op_ref();
 
         let module = build_module(&mut ctx, loc, vec![callback, main]);
 
@@ -667,15 +688,12 @@ mod tests {
             parent_region: None,
         });
         let i32_ty = i32_type(&mut ctx);
-        let call = func::call(
-            &mut ctx,
-            loc,
-            std::iter::empty(),
-            [i32_ty],
-            Symbol::new("helper"),
-        );
+        let call = func::Call::operands(std::iter::empty())
+            .callee(Symbol::new("helper"))
+            .results([i32_ty])
+            .build(&mut ctx, loc);
         ctx.push_op(entry, call.op_ref());
-        let ret = func::r#return(&mut ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,

@@ -62,7 +62,9 @@ impl RewritePattern for ArithConstPattern {
         };
         if type_name == "nil" {
             let loc = ctx.op(op).location;
-            let nop = wasm_dialect::nop(ctx, loc, result_ty);
+            let nop = wasm_dialect::Nop::operands()
+                .results(result_ty)
+                .build(ctx, loc);
             rewriter.replace_op(nop.op_ref());
             return true;
         }
@@ -72,12 +74,16 @@ impl RewritePattern for ArithConstPattern {
 
         let new_op_ref = match type_name {
             "i32" => match value {
-                Attribute::Int(v) => {
-                    wasm_dialect::i32_const(ctx, loc, result_ty, v as i32).op_ref()
-                }
-                Attribute::Bool(b) => {
-                    wasm_dialect::i32_const(ctx, loc, result_ty, if b { 1 } else { 0 }).op_ref()
-                }
+                Attribute::Int(v) => wasm_dialect::I32Const::operands()
+                    .value(v as i32)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                Attribute::Bool(b) => wasm_dialect::I32Const::operands()
+                    .value(if b { 1 } else { 0 })
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => {
                     warn!("arith.const: expected Int or Bool for i32, got {:?}", value);
                     return false;
@@ -88,21 +94,33 @@ impl RewritePattern for ArithConstPattern {
                     warn!("arith.const: expected Int for i64, got {:?}", value);
                     return false;
                 };
-                wasm_dialect::i64_const(ctx, loc, result_ty, v as i64).op_ref()
+                wasm_dialect::I64Const::operands()
+                    .value(v as i64)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref()
             }
             "f32" => {
                 let Attribute::FloatBits(v) = value else {
                     warn!("arith.const: expected FloatBits for f32, got {:?}", value);
                     return false;
                 };
-                wasm_dialect::f32_const(ctx, loc, result_ty, f32::from_bits(v as u32)).op_ref()
+                wasm_dialect::F32Const::operands()
+                    .value(f32::from_bits(v as u32))
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref()
             }
             "f64" => {
                 let Attribute::FloatBits(v) = value else {
                     warn!("arith.const: expected FloatBits for f64, got {:?}", value);
                     return false;
                 };
-                wasm_dialect::f64_const(ctx, loc, result_ty, f64::from_bits(v)).op_ref()
+                wasm_dialect::F64Const::operands()
+                    .value(f64::from_bits(v))
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref()
             }
             _ => {
                 warn!("arith.const: unsupported type suffix '{}'", type_name);
@@ -154,67 +172,130 @@ impl RewritePattern for ArithBinOpPattern {
                         .build(ctx, loc)
                         .op_ref()
                 }
-                "i64" => wasm_dialect::i64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::I64Add::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("addf") {
             match suffix {
-                "f32" => wasm_dialect::f32_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => wasm_dialect::f64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::F32Add::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "f64" => wasm_dialect::F64Add::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("subi") {
             match suffix {
-                "i32" => wasm_dialect::i32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => wasm_dialect::i64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::I32Sub::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i64" => wasm_dialect::I64Sub::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("subf") {
             match suffix {
-                "f32" => wasm_dialect::f32_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => wasm_dialect::f64_sub(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::F32Sub::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "f64" => wasm_dialect::F64Sub::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("muli") {
             match suffix {
-                "i32" => wasm_dialect::i32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => wasm_dialect::i64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::I32Mul::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i64" => wasm_dialect::I64Mul::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("mulf") {
             match suffix {
-                "f32" => wasm_dialect::f32_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => wasm_dialect::f64_mul(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::F32Mul::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "f64" => wasm_dialect::F64Mul::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("divsi") {
             match suffix {
-                "i32" => wasm_dialect::i32_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => wasm_dialect::i64_div_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::I32DivS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i64" => wasm_dialect::I64DivS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("divui") {
             match suffix {
-                "i32" => wasm_dialect::i32_div_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => wasm_dialect::i64_div_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::I32DivU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i64" => wasm_dialect::I64DivU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("divf") {
             match suffix {
-                "f32" => wasm_dialect::f32_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "f64" => wasm_dialect::f64_div(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "f32" => wasm_dialect::F32Div::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "f64" => wasm_dialect::F64Div::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("remsi") {
             match suffix {
-                "i32" => wasm_dialect::i32_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => wasm_dialect::i64_rem_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::I32RemS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i64" => wasm_dialect::I64RemS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("remui") {
             match suffix {
-                "i32" => wasm_dialect::i32_rem_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i64" => wasm_dialect::i64_rem_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i32" => wasm_dialect::I32RemU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i64" => wasm_dialect::I64RemU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else {
@@ -254,19 +335,58 @@ impl RewritePattern for ArithCmpPattern {
 
             let pred_str = predicate.to_string();
             let new_op = match (suffix, pred_str.as_str()) {
-                ("i32", "eq") => wasm_dialect::i32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", "eq") => wasm_dialect::i64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i32", "ne") => wasm_dialect::i32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", "ne") => wasm_dialect::i64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i32", "slt") => wasm_dialect::i32_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", "slt") => wasm_dialect::i64_lt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i32", "sle") => wasm_dialect::i32_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", "sle") => wasm_dialect::i64_le_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i32", "sgt") => wasm_dialect::i32_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", "sgt") => wasm_dialect::i64_gt_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i32", "sge") => wasm_dialect::i32_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i64", "sge") => wasm_dialect::i64_ge_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("i32", "ult") => wasm_dialect::i32_lt_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("i32", "eq") => wasm_dialect::I32Eq::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "eq") => wasm_dialect::I64Eq::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "ne") => wasm_dialect::I32Ne::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "ne") => wasm_dialect::I64Ne::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "slt") => wasm_dialect::I32LtS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "slt") => wasm_dialect::I64LtS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "sle") => wasm_dialect::I32LeS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "sle") => wasm_dialect::I64LeS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "sgt") => wasm_dialect::I32GtS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "sgt") => wasm_dialect::I64GtS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "sge") => wasm_dialect::I32GeS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "sge") => wasm_dialect::I64GeS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "ult") => wasm_dialect::I32LtU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             };
             rewriter.replace_op(new_op);
@@ -279,18 +399,54 @@ impl RewritePattern for ArithCmpPattern {
 
             let pred_str = predicate.to_string();
             let new_op = match (suffix, pred_str.as_str()) {
-                ("f32", "oeq") => wasm_dialect::f32_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", "oeq") => wasm_dialect::f64_eq(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", "une") => wasm_dialect::f32_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", "une") => wasm_dialect::f64_ne(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", "olt") => wasm_dialect::f32_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", "olt") => wasm_dialect::f64_lt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", "ole") => wasm_dialect::f32_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", "ole") => wasm_dialect::f64_le(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", "ogt") => wasm_dialect::f32_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", "ogt") => wasm_dialect::f64_gt(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f32", "oge") => wasm_dialect::f32_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                ("f64", "oge") => wasm_dialect::f64_ge(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                ("f32", "oeq") => wasm_dialect::F32Eq::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "oeq") => wasm_dialect::F64Eq::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "une") => wasm_dialect::F32Ne::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "une") => wasm_dialect::F64Ne::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "olt") => wasm_dialect::F32Lt::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "olt") => wasm_dialect::F64Lt::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "ole") => wasm_dialect::F32Le::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "ole") => wasm_dialect::F64Le::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "ogt") => wasm_dialect::F32Gt::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "ogt") => wasm_dialect::F64Gt::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "oge") => wasm_dialect::F32Ge::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "oge") => wasm_dialect::F64Ge::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             };
             rewriter.replace_op(new_op);
@@ -324,13 +480,21 @@ impl RewritePattern for ArithNegPattern {
 
             match suffix {
                 "f32" => {
-                    rewriter
-                        .replace_op(wasm_dialect::f32_neg(ctx, loc, operand, result_ty).op_ref());
+                    rewriter.replace_op(
+                        wasm_dialect::F32Neg::operands(operand)
+                            .results(result_ty)
+                            .build(ctx, loc)
+                            .op_ref(),
+                    );
                     true
                 }
                 "f64" => {
-                    rewriter
-                        .replace_op(wasm_dialect::f64_neg(ctx, loc, operand, result_ty).op_ref());
+                    rewriter.replace_op(
+                        wasm_dialect::F64Neg::operands(operand)
+                            .results(result_ty)
+                            .build(ctx, loc)
+                            .op_ref(),
+                    );
                     true
                 }
                 _ => false,
@@ -347,16 +511,26 @@ impl RewritePattern for ArithNegPattern {
             match suffix {
                 "i32" => {
                     let i32_ty = intern_i32_type(ctx);
-                    let zero = wasm_dialect::i32_const(ctx, loc, i32_ty, 0);
-                    let sub = wasm_dialect::i32_sub(ctx, loc, zero.result(ctx), operand, i32_ty);
+                    let zero = wasm_dialect::I32Const::operands()
+                        .value(0)
+                        .results(i32_ty)
+                        .build(ctx, loc);
+                    let sub = wasm_dialect::I32Sub::operands(zero.result(ctx), operand)
+                        .results(i32_ty)
+                        .build(ctx, loc);
                     rewriter.insert_op(zero.op_ref());
                     rewriter.replace_op(sub.op_ref());
                     true
                 }
                 "i64" => {
                     let i64_ty = intern_i64_type(ctx);
-                    let zero = wasm_dialect::i64_const(ctx, loc, i64_ty, 0);
-                    let sub = wasm_dialect::i64_sub(ctx, loc, zero.result(ctx), operand, i64_ty);
+                    let zero = wasm_dialect::I64Const::operands()
+                        .value(0)
+                        .results(i64_ty)
+                        .build(ctx, loc);
+                    let sub = wasm_dialect::I64Sub::operands(zero.result(ctx), operand)
+                        .results(i64_ty)
+                        .build(ctx, loc);
                     rewriter.insert_op(zero.op_ref());
                     rewriter.replace_op(sub.op_ref());
                     true
@@ -411,38 +585,74 @@ impl RewritePattern for ArithBitwisePattern {
 
         let new_op = if name == Symbol::new("and") {
             match suffix {
-                "i64" => wasm_dialect::i64_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i32" => wasm_dialect::i32_and(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::I64And::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i32" => wasm_dialect::I32And::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("or") {
             match suffix {
-                "i64" => wasm_dialect::i64_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i32" => wasm_dialect::i32_or(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::I64Or::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i32" => wasm_dialect::I32Or::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("xor") {
             match suffix {
-                "i64" => wasm_dialect::i64_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i32" => wasm_dialect::i32_xor(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::I64Xor::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i32" => wasm_dialect::I32Xor::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("shl") {
             match suffix {
-                "i64" => wasm_dialect::i64_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i32" => wasm_dialect::i32_shl(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::I64Shl::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i32" => wasm_dialect::I32Shl::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("shr") {
             match suffix {
-                "i64" => wasm_dialect::i64_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i32" => wasm_dialect::i32_shr_s(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::I64ShrS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i32" => wasm_dialect::I32ShrS::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("shru") {
             match suffix {
-                "i64" => wasm_dialect::i64_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
-                "i32" => wasm_dialect::i32_shr_u(ctx, loc, lhs, rhs, result_ty).op_ref(),
+                "i64" => wasm_dialect::I64ShrU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                "i32" => wasm_dialect::I32ShrU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else {
@@ -502,49 +712,94 @@ impl RewritePattern for ArithConversionPattern {
 
         let new_op = if name == Symbol::new("cast") {
             match (src_suffix, dst_suffix) {
-                ("i64", "i32") => wasm_dialect::i32_wrap_i64(ctx, loc, operand, dst_ty).op_ref(),
-                ("i32", "i64") => {
-                    wasm_dialect::i64_extend_i32_s(ctx, loc, operand, dst_ty).op_ref()
-                }
+                ("i64", "i32") => wasm_dialect::I32WrapI64::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "i64") => wasm_dialect::I64ExtendI32S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("trunc") {
             match (src_suffix, dst_suffix) {
-                ("f32", "i32") => wasm_dialect::i32_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "i32") => wasm_dialect::i32_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "i64") => wasm_dialect::i64_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "i64") => wasm_dialect::i64_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("i64", "i32") => wasm_dialect::i32_wrap_i64(ctx, loc, operand, dst_ty).op_ref(),
+                ("f32", "i32") => wasm_dialect::I32TruncF32S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "i32") => wasm_dialect::I32TruncF64S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "i64") => wasm_dialect::I64TruncF32S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "i64") => wasm_dialect::I64TruncF64S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "i32") => wasm_dialect::I32WrapI64::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("extend") {
             match (src_suffix, dst_suffix) {
-                ("i32", "i64") => {
-                    wasm_dialect::i64_extend_i32_s(ctx, loc, operand, dst_ty).op_ref()
-                }
-                ("f32", "f64") => wasm_dialect::f64_promote_f32(ctx, loc, operand, dst_ty).op_ref(),
+                ("i32", "i64") => wasm_dialect::I64ExtendI32S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "f64") => wasm_dialect::F64PromoteF32::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else if name == Symbol::new("convert") {
             match (src_suffix, dst_suffix) {
-                ("i32", "f32") => {
-                    wasm_dialect::f32_convert_i32_s(ctx, loc, operand, dst_ty).op_ref()
-                }
-                ("i32", "f64") => {
-                    wasm_dialect::f64_convert_i32_s(ctx, loc, operand, dst_ty).op_ref()
-                }
-                ("i64", "f32") => {
-                    wasm_dialect::f32_convert_i64_s(ctx, loc, operand, dst_ty).op_ref()
-                }
-                ("i64", "f64") => {
-                    wasm_dialect::f64_convert_i64_s(ctx, loc, operand, dst_ty).op_ref()
-                }
-                ("f32", "i32") => wasm_dialect::i32_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "i32") => wasm_dialect::i32_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "i64") => wasm_dialect::i64_trunc_f32_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "i64") => wasm_dialect::i64_trunc_f64_s(ctx, loc, operand, dst_ty).op_ref(),
-                ("f32", "f64") => wasm_dialect::f64_promote_f32(ctx, loc, operand, dst_ty).op_ref(),
-                ("f64", "f32") => wasm_dialect::f32_demote_f64(ctx, loc, operand, dst_ty).op_ref(),
+                ("i32", "f32") => wasm_dialect::F32ConvertI32S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "f64") => wasm_dialect::F64ConvertI32S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "f32") => wasm_dialect::F32ConvertI64S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "f64") => wasm_dialect::F64ConvertI64S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "i32") => wasm_dialect::I32TruncF32S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "i32") => wasm_dialect::I32TruncF64S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "i64") => wasm_dialect::I64TruncF32S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "i64") => wasm_dialect::I64TruncF64S::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f32", "f64") => wasm_dialect::F64PromoteF32::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("f64", "f32") => wasm_dialect::F32DemoteF64::operands(operand)
+                    .results(dst_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             }
         } else {

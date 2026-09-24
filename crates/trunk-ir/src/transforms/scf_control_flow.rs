@@ -199,7 +199,7 @@ mod tests {
 
         // A synthetic use before the control isolates liveness from final position.
         let loc = ctx.op(control).location;
-        let user = scf::r#yield(&mut ctx, loc, [never]);
+        let user = scf::Yield::operands([never]).build(&mut ctx, loc);
         ctx.insert_op_before(entry, control, user.op_ref());
         assert!(
             cache
@@ -217,7 +217,7 @@ mod tests {
         // Remove the use and append an exit: only the final-position fact changes.
         ctx.detach_op(user.op_ref());
         ctx.remove_op(user.op_ref());
-        let trailing = func::unreachable(&mut ctx, loc);
+        let trailing = func::Unreachable::operands().build(&mut ctx, loc);
         ctx.push_op(entry, trailing.op_ref());
         assert!(
             cache
@@ -245,7 +245,7 @@ mod tests {
         let arm = ctx.op(exit).parent_block.unwrap();
         ctx.detach_op(exit);
         ctx.remove_op(exit);
-        let yielding = scf::r#yield(&mut ctx, loc, []);
+        let yielding = scf::Yield::operands([]).build(&mut ctx, loc);
         ctx.push_op(arm, yielding.op_ref());
         assert!(
             cache

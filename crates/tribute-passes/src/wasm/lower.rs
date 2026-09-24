@@ -504,14 +504,12 @@ impl<'a> WasmLowerer<'a> {
         if self.io_analysis.needs_fd_write {
             let i32_ty = intern_type(ctx, "core", "i32");
             let import_ty = intern_func_type(ctx, vec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty);
-            let op = wasm_dialect::import_func(
-                ctx,
-                location,
-                Symbol::new("wasi_snapshot_preview1"),
-                Symbol::new("fd_write"),
-                Symbol::new("fd_write"),
-                import_ty,
-            );
+            let op = wasm_dialect::ImportFunc::operands()
+                .module(Symbol::new("wasi_snapshot_preview1"))
+                .name(Symbol::new("fd_write"))
+                .sym_name(Symbol::new("fd_write"))
+                .r#type(import_ty)
+                .build(ctx, location);
             preamble_ops.push(op.op_ref());
         }
 
@@ -525,7 +523,12 @@ impl<'a> WasmLowerer<'a> {
         if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
             let total_data_size = const_size + io_size;
             let required_pages = self.memory_plan.required_pages(total_data_size);
-            let op = wasm_dialect::memory(ctx, location, required_pages, 0, false, false);
+            let op = wasm_dialect::Memory::operands()
+                .min(required_pages)
+                .max(0)
+                .shared(false)
+                .memory64(false)
+                .build(ctx, location);
             preamble_ops.push(op.op_ref());
             self.memory_plan.has_memory = true;
         }
@@ -544,13 +547,11 @@ impl<'a> WasmLowerer<'a> {
     fn append_data_ops(&self, ctx: &mut IrContext, module_block: BlockRef, location: Location) {
         // String and Bytes constants share passive data segments.
         for (content, _data_idx, _len) in self.const_analysis.allocations.iter() {
-            let op = wasm_dialect::data(
-                ctx,
-                location,
-                0,
-                Attribute::Bytes(content.as_slice().into()),
-                true,
-            );
+            let op = wasm_dialect::Data::operands()
+                .offset(0)
+                .bytes(Attribute::Bytes(content.as_slice().into()))
+                .passive(true)
+                .build(ctx, location);
             ctx.push_op(module_block, op.op_ref());
         }
     }
@@ -566,13 +567,19 @@ impl<'a> WasmLowerer<'a> {
             && self.memory_plan.has_memory
             && !self.memory_plan.has_exported_memory
         {
-            let op = wasm_dialect::export_memory(ctx, location, "memory".into(), 0);
+            let op = wasm_dialect::ExportMemory::operands()
+                .name("memory".into())
+                .index(0)
+                .build(ctx, location);
             ctx.push_op(module_block, op.op_ref());
             self.memory_plan.has_exported_memory = true;
         }
 
         if self.main_exports.saw_main && !self.main_exports.main_exported {
-            let op = wasm_dialect::export_func(ctx, location, "main".into(), Symbol::new("main"));
+            let op = wasm_dialect::ExportFunc::operands()
+                .name("main".into())
+                .func(Symbol::new("main"))
+                .build(ctx, location);
             ctx.push_op(module_block, op.op_ref());
             self.main_exports.main_exported = true;
         }
@@ -581,8 +588,10 @@ impl<'a> WasmLowerer<'a> {
             let start_func = self.build_start_function(ctx, location);
             ctx.push_op(module_block, start_func);
 
-            let export_op =
-                wasm_dialect::export_func(ctx, location, "_start".into(), Symbol::new("_start"));
+            let export_op = wasm_dialect::ExportFunc::operands()
+                .name("_start".into())
+                .func(Symbol::new("_start"))
+                .build(ctx, location);
             ctx.push_op(module_block, export_op.op_ref());
         }
     }
@@ -609,8 +618,11 @@ impl<'a> WasmLowerer<'a> {
         });
 
         let func_ty = intern_func_type(ctx, vec![], nil_ty);
-        let func_op =
-            wasm_dialect::func(ctx, location, Symbol::new("_start"), func_ty, body_region);
+        let func_op = wasm_dialect::Func::operands()
+            .sym_name(Symbol::new("_start"))
+            .r#type(func_ty)
+            .regions(body_region)
+            .build(ctx, location);
         func_op.op_ref()
     }
 
@@ -624,10 +636,13 @@ impl<'a> WasmLowerer<'a> {
         _nil_ty: TypeRef,
     ) {
         let main_args = self.build_main_args(ctx, body_block, location, i32_ty);
-        let call = wasm_dialect::call(ctx, location, main_args, vec![], Symbol::new("main"));
+        let call = wasm_dialect::Call::operands(main_args)
+            .callee(Symbol::new("main"))
+            .results(vec![])
+            .build(ctx, location);
         ctx.push_op(body_block, call.op_ref());
 
-        let ret = wasm_dialect::r#return(ctx, location, vec![]);
+        let ret = wasm_dialect::Return::operands(vec![]).build(ctx, location);
         ctx.push_op(body_block, ret.op_ref());
     }
 
@@ -652,15 +667,15 @@ impl<'a> WasmLowerer<'a> {
                     1,
                     "Wasm entrypoint: EvidenceDirect `main` must have one evidence parameter"
                 );
-                let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+                let zero = wasm_dialect::I32Const::operands()
+                    .value(0)
+                    .results(i32_ty)
+                    .build(ctx, location);
                 ctx.push_op(body_block, zero.op_ref());
-                let empty = wasm_dialect::array_new_default(
-                    ctx,
-                    location,
-                    zero.result(ctx),
-                    self.main_exports.main_param_types[0],
-                    EVIDENCE_IDX,
-                );
+                let empty = wasm_dialect::ArrayNewDefault::operands(zero.result(ctx))
+                    .type_idx(EVIDENCE_IDX)
+                    .results(self.main_exports.main_param_types[0])
+                    .build(ctx, location);
                 ctx.push_op(body_block, empty.op_ref());
                 vec![empty.result(ctx)]
             }
@@ -915,12 +930,30 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let address = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 0);
+        let address = wasm_dialect::I32Const::operands()
+            .value(0)
+            .results(i32_ty)
+            .build(&mut ctx, location);
         let address_result = address.result(&ctx);
         ctx.push_op(body_block, address.op_ref());
-        let i64_load = wasm_dialect::i64_load(&mut ctx, location, address_result, i64_ty, 0, 0, 0);
-        let f32_load = wasm_dialect::f32_load(&mut ctx, location, address_result, f32_ty, 0, 0, 0);
-        let f64_load = wasm_dialect::f64_load(&mut ctx, location, address_result, f64_ty, 0, 0, 0);
+        let i64_load = wasm_dialect::I64Load::operands(address_result)
+            .offset(0)
+            .align(0)
+            .memory(0)
+            .results(i64_ty)
+            .build(&mut ctx, location);
+        let f32_load = wasm_dialect::F32Load::operands(address_result)
+            .offset(0)
+            .align(0)
+            .memory(0)
+            .results(f32_ty)
+            .build(&mut ctx, location);
+        let f64_load = wasm_dialect::F64Load::operands(address_result)
+            .offset(0)
+            .align(0)
+            .memory(0)
+            .results(f64_ty)
+            .build(&mut ctx, location);
         let i64_result = i64_load.result(&ctx);
         let f32_result = f32_load.result(&ctx);
         let f64_result = f64_load.result(&ctx);
@@ -928,16 +961,28 @@ mod tests {
             ctx.push_op(body_block, load);
         }
         for store in [
-            wasm_dialect::i64_store(&mut ctx, location, address_result, i64_result, 0, 0, 0)
+            wasm_dialect::I64Store::operands(address_result, i64_result)
+                .offset(0)
+                .align(0)
+                .memory(0)
+                .build(&mut ctx, location)
                 .op_ref(),
-            wasm_dialect::f32_store(&mut ctx, location, address_result, f32_result, 0, 0, 0)
+            wasm_dialect::F32Store::operands(address_result, f32_result)
+                .offset(0)
+                .align(0)
+                .memory(0)
+                .build(&mut ctx, location)
                 .op_ref(),
-            wasm_dialect::f64_store(&mut ctx, location, address_result, f64_result, 0, 0, 0)
+            wasm_dialect::F64Store::operands(address_result, f64_result)
+                .offset(0)
+                .align(0)
+                .memory(0)
+                .build(&mut ctx, location)
                 .op_ref(),
         ] {
             ctx.push_op(body_block, store);
         }
-        let ret = wasm_dialect::r#return(&mut ctx, location, vec![]);
+        let ret = wasm_dialect::Return::operands(vec![]).build(&mut ctx, location);
         ctx.push_op(body_block, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location,
@@ -945,8 +990,11 @@ mod tests {
             parent_op: None,
         });
         let func_ty = intern_func_type(&mut ctx, vec![], nil_ty);
-        let memory_func =
-            wasm_dialect::func(&mut ctx, location, Symbol::new("memory_ops"), func_ty, body);
+        let memory_func = wasm_dialect::Func::operands()
+            .sym_name(Symbol::new("memory_ops"))
+            .r#type(func_ty)
+            .regions(body)
+            .build(&mut ctx, location);
         ctx.push_op(module_block, memory_func.op_ref());
 
         let output = print_module(&ctx, module.op());
@@ -969,10 +1017,20 @@ mod tests {
         let i32_ty = intern_type(&mut ctx, "core", "i32");
         let nil_ty = intern_type(&mut ctx, "core", "nil");
 
-        let memory = wasm_dialect::memory(&mut ctx, location, 1, 0, false, false);
-        let export_memory = wasm_dialect::export_memory(&mut ctx, location, "memory".into(), 0);
-        let export_main =
-            wasm_dialect::export_func(&mut ctx, location, "main".into(), Symbol::new("main"));
+        let memory = wasm_dialect::Memory::operands()
+            .min(1)
+            .max(0)
+            .shared(false)
+            .memory64(false)
+            .build(&mut ctx, location);
+        let export_memory = wasm_dialect::ExportMemory::operands()
+            .name("memory".into())
+            .index(0)
+            .build(&mut ctx, location);
+        let export_main = wasm_dialect::ExportFunc::operands()
+            .name("main".into())
+            .func(Symbol::new("main"))
+            .build(&mut ctx, location);
         for op in [
             memory.op_ref(),
             export_memory.op_ref(),
@@ -987,7 +1045,7 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret = wasm_dialect::r#return(&mut ctx, location, vec![]);
+        let ret = wasm_dialect::Return::operands(vec![]).build(&mut ctx, location);
         ctx.push_op(main_block, ret.op_ref());
         let main_body = ctx.create_region(RegionData {
             location,
@@ -995,7 +1053,11 @@ mod tests {
             parent_op: None,
         });
         let main_ty = intern_func_type(&mut ctx, vec![i32_ty], nil_ty);
-        let main = wasm_dialect::func(&mut ctx, location, Symbol::new("main"), main_ty, main_body);
+        let main = wasm_dialect::Func::operands()
+            .sym_name(Symbol::new("main"))
+            .r#type(main_ty)
+            .regions(main_body)
+            .build(&mut ctx, location);
         ctx.push_op(module_block, main.op_ref());
 
         let const_analysis = ConstAnalysis {

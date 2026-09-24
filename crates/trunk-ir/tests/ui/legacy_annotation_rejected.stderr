@@ -1,5 +1,5 @@
-error: cannot mix legacy and new operation syntax
- --> tests/ui/mixed_syntax.rs:2:5
+error: `#[attr(..)]` is not supported on operations; declare `Attr<..>` parameters
+ --> tests/ui/legacy_annotation_rejected.rs:2:5
   |
 2 |     #[trunk_ir::dialect]
   |     ^^^^^^^^^^^^^^^^^^^^

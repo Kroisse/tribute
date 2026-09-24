@@ -128,7 +128,10 @@ impl RewritePattern for StructGetPattern {
         };
         let result_ty = tc.convert_type_or_identity(ctx, result_ty);
 
-        let load_op = clif::load(ctx, loc, ref_val, result_ty, offset);
+        let load_op = clif::Load::operands(ref_val)
+            .offset(offset)
+            .results(result_ty)
+            .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
         true
     }
@@ -166,7 +169,9 @@ impl RewritePattern for StructSetPattern {
         let ref_val = struct_set.r#ref(ctx);
         let value_val = struct_set.value(ctx);
 
-        let store_op = clif::store(ctx, loc, value_val, ref_val, offset);
+        let store_op = clif::Store::operands(value_val, ref_val)
+            .offset(offset)
+            .build(ctx, loc);
         rewriter.replace_op(store_op.op_ref());
         true
     }
@@ -205,19 +210,21 @@ impl RewritePattern for VariantIsPattern {
         let ref_val = variant_is.r#ref(ctx);
 
         // Load tag from payload_ptr + 0
-        let tag_load = clif::load(ctx, loc, ref_val, i32_ty, 0);
+        let tag_load = clif::Load::operands(ref_val)
+            .offset(0)
+            .results(i32_ty)
+            .build(ctx, loc);
         let tag_val = tag_load.result(ctx);
 
         // Compare with expected discriminant
-        let expected = clif::iconst(ctx, loc, i32_ty, variant_layout.tag_value as i64);
-        let cmp_op = clif::icmp(
-            ctx,
-            loc,
-            tag_val,
-            expected.result(ctx),
-            i1_ty,
-            Symbol::new("eq"),
-        );
+        let expected = clif::Iconst::operands()
+            .value(variant_layout.tag_value as i64)
+            .results(i32_ty)
+            .build(ctx, loc);
+        let cmp_op = clif::Icmp::operands(tag_val, expected.result(ctx))
+            .cond(Symbol::new("eq"))
+            .results(i1_ty)
+            .build(ctx, loc);
 
         rewriter.insert_op(tag_load.op_ref());
         rewriter.insert_op(expected.op_ref());
@@ -308,7 +315,10 @@ impl RewritePattern for VariantGetPattern {
             return false;
         };
 
-        let load_op = clif::load(ctx, loc, ref_val, load_ty, offset);
+        let load_op = clif::Load::operands(ref_val)
+            .offset(offset)
+            .results(load_ty)
+            .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
         true
     }
@@ -328,7 +338,10 @@ impl RewritePattern for RefNullPattern {
         }
         let loc = ctx.op(op).location;
         let ptr_ty = core::ptr(ctx).as_type_ref();
-        let iconst_op = clif::iconst(ctx, loc, ptr_ty, 0);
+        let iconst_op = clif::Iconst::operands()
+            .value(0)
+            .results(ptr_ty)
+            .build(ctx, loc);
         rewriter.replace_op(iconst_op.op_ref());
         true
     }
@@ -385,21 +398,22 @@ impl RewritePattern for RefIsNullPattern {
         let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
         let ref_val = ref_is_null.r#ref(ctx);
 
-        let null_op = clif::iconst(ctx, loc, ptr_ty, 0);
-        let icmp_op = clif::icmp(
-            ctx,
-            loc,
-            ref_val,
-            null_op.result(ctx),
-            i8_ty,
-            Symbol::new("eq"),
-        );
+        let null_op = clif::Iconst::operands()
+            .value(0)
+            .results(ptr_ty)
+            .build(ctx, loc);
+        let icmp_op = clif::Icmp::operands(ref_val, null_op.result(ctx))
+            .cond(Symbol::new("eq"))
+            .results(i8_ty)
+            .build(ctx, loc);
         rewriter.insert_op(null_op.op_ref());
         if result_ty == i8_ty {
             rewriter.replace_op(icmp_op.op_ref());
         } else {
             rewriter.insert_op(icmp_op.op_ref());
-            let extended = clif::uextend(ctx, loc, icmp_op.result(ctx), result_ty);
+            let extended = clif::Uextend::operands(icmp_op.result(ctx))
+                .results(result_ty)
+                .build(ctx, loc);
             rewriter.replace_op(extended.op_ref());
         }
         true

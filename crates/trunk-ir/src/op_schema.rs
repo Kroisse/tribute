@@ -79,7 +79,7 @@ pub struct ProjectionRef {
 /// Constraint on one type.
 #[derive(Clone, Copy, Debug)]
 pub enum TypeSpec {
-    /// Unconstrained (`_`, and every legacy entity).
+    /// Unconstrained (`_`).
     Any,
     /// A named type variable; repeated uses require the same type.
     Var(usize),

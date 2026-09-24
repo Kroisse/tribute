@@ -298,21 +298,18 @@ impl RewritePattern for EffectDispatchTailPattern {
         let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_closure, rewriter);
         let op_idx = insert_op_idx_const(ctx, loc, ability_ref, dispatch_op.op_name(ctx), rewriter);
 
-        let call = wasm_dialect::call_indirect(
-            ctx,
-            loc,
-            [
-                table_idx,
-                dispatch_op.evidence(ctx),
-                env,
-                op_idx,
-                dispatch_op.payload(ctx),
-            ],
-            [result_ty],
-            0,
-            0,
-            Some(signature),
-        );
+        let call = wasm_dialect::CallIndirect::operands([
+            table_idx,
+            dispatch_op.evidence(ctx),
+            env,
+            op_idx,
+            dispatch_op.payload(ctx),
+        ])
+        .type_idx(0)
+        .table(0)
+        .signature(Some(signature))
+        .results([result_ty])
+        .build(ctx, loc);
         let call_result = call.results(ctx)[0];
         rewriter.insert_op(call.op_ref());
         rewriter.erase_op(vec![call_result]);
@@ -449,48 +446,41 @@ impl RewritePattern for EffectDispatchCpsPattern {
         let ability_ref = dispatch_op.ability_ref(ctx);
         let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
         let i32_ty = intern_i32(ctx);
-        let ability_id =
-            wasm_dialect::i32_const(ctx, loc, i32_ty, compute_ability_id(ctx, ability_ref));
+        let ability_id = wasm_dialect::I32Const::operands()
+            .value(compute_ability_id(ctx, ability_ref))
+            .results(i32_ty)
+            .build(ctx, loc);
         let ability_id_value = ability_id.result(ctx);
         rewriter.insert_op(ability_id.op_ref());
         let marker_ty = ability::marker_adt_type_ref(ctx);
-        let marker = wasm_dialect::call(
-            ctx,
-            loc,
-            [dispatch_op.evidence(ctx), ability_id_value],
-            [marker_ty],
-            Symbol::new(evidence_abi::LOOKUP),
-        );
-        let prompt = wasm_dialect::struct_get(
-            ctx,
-            loc,
-            marker.results(ctx)[0],
-            i32_ty,
-            MARKER_IDX,
-            MarkerField::PromptTag.index(),
-        );
+        let marker = wasm_dialect::Call::operands([dispatch_op.evidence(ctx), ability_id_value])
+            .callee(Symbol::new(evidence_abi::LOOKUP))
+            .results([marker_ty])
+            .build(ctx, loc);
+        let prompt = wasm_dialect::StructGet::operands(marker.results(ctx)[0])
+            .type_idx(MARKER_IDX)
+            .field_idx(MarkerField::PromptTag.index())
+            .results(i32_ty)
+            .build(ctx, loc);
         let prompt_value = prompt.result(ctx);
         rewriter.insert_op(marker.op_ref());
         rewriter.insert_op(prompt.op_ref());
         let op_idx = insert_op_idx_const(ctx, loc, ability_ref, dispatch_op.op_name(ctx), rewriter);
 
-        let tail = wasm_dialect::return_call_indirect(
-            ctx,
-            loc,
-            [
-                table_idx,
-                dispatch_op.evidence(ctx),
-                env,
-                dispatch_op.resume(ctx),
-                prompt_value,
-                ability_id_value,
-                op_idx,
-                dispatch_op.payload(ctx),
-            ],
-            0,
-            0,
-            Some(signature),
-        );
+        let tail = wasm_dialect::ReturnCallIndirect::operands([
+            table_idx,
+            dispatch_op.evidence(ctx),
+            env,
+            dispatch_op.resume(ctx),
+            prompt_value,
+            ability_id_value,
+            op_idx,
+            dispatch_op.payload(ctx),
+        ])
+        .type_idx(0)
+        .table(0)
+        .signature(Some(signature))
+        .build(ctx, loc);
         set_calling_convention(ctx, tail.op_ref(), CallingConvention::Cps);
         rewriter.replace_op(tail.op_ref());
         true
@@ -514,17 +504,20 @@ fn insert_dispatch_closure_lookup(
     let marker_ty = ability::marker_adt_type_ref(ctx);
     let closure_ty = crate::wasm::type_converter::closure_adt_type(ctx);
 
-    let ability_id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
-    let lookup = wasm_dialect::call(
-        ctx,
-        loc,
-        [evidence, ability_id_const.result(ctx)],
-        [marker_ty],
-        Symbol::new(evidence_abi::LOOKUP),
-    );
+    let ability_id_const = wasm_dialect::I32Const::operands()
+        .value(ability_id)
+        .results(i32_ty)
+        .build(ctx, loc);
+    let lookup = wasm_dialect::Call::operands([evidence, ability_id_const.result(ctx)])
+        .callee(Symbol::new(evidence_abi::LOOKUP))
+        .results([marker_ty])
+        .build(ctx, loc);
     let marker = lookup.results(ctx)[0];
-    let closure_get =
-        wasm_dialect::struct_get(ctx, loc, marker, closure_ty, MARKER_IDX, field.index());
+    let closure_get = wasm_dialect::StructGet::operands(marker)
+        .type_idx(MARKER_IDX)
+        .field_idx(field.index())
+        .results(closure_ty)
+        .build(ctx, loc);
     let closure = closure_get.result(ctx);
 
     rewriter.insert_op(ability_id_const.op_ref());
@@ -542,9 +535,17 @@ fn insert_closure_parts(
     let i32_ty = intern_i32(ctx);
     let anyref_ty = trunk_ir::dialect::wasm::anyref(ctx).as_type_ref();
 
-    let table_idx_get = wasm_dialect::struct_get(ctx, loc, closure, i32_ty, CLOSURE_STRUCT_IDX, 0);
+    let table_idx_get = wasm_dialect::StructGet::operands(closure)
+        .type_idx(CLOSURE_STRUCT_IDX)
+        .field_idx(0)
+        .results(i32_ty)
+        .build(ctx, loc);
     let table_idx = table_idx_get.result(ctx);
-    let env_get = wasm_dialect::struct_get(ctx, loc, closure, anyref_ty, CLOSURE_STRUCT_IDX, 1);
+    let env_get = wasm_dialect::StructGet::operands(closure)
+        .type_idx(CLOSURE_STRUCT_IDX)
+        .field_idx(1)
+        .results(anyref_ty)
+        .build(ctx, loc);
     let env = env_get.result(ctx);
 
     rewriter.insert_op(table_idx_get.op_ref());
@@ -562,7 +563,10 @@ fn insert_op_idx_const(
     let ability_name = ability::ability_name(ctx, ability_ref_ty);
     let op_idx = ability::compute_op_idx(ability_name, Some(op_name));
     let i32_ty = intern_i32(ctx);
-    let op_idx_const = wasm_dialect::i32_const(ctx, loc, i32_ty, op_idx as i32);
+    let op_idx_const = wasm_dialect::I32Const::operands()
+        .value(op_idx as i32)
+        .results(i32_ty)
+        .build(ctx, loc);
     let op_idx = op_idx_const.result(ctx);
     rewriter.insert_op(op_idx_const.op_ref());
     op_idx
@@ -588,30 +592,27 @@ fn insert_evidence_extend_call(
     let marker_ty = ability::marker_adt_type_ref(ctx);
 
     // Create: %ability_id = wasm.i32_const(ability_id)
-    let ability_id_const = wasm_dialect::i32_const(ctx, loc, i32_ty, ability_id);
+    let ability_id_const = wasm_dialect::I32Const::operands()
+        .value(ability_id)
+        .results(i32_ty)
+        .build(ctx, loc);
 
     // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %tr_dispatch_fn, %handler_dispatch)
-    let marker_op = wasm_dialect::struct_new(
-        ctx,
-        loc,
-        [
-            ability_id_const.result(ctx),
-            call.prompt_tag,
-            call.tr_dispatch_fn,
-            call.handler_dispatch,
-        ],
-        marker_ty,
-        MARKER_IDX,
-    );
+    let marker_op = wasm_dialect::StructNew::operands([
+        ability_id_const.result(ctx),
+        call.prompt_tag,
+        call.tr_dispatch_fn,
+        call.handler_dispatch,
+    ])
+    .type_idx(MARKER_IDX)
+    .results(marker_ty)
+    .build(ctx, loc);
 
     // Create: %result = wasm.call @__tribute_evidence_extend(%ev, %marker)
-    let call_op = wasm_dialect::call(
-        ctx,
-        loc,
-        [call.evidence, marker_op.result(ctx)],
-        [call.result_ty],
-        Symbol::new(evidence_abi::EXTEND),
-    );
+    let call_op = wasm_dialect::Call::operands([call.evidence, marker_op.result(ctx)])
+        .callee(Symbol::new(evidence_abi::EXTEND))
+        .results([call.result_ty])
+        .build(ctx, loc);
 
     let call_result = call_op.results(ctx)[0];
     rewriter.insert_op(ability_id_const.op_ref());
@@ -663,25 +664,37 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
     let target_id_val = ctx.block_arg(body_block, 1);
 
     // Initialize low = 0
-    let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+    let zero = wasm_dialect::I32Const::operands()
+        .value(0)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(body_block, zero.op_ref());
-    let low_init = wasm_dialect::local_set(ctx, location, zero.result(ctx), locals::LOW);
+    let low_init = wasm_dialect::LocalSet::operands(zero.result(ctx))
+        .index(locals::LOW)
+        .build(ctx, location);
     ctx.push_op(body_block, low_init.op_ref());
 
     // Initialize high = array.len(ev)
-    let len_op = wasm_dialect::array_len(ctx, location, ev_val, i32_ty);
+    let len_op = wasm_dialect::ArrayLen::operands(ev_val)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(body_block, len_op.op_ref());
-    let high_init = wasm_dialect::local_set(ctx, location, len_op.result(ctx), locals::HIGH);
+    let high_init = wasm_dialect::LocalSet::operands(len_op.result(ctx))
+        .index(locals::HIGH)
+        .build(ctx, location);
     ctx.push_op(body_block, high_init.op_ref());
 
     // Build the search loop
     let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
     let loop_region = build_lookup_loop_body(ctx, location, ev_val, target_id_val, i32_ty);
-    let loop_op = wasm_dialect::r#loop(ctx, location, [], [nil_ty], loop_region);
+    let loop_op = wasm_dialect::Loop::operands([])
+        .results([nil_ty])
+        .regions(loop_region)
+        .build(ctx, location);
     ctx.push_op(body_block, loop_op.op_ref());
 
     // unreachable after loop (should never reach here - loop always returns)
-    let unreachable_op = wasm_dialect::unreachable(ctx, location);
+    let unreachable_op = wasm_dialect::Unreachable::operands().build(ctx, location);
     ctx.push_op(body_block, unreachable_op.op_ref());
 
     let body = ctx.create_region(RegionData {
@@ -690,13 +703,11 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
         parent_op: None,
     });
 
-    let func_op = wasm_dialect::func(
-        ctx,
-        location,
-        Symbol::new(evidence_abi::LOOKUP),
-        func_ty,
-        body,
-    );
+    let func_op = wasm_dialect::Func::operands()
+        .sym_name(Symbol::new(evidence_abi::LOOKUP))
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, location);
     func_op.op_ref()
 }
 
@@ -719,17 +730,25 @@ fn build_lookup_loop_body(
     });
 
     // low = local.get LOW
-    let get_low = wasm_dialect::local_get(ctx, location, i32_ty, locals::LOW);
+    let get_low = wasm_dialect::LocalGet::operands()
+        .index(locals::LOW)
+        .results(i32_ty)
+        .build(ctx, location);
     let low = get_low.result(ctx);
     ctx.push_op(block, get_low.op_ref());
 
     // high = local.get HIGH
-    let get_high = wasm_dialect::local_get(ctx, location, i32_ty, locals::HIGH);
+    let get_high = wasm_dialect::LocalGet::operands()
+        .index(locals::HIGH)
+        .results(i32_ty)
+        .build(ctx, location);
     let high = get_high.result(ctx);
     ctx.push_op(block, get_high.op_ref());
 
     // Check low >= high -> unreachable (ability not found = compiler bug)
-    let ge_check = wasm_dialect::i32_ge_s(ctx, location, low, high, i32_ty);
+    let ge_check = wasm_dialect::I32GeS::operands(low, high)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(block, ge_check.op_ref());
 
     let unreachable_then = {
@@ -739,7 +758,7 @@ fn build_lookup_loop_body(
             ops: smallvec![],
             parent_region: None,
         });
-        let unreachable_op = wasm_dialect::unreachable(ctx, location);
+        let unreachable_op = wasm_dialect::Unreachable::operands().build(ctx, location);
         ctx.push_op(inner_block, unreachable_op.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -760,45 +779,47 @@ fn build_lookup_loop_body(
             parent_op: None,
         })
     };
-    let bound_check_if = wasm_dialect::r#if(
-        ctx,
-        location,
-        ge_check.result(ctx),
-        [nil_ty],
-        unreachable_then,
-        empty_else,
-    );
+    let bound_check_if = wasm_dialect::If::operands(ge_check.result(ctx))
+        .results([nil_ty])
+        .regions(unreachable_then, empty_else)
+        .build(ctx, location);
     ctx.push_op(block, bound_check_if.op_ref());
 
     // mid = (low + high) / 2
     let add_op = wasm_dialect::I32Add::operands(low, high).build(ctx, location);
     ctx.push_op(block, add_op.op_ref());
-    let two = wasm_dialect::i32_const(ctx, location, i32_ty, 2);
+    let two = wasm_dialect::I32Const::operands()
+        .value(2)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(block, two.op_ref());
-    let mid_op =
-        wasm_dialect::i32_div_u(ctx, location, add_op.result(ctx), two.result(ctx), i32_ty);
+    let mid_op = wasm_dialect::I32DivU::operands(add_op.result(ctx), two.result(ctx))
+        .results(i32_ty)
+        .build(ctx, location);
     let mid = mid_op.result(ctx);
     ctx.push_op(block, mid_op.op_ref());
 
     // marker = array.get(ev, mid)
-    let marker_op = wasm_dialect::array_get(ctx, location, ev_val, mid, marker_ty, EVIDENCE_IDX);
+    let marker_op = wasm_dialect::ArrayGet::operands(ev_val, mid)
+        .type_idx(EVIDENCE_IDX)
+        .results(marker_ty)
+        .build(ctx, location);
     let marker = marker_op.result(ctx);
     ctx.push_op(block, marker_op.op_ref());
 
     // marker_ability_id = struct.get(marker, MarkerField::AbilityId)
-    let marker_id_op = wasm_dialect::struct_get(
-        ctx,
-        location,
-        marker,
-        i32_ty,
-        MARKER_IDX,
-        MarkerField::AbilityId.index(),
-    );
+    let marker_id_op = wasm_dialect::StructGet::operands(marker)
+        .type_idx(MARKER_IDX)
+        .field_idx(MarkerField::AbilityId.index())
+        .results(i32_ty)
+        .build(ctx, location);
     let marker_id = marker_id_op.result(ctx);
     ctx.push_op(block, marker_id_op.op_ref());
 
     // Check marker_ability_id == target -> return marker
-    let eq_check = wasm_dialect::i32_eq(ctx, location, marker_id, target_id_val, i32_ty);
+    let eq_check = wasm_dialect::I32Eq::operands(marker_id, target_id_val)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(block, eq_check.op_ref());
 
     let found_then = {
@@ -809,7 +830,7 @@ fn build_lookup_loop_body(
             ops: smallvec![],
             parent_region: None,
         });
-        let return_op = wasm_dialect::r#return(ctx, location, [marker]);
+        let return_op = wasm_dialect::Return::operands([marker]).build(ctx, location);
         ctx.push_op(inner_block, return_op.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -827,7 +848,9 @@ fn build_lookup_loop_body(
             parent_region: None,
         });
 
-        let lt_check = wasm_dialect::i32_lt_s(ctx, location, marker_id, target_id_val, i32_ty);
+        let lt_check = wasm_dialect::I32LtS::operands(marker_id, target_id_val)
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(inner_block, lt_check.op_ref());
 
         let update_low = {
@@ -838,11 +861,16 @@ fn build_lookup_loop_body(
                 ops: smallvec![],
                 parent_region: None,
             });
-            let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
+            let one = wasm_dialect::I32Const::operands()
+                .value(1)
+                .results(i32_ty)
+                .build(ctx, location);
             ctx.push_op(ub, one.op_ref());
             let add_one = wasm_dialect::I32Add::operands(mid, one.result(ctx)).build(ctx, location);
             ctx.push_op(ub, add_one.op_ref());
-            let set_low = wasm_dialect::local_set(ctx, location, add_one.result(ctx), locals::LOW);
+            let set_low = wasm_dialect::LocalSet::operands(add_one.result(ctx))
+                .index(locals::LOW)
+                .build(ctx, location);
             ctx.push_op(ub, set_low.op_ref());
             ctx.create_region(RegionData {
                 location,
@@ -859,7 +887,9 @@ fn build_lookup_loop_body(
                 ops: smallvec![],
                 parent_region: None,
             });
-            let set_high = wasm_dialect::local_set(ctx, location, mid, locals::HIGH);
+            let set_high = wasm_dialect::LocalSet::operands(mid)
+                .index(locals::HIGH)
+                .build(ctx, location);
             ctx.push_op(ub, set_high.op_ref());
             ctx.create_region(RegionData {
                 location,
@@ -868,18 +898,14 @@ fn build_lookup_loop_body(
             })
         };
 
-        let update_if = wasm_dialect::r#if(
-            ctx,
-            location,
-            lt_check.result(ctx),
-            [nil_ty],
-            update_low,
-            update_high,
-        );
+        let update_if = wasm_dialect::If::operands(lt_check.result(ctx))
+            .results([nil_ty])
+            .regions(update_low, update_high)
+            .build(ctx, location);
         ctx.push_op(inner_block, update_if.op_ref());
 
         // br $loop (target = 0, since loop is innermost)
-        let br_loop = wasm_dialect::br(ctx, location, 0);
+        let br_loop = wasm_dialect::Br::operands().target(0).build(ctx, location);
         ctx.push_op(inner_block, br_loop.op_ref());
 
         ctx.create_region(RegionData {
@@ -889,14 +915,10 @@ fn build_lookup_loop_body(
         })
     };
 
-    let found_if = wasm_dialect::r#if(
-        ctx,
-        location,
-        eq_check.result(ctx),
-        [nil_ty],
-        found_then,
-        continue_else,
-    );
+    let found_if = wasm_dialect::If::operands(eq_check.result(ctx))
+        .results([nil_ty])
+        .regions(found_then, continue_else)
+        .build(ctx, location);
     ctx.push_op(block, found_if.op_ref());
 
     ctx.create_region(RegionData {
@@ -940,36 +962,45 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     let nil_ty = trunk_ir::dialect::core::nil(ctx).as_type_ref();
 
     // Get marker's ability_id for binary search
-    let marker_id_op = wasm_dialect::struct_get(
-        ctx,
-        location,
-        marker_val,
-        i32_ty,
-        MARKER_IDX,
-        MarkerField::AbilityId.index(),
-    );
+    let marker_id_op = wasm_dialect::StructGet::operands(marker_val)
+        .type_idx(MARKER_IDX)
+        .field_idx(MarkerField::AbilityId.index())
+        .results(i32_ty)
+        .build(ctx, location);
     let marker_id = marker_id_op.result(ctx);
     ctx.push_op(body_block, marker_id_op.op_ref());
 
     // old_len = array.len(ev)
-    let len_op = wasm_dialect::array_len(ctx, location, ev_val, i32_ty);
+    let len_op = wasm_dialect::ArrayLen::operands(ev_val)
+        .results(i32_ty)
+        .build(ctx, location);
     let old_len = len_op.result(ctx);
     ctx.push_op(body_block, len_op.op_ref());
 
     // Initialize low = 0
-    let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+    let zero = wasm_dialect::I32Const::operands()
+        .value(0)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(body_block, zero.op_ref());
-    let low_init = wasm_dialect::local_set(ctx, location, zero.result(ctx), locals::LOW);
+    let low_init = wasm_dialect::LocalSet::operands(zero.result(ctx))
+        .index(locals::LOW)
+        .build(ctx, location);
     ctx.push_op(body_block, low_init.op_ref());
 
     // Initialize high = old_len
-    let high_init = wasm_dialect::local_set(ctx, location, old_len, locals::HIGH);
+    let high_init = wasm_dialect::LocalSet::operands(old_len)
+        .index(locals::HIGH)
+        .build(ctx, location);
     ctx.push_op(body_block, high_init.op_ref());
 
     // Binary search loop to find insertion point
     // After loop, LOW contains the insertion index
     let search_loop = build_extend_search_loop(ctx, location, ev_val, marker_id, i32_ty);
-    let loop_op = wasm_dialect::r#loop(ctx, location, [], [nil_ty], search_loop);
+    let loop_op = wasm_dialect::Loop::operands([])
+        .results([nil_ty])
+        .regions(search_loop)
+        .build(ctx, location);
 
     // Wrap loop in block for br_if(..., 1) target
     let loop_wrapper_block = ctx.create_block(BlockData {
@@ -984,33 +1015,49 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         blocks: smallvec![loop_wrapper_block],
         parent_op: None,
     });
-    let block_op = wasm_dialect::block(ctx, location, [nil_ty], loop_region);
+    let block_op = wasm_dialect::Block::operands()
+        .results([nil_ty])
+        .regions(loop_region)
+        .build(ctx, location);
     ctx.push_op(body_block, block_op.op_ref());
 
     // insert_idx = local.get LOW
-    let get_insert_idx = wasm_dialect::local_get(ctx, location, i32_ty, locals::LOW);
+    let get_insert_idx = wasm_dialect::LocalGet::operands()
+        .index(locals::LOW)
+        .results(i32_ty)
+        .build(ctx, location);
     let insert_idx = get_insert_idx.result(ctx);
     ctx.push_op(body_block, get_insert_idx.op_ref());
 
     // new_len = old_len + 1
-    let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
+    let one = wasm_dialect::I32Const::operands()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(body_block, one.op_ref());
     let add_len_op = wasm_dialect::I32Add::operands(old_len, one.result(ctx)).build(ctx, location);
     let new_len = add_len_op.result(ctx);
     ctx.push_op(body_block, add_len_op.op_ref());
 
     // new_ev = array.new_default(new_len)
-    let new_array_op =
-        wasm_dialect::array_new_default(ctx, location, new_len, evidence_ty, EVIDENCE_IDX);
+    let new_array_op = wasm_dialect::ArrayNewDefault::operands(new_len)
+        .type_idx(EVIDENCE_IDX)
+        .results(evidence_ty)
+        .build(ctx, location);
     let new_ev = new_array_op.result(ctx);
     ctx.push_op(body_block, new_array_op.op_ref());
 
     // Copy elements before insertion point: array.copy(new_ev, 0, ev, 0, insert_idx)
     // Only if insert_idx > 0
-    let zero2 = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+    let zero2 = wasm_dialect::I32Const::operands()
+        .value(0)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(body_block, zero2.op_ref());
 
-    let gt_zero = wasm_dialect::i32_gt_s(ctx, location, insert_idx, zero2.result(ctx), i32_ty);
+    let gt_zero = wasm_dialect::I32GtS::operands(insert_idx, zero2.result(ctx))
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(body_block, gt_zero.op_ref());
 
     let copy_prefix_then = {
@@ -1020,19 +1067,21 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
             ops: smallvec![],
             parent_region: None,
         });
-        let zero3 = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+        let zero3 = wasm_dialect::I32Const::operands()
+            .value(0)
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(inner_block, zero3.op_ref());
-        let copy_op = wasm_dialect::array_copy(
-            ctx,
-            location,
+        let copy_op = wasm_dialect::ArrayCopy::operands(
             new_ev,
             zero3.result(ctx),
             ev_val,
             zero3.result(ctx),
             insert_idx,
-            EVIDENCE_IDX,
-            EVIDENCE_IDX,
-        );
+        )
+        .dst_type_idx(EVIDENCE_IDX)
+        .src_type_idx(EVIDENCE_IDX)
+        .build(ctx, location);
         ctx.push_op(inner_block, copy_op.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -1053,31 +1102,35 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
             parent_op: None,
         })
     };
-    let copy_prefix_if = wasm_dialect::r#if(
-        ctx,
-        location,
-        gt_zero.result(ctx),
-        [nil_ty],
-        copy_prefix_then,
-        empty_else1,
-    );
+    let copy_prefix_if = wasm_dialect::If::operands(gt_zero.result(ctx))
+        .results([nil_ty])
+        .regions(copy_prefix_then, empty_else1)
+        .build(ctx, location);
     ctx.push_op(body_block, copy_prefix_if.op_ref());
 
     // Set marker at insert_idx: array.set(new_ev, insert_idx, marker)
-    let set_op =
-        wasm_dialect::array_set(ctx, location, new_ev, insert_idx, marker_val, EVIDENCE_IDX);
+    let set_op = wasm_dialect::ArraySet::operands(new_ev, insert_idx, marker_val)
+        .type_idx(EVIDENCE_IDX)
+        .build(ctx, location);
     ctx.push_op(body_block, set_op.op_ref());
 
     // Copy elements after insertion point: array.copy(new_ev, insert_idx+1, ev, insert_idx, old_len - insert_idx)
     // suffix_len = old_len - insert_idx
-    let suffix_len_op = wasm_dialect::i32_sub(ctx, location, old_len, insert_idx, i32_ty);
+    let suffix_len_op = wasm_dialect::I32Sub::operands(old_len, insert_idx)
+        .results(i32_ty)
+        .build(ctx, location);
     let suffix_len = suffix_len_op.result(ctx);
     ctx.push_op(body_block, suffix_len_op.op_ref());
 
     // Only if suffix_len > 0
-    let zero4 = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+    let zero4 = wasm_dialect::I32Const::operands()
+        .value(0)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(body_block, zero4.op_ref());
-    let gt_zero2 = wasm_dialect::i32_gt_s(ctx, location, suffix_len, zero4.result(ctx), i32_ty);
+    let gt_zero2 = wasm_dialect::I32GtS::operands(suffix_len, zero4.result(ctx))
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(body_block, gt_zero2.op_ref());
 
     let copy_suffix_then = {
@@ -1087,22 +1140,24 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
             ops: smallvec![],
             parent_region: None,
         });
-        let one2 = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
+        let one2 = wasm_dialect::I32Const::operands()
+            .value(1)
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(inner_block, one2.op_ref());
         let dst_offset_op =
             wasm_dialect::I32Add::operands(insert_idx, one2.result(ctx)).build(ctx, location);
         ctx.push_op(inner_block, dst_offset_op.op_ref());
-        let copy_op = wasm_dialect::array_copy(
-            ctx,
-            location,
+        let copy_op = wasm_dialect::ArrayCopy::operands(
             new_ev,
             dst_offset_op.result(ctx),
             ev_val,
             insert_idx,
             suffix_len,
-            EVIDENCE_IDX,
-            EVIDENCE_IDX,
-        );
+        )
+        .dst_type_idx(EVIDENCE_IDX)
+        .src_type_idx(EVIDENCE_IDX)
+        .build(ctx, location);
         ctx.push_op(inner_block, copy_op.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -1123,18 +1178,14 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
             parent_op: None,
         })
     };
-    let copy_suffix_if = wasm_dialect::r#if(
-        ctx,
-        location,
-        gt_zero2.result(ctx),
-        [nil_ty],
-        copy_suffix_then,
-        empty_else2,
-    );
+    let copy_suffix_if = wasm_dialect::If::operands(gt_zero2.result(ctx))
+        .results([nil_ty])
+        .regions(copy_suffix_then, empty_else2)
+        .build(ctx, location);
     ctx.push_op(body_block, copy_suffix_if.op_ref());
 
     // Return new_ev
-    let return_op = wasm_dialect::r#return(ctx, location, [new_ev]);
+    let return_op = wasm_dialect::Return::operands([new_ev]).build(ctx, location);
     ctx.push_op(body_block, return_op.op_ref());
 
     let body = ctx.create_region(RegionData {
@@ -1143,13 +1194,11 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
         parent_op: None,
     });
 
-    let func_op = wasm_dialect::func(
-        ctx,
-        location,
-        Symbol::new(evidence_abi::EXTEND),
-        func_ty,
-        body,
-    );
+    let func_op = wasm_dialect::Func::operands()
+        .sym_name(Symbol::new(evidence_abi::EXTEND))
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, location);
     func_op.op_ref()
 }
 
@@ -1175,54 +1224,69 @@ fn build_extend_search_loop(
     });
 
     // low = local.get LOW
-    let get_low = wasm_dialect::local_get(ctx, location, i32_ty, locals::LOW);
+    let get_low = wasm_dialect::LocalGet::operands()
+        .index(locals::LOW)
+        .results(i32_ty)
+        .build(ctx, location);
     let low = get_low.result(ctx);
     ctx.push_op(block, get_low.op_ref());
 
     // high = local.get HIGH
-    let get_high = wasm_dialect::local_get(ctx, location, i32_ty, locals::HIGH);
+    let get_high = wasm_dialect::LocalGet::operands()
+        .index(locals::HIGH)
+        .results(i32_ty)
+        .build(ctx, location);
     let high = get_high.result(ctx);
     ctx.push_op(block, get_high.op_ref());
 
     // if low >= high: break (insertion point found at LOW)
-    let ge_check = wasm_dialect::i32_ge_s(ctx, location, low, high, i32_ty);
+    let ge_check = wasm_dialect::I32GeS::operands(low, high)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(block, ge_check.op_ref());
 
     // br_if to exit loop (target = 1 to break out of loop to outer block)
-    let br_if_done = wasm_dialect::br_if(ctx, location, ge_check.result(ctx), 1);
+    let br_if_done = wasm_dialect::BrIf::operands(ge_check.result(ctx))
+        .target(1)
+        .build(ctx, location);
     ctx.push_op(block, br_if_done.op_ref());
 
     // mid = (low + high) / 2
     let add_op = wasm_dialect::I32Add::operands(low, high).build(ctx, location);
     ctx.push_op(block, add_op.op_ref());
-    let two = wasm_dialect::i32_const(ctx, location, i32_ty, 2);
+    let two = wasm_dialect::I32Const::operands()
+        .value(2)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(block, two.op_ref());
-    let mid_op =
-        wasm_dialect::i32_div_u(ctx, location, add_op.result(ctx), two.result(ctx), i32_ty);
+    let mid_op = wasm_dialect::I32DivU::operands(add_op.result(ctx), two.result(ctx))
+        .results(i32_ty)
+        .build(ctx, location);
     let mid = mid_op.result(ctx);
     ctx.push_op(block, mid_op.op_ref());
 
     // mid_marker = array.get(ev, mid)
-    let mid_marker_op =
-        wasm_dialect::array_get(ctx, location, ev_val, mid, marker_ty, EVIDENCE_IDX);
+    let mid_marker_op = wasm_dialect::ArrayGet::operands(ev_val, mid)
+        .type_idx(EVIDENCE_IDX)
+        .results(marker_ty)
+        .build(ctx, location);
     let mid_marker = mid_marker_op.result(ctx);
     ctx.push_op(block, mid_marker_op.op_ref());
 
     // mid_ability_id = struct.get(mid_marker, MarkerField::AbilityId)
-    let mid_id_op = wasm_dialect::struct_get(
-        ctx,
-        location,
-        mid_marker,
-        i32_ty,
-        MARKER_IDX,
-        MarkerField::AbilityId.index(),
-    );
+    let mid_id_op = wasm_dialect::StructGet::operands(mid_marker)
+        .type_idx(MARKER_IDX)
+        .field_idx(MarkerField::AbilityId.index())
+        .results(i32_ty)
+        .build(ctx, location);
     let mid_id = mid_id_op.result(ctx);
     ctx.push_op(block, mid_id_op.op_ref());
 
     // if mid_ability_id < marker_id: low = mid + 1
     // else: high = mid
-    let lt_check = wasm_dialect::i32_lt_s(ctx, location, mid_id, marker_id, i32_ty);
+    let lt_check = wasm_dialect::I32LtS::operands(mid_id, marker_id)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(block, lt_check.op_ref());
 
     let update_low = {
@@ -1232,11 +1296,16 @@ fn build_extend_search_loop(
             ops: smallvec![],
             parent_region: None,
         });
-        let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
+        let one = wasm_dialect::I32Const::operands()
+            .value(1)
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(inner_block, one.op_ref());
         let add_one = wasm_dialect::I32Add::operands(mid, one.result(ctx)).build(ctx, location);
         ctx.push_op(inner_block, add_one.op_ref());
-        let set_low = wasm_dialect::local_set(ctx, location, add_one.result(ctx), locals::LOW);
+        let set_low = wasm_dialect::LocalSet::operands(add_one.result(ctx))
+            .index(locals::LOW)
+            .build(ctx, location);
         ctx.push_op(inner_block, set_low.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -1252,7 +1321,9 @@ fn build_extend_search_loop(
             ops: smallvec![],
             parent_region: None,
         });
-        let set_high = wasm_dialect::local_set(ctx, location, mid, locals::HIGH);
+        let set_high = wasm_dialect::LocalSet::operands(mid)
+            .index(locals::HIGH)
+            .build(ctx, location);
         ctx.push_op(inner_block, set_high.op_ref());
         ctx.create_region(RegionData {
             location,
@@ -1261,18 +1332,14 @@ fn build_extend_search_loop(
         })
     };
 
-    let update_if = wasm_dialect::r#if(
-        ctx,
-        location,
-        lt_check.result(ctx),
-        [nil_ty],
-        update_low,
-        update_high,
-    );
+    let update_if = wasm_dialect::If::operands(lt_check.result(ctx))
+        .results([nil_ty])
+        .regions(update_low, update_high)
+        .build(ctx, location);
     ctx.push_op(block, update_if.op_ref());
 
     // br $loop (continue searching)
-    let br_loop = wasm_dialect::br(ctx, location, 0);
+    let br_loop = wasm_dialect::Br::operands().target(0).build(ctx, location);
     ctx.push_op(block, br_loop.op_ref());
 
     ctx.create_region(RegionData {

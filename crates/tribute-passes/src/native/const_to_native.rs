@@ -222,18 +222,27 @@ fn emit_bytes_alloc(
     let mut ops: Vec<OpRef> = Vec::new();
 
     // 1. Get rodata address
-    let data_ptr_op = clif::symbol_addr(ctx, loc, ptr_ty, data_sym);
+    let data_ptr_op = clif::SymbolAddr::operands()
+        .sym(data_sym)
+        .results(ptr_ty)
+        .build(ctx, loc);
     ops.push(data_ptr_op.op_ref());
     let data_ptr = data_ptr_op.result(ctx);
 
     // 2. Length constant
-    let len_op = clif::iconst(ctx, loc, i64_ty, content_len as i64);
+    let len_op = clif::Iconst::operands()
+        .value(content_len as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     ops.push(len_op.op_ref());
     let len_val = len_op.result(ctx);
 
     // 3. Allocate RC header (8) + TributeBytes payload (ptr=8 + len=8 = 16) = 24 bytes
     let alloc_size = RC_HEADER_SIZE + 16; // ptr(8) + len(8)
-    let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
+    let size_op = clif::Iconst::operands()
+        .value(alloc_size as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     ops.push(size_op.op_ref());
 
     let call_op = clif::Call::operands([size_op.result(ctx)])
@@ -244,47 +253,59 @@ fn emit_bytes_alloc(
     let raw_ptr = call_op.results(ctx)[0];
 
     // 4. Store RC header: refcount=1, rtti_idx=0
-    let rc_one = clif::iconst(ctx, loc, i32_ty, 1);
+    let rc_one = clif::Iconst::operands()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, loc);
     ops.push(rc_one.op_ref());
-    let store_rc = clif::store(
-        ctx,
-        loc,
-        rc_one.result(ctx),
-        raw_ptr,
-        REFCOUNT_OFFSET as i32,
-    );
+    let store_rc = clif::Store::operands(rc_one.result(ctx), raw_ptr)
+        .offset(REFCOUNT_OFFSET as i32)
+        .build(ctx, loc);
     ops.push(store_rc.op_ref());
 
-    let rtti_zero = clif::iconst(ctx, loc, i32_ty, 0);
+    let rtti_zero = clif::Iconst::operands()
+        .value(0)
+        .results(i32_ty)
+        .build(ctx, loc);
     ops.push(rtti_zero.op_ref());
-    let store_rtti = clif::store(
-        ctx,
-        loc,
-        rtti_zero.result(ctx),
-        raw_ptr,
-        RTTI_IDX_OFFSET as i32,
-    );
+    let store_rtti = clif::Store::operands(rtti_zero.result(ctx), raw_ptr)
+        .offset(RTTI_IDX_OFFSET as i32)
+        .build(ctx, loc);
     ops.push(store_rtti.op_ref());
 
     // 5. Compute payload pointer = raw + 8
-    let hdr_size = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_size = clif::Iconst::operands()
+        .value(RC_HEADER_SIZE as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     ops.push(hdr_size.op_ref());
-    let payload_op = clif::iadd(ctx, loc, raw_ptr, hdr_size.result(ctx), ptr_ty);
+    let payload_op = clif::Iadd::operands(raw_ptr, hdr_size.result(ctx))
+        .results(ptr_ty)
+        .build(ctx, loc);
     ops.push(payload_op.op_ref());
     let payload = payload_op.result(ctx);
 
     // 6. Store TributeBytes fields: ptr at payload+0, len at payload+8
-    let store_ptr = clif::store(ctx, loc, data_ptr, payload, 0);
+    let store_ptr = clif::Store::operands(data_ptr, payload)
+        .offset(0)
+        .build(ctx, loc);
     ops.push(store_ptr.op_ref());
 
-    let store_len = clif::store(ctx, loc, len_val, payload, 8);
+    let store_len = clif::Store::operands(len_val, payload)
+        .offset(8)
+        .build(ctx, loc);
     ops.push(store_len.op_ref());
 
     // 7. Identity iadd(payload, 0) to produce a fresh SSA value that the
     //    rewrite pattern can use as the replacement result.
-    let zero_op = clif::iconst(ctx, loc, i64_ty, 0);
+    let zero_op = clif::Iconst::operands()
+        .value(0)
+        .results(i64_ty)
+        .build(ctx, loc);
     ops.push(zero_op.op_ref());
-    let identity_op = clif::iadd(ctx, loc, payload, zero_op.result(ctx), ptr_ty);
+    let identity_op = clif::Iadd::operands(payload, zero_op.result(ctx))
+        .results(ptr_ty)
+        .build(ctx, loc);
     ops.push(identity_op.op_ref());
 
     let last = ops.pop().unwrap();
@@ -393,14 +414,11 @@ impl RewritePattern for StringConstNativePattern {
         // Create adt.variant_new(type=String, tag=Leaf, bytes_payload)
         // Use the actual String enum type for the type attribute so that
         // adt_rc_header can compute the correct enum layout.
-        let variant_new = adt::variant_new(
-            ctx,
-            loc,
-            [bytes_payload],
-            result_ty,
-            string_enum_ty,
-            Symbol::new("Leaf"),
-        );
+        let variant_new = adt::VariantNew::operands([bytes_payload])
+            .r#type(string_enum_ty)
+            .tag(Symbol::new("Leaf"))
+            .results(result_ty)
+            .build(ctx, loc);
 
         for o in insert_ops {
             rewriter.insert_op(o);

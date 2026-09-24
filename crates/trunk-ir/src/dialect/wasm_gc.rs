@@ -6,45 +6,46 @@
 
 #[trunk_ir::dialect]
 mod wasm_gc {
-    #[attr(r#type: Type)]
-    fn struct_new(#[rest] fields: ()) -> result {}
+    fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
-    #[attr(r#type: Type, field_idx: u32)]
-    fn struct_get(r#ref: ()) -> result {}
+    fn struct_get(r#type: Attr<Type>, field_idx: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type, field_idx: u32)]
-    fn struct_set(r#ref: (), value: ()) {}
+    fn struct_set(r#type: Attr<Type>, field_idx: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
-    #[attr(r#type: Type)]
-    fn array_new(size: (), init: ()) -> result {}
+    fn array_new(r#type: Attr<Type>, size: Value<_>, init: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type)]
-    fn array_new_default(size: ()) -> result {}
+    fn array_new_default(r#type: Attr<Type>, size: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type, data_idx: u32)]
-    fn array_new_data(offset: (), size: ()) -> result {}
+    fn array_new_data(
+        r#type: Attr<Type>,
+        data_idx: Attr<u32>,
+        offset: Value<_>,
+        size: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(r#type: Type)]
-    fn array_get(r#ref: (), index: ()) -> result {}
+    fn array_get(r#type: Attr<Type>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type)]
-    fn array_get_s(r#ref: (), index: ()) -> result {}
+    fn array_get_s(r#type: Attr<Type>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type)]
-    fn array_get_u(r#ref: (), index: ()) -> result {}
+    fn array_get_u(r#type: Attr<Type>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
 
-    #[attr(r#type: Type)]
-    fn array_set(r#ref: (), index: (), value: ()) {}
+    fn array_set(r#type: Attr<Type>, r#ref: Value<_>, index: Value<_>, value: Value<_>) {}
 
-    #[attr(dst_type: Type, src_type: Type)]
-    fn array_copy(dst: (), dst_offset: (), src: (), src_offset: (), len: ()) {}
+    fn array_copy(
+        dst_type: Attr<Type>,
+        src_type: Attr<Type>,
+        dst: Value<_>,
+        dst_offset: Value<_>,
+        src: Value<_>,
+        src_offset: Value<_>,
+        len: Value<_>,
+    ) {
+    }
 
-    #[attr(target_type: Type)]
-    fn ref_null() -> result {}
+    fn ref_null(target_type: Attr<Type>) -> Value<_> {}
 
-    #[attr(target_type: Type)]
-    fn ref_cast(r#ref: ()) -> result {}
+    fn ref_cast(target_type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(target_type: Type)]
-    fn ref_test(r#ref: ()) -> result {}
+    fn ref_test(target_type: Attr<Type>, r#ref: Value<_>) -> Value<_> {}
 }

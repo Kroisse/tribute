@@ -2,12 +2,12 @@
 
 #[trunk_ir::dialect]
 mod cf {
-    fn br(#[rest] args: ()) {
+    fn br(args: Variadic<_>) {
         #[successor(dest)]
         {}
     }
 
-    fn cond_br(cond: ()) {
+    fn cond_br(cond: Value<_>) {
         #[successor(then_dest)]
         {}
         #[successor(else_dest)]

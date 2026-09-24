@@ -349,14 +349,19 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let ret = func::r#return(ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, Symbol::from_dynamic(name), fn_ty, body).op_ref()
+        func::Func::operands()
+            .sym_name(Symbol::from_dynamic(name))
+            .r#type(fn_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     fn func_that_calls(ctx: &mut IrContext, loc: Location, name: &str, callees: &[&str]) -> OpRef {
@@ -369,23 +374,25 @@ mod tests {
             parent_region: None,
         });
         for callee in callees {
-            let call = func::call(
-                ctx,
-                loc,
-                std::iter::empty(),
-                [i32_ty],
-                Symbol::from_dynamic(callee),
-            );
+            let call = func::Call::operands(std::iter::empty())
+                .callee(Symbol::from_dynamic(callee))
+                .results([i32_ty])
+                .build(ctx, loc);
             ctx.push_op(entry, call.op_ref());
         }
-        let ret = func::r#return(ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, Symbol::from_dynamic(name), fn_ty, body).op_ref()
+        func::Func::operands()
+            .sym_name(Symbol::from_dynamic(name))
+            .r#type(fn_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     fn func_that_takes_constant_of(
@@ -401,16 +408,24 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let c = func::constant(ctx, loc, fn_ty, Symbol::from_dynamic(target));
+        let c = func::Constant::operands()
+            .func_ref(Symbol::from_dynamic(target))
+            .results(fn_ty)
+            .build(ctx, loc);
         ctx.push_op(entry, c.op_ref());
-        let ret = func::r#return(ctx, loc, std::iter::empty());
+        let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![entry],
             parent_op: None,
         });
-        func::func(ctx, loc, Symbol::from_dynamic(name), fn_ty, body).op_ref()
+        func::Func::operands()
+            .sym_name(Symbol::from_dynamic(name))
+            .r#type(fn_ty)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {

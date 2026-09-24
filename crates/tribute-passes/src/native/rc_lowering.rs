@@ -176,27 +176,30 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             });
 
             // Generate null check ops in current_block
-            let null_val = clif::iconst(ctx, loc, ptr_ty, 0);
+            let null_val = clif::Iconst::operands()
+                .value(0)
+                .results(ptr_ty)
+                .build(ctx, loc);
             ctx.push_op(current_block, null_val.op_ref());
-            let is_null = clif::icmp(
-                ctx,
-                loc,
-                ptr,
-                null_val.result(ctx),
-                i8_ty,
-                Symbol::new("eq"),
-            );
+            let is_null = clif::Icmp::operands(ptr, null_val.result(ctx))
+                .cond(Symbol::new("eq"))
+                .results(i8_ty)
+                .build(ctx, loc);
             ctx.push_op(current_block, is_null.op_ref());
 
             // brif: if null → skip, else → do_retain
-            let brif_op = clif::brif(ctx, loc, is_null.result(ctx), skip_block, do_retain_block);
+            let brif_op = clif::Brif::operands(is_null.result(ctx))
+                .successors(skip_block, do_retain_block)
+                .build(ctx, loc);
             ctx.push_op(current_block, brif_op.op_ref());
 
             // Generate retain RC ops in do_retain_block
             gen_retain_rc_ops(ctx, loc, do_retain_block, ptr, ptr_ty, i64_ty, i32_ty);
 
             // Jump from do_retain to skip
-            let jump = clif::jump(ctx, loc, [], skip_block);
+            let jump = clif::Jump::operands([])
+                .successors(skip_block)
+                .build(ctx, loc);
             ctx.push_op(do_retain_block, jump.op_ref());
 
             // Move remaining ops (after retain) to skip block
@@ -254,20 +257,21 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             });
 
             // Generate null check ops in current_block
-            let null_val = clif::iconst(ctx, loc, ptr_ty, 0);
+            let null_val = clif::Iconst::operands()
+                .value(0)
+                .results(ptr_ty)
+                .build(ctx, loc);
             ctx.push_op(current_block, null_val.op_ref());
-            let is_null = clif::icmp(
-                ctx,
-                loc,
-                ptr,
-                null_val.result(ctx),
-                i8_ty,
-                Symbol::new("eq"),
-            );
+            let is_null = clif::Icmp::operands(ptr, null_val.result(ctx))
+                .cond(Symbol::new("eq"))
+                .results(i8_ty)
+                .build(ctx, loc);
             ctx.push_op(current_block, is_null.op_ref());
 
             // brif: if null → skip, else → do_release
-            let brif_op = clif::brif(ctx, loc, is_null.result(ctx), skip_block, do_release_block);
+            let brif_op = clif::Brif::operands(is_null.result(ctx))
+                .successors(skip_block, do_release_block)
+                .build(ctx, loc);
             ctx.push_op(current_block, brif_op.op_ref());
 
             // Generate release decrement ops in do_release_block
@@ -283,7 +287,9 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
             );
 
             // brif: if last ref → free, else → skip
-            let last_brif = clif::brif(ctx, loc, is_last_val, free_block, skip_block);
+            let last_brif = clif::Brif::operands(is_last_val)
+                .successors(free_block, skip_block)
+                .build(ctx, loc);
             ctx.push_op(do_release_block, last_brif.op_ref());
 
             // Generate free block ops
@@ -339,23 +345,27 @@ fn gen_retain_rc_ops(
     i32_ty: TypeRef,
 ) {
     // rc_addr = ptr - RC_HEADER_SIZE
-    let hdr_sz = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_sz = clif::Iconst::operands()
+        .value(RC_HEADER_SIZE as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     ctx.push_op(block, hdr_sz.op_ref());
-    let rc_addr = clif::isub(ctx, loc, ptr, hdr_sz.result(ctx), ptr_ty);
+    let rc_addr = clif::Isub::operands(ptr, hdr_sz.result(ctx))
+        .results(ptr_ty)
+        .build(ctx, loc);
     ctx.push_op(block, rc_addr.op_ref());
 
     // atomic_rmw add: atomically increment RC
-    let one = clif::iconst(ctx, loc, i32_ty, 1);
+    let one = clif::Iconst::operands()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(block, one.op_ref());
-    let _old_rc = clif::atomic_rmw(
-        ctx,
-        loc,
-        rc_addr.result(ctx),
-        one.result(ctx),
-        i32_ty,
-        Symbol::new("add"),
-        0,
-    );
+    let _old_rc = clif::AtomicRmw::operands(rc_addr.result(ctx), one.result(ctx))
+        .op(Symbol::new("add"))
+        .offset(0)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(block, _old_rc.op_ref());
 }
 
@@ -373,34 +383,34 @@ fn gen_release_decrement(
     i8_ty: TypeRef,
 ) -> ValueRef {
     // rc_addr = ptr - RC_HEADER_SIZE
-    let hdr_sz = clif::iconst(ctx, loc, i64_ty, RC_HEADER_SIZE as i64);
+    let hdr_sz = clif::Iconst::operands()
+        .value(RC_HEADER_SIZE as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     ctx.push_op(block, hdr_sz.op_ref());
-    let rc_addr = clif::isub(ctx, loc, ptr, hdr_sz.result(ctx), ptr_ty);
+    let rc_addr = clif::Isub::operands(ptr, hdr_sz.result(ctx))
+        .results(ptr_ty)
+        .build(ctx, loc);
     ctx.push_op(block, rc_addr.op_ref());
 
     // atomic_rmw sub: atomically decrement RC, returns old value
-    let one = clif::iconst(ctx, loc, i32_ty, 1);
+    let one = clif::Iconst::operands()
+        .value(1)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(block, one.op_ref());
-    let old_rc = clif::atomic_rmw(
-        ctx,
-        loc,
-        rc_addr.result(ctx),
-        one.result(ctx),
-        i32_ty,
-        Symbol::new("sub"),
-        0,
-    );
+    let old_rc = clif::AtomicRmw::operands(rc_addr.result(ctx), one.result(ctx))
+        .op(Symbol::new("sub"))
+        .offset(0)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(block, old_rc.op_ref());
 
     // is_last = (old_rc == 1) means refcount was 1 before decrement, now 0
-    let is_last = clif::icmp(
-        ctx,
-        loc,
-        old_rc.result(ctx),
-        one.result(ctx),
-        i8_ty,
-        Symbol::new("eq"),
-    );
+    let is_last = clif::Icmp::operands(old_rc.result(ctx), one.result(ctx))
+        .cond(Symbol::new("eq"))
+        .results(i8_ty)
+        .build(ctx, loc);
     ctx.push_op(block, is_last.op_ref());
 
     is_last.result(ctx)
@@ -419,7 +429,10 @@ fn gen_deep_release_call(
     nil_ty: TypeRef,
 ) {
     // size = iconst(alloc_size)
-    let size = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
+    let size = clif::Iconst::operands()
+        .value(alloc_size as i64)
+        .results(i64_ty)
+        .build(ctx, loc);
     ctx.push_op(block, size.op_ref());
 
     // call @__tribute_deep_release(payload_ptr, size)
@@ -430,7 +443,9 @@ fn gen_deep_release_call(
     ctx.push_op(block, call.op_ref());
 
     // jump to continue block
-    let jump = clif::jump(ctx, loc, [], continue_block);
+    let jump = clif::Jump::operands([])
+        .successors(continue_block)
+        .build(ctx, loc);
     ctx.push_op(block, jump.op_ref());
 }
 

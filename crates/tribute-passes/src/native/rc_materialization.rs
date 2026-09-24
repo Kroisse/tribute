@@ -236,7 +236,9 @@ fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement,
     match action {
         ScheduledAction::Retain { placement, value } => {
             let ty = ctx.value_ty(value);
-            let retain = tribute_rt::retain(ctx, location_for(ctx, placement), value, ty);
+            let retain = tribute_rt::Retain::operands(value)
+                .results(ty)
+                .build(ctx, location_for(ctx, placement));
             (placement, vec![retain.op_ref()])
         }
         ScheduledAction::Release {
@@ -244,7 +246,9 @@ fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement,
             value,
             alloc_size,
         } => {
-            let release = tribute_rt::release(ctx, location_for(ctx, placement), value, alloc_size);
+            let release = tribute_rt::Release::operands(value)
+                .alloc_size(alloc_size)
+                .build(ctx, location_for(ctx, placement));
             (placement, vec![release.op_ref()])
         }
         ScheduledAction::ReleaseReplacedField {
@@ -256,8 +260,14 @@ fn build_operations(ctx: &mut IrContext, action: ScheduledAction) -> (Placement,
             alloc_size,
         } => {
             let location = location_for(ctx, placement);
-            let get = adt::struct_get(ctx, location, object, field_ty, layout, field);
-            let release = tribute_rt::release(ctx, location, get.result(ctx), alloc_size);
+            let get = adt::StructGet::operands(object)
+                .r#type(layout)
+                .field(field)
+                .results(field_ty)
+                .build(ctx, location);
+            let release = tribute_rt::Release::operands(get.result(ctx))
+                .alloc_size(alloc_size)
+                .build(ctx, location);
             (placement, vec![get.op_ref(), release.op_ref()])
         }
     }

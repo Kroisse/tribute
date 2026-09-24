@@ -110,13 +110,10 @@ impl RewritePattern for NativeWritePattern {
         };
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
-        let call = func::call(
-            ctx,
-            loc,
-            [write.bytes(ctx), write.newline(ctx)],
-            [result_ty],
-            Symbol::new(WRITE_FN),
-        );
+        let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
+            .callee(Symbol::new(WRITE_FN))
+            .results([result_ty])
+            .build(ctx, loc);
         rewriter.replace_op(call.op_ref());
         true
     }
@@ -147,19 +144,31 @@ impl RewritePattern for NativeReadLinePattern {
         let i32_ty = intern_type(ctx, "core", "i32");
         let nil_ty = core::nil(ctx).as_type_ref();
 
-        let descriptor = func::call(ctx, loc, [], [ptr_ty], Symbol::new(READ_LINE_FN));
+        let descriptor = func::Call::operands([])
+            .callee(Symbol::new(READ_LINE_FN))
+            .results([ptr_ty])
+            .build(ctx, loc);
         let descriptor_value = descriptor.result(ctx);
-        let tag = mem::load(ctx, loc, descriptor_value, i32_ty, TAG_OFFSET);
-        let code = mem::load(ctx, loc, descriptor_value, i32_ty, CODE_OFFSET);
-        let bytes = mem::load(ctx, loc, descriptor_value, bytes_ty, BYTES_OFFSET);
-        let message = mem::load(ctx, loc, descriptor_value, bytes_ty, MESSAGE_OFFSET);
-        let dealloc = func::call(
-            ctx,
-            loc,
-            [descriptor_value],
-            [nil_ty],
-            Symbol::new(DEALLOC_RESULT_FN),
-        );
+        let tag = mem::Load::operands(descriptor_value)
+            .offset(TAG_OFFSET)
+            .results(i32_ty)
+            .build(ctx, loc);
+        let code = mem::Load::operands(descriptor_value)
+            .offset(CODE_OFFSET)
+            .results(i32_ty)
+            .build(ctx, loc);
+        let bytes = mem::Load::operands(descriptor_value)
+            .offset(BYTES_OFFSET)
+            .results(bytes_ty)
+            .build(ctx, loc);
+        let message = mem::Load::operands(descriptor_value)
+            .offset(MESSAGE_OFFSET)
+            .results(bytes_ty)
+            .build(ctx, loc);
+        let dealloc = func::Call::operands([descriptor_value])
+            .callee(Symbol::new(DEALLOC_RESULT_FN))
+            .results([nil_ty])
+            .build(ctx, loc);
 
         let (line_tag, line_cond) = tag_equals(ctx, loc, tag.result(ctx), TAG_LINE, i32_ty);
         let (eof_tag, eof_cond) = tag_equals(ctx, loc, tag.result(ctx), TAG_END_OF_FILE, i32_ty);
@@ -176,25 +185,17 @@ impl RewritePattern for NativeReadLinePattern {
         );
         let invalid_region =
             variant_region(ctx, loc, enum_ty, result_ty, "ReadInvalidEncoding", []);
-        let invalid_if = scf::r#if(
-            ctx,
-            loc,
-            invalid_cond.result(ctx),
-            result_ty,
-            invalid_region,
-            system_region,
-        );
+        let invalid_if = scf::If::operands(invalid_cond.result(ctx))
+            .results(result_ty)
+            .regions(invalid_region, system_region)
+            .build(ctx, loc);
 
         let eof_region = variant_region(ctx, loc, enum_ty, result_ty, "ReadEndOfFile", []);
         let eof_else = op_region(ctx, loc, invalid_if.op_ref(), invalid_if.result(ctx));
-        let eof_if = scf::r#if(
-            ctx,
-            loc,
-            eof_cond.result(ctx),
-            result_ty,
-            eof_region,
-            eof_else,
-        );
+        let eof_if = scf::If::operands(eof_cond.result(ctx))
+            .results(result_ty)
+            .regions(eof_region, eof_else)
+            .build(ctx, loc);
 
         let line_region = variant_region(
             ctx,
@@ -205,14 +206,10 @@ impl RewritePattern for NativeReadLinePattern {
             [bytes.result(ctx)],
         );
         let line_else = op_region(ctx, loc, eof_if.op_ref(), eof_if.result(ctx));
-        let line_if = scf::r#if(
-            ctx,
-            loc,
-            line_cond.result(ctx),
-            result_ty,
-            line_region,
-            line_else,
-        );
+        let line_if = scf::If::operands(line_cond.result(ctx))
+            .results(result_ty)
+            .regions(line_region, line_else)
+            .build(ctx, loc);
 
         for inserted in [
             descriptor.op_ref(),
@@ -242,7 +239,10 @@ fn tag_equals(
     expected: i128,
     i32_ty: TypeRef,
 ) -> (arith::Const, arith::Cmpi) {
-    let constant = arith::r#const(ctx, loc, i32_ty, Attribute::Int(expected));
+    let constant = arith::Const::operands()
+        .value(Attribute::Int(expected))
+        .results(i32_ty)
+        .build(ctx, loc);
     let comparison = arith::Cmpi::operands(tag, constant.result(ctx))
         .predicate(Symbol::new("eq"))
         .build(ctx, loc);
@@ -257,12 +257,16 @@ fn variant_region<const N: usize>(
     tag: &'static str,
     fields: [ValueRef; N],
 ) -> RegionRef {
-    let variant = adt::variant_new(ctx, loc, fields, result_ty, enum_ty, Symbol::new(tag));
+    let variant = adt::VariantNew::operands(fields)
+        .r#type(enum_ty)
+        .tag(Symbol::new(tag))
+        .results(result_ty)
+        .build(ctx, loc);
     op_region(ctx, loc, variant.op_ref(), variant.result(ctx))
 }
 
 fn op_region(ctx: &mut IrContext, loc: Location, op: OpRef, result: ValueRef) -> RegionRef {
-    let yield_op = scf::r#yield(ctx, loc, [result]);
+    let yield_op = scf::Yield::operands([result]).build(ctx, loc);
     let block = ctx.create_block(BlockData {
         location: loc,
         args: vec![],

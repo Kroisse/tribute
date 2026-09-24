@@ -53,12 +53,18 @@ impl RewritePattern for IoCallPattern {
                 return false;
             };
             let (bytes, newline) = (*bytes, *newline);
-            tribute_io::write(ctx, loc, bytes, newline, result_ty).op_ref()
+            tribute_io::Write::operands(bytes, newline)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else if callee == READ_LINE_INTRINSIC {
             let (Some(result_ty), []) = (result_ty, ctx.op_operands(op)) else {
                 return false;
             };
-            tribute_io::read_line(ctx, loc, result_ty).op_ref()
+            tribute_io::ReadLine::operands()
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else {
             return false;
         };

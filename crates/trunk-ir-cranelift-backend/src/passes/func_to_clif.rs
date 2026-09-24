@@ -554,7 +554,9 @@ impl RewritePattern for FuncUnreachablePattern {
             return false;
         }
         let loc = ctx.op(op).location;
-        let new_op = clif::trap(ctx, loc, Symbol::new("unreachable"));
+        let new_op = clif::Trap::operands()
+            .code(Symbol::new("unreachable"))
+            .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -577,7 +579,10 @@ impl RewritePattern for FuncConstantPattern {
         let func_ref = const_op.func_ref(ctx);
         let loc = ctx.op(op).location;
         let ptr_ty = intern_ptr_type(ctx);
-        let new_op = clif::symbol_addr(ctx, loc, ptr_ty, func_ref);
+        let new_op = clif::SymbolAddr::operands()
+            .sym(func_ref)
+            .results(ptr_ty)
+            .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }

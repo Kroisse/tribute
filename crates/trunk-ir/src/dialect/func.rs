@@ -42,15 +42,12 @@ crate::register_isolated_op!(func.func);
 
 #[trunk_ir::dialect]
 mod func {
-    #[attr(sym_name: Symbol, r#type: Type)]
-    fn func() {
+    fn func(sym_name: Attr<Symbol>, r#type: Attr<Type>) {
         #[region(body?)]
         {}
     }
 
-    #[attr(callee: Symbol)]
-    #[rest_results]
-    fn call(#[rest] args: ()) -> results {}
+    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
     fn call_indirect<S: FuncSig>(
@@ -60,8 +57,7 @@ mod func {
     ) -> Values<S::Results> {
     }
 
-    #[attr(callee: Symbol)]
-    fn tail_call(#[rest] args: ()) {}
+    fn tail_call(callee: Attr<Symbol>, args: Variadic<_>) {}
 
     #[verify]
     fn tail_call_indirect<S: FuncSig>(
@@ -71,10 +67,9 @@ mod func {
     ) {
     }
 
-    fn r#return(#[rest] values: ()) {}
+    fn r#return(values: Variadic<_>) {}
 
-    #[attr(func_ref: Symbol)]
-    fn constant() -> result {}
+    fn constant(func_ref: Attr<Symbol>) -> Value<_> {}
 
     fn unreachable() {}
 }
@@ -935,8 +930,15 @@ mod result_list_tests {
         let nil = core::nil(&mut ctx).as_type_ref();
         for results in [vec![], vec![nil]] {
             let signature = func_sig(&mut ctx, [], results.clone()).as_type_ref();
-            let callee = constant(&mut ctx, loc, signature, Symbol::new("f")).result(&ctx);
-            let direct = call(&mut ctx, loc, [], results.clone(), Symbol::new("f"));
+            let callee = Constant::operands()
+                .func_ref(Symbol::new("f"))
+                .results(signature)
+                .build(&mut ctx, loc)
+                .result(&ctx);
+            let direct = Call::operands([])
+                .callee(Symbol::new("f"))
+                .results(results.clone())
+                .build(&mut ctx, loc);
             let indirect = CallIndirect::operands(callee, [])
                 .signature(signature)
                 .build(&mut ctx, loc);

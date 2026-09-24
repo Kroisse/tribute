@@ -23,71 +23,63 @@ mod clif {
     ) -> Variadic<_> {
     }
 
-    fn r#return(#[rest] values: ()) {}
+    fn r#return(values: Variadic<_>) {}
 
     // Constants
-    #[attr(value: i64)]
-    fn iconst() -> result {}
+    fn iconst(value: Attr<i64>) -> Value<_> {}
 
-    #[attr(value: f32)]
-    fn f32const() -> result {}
+    fn f32const(value: Attr<f32>) -> Value<_> {}
 
-    #[attr(value: f64)]
-    fn f64const() -> result {}
+    fn f64const(value: Attr<f64>) -> Value<_> {}
 
     // Integer arithmetic
-    fn iadd(lhs: (), rhs: ()) -> result {}
-    fn isub(lhs: (), rhs: ()) -> result {}
-    fn imul(lhs: (), rhs: ()) -> result {}
-    fn sdiv(lhs: (), rhs: ()) -> result {}
-    fn udiv(lhs: (), rhs: ()) -> result {}
-    fn srem(lhs: (), rhs: ()) -> result {}
-    fn urem(lhs: (), rhs: ()) -> result {}
-    fn ineg(operand: ()) -> result {}
+    fn iadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn isub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn imul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn sdiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn udiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn srem(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn urem(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn ineg(operand: Value<_>) -> Value<_> {}
 
     // Float arithmetic
-    fn fadd(lhs: (), rhs: ()) -> result {}
-    fn fsub(lhs: (), rhs: ()) -> result {}
-    fn fmul(lhs: (), rhs: ()) -> result {}
-    fn fdiv(lhs: (), rhs: ()) -> result {}
-    fn fneg(operand: ()) -> result {}
+    fn fadd(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn fsub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn fmul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn fdiv(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn fneg(operand: Value<_>) -> Value<_> {}
 
     // Comparisons
-    #[attr(cond: Symbol)]
-    fn icmp(lhs: (), rhs: ()) -> result {}
+    fn icmp(cond: Attr<Symbol>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
-    #[attr(cond: Symbol)]
-    fn fcmp(lhs: (), rhs: ()) -> result {}
+    fn fcmp(cond: Attr<Symbol>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Bitwise
-    fn band(lhs: (), rhs: ()) -> result {}
-    fn bor(lhs: (), rhs: ()) -> result {}
-    fn bxor(lhs: (), rhs: ()) -> result {}
-    fn ishl(lhs: (), rhs: ()) -> result {}
-    fn sshr(lhs: (), rhs: ()) -> result {}
-    fn ushr(lhs: (), rhs: ()) -> result {}
+    fn band(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn bor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn bxor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn ishl(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn sshr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn ushr(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Control flow
-    fn brif(cond: ()) {
+    fn brif(cond: Value<_>) {
         #[successor(then_dest)]
         {}
         #[successor(else_dest)]
         {}
     }
 
-    fn jump(#[rest] args: ()) {
+    fn jump(args: Variadic<_>) {
         #[successor(dest)]
         {}
     }
 
-    #[attr(table: any)]
-    fn br_table(index: ()) {}
+    fn br_table(table: Attr<_>, index: Value<_>) {}
 
-    #[attr(code: Symbol)]
-    fn trap() {}
+    fn trap(code: Attr<Symbol>) {}
 
-    #[attr(callee: Symbol)]
-    fn return_call(#[rest] args: ()) {}
+    fn return_call(callee: Attr<Symbol>, args: Variadic<_>) {}
 
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<S::Type>,
@@ -97,33 +89,34 @@ mod clif {
     }
 
     // Memory
-    #[attr(offset: i32)]
-    fn load(addr: ()) -> result {}
+    fn load(offset: Attr<i32>, addr: Value<_>) -> Value<_> {}
 
-    #[attr(offset: i32)]
-    fn store(value: (), addr: ()) {}
+    fn store(offset: Attr<i32>, value: Value<_>, addr: Value<_>) {}
 
-    #[attr(op: Symbol, offset: i32)]
-    fn atomic_rmw(addr: (), value: ()) -> result {}
+    fn atomic_rmw(
+        op: Attr<Symbol>,
+        offset: Attr<i32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(size: u32, align: u32)]
-    fn stack_slot() -> result {}
+    fn stack_slot(size: Attr<u32>, align: Attr<u32>) -> Value<_> {}
 
-    fn stack_addr(slot: ()) -> result {}
+    fn stack_addr(slot: Value<_>) -> Value<_> {}
 
-    #[attr(sym: Symbol)]
-    fn symbol_addr() -> result {}
+    fn symbol_addr(sym: Attr<Symbol>) -> Value<_> {}
 
     // Type conversions
-    fn ireduce(operand: ()) -> result {}
-    fn uextend(operand: ()) -> result {}
-    fn sextend(operand: ()) -> result {}
-    fn fpromote(operand: ()) -> result {}
-    fn fdemote(operand: ()) -> result {}
-    fn fcvt_to_sint(operand: ()) -> result {}
-    fn fcvt_from_sint(operand: ()) -> result {}
-    fn fcvt_to_uint(operand: ()) -> result {}
-    fn fcvt_from_uint(operand: ()) -> result {}
+    fn ireduce(operand: Value<_>) -> Value<_> {}
+    fn uextend(operand: Value<_>) -> Value<_> {}
+    fn sextend(operand: Value<_>) -> Value<_> {}
+    fn fpromote(operand: Value<_>) -> Value<_> {}
+    fn fdemote(operand: Value<_>) -> Value<_> {}
+    fn fcvt_to_sint(operand: Value<_>) -> Value<_> {}
+    fn fcvt_from_sint(operand: Value<_>) -> Value<_> {}
+    fn fcvt_to_uint(operand: Value<_>) -> Value<_> {}
+    fn fcvt_from_uint(operand: Value<_>) -> Value<_> {}
 }
 
 const INDIRECT_CALL_SIGNATURE_ATTR: &str = "sig";

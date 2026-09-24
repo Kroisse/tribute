@@ -186,7 +186,7 @@ fn typed_schema_records_variables_and_constraints() {
 }
 
 #[test]
-fn legacy_schemas_are_unconstrained() {
+fn wildcard_entities_are_unconstrained() {
     let schema = crate::dialect::arith::Subi::SCHEMA;
     assert!(schema.type_vars.is_empty());
     assert!(matches!(
@@ -309,7 +309,7 @@ fn fluent_builders_group_inputs_by_kind() {
     assert_eq!(labeled.label(&ctx), Some(Symbol::new("l")));
     assert_eq!(labeled.result_ty(&ctx), i32_ty);
 
-    let marker = test_typed::Marker::builder()
+    let marker = test_typed::Marker::operands()
         .results(i1_ty)
         .build(&mut ctx, loc);
 

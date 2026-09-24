@@ -10,23 +10,22 @@ mod tribute_rt {
     struct Intref;
     struct Anyref;
 
-    fn box_int(value: ()) -> result {}
-    fn unbox_int(value: ()) -> result {}
-    fn box_nat(value: ()) -> result {}
-    fn unbox_nat(value: ()) -> result {}
-    fn box_float(value: ()) -> result {}
-    fn unbox_float(value: ()) -> result {}
-    fn box_bool(value: ()) -> result {}
-    fn unbox_bool(value: ()) -> result {}
+    fn box_int(value: Value<_>) -> Value<_> {}
+    fn unbox_int(value: Value<_>) -> Value<_> {}
+    fn box_nat(value: Value<_>) -> Value<_> {}
+    fn unbox_nat(value: Value<_>) -> Value<_> {}
+    fn box_float(value: Value<_>) -> Value<_> {}
+    fn unbox_float(value: Value<_>) -> Value<_> {}
+    fn box_bool(value: Value<_>) -> Value<_> {}
+    fn unbox_bool(value: Value<_>) -> Value<_> {}
 
-    fn retain(ptr: ()) -> result {}
+    fn retain(ptr: Value<_>) -> Value<_> {}
 
-    #[attr(alloc_size: u64)]
-    fn release(ptr: ()) {}
+    fn release(alloc_size: Attr<u64>, ptr: Value<_>) {}
 
     /// Consume one managed ownership unit while crossing a native raw-pointer
     /// representation boundary. This is deliberately not a pure operation.
-    fn into_raw(value: ()) -> result {}
+    fn into_raw(value: Value<_>) -> Value<_> {}
 }
 
 // === RC Header Layout ===
@@ -77,11 +76,16 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a value to box
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+        let c = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(42))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         let val = c.result(&ctx);
 
         // Create tribute_rt.box_int
-        let op = super::box_int(&mut ctx, loc, val, ptr_ty);
+        let op = super::BoxInt::operands(val)
+            .results(ptr_ty)
+            .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let op2 =
@@ -108,11 +112,16 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a boxed value
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
+        let c = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(ptr_ty)
+            .build(&mut ctx, loc);
         let boxed_val = c.result(&ctx);
 
         // Create tribute_rt.unbox_int
-        let op = super::unbox_int(&mut ctx, loc, boxed_val, i32_ty);
+        let op = super::UnboxInt::operands(boxed_val)
+            .results(i32_ty)
+            .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let op2 =
@@ -137,11 +146,16 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a ptr value
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
+        let c = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(ptr_ty)
+            .build(&mut ctx, loc);
         let ptr_val = c.result(&ctx);
 
         // Create tribute_rt.retain
-        let op = super::retain(&mut ctx, loc, ptr_val, ptr_ty);
+        let op = super::Retain::operands(ptr_val)
+            .results(ptr_ty)
+            .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let op2 =
@@ -166,11 +180,16 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a ptr value
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, ptr_ty, Attribute::Int(0));
+        let c = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(ptr_ty)
+            .build(&mut ctx, loc);
         let ptr_val = c.result(&ctx);
 
         // Create tribute_rt.release (no result, has alloc_size attr)
-        let op = super::release(&mut ctx, loc, ptr_val, 16u64);
+        let op = super::Release::operands(ptr_val)
+            .alloc_size(16u64)
+            .build(&mut ctx, loc);
 
         // Verify from_op round-trip
         let op2 =
@@ -197,10 +216,15 @@ mod tests {
                 .build(),
         );
         let ptr_ty = make_ptr_type(&mut ctx);
-        let value = trunk_ir::dialect::arith::r#const(&mut ctx, loc, managed_ty, Attribute::Int(0))
+        let value = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(managed_ty)
+            .build(&mut ctx, loc)
             .result(&ctx);
 
-        let op = super::into_raw(&mut ctx, loc, value, ptr_ty);
+        let op = super::IntoRaw::operands(value)
+            .results(ptr_ty)
+            .build(&mut ctx, loc);
         let round_trip =
             super::IntoRaw::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.into_raw");
 
@@ -218,10 +242,15 @@ mod tests {
         let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let ptr_ty = make_ptr_type(&mut ctx);
 
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, f64_ty, Attribute::Int(0));
+        let c = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(f64_ty)
+            .build(&mut ctx, loc);
         let val = c.result(&ctx);
 
-        let op = super::box_float(&mut ctx, loc, val, ptr_ty);
+        let op = super::BoxFloat::operands(val)
+            .results(ptr_ty)
+            .build(&mut ctx, loc);
         let op2 =
             super::BoxFloat::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.box_float");
         assert_eq!(op.op_ref(), op2.op_ref());
@@ -236,10 +265,15 @@ mod tests {
         let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "bool").build());
         let ptr_ty = make_ptr_type(&mut ctx);
 
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, bool_ty, Attribute::Int(1));
+        let c = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(1))
+            .results(bool_ty)
+            .build(&mut ctx, loc);
         let val = c.result(&ctx);
 
-        let op = super::box_bool(&mut ctx, loc, val, ptr_ty);
+        let op = super::BoxBool::operands(val)
+            .results(ptr_ty)
+            .build(&mut ctx, loc);
         let op2 =
             super::BoxBool::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.box_bool");
         assert_eq!(op.op_ref(), op2.op_ref());
@@ -253,7 +287,10 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create an arith.const — should not match tribute_rt ops
-        let c = trunk_ir::dialect::arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
+        let c = trunk_ir::dialect::arith::Const::operands()
+            .value(Attribute::Int(1))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         assert!(super::BoxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::UnboxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Retain::from_op(&ctx, c.op_ref()).is_err());

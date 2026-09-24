@@ -515,7 +515,10 @@ mod tests {
             blocks: smallvec![block],
             parent_op: None,
         });
-        core::module(ctx, loc, Symbol::new("test"), region)
+        core::Module::operands()
+            .sym_name(Symbol::new("test"))
+            .regions(region)
+            .build(ctx, loc)
     }
 
     /// Append a body-less `func.func` op into the given module. Returns

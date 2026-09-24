@@ -249,11 +249,16 @@ mod tests {
             let i64_ty = i64_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+            let const_op = arith::Const::operands()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(&mut ctx, loc);
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i64
-            let cast_op = core::unrealized_conversion_cast(&mut ctx, loc, const_result, i64_ty);
+            let cast_op = core::UnrealizedConversionCast::operands(const_result)
+                .results(i64_ty)
+                .build(&mut ctx, loc);
 
             let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast_op.op_ref()]);
 
@@ -271,11 +276,16 @@ mod tests {
             let i32_ty = i32_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+            let const_op = arith::Const::operands()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(&mut ctx, loc);
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i32 (same type)
-            let cast_op = core::unrealized_conversion_cast(&mut ctx, loc, const_result, i32_ty);
+            let cast_op = core::UnrealizedConversionCast::operands(const_result)
+                .results(i32_ty)
+                .build(&mut ctx, loc);
 
             let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast_op.op_ref()]);
 
@@ -299,11 +309,16 @@ mod tests {
             let i64_ty = i64_type(&mut ctx);
 
             // arith.const -> i32
-            let const_op = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+            let const_op = arith::Const::operands()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(&mut ctx, loc);
             let const_result = const_op.result(&ctx);
 
             // unrealized_conversion_cast(const_result) -> i64
-            let cast_op = core::unrealized_conversion_cast(&mut ctx, loc, const_result, i64_ty);
+            let cast_op = core::UnrealizedConversionCast::operands(const_result)
+                .results(i64_ty)
+                .build(&mut ctx, loc);
             let cast_result = cast_op.result(&ctx);
 
             // A user of the cast result

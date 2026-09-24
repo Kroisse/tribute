@@ -378,7 +378,9 @@ impl PatternApplicator {
                 && target_ty != raw_ty
             {
                 let loc = ctx.op(op).location;
-                let cast = core::unrealized_conversion_cast(ctx, loc, operand, target_ty);
+                let cast = core::UnrealizedConversionCast::operands(operand)
+                    .results(target_ty)
+                    .build(ctx, loc);
                 let cast_ref = cast.op_ref();
                 let cast_result = cast.result(ctx);
                 ctx.insert_op_before(block, op, cast_ref);
@@ -512,7 +514,11 @@ mod tests {
         });
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
-        wasm::func(ctx, loc, Symbol::new(name), func_ty, region)
+        wasm::Func::operands()
+            .sym_name(Symbol::new(name))
+            .r#type(func_ty)
+            .regions(region)
+            .build(ctx, loc)
     }
 
     fn make_bodyless_func(

@@ -6,7 +6,7 @@ use quote::{format_ident, quote, quote_spanned};
 
 use crate::parse::{
     AttrDef, AttrType, BoundPath, DialectItem, DialectModule, ListExpr, Operand, OperationDef,
-    Projection, RegionOrSuccessor, ResultDef, Syntax, TypeDefData, TypeExpr, ValueExpr,
+    Projection, RegionOrSuccessor, ResultDef, TypeDefData, TypeExpr, ValueExpr,
 };
 
 /// Generate all code for a dialect module.
@@ -45,17 +45,13 @@ fn gen_operation(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
     let op_name_fn = gen_op_name_fn(crate_path, &op.name);
     let struct_and_trait = gen_struct_and_trait(crate_path, dialect, op);
     let impl_block = gen_impl_block(crate_path, op);
-    let constructor = if op.syntax == Syntax::Typed {
-        gen_fluent_builder(crate_path, dialect, op)
-    } else {
-        gen_constructor(crate_path, dialect, op)
-    };
+    let builder = gen_fluent_builder(crate_path, dialect, op);
 
     quote! {
         #op_name_fn
         #struct_and_trait
         #impl_block
-        #constructor
+        #builder
     }
 }
 
@@ -141,7 +137,6 @@ fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
     let results = match &op.results {
         ResultDef::None => quote!(#schema_mod::ResultSchema::Fixed(&[])),
         ResultDef::Single(name) => quote!(#schema_mod::ResultSchema::Fixed(&[#name])),
-        ResultDef::Multi(names) => quote!(#schema_mod::ResultSchema::Fixed(&[#(#names),*])),
         ResultDef::Variadic(name) => quote!(#schema_mod::ResultSchema::Variadic(#name)),
         ResultDef::Optional(name) => quote!(#schema_mod::ResultSchema::Optional(#name)),
     };
@@ -383,26 +378,6 @@ fn gen_result_accessors(crate_path: &TokenStream, results: &ResultDef) -> TokenS
                 }
             }
         }
-        ResultDef::Multi(names) => {
-            let methods: Vec<TokenStream> = names
-                .iter()
-                .enumerate()
-                .map(|(idx, name)| {
-                    let name_ident = format_ident!("{name}");
-                    let ty_name = format_ident!("{name}_ty");
-                    quote! {
-                        pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::ValueRef {
-                            ctx.op_result(self.0, #idx)
-                        }
-
-                        pub fn #ty_name(&self, ctx: &#crate_path::IrContext) -> #crate_path::TypeRef {
-                            ctx.op_result_types(self.0)[#idx]
-                        }
-                    }
-                })
-                .collect();
-            quote!(#(#methods)*)
-        }
         ResultDef::Variadic(name) => {
             let name_ident = format_ident!("{name}");
             quote! {
@@ -517,120 +492,11 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
 // Constructor function
 // ============================================================================
 
-fn gen_constructor(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> TokenStream {
-    let sname = struct_name(&op.name);
-    let fn_name = &op.raw_ident;
-    let op_name = &op.name;
-
-    // Build parameter list
-    let mut params = Vec::new();
-    let mut body_stmts = Vec::new();
-
-    // Fixed operands
-    for operand in &op.operands {
-        let name = &operand.raw_ident;
-        if operand.variadic {
-            params.push(quote!(#name: impl IntoIterator<Item = #crate_path::ValueRef>));
-            body_stmts.push(quote!(__builder = __builder.operands(#name);));
-        } else {
-            params.push(quote!(#name: #crate_path::ValueRef));
-            body_stmts.push(quote!(__builder = __builder.operand(#name);));
-        }
-    }
-
-    // Results
-    match &op.results {
-        ResultDef::None => {}
-        ResultDef::Single(name) | ResultDef::Optional(name) => {
-            let ty_param = format_ident!("{name}_ty");
-            params.push(quote!(#ty_param: #crate_path::TypeRef));
-            body_stmts.push(quote!(__builder = __builder.result(#ty_param);));
-        }
-        ResultDef::Multi(names) => {
-            for name in names {
-                let ty_param = format_ident!("{name}_ty");
-                params.push(quote!(#ty_param: #crate_path::TypeRef));
-                body_stmts.push(quote!(__builder = __builder.result(#ty_param);));
-            }
-        }
-        ResultDef::Variadic(_) => {
-            params.push(quote!(result_types: impl IntoIterator<Item = #crate_path::TypeRef>));
-            body_stmts.push(quote!(__builder = __builder.results(result_types);));
-        }
-    }
-
-    // Attributes
-    for attr in &op.attrs {
-        let name = &attr.raw_ident;
-        let name_str = &attr.name;
-        let rust_ty = attr_rust_type(crate_path, attr.ty);
-        let to_attr_expr = |val: TokenStream| attr_to_attr(crate_path, attr.ty, val);
-
-        if attr.optional {
-            params.push(quote!(#name: Option<#rust_ty>));
-            let attr_conv = to_attr_expr(quote!(__attr_val));
-            body_stmts.push(quote! {
-                if let ::core::option::Option::Some(__attr_val) = #name {
-                    __builder = __builder.attr(
-                        #crate_path::Symbol::new(#name_str),
-                        #attr_conv,
-                    );
-                }
-            });
-        } else {
-            params.push(quote!(#name: #rust_ty));
-            let attr_conv = to_attr_expr(quote!(#name));
-            body_stmts.push(quote! {
-                __builder = __builder.attr(
-                    #crate_path::Symbol::new(#name_str),
-                    #attr_conv,
-                );
-            });
-        }
-    }
-
-    // Regions and successors
-    for item in &op.regions {
-        match item {
-            RegionOrSuccessor::Region { name, .. } => {
-                let name_ident = format_ident!("{name}");
-                params.push(quote!(#name_ident: #crate_path::RegionRef));
-                body_stmts.push(quote!(__builder = __builder.region(#name_ident);));
-            }
-            RegionOrSuccessor::Successor(name) => {
-                let name_ident = format_ident!("{name}");
-                params.push(quote!(#name_ident: #crate_path::BlockRef));
-                body_stmts.push(quote!(__builder = __builder.successor(#name_ident);));
-            }
-        }
-    }
-
-    quote! {
-        #[allow(clippy::too_many_arguments)]
-        pub fn #fn_name(
-            ctx: &mut #crate_path::IrContext,
-            location: #crate_path::Location,
-            #(#params),*
-        ) -> #sname {
-            #[allow(unused_mut)]
-            let mut __builder = #crate_path::OperationDataBuilder::new(
-                location,
-                #crate_path::Symbol::new(#dialect),
-                #crate_path::Symbol::new(#op_name),
-            );
-            #(#body_stmts)*
-            let __data = __builder.build(ctx);
-            let __op_ref = ctx.create_op(__data);
-            #sname(__op_ref)
-        }
-    }
-}
-
 // ============================================================================
 // Fluent builder (typed syntax)
 // ============================================================================
 
-/// Generate `Op::operands(..)` / `Op::builder()` and the `OpBuilder` type.
+/// Generate `Op::operands(..)` and the `OpBuilder` type.
 ///
 /// Inputs are grouped by entity kind: operands start the builder, result
 /// types, regions, and successors are each one call, and attributes are set
@@ -685,7 +551,6 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             quote!(result: impl Into<Option<#type_ref>>),
             quote!(result.into().into_iter().collect()),
         )),
-        ResultDef::Multi(_) => unreachable!("typed operations reserve fixed multi-results"),
         ResultDef::Variadic(_) => Some((
             quote!(results: impl IntoIterator<Item = #type_ref>),
             quote!(results.into_iter().collect()),
@@ -816,22 +681,22 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         });
     }
 
-    let entry = if op.operands.is_empty() {
-        quote! {
-            /// Start building this operation.
-            pub fn builder() -> #bname {
-                #bname { operands: ::std::vec::Vec::new(), #(#field_inits)* }
-            }
-        }
+    // Operations without operands start from an empty `operands()` so every
+    // builder has the same entry point.
+    let operands_init = if op.operands.is_empty() {
+        quote!(::std::vec::Vec::new())
     } else {
-        quote! {
-            /// Start building this operation from its operands in
-            /// declaration order.
-            pub fn operands(#(#entry_params),*) -> #bname {
-                let mut __operands = ::std::vec::Vec::new();
-                #(#entry_stmts)*
-                #bname { operands: __operands, #(#field_inits)* }
-            }
+        quote!({
+            let mut __operands = ::std::vec::Vec::new();
+            #(#entry_stmts)*
+            __operands
+        })
+    };
+    let entry = quote! {
+        /// Start building this operation from its operands in declaration
+        /// order.
+        pub fn operands(#(#entry_params),*) -> #bname {
+            #bname { operands: #operands_init, #(#field_inits)* }
         }
     };
     let builder_doc = format!("Builder for `{full_name}`.");

@@ -126,17 +126,12 @@ impl RewritePattern for LowerPerformPattern {
         // === 3. Dispatch through the target-independent effect ABI ===
         // Keep both control closures typed. Only the payload crosses the
         // target-independent dynamic-storage boundary.
-        let dispatch_op = effect::dispatch_cps(
-            ctx,
-            location,
-            evidence_val,
-            dispatch_val,
-            resume_val,
-            shift_value_val,
-            ability_ref_type,
-            op_name_sym,
-            answer_type,
-        );
+        let dispatch_op =
+            effect::DispatchCps::operands(evidence_val, dispatch_val, resume_val, shift_value_val)
+                .ability_ref(ability_ref_type)
+                .op_name(op_name_sym)
+                .answer_type(answer_type)
+                .build(ctx, location);
         rewriter.insert_op(dispatch_op.op_ref());
         rewriter.erase_op(vec![]);
         true
@@ -191,22 +186,19 @@ impl RewritePattern for LowerCallPattern {
         );
 
         // === 3. Dispatch through target-independent effect ABI ===
-        let dispatch_op = effect::dispatch_tail(
-            ctx,
-            location,
-            evidence_val,
-            shift_value_val,
-            t.anyref,
-            ability_ref_type,
-            op_name_sym,
-        );
+        let dispatch_op = effect::DispatchTail::operands(evidence_val, shift_value_val)
+            .ability_ref(ability_ref_type)
+            .op_name(op_name_sym)
+            .results(t.anyref)
+            .build(ctx, location);
         rewriter.insert_op(dispatch_op.op_ref());
 
         // The target-independent dispatch ABI erases the operation result.
         // Restore its exact source type before replacing the typed call result;
         // later CPS continuations still consume that logical value directly.
-        let typed_result =
-            core::unrealized_conversion_cast(ctx, location, dispatch_op.result(ctx), *result_type);
+        let typed_result = core::UnrealizedConversionCast::operands(dispatch_op.result(ctx))
+            .results(*result_type)
+            .build(ctx, location);
         rewriter.insert_op(typed_result.op_ref());
 
         // === 4. Erase ability.call, mapping its result to the typed dispatch result ===
@@ -238,15 +230,22 @@ fn pack_payload(
     let dynamic_values = values
         .iter()
         .map(|&value| {
-            let cast = core::unrealized_conversion_cast(ctx, location, value, anyref);
+            let cast = core::UnrealizedConversionCast::operands(value)
+                .results(anyref)
+                .build(ctx, location);
             let result = cast.result(ctx);
             rewriter.insert_op(cast.op_ref());
             result
         })
         .collect::<Vec<_>>();
-    let payload = adt::struct_new(ctx, location, dynamic_values, payload_type, payload_type);
+    let payload = adt::StructNew::operands(dynamic_values)
+        .r#type(payload_type)
+        .results(payload_type)
+        .build(ctx, location);
     rewriter.insert_op(payload.op_ref());
-    let erased = core::unrealized_conversion_cast(ctx, location, payload.result(ctx), anyref);
+    let erased = core::UnrealizedConversionCast::operands(payload.result(ctx))
+        .results(anyref)
+        .build(ctx, location);
     rewriter.insert_op(erased.op_ref());
     erased.result(ctx)
 }

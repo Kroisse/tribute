@@ -150,118 +150,92 @@ impl RewritePattern for LowerTypedGcPattern {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::struct_new(ctx, loc, old.fields(ctx).to_vec(), old.result_ty(ctx), idx);
+            let new = wasm::StructNew::operands(old.fields(ctx).to_vec())
+                .type_idx(idx)
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::StructGet::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::struct_get(
-                ctx,
-                loc,
-                old.r#ref(ctx),
-                old.result_ty(ctx),
-                idx,
-                old.field_idx(ctx),
-            );
+            let new = wasm::StructGet::operands(old.r#ref(ctx))
+                .type_idx(idx)
+                .field_idx(old.field_idx(ctx))
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::StructSet::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::struct_set(
-                ctx,
-                loc,
-                old.r#ref(ctx),
-                old.value(ctx),
-                idx,
-                old.field_idx(ctx),
-            );
+            let new = wasm::StructSet::operands(old.r#ref(ctx), old.value(ctx))
+                .type_idx(idx)
+                .field_idx(old.field_idx(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::ArrayNew::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::array_new(
-                ctx,
-                loc,
-                old.size(ctx),
-                old.init(ctx),
-                old.result_ty(ctx),
-                idx,
-            );
+            let new = wasm::ArrayNew::operands(old.size(ctx), old.init(ctx))
+                .type_idx(idx)
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::ArrayNewDefault::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::array_new_default(ctx, loc, old.size(ctx), old.result_ty(ctx), idx);
+            let new = wasm::ArrayNewDefault::operands(old.size(ctx))
+                .type_idx(idx)
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::ArrayNewData::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::array_new_data(
-                ctx,
-                loc,
-                old.offset(ctx),
-                old.size(ctx),
-                old.result_ty(ctx),
-                idx,
-                old.data_idx(ctx),
-            );
+            let new = wasm::ArrayNewData::operands(old.offset(ctx), old.size(ctx))
+                .type_idx(idx)
+                .data_idx(old.data_idx(ctx))
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::ArrayGet::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::array_get(
-                ctx,
-                loc,
-                old.r#ref(ctx),
-                old.index(ctx),
-                old.result_ty(ctx),
-                idx,
-            );
+            let new = wasm::ArrayGet::operands(old.r#ref(ctx), old.index(ctx))
+                .type_idx(idx)
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::ArrayGetS::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::array_get_s(
-                ctx,
-                loc,
-                old.r#ref(ctx),
-                old.index(ctx),
-                old.result_ty(ctx),
-                idx,
-            );
+            let new = wasm::ArrayGetS::operands(old.r#ref(ctx), old.index(ctx))
+                .type_idx(idx)
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::ArrayGetU::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::array_get_u(
-                ctx,
-                loc,
-                old.r#ref(ctx),
-                old.index(ctx),
-                old.result_ty(ctx),
-                idx,
-            );
+            let new = wasm::ArrayGetU::operands(old.r#ref(ctx), old.index(ctx))
+                .type_idx(idx)
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::ArraySet::from_op(ctx, op) {
             let Some(idx) = self.index(old.r#type(ctx)) else {
                 return false;
             };
-            let new = wasm::array_set(
-                ctx,
-                loc,
-                old.r#ref(ctx),
-                old.index(ctx),
-                old.value(ctx),
-                idx,
-            );
+            let new = wasm::ArraySet::operands(old.r#ref(ctx), old.index(ctx), old.value(ctx))
+                .type_idx(idx)
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::ArrayCopy::from_op(ctx, op) {
             let (Some(dst_idx), Some(src_idx)) =
@@ -269,49 +243,40 @@ impl RewritePattern for LowerTypedGcPattern {
             else {
                 return false;
             };
-            let new = wasm::array_copy(
-                ctx,
-                loc,
+            let new = wasm::ArrayCopy::operands(
                 old.dst(ctx),
                 old.dst_offset(ctx),
                 old.src(ctx),
                 old.src_offset(ctx),
                 old.len(ctx),
-                dst_idx,
-                src_idx,
-            );
+            )
+            .dst_type_idx(dst_idx)
+            .src_type_idx(src_idx)
+            .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::RefNull::from_op(ctx, op) {
             let target = old.target_type(ctx);
-            let new = wasm::ref_null(
-                ctx,
-                loc,
-                old.result_ty(ctx),
-                ctx.get_type(target).name,
-                self.index(target),
-            );
+            let new = wasm::RefNull::operands()
+                .heap_type(ctx.get_type(target).name)
+                .type_idx(self.index(target))
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::RefCast::from_op(ctx, op) {
             let target = old.target_type(ctx);
-            let new = wasm::ref_cast(
-                ctx,
-                loc,
-                old.r#ref(ctx),
-                old.result_ty(ctx),
-                target,
-                self.index(target),
-            );
+            let new = wasm::RefCast::operands(old.r#ref(ctx))
+                .target_type(target)
+                .type_idx(self.index(target))
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::RefTest::from_op(ctx, op) {
             let target = old.target_type(ctx);
-            let new = wasm::ref_test(
-                ctx,
-                loc,
-                old.r#ref(ctx),
-                old.result_ty(ctx),
-                target,
-                self.index(target),
-            );
+            let new = wasm::RefTest::operands(old.r#ref(ctx))
+                .target_type(target)
+                .type_idx(self.index(target))
+                .results(old.result_ty(ctx))
+                .build(ctx, loc);
             rewriter.replace_op(new.op_ref());
         } else {
             return false;

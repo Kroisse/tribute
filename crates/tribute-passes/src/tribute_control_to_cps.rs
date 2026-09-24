@@ -939,16 +939,17 @@ impl<'a> Converter<'a> {
         frame_value: ValueRef,
     ) -> (ValueRef, ValueRef) {
         let frame = self.frame_types(answer);
-        let done = adt::struct_get(self.ctx, location, frame_value, frame.done, frame.layout, 0);
+        let done = adt::StructGet::operands(frame_value)
+            .r#type(frame.layout)
+            .field(0)
+            .results(frame.done)
+            .build(self.ctx, location);
         self.ctx.push_op(block, done.op_ref());
-        let dispatch = adt::struct_get(
-            self.ctx,
-            location,
-            frame_value,
-            frame.dispatch,
-            frame.layout,
-            1,
-        );
+        let dispatch = adt::StructGet::operands(frame_value)
+            .r#type(frame.layout)
+            .field(1)
+            .results(frame.dispatch)
+            .build(self.ctx, location);
         self.ctx.push_op(block, dispatch.op_ref());
         (done.result(self.ctx), dispatch.result(self.ctx))
     }
@@ -962,13 +963,10 @@ impl<'a> Converter<'a> {
         dispatch: ValueRef,
     ) -> ValueRef {
         let frame = self.frame_types(answer);
-        let packed = adt::struct_new(
-            self.ctx,
-            location,
-            [done, dispatch],
-            frame.reference,
-            frame.layout,
-        );
+        let packed = adt::StructNew::operands([done, dispatch])
+            .r#type(frame.layout)
+            .results(frame.reference)
+            .build(self.ctx, location);
         self.ctx.push_op(block, packed.op_ref());
         packed.result(self.ctx)
     }
@@ -991,13 +989,10 @@ impl<'a> Converter<'a> {
         )?;
         let region = self.single_block_region(location, done_block);
         let done_type = self.done_k_type(value_type);
-        let done = closure::lambda(
-            self.ctx,
-            location,
-            ordered_external_values(self.ctx, region),
-            done_type,
-            region,
-        );
+        let done = closure::Lambda::operands(ordered_external_values(self.ctx, region))
+            .results(done_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, done.op_ref(), CallingConvention::Cps);
         Ok((done.op_ref(), done.result(self.ctx)))
     }
@@ -1026,13 +1021,10 @@ impl<'a> Converter<'a> {
         let mut factory_args = dispatch_factory_args.prefix.to_vec();
         factory_args.extend([completion, outer_dispatch]);
         factory_args.extend_from_slice(dispatch_factory_args.suffix);
-        let dispatch = func::call(
-            self.ctx,
-            location,
-            factory_args,
-            [dispatch_type],
-            dispatch_factory,
-        );
+        let dispatch = func::Call::operands(factory_args)
+            .callee(dispatch_factory)
+            .results([dispatch_type])
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
         self.ctx.push_op(block, dispatch.op_ref());
         let frame = self.pack_frame(block, location, value_type, done, dispatch.result(self.ctx));
@@ -1044,13 +1036,10 @@ impl<'a> Converter<'a> {
             boundary_frame,
             anyref,
         );
-        let resume = closure::lambda(
-            self.ctx,
-            location,
-            ordered_external_values(self.ctx, region),
-            resume_type,
-            region,
-        );
+        let resume = closure::Lambda::operands(ordered_external_values(self.ctx, region))
+            .results(resume_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, resume.op_ref(), CallingConvention::Cps);
         Ok((resume.op_ref(), resume.result(self.ctx)))
     }
@@ -1122,19 +1111,21 @@ impl<'a> Converter<'a> {
             ],
         )?;
         let dispatch_region = self.single_block_region(location, dispatch_block);
-        let dispatch = closure::lambda(
-            self.ctx,
-            location,
-            ordered_external_values(self.ctx, dispatch_region),
-            dispatch_type,
-            dispatch_region,
-        );
+        let dispatch =
+            closure::Lambda::operands(ordered_external_values(self.ctx, dispatch_region))
+                .results(dispatch_type)
+                .regions(dispatch_region)
+                .build(self.ctx, location);
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Cps);
         self.ctx.push_op(factory_block, dispatch.op_ref());
-        let ret = func::r#return(self.ctx, location, [dispatch.result(self.ctx)]);
+        let ret = func::Return::operands([dispatch.result(self.ctx)]).build(self.ctx, location);
         self.ctx.push_op(factory_block, ret.op_ref());
         let factory_region = self.single_block_region(location, factory_block);
-        let factory = func::func(self.ctx, location, symbol, factory_type, factory_region);
+        let factory = func::Func::operands()
+            .sym_name(symbol)
+            .r#type(factory_type)
+            .regions(factory_region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
         self.ctx.push_op(self.module_block, factory.op_ref());
         Ok(symbol)
@@ -1177,17 +1168,15 @@ impl<'a> Converter<'a> {
         let dispatch_factory =
             self.build_dispatch_adapter_factory(location, value_type, flow.answer_type)?;
         let completion_type = self.completion_type(value_type, flow.answer_type);
-        let typed_completion =
-            core::unrealized_conversion_cast(self.ctx, location, suffix, completion_type);
+        let typed_completion = core::UnrealizedConversionCast::operands(suffix)
+            .results(completion_type)
+            .build(self.ctx, location);
         self.ctx.push_op(block, typed_completion.op_ref());
         let dispatch_type = self.frame_types(value_type).dispatch;
-        let dispatch = func::call(
-            self.ctx,
-            location,
-            [typed_completion.result(self.ctx), outer_dispatch],
-            [dispatch_type],
-            dispatch_factory,
-        );
+        let dispatch = func::Call::operands([typed_completion.result(self.ctx), outer_dispatch])
+            .callee(dispatch_factory)
+            .results([dispatch_type])
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
         self.ctx.push_op(block, dispatch.op_ref());
         Ok(self.pack_frame(block, location, value_type, done, dispatch.result(self.ctx)))
@@ -1703,14 +1692,10 @@ impl<'a> Converter<'a> {
         let condition = mapping.get(&condition).copied().unwrap_or(condition);
         if continuation.is_some() {
             let never = self.never_type();
-            let lowered = scf::r#if(
-                self.ctx,
-                location,
-                condition,
-                never,
-                *then_region,
-                *else_region,
-            );
+            let lowered = scf::If::operands(condition)
+                .results(never)
+                .regions(*then_region, *else_region)
+                .build(self.ctx, location);
             self.copy_extra_attrs(source, lowered.op_ref(), &[]);
             self.ctx.push_op(block, lowered.op_ref());
             return Ok(());
@@ -1841,16 +1826,25 @@ impl<'a> Converter<'a> {
                 let Some(case_value) = case_value else {
                     return Err(self.malformed_source(case, "scf.case requires a value attribute"));
                 };
-                scf::case(self.ctx, case_location, case_value, converted_region).op_ref()
+                scf::Case::operands()
+                    .value(case_value)
+                    .regions(converted_region)
+                    .build(self.ctx, case_location)
+                    .op_ref()
             } else {
-                scf::default(self.ctx, case_location, converted_region).op_ref()
+                scf::Default::operands()
+                    .regions(converted_region)
+                    .build(self.ctx, case_location)
+                    .op_ref()
             };
             self.ctx.push_op(switch_block, converted);
         }
         let switch_region = self.single_block_region(location, switch_block);
         let discriminant = self.ctx.op_operands(source)[0];
         let discriminant = mapping.get(&discriminant).copied().unwrap_or(discriminant);
-        let lowered = scf::switch(self.ctx, location, discriminant, switch_region);
+        let lowered = scf::Switch::operands(discriminant)
+            .regions(switch_region)
+            .build(self.ctx, location);
         self.copy_extra_attrs(source, lowered.op_ref(), &[]);
         self.ctx.push_op(block, lowered.op_ref());
         Ok(())
@@ -1875,7 +1869,7 @@ impl<'a> Converter<'a> {
             let (done, _) = self.unpack_frame(block, location, flow.answer_type, exit_k);
             self.emit_cps_tail_call_indirect(block, location, done, [value])?;
         } else {
-            let ret = func::r#return(self.ctx, location, [value]);
+            let ret = func::Return::operands([value]).build(self.ctx, location);
             self.ctx.push_op(block, ret.op_ref());
         }
         Ok(())
@@ -1951,7 +1945,10 @@ impl<'a> Converter<'a> {
         let never = self.never_type();
         let function = func::func_sig(self.ctx, [evidence_type, frame_type], [never]).as_type_ref();
         let closure_type = self.generated_continuation_type(function);
-        let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
+        let lambda = closure::Lambda::operands(captures)
+            .results(closure_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
     }
@@ -2023,7 +2020,10 @@ impl<'a> Converter<'a> {
             .map(|capture| mapping.get(capture).copied().unwrap_or(*capture))
             .collect();
         let physical_ty = self.convert_type(logical_ty);
-        let lambda = closure::lambda(self.ctx, location, captures, physical_ty, body);
+        let lambda = closure::Lambda::operands(captures)
+            .results(physical_ty)
+            .regions(body)
+            .build(self.ctx, location);
         self.copy_extra_attrs(source, lambda.op_ref(), &[CALLING_CONVENTION_ATTR]);
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
         Ok(lambda.op_ref())
@@ -2063,7 +2063,10 @@ impl<'a> Converter<'a> {
                 .map(|value| mapping.get(value).copied().unwrap_or(*value)),
         );
         let result_ty = self.convert_type(target.source_result);
-        let call = func::call(self.ctx, location, args, [result_ty], target.symbol);
+        let call = func::Call::operands(args)
+            .callee(target.symbol)
+            .results([result_ty])
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, call.op_ref(), target.convention);
         Ok(call)
     }
@@ -2101,7 +2104,10 @@ impl<'a> Converter<'a> {
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
         let closure_ty = self.completion_type(result_type, flow.answer_type);
-        let lambda = closure::lambda(self.ctx, location, captures, closure_ty, region);
+        let lambda = closure::Lambda::operands(captures)
+            .results(closure_ty)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
     }
@@ -2169,18 +2175,17 @@ impl<'a> Converter<'a> {
         }
         target_args.extend_from_slice(&args[source_offset..]);
         if target.convention == CallingConvention::Cps {
-            let tail = func::tail_call(self.ctx, location, target_args, target.symbol);
+            let tail = func::TailCall::operands(target_args)
+                .callee(target.symbol)
+                .build(self.ctx, location);
             set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
             self.ctx.push_op(block, tail.op_ref());
         } else {
             let target_result = self.convert_type(target.source_result);
-            let call = func::call(
-                self.ctx,
-                location,
-                target_args,
-                [target_result],
-                target.symbol,
-            );
+            let call = func::Call::operands(target_args)
+                .callee(target.symbol)
+                .results([target_result])
+                .build(self.ctx, location);
             set_calling_convention(self.ctx, call.op_ref(), target.convention);
             self.ctx.push_op(block, call.op_ref());
             if result_convention == CallingConvention::Cps {
@@ -2188,13 +2193,17 @@ impl<'a> Converter<'a> {
                 let (done_k, _) = self.unpack_frame(block, location, result, frame);
                 self.emit_cps_tail_call_indirect(block, location, done_k, [call.result(self.ctx)])?;
             } else {
-                let ret = func::r#return(self.ctx, location, [call.result(self.ctx)]);
+                let ret = func::Return::operands([call.result(self.ctx)]).build(self.ctx, location);
                 self.ctx.push_op(block, ret.op_ref());
             }
         }
         let region = self.single_block_region(location, block);
         let adapter_symbol = self.fresh_helper("func_ref_adapter");
-        let adapter = func::func(self.ctx, location, adapter_symbol, adapter_ty, region);
+        let adapter = func::Func::operands()
+            .sym_name(adapter_symbol)
+            .r#type(adapter_ty)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, adapter.op_ref(), result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
@@ -2207,21 +2216,15 @@ impl<'a> Converter<'a> {
                 .attr("fields", Attribute::List(vec![]))
                 .build(),
         );
-        let empty_env = adt::struct_new(
-            self.ctx,
-            location,
-            std::iter::empty::<ValueRef>(),
-            empty_env_ty,
-            empty_env_ty,
-        );
+        let empty_env = adt::StructNew::operands(std::iter::empty::<ValueRef>())
+            .r#type(empty_env_ty)
+            .results(empty_env_ty)
+            .build(self.ctx, location);
         let closure_ty = self.convert_type(result_logical_ty);
-        let closure_new = closure::new(
-            self.ctx,
-            location,
-            empty_env.result(self.ctx),
-            closure_ty,
-            adapter_symbol,
-        );
+        let closure_new = closure::New::operands(empty_env.result(self.ctx))
+            .func_ref(adapter_symbol)
+            .results(closure_ty)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, closure_new.op_ref(), result_convention);
         Ok((
             vec![empty_env.op_ref(), closure_new.op_ref()],
@@ -2264,7 +2267,10 @@ impl<'a> Converter<'a> {
         let body = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, body);
         let closure_type = self.completion_type(arg_type, flow.answer_type);
-        let lambda = closure::lambda(self.ctx, location, captures, closure_type, body);
+        let lambda = closure::Lambda::operands(captures)
+            .results(closure_type)
+            .regions(body)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
@@ -2306,7 +2312,10 @@ impl<'a> Converter<'a> {
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
         let closure_type = self.resumption_type(input_type, flow.answer_type);
-        let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
+        let lambda = closure::Lambda::operands(captures)
+            .results(closure_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
@@ -2328,7 +2337,9 @@ impl<'a> Converter<'a> {
         let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
         let args = self.ctx.block_args(block).to_vec();
         let anyref = self.anyref_type();
-        let erased_input = core::unrealized_conversion_cast(self.ctx, location, args[2], anyref);
+        let erased_input = core::UnrealizedConversionCast::operands(args[2])
+            .results(anyref)
+            .build(self.ctx, location);
         self.ctx.push_op(block, erased_input.op_ref());
         let (rebound_op, rebound) = self.build_rebound_resume(
             location,
@@ -2348,13 +2359,10 @@ impl<'a> Converter<'a> {
         )?;
         let region = self.single_block_region(location, block);
         let token_type = self.resumption_type(input_type, answer_type);
-        let lambda = closure::lambda(
-            self.ctx,
-            location,
-            ordered_external_values(self.ctx, region),
-            token_type,
-            region,
-        );
+        let lambda = closure::Lambda::operands(ordered_external_values(self.ctx, region))
+            .results(token_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
@@ -2398,10 +2406,14 @@ impl<'a> Converter<'a> {
             factory_args[3..].to_vec(),
         )?;
         self.ctx.push_op(factory_block, dispatcher_op);
-        let ret = func::r#return(self.ctx, location, [dispatcher]);
+        let ret = func::Return::operands([dispatcher]).build(self.ctx, location);
         self.ctx.push_op(factory_block, ret.op_ref());
         let region = self.single_block_region(location, factory_block);
-        let factory = func::func(self.ctx, location, symbol, factory_type, region);
+        let factory = func::Func::operands()
+            .sym_name(symbol)
+            .r#type(factory_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
         self.ctx.push_op(self.module_block, factory.op_ref());
         Ok(symbol)
@@ -2462,13 +2474,10 @@ impl<'a> Converter<'a> {
         )?;
         let region = self.single_block_region(location, block);
         let dispatch_type = self.frame_types(body_type).dispatch;
-        let lambda = closure::lambda(
-            self.ctx,
-            location,
-            ordered_external_values(self.ctx, region),
-            dispatch_type,
-            region,
-        );
+        let lambda = closure::Lambda::operands(ordered_external_values(self.ctx, region))
+            .results(dispatch_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
@@ -2572,26 +2581,20 @@ impl<'a> Converter<'a> {
             )?;
             let fallback_region = self.single_block_region(location, fallback_block);
             let never = self.never_type();
-            let choose = scf::r#if(
-                self.ctx,
-                location,
-                same_prompt.result(self.ctx),
-                never,
-                local_region,
-                fallback_region,
-            );
+            let choose = scf::If::operands(same_prompt.result(self.ctx))
+                .results(never)
+                .regions(local_region, fallback_region)
+                .build(self.ctx, location);
             self.ctx.push_op(case_block, choose.op_ref());
             let case_region = self.single_block_region(location, case_block);
             let op_index = ability::compute_op_idx(
                 self.ctx.get_type(arm.ability_ref).attrs.get_symbol("name"),
                 Some(arm.op_name),
             );
-            let case = scf::case(
-                self.ctx,
-                location,
-                Attribute::Int(op_index as i128),
-                case_region,
-            );
+            let case = scf::Case::operands()
+                .value(Attribute::Int(op_index as i128))
+                .regions(case_region)
+                .build(self.ctx, location);
             self.ctx.push_op(switch_block, case.op_ref());
         }
         let default_block = self.make_block(location, &[]);
@@ -2602,20 +2605,21 @@ impl<'a> Converter<'a> {
             [args[0], args[1], args[2], args[3], args[4], args[5]],
         )?;
         let foreign_region = self.single_block_region(location, default_block);
-        let default = scf::default(self.ctx, location, foreign_region);
+        let default = scf::Default::operands()
+            .regions(foreign_region)
+            .build(self.ctx, location);
         self.ctx.push_op(switch_block, default.op_ref());
         let switch_region = self.single_block_region(location, switch_block);
-        let switch = scf::switch(self.ctx, location, args[4], switch_region);
+        let switch = scf::Switch::operands(args[4])
+            .regions(switch_region)
+            .build(self.ctx, location);
         self.ctx.push_op(block, switch.op_ref());
         let region = self.single_block_region(location, block);
         let dispatch_type = self.frame_types(body_type).dispatch;
-        let lambda = closure::lambda(
-            self.ctx,
-            location,
-            ordered_external_values(self.ctx, region),
-            dispatch_type,
-            region,
-        );
+        let lambda = closure::Lambda::operands(ordered_external_values(self.ctx, region))
+            .results(dispatch_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
@@ -2643,14 +2647,14 @@ impl<'a> Converter<'a> {
                 )
                 .build(),
         );
-        let not_consumed = arith::r#const(self.ctx, location, i1_type, Attribute::Int(0));
-        let state = adt::struct_new(
-            self.ctx,
-            location,
-            [not_consumed.result(self.ctx)],
-            state_type,
-            state_type,
-        );
+        let not_consumed = arith::Const::operands()
+            .value(Attribute::Int(0))
+            .results(i1_type)
+            .build(self.ctx, location);
+        let state = adt::StructNew::operands([not_consumed.result(self.ctx)])
+            .r#type(state_type)
+            .results(state_type)
+            .build(self.ctx, location);
 
         let evidence_type = self.evidence_type();
         let frame_type = self.frame_types(answer_type).reference;
@@ -2663,47 +2667,50 @@ impl<'a> Converter<'a> {
         let input = if type_is(self.ctx, input_type, "core", "nil") {
             // Nil has no physical payload: its exact resumption receives the
             // canonical unit instead of an erased runtime value.
-            let unit = arith::r#const(self.ctx, location, input_type, Attribute::Unit);
+            let unit = arith::Const::operands()
+                .value(Attribute::Unit)
+                .results(input_type)
+                .build(self.ctx, location);
             self.ctx.push_op(block, unit.op_ref());
             unit.result(self.ctx)
         } else if type_is(self.ctx, input_type, "adt", "typeref") {
             // Dynamic effect values recover nominal references only through
             // their declared type, preserving the typed ownership boundary.
-            let recovered = adt::ref_cast(self.ctx, location, args[2], input_type, input_type);
+            let recovered = adt::RefCast::operands(args[2])
+                .r#type(input_type)
+                .results(input_type)
+                .build(self.ctx, location);
             self.ctx.push_op(block, recovered.op_ref());
             recovered.result(self.ctx)
         } else {
-            let recovered =
-                core::unrealized_conversion_cast(self.ctx, location, args[2], input_type);
+            let recovered = core::UnrealizedConversionCast::operands(args[2])
+                .results(input_type)
+                .build(self.ctx, location);
             self.ctx.push_op(block, recovered.op_ref());
             recovered.result(self.ctx)
         };
-        let consumed = adt::struct_get(
-            self.ctx,
-            location,
-            state.result(self.ctx),
-            i1_type,
-            state_type,
-            0,
-        );
+        let consumed = adt::StructGet::operands(state.result(self.ctx))
+            .r#type(state_type)
+            .field(0)
+            .results(i1_type)
+            .build(self.ctx, location);
         self.ctx.push_op(block, consumed.op_ref());
 
         let reject_block = self.make_block(location, &[]);
-        let unreachable = func::unreachable(self.ctx, location);
+        let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(reject_block, unreachable.op_ref());
         let reject_region = self.single_block_region(location, reject_block);
 
         let enter_block = self.make_block(location, &[]);
-        let consumed_true = arith::r#const(self.ctx, location, i1_type, Attribute::Int(1));
+        let consumed_true = arith::Const::operands()
+            .value(Attribute::Int(1))
+            .results(i1_type)
+            .build(self.ctx, location);
         self.ctx.push_op(enter_block, consumed_true.op_ref());
-        let mark = adt::struct_set(
-            self.ctx,
-            location,
-            state.result(self.ctx),
-            consumed_true.result(self.ctx),
-            state_type,
-            0,
-        );
+        let mark = adt::StructSet::operands(state.result(self.ctx), consumed_true.result(self.ctx))
+            .r#type(state_type)
+            .field(0)
+            .build(self.ctx, location);
         self.ctx.push_op(enter_block, mark.op_ref());
         self.emit_cps_tail_call_indirect(
             enter_block,
@@ -2714,14 +2721,10 @@ impl<'a> Converter<'a> {
         let enter_region = self.single_block_region(location, enter_block);
 
         let never = self.never_type();
-        let guard = scf::r#if(
-            self.ctx,
-            location,
-            consumed.result(self.ctx),
-            never,
-            reject_region,
-            enter_region,
-        );
+        let guard = scf::If::operands(consumed.result(self.ctx))
+            .results(never)
+            .regions(reject_region, enter_region)
+            .build(self.ctx, location);
         self.ctx.push_op(block, guard.op_ref());
         let region = self.single_block_region(location, block);
         let captures = ordered_external_values(self.ctx, region);
@@ -2731,7 +2734,10 @@ impl<'a> Converter<'a> {
             frame_type,
             anyref,
         );
-        let wrapper = closure::lambda(self.ctx, location, captures, closure_type, region);
+        let wrapper = closure::Lambda::operands(captures)
+            .results(closure_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, wrapper.op_ref(), CallingConvention::Cps);
         Ok((
             vec![not_consumed.op_ref(), state.op_ref(), wrapper.op_ref()],
@@ -2748,17 +2754,14 @@ impl<'a> Converter<'a> {
         let frame_type = self.frame_types(answer_type).reference;
         let anyref = self.anyref_type();
         let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
-        let unreachable = func::unreachable(self.ctx, location);
+        let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(block, unreachable.op_ref());
         let region = self.single_block_region(location, block);
         let closure_type = cps_resume_type(self.ctx, evidence_type, frame_type, anyref);
-        let lambda = closure::lambda(
-            self.ctx,
-            location,
-            std::iter::empty::<ValueRef>(),
-            closure_type,
-            region,
-        );
+        let lambda = closure::Lambda::operands(std::iter::empty::<ValueRef>())
+            .results(closure_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
         (lambda.op_ref(), lambda.result(self.ctx))
     }
@@ -2840,16 +2843,10 @@ impl<'a> Converter<'a> {
                     .1
             }
         };
-        let perform = ability::perform(
-            self.ctx,
-            location,
-            evidence,
-            dispatch,
-            continuation,
-            args,
-            ability_ref,
-            op_name,
-        );
+        let perform = ability::Perform::operands(evidence, dispatch, continuation, args)
+            .ability_ref(ability_ref)
+            .op_name(op_name)
+            .build(self.ctx, location);
         self.ctx.push_op(block, perform.op_ref());
         Ok(())
     }
@@ -2988,7 +2985,10 @@ impl<'a> Converter<'a> {
         };
         let function = func::func_sig(self.ctx, params, [result]).as_type_ref();
         let closure_type = physical_closure_type(self.ctx, function, convention);
-        let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
+        let lambda = closure::Lambda::operands(captures)
+            .results(closure_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
         Ok(HandlerArmInfo {
             op: lambda.op_ref(),
@@ -3020,24 +3020,24 @@ impl<'a> Converter<'a> {
             arm.op_name,
             value_params.iter().map(|_| anyref),
         );
-        let cast = core::unrealized_conversion_cast(self.ctx, location, payload, payload_type);
+        let cast = core::UnrealizedConversionCast::operands(payload)
+            .results(payload_type)
+            .build(self.ctx, location);
         self.ctx.push_op(block, cast.op_ref());
         value_params
             .iter()
             .copied()
             .enumerate()
             .map(|(index, ty)| {
-                let get = adt::struct_get(
-                    self.ctx,
-                    location,
-                    cast.result(self.ctx),
-                    anyref,
-                    payload_type,
-                    index as u32,
-                );
+                let get = adt::StructGet::operands(cast.result(self.ctx))
+                    .r#type(payload_type)
+                    .field(index as u32)
+                    .results(anyref)
+                    .build(self.ctx, location);
                 self.ctx.push_op(block, get.op_ref());
-                let recovered =
-                    core::unrealized_conversion_cast(self.ctx, location, get.result(self.ctx), ty);
+                let recovered = core::UnrealizedConversionCast::operands(get.result(self.ctx))
+                    .results(ty)
+                    .build(self.ctx, location);
                 self.ctx.push_op(block, recovered.op_ref());
                 recovered.result(self.ctx)
             })
@@ -3081,12 +3081,11 @@ impl<'a> Converter<'a> {
             call_args.extend(self.unpack_handler_payload(case_block, location, payload, arm));
             if arm.has_resume_token {
                 let token_type = *arm.params.last().unwrap();
-                let token = core::unrealized_conversion_cast(
-                    self.ctx,
-                    location,
+                let token = core::UnrealizedConversionCast::operands(
                     continuation.expect("general dispatcher has a continuation"),
-                    token_type,
-                );
+                )
+                .results(token_type)
+                .build(self.ctx, location);
                 self.ctx.push_op(case_block, token.op_ref());
                 call_args.push(token.result(self.ctx));
             }
@@ -3111,14 +3110,12 @@ impl<'a> Converter<'a> {
                     .build(self.ctx, location);
                 set_calling_convention(self.ctx, call.op_ref(), CallingConvention::EvidenceDirect);
                 self.ctx.push_op(case_block, call.op_ref());
-                let erased = core::unrealized_conversion_cast(
-                    self.ctx,
-                    location,
-                    call.result(self.ctx),
-                    anyref,
-                );
+                let erased = core::UnrealizedConversionCast::operands(call.result(self.ctx))
+                    .results(anyref)
+                    .build(self.ctx, location);
                 self.ctx.push_op(case_block, erased.op_ref());
-                let ret = func::r#return(self.ctx, location, [erased.result(self.ctx)]);
+                let ret =
+                    func::Return::operands([erased.result(self.ctx)]).build(self.ctx, location);
                 self.ctx.push_op(case_block, ret.op_ref());
             }
             let case_region = self.single_block_region(location, case_block);
@@ -3126,22 +3123,24 @@ impl<'a> Converter<'a> {
                 self.ctx.get_type(arm.ability_ref).attrs.get_symbol("name"),
                 Some(arm.op_name),
             );
-            let case = scf::case(
-                self.ctx,
-                location,
-                Attribute::Int(op_index as i128),
-                case_region,
-            );
+            let case = scf::Case::operands()
+                .value(Attribute::Int(op_index as i128))
+                .regions(case_region)
+                .build(self.ctx, location);
             self.ctx.push_op(switch_block, case.op_ref());
         }
         let reject_block = self.make_block(location, &[]);
-        let unreachable = func::unreachable(self.ctx, location);
+        let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(reject_block, unreachable.op_ref());
         let reject_region = self.single_block_region(location, reject_block);
-        let default = scf::default(self.ctx, location, reject_region);
+        let default = scf::Default::operands()
+            .regions(reject_region)
+            .build(self.ctx, location);
         self.ctx.push_op(switch_block, default.op_ref());
         let switch_region = self.single_block_region(location, switch_block);
-        let switch = scf::switch(self.ctx, location, op_idx, switch_region);
+        let switch = scf::Switch::operands(op_idx)
+            .regions(switch_region)
+            .build(self.ctx, location);
         self.ctx.push_op(block, switch.op_ref());
 
         let region = self.single_block_region(location, block);
@@ -3153,7 +3152,10 @@ impl<'a> Converter<'a> {
             CallingConvention::EvidenceDirect
         };
         let closure_type = physical_closure_type(self.ctx, function, convention);
-        let lambda = closure::lambda(self.ctx, location, captures, closure_type, region);
+        let lambda = closure::Lambda::operands(captures)
+            .results(closure_type)
+            .regions(region)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, lambda.op_ref(), convention);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
@@ -3236,7 +3238,9 @@ impl<'a> Converter<'a> {
 
         let evidence_type = self.evidence_type();
         let i32_type = self.i32_type();
-        let prompt = effect::fresh_prompt_tag(self.ctx, location, i32_type);
+        let prompt = effect::FreshPromptTag::operands()
+            .results(i32_type)
+            .build(self.ctx, location);
         self.ctx.push_op(block, prompt.op_ref());
         let body_block = self.make_block(location, &[evidence_type]);
         let extended_evidence = self.ctx.block_args(body_block)[0];
@@ -3282,13 +3286,10 @@ impl<'a> Converter<'a> {
         let mut local_dispatch_args = vec![completion_k, parent_dispatch, prompt.result(self.ctx)];
         local_dispatch_args.extend(handler_arms.iter().map(|arm| arm.value));
         let local_dispatch_type = self.frame_types(completion_input).dispatch;
-        let local_dispatch_op = func::call(
-            self.ctx,
-            location,
-            local_dispatch_args,
-            [local_dispatch_type],
-            local_dispatch_factory,
-        );
+        let local_dispatch_op = func::Call::operands(local_dispatch_args)
+            .callee(local_dispatch_factory)
+            .results([local_dispatch_type])
+            .build(self.ctx, location);
         set_calling_convention(
             self.ctx,
             local_dispatch_op.op_ref(),
@@ -3313,15 +3314,16 @@ impl<'a> Converter<'a> {
         )?;
         let body_region = self.single_block_region(location, body_block);
         let current_evidence = self.current_evidence(source, flow)?;
-        let dispatch = ability::handle_dispatch(
-            self.ctx,
-            location,
+        let dispatch = ability::HandleDispatch::operands(
             current_evidence,
             prompt.result(self.ctx),
             dispatchers,
-            Attribute::List(ability_refs.into_iter().map(Attribute::Type).collect()),
-            body_region,
-        );
+        )
+        .ability_refs(Attribute::List(
+            ability_refs.into_iter().map(Attribute::Type).collect(),
+        ))
+        .regions(body_region)
+        .build(self.ctx, location);
         self.ctx.push_op(block, dispatch.op_ref());
         Ok(())
     }
@@ -3454,7 +3456,9 @@ impl<'a> Converter<'a> {
                                 .iter()
                                 .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
                         );
-                        let tail = func::tail_call(self.ctx, location, args, target_symbol);
+                        let tail = func::TailCall::operands(args)
+                            .callee(target_symbol)
+                            .build(self.ctx, location);
                         set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
                         self.ctx.push_op(block, tail.op_ref());
                         return Ok(());
@@ -3580,14 +3584,11 @@ impl<'a> Converter<'a> {
                             .attributes
                             .get_symbol("op_name")
                             .expect("pre-CPS validation checked perform operation");
-                        let call = ability::call(
-                            self.ctx,
-                            location,
-                            args,
-                            result_type,
-                            ability_ref,
-                            op_name,
-                        );
+                        let call = ability::Call::operands(args)
+                            .ability_ref(ability_ref)
+                            .op_name(op_name)
+                            .results(result_type)
+                            .build(self.ctx, location);
                         self.ctx.push_op(block, call.op_ref());
                         mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
                         index += 1;
@@ -3706,7 +3707,11 @@ impl<'a> Converter<'a> {
             &flow,
         )?;
         let region = self.single_block_region(location, block);
-        let function = func::func(self.ctx, location, symbol, physical_type, region);
+        let function = func::Func::operands()
+            .sym_name(symbol)
+            .r#type(physical_type)
+            .regions(region)
+            .build(self.ctx, location);
         self.copy_extra_attrs(
             source,
             function.op_ref(),
@@ -3913,7 +3918,10 @@ pub fn tribute_control_to_cps(
         parent_op: None,
     });
     let temp_symbol = Symbol::new("__tribute_control_to_cps_candidate");
-    let temp_module = core::module(ctx, module_location, temp_symbol, new_region);
+    let temp_module = core::Module::operands()
+        .sym_name(temp_symbol)
+        .regions(new_region)
+        .build(ctx, module_location);
     let candidate: Module = temp_module.into();
     for (name, ty) in &converted_aliases {
         ctx.register_type_alias(*name, *ty);
@@ -5572,7 +5580,10 @@ mod tests {
         let location = ctx.op(module.op()).location;
         let never = core::never(&mut ctx).as_type_ref();
         let raw_type = func::func_sig(&mut ctx, [], [never]).as_type_ref();
-        let raw = func::constant(&mut ctx, location, raw_type, Symbol::new("raw"));
+        let raw = func::Constant::operands()
+            .func_ref(Symbol::new("raw"))
+            .results(raw_type)
+            .build(&mut ctx, location);
         let before = ctx.block(module_block).ops.to_vec();
         let mut converter = Converter::new(&mut ctx, module_block, HashMap::new(), module.op());
 

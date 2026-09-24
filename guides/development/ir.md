@@ -40,27 +40,15 @@ selecting closure storage. See [the IR contract](../../new-plans/ir.md) and
 
 ## `#[dialect]` Macro
 
-Operations and types are defined using the `#[dialect]` attribute macro.
-Within trunk-ir: `#[crate::dialect(crate = crate)]`.
-From external crates: `#[trunk_ir::dialect]`.
+Operations and types are defined with the `#[trunk_ir::dialect]` attribute
+macro on a `mod`; it takes no arguments.
 
-**Annotations**:
-
-- `#[attr(...)]` — Attributes (metadata stored on operation); `name?: Ty`
-  marks an optional attribute
-- `#[region(...)]` — Regions (nested control flow); `#[region(name?)]` marks
-  the last region optional, e.g. the body of an external function
-- `#[rest]` — Variadic operands
-- `-> result` — Operation produces one result; `-> Option<result>` produces
-  zero or one; `#[rest_results] -> results` produces any number
-- `struct` definitions — Generate typed type wrappers
-
-**Typed syntax**: an operation may instead declare its entities and type
-constraints in the signature, following
-[the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
-`arith.addi`/`addf`/`cmpi`/`cmpf`, `wasm.i32_add`, every `tribute_control`
-operation, the `func` indirect calls, and `clif.func`, `clif.call`, and the
-`clif` indirect calls use it. For example:
+- `struct` definitions generate typed type wrappers. `#[attr(..)]` declares
+  type attributes, and `#[rest]` marks a variadic last type parameter.
+- `fn` definitions declare operations. The signature declares each entity and
+  its type constraint, following
+  [the declarative schema contract](../../new-plans/ir.md#선언적-operation-schema).
+  `_` leaves an entity unconstrained. For example:
 
 ```rust
 fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
@@ -88,8 +76,10 @@ fn call_indirect<S: FuncSig>(
 
 - Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`, and
   `Option<Attr<K>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
-  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`). Regions and
-  successors keep the `#[region(..)]` / `#[successor(..)]` body form.
+  `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
+- Regions and successors are declared in the body: `#[region(name)] {}`,
+  `#[region(name?)] {}` for an optional last region such as the body of an
+  external function, and `#[successor(name)] {}`.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
   `core` scalar categories (`IntegerLike`, `BoolLike`, `FloatLike`), exact
   `core` scalars (`I1`–`I64`, `F32`, `F64`), macro-defined type wrappers
@@ -103,16 +93,12 @@ fn call_indirect<S: FuncSig>(
   define on its wrapper, and reserves the entity name `verify`. It checks
   what the schema cannot express and runs only after every generated check
   passed.
-- An operation uses either the legacy annotations above or the typed syntax,
-  never both. Legacy definitions remain supported and are unconstrained in the
-  schema.
-
-Typed operations generate a builder that groups inputs by entity kind instead
-of a positional constructor. For the declarations above:
+Each operation gets a builder that groups inputs by entity kind. For the
+declarations above:
 
 ```rust
 let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
-let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::builder()` without operands
+let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::operands()` without operands
     .predicate(Symbol::new("slt"))          // attributes by name
     .build(ctx, loc);                       // result is `core.i1`
 let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
@@ -151,10 +137,13 @@ let nil_ty = core::nil(ctx).as_type_ref();
 let func_ty = func::func_sig(ctx, params, [return_ty]).as_type_ref();
 ```
 
-Operations use the same pattern:
+Operations are created with their builders:
 
 ```rust
-let c = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(42));
+let c = arith::Const::operands()
+    .value(Attribute::Int(42))
+    .results(i32_ty)
+    .build(&mut ctx, loc);
 ```
 
 Matching uses typed wrappers (see [code conventions](conventions.md) for

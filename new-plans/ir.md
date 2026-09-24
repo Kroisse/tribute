@@ -104,7 +104,8 @@ interfaces describe behavior, not validation phases.
 ### 선언적 operation schema
 
 Operation verifier의 로컬 계약은 `#[dialect]` operation 정의에서 선언적으로
-기술할 수 있다. 이 schema는 operation verifier layer를 생성하는 표현이며,
+기술한다. 모든 operation은 이 문법으로 정의하며, 타입 제약이 없는 entity는 `_`로
+선언한다. 이 schema는 operation verifier layer를 생성하는 표현이며,
 같은 정의에서 검증 코드, builder, 정적 schema descriptor를 만든다. Assembly
 format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 이 descriptor를
 소비한다.
