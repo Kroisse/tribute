@@ -42,6 +42,8 @@ mod parse;
 /// - Constructor function `op_name(ctx, location, ...)`, or for operations in
 ///   the typed syntax (`fn addi<T: IntegerLike>(lhs: Value<T>, ...)`), a
 ///   builder started by `OpName::operands(..)` / `OpName::builder()`
+/// - `OpSchema` registration; `#[verify]` on the operation adds a call to
+///   its `VerifyOp` impl after the generated checks
 #[proc_macro_attribute]
 pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match dialect_impl(attr.into(), item.into()) {

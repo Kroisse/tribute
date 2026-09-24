@@ -198,7 +198,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
 
         // Add offset to index: actual_index = offset + index
         let add_offset =
-            wasm_dialect::i32_add(ctx, location, get_offset.result(ctx), index, i32_ty);
+            wasm_dialect::I32Add::operands(get_offset.result(ctx), index).build(location, ctx);
 
         // array.get_u (unsigned extend to i32, for byte values 0-255)
         let array_get = wasm_dialect::array_get_u(
@@ -250,8 +250,10 @@ impl RewritePattern for BytesRangeEqualPattern {
         let nil_ty = core::nil(ctx).as_type_ref();
         let (left, left_ops) = extract_bytes_fields(ctx, location, operands[0]);
         let (right, right_ops) = extract_bytes_fields(ctx, location, operands[2]);
-        let left_start = wasm_dialect::i32_add(ctx, location, left.offset, operands[1], i32_ty);
-        let right_start = wasm_dialect::i32_add(ctx, location, right.offset, operands[3], i32_ty);
+        let left_start =
+            wasm_dialect::I32Add::operands(left.offset, operands[1]).build(location, ctx);
+        let right_start =
+            wasm_dialect::I32Add::operands(right.offset, operands[3]).build(location, ctx);
         let len = operands[4];
         let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
 
@@ -281,7 +283,7 @@ impl RewritePattern for BytesRangeEqualPattern {
         ctx.push_op(loop_block, break_when_done.op_ref());
 
         let left_index =
-            wasm_dialect::i32_add(ctx, location, left_start.result(ctx), index, i32_ty);
+            wasm_dialect::I32Add::operands(left_start.result(ctx), index).build(location, ctx);
         ctx.push_op(loop_block, left_index.op_ref());
         let left_byte = wasm_dialect::array_get_u(
             ctx,
@@ -293,7 +295,7 @@ impl RewritePattern for BytesRangeEqualPattern {
         );
         ctx.push_op(loop_block, left_byte.op_ref());
         let right_index =
-            wasm_dialect::i32_add(ctx, location, right_start.result(ctx), index, i32_ty);
+            wasm_dialect::I32Add::operands(right_start.result(ctx), index).build(location, ctx);
         ctx.push_op(loop_block, right_index.op_ref());
         let right_byte = wasm_dialect::array_get_u(
             ctx,
@@ -326,7 +328,7 @@ impl RewritePattern for BytesRangeEqualPattern {
 
         let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
         ctx.push_op(loop_block, one.op_ref());
-        let next = wasm_dialect::i32_add(ctx, location, index, one.result(ctx), i32_ty);
+        let next = wasm_dialect::I32Add::operands(index, one.result(ctx)).build(location, ctx);
         ctx.push_op(loop_block, next.op_ref());
         let yield_next = wasm_dialect::r#yield(ctx, location, next.result(ctx));
         ctx.push_op(loop_block, yield_next.op_ref());
@@ -441,7 +443,7 @@ impl RewritePattern for BytesConcatPattern {
 
         // Calculate total_len = left.len + right.len
         let total_len =
-            wasm_dialect::i32_add(ctx, location, left_fields.len, right_fields.len, i32_ty);
+            wasm_dialect::I32Add::operands(left_fields.len, right_fields.len).build(location, ctx);
 
         // Allocate new array: array_new_default(total_len)
         let new_array = wasm_dialect::array_new_default(

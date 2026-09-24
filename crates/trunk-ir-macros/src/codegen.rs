@@ -169,6 +169,15 @@ fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
         RegionOrSuccessor::Region { .. } => None,
     });
 
+    let verifier = if op.verify {
+        let sname = struct_name(&op.name);
+        quote!(Some(|ctx, op| {
+            <#sname as #crate_path::ops::VerifyOp>::verify(#sname(op), ctx)
+        }))
+    } else {
+        quote!(None)
+    };
+
     quote! {
         #schema_mod::OpSchema {
             dialect: #dialect,
@@ -180,6 +189,7 @@ fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
             attributes: &[#(#attributes),*],
             regions: &[#(#regions),*],
             successors: &[#(#successors),*],
+            verifier: #verifier,
         }
     }
 }
@@ -232,6 +242,10 @@ fn gen_type_expr(crate_path: &TokenStream, expr: &TypeExpr, op: &OperationDef) -
         TypeExpr::Var(i) => quote!(#schema::TypeSpec::Var(#i)),
         TypeExpr::Anon(paths) => {
             let bounds = gen_bounds(crate_path, paths);
+            quote!(#schema::TypeSpec::Anon(#bounds))
+        }
+        TypeExpr::Exact(path) => {
+            let bounds = gen_bounds(crate_path, std::slice::from_ref(path));
             quote!(#schema::TypeSpec::Anon(#bounds))
         }
         TypeExpr::Proj(proj) => {
@@ -644,9 +658,24 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         }
     }
 
-    // Result types.
+    // Result types: inferred when uniquely determined, otherwise one call.
+    let mut pre_stmts = Vec::new();
+    let checks = fixed_result_checks(crate_path, op);
     let results_param = match &op.results {
         ResultDef::None => None,
+        _ if results_inferable(op) => {
+            let attrs = op.attrs.iter().map(|attr| {
+                let name = &attr.name;
+                let field = format_ident!("attr_{}", attr.name);
+                quote!((#name, self.#field.as_ref()))
+            });
+            pre_stmts.push(quote! {
+                let __results = <#sname as #crate_path::ops::DialectOp>::SCHEMA
+                    .infer_result_types(ctx, &self.operands, &[#(#attrs),*]);
+            });
+            build_stmts.push(quote!(__builder = __builder.results(__results);));
+            None
+        }
         ResultDef::Single(_) => Some((quote!(result: #type_ref), quote!(::std::vec![result]))),
         ResultDef::Optional(_) => Some((
             quote!(result: impl Into<Option<#type_ref>>),
@@ -804,6 +833,8 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
     let builder_doc = format!("Builder for `{full_name}`.");
 
     quote! {
+        #(#checks)*
+
         impl #sname {
             #entry
         }
@@ -823,6 +854,7 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
                 location: #crate_path::Location,
                 ctx: &mut #crate_path::IrContext,
             ) -> #sname {
+                #(#pre_stmts)*
                 let mut __builder = #crate_path::OperationDataBuilder::new(
                     location,
                     #crate_path::Symbol::new(#dialect),
@@ -834,6 +866,63 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             }
         }
     }
+}
+
+/// Whether a builder can infer every result type: each is a fixed type, a
+/// variable bound by a single operand or a required attribute, or a
+/// projection of such a variable. Must agree with
+/// `OpSchema::infer_result_types`.
+fn results_inferable(op: &OperationDef) -> bool {
+    let var_bound = |var: usize| {
+        op.attrs
+            .iter()
+            .any(|attr| attr.binds == Some(var) && !attr.optional)
+            || op.operands.iter().any(|operand| {
+                !operand.variadic
+                    && matches!(operand.constraint, ValueExpr::Each(TypeExpr::Var(v)) if v == var)
+            })
+    };
+    let one = |expr: &TypeExpr| match expr {
+        TypeExpr::Var(var) => var_bound(*var),
+        TypeExpr::Proj(proj) => var_bound(proj.var),
+        TypeExpr::Exact(_) => true,
+        TypeExpr::Any | TypeExpr::Anon(_) => false,
+    };
+    match (&op.results, &op.result_constraint) {
+        (ResultDef::Single(_), ValueExpr::Each(expr)) => one(expr),
+        (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Types(exprs))) => exprs.iter().all(one),
+        (ResultDef::Variadic(_), ValueExpr::List(ListExpr::Proj(proj))) => var_bound(proj.var),
+        _ => false,
+    }
+}
+
+/// Compile-time checks that directly named result bounds denote one type,
+/// whether or not the builder infers them.
+fn fixed_result_checks(crate_path: &TokenStream, op: &OperationDef) -> Vec<TokenStream> {
+    let exprs: Vec<&TypeExpr> = match &op.result_constraint {
+        ValueExpr::Each(expr) => vec![expr],
+        ValueExpr::List(ListExpr::Types(exprs)) => exprs.iter().collect(),
+        ValueExpr::List(ListExpr::Proj(_)) => Vec::new(),
+    };
+    exprs
+        .into_iter()
+        .filter_map(|expr| match expr {
+            TypeExpr::Exact(path) => Some(path),
+            _ => None,
+        })
+        .map(|path| {
+            quote_spanned! {path.span()=>
+                const _: () = assert!(
+                    <#path as #crate_path::type_constraint::TypeConstraint>::DESC.fixed.is_some(),
+                    concat!(
+                        "result bound `", stringify!(#path), "` does not denote one type; ",
+                        "declare the result as `impl ", stringify!(#path),
+                        "` and pass it with `.results(..)`"
+                    ),
+                );
+            }
+        })
+        .collect()
 }
 
 // ============================================================================
@@ -900,6 +989,14 @@ fn gen_type_constraint(
             quote!(#i => Some(#crate_path::type_constraint::Projected::One(params[#i])),)
         }
     });
+    // A type without parameters or attributes has exactly one instance.
+    let fixed_type = if td.params.is_empty() && td.attrs.is_empty() {
+        quote!(Some(|ctx| {
+            ctx.intern_type(#crate_path::TypeDataBuilder::new(#dialect, #type_name).build())
+        }))
+    } else {
+        quote!(None)
+    };
     quote! {
         impl #crate_path::type_constraint::TypeConstraint for #sname {
             const DESC: &'static #crate_path::type_constraint::ConstraintDesc =
@@ -924,6 +1021,7 @@ fn gen_type_constraint(
                         let params = &ctx.get_type(ty).params;
                         match index { #(#arms)* _ => None }
                     },
+                    fixed: #fixed_type,
                 };
         }
     }

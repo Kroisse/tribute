@@ -1,0 +1,11 @@
+error[E0080]: evaluation panicked: result bound `IntegerLike` does not denote one type; declare the result as `impl IntegerLike` and pass it with `.results(..)`
+ --> tests/ui/result_bound_not_fixed.rs:6:44
+  |
+6 |         fn probe(value: Value<_>) -> Value<IntegerLike> {}
+  |                                            ^^^^^^^^^^^ evaluation of `d::_` failed here
+
+error[E0080]: evaluation panicked: result bound `IntegerLike` does not denote one type; declare the result as `impl IntegerLike` and pass it with `.results(..)`
+ --> tests/ui/result_bound_not_fixed.rs:9:51
+  |
+9 |         fn probe_list(value: Value<_>) -> Values<(IntegerLike, _)> {}
+  |                                                   ^^^^^^^^^^^ evaluation of `d::_` failed here

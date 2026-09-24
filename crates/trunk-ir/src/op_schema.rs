@@ -6,19 +6,22 @@
 //! verification, assembly formats, and declarative rewrite tooling can look
 //! them up by operation name without duplicating the definition.
 //!
-//! Schema verification is the first stage of the operation-verifier layer
-//! described in `new-plans/ir.md`: it checks entity counts, required
-//! attributes, and attribute kinds. It runs only at explicit verifier
-//! checkpoints; parsers, raw builders, and rewrites may construct operations
-//! that violate the schema in the meantime.
+//! [`OpSchema::verify`] runs the operation-verifier stages described in
+//! `new-plans/ir.md`: entity counts and attributes, individual type
+//! constraints, type-variable bindings, projection and list relations, and
+//! finally the operation's own [`VerifyOp`](crate::ops::VerifyOp) hook. Each
+//! stage runs only if the previous ones passed. Verification happens only at
+//! explicit verifier checkpoints; parsers, raw builders, and rewrites may
+//! construct operations that violate the schema in the meantime.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::LazyLock;
 
-use crate::type_constraint::ConstraintDesc;
+use crate::printer::print_type;
+use crate::type_constraint::{ConstraintDesc, Projected};
 use crate::types::Attribute;
-use crate::{IrContext, OpRef, Symbol};
+use crate::{IrContext, OpRef, Symbol, TypeRef, ValueRef};
 
 /// Static description of one dialect operation.
 #[derive(Debug)]
@@ -42,7 +45,13 @@ pub struct OpSchema {
     pub regions: &'static [RegionSchema],
     /// Declared successor names in order.
     pub successors: &'static [&'static str],
+    /// Operation-local verifier from `#[verify]`, run after every schema
+    /// check passed.
+    pub verifier: Option<OpVerifier>,
 }
+
+/// An operation-local verifier generated from `#[verify]`.
+pub type OpVerifier = fn(&IrContext, OpRef) -> Result<(), String>;
 
 /// Static description of one declared operand.
 #[derive(Debug)]
@@ -221,6 +230,79 @@ pub enum SchemaViolation {
         name: &'static str,
         expected: AttributeKind,
     },
+    /// A type does not satisfy a bound.
+    TypeConstraint {
+        site: Site,
+        /// The type variable the bound belongs to, if named.
+        var: Option<&'static str>,
+        expected: &'static str,
+        found: String,
+    },
+    /// A type variable was bound to a different type earlier.
+    TypeMismatch {
+        site: Site,
+        var: &'static str,
+        bound_by: Site,
+        expected: String,
+        found: String,
+    },
+    /// A type differs from a single-type projection (`T::Input`).
+    ProjectionMismatch {
+        site: Site,
+        projection: String,
+        expected: String,
+        found: String,
+    },
+    /// A value segment differs from a list projection (`S::Inputs`).
+    ListMismatch {
+        segment: Segment,
+        projection: String,
+        expected: String,
+        found: String,
+    },
+    /// A projection's variable has no binding in the operation.
+    UnboundProjection {
+        /// The operand, result, or segment the projection constrains.
+        site: String,
+        projection: String,
+        var: &'static str,
+    },
+    /// The operation's own verifier rejected it.
+    Verifier(String),
+}
+
+/// Where a constrained type appears in an operation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Site {
+    Operand { index: usize, name: &'static str },
+    Result { index: usize, name: &'static str },
+    Attribute { name: &'static str },
+}
+
+impl fmt::Display for Site {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Site::Operand { index, name } => write!(f, "operand #{index} `{name}`"),
+            Site::Result { index, name } => write!(f, "result #{index} `{name}`"),
+            Site::Attribute { name } => write!(f, "attribute `{name}`"),
+        }
+    }
+}
+
+/// A variadic operand or result segment.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Segment {
+    Operands(&'static str),
+    Results(&'static str),
+}
+
+impl fmt::Display for Segment {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Segment::Operands(name) => write!(f, "operands `{name}`"),
+            Segment::Results(name) => write!(f, "results `{name}`"),
+        }
+    }
 }
 
 /// An inclusive count range; `max` is `None` when unbounded.
@@ -274,6 +356,52 @@ impl fmt::Display for SchemaViolation {
             SchemaViolation::AttributeKind { name, expected } => {
                 write!(f, "attribute `{name}` must be a {expected} attribute")
             }
+            SchemaViolation::TypeConstraint {
+                site,
+                var,
+                expected,
+                found,
+            } => match var {
+                Some(var) => write!(f, "{site}: expected {var}: {expected}, found {found}"),
+                None => write!(f, "{site}: expected {expected}, found {found}"),
+            },
+            SchemaViolation::TypeMismatch {
+                site,
+                var,
+                bound_by,
+                expected,
+                found,
+            } => write!(
+                f,
+                "{site}: expected same type as {bound_by} ({var} = {expected}), found {found}"
+            ),
+            SchemaViolation::ProjectionMismatch {
+                site,
+                projection,
+                expected,
+                found,
+            } => write!(
+                f,
+                "{site}: expected {projection} = {expected}, found {found}"
+            ),
+            SchemaViolation::ListMismatch {
+                segment,
+                projection,
+                expected,
+                found,
+            } => write!(
+                f,
+                "{segment}: expected {projection} = {expected}, found {found}"
+            ),
+            SchemaViolation::UnboundProjection {
+                site,
+                projection,
+                var,
+            } => write!(
+                f,
+                "{site}: cannot check {projection} because `{var}` is not bound"
+            ),
+            SchemaViolation::Verifier(message) => f.write_str(message),
         }
     }
 }
@@ -281,22 +409,23 @@ impl fmt::Display for SchemaViolation {
 impl OpSchema {
     /// Allowed operand count.
     pub fn operand_count(&self) -> CountRange {
-        let fixed = self
-            .operands
-            .iter()
-            .filter(|operand| operand.arity == Arity::One)
-            .count();
-        CountRange {
-            min: fixed,
-            max: (fixed == self.operands.len()).then_some(fixed),
+        let mut count = CountRange::exactly(0);
+        for operand in self.operands {
+            let segment = match operand.arity {
+                Arity::One => CountRange::exactly(1),
+                Arity::Variadic => segment_count(&operand.constraint),
+            };
+            count.min += segment.min;
+            count.max = count.max.zip(segment.max).map(|(a, b)| a + b);
         }
+        count
     }
 
     /// Allowed result count.
     pub fn result_count(&self) -> CountRange {
         match self.results {
             ResultSchema::Fixed(names) => CountRange::exactly(names.len()),
-            ResultSchema::Variadic(_) => CountRange { min: 0, max: None },
+            ResultSchema::Variadic(_) => segment_count(&self.result_constraint),
             ResultSchema::Optional(_) => CountRange {
                 min: 0,
                 max: Some(1),
@@ -374,6 +503,206 @@ impl OpSchema {
         violations
     }
 
+    /// Run every verifier stage on `op`, stopping after the first stage
+    /// that reports a violation.
+    pub fn verify(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
+        let violations = self.verify_structure(ctx, op);
+        if !violations.is_empty() {
+            return violations;
+        }
+        let violations = self.verify_types(ctx, op);
+        if !violations.is_empty() {
+            return violations;
+        }
+        match self.verifier.map(|verifier| verifier(ctx, op)) {
+            Some(Err(message)) => vec![SchemaViolation::Verifier(message)],
+            _ => Vec::new(),
+        }
+    }
+
+    /// Check type constraints, variable bindings, and projections.
+    ///
+    /// Requires an operation that passed [`verify_structure`](Self::verify_structure).
+    pub fn verify_types(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
+        let slots = TypeSlots::collect(self, ctx, op);
+        let mut violations = Vec::new();
+
+        // Stage 2: individual constraints.
+        for slot in &slots.types {
+            let (var, bounds) = match slot.spec {
+                TypeSpec::Var(v) => (Some(self.type_vars[v].name), self.type_vars[v].bounds),
+                TypeSpec::Anon(bounds) => (None, bounds),
+                TypeSpec::Any | TypeSpec::Proj(_) => continue,
+            };
+            if let Some(bound) = bounds.iter().find(|bound| !(bound.matches)(ctx, slot.ty)) {
+                violations.push(SchemaViolation::TypeConstraint {
+                    site: slot.site,
+                    var,
+                    expected: bound.name,
+                    found: print_type(ctx, slot.ty),
+                });
+            }
+        }
+        if !violations.is_empty() {
+            return violations;
+        }
+
+        // Stage 3: the first occurrence of a variable binds it.
+        let mut bindings: Vec<Option<(TypeRef, Site)>> = vec![None; self.type_vars.len()];
+        for slot in &slots.types {
+            let TypeSpec::Var(v) = slot.spec else {
+                continue;
+            };
+            match bindings[v] {
+                None => bindings[v] = Some((slot.ty, slot.site)),
+                Some((ty, _)) if ty == slot.ty => {}
+                Some((ty, bound_by)) => violations.push(SchemaViolation::TypeMismatch {
+                    site: slot.site,
+                    var: self.type_vars[v].name,
+                    bound_by,
+                    expected: print_type(ctx, ty),
+                    found: print_type(ctx, slot.ty),
+                }),
+            }
+        }
+        if !violations.is_empty() {
+            return violations;
+        }
+
+        // Stage 4: projections of bound variables. A projection whose
+        // variable has no binding here (e.g. an absent optional attribute)
+        // cannot be checked, which is itself a violation.
+        let project = |p: ProjectionRef| {
+            let (ty, _) = bindings[p.var]?;
+            (self.type_vars[p.var].bounds[p.bound].project)(ctx, ty, p.index)
+        };
+        let unbound = |p: ProjectionRef, site: String| SchemaViolation::UnboundProjection {
+            site,
+            projection: self.projection_name(p),
+            var: self.type_vars[p.var].name,
+        };
+        for slot in &slots.types {
+            let TypeSpec::Proj(p) = slot.spec else {
+                continue;
+            };
+            if bindings[p.var].is_none() {
+                violations.push(unbound(p, slot.site.to_string()));
+            } else if let Some(Projected::One(expected)) = project(p)
+                && expected != slot.ty
+            {
+                violations.push(SchemaViolation::ProjectionMismatch {
+                    site: slot.site,
+                    projection: self.projection_name(p),
+                    expected: print_type(ctx, expected),
+                    found: print_type(ctx, slot.ty),
+                });
+            }
+        }
+        for list in &slots.lists {
+            if bindings[list.projection.var].is_none() {
+                violations.push(unbound(list.projection, list.segment.to_string()));
+            } else if let Some(Projected::List(expected)) = project(list.projection)
+                && expected != list.types.as_slice()
+            {
+                violations.push(SchemaViolation::ListMismatch {
+                    segment: list.segment,
+                    projection: self.projection_name(list.projection),
+                    expected: print_type_list(ctx, expected),
+                    found: print_type_list(ctx, &list.types),
+                });
+            }
+        }
+        violations
+    }
+
+    fn projection_name(&self, p: ProjectionRef) -> String {
+        let var = &self.type_vars[p.var];
+        format!(
+            "{}::{}",
+            var.name, var.bounds[p.bound].projections[p.index].name
+        )
+    }
+
+    /// Infer result types for a generated builder.
+    ///
+    /// The `#[dialect]` macro calls this only when every result type is a
+    /// fixed type, a variable bound by a single operand or a required
+    /// attribute, or a projection of such a variable. Panics if a binding
+    /// source is missing or does not provide the projection.
+    #[doc(hidden)]
+    pub fn infer_result_types(
+        &self,
+        ctx: &mut IrContext,
+        operands: &[ValueRef],
+        attrs: &[(&str, Option<&Attribute>)],
+    ) -> Vec<TypeRef> {
+        let binding = |ctx: &IrContext, var: usize| -> TypeRef {
+            let from_attr = self
+                .attributes
+                .iter()
+                .filter(|attr| attr.binds == Some(var) && !attr.optional)
+                .find_map(
+                    |attr| match attrs.iter().find(|(name, _)| *name == attr.name) {
+                        Some((_, Some(Attribute::Type(ty)))) => Some(*ty),
+                        _ => None,
+                    },
+                );
+            let from_operand = || {
+                self.operands
+                    .iter()
+                    .zip(operands)
+                    .take_while(|(operand, _)| operand.arity == Arity::One)
+                    .find(|(operand, _)| {
+                        matches!(operand.constraint, ValueConstraint::Each(TypeSpec::Var(v)) if v == var)
+                    })
+                    .map(|(_, value)| ctx.value_ty(*value))
+            };
+            from_attr.or_else(from_operand).unwrap_or_else(|| {
+                panic!(
+                    "{}.{}: cannot infer type variable `{}`",
+                    self.dialect, self.name, self.type_vars[var].name
+                )
+            })
+        };
+        // Projections are copied out so that fixed types can borrow `ctx`
+        // mutably afterwards. Kinds were checked at compile time.
+        let project = |ctx: &IrContext, p: ProjectionRef| -> Vec<TypeRef> {
+            let ty = binding(ctx, p.var);
+            match (self.type_vars[p.var].bounds[p.bound].project)(ctx, ty, p.index) {
+                Some(Projected::One(ty)) => vec![ty],
+                Some(Projected::List(types)) => types.to_vec(),
+                None => panic!(
+                    "{}.{}: {} = {} does not provide {}",
+                    self.dialect,
+                    self.name,
+                    self.type_vars[p.var].name,
+                    print_type(ctx, ty),
+                    self.projection_name(p),
+                ),
+            }
+        };
+        let infer = |ctx: &mut IrContext, spec: &TypeSpec| match *spec {
+            TypeSpec::Var(v) => binding(ctx, v),
+            TypeSpec::Proj(p) => project(ctx, p)[0],
+            TypeSpec::Anon(bounds) => {
+                let fixed = bounds.iter().find_map(|bound| bound.fixed);
+                fixed.expect("result bounds are checked at compile time")(ctx)
+            }
+            TypeSpec::Any => unreachable!("unconstrained results are never inferred"),
+        };
+        match (&self.results, &self.result_constraint) {
+            (ResultSchema::Fixed([]), _) => Vec::new(),
+            (ResultSchema::Fixed([_]), ValueConstraint::Each(spec)) => vec![infer(ctx, spec)],
+            (ResultSchema::Variadic(_), ValueConstraint::List(ListSpec::Types(specs))) => {
+                specs.iter().map(|spec| infer(ctx, spec)).collect()
+            }
+            (ResultSchema::Variadic(_), ValueConstraint::List(ListSpec::Proj(p))) => {
+                project(ctx, *p)
+            }
+            _ => unreachable!("{}.{}: results are not inferable", self.dialect, self.name),
+        }
+    }
+
     /// Look up the registered schema for `dialect.name`.
     pub fn lookup(dialect: Symbol, name: Symbol) -> Option<&'static OpSchema> {
         REGISTRY.get(&(dialect, name)).copied()
@@ -383,6 +712,147 @@ impl OpSchema {
     pub fn of(ctx: &IrContext, op: OpRef) -> Option<&'static OpSchema> {
         let data = ctx.op(op);
         Self::lookup(data.dialect, data.name)
+    }
+}
+
+/// Allowed length of a variadic segment; explicit type lists are exact.
+fn segment_count(constraint: &ValueConstraint) -> CountRange {
+    match constraint {
+        ValueConstraint::List(ListSpec::Types(types)) => CountRange::exactly(types.len()),
+        _ => CountRange { min: 0, max: None },
+    }
+}
+
+fn print_type_list(ctx: &IrContext, types: &[TypeRef]) -> String {
+    use std::fmt::Write;
+    let mut out = String::from("(");
+    for (i, ty) in types.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        write!(out, "{}", print_type(ctx, *ty)).expect("fmt::Write to String never fails");
+    }
+    out.push(')');
+    out
+}
+
+/// One type checked against a single-type constraint.
+struct TypeSlot {
+    site: Site,
+    ty: TypeRef,
+    spec: TypeSpec,
+}
+
+/// A segment checked against a list projection.
+struct ListSlot {
+    segment: Segment,
+    types: Vec<TypeRef>,
+    projection: ProjectionRef,
+}
+
+/// The constrained types of an operation: bound attributes first, then
+/// operands and results in order. Variable binding follows this order.
+#[derive(Default)]
+struct TypeSlots {
+    types: Vec<TypeSlot>,
+    lists: Vec<ListSlot>,
+}
+
+impl TypeSlots {
+    fn collect(schema: &OpSchema, ctx: &IrContext, op: OpRef) -> Self {
+        let mut slots = TypeSlots::default();
+        let data = ctx.op(op);
+        for attr in schema.attributes {
+            if let (Some(var), Some(Attribute::Type(ty))) =
+                (attr.binds, data.attributes.get(attr.name))
+            {
+                slots.types.push(TypeSlot {
+                    site: Site::Attribute { name: attr.name },
+                    ty: *ty,
+                    spec: TypeSpec::Var(var),
+                });
+            }
+        }
+
+        let operand_types: Vec<TypeRef> = ctx
+            .op_operands(op)
+            .iter()
+            .map(|value| ctx.value_ty(*value))
+            .collect();
+        let mut start = 0;
+        for operand in schema.operands {
+            let len = match operand.arity {
+                Arity::One => 1,
+                Arity::Variadic => operand_types.len() - start,
+            };
+            slots.push_segment(
+                start,
+                &operand_types[start..start + len],
+                operand.constraint,
+                |index| Site::Operand {
+                    index,
+                    name: operand.name,
+                },
+                Segment::Operands(operand.name),
+            );
+            start += len;
+        }
+
+        let result_types = ctx.op_result_types(op);
+        let result_name = match schema.results {
+            ResultSchema::Fixed(names) => names.first().copied().unwrap_or("result"),
+            ResultSchema::Variadic(name) | ResultSchema::Optional(name) => name,
+        };
+        slots.push_segment(
+            0,
+            result_types,
+            schema.result_constraint,
+            |index| Site::Result {
+                index,
+                name: match schema.results {
+                    ResultSchema::Fixed(names) => names[index],
+                    _ => result_name,
+                },
+            },
+            Segment::Results(result_name),
+        );
+        slots
+    }
+
+    fn push_segment(
+        &mut self,
+        start: usize,
+        types: &[TypeRef],
+        constraint: ValueConstraint,
+        site: impl Fn(usize) -> Site,
+        segment: Segment,
+    ) {
+        match constraint {
+            ValueConstraint::Each(spec) => {
+                for (i, ty) in types.iter().enumerate() {
+                    self.types.push(TypeSlot {
+                        site: site(start + i),
+                        ty: *ty,
+                        spec,
+                    });
+                }
+            }
+            ValueConstraint::List(ListSpec::Types(specs)) => {
+                // Counts were checked, so the lengths agree.
+                for (i, (ty, spec)) in types.iter().zip(specs).enumerate() {
+                    self.types.push(TypeSlot {
+                        site: site(start + i),
+                        ty: *ty,
+                        spec: *spec,
+                    });
+                }
+            }
+            ValueConstraint::List(ListSpec::Proj(projection)) => self.lists.push(ListSlot {
+                segment,
+                types: types.to_vec(),
+                projection,
+            }),
+        }
     }
 }
 

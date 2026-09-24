@@ -66,7 +66,11 @@ pub struct Projection {
 pub enum TypeExpr {
     Any,
     Var(usize),
+    /// `impl A + B`.
     Anon(Vec<BoundPath>),
+    /// A bound written directly (`core::Ptr`); a result of this form names
+    /// one fixed type.
+    Exact(BoundPath),
     Proj(Projection),
 }
 
@@ -448,6 +452,7 @@ pub(super) fn parse_typed_operation(
         syntax: Syntax::Typed,
         type_vars: vars,
         result_constraint,
+        verify: false,
     })
 }
 
@@ -625,7 +630,7 @@ fn parse_one(ty: &Ty, vars: &[TypeVar]) -> Result<TypeExpr, String> {
             if let Some(var) = simple_var(path, vars) {
                 return Ok(TypeExpr::Var(var));
             }
-            Ok(TypeExpr::Anon(vec![bound]))
+            Ok(TypeExpr::Exact(bound))
         }
         Ty::Other => Err("invalid single-type constraint".into()),
     }
@@ -738,9 +743,10 @@ mod tests {
         assert_eq!(op.attrs[0].binds, Some(0));
         assert!(op.attrs[1].optional);
         assert!(matches!(op.attrs[2].ty, AttrType::Any));
-        assert!(
-            matches!(op.operands[0].constraint, ValueExpr::Each(TypeExpr::Anon(ref b)) if b.len() == 1)
-        );
+        assert!(matches!(
+            op.operands[0].constraint,
+            ValueExpr::Each(TypeExpr::Exact(_))
+        ));
         assert!(op.operands[1].variadic);
         assert!(matches!(
             op.operands[1].constraint,

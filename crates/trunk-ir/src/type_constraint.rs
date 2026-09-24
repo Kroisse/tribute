@@ -47,6 +47,10 @@ pub struct ConstraintDesc {
     /// Projection by index into `projections`. Returns `None` if the type does
     /// not match or the index is out of range.
     pub project: for<'a> fn(&'a IrContext, TypeRef, usize) -> Option<Projected<'a>>,
+    /// Construct the one type this bound denotes, if it denotes exactly one.
+    /// Builders use it to infer a result declared as a direct bound path
+    /// (`-> Value<core::I32>`).
+    pub fixed: Option<fn(&mut IrContext) -> TypeRef>,
 }
 
 /// Implemented by Rust types usable as bounds in typed `#[dialect]` operations.
@@ -86,6 +90,7 @@ macro_rules! impl_func_sig_constraint {
                             _ => None,
                         }
                     },
+                    fixed: None,
                 };
         }
     };
@@ -221,6 +226,7 @@ mod tests {
             projections,
             matches: |_, _| true,
             project: |_, _, _| None,
+            fixed: None,
         }
     }
 

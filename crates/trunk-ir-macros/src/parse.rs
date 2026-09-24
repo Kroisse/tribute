@@ -34,6 +34,8 @@ pub struct OperationDef {
     pub syntax: Syntax,
     pub type_vars: Vec<TypeVar>,
     pub result_constraint: ValueExpr,
+    /// `#[verify]`: run the operation's `VerifyOp` impl after the schema checks.
+    pub verify: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -185,8 +187,10 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
 fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut op_attrs = Vec::new();
     let mut rest_results = false;
+    let mut verify = false;
 
-    // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)], #[rest_results]
+    // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)],
+    // #[rest_results], #[verify]
     while peek_punct(iter, '#') {
         let attr = parse_outer_attr(iter)?;
         match attr {
@@ -205,6 +209,12 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
                 rest_results = true;
             }
+            OuterAttr::Verify => {
+                if verify {
+                    return Err("duplicate #[verify] on the same operation".into());
+                }
+                verify = true;
+            }
         }
     }
 
@@ -213,12 +223,16 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
 
     match kw.to_string().as_str() {
         "fn" => {
-            let op = parse_operation(iter, op_attrs, rest_results)?;
+            let mut op = parse_operation(iter, op_attrs, rest_results)?;
+            op.verify = verify;
             Ok(DialectItem::Operation(op))
         }
         "struct" => {
             if rest_results {
                 return Err("#[rest_results] is not allowed on struct items".into());
+            }
+            if verify {
+                return Err("#[verify] is not allowed on struct items".into());
             }
             let td = parse_struct_def(iter, op_attrs)?;
             Ok(DialectItem::TypeDef(td))
@@ -231,9 +245,11 @@ enum OuterAttr {
     Doc,
     OpAttrs(Vec<AttrDef>),
     RestResults,
+    Verify,
 }
 
-/// Parse `#[...]` — either `#[doc = "..."]`, `#[attr(...)]`, or `#[rest_results]`.
+/// Parse `#[...]` — `#[doc = "..."]`, `#[attr(...)]`, `#[rest_results]`, or
+/// `#[verify]`.
 fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
     expect_punct(iter, '#')?;
     let bracket = expect_group(iter, Delimiter::Bracket)?;
@@ -257,8 +273,12 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
             expect_consumed(&inner, "#[rest_results]")?;
             Ok(OuterAttr::RestResults)
         }
+        "verify" => {
+            expect_consumed(&inner, "#[verify]")?;
+            Ok(OuterAttr::Verify)
+        }
         other => Err(format!(
-            "unexpected attribute `{other}`, expected `doc`, `attr`, or `rest_results`"
+            "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, or `verify`"
         )),
     }
 }
@@ -387,6 +407,7 @@ fn parse_operation(
         syntax: Syntax::Legacy,
         type_vars: Vec::new(),
         result_constraint: ValueExpr::Each(TypeExpr::Any),
+        verify: false,
     })
 }
 
@@ -1262,6 +1283,61 @@ mod tests {
             result.is_err(),
             "should reject trailing tokens in #[rest_results]"
         );
+    }
+
+    #[test]
+    fn test_verify_marks_operations() {
+        let module = parse_test_module(quote! {
+            mod test {
+                #[verify]
+                fn checked(x: ()) {}
+                fn plain(xs: Variadic<_>) {}
+            }
+        })
+        .unwrap();
+        let flags: Vec<bool> = module
+            .items
+            .iter()
+            .map(|item| match item {
+                DialectItem::Operation(op) => op.verify,
+                DialectItem::TypeDef(_) => unreachable!(),
+            })
+            .collect();
+        assert_eq!(flags, [true, false]);
+
+        for (item, expected) in [
+            (
+                quote!(
+                    mod test {
+                        #[verify]
+                        #[verify]
+                        fn op() {}
+                    }
+                ),
+                "duplicate #[verify]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[verify]
+                        struct Ty;
+                    }
+                ),
+                "#[verify] is not allowed on struct items",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[verify(x)]
+                        fn op() {}
+                    }
+                ),
+                "#[verify]",
+            ),
+        ] {
+            let err = parse_test_module(item).err().expect("should fail");
+            assert!(err.contains(expected), "unexpected error: {err}");
+        }
     }
 
     #[test]

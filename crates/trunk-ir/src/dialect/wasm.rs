@@ -1,5 +1,6 @@
 //! Arena-based wasm dialect.
 
+use crate::dialect::core::I32;
 use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
@@ -110,7 +111,7 @@ mod wasm {
     #[attr(value: i32)]
     fn i32_const() -> result {}
 
-    fn i32_add(lhs: (), rhs: ()) -> result {}
+    fn i32_add(lhs: Value<I32>, rhs: Value<I32>) -> Value<I32> {}
     fn i32_sub(lhs: (), rhs: ()) -> result {}
     fn i32_mul(lhs: (), rhs: ()) -> result {}
     fn i32_div_s(lhs: (), rhs: ()) -> result {}

@@ -69,6 +69,7 @@ impl crate::type_constraint::TypeConstraint for IntegerLike {
             projections: &[],
             matches: Self::matches,
             project: |_, _, _| None,
+            fixed: None,
         };
 }
 
@@ -94,6 +95,7 @@ impl crate::type_constraint::TypeConstraint for BoolLike {
             projections: &[],
             matches: Self::matches,
             project: |_, _, _| None,
+            fixed: None,
         };
 }
 
@@ -114,6 +116,7 @@ impl crate::type_constraint::TypeConstraint for FloatLike {
             projections: &[],
             matches: Self::matches,
             project: |_, _, _| None,
+            fixed: None,
         };
 }
 
@@ -126,6 +129,54 @@ impl FloatLike {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
         Self::width(ctx, ty).is_some()
     }
+}
+
+/// Exact bounds for individual `core` scalar types, e.g. `Value<core::I32>`.
+macro_rules! scalar_types {
+    ($($(#[$meta:meta])* $wrapper:ident = $name:literal via $category:ident($width:literal);)*) => {$(
+        $(#[$meta])*
+        pub struct $wrapper;
+
+        impl $wrapper {
+            pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+                $category::width(ctx, ty) == Some($width)
+            }
+
+            /// Intern this scalar type.
+            pub fn type_ref(ctx: &mut IrContext) -> TypeRef {
+                ctx.intern_type(crate::TypeDataBuilder::new("core", $name).build())
+            }
+        }
+
+        impl crate::type_constraint::TypeConstraint for $wrapper {
+            const DESC: &'static crate::type_constraint::ConstraintDesc =
+                &crate::type_constraint::ConstraintDesc {
+                    name: concat!("core.", $name),
+                    exact: true,
+                    projections: &[],
+                    matches: Self::matches,
+                    project: |_, _, _| None,
+                    fixed: Some(Self::type_ref),
+                };
+        }
+    )*};
+}
+
+scalar_types! {
+    /// `core.i1`.
+    I1 = "i1" via IntegerLike(1);
+    /// `core.i8`.
+    I8 = "i8" via IntegerLike(8);
+    /// `core.i16`.
+    I16 = "i16" via IntegerLike(16);
+    /// `core.i32`.
+    I32 = "i32" via IntegerLike(32);
+    /// `core.i64`.
+    I64 = "i64" via IntegerLike(64);
+    /// `core.f32`.
+    F32 = "f32" via FloatLike(32);
+    /// `core.f64`.
+    F64 = "f64" via FloatLike(64);
 }
 
 // =========================================================================

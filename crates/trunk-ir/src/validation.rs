@@ -357,7 +357,8 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     ValidationResult { errors }
 }
 
-/// Check an operation against its registered declarative schema.
+/// Check an operation against its registered declarative schema, including
+/// type constraints and its `#[verify]` hook.
 ///
 /// Returns `false` when the operation violates its schema. Later
 /// operation-local checks assume the declared shape, so callers skip them for
@@ -366,7 +367,7 @@ fn validate_op_schema(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
     let Some(schema) = OpSchema::of(ctx, op) else {
         return true;
     };
-    let violations = schema.verify_structure(ctx, op);
+    let violations = schema.verify(ctx, op);
     for violation in &violations {
         errors.push(operation_verifier_error(ctx, op, violation.to_string()));
     }
@@ -1693,7 +1694,7 @@ mod tests {
         ctx.push_op(entry_block, c1.op_ref());
         let c1_val = c1.result(ctx);
 
-        let add_op = arith::addi(ctx, loc, c0_val, c1_val, i32_ty);
+        let add_op = arith::Addi::operands(c0_val, c1_val).build(loc, ctx);
         ctx.push_op(entry_block, add_op.op_ref());
         let sum = add_op.result(ctx);
 
@@ -1920,7 +1921,7 @@ mod tests {
         let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(else_block, c1.op_ref());
         let c1_val = c1.result(&ctx);
-        let sum = arith::addi(&mut ctx, loc, param, c1_val, i32_ty);
+        let sum = arith::Addi::operands(param, c1_val).build(loc, &mut ctx);
         ctx.push_op(else_block, sum.op_ref());
         let sum_val = sum.result(&ctx);
         let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
@@ -2021,7 +2022,7 @@ mod tests {
         let local = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(entry_b, local.op_ref());
         let local_val = local.result(&ctx);
-        let add_op = arith::addi(&mut ctx, loc, value_from_a, local_val, i32_ty);
+        let add_op = arith::Addi::operands(value_from_a, local_val).build(loc, &mut ctx);
         ctx.push_op(entry_b, add_op.op_ref());
         let ret_b = func::r#return(&mut ctx, loc, [value_from_a]);
         ctx.push_op(entry_b, ret_b.op_ref());
@@ -2356,7 +2357,7 @@ mod tests {
         let c1_val = c1.result(&ctx);
 
         // Use c0 in two places
-        let add = arith::addi(&mut ctx, loc, c0_val, c0_val, i32_ty);
+        let add = arith::Addi::operands(c0_val, c0_val).build(loc, &mut ctx);
         ctx.push_op(entry, add.op_ref());
         let add_val = add.result(&ctx);
 
