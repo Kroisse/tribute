@@ -3,11 +3,10 @@
 use heck::{ToShoutySnakeCase, ToSnakeCase, ToUpperCamelCase};
 use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
-use syn::spanned::Spanned;
 
 use crate::parse::{
-    AttrDef, AttrType, DialectItem, DialectModule, ListExpr, Operand, OperationDef, Projection,
-    RegionOrSuccessor, ResultDef, Syntax, TypeDefData, TypeExpr, ValueExpr,
+    AttrDef, AttrType, BoundPath, DialectItem, DialectModule, ListExpr, Operand, OperationDef,
+    Projection, RegionOrSuccessor, ResultDef, Syntax, TypeDefData, TypeExpr, ValueExpr,
 };
 
 /// Generate all code for a dialect module.
@@ -185,7 +184,7 @@ fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
     }
 }
 
-fn gen_bounds(crate_path: &TokenStream, paths: &[syn::Path]) -> TokenStream {
+fn gen_bounds(crate_path: &TokenStream, paths: &[BoundPath]) -> TokenStream {
     let descriptors = paths.iter().map(|path| {
         quote_spanned!(path.span()=> <#path as #crate_path::type_constraint::TypeConstraint>::DESC)
     });

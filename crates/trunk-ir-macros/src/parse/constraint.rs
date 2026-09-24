@@ -1,19 +1,64 @@
 //! Parsing for typed operation signatures. The legacy DSL remains in `parse.rs`.
+//!
+//! The signature after the operation name is parsed into a small type
+//! expression tree ([`Ty`]) and then interpreted as entity wrappers, type
+//! variables, bounds, and projections.
 
 use super::*;
-use proc_macro2::TokenStream;
-use quote::quote;
-use syn::{GenericArgument, Pat, Path, PathArguments, Type, TypeParamBound};
+use proc_macro2::{Span, TokenStream};
+use quote::{ToTokens, quote};
+
+// ============================================================================
+// Parsed constraint model
+// ============================================================================
+
+/// A bound path such as `IntegerLike` or `func::FuncSig`.
+#[derive(Clone)]
+pub struct BoundPath {
+    leading_colon: bool,
+    segments: Vec<Ident>,
+}
+
+impl BoundPath {
+    pub fn span(&self) -> Span {
+        self.segments[0].span()
+    }
+
+    fn key(&self) -> String {
+        let path = self
+            .segments
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<_>>()
+            .join("::");
+        if self.leading_colon {
+            format!("::{path}")
+        } else {
+            path
+        }
+    }
+}
+
+impl ToTokens for BoundPath {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let segments = &self.segments;
+        if self.leading_colon {
+            tokens.extend(quote!(:: #(#segments)::*));
+        } else {
+            tokens.extend(quote!(#(#segments)::*));
+        }
+    }
+}
 
 pub struct TypeVar {
     pub name: String,
-    pub bounds: Vec<Path>,
+    pub bounds: Vec<BoundPath>,
 }
 
 #[derive(Clone)]
 pub struct Projection {
     pub var: usize,
-    pub bound: Option<Path>,
+    pub bound: Option<BoundPath>,
     pub name: String,
 }
 
@@ -21,7 +66,7 @@ pub struct Projection {
 pub enum TypeExpr {
     Any,
     Var(usize),
-    Anon(Vec<Path>),
+    Anon(Vec<BoundPath>),
     Proj(Projection),
 }
 
@@ -37,12 +82,221 @@ pub enum ValueExpr {
     List(ListExpr),
 }
 
+// ============================================================================
+// Type expression syntax
+// ============================================================================
+
+/// A type written in a typed operation signature.
+#[derive(Clone)]
+enum Ty {
+    /// `_`
+    Infer,
+    /// `(A, B)`, `()`
+    Tuple(Vec<Ty>),
+    /// `impl A + B`
+    Impl(Vec<BoundPath>),
+    /// `a::B<C>`, `S::X`, `<S as B>::X`
+    Path(TyPath),
+    /// Any other type form (references, slices, ...), which is always rejected.
+    Other,
+}
+
+#[derive(Clone)]
+struct TyPath {
+    /// `<ty as bound>` of a qualified path.
+    qself: Option<(Box<Ty>, Option<Box<TyPath>>)>,
+    leading_colon: bool,
+    segments: Vec<Segment>,
+}
+
+#[derive(Clone)]
+struct Segment {
+    ident: Ident,
+    args: Option<Vec<GenericArg>>,
+}
+
+#[derive(Clone)]
+enum GenericArg {
+    Type(Ty),
+    Lifetime,
+}
+
+fn peek_ident(iter: &TokenIter, name: &str) -> bool {
+    matches!(iter.clone().next(), Some(TokenTree::Ident(i)) if i == name)
+}
+
+fn eat_path_sep(iter: &mut TokenIter) -> bool {
+    let mut look = iter.clone();
+    let is_sep = matches!(look.next(), Some(TokenTree::Punct(p)) if p.as_char() == ':')
+        && matches!(look.next(), Some(TokenTree::Punct(p)) if p.as_char() == ':');
+    if is_sep {
+        *iter = look;
+    }
+    is_sep
+}
+
+fn skip_lifetime(iter: &mut TokenIter) {
+    iter.next();
+    iter.next();
+}
+
+fn parse_ty(iter: &mut TokenIter) -> Result<Ty, String> {
+    match iter.clone().next() {
+        Some(TokenTree::Ident(i)) if i == "_" => {
+            iter.next();
+            Ok(Ty::Infer)
+        }
+        Some(TokenTree::Ident(i)) if i == "impl" => {
+            iter.next();
+            Ok(Ty::Impl(parse_bounds(iter)?))
+        }
+        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis => {
+            iter.next();
+            parse_ty_list(g.stream()).map(Ty::Tuple)
+        }
+        Some(TokenTree::Punct(p)) if p.as_char() == '<' => parse_qualified(iter).map(Ty::Path),
+        Some(TokenTree::Ident(_)) => parse_ty_path(iter).map(Ty::Path),
+        Some(TokenTree::Punct(p)) if p.as_char() == ':' => parse_ty_path(iter).map(Ty::Path),
+        Some(_) => {
+            skip_ty(iter);
+            Ok(Ty::Other)
+        }
+        None => Err("expected a type".into()),
+    }
+}
+
+/// Skip the rest of an unsupported type, up to a top-level `,` or `>`.
+fn skip_ty(iter: &mut TokenIter) {
+    let mut depth = 0usize;
+    while let Some(tt) = iter.clone().next() {
+        if let TokenTree::Punct(p) = &tt {
+            match p.as_char() {
+                '<' => depth += 1,
+                '>' if depth == 0 => return,
+                '>' => depth -= 1,
+                ',' if depth == 0 => return,
+                _ => {}
+            }
+        }
+        iter.next();
+    }
+}
+
+fn parse_ty_list(stream: TokenStream) -> Result<Vec<Ty>, String> {
+    let mut iter = stream.to_token_iter();
+    let mut tys = Vec::new();
+    while has_remaining(&iter) {
+        tys.push(parse_ty(&mut iter)?);
+        if has_remaining(&iter) {
+            expect_punct(&mut iter, ',')?;
+        }
+    }
+    Ok(tys)
+}
+
+fn parse_ty_path(iter: &mut TokenIter) -> Result<TyPath, String> {
+    let leading_colon = eat_path_sep(iter);
+    let segments = parse_segments(iter)?;
+    Ok(TyPath {
+        qself: None,
+        leading_colon,
+        segments,
+    })
+}
+
+fn parse_segments(iter: &mut TokenIter) -> Result<Vec<Segment>, String> {
+    let mut segments = Vec::new();
+    loop {
+        let ident = Ident::parser(iter).map_err(|e| format!("expected a path segment: {e}"))?;
+        let args = if peek_punct(iter, '<') {
+            Some(parse_generic_args(iter)?)
+        } else {
+            None
+        };
+        segments.push(Segment { ident, args });
+        if !eat_path_sep(iter) {
+            return Ok(segments);
+        }
+    }
+}
+
+fn parse_generic_args(iter: &mut TokenIter) -> Result<Vec<GenericArg>, String> {
+    expect_punct(iter, '<')?;
+    let mut args = Vec::new();
+    while !peek_punct(iter, '>') {
+        if peek_punct(iter, '\'') {
+            skip_lifetime(iter);
+            args.push(GenericArg::Lifetime);
+        } else {
+            args.push(GenericArg::Type(parse_ty(iter)?));
+        }
+        if !peek_punct(iter, '>') {
+            expect_punct(iter, ',')?;
+        }
+    }
+    expect_punct(iter, '>')?;
+    Ok(args)
+}
+
+/// Parse `<ty as bound>::segments` (or `<ty>::segments`).
+fn parse_qualified(iter: &mut TokenIter) -> Result<TyPath, String> {
+    expect_punct(iter, '<')?;
+    let ty = parse_ty(iter)?;
+    let bound = if peek_ident(iter, "as") {
+        iter.next();
+        Some(Box::new(parse_ty_path(iter)?))
+    } else {
+        None
+    };
+    expect_punct(iter, '>')?;
+    if !eat_path_sep(iter) {
+        return Err("invalid projection".into());
+    }
+    Ok(TyPath {
+        qself: Some((Box::new(ty), bound)),
+        leading_colon: false,
+        segments: parse_segments(iter)?,
+    })
+}
+
+fn parse_bounds(iter: &mut TokenIter) -> Result<Vec<BoundPath>, String> {
+    let mut bounds = Vec::new();
+    loop {
+        match iter.clone().next() {
+            Some(TokenTree::Ident(_)) => {}
+            Some(TokenTree::Punct(p)) if p.as_char() == ':' => {}
+            _ => return Err("bounds must be plain Rust paths".into()),
+        }
+        bounds.push(bound_path(&parse_ty_path(iter)?)?);
+        if !peek_punct(iter, '+') {
+            return Ok(bounds);
+        }
+        consume_punct(iter)?;
+    }
+}
+
+/// Convert an unqualified path to a bound; qualified paths are projections.
+fn bound_path(path: &TyPath) -> Result<BoundPath, String> {
+    debug_assert!(path.qself.is_none());
+    if path.segments.iter().any(|s| s.args.is_some()) {
+        return Err("generic arguments on bound paths are not supported".into());
+    }
+    Ok(BoundPath {
+        leading_colon: path.leading_colon,
+        segments: path.segments.iter().map(|s| s.ident.clone()).collect(),
+    })
+}
+
+// ============================================================================
+// Typed operation parsing
+// ============================================================================
+
 /// Whether the signature after the operation name uses the typed syntax:
 /// generic parameters, or a typed entity wrapper (`Value<..>`, `Variadic<..>`,
 /// `Values<..>`, `Attr<..>`) in the parameters or the return type. Legacy
 /// results may be `-> Option<result>`, so `Option` alone is not a marker.
 pub(super) fn is_typed_operation(iter: &TokenIter) -> Result<bool, String> {
-    if matches!(iter.clone().next(), Some(TokenTree::Punct(p)) if p.as_char() == '<') {
+    if peek_punct(iter, '<') {
         return Ok(true);
     }
     let mut signature = TokenStream::new();
@@ -90,67 +344,39 @@ pub(super) fn parse_typed_operation(
             tt => sig_tokens.extend([tt]),
         }
     };
-    let signature = quote!(fn #name_ident #sig_tokens {});
-    let func: syn::ItemFn =
-        syn::parse2(signature).map_err(|e| format!("invalid typed operation signature: {e}"))?;
-    let mut vars = Vec::<TypeVar>::new();
-    for param in &func.sig.generics.params {
-        match param {
-            syn::GenericParam::Type(tp) => {
-                let name = ident_str(&tp.ident);
-                if vars.iter().any(|v| v.name == name) {
-                    return Err(format!("duplicate type variable `{name}`"));
-                }
-                vars.push(TypeVar {
-                    name,
-                    bounds: paths(&tp.bounds)?,
-                });
-            }
-            _ => return Err("only type variables are supported in typed operations".into()),
-        }
+    let mut sig = sig_tokens.to_token_iter();
+
+    let mut vars = parse_generics(&mut sig)?;
+    let params = parse_params(expect_group(&mut sig, Delimiter::Parenthesis)?.stream())?;
+    let output = if peek_punct(&sig, '-') {
+        expect_punct(&mut sig, '-')?;
+        expect_punct(&mut sig, '>')?;
+        Some(parse_ty(&mut sig)?)
+    } else {
+        None
+    };
+    if peek_ident(&sig, "where") {
+        sig.next();
+        parse_where_clause(&mut sig, &mut vars)?;
     }
-    if let Some(where_clause) = &func.sig.generics.where_clause {
-        for pred in &where_clause.predicates {
-            let syn::WherePredicate::Type(pred) = pred else {
-                return Err("unsupported where predicate".into());
-            };
-            let Type::Path(ty) = &pred.bounded_ty else {
-                return Err("where bound must name a type variable".into());
-            };
-            let Some(var) = simple_var(&ty.path, &vars) else {
-                return Err("where bound must name a declared type variable".into());
-            };
-            vars[var].bounds.extend(paths(&pred.bounds)?);
-        }
-    }
+    expect_consumed(&sig, "typed operation signature")?;
+
     let mut attrs = Vec::new();
     let mut operands = Vec::new();
     let mut names = std::collections::HashSet::new();
-    let mut typed_entity = false;
-    for arg in &func.sig.inputs {
-        let syn::FnArg::Typed(arg) = arg else {
-            return Err("self parameter is not supported".into());
-        };
-        if !arg.attrs.is_empty() {
-            return Err("cannot mix legacy and new operation syntax".into());
-        }
-        let Pat::Ident(pat) = &*arg.pat else {
-            return Err("parameter must have a name".into());
-        };
-        let ident = pat.ident.clone();
-        let name = ident_str(&ident);
+    for (ident, ty) in &params {
+        let name = ident_str(ident);
         check_name(&name, &mut names)?;
-        if matches!(&*arg.ty, Type::Tuple(t) if t.elems.is_empty()) {
+        if matches!(ty, Ty::Tuple(t) if t.is_empty()) {
             return Err("cannot mix legacy and new operation syntax".into());
         }
-        typed_entity = true;
-        let (wrapper, inner, optional) = unwrap_wrapper(&arg.ty)?;
+        let (wrapper, inner, optional) = unwrap_wrapper(ty)?;
         match wrapper.as_str() {
             "Attr" => {
                 let (ty, binds) = parse_attr_kind(inner, &vars)?;
                 attrs.push(AttrDef {
                     name,
-                    raw_ident: ident,
+                    raw_ident: ident.clone(),
                     ty,
                     optional,
                     binds,
@@ -167,7 +393,7 @@ pub(super) fn parse_typed_operation(
                 };
                 operands.push(Operand {
                     name,
-                    raw_ident: ident,
+                    raw_ident: ident.clone(),
                     variadic,
                     constraint,
                 });
@@ -176,13 +402,10 @@ pub(super) fn parse_typed_operation(
             _ => return Err("expected Value, Variadic, Values, Attr, or Option<Attr>".into()),
         }
     }
-    let (results, result_constraint) = match &func.sig.output {
-        syn::ReturnType::Default => (ResultDef::None, ValueExpr::Each(TypeExpr::Any)),
-        syn::ReturnType::Type(_, ty) => {
-            typed_entity = true;
-            if matches!(&**ty, Type::Tuple(_)) {
-                return Err("tuple results are reserved".into());
-            }
+    let (results, result_constraint) = match &output {
+        None => (ResultDef::None, ValueExpr::Each(TypeExpr::Any)),
+        Some(Ty::Tuple(_)) => return Err("tuple results are reserved".into()),
+        Some(ty) => {
             let (wrapper, inner, optional) = unwrap_wrapper(ty)?;
             match (wrapper.as_str(), optional) {
                 ("Value", false) => (
@@ -205,7 +428,7 @@ pub(super) fn parse_typed_operation(
             }
         }
     };
-    if !typed_entity && !vars.is_empty() {
+    if params.is_empty() && output.is_none() && !vars.is_empty() {
         return Err("generics require new operation syntax".into());
     }
     let regions = parse_regions(body.stream())?;
@@ -226,6 +449,84 @@ pub(super) fn parse_typed_operation(
         type_vars: vars,
         result_constraint,
     })
+}
+
+/// Parse `<T: A + B, U>`.
+fn parse_generics(iter: &mut TokenIter) -> Result<Vec<TypeVar>, String> {
+    let mut vars = Vec::<TypeVar>::new();
+    if !peek_punct(iter, '<') {
+        return Ok(vars);
+    }
+    consume_punct(iter)?;
+    while !peek_punct(iter, '>') {
+        if peek_punct(iter, '\'') || peek_ident(iter, "const") {
+            return Err("only type variables are supported in typed operations".into());
+        }
+        let ident = Ident::parser(iter).map_err(|e| format!("expected type variable: {e}"))?;
+        let name = ident_str(&ident);
+        if vars.iter().any(|v| v.name == name) {
+            return Err(format!("duplicate type variable `{name}`"));
+        }
+        let bounds = if peek_punct(iter, ':') {
+            consume_punct(iter)?;
+            parse_bounds(iter)?
+        } else {
+            Vec::new()
+        };
+        vars.push(TypeVar { name, bounds });
+        if !peek_punct(iter, '>') {
+            expect_punct(iter, ',')?;
+        }
+    }
+    consume_punct(iter)?;
+    Ok(vars)
+}
+
+/// Parse `where T: A, U: B`, merging the bounds into the declared variables.
+fn parse_where_clause(iter: &mut TokenIter, vars: &mut [TypeVar]) -> Result<(), String> {
+    while has_remaining(iter) {
+        if peek_punct(iter, '\'') {
+            return Err("unsupported where predicate".into());
+        }
+        let bounded = parse_ty(iter)?;
+        expect_punct(iter, ':')?;
+        let bounds = parse_bounds(iter)?;
+        let var = match &bounded {
+            Ty::Path(path) => {
+                simple_var(path, vars).ok_or("where bound must name a declared type variable")?
+            }
+            _ => return Err("where bound must name a type variable".into()),
+        };
+        vars[var].bounds.extend(bounds);
+        if has_remaining(iter) {
+            expect_punct(iter, ',')?;
+        }
+    }
+    Ok(())
+}
+
+/// Parse `name: Type` parameters.
+fn parse_params(stream: TokenStream) -> Result<Vec<(Ident, Ty)>, String> {
+    let mut iter = stream.to_token_iter();
+    let mut params = Vec::new();
+    while has_remaining(&iter) {
+        if peek_punct(&iter, '#') {
+            return Err("cannot mix legacy and new operation syntax".into());
+        }
+        if peek_punct(&iter, '&') || peek_ident(&iter, "self") {
+            return Err("self parameter is not supported".into());
+        }
+        let ident = match iter.next() {
+            Some(TokenTree::Ident(ident)) if ident != "mut" => ident,
+            _ => return Err("parameter must have a name".into()),
+        };
+        expect_punct(&mut iter, ':')?;
+        params.push((ident, parse_ty(&mut iter)?));
+        if has_remaining(&iter) {
+            expect_punct(&mut iter, ',')?;
+        }
+    }
+    Ok(params)
 }
 
 fn check_name(name: &str, names: &mut std::collections::HashSet<String>) -> Result<(), String> {
@@ -249,59 +550,29 @@ fn check_name(name: &str, names: &mut std::collections::HashSet<String>) -> Resu
     Ok(())
 }
 
-fn paths(
-    bounds: &syn::punctuated::Punctuated<TypeParamBound, syn::token::Plus>,
-) -> Result<Vec<Path>, String> {
-    bounds
-        .iter()
-        .map(|bound| match bound {
-            TypeParamBound::Trait(tr)
-                if tr.lifetimes.is_none()
-                    && matches!(tr.modifier, syn::TraitBoundModifier::None) =>
-            {
-                check_path(&tr.path)?;
-                Ok(tr.path.clone())
-            }
-            _ => Err("bounds must be plain Rust paths".into()),
-        })
-        .collect()
-}
-
-fn check_path(path: &Path) -> Result<(), String> {
-    if path
-        .segments
-        .iter()
-        .any(|s| !matches!(s.arguments, PathArguments::None))
-    {
-        return Err("generic arguments on bound paths are not supported".into());
-    }
-    Ok(())
-}
-
-fn simple_var(path: &Path, vars: &[TypeVar]) -> Option<usize> {
-    if path.leading_colon.is_none() && path.segments.len() == 1 {
-        let name = path.segments.first()?.ident.to_string();
-        vars.iter().position(|v| v.name == name)
-    } else {
-        None
+fn simple_var(path: &TyPath, vars: &[TypeVar]) -> Option<usize> {
+    match (&path.qself, path.leading_colon, path.segments.as_slice()) {
+        (None, false, [Segment { ident, args: None }]) => {
+            vars.iter().position(|v| *ident == v.name)
+        }
+        _ => None,
     }
 }
 
-fn unwrap_wrapper(ty: &Type) -> Result<(String, &Type, bool), String> {
-    let Type::Path(path) = ty else {
+fn unwrap_wrapper(ty: &Ty) -> Result<(String, &Ty, bool), String> {
+    let Ty::Path(path) = ty else {
         return Err("expected a typed entity wrapper".into());
     };
-    if path.qself.is_some() || path.path.segments.len() != 1 {
+    let (None, false, [seg]) = (&path.qself, path.leading_colon, path.segments.as_slice()) else {
         return Err("expected a typed entity wrapper".into());
-    }
-    let seg = path.path.segments.first().unwrap();
-    let syn::PathArguments::AngleBracketed(args) = &seg.arguments else {
+    };
+    let Some(args) = &seg.args else {
         return Err("expected wrapper<..>".into());
     };
-    if args.args.len() != 1 {
+    let [arg] = args.as_slice() else {
         return Err("entity wrapper requires one type argument".into());
-    }
-    let GenericArgument::Type(inner) = args.args.first().unwrap() else {
+    };
+    let GenericArg::Type(inner) = arg else {
         return Err("entity wrapper requires a type argument".into());
     };
     if seg.ident == "Option" {
@@ -315,106 +586,98 @@ fn unwrap_wrapper(ty: &Type) -> Result<(String, &Type, bool), String> {
     }
 }
 
-fn parse_attr_kind(ty: &Type, vars: &[TypeVar]) -> Result<(AttrType, Option<usize>), String> {
-    if matches!(ty, Type::Infer(_)) {
-        return Ok((AttrType::Any, None));
-    }
-    let Type::Path(path) = ty else {
-        return Err("invalid attribute kind".into());
+fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrType, Option<usize>), String> {
+    let path = match ty {
+        Ty::Infer => return Ok((AttrType::Any, None)),
+        Ty::Path(path) => path,
+        _ => return Err("invalid attribute kind".into()),
     };
     if path.qself.is_some() {
         return Err("invalid attribute projection".into());
     }
-    if path.path.segments.len() == 2 {
-        let mut it = path.path.segments.iter();
-        let first = it.next().unwrap();
-        let second = it.next().unwrap();
-        if second.ident == "Type"
-            && let Some(var) = vars.iter().position(|v| first.ident == v.name)
-        {
-            return Ok((AttrType::Type, Some(var)));
-        }
-        return Err("attribute projection must be V::Type for a declared variable".into());
-    }
-    if path.path.segments.len() != 1 {
+    if path.leading_colon || path.segments.iter().any(|s| s.args.is_some()) {
         return Err("invalid attribute kind".into());
     }
-    let ident = &path.path.segments.first().unwrap().ident;
-    parse_attr_type(ident).map(|kind| (kind, None))
+    match path.segments.as_slice() {
+        [kind] => parse_attr_type(&kind.ident).map(|kind| (kind, None)),
+        [var, proj] => {
+            if proj.ident == "Type"
+                && let Some(var) = vars.iter().position(|v| var.ident == v.name)
+            {
+                return Ok((AttrType::Type, Some(var)));
+            }
+            Err("attribute projection must be V::Type for a declared variable".into())
+        }
+        _ => Err("invalid attribute kind".into()),
+    }
 }
 
-fn parse_one(ty: &Type, vars: &[TypeVar]) -> Result<TypeExpr, String> {
+fn parse_one(ty: &Ty, vars: &[TypeVar]) -> Result<TypeExpr, String> {
     match ty {
-        Type::Infer(_) => Ok(TypeExpr::Any),
-        Type::Tuple(_) => Err("tuple type is not allowed in Value/Variadic".into()),
-        Type::ImplTrait(tr) => Ok(TypeExpr::Anon(paths(&tr.bounds)?)),
-        Type::Path(path) => {
+        Ty::Infer => Ok(TypeExpr::Any),
+        Ty::Tuple(_) => Err("tuple type is not allowed in Value/Variadic".into()),
+        Ty::Impl(bounds) => Ok(TypeExpr::Anon(bounds.clone())),
+        Ty::Path(path) => {
             if let Some(proj) = projection(path, vars)? {
                 return Ok(TypeExpr::Proj(proj));
             }
-            check_path(&path.path)?;
-            if let Some(var) = simple_var(&path.path, vars) {
+            let bound = bound_path(path)?;
+            if let Some(var) = simple_var(path, vars) {
                 return Ok(TypeExpr::Var(var));
             }
-            Ok(TypeExpr::Anon(vec![path.path.clone()]))
+            Ok(TypeExpr::Anon(vec![bound]))
         }
-        _ => Err("invalid single-type constraint".into()),
+        Ty::Other => Err("invalid single-type constraint".into()),
     }
 }
 
-fn parse_list(ty: &Type, vars: &[TypeVar]) -> Result<ListExpr, String> {
+fn parse_list(ty: &Ty, vars: &[TypeVar]) -> Result<ListExpr, String> {
     match ty {
-        Type::Tuple(t) => t
-            .elems
+        Ty::Tuple(tys) => tys
             .iter()
-            .map(|e| parse_one(e, vars))
+            .map(|ty| parse_one(ty, vars))
             .collect::<Result<_, _>>()
             .map(ListExpr::Types),
-        Type::Path(path) => projection(path, vars)?
+        Ty::Path(path) => projection(path, vars)?
             .map(ListExpr::Proj)
             .ok_or_else(|| "Values<..> requires a type list".into()),
         _ => Err("Values<..> requires a type list".into()),
     }
 }
 
-fn projection(path: &syn::TypePath, vars: &[TypeVar]) -> Result<Option<Projection>, String> {
-    let (var, bound, name) = if let Some(qself) = &path.qself {
-        let Type::Path(var_ty) = &*qself.ty else {
-            return Err("projection needs a declared variable".into());
-        };
-        let Some(var) = simple_var(&var_ty.path, vars) else {
-            return Err("projection needs a declared variable".into());
-        };
-        let Some(last) = path.path.segments.last() else {
+/// Interpret `V::Name` or `<V as B>::Name` as a projection of a declared
+/// variable. Returns `None` for paths that do not start with a variable.
+fn projection(path: &TyPath, vars: &[TypeVar]) -> Result<Option<Projection>, String> {
+    let (var, bound, name) = if let Some((qself, bound)) = &path.qself {
+        let var = match &**qself {
+            Ty::Path(var_path) => simple_var(var_path, vars),
+            _ => None,
+        }
+        .ok_or("projection needs a declared variable")?;
+        let bound = bound.as_deref().map(bound_path).transpose()?;
+        let [Segment { ident, args: None }] = path.segments.as_slice() else {
             return Err("invalid projection".into());
         };
-        let segments: Vec<_> = path.path.segments.iter().take(qself.position).collect();
-        let bound: Path = syn::parse2(quote!(#(#segments)::*))
-            .map_err(|_| "invalid qualified projection bound")?;
-        (var, Some(bound), last.ident.to_string())
-    } else if path.path.segments.len() == 2 {
-        let mut it = path.path.segments.iter();
-        let first = it.next().unwrap();
-        let last = it.next().unwrap();
-        let Some(var) = vars.iter().position(|v| first.ident == v.name) else {
+        (var, bound, ident.to_string())
+    } else {
+        let (false, [first, Segment { ident, args: None }]) =
+            (path.leading_colon, path.segments.as_slice())
+        else {
             return Ok(None);
         };
-        (var, None, last.ident.to_string())
-    } else {
-        return Ok(None);
+        let (None, Some(var)) = (&first.args, vars.iter().position(|v| first.ident == v.name))
+        else {
+            return Ok(None);
+        };
+        (var, None, ident.to_string())
     };
     if name == "Type" {
         return Err("V::Type in a value position is reserved; use V".into());
     }
-    if let Some(bound) = &bound {
-        check_path(bound)?;
-        if !vars[var]
-            .bounds
-            .iter()
-            .any(|b| quote!(#b).to_string() == quote!(#bound).to_string())
-        {
-            return Err("qualified projection bound is not declared on the variable".into());
-        }
+    if let Some(bound) = &bound
+        && !vars[var].bounds.iter().any(|b| b.key() == bound.key())
+    {
+        return Err("qualified projection bound is not declared on the variable".into());
     }
     Ok(Some(Projection { var, bound, name }))
 }
@@ -532,6 +795,25 @@ mod tests {
     }
 
     #[test]
+    fn qualified_projections_without_as_and_absolute_bounds() {
+        let op = parse_op(quote! {
+            fn f<S: ::a::FuncSig>(
+                x: Value<<S>::Input>,
+                ys: Values<<S as ::a::FuncSig>::Inputs>,
+            ) {}
+        })
+        .unwrap();
+        assert!(matches!(
+            op.operands[0].constraint,
+            ValueExpr::Each(TypeExpr::Proj(Projection { bound: None, .. }))
+        ));
+        assert!(matches!(
+            op.operands[1].constraint,
+            ValueExpr::List(ListExpr::Proj(Projection { bound: Some(ref b), .. })) if b.key() == "::a::FuncSig"
+        ));
+    }
+
+    #[test]
     fn legacy_optional_results_stay_legacy() {
         let op = parse_op(quote! {
             fn r#if(cond: ()) -> Option<result> {
@@ -546,6 +828,35 @@ mod tests {
     #[test]
     fn typed_syntax_errors() {
         let cases = [
+            (quote!(fn f(x: , y: Value<_>) {}), "expected a type"),
+            (
+                quote!(
+                    fn f(x: &T, y: Value<_>) {}
+                ),
+                "expected a typed entity wrapper",
+            ),
+            (
+                quote!(fn f<S: B>(x: Value<<S as B>>) {}),
+                "invalid projection",
+            ),
+            (
+                quote!(
+                    fn f<S: B>(x: Value<<S as B>::X::Y>) {}
+                ),
+                "invalid projection",
+            ),
+            (
+                quote!(
+                    fn f(x: Attr<::Symbol>) {}
+                ),
+                "invalid attribute kind",
+            ),
+            (
+                quote!(
+                    fn f(mut x: Value<_>) {}
+                ),
+                "parameter must have a name",
+            ),
             (
                 quote!(
                     #[attr(p: Symbol)]

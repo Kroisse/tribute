@@ -6,7 +6,7 @@ use proc_macro2::{Delimiter, Ident, TokenTree};
 use unsynn::{Parser, ToTokenIter, TokenIter};
 
 mod constraint;
-pub use constraint::{ListExpr, Projection, TypeExpr, TypeVar, ValueExpr};
+pub use constraint::{BoundPath, ListExpr, Projection, TypeExpr, TypeVar, ValueExpr};
 
 // ============================================================================
 // Parsed types
