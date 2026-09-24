@@ -186,7 +186,7 @@ fn typed_schema_records_variables_and_constraints() {
 }
 
 #[test]
-fn legacy_schemas_are_unconstrained() {
+fn wildcard_entities_are_unconstrained() {
     let schema = crate::dialect::arith::Subi::SCHEMA;
     assert!(schema.type_vars.is_empty());
     assert!(matches!(

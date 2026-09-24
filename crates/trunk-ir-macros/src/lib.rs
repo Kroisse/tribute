@@ -1,7 +1,7 @@
 //! Proc macros for trunk-ir dialect definitions.
 //!
 //! Provides `#[dialect]` for defining dialect operations with type-safe
-//! wrappers/accessors/constructors, plus `#[canonicalize_fold]` for
+//! wrappers, accessors, and builders, plus `#[canonicalize_fold]` for
 //! registering canonicalize-pass folds next to the function definition.
 
 use proc_macro::TokenStream as ProcTokenStream;
@@ -15,15 +15,13 @@ mod parse;
 /// ```ignore
 /// #[dialect]
 /// mod func {
-///     #[attr(sym_name: Symbol, r#type: Type)]
-///     fn func() {
-///         #[region(body)] {}
+///     fn func(sym_name: Attr<Symbol>, r#type: Attr<Type>) {
+///         #[region(body?)] {}
 ///     }
 ///
-///     #[attr(callee: Symbol)]
-///     fn call(#[rest] args: ()) -> result {}
+///     fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
 ///
-///     fn r#return(#[rest] values: ()) {}
+///     fn r#return(values: Variadic<_>) {}
 /// }
 /// ```
 ///
@@ -39,9 +37,8 @@ mod parse;
 /// - `struct OpName(OpRef)` — wrapper struct
 /// - `impl DialectOp for OpName` — type-safe matching
 /// - Operand, result, attribute, region/successor accessors
-/// - Constructor function `op_name(ctx, location, ...)`, or for operations in
-///   the typed syntax (`fn addi<T: IntegerLike>(lhs: Value<T>, ...)`), a
-///   builder started by `OpName::operands(..)` / `OpName::builder()`
+/// - A builder started by `OpName::operands(..)` (or `OpName::builder()`
+///   without operands) and finished by `.build(ctx, location)`
 /// - `OpSchema` registration; `#[verify]` on the operation adds a call to
 ///   the wrapper's inherent `verify(self, ctx) -> Result<(), String>` method
 ///   after the generated checks

@@ -735,7 +735,7 @@ mod tests {
         let op = parse_op(quote! {
             fn pack<T>(xs: Values<(T, impl IntegerLike + BoolLike, _)>, rest: ()) {}
         });
-        assert!(op.is_err(), "a legacy operand in a typed op is rejected");
+        assert!(op.is_err(), "a `()` operand is rejected");
 
         let op = parse_op(quote! {
             fn select(cond: Value<impl BoolLike>, elems: Values<()>) -> Variadic<_> {

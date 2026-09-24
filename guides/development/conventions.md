@@ -85,15 +85,19 @@ Two-phase resolution:
 
 ### Creating Operations
 
-Use generated typed builders and wrappers with the arena context:
+Use generated builders and wrappers with the arena context. A builder groups
+inputs by kind: operands start it, attributes are set by name, and result
+types, regions, and successors are each one call:
 
 ```rust
-let value = arith::r#const(ctx, location, i32_ty, Attribute::Int(42));
+let value = arith::Const::builder()
+    .value(Attribute::Int(42))
+    .results(i32_ty)
+    .build(ctx, location);
 let result = value.result(ctx);
 ```
 
-Operations declared with the typed `#[dialect]` syntax use a builder that
-groups inputs by kind and infers result types where the declaration fixes them:
+The builder infers result types the declaration fixes:
 
 ```rust
 // fn cmpi<T: IntegerLike>(
@@ -105,6 +109,9 @@ let cmp = arith::Cmpi::operands(lhs, rhs)
     .predicate(Symbol::new("slt"))
     .build(ctx, location);
 ```
+
+For a construction that many call sites repeat, define an inherent method on
+the wrapper rather than a free constructor function.
 
 ### Matching Operations
 
