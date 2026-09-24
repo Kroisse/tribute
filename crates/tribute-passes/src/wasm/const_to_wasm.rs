@@ -248,7 +248,12 @@ impl RewritePattern for StringConstPattern {
 
         let location = ctx.op(op).location;
         let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
-        let bytes = wasm_dialect::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
+        let bytes = wasm_dialect::BytesFromData::builder()
+            .data_idx(data_idx)
+            .offset(0)
+            .len(len)
+            .results(bytes_ty)
+            .build(ctx, location);
         let result_ty = ctx.op_result_types(op)[0];
         let leaf = adt::variant_new(
             ctx,
@@ -313,7 +318,12 @@ impl RewritePattern for BytesConstPattern {
         let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
 
         // Create wasm.bytes_from_data operation
-        let new_op = wasm_dialect::bytes_from_data(ctx, location, bytes_ty, data_idx, 0, len);
+        let new_op = wasm_dialect::BytesFromData::builder()
+            .data_idx(data_idx)
+            .offset(0)
+            .len(len)
+            .results(bytes_ty)
+            .build(ctx, location);
 
         rewriter.replace_op(new_op.op_ref());
         true

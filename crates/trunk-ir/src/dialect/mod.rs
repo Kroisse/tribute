@@ -239,7 +239,11 @@ mod tests {
         let loc = dummy_location();
 
         // wasm.table has required min and optional max
-        let table_op = super::wasm::table(&mut ctx, loc, Symbol::new("funcref"), 10, Some(100));
+        let table_op = super::wasm::Table::builder()
+            .reftype(Symbol::new("funcref"))
+            .min(10)
+            .max(Some(100))
+            .build(&mut ctx, loc);
 
         let table2 =
             super::wasm::Table::from_op(&ctx, table_op.op_ref()).expect("should match wasm.table");
@@ -255,7 +259,11 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
 
-        let table_op = super::wasm::table(&mut ctx, loc, Symbol::new("funcref"), 5, None);
+        let table_op = super::wasm::Table::builder()
+            .reftype(Symbol::new("funcref"))
+            .min(5)
+            .max(None)
+            .build(&mut ctx, loc);
         assert_eq!(table_op.min(&ctx), 5);
         assert_eq!(table_op.max(&ctx), None);
     }
@@ -303,13 +311,10 @@ mod tests {
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
 
-        let call = super::wasm::call(
-            &mut ctx,
-            loc,
-            [],               // no args
-            [i32_ty, i32_ty], // two result types
-            Symbol::new("multi_return"),
-        );
+        let call = super::wasm::Call::operands([])
+            .callee(Symbol::new("multi_return"))
+            .results([i32_ty, i32_ty])
+            .build(&mut ctx, loc);
 
         let results = call.results(&ctx);
         assert_eq!(results.len(), 2);

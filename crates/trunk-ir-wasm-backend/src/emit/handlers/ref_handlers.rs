@@ -140,17 +140,17 @@ mod tests {
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let anyref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
         let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
-        let null =
-            wasm_dialect::ref_null(&mut ctx, location, anyref_ty, Symbol::new("anyref"), None);
+        let null = wasm_dialect::RefNull::builder()
+            .heap_type(Symbol::new("anyref"))
+            .type_idx(None)
+            .results(anyref_ty)
+            .build(&mut ctx, location);
         let null_result = null.result(&ctx);
-        let cast = wasm_dialect::ref_cast(
-            &mut ctx,
-            location,
-            null_result,
-            bytes_ty,
-            bytes_ty,
-            Some(crate::gc_types::BYTES_STRUCT_IDX),
-        );
+        let cast = wasm_dialect::RefCast::operands(null_result)
+            .target_type(bytes_ty)
+            .type_idx(Some(crate::gc_types::BYTES_STRUCT_IDX))
+            .results(bytes_ty)
+            .build(&mut ctx, location);
         let cast_result = cast.result(&ctx);
         let emit_ctx = FunctionEmitContext {
             value_locals: HashMap::from([(null_result, 0), (cast_result, 1)]),

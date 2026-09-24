@@ -65,14 +65,24 @@ fn create_i31_unbox(
     let i32_ty = i32_type(ctx);
 
     // Cast anyref to i31ref first (abstract type, no type_idx needed)
-    let cast_op = wasm_dialect::ref_cast(ctx, location, value, i31ref_ty, i31ref_ty, None);
+    let cast_op = wasm_dialect::RefCast::operands(value)
+        .target_type(i31ref_ty)
+        .type_idx(None)
+        .results(i31ref_ty)
+        .build(ctx, location);
     let cast_result = cast_op.result(ctx);
 
     // Extract value: signed or unsigned
     let get_op_ref = if is_signed {
-        wasm_dialect::i31_get_s(ctx, location, cast_result, i32_ty).op_ref()
+        wasm_dialect::I31GetS::operands(cast_result)
+            .results(i32_ty)
+            .build(ctx, location)
+            .op_ref()
     } else {
-        wasm_dialect::i31_get_u(ctx, location, cast_result, i32_ty).op_ref()
+        wasm_dialect::I31GetU::operands(cast_result)
+            .results(i32_ty)
+            .build(ctx, location)
+            .op_ref()
     };
 
     (vec![cast_op.op_ref()], get_op_ref)
@@ -114,7 +124,9 @@ impl RewritePattern for BoxIntPattern {
         let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
 
         // wasm.ref_i31: i32 -> i31ref
-        let new_op = wasm_dialect::ref_i31(ctx, location, value, i31ref_ty);
+        let new_op = wasm_dialect::RefI31::operands(value)
+            .results(i31ref_ty)
+            .build(ctx, location);
 
         rewriter.replace_op(new_op.op_ref());
         true
@@ -175,7 +187,9 @@ impl RewritePattern for BoxNatPattern {
         let value = box_op.value(ctx);
         let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
 
-        let new_op = wasm_dialect::ref_i31(ctx, location, value, i31ref_ty);
+        let new_op = wasm_dialect::RefI31::operands(value)
+            .results(i31ref_ty)
+            .build(ctx, location);
         rewriter.replace_op(new_op.op_ref());
         true
     }
@@ -308,7 +322,9 @@ impl RewritePattern for BoxBoolPattern {
         let value = box_op.value(ctx);
         let i31ref_ty = wasm_dialect::i31ref(ctx).as_type_ref();
 
-        let new_op = wasm_dialect::ref_i31(ctx, location, value, i31ref_ty);
+        let new_op = wasm_dialect::RefI31::operands(value)
+            .results(i31ref_ty)
+            .build(ctx, location);
         rewriter.replace_op(new_op.op_ref());
         true
     }

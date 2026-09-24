@@ -316,14 +316,12 @@ mod tests {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let malformed = ctx.intern_type(TypeDataBuilder::new("wasm", "func_sig").build());
-        let import = wasm_dialect::import_func(
-            &mut ctx,
-            location,
-            Symbol::new("env"),
-            Symbol::new("run"),
-            Symbol::new("run"),
-            malformed,
-        );
+        let import = wasm_dialect::ImportFunc::builder()
+            .module(Symbol::new("env"))
+            .name(Symbol::new("run"))
+            .sym_name(Symbol::new("run"))
+            .r#type(malformed)
+            .build(&mut ctx, location);
 
         let error = extract_import_def(&ctx, import).expect_err("malformed import signature");
         assert!(

@@ -42,32 +42,23 @@ fn extract_bytes_fields(
     let array_ty = core::array(ctx, i8_ty).as_type_ref();
     let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();
 
-    let get_data = wasm_dialect::struct_get(
-        ctx,
-        location,
-        bytes_value,
-        array_ref_ty,
-        BYTES_STRUCT_IDX,
-        BYTES_DATA_FIELD,
-    );
+    let get_data = wasm_dialect::StructGet::operands(bytes_value)
+        .type_idx(BYTES_STRUCT_IDX)
+        .field_idx(BYTES_DATA_FIELD)
+        .results(array_ref_ty)
+        .build(ctx, location);
 
-    let get_offset = wasm_dialect::struct_get(
-        ctx,
-        location,
-        bytes_value,
-        i32_ty,
-        BYTES_STRUCT_IDX,
-        BYTES_OFFSET_FIELD,
-    );
+    let get_offset = wasm_dialect::StructGet::operands(bytes_value)
+        .type_idx(BYTES_STRUCT_IDX)
+        .field_idx(BYTES_OFFSET_FIELD)
+        .results(i32_ty)
+        .build(ctx, location);
 
-    let get_len = wasm_dialect::struct_get(
-        ctx,
-        location,
-        bytes_value,
-        i32_ty,
-        BYTES_STRUCT_IDX,
-        BYTES_LEN_FIELD,
-    );
+    let get_len = wasm_dialect::StructGet::operands(bytes_value)
+        .type_idx(BYTES_STRUCT_IDX)
+        .field_idx(BYTES_LEN_FIELD)
+        .results(i32_ty)
+        .build(ctx, location);
 
     let fields = BytesFields {
         data: get_data.result(ctx),
@@ -129,14 +120,11 @@ impl RewritePattern for BytesLenPattern {
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
         // struct.get to get len field (field 2)
-        let get_len = wasm_dialect::struct_get(
-            ctx,
-            location,
-            bytes_ref,
-            i32_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_LEN_FIELD,
-        );
+        let get_len = wasm_dialect::StructGet::operands(bytes_ref)
+            .type_idx(BYTES_STRUCT_IDX)
+            .field_idx(BYTES_LEN_FIELD)
+            .results(i32_ty)
+            .build(ctx, location);
 
         rewriter.replace_op(get_len.op_ref());
         true
@@ -177,38 +165,29 @@ impl RewritePattern for BytesGetOrPanicPattern {
         // Get data array ref (field 0)
         let array_ty = core::array(ctx, i8_ty).as_type_ref();
         let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();
-        let get_data = wasm_dialect::struct_get(
-            ctx,
-            location,
-            bytes_ref,
-            array_ref_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_DATA_FIELD,
-        );
+        let get_data = wasm_dialect::StructGet::operands(bytes_ref)
+            .type_idx(BYTES_STRUCT_IDX)
+            .field_idx(BYTES_DATA_FIELD)
+            .results(array_ref_ty)
+            .build(ctx, location);
 
         // Get offset (field 1)
-        let get_offset = wasm_dialect::struct_get(
-            ctx,
-            location,
-            bytes_ref,
-            i32_ty,
-            BYTES_STRUCT_IDX,
-            BYTES_OFFSET_FIELD,
-        );
+        let get_offset = wasm_dialect::StructGet::operands(bytes_ref)
+            .type_idx(BYTES_STRUCT_IDX)
+            .field_idx(BYTES_OFFSET_FIELD)
+            .results(i32_ty)
+            .build(ctx, location);
 
         // Add offset to index: actual_index = offset + index
         let add_offset =
             wasm_dialect::I32Add::operands(get_offset.result(ctx), index).build(ctx, location);
 
         // array.get_u (unsigned extend to i32, for byte values 0-255)
-        let array_get = wasm_dialect::array_get_u(
-            ctx,
-            location,
-            get_data.result(ctx),
-            add_offset.result(ctx),
-            i32_ty,
-            BYTES_ARRAY_IDX,
-        );
+        let array_get =
+            wasm_dialect::ArrayGetU::operands(get_data.result(ctx), add_offset.result(ctx))
+                .type_idx(BYTES_ARRAY_IDX)
+                .results(i32_ty)
+                .build(ctx, location);
 
         rewriter.insert_op(get_data.op_ref());
         rewriter.insert_op(get_offset.op_ref());
@@ -255,7 +234,10 @@ impl RewritePattern for BytesRangeEqualPattern {
         let right_start =
             wasm_dialect::I32Add::operands(right.offset, operands[3]).build(ctx, location);
         let len = operands[4];
-        let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+        let zero = wasm_dialect::I32Const::builder()
+            .value(0)
+            .results(i32_ty)
+            .build(ctx, location);
 
         let loop_block = ctx.create_block(BlockData {
             location,
@@ -268,71 +250,56 @@ impl RewritePattern for BytesRangeEqualPattern {
         });
         let index = ctx.block_arg(loop_block, 0);
 
-        let done = wasm_dialect::i32_ge_u(ctx, location, index, len, i32_ty);
+        let done = wasm_dialect::I32GeU::operands(index, len)
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(loop_block, done.op_ref());
         let done_then = value_break_region(ctx, location, i32_ty, 1);
         let done_else = empty_region(ctx, location);
-        let break_when_done = wasm_dialect::r#if(
-            ctx,
-            location,
-            done.result(ctx),
-            [nil_ty],
-            done_then,
-            done_else,
-        );
+        let break_when_done = wasm_dialect::If::operands(done.result(ctx))
+            .results([nil_ty])
+            .regions(done_then, done_else)
+            .build(ctx, location);
         ctx.push_op(loop_block, break_when_done.op_ref());
 
         let left_index =
             wasm_dialect::I32Add::operands(left_start.result(ctx), index).build(ctx, location);
         ctx.push_op(loop_block, left_index.op_ref());
-        let left_byte = wasm_dialect::array_get_u(
-            ctx,
-            location,
-            left.data,
-            left_index.result(ctx),
-            i32_ty,
-            BYTES_ARRAY_IDX,
-        );
+        let left_byte = wasm_dialect::ArrayGetU::operands(left.data, left_index.result(ctx))
+            .type_idx(BYTES_ARRAY_IDX)
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(loop_block, left_byte.op_ref());
         let right_index =
             wasm_dialect::I32Add::operands(right_start.result(ctx), index).build(ctx, location);
         ctx.push_op(loop_block, right_index.op_ref());
-        let right_byte = wasm_dialect::array_get_u(
-            ctx,
-            location,
-            right.data,
-            right_index.result(ctx),
-            i32_ty,
-            BYTES_ARRAY_IDX,
-        );
+        let right_byte = wasm_dialect::ArrayGetU::operands(right.data, right_index.result(ctx))
+            .type_idx(BYTES_ARRAY_IDX)
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(loop_block, right_byte.op_ref());
-        let mismatch = wasm_dialect::i32_ne(
-            ctx,
-            location,
-            left_byte.result(ctx),
-            right_byte.result(ctx),
-            i32_ty,
-        );
+        let mismatch = wasm_dialect::I32Ne::operands(left_byte.result(ctx), right_byte.result(ctx))
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(loop_block, mismatch.op_ref());
         let mismatch_then = value_break_region(ctx, location, i32_ty, 0);
         let mismatch_else = empty_region(ctx, location);
-        let break_on_mismatch = wasm_dialect::r#if(
-            ctx,
-            location,
-            mismatch.result(ctx),
-            [nil_ty],
-            mismatch_then,
-            mismatch_else,
-        );
+        let break_on_mismatch = wasm_dialect::If::operands(mismatch.result(ctx))
+            .results([nil_ty])
+            .regions(mismatch_then, mismatch_else)
+            .build(ctx, location);
         ctx.push_op(loop_block, break_on_mismatch.op_ref());
 
-        let one = wasm_dialect::i32_const(ctx, location, i32_ty, 1);
+        let one = wasm_dialect::I32Const::builder()
+            .value(1)
+            .results(i32_ty)
+            .build(ctx, location);
         ctx.push_op(loop_block, one.op_ref());
         let next = wasm_dialect::I32Add::operands(index, one.result(ctx)).build(ctx, location);
         ctx.push_op(loop_block, next.op_ref());
-        let yield_next = wasm_dialect::r#yield(ctx, location, next.result(ctx));
+        let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, location);
         ctx.push_op(loop_block, yield_next.op_ref());
-        let continue_loop = wasm_dialect::br(ctx, location, 0);
+        let continue_loop = wasm_dialect::Br::builder().target(0).build(ctx, location);
         ctx.push_op(loop_block, continue_loop.op_ref());
 
         let loop_region = ctx.create_region(RegionData {
@@ -340,8 +307,10 @@ impl RewritePattern for BytesRangeEqualPattern {
             blocks: smallvec![loop_block],
             parent_op: None,
         });
-        let compare_loop =
-            wasm_dialect::r#loop(ctx, location, [zero.result(ctx)], [result_ty], loop_region);
+        let compare_loop = wasm_dialect::Loop::operands([zero.result(ctx)])
+            .results([result_ty])
+            .regions(loop_region)
+            .build(ctx, location);
         let outer_block = ctx.create_block(BlockData {
             location,
             args: vec![],
@@ -353,7 +322,10 @@ impl RewritePattern for BytesRangeEqualPattern {
             blocks: smallvec![outer_block],
             parent_op: None,
         });
-        let compare = wasm_dialect::block(ctx, location, [result_ty], outer_region);
+        let compare = wasm_dialect::Block::builder()
+            .results([result_ty])
+            .regions(outer_region)
+            .build(ctx, location);
 
         for field_op in left_ops.into_iter().chain(right_ops) {
             rewriter.insert_op(field_op);
@@ -396,11 +368,14 @@ fn value_break_region(
         ops: smallvec![],
         parent_region: None,
     });
-    let value = wasm_dialect::i32_const(ctx, location, i32_ty, value);
+    let value = wasm_dialect::I32Const::builder()
+        .value(value)
+        .results(i32_ty)
+        .build(ctx, location);
     ctx.push_op(block, value.op_ref());
-    let yield_value = wasm_dialect::r#yield(ctx, location, value.result(ctx));
+    let yield_value = wasm_dialect::Yield::operands(value.result(ctx)).build(ctx, location);
     ctx.push_op(block, yield_value.op_ref());
-    let break_outer = wasm_dialect::br(ctx, location, 2);
+    let break_outer = wasm_dialect::Br::builder().target(2).build(ctx, location);
     ctx.push_op(block, break_outer.op_ref());
     ctx.create_region(RegionData {
         location,
@@ -446,54 +421,49 @@ impl RewritePattern for BytesConcatPattern {
             wasm_dialect::I32Add::operands(left_fields.len, right_fields.len).build(ctx, location);
 
         // Allocate new array: array_new_default(total_len)
-        let new_array = wasm_dialect::array_new_default(
-            ctx,
-            location,
-            total_len.result(ctx),
-            array_ref_ty,
-            BYTES_ARRAY_IDX,
-        );
+        let new_array = wasm_dialect::ArrayNewDefault::operands(total_len.result(ctx))
+            .type_idx(BYTES_ARRAY_IDX)
+            .results(array_ref_ty)
+            .build(ctx, location);
 
         // Copy left bytes: array_copy(new_arr, 0, left.data, left.offset, left.len)
-        let zero = wasm_dialect::i32_const(ctx, location, i32_ty, 0);
+        let zero = wasm_dialect::I32Const::builder()
+            .value(0)
+            .results(i32_ty)
+            .build(ctx, location);
 
-        let copy_left = wasm_dialect::array_copy(
-            ctx,
-            location,
+        let copy_left = wasm_dialect::ArrayCopy::operands(
             new_array.result(ctx),
             zero.result(ctx),
             left_fields.data,
             left_fields.offset,
             left_fields.len,
-            BYTES_ARRAY_IDX,
-            BYTES_ARRAY_IDX,
-        );
+        )
+        .dst_type_idx(BYTES_ARRAY_IDX)
+        .src_type_idx(BYTES_ARRAY_IDX)
+        .build(ctx, location);
 
         // Copy right bytes: array_copy(new_arr, left.len, right.data, right.offset, right.len)
-        let copy_right = wasm_dialect::array_copy(
-            ctx,
-            location,
+        let copy_right = wasm_dialect::ArrayCopy::operands(
             new_array.result(ctx),
             left_fields.len,
             right_fields.data,
             right_fields.offset,
             right_fields.len,
-            BYTES_ARRAY_IDX,
-            BYTES_ARRAY_IDX,
-        );
+        )
+        .dst_type_idx(BYTES_ARRAY_IDX)
+        .src_type_idx(BYTES_ARRAY_IDX)
+        .build(ctx, location);
 
         // Create new Bytes struct: struct_new(new_arr, 0, total_len)
-        let struct_new = wasm_dialect::struct_new(
-            ctx,
-            location,
-            vec![
-                new_array.result(ctx),
-                zero.result(ctx),
-                total_len.result(ctx),
-            ],
-            bytes_ty,
-            BYTES_STRUCT_IDX,
-        );
+        let struct_new = wasm_dialect::StructNew::operands(vec![
+            new_array.result(ctx),
+            zero.result(ctx),
+            total_len.result(ctx),
+        ])
+        .type_idx(BYTES_STRUCT_IDX)
+        .results(bytes_ty)
+        .build(ctx, location);
 
         // Combine all operations in order
         let mut ops = Vec::with_capacity(left_ops.len() + right_ops.len() + 6);

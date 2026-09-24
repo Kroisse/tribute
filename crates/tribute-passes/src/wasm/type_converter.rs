@@ -190,19 +190,27 @@ fn box_via_i31(
     let mut ops: Vec<OpRef> = Vec::new();
 
     let val = if is_i64 {
-        let wrap = wasm_dialect::i32_wrap_i64(ctx, loc, value, i32_ty);
+        let wrap = wasm_dialect::I32WrapI64::operands(value)
+            .results(i32_ty)
+            .build(ctx, loc);
         ops.push(wrap.op_ref());
         wrap.result(ctx)
     } else {
         value
     };
 
-    let ref_op = wasm_dialect::ref_i31(ctx, loc, val, i31ref_ty);
+    let ref_op = wasm_dialect::RefI31::operands(val)
+        .results(i31ref_ty)
+        .build(ctx, loc);
     ops.push(ref_op.op_ref());
     let i31_val = ref_op.result(ctx);
 
     // Upcast i31ref -> anyref (needed for IR type correctness)
-    let upcast = wasm_dialect::ref_cast(ctx, loc, i31_val, anyref_ty, anyref_ty, None);
+    let upcast = wasm_dialect::RefCast::operands(i31_val)
+        .target_type(anyref_ty)
+        .type_idx(None)
+        .results(anyref_ty)
+        .build(ctx, loc);
     ops.push(upcast.op_ref());
 
     Some(MaterializeResult {
@@ -223,11 +231,17 @@ fn unbox_via_i31(
     i32_ty: TypeRef,
 ) -> Option<MaterializeResult> {
     // Cast anyref to i31ref
-    let cast_op = wasm_dialect::ref_cast(ctx, loc, value, i31ref_ty, i31ref_ty, None);
+    let cast_op = wasm_dialect::RefCast::operands(value)
+        .target_type(i31ref_ty)
+        .type_idx(None)
+        .results(i31ref_ty)
+        .build(ctx, loc);
     let cast_val = cast_op.result(ctx);
 
     // Extract i32 from i31ref
-    let get_op = wasm_dialect::i31_get_s(ctx, loc, cast_val, i32_ty);
+    let get_op = wasm_dialect::I31GetS::operands(cast_val)
+        .results(i32_ty)
+        .build(ctx, loc);
 
     Some(MaterializeResult {
         value: get_op.result(ctx),
@@ -427,13 +441,20 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
             }
 
             if is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref")) {
-                let cast_op = wasm_dialect::ref_cast(ctx, location, value, to_ty, to_ty, None);
+                let cast_op = wasm_dialect::RefCast::operands(value)
+                    .target_type(to_ty)
+                    .type_idx(None)
+                    .results(to_ty)
+                    .build(ctx, location);
                 return Some(MaterializeResult {
                     value: cast_op.result(ctx),
                     ops: vec![cast_op.op_ref()],
                 });
             }
-            let cast_op = wasm_gc_dialect::ref_cast(ctx, location, value, to_ty, to_ty);
+            let cast_op = wasm_gc_dialect::RefCast::operands(value)
+                .target_type(to_ty)
+                .results(to_ty)
+                .build(ctx, location);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
                 ops: vec![cast_op.op_ref()],
@@ -453,7 +474,10 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
             );
         let to_is_abstract_anyref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"));
         if from_is_anyref && to_is_struct_like && !to_is_abstract_anyref {
-            let cast_op = wasm_gc_dialect::ref_cast(ctx, location, value, to_ty, to_ty);
+            let cast_op = wasm_gc_dialect::RefCast::operands(value)
+                .target_type(to_ty)
+                .results(to_ty)
+                .build(ctx, location);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
                 ops: vec![cast_op.op_ref()],
@@ -545,8 +569,11 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         if is_type(ctx, from_ty, Symbol::new("core"), Symbol::new("nil"))
             && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"))
         {
-            let null_op =
-                wasm_dialect::ref_null(ctx, location, anyref_ty, Symbol::new("anyref"), None);
+            let null_op = wasm_dialect::RefNull::builder()
+                .heap_type(Symbol::new("anyref"))
+                .type_idx(None)
+                .results(anyref_ty)
+                .build(ctx, location);
             return Some(MaterializeResult {
                 value: null_op.result(ctx),
                 ops: vec![null_op.op_ref()],
@@ -695,8 +722,11 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
                 Symbol::new("anyref"),
             );
         if from_is_any && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("arrayref")) {
-            let cast_op =
-                wasm_dialect::ref_cast(ctx, location, value, arrayref_ty, arrayref_ty, None);
+            let cast_op = wasm_dialect::RefCast::operands(value)
+                .target_type(arrayref_ty)
+                .type_idx(None)
+                .results(arrayref_ty)
+                .build(ctx, location);
             return Some(MaterializeResult {
                 value: cast_op.result(ctx),
                 ops: vec![cast_op.op_ref()],

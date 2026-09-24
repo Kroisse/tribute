@@ -574,15 +574,32 @@ mod tests {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let address = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 0);
-        let value = wasm_dialect::i32_const(&mut ctx, location, i32_ty, 42);
+        let address = wasm_dialect::I32Const::builder()
+            .value(0)
+            .results(i32_ty)
+            .build(&mut ctx, location);
+        let value = wasm_dialect::I32Const::builder()
+            .value(42)
+            .results(i32_ty)
+            .build(&mut ctx, location);
         let address_result = address.result(&ctx);
         let value_result = value.result(&ctx);
-        let load = wasm_dialect::i32_load(&mut ctx, location, address_result, i32_ty, 4, 7, 0);
-        let store =
-            wasm_dialect::i32_store(&mut ctx, location, address_result, value_result, 8, 7, 0);
-        let store8 =
-            wasm_dialect::i32_store8(&mut ctx, location, address_result, value_result, 12, 7, 0);
+        let load = wasm_dialect::I32Load::operands(address_result)
+            .offset(4)
+            .align(7)
+            .memory(0)
+            .results(i32_ty)
+            .build(&mut ctx, location);
+        let store = wasm_dialect::I32Store::operands(address_result, value_result)
+            .offset(8)
+            .align(7)
+            .memory(0)
+            .build(&mut ctx, location);
+        let store8 = wasm_dialect::I32Store8::operands(address_result, value_result)
+            .offset(12)
+            .align(7)
+            .memory(0)
+            .build(&mut ctx, location);
         let emit_ctx = FunctionEmitContext {
             value_locals: HashMap::from([
                 (address_result, 0),

@@ -137,23 +137,21 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
     let i8_ty = simple_type(ctx, "core", "i8");
     let array_ty = core::array(ctx, i8_ty).as_type_ref();
     let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();
-    let data = wasm_dialect::struct_get(
-        ctx,
-        loc,
-        bytes,
-        array_ref_ty,
-        BYTES_STRUCT_IDX,
-        BYTES_DATA_FIELD,
-    );
-    let offset = wasm_dialect::struct_get(
-        ctx,
-        loc,
-        bytes,
-        i32_ty,
-        BYTES_STRUCT_IDX,
-        BYTES_OFFSET_FIELD,
-    );
-    let len = wasm_dialect::struct_get(ctx, loc, bytes, i32_ty, BYTES_STRUCT_IDX, BYTES_LEN_FIELD);
+    let data = wasm_dialect::StructGet::operands(bytes)
+        .type_idx(BYTES_STRUCT_IDX)
+        .field_idx(BYTES_DATA_FIELD)
+        .results(array_ref_ty)
+        .build(ctx, loc);
+    let offset = wasm_dialect::StructGet::operands(bytes)
+        .type_idx(BYTES_STRUCT_IDX)
+        .field_idx(BYTES_OFFSET_FIELD)
+        .results(i32_ty)
+        .build(ctx, loc);
+    let len = wasm_dialect::StructGet::operands(bytes)
+        .type_idx(BYTES_STRUCT_IDX)
+        .field_idx(BYTES_LEN_FIELD)
+        .results(i32_ty)
+        .build(ctx, loc);
     for op in [data.op_ref(), offset.op_ref(), len.op_ref()] {
         ctx.push_op(body, op);
     }
@@ -188,12 +186,18 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
     ctx.push_op(body, newline_addr.op_ref());
     let newline_region = region(ctx, loc, |ctx, block| {
         let lf = i32_const(ctx, block, loc, i32_ty, 10);
-        let store = wasm_dialect::i32_store8(ctx, loc, newline_addr.result(ctx), lf, 0, 0, 0);
+        let store = wasm_dialect::I32Store8::operands(newline_addr.result(ctx), lf)
+            .offset(0)
+            .align(0)
+            .memory(0)
+            .build(ctx, loc);
         ctx.push_op(block, store.op_ref());
     });
     let empty_region = region(ctx, loc, |_, _| {});
-    let append_newline =
-        wasm_dialect::r#if(ctx, loc, newline, [nil_ty], newline_region, empty_region);
+    let append_newline = wasm_dialect::If::operands(newline)
+        .results([nil_ty])
+        .regions(newline_region, empty_region)
+        .build(ctx, loc);
     ctx.push_op(body, append_newline.op_ref());
 
     let writes = write_loop(ctx, loc, zero, total.result(ctx), analysis, i32_ty, nil_ty);
@@ -219,41 +223,53 @@ fn ensure_memory(
     nil_ty: TypeRef,
 ) {
     let one = i32_const(ctx, body, loc, i32_ty, 1);
-    let end_minus_one = wasm_dialect::i32_sub(ctx, loc, end, one, i32_ty);
+    let end_minus_one = wasm_dialect::I32Sub::operands(end, one)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(body, end_minus_one.op_ref());
     let page_size = i32_const(ctx, body, loc, i32_ty, PAGE_SIZE);
-    let quotient = wasm_dialect::i32_div_u(ctx, loc, end_minus_one.result(ctx), page_size, i32_ty);
+    let quotient = wasm_dialect::I32DivU::operands(end_minus_one.result(ctx), page_size)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(body, quotient.op_ref());
     let required = wasm_dialect::I32Add::operands(quotient.result(ctx), one).build(ctx, loc);
     ctx.push_op(body, required.op_ref());
-    let current = wasm_dialect::memory_size(ctx, loc, i32_ty, 0);
+    let current = wasm_dialect::MemorySize::builder()
+        .memory(0)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(body, current.op_ref());
-    let needs_grow =
-        wasm_dialect::i32_gt_u(ctx, loc, required.result(ctx), current.result(ctx), i32_ty);
+    let needs_grow = wasm_dialect::I32GtU::operands(required.result(ctx), current.result(ctx))
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(body, needs_grow.op_ref());
 
     let grow_region = region(ctx, loc, |ctx, block| {
-        let delta =
-            wasm_dialect::i32_sub(ctx, loc, required.result(ctx), current.result(ctx), i32_ty);
+        let delta = wasm_dialect::I32Sub::operands(required.result(ctx), current.result(ctx))
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(block, delta.op_ref());
-        let grown = wasm_dialect::memory_grow(ctx, loc, delta.result(ctx), i32_ty, 0);
+        let grown = wasm_dialect::MemoryGrow::operands(delta.result(ctx))
+            .memory(0)
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(block, grown.op_ref());
-        let failed = wasm_dialect::i32_const(ctx, loc, i32_ty, -1);
+        let failed = wasm_dialect::I32Const::builder()
+            .value(-1)
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(block, failed.op_ref());
-        let is_failed =
-            wasm_dialect::i32_eq(ctx, loc, grown.result(ctx), failed.result(ctx), i32_ty);
+        let is_failed = wasm_dialect::I32Eq::operands(grown.result(ctx), failed.result(ctx))
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(block, is_failed.op_ref());
         trap_if(ctx, block, loc, is_failed.result(ctx), nil_ty);
     });
     let no_grow = region(ctx, loc, |_, _| {});
-    let grow_if = wasm_dialect::r#if(
-        ctx,
-        loc,
-        needs_grow.result(ctx),
-        [nil_ty],
-        grow_region,
-        no_grow,
-    );
+    let grow_if = wasm_dialect::If::operands(needs_grow.result(ctx))
+        .results([nil_ty])
+        .regions(grow_region, no_grow)
+        .build(ctx, loc);
     ctx.push_op(body, grow_if.op_ref());
 }
 
@@ -286,26 +302,35 @@ fn copy_loop(ctx: &mut IrContext, input: CopyLoopInput) -> OpRef {
         parent_region: None,
     });
     let index = ctx.block_arg(loop_block, 0);
-    let done = wasm_dialect::i32_ge_u(ctx, loc, index, len, i32_ty);
+    let done = wasm_dialect::I32GeU::operands(index, len)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(loop_block, done.op_ref());
-    let break_if_done = wasm_dialect::br_if(ctx, loc, done.result(ctx), 1);
+    let break_if_done = wasm_dialect::BrIf::operands(done.result(ctx))
+        .target(1)
+        .build(ctx, loc);
     ctx.push_op(loop_block, break_if_done.op_ref());
     let source = wasm_dialect::I32Add::operands(offset, index).build(ctx, loc);
     ctx.push_op(loop_block, source.op_ref());
-    let byte =
-        wasm_dialect::array_get_u(ctx, loc, data, source.result(ctx), i32_ty, BYTES_ARRAY_IDX);
+    let byte = wasm_dialect::ArrayGetU::operands(data, source.result(ctx))
+        .type_idx(BYTES_ARRAY_IDX)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(loop_block, byte.op_ref());
     let destination = wasm_dialect::I32Add::operands(scratch, index).build(ctx, loc);
     ctx.push_op(loop_block, destination.op_ref());
-    let store =
-        wasm_dialect::i32_store8(ctx, loc, destination.result(ctx), byte.result(ctx), 0, 0, 0);
+    let store = wasm_dialect::I32Store8::operands(destination.result(ctx), byte.result(ctx))
+        .offset(0)
+        .align(0)
+        .memory(0)
+        .build(ctx, loc);
     ctx.push_op(loop_block, store.op_ref());
     let one = i32_const(ctx, loop_block, loc, i32_ty, 1);
     let next = wasm_dialect::I32Add::operands(index, one).build(ctx, loc);
     ctx.push_op(loop_block, next.op_ref());
-    let yield_next = wasm_dialect::r#yield(ctx, loc, next.result(ctx));
+    let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, loc);
     ctx.push_op(loop_block, yield_next.op_ref());
-    let continue_loop = wasm_dialect::br(ctx, loc, 0);
+    let continue_loop = wasm_dialect::Br::builder().target(0).build(ctx, loc);
     ctx.push_op(loop_block, continue_loop.op_ref());
     loop_in_block(ctx, loc, init, loop_block, nil_ty)
 }
@@ -326,20 +351,34 @@ fn write_loop(
         parent_region: None,
     });
     let written = ctx.block_arg(loop_block, 0);
-    let done = wasm_dialect::i32_ge_u(ctx, loc, written, total, i32_ty);
+    let done = wasm_dialect::I32GeU::operands(written, total)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(loop_block, done.op_ref());
-    let break_if_done = wasm_dialect::br_if(ctx, loc, done.result(ctx), 1);
+    let break_if_done = wasm_dialect::BrIf::operands(done.result(ctx))
+        .target(1)
+        .build(ctx, loc);
     ctx.push_op(loop_block, break_if_done.op_ref());
 
     let scratch = i32_const(ctx, loop_block, loc, i32_ty, analysis.scratch_offset as i32);
     let ptr = wasm_dialect::I32Add::operands(scratch, written).build(ctx, loc);
     ctx.push_op(loop_block, ptr.op_ref());
-    let remaining = wasm_dialect::i32_sub(ctx, loc, total, written, i32_ty);
+    let remaining = wasm_dialect::I32Sub::operands(total, written)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(loop_block, remaining.op_ref());
     let iovec = i32_const(ctx, loop_block, loc, i32_ty, analysis.iovec_offset as i32);
-    let store_ptr = wasm_dialect::i32_store(ctx, loc, iovec, ptr.result(ctx), 0, 2, 0);
+    let store_ptr = wasm_dialect::I32Store::operands(iovec, ptr.result(ctx))
+        .offset(0)
+        .align(2)
+        .memory(0)
+        .build(ctx, loc);
     ctx.push_op(loop_block, store_ptr.op_ref());
-    let store_len = wasm_dialect::i32_store(ctx, loc, iovec, remaining.result(ctx), 4, 2, 0);
+    let store_len = wasm_dialect::I32Store::operands(iovec, remaining.result(ctx))
+        .offset(4)
+        .align(2)
+        .memory(0)
+        .build(ctx, loc);
     ctx.push_op(loop_block, store_len.op_ref());
 
     let stdout = i32_const(ctx, loop_block, loc, i32_ty, 1);
@@ -351,43 +390,57 @@ fn write_loop(
         i32_ty,
         analysis.nwritten_offset as i32,
     );
-    let call = wasm_dialect::call(
-        ctx,
-        loc,
-        [stdout, iovec, one_iovec, nwritten],
-        [i32_ty],
-        Symbol::new("fd_write"),
-    );
+    let call = wasm_dialect::Call::operands([stdout, iovec, one_iovec, nwritten])
+        .callee(Symbol::new("fd_write"))
+        .results([i32_ty])
+        .build(ctx, loc);
     ctx.push_op(loop_block, call.op_ref());
     let zero = i32_const(ctx, loop_block, loc, i32_ty, 0);
-    let succeeded = wasm_dialect::i32_eq(ctx, loc, call.results(ctx)[0], zero, i32_ty);
+    let succeeded = wasm_dialect::I32Eq::operands(call.results(ctx)[0], zero)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(loop_block, succeeded.op_ref());
 
     let success = region(ctx, loc, |ctx, block| {
-        let count = wasm_dialect::i32_load(ctx, loc, nwritten, i32_ty, 0, 2, 0);
+        let count = wasm_dialect::I32Load::operands(nwritten)
+            .offset(0)
+            .align(2)
+            .memory(0)
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(block, count.op_ref());
-        let no_progress = wasm_dialect::i32_eq(ctx, loc, count.result(ctx), zero, i32_ty);
+        let no_progress = wasm_dialect::I32Eq::operands(count.result(ctx), zero)
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(block, no_progress.op_ref());
-        let break_if_stalled = wasm_dialect::br_if(ctx, loc, no_progress.result(ctx), 2);
+        let break_if_stalled = wasm_dialect::BrIf::operands(no_progress.result(ctx))
+            .target(2)
+            .build(ctx, loc);
         ctx.push_op(block, break_if_stalled.op_ref());
         let next = wasm_dialect::I32Add::operands(written, count.result(ctx)).build(ctx, loc);
         ctx.push_op(block, next.op_ref());
-        let yield_next = wasm_dialect::r#yield(ctx, loc, next.result(ctx));
+        let yield_next = wasm_dialect::Yield::operands(next.result(ctx)).build(ctx, loc);
         ctx.push_op(block, yield_next.op_ref());
-        let continue_loop = wasm_dialect::br(ctx, loc, 1);
+        let continue_loop = wasm_dialect::Br::builder().target(1).build(ctx, loc);
         ctx.push_op(block, continue_loop.op_ref());
     });
     let failure = region(ctx, loc, |ctx, block| {
         let intr = i32_const(ctx, block, loc, i32_ty, WASI_ERRNO_INTR);
-        let interrupted = wasm_dialect::i32_eq(ctx, loc, call.results(ctx)[0], intr, i32_ty);
+        let interrupted = wasm_dialect::I32Eq::operands(call.results(ctx)[0], intr)
+            .results(i32_ty)
+            .build(ctx, loc);
         ctx.push_op(block, interrupted.op_ref());
-        let retry_if_interrupted = wasm_dialect::br_if(ctx, loc, interrupted.result(ctx), 1);
+        let retry_if_interrupted = wasm_dialect::BrIf::operands(interrupted.result(ctx))
+            .target(1)
+            .build(ctx, loc);
         ctx.push_op(block, retry_if_interrupted.op_ref());
-        let stop = wasm_dialect::br(ctx, loc, 2);
+        let stop = wasm_dialect::Br::builder().target(2).build(ctx, loc);
         ctx.push_op(block, stop.op_ref());
     });
-    let handle_result =
-        wasm_dialect::r#if(ctx, loc, succeeded.result(ctx), [nil_ty], success, failure);
+    let handle_result = wasm_dialect::If::operands(succeeded.result(ctx))
+        .results([nil_ty])
+        .regions(success, failure)
+        .build(ctx, loc);
     ctx.push_op(loop_block, handle_result.op_ref());
     loop_in_block(ctx, loc, init, loop_block, nil_ty)
 }
@@ -404,7 +457,10 @@ fn loop_in_block(
         blocks: smallvec![loop_block],
         parent_op: None,
     });
-    let loop_op = wasm_dialect::r#loop(ctx, loc, [init], [nil_ty], loop_region);
+    let loop_op = wasm_dialect::Loop::operands([init])
+        .results([nil_ty])
+        .regions(loop_region)
+        .build(ctx, loc);
     let block = ctx.create_block(BlockData {
         location: loc,
         args: vec![],
@@ -417,7 +473,11 @@ fn loop_in_block(
         blocks: smallvec![block],
         parent_op: None,
     });
-    wasm_dialect::block(ctx, loc, [nil_ty], region).op_ref()
+    wasm_dialect::Block::builder()
+        .results([nil_ty])
+        .regions(region)
+        .build(ctx, loc)
+        .op_ref()
 }
 
 fn trap_if_less(
@@ -428,7 +488,9 @@ fn trap_if_less(
     rhs: ValueRef,
     i32_ty: TypeRef,
 ) {
-    let overflow = wasm_dialect::i32_lt_u(ctx, loc, lhs, rhs, i32_ty);
+    let overflow = wasm_dialect::I32LtU::operands(lhs, rhs)
+        .results(i32_ty)
+        .build(ctx, loc);
     ctx.push_op(body, overflow.op_ref());
     let nil_ty = core::nil(ctx).as_type_ref();
     trap_if(ctx, body, loc, overflow.result(ctx), nil_ty);
@@ -446,7 +508,10 @@ fn trap_if(
         ctx.push_op(block, unreachable.op_ref());
     });
     let ok = region(ctx, loc, |_, _| {});
-    let if_op = wasm_dialect::r#if(ctx, loc, condition, [nil_ty], trap, ok);
+    let if_op = wasm_dialect::If::operands(condition)
+        .results([nil_ty])
+        .regions(trap, ok)
+        .build(ctx, loc);
     ctx.push_op(body, if_op.op_ref());
 }
 
@@ -476,7 +541,10 @@ fn i32_const(
     ty: TypeRef,
     value: i32,
 ) -> ValueRef {
-    let op = wasm_dialect::i32_const(ctx, loc, ty, value);
+    let op = wasm_dialect::I32Const::builder()
+        .value(value)
+        .results(ty)
+        .build(ctx, loc);
     let result = op.result(ctx);
     ctx.push_op(block, op.op_ref());
     result

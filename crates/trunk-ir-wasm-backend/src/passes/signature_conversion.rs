@@ -55,7 +55,12 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
             new_func_type,
             &converted.inputs,
             |ctx, ty, body| match body {
-                Some(body) => wasm::func(ctx, loc, sym_name, ty, body).op_ref(),
+                Some(body) => wasm::Func::builder()
+                    .sym_name(sym_name)
+                    .r#type(ty)
+                    .regions(body)
+                    .build(ctx, loc)
+                    .op_ref(),
                 None => make_bodyless_wasm_func(ctx, loc, sym_name, ty),
             },
         )
@@ -151,7 +156,12 @@ mod tests {
             blocks: smallvec![entry],
             parent_op: None,
         });
-        wasm::func(ctx, loc, Symbol::new(name), signature, body).op_ref()
+        wasm::Func::builder()
+            .sym_name(Symbol::new(name))
+            .r#type(signature)
+            .regions(body)
+            .build(ctx, loc)
+            .op_ref()
     }
 
     fn i32_to_i64(i32: TypeRef, i64: TypeRef) -> TypeConverter {

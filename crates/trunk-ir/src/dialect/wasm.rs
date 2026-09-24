@@ -19,373 +19,485 @@ mod wasm {
     struct Externref;
 
     // Control flow
-    #[rest_results]
-    fn block() -> results {
+    fn block() -> Variadic<_> {
         #[region(body)]
         {}
     }
 
-    #[rest_results]
-    fn r#loop(#[rest] init: ()) -> results {
+    fn r#loop(init: Variadic<_>) -> Variadic<_> {
         #[region(body)]
         {}
     }
 
-    #[rest_results]
-    fn r#if(cond: ()) -> results {
+    fn r#if(cond: Value<_>) -> Variadic<_> {
         #[region(then_region)]
         {}
         #[region(else_region)]
         {}
     }
 
-    #[attr(target: u32)]
-    fn br() {}
+    fn br(target: Attr<u32>) {}
 
-    #[attr(target: u32)]
-    fn br_if(cond: ()) {}
+    fn br_if(target: Attr<u32>, cond: Value<_>) {}
 
-    fn r#return(#[rest] values: ()) {}
-    fn r#yield(value: ()) {}
-    fn drop(value: ()) {}
+    fn r#return(values: Variadic<_>) {}
+    fn r#yield(value: Value<_>) {}
+    fn drop(value: Value<_>) {}
 
     // Functions
-    #[attr(callee: Symbol)]
-    #[rest_results]
-    fn call(#[rest] args: ()) -> results {}
+    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
 
-    #[attr(type_idx: u32, table: u32, signature?: Type)]
-    #[rest_results]
-    fn call_indirect(#[rest] args: ()) -> results {}
+    fn call_indirect(
+        type_idx: Attr<u32>,
+        table: Attr<u32>,
+        signature: Option<Attr<Type>>,
+        args: Variadic<_>,
+    ) -> Variadic<_> {
+    }
 
-    #[attr(callee: Symbol)]
-    fn return_call(#[rest] args: ()) {}
+    fn return_call(callee: Attr<Symbol>, args: Variadic<_>) {}
 
-    #[attr(type_idx: u32, table: u32, signature?: Type)]
-    fn return_call_indirect(#[rest] args: ()) {}
+    fn return_call_indirect(
+        type_idx: Attr<u32>,
+        table: Attr<u32>,
+        signature: Option<Attr<Type>>,
+        args: Variadic<_>,
+    ) {
+    }
 
     fn unreachable() {}
-    fn nop() -> result {}
+    fn nop() -> Value<_> {}
 
     // Module
-    #[attr(sym_name: Symbol, r#type: Type)]
-    fn func() {
+    fn func(sym_name: Attr<Symbol>, r#type: Attr<Type>) {
         #[region(body)]
         {}
     }
 
-    #[attr(module: Symbol, name: Symbol, sym_name: Symbol, r#type: Type)]
-    fn import_func() {}
+    fn import_func(
+        module: Attr<Symbol>,
+        name: Attr<Symbol>,
+        sym_name: Attr<Symbol>,
+        r#type: Attr<Type>,
+    ) {
+    }
 
-    #[attr(name: String, func: Symbol)]
-    fn export_func() {}
+    fn export_func(name: Attr<String>, func: Attr<Symbol>) {}
 
-    #[attr(name: String, index: u32)]
-    fn export_memory() {}
+    fn export_memory(name: Attr<String>, index: Attr<u32>) {}
 
-    #[attr(min: u32, max: u32, shared: bool, memory64: bool)]
-    fn memory() {}
+    fn memory(min: Attr<u32>, max: Attr<u32>, shared: Attr<bool>, memory64: Attr<bool>) {}
 
-    #[attr(offset: u32, bytes: any, passive: bool)]
-    fn data() {}
+    fn data(offset: Attr<u32>, bytes: Attr<_>, passive: Attr<bool>) {}
 
-    #[attr(reftype: Symbol, min: u32, max?: u32)]
-    fn table() {}
+    fn table(reftype: Attr<Symbol>, min: Attr<u32>, max: Option<Attr<u32>>) {}
 
-    #[attr(table?: u32, offset?: u32)]
-    fn elem() {
+    fn elem(table: Option<Attr<u32>>, offset: Option<Attr<u32>>) {
         #[region(funcs)]
         {}
     }
 
-    #[attr(valtype: Symbol, mutable: bool, init: any)]
-    fn global() {}
+    fn global(valtype: Attr<Symbol>, mutable: Attr<bool>, init: Attr<_>) {}
 
-    #[attr(index: u32)]
-    fn global_get() -> result {}
+    fn global_get(index: Attr<u32>) -> Value<_> {}
 
-    #[attr(index: u32)]
-    fn global_set(value: ()) {}
+    fn global_set(index: Attr<u32>, value: Value<_>) {}
 
     // i32
-    #[attr(value: i32)]
-    fn i32_const() -> result {}
+    fn i32_const(value: Attr<i32>) -> Value<_> {}
 
     fn i32_add(lhs: Value<I32>, rhs: Value<I32>) -> Value<I32> {}
-    fn i32_sub(lhs: (), rhs: ()) -> result {}
-    fn i32_mul(lhs: (), rhs: ()) -> result {}
-    fn i32_div_s(lhs: (), rhs: ()) -> result {}
-    fn i32_div_u(lhs: (), rhs: ()) -> result {}
-    fn i32_rem_s(lhs: (), rhs: ()) -> result {}
-    fn i32_rem_u(lhs: (), rhs: ()) -> result {}
+    fn i32_sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_mul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_div_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_div_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_rem_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_rem_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
-    fn i32_eq(lhs: (), rhs: ()) -> result {}
-    fn i32_ne(lhs: (), rhs: ()) -> result {}
-    fn i32_lt_s(lhs: (), rhs: ()) -> result {}
-    fn i32_lt_u(lhs: (), rhs: ()) -> result {}
-    fn i32_le_s(lhs: (), rhs: ()) -> result {}
-    fn i32_le_u(lhs: (), rhs: ()) -> result {}
-    fn i32_gt_s(lhs: (), rhs: ()) -> result {}
-    fn i32_gt_u(lhs: (), rhs: ()) -> result {}
-    fn i32_ge_s(lhs: (), rhs: ()) -> result {}
-    fn i32_ge_u(lhs: (), rhs: ()) -> result {}
+    fn i32_eq(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_ne(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_lt_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_lt_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_le_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_le_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_gt_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_gt_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_ge_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_ge_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
-    fn i32_and(lhs: (), rhs: ()) -> result {}
-    fn i32_or(lhs: (), rhs: ()) -> result {}
-    fn i32_xor(lhs: (), rhs: ()) -> result {}
-    fn i32_shl(lhs: (), rhs: ()) -> result {}
-    fn i32_shr_s(lhs: (), rhs: ()) -> result {}
-    fn i32_shr_u(lhs: (), rhs: ()) -> result {}
+    fn i32_and(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_or(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_xor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_shl(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_shr_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i32_shr_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // i64
-    #[attr(value: i64)]
-    fn i64_const() -> result {}
+    fn i64_const(value: Attr<i64>) -> Value<_> {}
 
-    fn i64_add(lhs: (), rhs: ()) -> result {}
-    fn i64_sub(lhs: (), rhs: ()) -> result {}
-    fn i64_mul(lhs: (), rhs: ()) -> result {}
-    fn i64_div_s(lhs: (), rhs: ()) -> result {}
-    fn i64_div_u(lhs: (), rhs: ()) -> result {}
-    fn i64_rem_s(lhs: (), rhs: ()) -> result {}
-    fn i64_rem_u(lhs: (), rhs: ()) -> result {}
+    fn i64_add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_mul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_div_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_div_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_rem_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_rem_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
-    fn i64_eq(lhs: (), rhs: ()) -> result {}
-    fn i64_ne(lhs: (), rhs: ()) -> result {}
-    fn i64_lt_s(lhs: (), rhs: ()) -> result {}
-    fn i64_lt_u(lhs: (), rhs: ()) -> result {}
-    fn i64_le_s(lhs: (), rhs: ()) -> result {}
-    fn i64_le_u(lhs: (), rhs: ()) -> result {}
-    fn i64_gt_s(lhs: (), rhs: ()) -> result {}
-    fn i64_gt_u(lhs: (), rhs: ()) -> result {}
-    fn i64_ge_s(lhs: (), rhs: ()) -> result {}
-    fn i64_ge_u(lhs: (), rhs: ()) -> result {}
+    fn i64_eq(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_ne(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_lt_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_lt_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_le_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_le_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_gt_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_gt_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_ge_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_ge_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
-    fn i64_and(lhs: (), rhs: ()) -> result {}
-    fn i64_or(lhs: (), rhs: ()) -> result {}
-    fn i64_xor(lhs: (), rhs: ()) -> result {}
-    fn i64_shl(lhs: (), rhs: ()) -> result {}
-    fn i64_shr_s(lhs: (), rhs: ()) -> result {}
-    fn i64_shr_u(lhs: (), rhs: ()) -> result {}
+    fn i64_and(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_or(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_xor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_shl(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_shr_s(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn i64_shr_u(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // f32
-    #[attr(value: f32)]
-    fn f32_const() -> result {}
+    fn f32_const(value: Attr<f32>) -> Value<_> {}
 
-    fn f32_add(lhs: (), rhs: ()) -> result {}
-    fn f32_sub(lhs: (), rhs: ()) -> result {}
-    fn f32_mul(lhs: (), rhs: ()) -> result {}
-    fn f32_div(lhs: (), rhs: ()) -> result {}
-    fn f32_neg(operand: ()) -> result {}
+    fn f32_add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_mul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_div(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_neg(operand: Value<_>) -> Value<_> {}
 
-    fn f32_eq(lhs: (), rhs: ()) -> result {}
-    fn f32_ne(lhs: (), rhs: ()) -> result {}
-    fn f32_lt(lhs: (), rhs: ()) -> result {}
-    fn f32_le(lhs: (), rhs: ()) -> result {}
-    fn f32_gt(lhs: (), rhs: ()) -> result {}
-    fn f32_ge(lhs: (), rhs: ()) -> result {}
+    fn f32_eq(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_ne(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_lt(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_le(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_gt(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f32_ge(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // f64
-    #[attr(value: f64)]
-    fn f64_const() -> result {}
+    fn f64_const(value: Attr<f64>) -> Value<_> {}
 
-    fn f64_add(lhs: (), rhs: ()) -> result {}
-    fn f64_sub(lhs: (), rhs: ()) -> result {}
-    fn f64_mul(lhs: (), rhs: ()) -> result {}
-    fn f64_div(lhs: (), rhs: ()) -> result {}
-    fn f64_neg(operand: ()) -> result {}
+    fn f64_add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_mul(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_div(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_neg(operand: Value<_>) -> Value<_> {}
 
-    fn f64_eq(lhs: (), rhs: ()) -> result {}
-    fn f64_ne(lhs: (), rhs: ()) -> result {}
-    fn f64_lt(lhs: (), rhs: ()) -> result {}
-    fn f64_le(lhs: (), rhs: ()) -> result {}
-    fn f64_gt(lhs: (), rhs: ()) -> result {}
-    fn f64_ge(lhs: (), rhs: ()) -> result {}
+    fn f64_eq(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_ne(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_lt(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_le(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_gt(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn f64_ge(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Local variables
-    #[attr(index: u32)]
-    fn local_get() -> result {}
+    fn local_get(index: Attr<u32>) -> Value<_> {}
 
-    #[attr(index: u32)]
-    fn local_set(value: ()) {}
+    fn local_set(index: Attr<u32>, value: Value<_>) {}
 
-    #[attr(index: u32)]
-    fn local_tee(value: ()) -> result {}
+    fn local_tee(index: Attr<u32>, value: Value<_>) -> Value<_> {}
 
     // GC structs
-    #[attr(type_idx: u32)]
-    fn struct_new(#[rest] fields: ()) -> result {}
+    fn struct_new(type_idx: Attr<u32>, fields: Variadic<_>) -> Value<_> {}
 
-    #[attr(type_idx: u32, field_idx: u32)]
-    fn struct_get(r#ref: ()) -> result {}
+    fn struct_get(type_idx: Attr<u32>, field_idx: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(type_idx: u32, field_idx: u32)]
-    fn struct_set(r#ref: (), value: ()) {}
+    fn struct_set(type_idx: Attr<u32>, field_idx: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
     // GC arrays
-    #[attr(type_idx: u32)]
-    fn array_new(size: (), init: ()) -> result {}
+    fn array_new(type_idx: Attr<u32>, size: Value<_>, init: Value<_>) -> Value<_> {}
 
-    #[attr(type_idx: u32)]
-    fn array_new_default(size: ()) -> result {}
+    fn array_new_default(type_idx: Attr<u32>, size: Value<_>) -> Value<_> {}
 
-    #[attr(type_idx: u32, data_idx: u32)]
-    fn array_new_data(offset: (), size: ()) -> result {}
+    fn array_new_data(
+        type_idx: Attr<u32>,
+        data_idx: Attr<u32>,
+        offset: Value<_>,
+        size: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(data_idx: u32, offset: u32, len: u32)]
-    fn bytes_from_data() -> result {}
+    fn bytes_from_data(data_idx: Attr<u32>, offset: Attr<u32>, len: Attr<u32>) -> Value<_> {}
 
-    #[attr(type_idx: u32)]
-    fn array_get(r#ref: (), index: ()) -> result {}
+    fn array_get(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
 
-    #[attr(type_idx: u32)]
-    fn array_get_s(r#ref: (), index: ()) -> result {}
+    fn array_get_s(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
 
-    #[attr(type_idx: u32)]
-    fn array_get_u(r#ref: (), index: ()) -> result {}
+    fn array_get_u(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<_>) -> Value<_> {}
 
-    #[attr(type_idx: u32)]
-    fn array_set(r#ref: (), index: (), value: ()) {}
+    fn array_set(type_idx: Attr<u32>, r#ref: Value<_>, index: Value<_>, value: Value<_>) {}
 
-    fn array_len(r#ref: ()) -> result {}
+    fn array_len(r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(dst_type_idx: u32, src_type_idx: u32)]
-    fn array_copy(dst: (), dst_offset: (), src: (), src_offset: (), len: ()) {}
+    fn array_copy(
+        dst_type_idx: Attr<u32>,
+        src_type_idx: Attr<u32>,
+        dst: Value<_>,
+        dst_offset: Value<_>,
+        src: Value<_>,
+        src_offset: Value<_>,
+        len: Value<_>,
+    ) {
+    }
 
     // References
-    #[attr(heap_type: Symbol, type_idx?: u32)]
-    fn ref_null() -> result {}
+    fn ref_null(heap_type: Attr<Symbol>, type_idx: Option<Attr<u32>>) -> Value<_> {}
 
-    #[attr(func_name: Symbol)]
-    fn ref_func() -> result {}
+    fn ref_func(func_name: Attr<Symbol>) -> Value<_> {}
 
-    fn ref_is_null(r#ref: ()) -> result {}
+    fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
-    #[attr(target_type: Type, type_idx?: u32)]
-    fn ref_cast(r#ref: ()) -> result {}
+    fn ref_cast(target_type: Attr<Type>, type_idx: Option<Attr<u32>>, r#ref: Value<_>) -> Value<_> {
+    }
 
-    #[attr(target_type: Type, type_idx?: u32)]
-    fn ref_test(r#ref: ()) -> result {}
+    fn ref_test(target_type: Attr<Type>, type_idx: Option<Attr<u32>>, r#ref: Value<_>) -> Value<_> {
+    }
 
     // i31ref
-    fn ref_i31(value: ()) -> result {}
-    fn i31_get_s(r#ref: ()) -> result {}
-    fn i31_get_u(r#ref: ()) -> result {}
+    fn ref_i31(value: Value<_>) -> Value<_> {}
+    fn i31_get_s(r#ref: Value<_>) -> Value<_> {}
+    fn i31_get_u(r#ref: Value<_>) -> Value<_> {}
 
     // Type conversions (integer)
-    fn i32_wrap_i64(operand: ()) -> result {}
-    fn i64_extend_i32_s(operand: ()) -> result {}
-    fn i64_extend_i32_u(operand: ()) -> result {}
+    fn i32_wrap_i64(operand: Value<_>) -> Value<_> {}
+    fn i64_extend_i32_s(operand: Value<_>) -> Value<_> {}
+    fn i64_extend_i32_u(operand: Value<_>) -> Value<_> {}
 
     // Type conversions (float to int)
-    fn i32_trunc_f32_s(operand: ()) -> result {}
-    fn i32_trunc_f32_u(operand: ()) -> result {}
-    fn i32_trunc_f64_s(operand: ()) -> result {}
-    fn i32_trunc_f64_u(operand: ()) -> result {}
-    fn i64_trunc_f32_s(operand: ()) -> result {}
-    fn i64_trunc_f32_u(operand: ()) -> result {}
-    fn i64_trunc_f64_s(operand: ()) -> result {}
-    fn i64_trunc_f64_u(operand: ()) -> result {}
+    fn i32_trunc_f32_s(operand: Value<_>) -> Value<_> {}
+    fn i32_trunc_f32_u(operand: Value<_>) -> Value<_> {}
+    fn i32_trunc_f64_s(operand: Value<_>) -> Value<_> {}
+    fn i32_trunc_f64_u(operand: Value<_>) -> Value<_> {}
+    fn i64_trunc_f32_s(operand: Value<_>) -> Value<_> {}
+    fn i64_trunc_f32_u(operand: Value<_>) -> Value<_> {}
+    fn i64_trunc_f64_s(operand: Value<_>) -> Value<_> {}
+    fn i64_trunc_f64_u(operand: Value<_>) -> Value<_> {}
 
     // Type conversions (int to float)
-    fn f32_convert_i32_s(operand: ()) -> result {}
-    fn f32_convert_i32_u(operand: ()) -> result {}
-    fn f32_convert_i64_s(operand: ()) -> result {}
-    fn f32_convert_i64_u(operand: ()) -> result {}
-    fn f64_convert_i32_s(operand: ()) -> result {}
-    fn f64_convert_i32_u(operand: ()) -> result {}
-    fn f64_convert_i64_s(operand: ()) -> result {}
-    fn f64_convert_i64_u(operand: ()) -> result {}
+    fn f32_convert_i32_s(operand: Value<_>) -> Value<_> {}
+    fn f32_convert_i32_u(operand: Value<_>) -> Value<_> {}
+    fn f32_convert_i64_s(operand: Value<_>) -> Value<_> {}
+    fn f32_convert_i64_u(operand: Value<_>) -> Value<_> {}
+    fn f64_convert_i32_s(operand: Value<_>) -> Value<_> {}
+    fn f64_convert_i32_u(operand: Value<_>) -> Value<_> {}
+    fn f64_convert_i64_s(operand: Value<_>) -> Value<_> {}
+    fn f64_convert_i64_u(operand: Value<_>) -> Value<_> {}
 
     // Float conversions
-    fn f32_demote_f64(operand: ()) -> result {}
-    fn f64_promote_f32(operand: ()) -> result {}
+    fn f32_demote_f64(operand: Value<_>) -> Value<_> {}
+    fn f64_promote_f32(operand: Value<_>) -> Value<_> {}
 
     // Bitcast
-    fn i32_reinterpret_f32(operand: ()) -> result {}
-    fn i64_reinterpret_f64(operand: ()) -> result {}
-    fn f32_reinterpret_i32(operand: ()) -> result {}
-    fn f64_reinterpret_i64(operand: ()) -> result {}
+    fn i32_reinterpret_f32(operand: Value<_>) -> Value<_> {}
+    fn i64_reinterpret_f64(operand: Value<_>) -> Value<_> {}
+    fn f32_reinterpret_i32(operand: Value<_>) -> Value<_> {}
+    fn f64_reinterpret_i64(operand: Value<_>) -> Value<_> {}
 
     // Linear memory
-    #[attr(memory: u32)]
-    fn memory_size() -> result {}
+    fn memory_size(memory: Attr<u32>) -> Value<_> {}
 
-    #[attr(memory: u32)]
-    fn memory_grow(delta: ()) -> result {}
+    fn memory_grow(memory: Attr<u32>, delta: Value<_>) -> Value<_> {}
 
     // Memory loads (full width)
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i32_load(addr: ()) -> result {}
+    fn i32_load(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_load(addr: ()) -> result {}
+    fn i64_load(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn f32_load(addr: ()) -> result {}
+    fn f32_load(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn f64_load(addr: ()) -> result {}
+    fn f64_load(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
     // Memory loads (partial width i32)
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i32_load8_s(addr: ()) -> result {}
+    fn i32_load8_s(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i32_load8_u(addr: ()) -> result {}
+    fn i32_load8_u(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i32_load16_s(addr: ()) -> result {}
+    fn i32_load16_s(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i32_load16_u(addr: ()) -> result {}
+    fn i32_load16_u(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
     // Memory loads (partial width i64)
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_load8_s(addr: ()) -> result {}
+    fn i64_load8_s(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_load8_u(addr: ()) -> result {}
+    fn i64_load8_u(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_load16_s(addr: ()) -> result {}
+    fn i64_load16_s(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_load16_u(addr: ()) -> result {}
+    fn i64_load16_u(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_load32_s(addr: ()) -> result {}
+    fn i64_load32_s(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_load32_u(addr: ()) -> result {}
+    fn i64_load32_u(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+    ) -> Value<_> {
+    }
 
     // Memory stores (full width)
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i32_store(addr: (), value: ()) {}
+    fn i32_store(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_store(addr: (), value: ()) {}
+    fn i64_store(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn f32_store(addr: (), value: ()) {}
+    fn f32_store(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn f64_store(addr: (), value: ()) {}
+    fn f64_store(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
     // Memory stores (partial width)
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i32_store8(addr: (), value: ()) {}
+    fn i32_store8(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i32_store16(addr: (), value: ()) {}
+    fn i32_store16(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_store8(addr: (), value: ()) {}
+    fn i64_store8(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_store16(addr: (), value: ()) {}
+    fn i64_store16(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 
-    #[attr(offset: u32, align: u32, memory: u32)]
-    fn i64_store32(addr: (), value: ()) {}
+    fn i64_store32(
+        offset: Attr<u32>,
+        align: Attr<u32>,
+        memory: Attr<u32>,
+        addr: Value<_>,
+        value: Value<_>,
+    ) {
+    }
 }
 
 /// Reserved delimiter attribute for the number of Wasm signature inputs.
