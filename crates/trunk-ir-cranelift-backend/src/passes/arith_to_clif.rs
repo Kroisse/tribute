@@ -66,13 +66,13 @@ fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
 
 /// Bit width clif uses for an integer-category type.
 ///
-/// `core.i1` is materialized as `i8`; `core.ptr` keeps the historical 32-bit
-/// default.
+/// `core.i1` is materialized as `i8`. `core.ptr` is 64 bits wide on the
+/// supported native targets (x86_64 and aarch64).
 fn clif_int_width(ctx: &IrContext, ty: TypeRef) -> u32 {
     match IntegerLike::width(ctx, ty) {
         Some(1) => 8,
         Some(width) => width,
-        None => 32,
+        None => 64,
     }
 }
 
@@ -493,6 +493,21 @@ mod tests {
             result.contains("clif.iconst {value = 0} : core.ptr"),
             "{result}"
         );
+    }
+
+    #[test]
+    fn pointer_casts_use_the_native_pointer_width() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @f(%index: core.i32, %address: core.ptr) {
+    %widened = arith.cast %index : core.ptr
+    %narrowed = arith.cast %address : core.i32
+    func.return
+  }
+}"#,
+        );
+        assert!(result.contains("clif.sextend %0 : core.ptr"), "{result}");
+        assert!(result.contains("clif.ireduce %1 : core.i32"), "{result}");
     }
 
     #[test]
