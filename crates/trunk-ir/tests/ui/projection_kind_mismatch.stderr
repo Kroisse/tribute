@@ -1,0 +1,27 @@
+error[E0080]: evaluation panicked: type constraint projection is a type list but is used as a single type
+ --> tests/ui/projection_kind_mismatch.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::SCHEMA::P` failed inside this call
+  |
+note: inside `resolve_projection`
+ --> $RUST/core/src/panic.rs
+  |
+  |           $crate::panicking::panic_fmt($crate::const_format_args!($($t)+));
+  |           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ the failure occurred here
+  |
+ ::: src/type_constraint.rs
+  |
+  |                       ProjectionKind::List => panic!(
+  |  _____________________________________________-
+  | |                         "type constraint projection is a type list but is used as a single type"
+  | |                     ),
+  | |_____________________- in this macro invocation
+
+note: erroneous constant encountered
+ --> tests/ui/projection_kind_mismatch.rs:4:5
+  |
+4 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this note originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

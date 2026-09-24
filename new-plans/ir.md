@@ -114,9 +114,8 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
 - 파라미터 wrapper가 종류를 정한다. `Value<C>`는 operand 하나,
   `Variadic<C>`는 같은 제약을 만족하는 0개 이상의 operand, `Values<L>`는
   타입 목록 `L`과 개수·순서·타입이 정확히 일치하는 operand 목록이다.
-  `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다. 파라미터
-  선언 순서가 builder 인자 순서다. 가변 operand 구간은 operand 중 마지막
-  하나만 허용한다.
+  `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다. 가변
+  operand 구간은 operand 중 마지막 하나만 허용한다.
 - 결과는 `-> Value<C>`(accessor `result`) 또는 `-> Variadic<C>` /
   `-> Values<L>`(accessor `results`)로 선언한다. 결과가 0개 또는 1개인
   operation은 `-> Option<Value<C>>`로 선언한다. 결과가 없는 operation과
@@ -158,10 +157,15 @@ exact bound 충돌)는 컴파일 시점에 거부한다. 다른 crate의 dialect
 
 선언적 제약은 verifier checkpoint에서만 강제한다. Parser, raw operation
 builder, operation clone, 결과 타입 재지정은 제약을 우회할 수 있으며, rewrite
-중간 상태가 일시적으로 제약을 위반하는 것도 허용한다. 생성된 builder는 결과
-타입이 고정 타입, 단일 operand나 필수 attribute로 바인딩된 변수, 또는 그
-변수의 투영으로 유일하게 결정될 때만 결과 타입을 추론한다. Builder는 cast를
-삽입하지 않는다. 심볼 해석, 소유 callable, conversion 경계, ownership처럼 한
+중간 상태가 일시적으로 제약을 위반하는 것도 허용한다.
+
+생성된 builder는 entity 종류별로 입력을 묶는다. Operand 전체를 선언 순서대로
+받는 것으로 시작하고, attribute는 이름별로 받는다. 추론할 수 없는 결과 타입,
+region, successor는 각각 한 묶음으로 받는다. 묶음 안의 순서는 선언 순서다.
+Builder는 결과 타입이 고정 타입, 단일 operand나 필수 attribute로 바인딩된
+변수, 또는 그 변수의 투영으로 유일하게 결정될 때만 결과 타입을 추론한다.
+입력 타입을 검사하거나 cast를 삽입하지 않으며, 필수 입력의 누락은 프로그래밍
+오류로 취급한다. 심볼 해석, 소유 callable, conversion 경계, ownership처럼 한
 operation 밖의 정보가 필요한 조건은 schema가 아니라 기존 whole-IR verifier와
 conversion target이 소유한다.
 

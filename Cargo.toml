@@ -44,6 +44,7 @@ smallvec = { version = "1.16", features = ["union", "const_generics", "serde"] }
 strsim = "0.11"
 target-lexicon = "0.13"
 tempfile = "3.27"
+trybuild = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tree-sitter = "0.26.13"

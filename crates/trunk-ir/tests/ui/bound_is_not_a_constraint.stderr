@@ -1,0 +1,16 @@
+error[E0277]: the trait bound `std::string::String: TypeConstraint` is not satisfied
+ --> tests/ui/bound_is_not_a_constraint.rs:4:21
+  |
+4 |         fn probe<T: String>(x: Value<T>) {}
+  |                     ^^^^^^ the trait `TypeConstraint` is not implemented for `std::string::String`
+  |
+  = help: the following other types implement trait `TypeConstraint`:
+            Anyref
+            Arrayref
+            BoolLike
+            Eqref
+            Externref
+            FloatLike
+            Funcref
+            I31ref
+          and $N others

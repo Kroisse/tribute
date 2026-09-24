@@ -124,6 +124,8 @@ impl std::error::Error for FuncSigTypeError {}
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct FuncSig(TypeRef);
 
+crate::impl_func_sig_constraint!(FuncSig, "func.func_sig");
+
 impl FuncSig {
     /// Validate a name-matching `func.func_sig`, including both delimiter counts.
     pub(crate) fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, FuncSigTypeError> {
