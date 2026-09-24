@@ -221,6 +221,22 @@ fn generated_type_constraints_check_parameters_and_project() {
     assert!((sig_desc.project)(&ctx, pair, 0).is_none());
     assert!(!(sig_desc.matches)(&ctx, pair));
 
+    // Declared type attributes are part of the exact-bound invariant.
+    let ref_desc = <crate::dialect::core::Ref as TypeConstraint>::DESC;
+    let ref_with = |ctx: &mut IrContext, attr: Option<crate::Attribute>| {
+        let mut builder = TypeDataBuilder::new("core", "ref").param(i32_ty);
+        if let Some(attr) = attr {
+            builder = builder.attr("nullable", attr);
+        }
+        ctx.intern_type(builder.build())
+    };
+    let nullable = ref_with(&mut ctx, Some(crate::Attribute::Bool(true)));
+    let missing = ref_with(&mut ctx, None);
+    let wrong_kind = ref_with(&mut ctx, Some(crate::Attribute::Int(1)));
+    assert!((ref_desc.matches)(&ctx, nullable));
+    assert!(!(ref_desc.matches)(&ctx, missing));
+    assert!(!(ref_desc.matches)(&ctx, wrong_kind));
+
     let integer = <IntegerLike as TypeConstraint>::DESC;
     assert!((integer.matches)(&ctx, i1_ty));
     assert!(!(integer.matches)(&ctx, pair));

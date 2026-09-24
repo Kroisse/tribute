@@ -866,6 +866,17 @@ fn gen_type_constraint(
     let sname = struct_name(&td.name);
     let full_name = format!("{dialect}.{type_name}");
     let fixed = td.params.iter().filter(|p| !p.variadic).count();
+    // Declared attributes are part of the wrapper invariant: required ones
+    // must be present, and every present one must match its kind.
+    let attrs_ok = td.attrs.iter().map(|attr| {
+        let name = &attr.name;
+        let kind = attr_kind(crate_path, attr.ty);
+        if attr.optional {
+            quote!(attrs.get(#name).is_none_or(|attr| #kind.accepts(attr)))
+        } else {
+            quote!(attrs.get(#name).is_some_and(|attr| #kind.accepts(attr)))
+        }
+    });
     let count_ok = if td.params.iter().any(|p| p.variadic) {
         quote!(params.len() >= #fixed)
     } else {
@@ -898,7 +909,13 @@ fn gen_type_constraint(
                     projections: &[#(#projections),*],
                     matches: |ctx, ty| {
                         <Self as #crate_path::ops::DialectType>::matches(ctx, ty)
-                            && { let params = &ctx.get_type(ty).params; #count_ok }
+                            && {
+                                let data = ctx.get_type(ty);
+                                let params = &data.params;
+                                #[allow(unused_variables)]
+                                let attrs = &data.attrs;
+                                #count_ok #(&& #attrs_ok)*
+                            }
                     },
                     project: |ctx, ty, index| {
                         if !(<Self as #crate_path::type_constraint::TypeConstraint>::DESC.matches)(ctx, ty) {
