@@ -853,7 +853,7 @@ mod tests {
         assert!(
             error
                 .to_string()
-                .contains("clif.func @helper: has more than one body region"),
+                .contains("clif.func: expected 0 to 1 region(s), found 2"),
             "{error}"
         );
     }

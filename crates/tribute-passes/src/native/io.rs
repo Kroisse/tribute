@@ -145,7 +145,6 @@ impl RewritePattern for NativeReadLinePattern {
         let ptr_ty = core::ptr(ctx).as_type_ref();
         let bytes_ty = core::bytes(ctx).as_type_ref();
         let i32_ty = intern_type(ctx, "core", "i32");
-        let i1_ty = intern_type(ctx, "core", "i1");
         let nil_ty = core::nil(ctx).as_type_ref();
 
         let descriptor = func::call(ctx, loc, [], [ptr_ty], Symbol::new(READ_LINE_FN));
@@ -162,17 +161,10 @@ impl RewritePattern for NativeReadLinePattern {
             Symbol::new(DEALLOC_RESULT_FN),
         );
 
-        let (line_tag, line_cond) = tag_equals(ctx, loc, tag.result(ctx), TAG_LINE, i32_ty, i1_ty);
-        let (eof_tag, eof_cond) =
-            tag_equals(ctx, loc, tag.result(ctx), TAG_END_OF_FILE, i32_ty, i1_ty);
-        let (invalid_tag, invalid_cond) = tag_equals(
-            ctx,
-            loc,
-            tag.result(ctx),
-            TAG_INVALID_ENCODING,
-            i32_ty,
-            i1_ty,
-        );
+        let (line_tag, line_cond) = tag_equals(ctx, loc, tag.result(ctx), TAG_LINE, i32_ty);
+        let (eof_tag, eof_cond) = tag_equals(ctx, loc, tag.result(ctx), TAG_END_OF_FILE, i32_ty);
+        let (invalid_tag, invalid_cond) =
+            tag_equals(ctx, loc, tag.result(ctx), TAG_INVALID_ENCODING, i32_ty);
 
         let system_region = variant_region(
             ctx,
@@ -249,17 +241,11 @@ fn tag_equals(
     tag: ValueRef,
     expected: i128,
     i32_ty: TypeRef,
-    i1_ty: TypeRef,
 ) -> (arith::Const, arith::Cmpi) {
     let constant = arith::r#const(ctx, loc, i32_ty, Attribute::Int(expected));
-    let comparison = arith::cmpi(
-        ctx,
-        loc,
-        tag,
-        constant.result(ctx),
-        i1_ty,
-        Symbol::new("eq"),
-    );
+    let comparison = arith::Cmpi::operands(tag, constant.result(ctx))
+        .predicate(Symbol::new("eq"))
+        .build(ctx, loc);
     (constant, comparison)
 }
 

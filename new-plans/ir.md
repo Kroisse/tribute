@@ -950,15 +950,17 @@ than scanning types for a plausible replacement.
 
 `func.*` represents function definitions, direct calls, indirect calls, function
 references, returns, tail calls, and unreachable control flow.
-`func.call_indirect`와 `func.tail_call_indirect`는 선택적 `signature: TypeRef`
-attribute로 erased callee/table index 이전의 exact `func.func_sig` contract를 보존할 수
-있다. 일반 pre-contract indirect call은 이 attribute 없이 존재할 수 있지만,
-`tribute.calling_convention`이 붙은 indirect transfer는 exact `signature`를 반드시
-가지며 verifier가 operand/result 및 convention과 대조한다. Physical operand type,
-symbol, ABI string 또는 storage shape로 signature를 재구성하지 않는다.
+`func.call_indirect`와 `func.tail_call_indirect`는 필수 `signature: TypeRef`
+attribute로 exact `func.func_sig` contract를 가지며, callee가 erased pointer나 table
+index로 바뀐 뒤에도 이 contract를 보존한다. 인자 목록과 `func.call_indirect`의 결과
+목록은 signature의 입력·결과 목록과 정확히 일치해야 한다. Callee 타입이
+`func.func_sig`이거나 `closure.closure`에 담긴 `func.func_sig`이면 signature와 같아야
+한다. `tribute.calling_convention`이 붙은 indirect transfer는 verifier가 convention과도
+대조한다. Physical operand type, symbol, ABI string 또는 storage shape로 signature를
+재구성하지 않는다.
 Backend indirect-call operation도 runtime-queried `IndirectCallLike` operation
 interface를 통해 같은 contract를 보존한다. 각 dialect는 attribute spelling과
-accessor를 소유한다 (`func`는 선택적 `signature`, `wasm`은 필수 `signature`,
+accessor를 소유한다 (`func`와 `wasm`은 필수 `signature`,
 `clif`는 필수 `sig`).
 Generic consumer는 다른 dialect의 attribute key 대신 interface를 query한다.
 Interface를 구현하지 않는 operation에는 exact signature가 없으며, erased callee나
@@ -1112,8 +1114,8 @@ Shared `func.call` and `func.call_indirect` support zero or one SSA result.
 Calls match complete input/result lists; returns match the enclosing function's
 result list. Proper-tail operations themselves remain resultless, including
 when transferring to a logical `[core.never]` callable, and require matching
-caller/callee result lists. Exact indirect signatures must agree with a typed
-callee when both are present.
+caller/callee result lists. Indirect calls require an exact signature, which
+must agree with a typed callee.
 
 Custom `func.func` assembly omits the arrow for zero results and prints `-> T`
 for one result. Absent arrow means zero IR results, never implicit Unit.

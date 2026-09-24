@@ -578,18 +578,9 @@ impl SwitchDispatch<'_> {
                 let case_const = arith::r#const(ctx, loc, disc_ty, case_attr.clone());
                 ctx.push_op(current_block, case_const.op_ref());
 
-                let i1_ty = ctx.intern_type(
-                    crate::types::TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i1"))
-                        .build(),
-                );
-                let cmp = arith::cmpi(
-                    ctx,
-                    loc,
-                    discriminant,
-                    case_const.result(ctx),
-                    i1_ty,
-                    Symbol::new("eq"),
-                );
+                let cmp = arith::Cmpi::operands(discriminant, case_const.result(ctx))
+                    .predicate(Symbol::new("eq"))
+                    .build(ctx, loc);
                 ctx.push_op(current_block, cmp.op_ref());
 
                 let else_target = if is_last {

@@ -129,8 +129,11 @@ impl RewritePattern for StructNewPattern {
         ops.push(size_op.op_ref());
 
         // 2. Call __tribute_alloc
-        let call_op = clif::call(ctx, loc, [size_val], self.ptr_ty, Symbol::new(ALLOC_FN));
-        let raw_ptr = call_op.result(ctx);
+        let call_op = clif::Call::operands([size_val])
+            .callee(Symbol::new(ALLOC_FN))
+            .results([self.ptr_ty])
+            .build(ctx, loc);
+        let raw_ptr = call_op.results(ctx)[0];
         ops.push(call_op.op_ref());
 
         // 3. Store refcount = 1
@@ -263,8 +266,11 @@ impl RewritePattern for VariantNewPattern {
         ops.push(size_op.op_ref());
 
         // 2. Call __tribute_alloc
-        let call_op = clif::call(ctx, loc, [size_val], self.ptr_ty, Symbol::new(ALLOC_FN));
-        let raw_ptr = call_op.result(ctx);
+        let call_op = clif::Call::operands([size_val])
+            .callee(Symbol::new(ALLOC_FN))
+            .results([self.ptr_ty])
+            .build(ctx, loc);
+        let raw_ptr = call_op.results(ctx)[0];
         ops.push(call_op.op_ref());
 
         // 3. Store refcount = 1

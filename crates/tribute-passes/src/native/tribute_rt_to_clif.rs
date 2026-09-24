@@ -62,8 +62,11 @@ fn box_value(
     ops.push(size_op.op_ref());
 
     // 2. Allocate heap memory
-    let call_op = clif::call(ctx, loc, [size_val], ptr_ty, Symbol::new(ALLOC_FN));
-    let raw_ptr = call_op.result(ctx);
+    let call_op = clif::Call::operands([size_val])
+        .callee(Symbol::new(ALLOC_FN))
+        .results([ptr_ty])
+        .build(ctx, loc);
+    let raw_ptr = call_op.results(ctx)[0];
     ops.push(call_op.op_ref());
 
     // 3. Store refcount = 1

@@ -258,14 +258,14 @@ fn generate_fixed_release_function(
         blocks: smallvec![entry_block],
         parent_op: None,
     });
-    clif::func(
-        ctx,
-        loc,
-        Symbol::from_dynamic(&format!("{RELEASE_FN_PREFIX}{rtti_idx}")),
-        func_ty,
-        body,
-    )
-    .op_ref()
+    clif::Func::builder()
+        .sym_name(Symbol::from_dynamic(&format!(
+            "{RELEASE_FN_PREFIX}{rtti_idx}"
+        )))
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, loc)
+        .op_ref()
 }
 
 /// Generate release function for a struct type.
@@ -345,7 +345,11 @@ fn generate_release_function_for_struct(
             parent_op: None,
         });
 
-        let func_op = clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
+        let func_op = clif::Func::builder()
+            .sym_name(Symbol::from_dynamic(&func_name))
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc);
         return func_op.op_ref();
     }
 
@@ -414,7 +418,11 @@ fn generate_release_function_for_struct(
         parent_op: None,
     });
 
-    let func_op = clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
+    let func_op = clif::Func::builder()
+        .sym_name(Symbol::from_dynamic(&func_name))
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, loc);
     func_op.op_ref()
 }
 
@@ -465,13 +473,10 @@ fn gen_dealloc_and_return_with_size(
     let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
     ctx.push_op(block, size_op.op_ref());
 
-    let dealloc_call = clif::call(
-        ctx,
-        loc,
-        [raw_ptr.result(ctx), size_op.result(ctx)],
-        nil_ty,
-        Symbol::new(DEALLOC_FN),
-    );
+    let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size_op.result(ctx)])
+        .callee(Symbol::new(DEALLOC_FN))
+        .results([nil_ty])
+        .build(ctx, loc);
     ctx.push_op(block, dealloc_call.op_ref());
 
     let ret_op = clif::r#return(ctx, loc, []);
@@ -575,13 +580,10 @@ fn generate_release_function_for_enum(
         let size_op = clif::iconst(ctx, loc, i64_ty, alloc_size as i64);
         ctx.push_op(dealloc_block, size_op.op_ref());
 
-        let dealloc_call = clif::call(
-            ctx,
-            loc,
-            [raw_ptr.result(ctx), size_op.result(ctx)],
-            nil_ty,
-            Symbol::new(DEALLOC_FN),
-        );
+        let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size_op.result(ctx)])
+            .callee(Symbol::new(DEALLOC_FN))
+            .results([nil_ty])
+            .build(ctx, loc);
         ctx.push_op(dealloc_block, dealloc_call.op_ref());
 
         let ret_op = clif::r#return(ctx, loc, []);
@@ -598,7 +600,11 @@ fn generate_release_function_for_enum(
             blocks: smallvec![entry_block, dealloc_block],
             parent_op: None,
         });
-        let func_op = clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
+        let func_op = clif::Func::builder()
+            .sym_name(Symbol::from_dynamic(&func_name))
+            .r#type(func_ty)
+            .regions(body)
+            .build(ctx, loc);
         return func_op.op_ref();
     }
 
@@ -744,7 +750,11 @@ fn generate_release_function_for_enum(
         blocks: all_blocks.into(),
         parent_op: None,
     });
-    let func_op = clif::func(ctx, loc, Symbol::from_dynamic(&func_name), func_ty, body);
+    let func_op = clif::Func::builder()
+        .sym_name(Symbol::from_dynamic(&func_name))
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, loc);
     func_op.op_ref()
 }
 

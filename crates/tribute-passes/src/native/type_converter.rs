@@ -301,15 +301,12 @@ fn box_primitive(
     ops.push(size_op.op_ref());
 
     // 2. Allocate heap memory
-    let call_op = clif::call(
-        ctx,
-        location,
-        [size_op.result(ctx)],
-        ptr_ty,
-        Symbol::new(ALLOC_FN),
-    );
+    let call_op = clif::Call::operands([size_op.result(ctx)])
+        .callee(Symbol::new(ALLOC_FN))
+        .results([ptr_ty])
+        .build(ctx, location);
     ops.push(call_op.op_ref());
-    let raw_ptr = call_op.result(ctx);
+    let raw_ptr = call_op.results(ctx)[0];
 
     // 3. Store refcount = 1
     let rc_one = clif::iconst(ctx, location, i32_ty, 1);

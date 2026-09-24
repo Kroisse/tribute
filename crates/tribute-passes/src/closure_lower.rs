@@ -211,14 +211,9 @@ impl RewritePattern for LowerClosureCallArena {
             new_args[index] = cast.result(ctx);
         }
         new_args.insert(contract.environment_index, env);
-        let new_call = func::call_indirect(
-            ctx,
-            loc,
-            table_idx,
-            new_args,
-            [caller_result_ty],
-            Some(contract.signature),
-        );
+        let new_call = func::CallIndirect::operands(table_idx, new_args)
+            .signature(contract.signature)
+            .build(ctx, loc);
         copy_indirect_call_attributes(ctx, op, new_call.op_ref());
 
         rewriter.insert_op(table_idx_op.op_ref());
@@ -280,13 +275,9 @@ impl RewritePattern for LowerClosureTailCallArena {
             args[index] = cast.result(ctx);
         }
         args.insert(contract.environment_index, environment.result(ctx));
-        let tail = func::tail_call_indirect(
-            ctx,
-            location,
-            func_ref.result(ctx),
-            args,
-            Some(contract.signature),
-        );
+        let tail = func::TailCallIndirect::operands(func_ref.result(ctx), args)
+            .signature(contract.signature)
+            .build(ctx, location);
         copy_indirect_call_attributes(ctx, op, tail.op_ref());
 
         rewriter.insert_op(func_ref.op_ref());

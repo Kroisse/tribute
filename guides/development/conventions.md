@@ -93,17 +93,16 @@ let result = value.result(ctx);
 ```
 
 Operations declared with the typed `#[dialect]` syntax use a builder that
-groups inputs by kind. For an illustrative typed declaration:
+groups inputs by kind and infers result types where the declaration fixes them:
 
 ```rust
 // fn cmpi<T: IntegerLike>(
 //     predicate: Attr<Symbol>,
 //     lhs: Value<T>,
 //     rhs: Value<T>,
-// ) -> Value<impl BoolLike> {}
-let cmp = Cmpi::operands(lhs, rhs)
+// ) -> Value<I1> {}
+let cmp = arith::Cmpi::operands(lhs, rhs)
     .predicate(Symbol::new("slt"))
-    .results(i1_ty)
     .build(ctx, location);
 ```
 
