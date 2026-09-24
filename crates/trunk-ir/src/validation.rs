@@ -326,6 +326,10 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 
     validate_func_sig_types(ctx, &mut errors);
 
+    // The root module is not visited by the body walk, so check its own
+    // schema (including a missing body region) first.
+    validate_op_schema(ctx, module.op(), &mut errors);
+
     let body = match module.body(ctx) {
         Some(r) => r,
         None => {
@@ -1443,6 +1447,30 @@ mod tests {
                 Some(message.as_str())
             })
             .collect()
+    }
+
+    #[test]
+    fn root_module_schema_is_verified() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            "core.module @m { func.func @f() { func.return } }",
+        );
+        ctx.op_mut(module.op()).attributes.remove("sym_name");
+        let text = validate_all(&ctx, module).to_string();
+        assert!(
+            text.contains("core.module") && text.contains("missing required attribute `sym_name`"),
+            "{text}"
+        );
+
+        let loc = test_location(&mut ctx);
+        let bodyless = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+            .attr(Symbol::new("sym_name"), Attribute::Symbol(Symbol::new("m")))
+            .build(&mut ctx);
+        let bodyless = ctx.create_op(bodyless);
+        let bodyless = Module::new(&ctx, bodyless).unwrap();
+        let text = validate_operation_verifiers(&ctx, bodyless).to_string();
+        assert!(text.contains("expected 1 region(s), found 0"), "{text}");
     }
 
     fn empty_module(ctx: &mut IrContext) -> Module {
