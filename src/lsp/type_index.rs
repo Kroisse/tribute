@@ -134,7 +134,7 @@ pub fn print_ast_type(db: &dyn salsa::Database, ty: Type<'_>) -> String {
 // =============================================================================
 
 /// Entry in the AST type index.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AstTypeEntry<'db> {
     /// The NodeId of the AST node.
     pub node_id: NodeId,
@@ -470,7 +470,7 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
 /// This is a Salsa tracked query that returns an index mapping source
 /// positions to type information. The index is invalidated when the
 /// typed AST changes.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn type_index<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,

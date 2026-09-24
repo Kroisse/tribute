@@ -9,12 +9,16 @@ use target_lexicon::{Architecture, Triple};
 #[salsa::input(debug)]
 pub struct TargetInfo {
     /// Target triple (e.g., "x86_64-unknown-linux-gnu")
+    #[returns(clone)]
     pub triple: Triple,
     /// Pointer size in bytes (4 for 32-bit, 8 for 64-bit)
+    #[returns(copy)]
     pub pointer_size: u8,
     /// Byte order of the target platform
+    #[returns(copy)]
     pub endianness: Endianness,
     /// Native integer size in bytes
+    #[returns(copy)]
     pub native_int_size: u8,
 }
 

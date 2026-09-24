@@ -9,7 +9,7 @@ use tribute_front::{
 };
 use trunk_ir::Symbol;
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let mut metadata = typed.expression_types(db).clone();

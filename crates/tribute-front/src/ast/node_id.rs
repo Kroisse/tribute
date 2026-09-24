@@ -25,7 +25,7 @@ use tree_sitter::Node;
 ///
 /// NodeIds are local to a compilation unit and should not be used
 /// for cross-module references.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, salsa::Update)]
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd, salsa::SalsaValue)]
 pub struct NodeId {
     source: u64,
     raw: usize,

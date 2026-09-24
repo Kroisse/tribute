@@ -1177,7 +1177,7 @@ mod tests {
         }
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_fresh_type_var_per_function_inner(db: &dyn salsa::Database) -> bool {
         let env = ModuleTypeEnv::new(db);
 
@@ -1215,7 +1215,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_instantiate_scheme_inner(db: &dyn salsa::Database) -> bool {
         let mut env = ModuleTypeEnv::new(db);
 
@@ -1462,7 +1462,7 @@ mod tests {
         assert!(empty.is_empty());
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_instantiate_constructor_inner(db: &dyn salsa::Database) -> bool {
         let mut env = ModuleTypeEnv::new(db);
 

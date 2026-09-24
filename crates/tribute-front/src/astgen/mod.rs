@@ -72,8 +72,10 @@ pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName
 #[salsa::tracked]
 pub struct ParsedAst<'db> {
     /// The parsed AST module with unresolved names.
+    #[returns(clone)]
     pub module: Module<UnresolvedName>,
     /// The span map for looking up source locations.
+    #[returns(clone)]
     pub span_map: SpanMap,
 }
 
@@ -81,7 +83,7 @@ pub struct ParsedAst<'db> {
 ///
 /// This is the primary entry point for CST → AST conversion.
 /// Returns `ParsedAst` containing both the module and span map.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn lower_source_to_parsed_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -95,7 +97,7 @@ pub fn lower_source_to_parsed_ast<'db>(
 /// This variant allows specifying a custom module path for the AST nodes,
 /// which is useful for parsing library modules (like the prelude) where
 /// NodeIds need a different path to avoid collisions with user code.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,

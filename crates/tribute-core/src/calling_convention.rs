@@ -17,7 +17,7 @@ pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_in
 ///
 /// Ordering is significant: composing requirements selects the stronger
 /// convention with [`CallingConvention::join`].
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, salsa::SalsaValue)]
 #[repr(u8)]
 pub enum CallingConvention {
     /// Pure function: source parameters and source result only.

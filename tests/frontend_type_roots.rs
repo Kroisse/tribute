@@ -12,7 +12,7 @@ use tribute_front::{
 };
 use trunk_ir::Symbol;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Root {
     TypeArgument,
     RowArgument,
@@ -21,7 +21,7 @@ enum Root {
     ConstructorUnion,
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn prepare_root<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,

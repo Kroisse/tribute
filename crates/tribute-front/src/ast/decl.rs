@@ -17,10 +17,10 @@ use super::types::TypeAnnotation;
 /// A module containing declarations.
 ///
 /// This is the top-level AST node for a source file.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Module<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -32,7 +32,7 @@ where
 
 impl<V> Module<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Create a new module.
     pub fn new(id: NodeId, name: Option<Symbol>, decls: Vec<Decl<V>>) -> Self {
@@ -41,10 +41,10 @@ where
 }
 
 /// A declaration in a module.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Decl<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Function declaration.
     Function(FuncDecl<V>),
@@ -65,7 +65,7 @@ where
 /// Extern function declaration: `extern "abi" fn name(params) -> ReturnType`
 ///
 /// Unlike `FuncDecl`, this has no body — the implementation is provided externally.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ExternFuncDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -82,10 +82,10 @@ pub struct ExternFuncDecl {
 }
 
 /// Function declaration: `fn name(params) -> ReturnType { body }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct FuncDecl<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -106,7 +106,7 @@ where
 }
 
 /// Type parameter declaration: `a`, `T: Eq`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TypeParamDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -117,7 +117,7 @@ pub struct TypeParamDecl {
 }
 
 /// Parameter declaration in a function.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ParamDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -130,7 +130,7 @@ pub struct ParamDecl {
 }
 
 /// Struct declaration: `struct Name { fields }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct StructDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -145,7 +145,7 @@ pub struct StructDecl {
 }
 
 /// Field declaration in a struct or enum variant.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct FieldDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -158,7 +158,7 @@ pub struct FieldDecl {
 }
 
 /// Enum declaration: `enum Name { Variants }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct EnumDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -173,7 +173,7 @@ pub struct EnumDecl {
 }
 
 /// Variant declaration in an enum.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct VariantDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -184,7 +184,7 @@ pub struct VariantDecl {
 }
 
 /// Ability declaration: `ability Name { operations }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AbilityDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -199,7 +199,7 @@ pub struct AbilityDecl {
 }
 
 /// Operation declaration in an ability.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct OpDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -214,7 +214,7 @@ pub struct OpDecl {
 }
 
 /// The kind of ability operation declaration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum OpDeclKind {
     /// Tail-resumptive: handler returns a value that is used to resume.
     /// No continuation capture.
@@ -225,7 +225,7 @@ pub enum OpDeclKind {
 }
 
 /// Import declaration: `use path::to::item` or `use path::to::item as alias`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct UseDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -238,10 +238,10 @@ pub struct UseDecl {
 }
 
 /// Inline module declaration: `mod name { ... }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ModuleDecl<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -250,6 +250,8 @@ where
     /// Whether this module is public.
     pub is_pub: bool,
     /// Module body (declarations). None for external modules (file-based).
+    // Inline modules own their nested declarations; V is the only phase-dependent value.
+    #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
     pub body: Option<Vec<Decl<V>>>,
 }
 

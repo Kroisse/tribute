@@ -24,7 +24,7 @@ static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::d
 /// Ordering is based on the underlying string content (not interning order),
 /// so that `BTreeMap<Symbol, _>` iteration is deterministic.
 #[derive(Clone, Copy, PartialEq, Eq)]
-#[cfg_attr(feature = "salsa", derive(salsa::Update))]
+#[cfg_attr(feature = "salsa", derive(salsa::SalsaValue))]
 pub struct Symbol(Spur);
 
 impl std::hash::Hash for Symbol {
@@ -206,7 +206,7 @@ static NEXT_BLOCK_ID: AtomicU64 = AtomicU64::new(1);
 /// during IR transformations. This allows block arguments to maintain stable
 /// identity across rewrites.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "salsa", derive(salsa::Update))]
+#[cfg_attr(feature = "salsa", derive(salsa::SalsaValue))]
 pub struct BlockId(pub u64);
 
 impl BlockId {

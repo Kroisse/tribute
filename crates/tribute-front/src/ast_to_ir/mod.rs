@@ -116,7 +116,7 @@ pub fn registered_compiler_intrinsics<V>(
     module: &AstModule<V>,
 ) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     fn collect<V>(
         declarations: &[crate::ast::Decl<V>],
@@ -124,7 +124,7 @@ where
         result: &mut HashMap<NodeId, Symbol>,
         unsupported: &mut Vec<UnsupportedCompilerIntrinsic>,
     ) where
-        V: salsa::Update,
+        V: salsa::SalsaValue,
     {
         for declaration in declarations {
             match declaration {

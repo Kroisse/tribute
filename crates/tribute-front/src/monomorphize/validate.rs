@@ -7,7 +7,7 @@ use crate::ast::{
 use std::collections::{HashMap, HashSet};
 use trunk_ir::Symbol;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum InstanceErrorKind {
     MissingInstance,
     WrongDeclaration,
@@ -19,7 +19,7 @@ pub enum InstanceErrorKind {
     ExpansionLimit,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct InstanceError {
     pub node: NodeId,
     pub kind: InstanceErrorKind,

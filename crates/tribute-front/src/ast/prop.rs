@@ -814,7 +814,7 @@ mod tests {
     ///
     /// Running inside a tracked function provides the accumulator context
     /// that the type checker needs to report diagnostics.
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn run_resolve_and_typecheck(db: &dyn salsa::Database, input: PropTestInput) {
         let module = input.module(db).clone();
         let span_map = SpanMap::default();

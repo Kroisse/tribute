@@ -54,7 +54,7 @@ pub enum DefinitionKind {
 }
 
 /// Entry representing a definition in the AST.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AstDefinitionEntry {
     /// The NodeId of the definition.
     pub node_id: NodeId,
@@ -69,7 +69,7 @@ pub struct AstDefinitionEntry {
 }
 
 /// Entry representing a reference to a definition.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AstReferenceEntry {
     /// The NodeId of the reference.
     pub node_id: NodeId,
@@ -80,7 +80,7 @@ pub struct AstReferenceEntry {
 }
 
 /// Target of a resolved reference.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum ResolvedTarget {
     /// Reference to a local variable.
     Local { id: LocalId, name: Symbol },
@@ -817,7 +817,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 }
 
 /// Build a definition index for a source file.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn definition_index<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
