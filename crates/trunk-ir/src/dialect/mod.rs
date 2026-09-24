@@ -336,17 +336,10 @@ mod tests {
         let v2 = c2.result(&ctx);
 
         // func.call_indirect has: callee (fixed), args (variadic)
-        let call = super::func::call_indirect(
-            &mut ctx,
-            loc,
-            v1, // callee
-            [v2],
-            [
-                // args
-                i32_ty,
-            ], // result type
-            None, // exact signature
-        );
+        let signature = super::func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        let call = super::func::CallIndirect::operands(v1, [v2])
+            .signature(signature)
+            .build(&mut ctx, loc);
 
         assert_eq!(call.callee(&ctx), v1);
         assert_eq!(call.args(&ctx), &[v2]);

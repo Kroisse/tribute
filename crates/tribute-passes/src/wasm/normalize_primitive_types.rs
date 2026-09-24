@@ -30,7 +30,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::op_interface::IndirectCallLikeOps;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     FuncSignatureConversionPattern, Module, PatternApplicator, PatternRewriter, RewritePattern,
@@ -196,8 +196,24 @@ impl RewritePattern for NormalizeCallIndirectPattern {
         // interface's borrowed view before creating the new operation.
         let args = args.to_vec();
 
-        let signature = IndirectCallLikeOps::exact_signature(ctx, op);
-        let new_op = func::call_indirect(ctx, loc, callee, args, [new_result_ty], signature);
+        // Keep the exact contract in step with the normalized result list.
+        let Some(signature) = IndirectCallLikeOps::exact_signature(ctx, op)
+            .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
+        else {
+            return false;
+        };
+        let inputs = signature.inputs(ctx).to_vec();
+        let inputs = inputs
+            .into_iter()
+            .map(|ty| convert_primitive_type(ctx, ty).unwrap_or(ty))
+            .collect::<Vec<_>>();
+        let mut attrs = ctx.get_type(signature.as_type_ref()).attrs.clone();
+        attrs.remove(func::NUM_INPUTS_ATTR);
+        attrs.remove(func::NUM_RESULTS_ATTR);
+        let signature = func::func_sig_with_attrs(ctx, inputs, [new_result_ty], attrs);
+        let new_op = func::CallIndirect::operands(callee, args)
+            .signature(signature.as_type_ref())
+            .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }

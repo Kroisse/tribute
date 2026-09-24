@@ -736,7 +736,6 @@ struct HandlerArmInfo {
     ability_ref: TypeRef,
     op_name: Symbol,
     kind: Symbol,
-    operation_result: TypeRef,
     params: Vec<TypeRef>,
     has_resume_token: bool,
 }
@@ -870,7 +869,9 @@ impl<'a> Converter<'a> {
                 "CPS indirect tail operands differ from the exact closure contract",
             ));
         }
-        let tail = func::tail_call_indirect(self.ctx, location, callee, args, Some(signature));
+        let tail = func::TailCallIndirect::operands(callee, args)
+            .signature(signature)
+            .build(self.ctx, location);
         set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
         self.ctx.push_op(block, tail.op_ref());
         Ok(tail.op_ref())
@@ -2995,7 +2996,6 @@ impl<'a> Converter<'a> {
             ability_ref,
             op_name,
             kind,
-            operation_result: self.convert_type(operation_result),
             params: converted_args,
             has_resume_token,
         })
@@ -3106,14 +3106,9 @@ impl<'a> Converter<'a> {
                         "fn handler indirect callee has no exact provenance-bearing closure contract",
                     )
                 })?;
-                let call = func::call_indirect(
-                    self.ctx,
-                    location,
-                    arm.value,
-                    call_args,
-                    [arm.operation_result],
-                    Some(signature),
-                );
+                let call = func::CallIndirect::operands(arm.value, call_args)
+                    .signature(signature)
+                    .build(self.ctx, location);
                 set_calling_convention(self.ctx, call.op_ref(), CallingConvention::EvidenceDirect);
                 self.ctx.push_op(case_block, call.op_ref());
                 let erased = core::unrealized_conversion_cast(
@@ -3531,7 +3526,6 @@ impl<'a> Converter<'a> {
                             .iter()
                             .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
                     );
-                    let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
                     // The source-data callee keeps its exact callable contract in its
                     // converted closure type. Carry that contract onto the transfer
                     // instead of inferring it from the physical operands later.
@@ -3549,14 +3543,9 @@ impl<'a> Converter<'a> {
                             "indirect callee has no exact provenance-bearing closure contract",
                         )
                     })?;
-                    let call = func::call_indirect(
-                        self.ctx,
-                        location,
-                        callee,
-                        args,
-                        [result_type],
-                        Some(signature),
-                    );
+                    let call = func::CallIndirect::operands(callee, args)
+                        .signature(signature)
+                        .build(self.ctx, location);
                     set_calling_convention(self.ctx, call.op_ref(), convention);
                     self.ctx.push_op(block, call.op_ref());
                     mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
@@ -6180,7 +6169,7 @@ mod tests {
             CallingConvention::EvidenceDirect,
         )
         .expect("fn arm retains an exact closure contract");
-        assert_eq!(call.signature(&ctx), Some(expected));
+        assert_eq!(call.signature(&ctx), expected);
     }
 
     #[test]

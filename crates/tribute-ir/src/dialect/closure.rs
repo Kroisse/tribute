@@ -635,7 +635,7 @@ mod malformed_owner_tests {
     #[test]
     fn malformed_lambda_owner_never_falls_back_to_outer_function() {
         for transfer in [
-            "func.tail_call_indirect %k",
+            "func.tail_call_indirect %k {signature = func.func_sig<() -> core.never>}",
             "func.tail_call {callee = @runtime}",
         ] {
             let mut ctx = trunk_ir::IrContext::new();
@@ -681,7 +681,7 @@ mod callable_owner_regressions {
               func.func @host() {{
                 %outer = closure.lambda() -> core.i32 [] {{
                   %inner = closure.lambda(%k: func.func_sig<() -> {callee_result}>) -> core.never [] {{
-                    func.tail_call_indirect %k
+                    func.tail_call_indirect %k {{signature = func.func_sig<() -> {callee_result}>}}
                   }}
                   %v = arith.const {{value = 0}} : core.i32
                   func.return %v

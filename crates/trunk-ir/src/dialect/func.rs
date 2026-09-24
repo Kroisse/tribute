@@ -7,8 +7,8 @@ use crate::op_interface::{
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
 
-/// The optional exact callable signature retained after a typed indirect callee
-/// becomes a runtime function or table index.
+/// The exact callable signature retained after a typed indirect callee becomes
+/// a runtime function or table index.
 const INDIRECT_CALL_SIGNATURE_ATTR: &str = "signature";
 
 /// Shared accessors for function calls with ordinary results or arguments.
@@ -52,15 +52,24 @@ mod func {
     #[rest_results]
     fn call(#[rest] args: ()) -> results {}
 
-    #[attr(signature?: Type)]
-    #[rest_results]
-    fn call_indirect(callee: (), #[rest] args: ()) -> results {}
+    #[verify]
+    fn call_indirect<S: FuncSig>(
+        signature: Attr<S::Type>,
+        callee: Value<_>,
+        args: Values<S::Inputs>,
+    ) -> Values<S::Results> {
+    }
 
     #[attr(callee: Symbol)]
     fn tail_call(#[rest] args: ()) {}
 
-    #[attr(signature?: Type)]
-    fn tail_call_indirect(callee: (), #[rest] args: ()) {}
+    #[verify]
+    fn tail_call_indirect<S: FuncSig>(
+        signature: Attr<S::Type>,
+        callee: Value<_>,
+        args: Values<S::Inputs>,
+    ) {
+    }
 
     fn r#return(#[rest] values: ()) {}
 
@@ -316,12 +325,48 @@ impl CallLike for CallIndirect {
 
 impl IndirectCallLikeModel for CallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        CallIndirect::signature(&self, ctx)
+        indirect_call_signature(ctx, self.op_ref())
     }
 
     fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
+}
+
+impl CallIndirect {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+        verify_typed_callee(ctx, self.callee(ctx), self.signature(ctx))
+    }
+}
+
+impl TailCallIndirect {
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+        verify_typed_callee(ctx, self.callee(ctx), self.signature(ctx))
+    }
+}
+
+/// A callee whose type is a `func.func_sig`, directly or as the single
+/// parameter of `closure.closure`, must carry the exact signature. Erased
+/// callees (pointers, table indices) are not checked.
+fn verify_typed_callee(
+    ctx: &crate::IrContext,
+    callee: crate::ValueRef,
+    signature: crate::TypeRef,
+) -> Result<(), String> {
+    let callee_ty = ctx.value_ty(callee);
+    let data = ctx.get_type(callee_ty);
+    let func_ty = if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
+        let [func_ty] = data.params.as_slice() else {
+            return Err("callee closure type must contain exactly one function type".into());
+        };
+        *func_ty
+    } else {
+        callee_ty
+    };
+    if FuncSig::from_type_ref(ctx, func_ty).is_some() && func_ty != signature {
+        return Err("exact indirect signature differs from typed callee".into());
+    }
+    Ok(())
 }
 
 impl CallLike for TailCall {
@@ -340,7 +385,7 @@ impl CallLike for TailCallIndirect {
 
 impl IndirectCallLikeModel for TailCallIndirect {
     fn exact_signature(self, ctx: &crate::IrContext) -> Option<crate::TypeRef> {
-        TailCallIndirect::signature(&self, ctx)
+        indirect_call_signature(ctx, self.op_ref())
     }
 
     fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
@@ -450,6 +495,12 @@ fn set_indirect_call_signature_attribute(
         crate::Symbol::new(INDIRECT_CALL_SIGNATURE_ATTR),
         crate::Attribute::Type(signature),
     );
+}
+
+/// Read the exact signature without assuming the operation passed its schema;
+/// interface queries must fail closed on malformed IR.
+fn indirect_call_signature(ctx: &crate::IrContext, op: crate::OpRef) -> Option<crate::TypeRef> {
+    ctx.op(op).attributes.get_type(INDIRECT_CALL_SIGNATURE_ATTR)
 }
 
 /// Remove the `func`-owned exact-signature attribute from copied metadata.
@@ -707,7 +758,10 @@ mod tests {
         let body = function.body_if_present(&ctx).expect("function body");
         let call = CallIndirect::from_op(&ctx, ctx.block(ctx.region(body).blocks[0]).ops[0])
             .expect("indirect call");
-        assert!(call.signature(&ctx).is_some(), "declared signature");
+        assert!(
+            FuncSig::from_type_ref(&ctx, call.signature(&ctx)).is_some(),
+            "declared signature"
+        );
 
         let printed = print_module(&ctx, module.op());
         assert!(
@@ -852,11 +906,13 @@ mod result_list_tests {
         let module = crate::parser::parse_test_module(&mut ctx, "core.module @m {}");
         let loc = ctx.op(module.op()).location;
         let nil = core::nil(&mut ctx).as_type_ref();
-        let signature = func_sig(&mut ctx, [], []).as_type_ref();
-        let callee = constant(&mut ctx, loc, signature, Symbol::new("f")).result(&ctx);
         for results in [vec![], vec![nil]] {
+            let signature = func_sig(&mut ctx, [], results.clone()).as_type_ref();
+            let callee = constant(&mut ctx, loc, signature, Symbol::new("f")).result(&ctx);
             let direct = call(&mut ctx, loc, [], results.clone(), Symbol::new("f"));
-            let indirect = call_indirect(&mut ctx, loc, callee, [], results.clone(), None);
+            let indirect = CallIndirect::operands(callee, [])
+                .signature(signature)
+                .build(&mut ctx, loc);
             assert_eq!(direct.call_result_types(&ctx), results);
             assert_eq!(indirect.call_result_types(&ctx), results);
             assert_eq!(direct.single_result(&ctx).is_some(), results.len() == 1);
@@ -882,10 +938,10 @@ mod result_list_tests {
           }
           func.func @tail(%x: core.i32) { func.tail_call %x {callee = @sink} }
           func.func @logical(%k: func.func_sig<(core.i32) -> core.never>, %x: core.i32) -> core.never {
-            func.tail_call_indirect %k, %x
+            func.tail_call_indirect %k, %x {signature = func.func_sig<(core.i32) -> core.never>}
           }
           func.func @one(%k: func.func_sig<(core.i32) -> core.i32>, %x: core.i32) -> core.i32 {
-            %r = func.call_indirect %k, %x : core.i32
+            %r = func.call_indirect %k, %x {signature = func.func_sig<(core.i32) -> core.i32>} : core.i32
             func.return %r
           }
         }";
@@ -915,7 +971,7 @@ mod result_list_tests {
             (
                 "signature = func.func_sig<(core.i32) -> ()>",
                 "signature = func.func_sig<(core.i64) -> ()>",
-                "exact indirect signature differs",
+                "expected S::Inputs = (core.i64), found (core.i32)",
             ),
             (
                 "callee = @sink",
@@ -948,7 +1004,7 @@ mod owner_identity_tests {
             &mut ctx,
             "core.module @m {
           func.func @f(%k: func.func_sig<() -> core.never>) -> core.never {
-            test.lambda {type = func.func_sig<() -> core.nil>} { func.tail_call_indirect %k }
+            test.lambda {type = func.func_sig<() -> core.nil>} { func.tail_call_indirect %k {signature = func.func_sig<() -> core.never>} }
             func.unreachable
           }
         }",
@@ -989,16 +1045,16 @@ mod normal_validation_regressions {
                 "multiple call results",
             ),
             (
-                "%a, %b = func.call_indirect %k : core.i32, core.i32\nfunc.return",
-                "multiple call results",
+                "%a, %b = func.call_indirect %k {signature = func.func_sig<() -> ()>} : core.i32, core.i32\nfunc.return",
+                "expected S::Results = (), found (core.i32, core.i32)",
             ),
             (
                 "%a = func.call {callee = @sink} : core.i32\nfunc.return",
                 "call result list mismatch",
             ),
             (
-                "%a = func.call_indirect %k : core.i32\nfunc.return",
-                "call result list mismatch",
+                "%a = func.call_indirect %k {signature = func.func_sig<() -> ()>} : core.i32\nfunc.return",
+                "expected S::Results = (), found (core.i32)",
             ),
             ("func.return %k", "return count mismatch"),
         ] {

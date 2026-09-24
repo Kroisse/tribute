@@ -934,7 +934,8 @@ mod tests {
         let call = func::CallIndirect::SCHEMA;
         assert_eq!(call.operands[1].arity, Arity::Variadic);
         assert!(matches!(call.results, ResultSchema::Variadic("results")));
-        assert!(call.attributes[0].optional);
+        assert_eq!(call.attributes[0].name, "signature");
+        assert!(!call.attributes[0].optional);
 
         let r#if = scf::If::SCHEMA;
         assert_eq!(r#if.regions.len(), 2);

@@ -344,7 +344,6 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
         let error_count = errors.len();
         validate_scf_if_structure(ctx, op, &mut errors);
         validate_func_shapes(ctx, op, &mut errors);
-        validate_func_indirect_call(ctx, op, &mut errors);
         if errors.len() == error_count {
             validate_branch_interface(ctx, op, &mut errors);
             validate_region_branch_interface(ctx, op, &mut errors);
@@ -395,81 +394,6 @@ fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
             });
         }
     }
-}
-
-fn validate_func_indirect_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let data = ctx.op(op);
-    if data.dialect != Symbol::new("func")
-        || ![
-            Symbol::new("call_indirect"),
-            Symbol::new("tail_call_indirect"),
-        ]
-        .contains(&data.name)
-    {
-        return;
-    }
-    let tail = data.name == Symbol::new("tail_call_indirect");
-    // The schema guarantees a callee operand.
-    let Some((&callee, args)) = ctx.op_operands(op).split_first() else {
-        return;
-    };
-    let callee_ty = ctx.get_type(ctx.value_ty(callee));
-    let func_ty = if callee_ty.dialect == Symbol::new("closure")
-        && callee_ty.name == Symbol::new("closure")
-    {
-        let [func_ty] = callee_ty.params.as_slice() else {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                "callee closure type must contain exactly one function type",
-            ));
-            return;
-        };
-        *func_ty
-    } else {
-        ctx.value_ty(callee)
-    };
-    let typed = crate::dialect::func::FuncSig::from_type_ref(ctx, func_ty);
-    let exact = data
-        .attributes
-        .get_type("signature")
-        .and_then(|ty| crate::dialect::func::FuncSig::from_type_ref(ctx, ty));
-    if data.attributes.contains_key("signature") && exact.is_none() {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "invalid exact indirect signature",
-        ));
-        return;
-    }
-    if let (Some(typed), Some(exact)) = (typed, exact)
-        && typed != exact
-    {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "exact indirect signature differs from typed callee",
-        ));
-    }
-    let Some(func_ty) = exact.or(typed) else {
-        if !tail {
-            return;
-        }
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "callee must have func.func_sig or closure.closure<func.func_sig> type",
-        ));
-        return;
-    };
-    if !tail && ctx.op_result_types(op) != func_ty.results(ctx) {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "call result list mismatch",
-        ));
-    }
-    check_value_types(ctx, op, args, func_ty.inputs(ctx), "call argument", errors);
 }
 
 fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -2371,7 +2295,7 @@ mod tests {
     fn tail_call_indirect_typed_cps_transfer_passes() {
         let input = r#"core.module @test {
   func.func @main(%k: closure.closure(func.func_sig<(core.i32) -> core.never>), %value: core.i32) -> core.never {
-    func.tail_call_indirect %k, %value
+    func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.never>}
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2384,7 +2308,7 @@ mod tests {
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
   func.func @main(%k: closure.closure(func.func_sig<(core.i32) -> core.i32>), %value: core.bool) -> core.never {
-    func.tail_call_indirect %k, %value
+    func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#;
         let mut ctx = IrContext::new();
@@ -2392,55 +2316,62 @@ mod tests {
         let result = validate_all(&ctx, module);
         let text = result.to_string();
         assert!(text.contains("caller/callee result lists differ"), "{text}");
-        assert!(text.contains("argument #0 type"), "{text}");
+        assert!(
+            text.contains("operands `args`: expected S::Inputs = (core.i32), found (core.bool)"),
+            "{text}"
+        );
     }
 
     #[test]
     fn tail_call_indirect_rejects_malformed_shapes_and_accepts_bare_function() {
         let input = r#"core.module @test {
-  func.func @result(%k: closure.closure(func.func_sig<() -> core.never>)) -> core.never {
-    %bad = func.tail_call_indirect %k : core.i32
+  !never = func.func_sig<() -> core.never>
+  !unary = func.func_sig<(core.i32) -> core.never>
+  func.func @result(%k: closure.closure(!never)) -> core.never {
+    %bad = func.tail_call_indirect %k {signature = !never} : core.i32
   }
-  func.func @not_last(%k: func.func_sig<() -> core.never>) -> core.never {
-    func.tail_call_indirect %k
+  func.func @not_last(%k: !never) -> core.never {
+    func.tail_call_indirect %k {signature = !never}
     func.unreachable
   }
   func.func @missing() -> core.never {
-    func.tail_call_indirect
+    func.tail_call_indirect {signature = !never}
+  }
+  func.func @unsigned(%k: !never) -> core.never {
+    func.tail_call_indirect %k
   }
   func.func @bad_closure(%k: closure.closure()) -> core.never {
-    func.tail_call_indirect %k
+    func.tail_call_indirect %k {signature = !never}
   }
-  func.func @not_callable(%value: core.i32) -> core.never {
-    func.tail_call_indirect %value
+  func.func @mismatched(%k: !unary) -> core.never {
+    func.tail_call_indirect %k {signature = !never}
   }
-  func.func @direct_function(%k: func.func_sig<() -> core.never>) -> core.never {
-    func.tail_call_indirect %k
+  func.func @erased(%k: core.ptr) -> core.never {
+    func.tail_call_indirect %k {signature = !never}
   }
-  func.func @arity(%k: closure.closure(func.func_sig<(core.i32) -> core.never>)) -> core.never {
-    func.tail_call_indirect %k
+  func.func @direct_function(%k: !never) -> core.never {
+    func.tail_call_indirect %k {signature = !never}
+  }
+  func.func @arity(%k: closure.closure(!unary)) -> core.never {
+    func.tail_call_indirect %k {signature = !unary}
   }
 }"#;
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let result = validate_operation_verifiers(&ctx, module);
         let text = result.to_string();
-        assert!(text.contains("expected 0 result(s), found 1"), "{text}");
-        assert!(
-            text.contains("expected at least 1 operand(s), found 0"),
-            "{text}"
-        );
-        assert!(
-            text.contains("closure type must contain exactly one function type"),
-            "{text}"
-        );
-        assert!(text.contains("callee must have func.func_sig"), "{text}");
-        assert!(
-            text.contains("call argument count mismatch: expected 1, found 0"),
-            "{text}"
-        );
-        assert!(text.contains("must terminate its block"), "{text}");
-        assert_eq!(result.errors.len(), 6, "{text}");
+        for expected in [
+            "expected 0 result(s), found 1",
+            "must terminate its block",
+            "expected at least 1 operand(s), found 0",
+            "missing required attribute `signature`",
+            "closure type must contain exactly one function type",
+            "exact indirect signature differs from typed callee",
+            "operands `args`: expected S::Inputs = (core.i32), found ()",
+        ] {
+            assert!(text.contains(expected), "missing `{expected}`:\n{text}");
+        }
+        assert_eq!(result.errors.len(), 7, "{text}");
     }
 
     #[test]

@@ -25,20 +25,6 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
-fn attach_exact_indirect_signature(ctx: &mut IrContext, call: OpRef) {
-    let result = ctx
-        .op_result_types(call)
-        .first()
-        .copied()
-        .unwrap_or_else(|| core::nil(ctx).as_type_ref());
-    let parameters = ctx.op_operands(call)[1..]
-        .iter()
-        .map(|&value| ctx.value_ty(value))
-        .collect::<Vec<_>>();
-    let signature = func::func_sig(ctx, parameters, [result]).as_type_ref();
-    let _ = func::set_indirect_call_signature(ctx, call, signature);
-}
-
 /// Lower evidence operations for the native backend.
 ///
 /// Must run AFTER effect lowering passes and BEFORE DCE.
@@ -343,20 +329,17 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
         rewriter.insert_op(env_get.op_ref());
 
         let result_ty = ctx.op_result_types(op)[0];
-        let call = func::call_indirect(
-            ctx,
-            loc,
-            fn_ptr,
-            [
-                dispatch_op.evidence(ctx),
-                env_val,
-                op_idx_val,
-                dispatch_op.payload(ctx),
-            ],
-            [result_ty],
-            None,
-        );
-        attach_exact_indirect_signature(ctx, call.op_ref());
+        let args = [
+            dispatch_op.evidence(ctx),
+            env_val,
+            op_idx_val,
+            dispatch_op.payload(ctx),
+        ];
+        let parameters = args.map(|value| ctx.value_ty(value));
+        let signature = func::func_sig(ctx, parameters, [result_ty]).as_type_ref();
+        let call = func::CallIndirect::operands(fn_ptr, args)
+            .signature(signature)
+            .build(ctx, loc);
         let new_result = call.result(ctx);
         rewriter.insert_op(call.op_ref());
         rewriter.erase_op(vec![new_result]);
@@ -449,9 +432,7 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let env_val = env_get.result(ctx);
         rewriter.insert_op(env_get.op_ref());
 
-        let tail = func::tail_call_indirect(
-            ctx,
-            loc,
+        let tail = func::TailCallIndirect::operands(
             fn_ptr,
             [
                 dispatch_op.evidence(ctx),
@@ -462,8 +443,9 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
                 op_idx_val,
                 dispatch_op.payload(ctx),
             ],
-            Some(signature),
-        );
+        )
+        .signature(signature)
+        .build(ctx, loc);
         set_calling_convention(ctx, tail.op_ref(), tribute_core::CallingConvention::Cps);
         rewriter.replace_op(tail.op_ref());
         true
