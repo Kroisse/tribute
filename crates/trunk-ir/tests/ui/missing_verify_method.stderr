@@ -1,0 +1,12 @@
+error[E0599]: no associated function or constant named `verify` found for struct `Probe` in the current scope
+ --> tests/ui/missing_verify_method.rs:4:11
+  |
+2 |     #[trunk_ir::dialect]
+  |     -------------------- associated function or constant `verify` not found for this struct
+3 |     mod d {
+4 |         #[verify]
+  |           ^^^^^^ associated function or constant not found in `Probe`
+  |
+  = help: items from traits can only be used if the trait is implemented and in scope
+  = note: the following trait defines an item `verify`, perhaps you need to implement it:
+          candidate #1: `winnow::parser::Parser`

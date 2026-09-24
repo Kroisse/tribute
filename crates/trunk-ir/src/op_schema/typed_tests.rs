@@ -3,7 +3,7 @@
 use super::*;
 use crate::dialect::core::{BoolLike, I32, IntegerLike, Ptr};
 use crate::dialect::func;
-use crate::ops::{DialectOp, VerifyOp};
+use crate::ops::DialectOp;
 use crate::printer::print_op;
 use crate::type_constraint::{ProjectionKind, TypeConstraint};
 use crate::{BlockArgData, BlockData, Location, RegionData, TypeDataBuilder, TypeRef, ValueRef};
@@ -65,7 +65,7 @@ mod test_typed {
         fn maybe_call<S: func::FuncSig>(sig: Option<Attr<S::Type>>, args: Values<S::Inputs>) {}
     }
 
-    impl VerifyOp for Nonempty {
+    impl Nonempty {
         fn verify(self, ctx: &IrContext) -> Result<(), String> {
             if self.values(ctx).is_empty() {
                 return Err("needs at least one value".into());

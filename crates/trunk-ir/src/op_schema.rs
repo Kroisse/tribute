@@ -9,7 +9,7 @@
 //! [`OpSchema::verify`] runs the operation-verifier stages described in
 //! `new-plans/ir.md`: entity counts and attributes, individual type
 //! constraints, type-variable bindings, projection and list relations, and
-//! finally the operation's own [`VerifyOp`](crate::ops::VerifyOp) hook. Each
+//! finally the operation's own `#[verify]` method. Each
 //! stage runs only if the previous ones passed. Verification happens only at
 //! explicit verifier checkpoints; parsers, raw builders, and rewrites may
 //! construct operations that violate the schema in the meantime.
@@ -45,8 +45,8 @@ pub struct OpSchema {
     pub regions: &'static [RegionSchema],
     /// Declared successor names in order.
     pub successors: &'static [&'static str],
-    /// Operation-local verifier from `#[verify]`, run after every schema
-    /// check passed.
+    /// Calls the wrapper's `verify` method for `#[verify]` operations, after
+    /// every schema check passed.
     pub verifier: Option<OpVerifier>,
 }
 

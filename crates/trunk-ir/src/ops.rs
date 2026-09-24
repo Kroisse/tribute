@@ -103,15 +103,6 @@ pub trait DialectOp: Sized + Copy {
     }
 }
 
-/// Operation-local conditions that the declarative schema cannot express.
-///
-/// Required for operations declared with `#[verify]`. It runs only after the
-/// operation passed every generated schema check, so accessors may assume the
-/// declared shape and type constraints.
-pub trait VerifyOp: DialectOp {
-    fn verify(self, ctx: &IrContext) -> Result<(), String>;
-}
-
 /// Trait for arena-based dialect type wrappers.
 pub trait DialectType: Sized + Copy {
     const DIALECT_NAME: &'static str;

@@ -169,13 +169,13 @@ fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
         RegionOrSuccessor::Region { .. } => None,
     });
 
-    let verifier = if op.verify {
-        let sname = struct_name(&op.name);
-        quote!(Some(|ctx, op| {
-            <#sname as #crate_path::ops::VerifyOp>::verify(#sname(op), ctx)
-        }))
-    } else {
-        quote!(None)
+    // The span points a missing `verify` method at the `#[verify]` attribute.
+    let verifier = match op.verify {
+        Some(span) => {
+            let sname = struct_name(&op.name);
+            quote_spanned!(span=> Some(|ctx, op| #sname::verify(#sname(op), ctx)))
+        }
+        None => quote!(None),
     };
 
     quote! {

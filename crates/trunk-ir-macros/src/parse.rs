@@ -34,8 +34,9 @@ pub struct OperationDef {
     pub syntax: Syntax,
     pub type_vars: Vec<TypeVar>,
     pub result_constraint: ValueExpr,
-    /// `#[verify]`: run the operation's `VerifyOp` impl after the schema checks.
-    pub verify: bool,
+    /// `#[verify]`: call the wrapper's inherent `verify(self, ctx)` method
+    /// after the schema checks. Holds the attribute's span for diagnostics.
+    pub verify: Option<proc_macro2::Span>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -187,7 +188,7 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
 fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     let mut op_attrs = Vec::new();
     let mut rest_results = false;
-    let mut verify = false;
+    let mut verify = None;
 
     // Collect outer attributes: #[doc = "..."] (skip), #[attr(...)],
     // #[rest_results], #[verify]
@@ -209,11 +210,11 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
                 rest_results = true;
             }
-            OuterAttr::Verify => {
-                if verify {
+            OuterAttr::Verify(span) => {
+                if verify.is_some() {
                     return Err("duplicate #[verify] on the same operation".into());
                 }
-                verify = true;
+                verify = Some(span);
             }
         }
     }
@@ -224,6 +225,9 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
     match kw.to_string().as_str() {
         "fn" => {
             let mut op = parse_operation(iter, op_attrs, rest_results)?;
+            if verify.is_some() && entity_names(&op).any(|name| name == "verify") {
+                return Err("#[verify] reserves the name `verify` for the verifier method".into());
+            }
             op.verify = verify;
             Ok(DialectItem::Operation(op))
         }
@@ -231,7 +235,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             if rest_results {
                 return Err("#[rest_results] is not allowed on struct items".into());
             }
-            if verify {
+            if verify.is_some() {
                 return Err("#[verify] is not allowed on struct items".into());
             }
             let td = parse_struct_def(iter, op_attrs)?;
@@ -245,7 +249,28 @@ enum OuterAttr {
     Doc,
     OpAttrs(Vec<AttrDef>),
     RestResults,
-    Verify,
+    Verify(proc_macro2::Span),
+}
+
+/// Names of an operation's entities, each of which becomes an accessor.
+fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
+    let results: Vec<&str> = match &op.results {
+        ResultDef::None => Vec::new(),
+        ResultDef::Single(name) | ResultDef::Variadic(name) | ResultDef::Optional(name) => {
+            vec![name]
+        }
+        ResultDef::Multi(names) => names.iter().map(String::as_str).collect(),
+    };
+    op.operands
+        .iter()
+        .map(|operand| operand.name.as_str())
+        .chain(op.attrs.iter().map(|attr| attr.name.as_str()))
+        .chain(op.regions.iter().map(|item| match item {
+            RegionOrSuccessor::Region { name, .. } | RegionOrSuccessor::Successor(name) => {
+                name.as_str()
+            }
+        }))
+        .chain(results)
 }
 
 /// Parse `#[...]` — `#[doc = "..."]`, `#[attr(...)]`, `#[rest_results]`, or
@@ -275,7 +300,7 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
         }
         "verify" => {
             expect_consumed(&inner, "#[verify]")?;
-            Ok(OuterAttr::Verify)
+            Ok(OuterAttr::Verify(ident.span()))
         }
         other => Err(format!(
             "unexpected attribute `{other}`, expected `doc`, `attr`, `rest_results`, or `verify`"
@@ -407,7 +432,7 @@ fn parse_operation(
         syntax: Syntax::Legacy,
         type_vars: Vec::new(),
         result_constraint: ValueExpr::Each(TypeExpr::Any),
-        verify: false,
+        verify: None,
     })
 }
 
@@ -1299,7 +1324,7 @@ mod tests {
             .items
             .iter()
             .map(|item| match item {
-                DialectItem::Operation(op) => op.verify,
+                DialectItem::Operation(op) => op.verify.is_some(),
                 DialectItem::TypeDef(_) => unreachable!(),
             })
             .collect();
@@ -1333,6 +1358,15 @@ mod tests {
                     }
                 ),
                 "#[verify]",
+            ),
+            (
+                quote!(
+                    mod test {
+                        #[verify]
+                        fn op(verify: ()) {}
+                    }
+                ),
+                "reserves the name `verify`",
             ),
         ] {
             let err = parse_test_module(item).err().expect("should fail");

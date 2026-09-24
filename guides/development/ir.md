@@ -91,9 +91,11 @@ fn call_indirect<S: clif::FuncSig>(
   projections and conflicting exact bounds fail to compile.
 - A bound written directly in a result, without `impl`, is that one fixed
   type (`-> Value<I32>`); it must denote exactly one type.
-- `#[verify]` on an operation requires an `ops::VerifyOp` impl for its
-  wrapper. It checks what the schema cannot express and runs only after every
-  generated check passed.
+- `#[verify]` on an operation calls an inherent
+  `verify(self, ctx: &IrContext) -> Result<(), String>` method that you
+  define on its wrapper, and reserves the entity name `verify`. It checks
+  what the schema cannot express and runs only after every generated check
+  passed.
 - An operation uses either the legacy annotations above or the typed syntax,
   never both. Legacy definitions remain supported and are unconstrained in the
   schema.

@@ -452,7 +452,7 @@ pub(super) fn parse_typed_operation(
         syntax: Syntax::Typed,
         type_vars: vars,
         result_constraint,
-        verify: false,
+        verify: None,
     })
 }
 
