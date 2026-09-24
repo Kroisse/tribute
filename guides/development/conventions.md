@@ -104,7 +104,7 @@ groups inputs by kind. For an illustrative typed declaration:
 let cmp = Cmpi::operands(lhs, rhs)
     .predicate(Symbol::new("slt"))
     .results(i1_ty)
-    .build(location, ctx);
+    .build(ctx, location);
 ```
 
 ### Matching Operations

@@ -158,12 +158,12 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
         ctx.push_op(body, op);
     }
 
-    let total = wasm_dialect::I32Add::operands(len.result(ctx), newline).build(loc, ctx);
+    let total = wasm_dialect::I32Add::operands(len.result(ctx), newline).build(ctx, loc);
     ctx.push_op(body, total.op_ref());
     trap_if_less(ctx, body, loc, total.result(ctx), len.result(ctx), i32_ty);
 
     let scratch = i32_const(ctx, body, loc, i32_ty, analysis.scratch_offset as i32);
-    let end = wasm_dialect::I32Add::operands(scratch, total.result(ctx)).build(loc, ctx);
+    let end = wasm_dialect::I32Add::operands(scratch, total.result(ctx)).build(ctx, loc);
     ctx.push_op(body, end.op_ref());
     trap_if_less(ctx, body, loc, end.result(ctx), total.result(ctx), i32_ty);
     ensure_memory(ctx, body, loc, end.result(ctx), i32_ty, nil_ty);
@@ -184,7 +184,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
     );
     ctx.push_op(body, copy);
 
-    let newline_addr = wasm_dialect::I32Add::operands(scratch, len.result(ctx)).build(loc, ctx);
+    let newline_addr = wasm_dialect::I32Add::operands(scratch, len.result(ctx)).build(ctx, loc);
     ctx.push_op(body, newline_addr.op_ref());
     let newline_region = region(ctx, loc, |ctx, block| {
         let lf = i32_const(ctx, block, loc, i32_ty, 10);
@@ -224,7 +224,7 @@ fn ensure_memory(
     let page_size = i32_const(ctx, body, loc, i32_ty, PAGE_SIZE);
     let quotient = wasm_dialect::i32_div_u(ctx, loc, end_minus_one.result(ctx), page_size, i32_ty);
     ctx.push_op(body, quotient.op_ref());
-    let required = wasm_dialect::I32Add::operands(quotient.result(ctx), one).build(loc, ctx);
+    let required = wasm_dialect::I32Add::operands(quotient.result(ctx), one).build(ctx, loc);
     ctx.push_op(body, required.op_ref());
     let current = wasm_dialect::memory_size(ctx, loc, i32_ty, 0);
     ctx.push_op(body, current.op_ref());
@@ -290,18 +290,18 @@ fn copy_loop(ctx: &mut IrContext, input: CopyLoopInput) -> OpRef {
     ctx.push_op(loop_block, done.op_ref());
     let break_if_done = wasm_dialect::br_if(ctx, loc, done.result(ctx), 1);
     ctx.push_op(loop_block, break_if_done.op_ref());
-    let source = wasm_dialect::I32Add::operands(offset, index).build(loc, ctx);
+    let source = wasm_dialect::I32Add::operands(offset, index).build(ctx, loc);
     ctx.push_op(loop_block, source.op_ref());
     let byte =
         wasm_dialect::array_get_u(ctx, loc, data, source.result(ctx), i32_ty, BYTES_ARRAY_IDX);
     ctx.push_op(loop_block, byte.op_ref());
-    let destination = wasm_dialect::I32Add::operands(scratch, index).build(loc, ctx);
+    let destination = wasm_dialect::I32Add::operands(scratch, index).build(ctx, loc);
     ctx.push_op(loop_block, destination.op_ref());
     let store =
         wasm_dialect::i32_store8(ctx, loc, destination.result(ctx), byte.result(ctx), 0, 0, 0);
     ctx.push_op(loop_block, store.op_ref());
     let one = i32_const(ctx, loop_block, loc, i32_ty, 1);
-    let next = wasm_dialect::I32Add::operands(index, one).build(loc, ctx);
+    let next = wasm_dialect::I32Add::operands(index, one).build(ctx, loc);
     ctx.push_op(loop_block, next.op_ref());
     let yield_next = wasm_dialect::r#yield(ctx, loc, next.result(ctx));
     ctx.push_op(loop_block, yield_next.op_ref());
@@ -332,7 +332,7 @@ fn write_loop(
     ctx.push_op(loop_block, break_if_done.op_ref());
 
     let scratch = i32_const(ctx, loop_block, loc, i32_ty, analysis.scratch_offset as i32);
-    let ptr = wasm_dialect::I32Add::operands(scratch, written).build(loc, ctx);
+    let ptr = wasm_dialect::I32Add::operands(scratch, written).build(ctx, loc);
     ctx.push_op(loop_block, ptr.op_ref());
     let remaining = wasm_dialect::i32_sub(ctx, loc, total, written, i32_ty);
     ctx.push_op(loop_block, remaining.op_ref());
@@ -370,7 +370,7 @@ fn write_loop(
         ctx.push_op(block, no_progress.op_ref());
         let break_if_stalled = wasm_dialect::br_if(ctx, loc, no_progress.result(ctx), 2);
         ctx.push_op(block, break_if_stalled.op_ref());
-        let next = wasm_dialect::I32Add::operands(written, count.result(ctx)).build(loc, ctx);
+        let next = wasm_dialect::I32Add::operands(written, count.result(ctx)).build(ctx, loc);
         ctx.push_op(block, next.op_ref());
         let yield_next = wasm_dialect::r#yield(ctx, loc, next.result(ctx));
         ctx.push_op(block, yield_next.op_ref());

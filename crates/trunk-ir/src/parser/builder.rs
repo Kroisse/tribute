@@ -925,7 +925,7 @@ core.module @test {
         });
         let x = ctx.block_arg(entry, 0);
         let y = ctx.block_arg(entry, 1);
-        let add = arith::Addi::operands(x, y).build(loc, &mut ctx);
+        let add = arith::Addi::operands(x, y).build(&mut ctx, loc);
         ctx.push_op(entry, add.op_ref());
         let add_val = add.result(&ctx);
         let ret = func::r#return(&mut ctx, loc, [add_val]);
@@ -994,7 +994,7 @@ core.module @test {
         let c1 = arith::r#const(&mut ctx, loc, i32_ty, Attribute::Int(1));
         ctx.push_op(else_block, c1.op_ref());
         let c1_val = c1.result(&ctx);
-        let sum = arith::Addi::operands(param, c1_val).build(loc, &mut ctx);
+        let sum = arith::Addi::operands(param, c1_val).build(&mut ctx, loc);
         ctx.push_op(else_block, sum.op_ref());
         let sum_val = sum.result(&ctx);
         let yield_else = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))

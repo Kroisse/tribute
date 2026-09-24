@@ -113,7 +113,7 @@ impl ArithIntrinsicPattern {
 
         // --- Int (signed) ---
         binary!("Int::+", |ctx, loc, l, r, _ty| arith::Addi::operands(l, r)
-            .build(loc, ctx)
+            .build(ctx, loc)
             .op_ref());
         binary!("Int::-", |ctx, loc, l, r, ty| arith::subi(
             ctx, loc, l, r, ty
@@ -140,7 +140,7 @@ impl ArithIntrinsicPattern {
 
         // --- Nat (unsigned) ---
         binary!("Nat::+", |ctx, loc, l, r, _ty| arith::Addi::operands(l, r)
-            .build(loc, ctx)
+            .build(ctx, loc)
             .op_ref());
         binary!("Nat::-", |ctx, loc, l, r, ty| arith::subi(
             ctx, loc, l, r, ty

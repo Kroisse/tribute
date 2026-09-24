@@ -851,8 +851,8 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             /// Create the operation.
             pub fn build(
                 self,
-                location: #crate_path::Location,
                 ctx: &mut #crate_path::IrContext,
+                location: #crate_path::Location,
             ) -> #sname {
                 #(#pre_stmts)*
                 let mut __builder = #crate_path::OperationDataBuilder::new(

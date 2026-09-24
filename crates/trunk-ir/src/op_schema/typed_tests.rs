@@ -269,32 +269,32 @@ fn fluent_builders_group_inputs_by_kind() {
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty, ptr_ty, i1_ty]);
     let (a, b, callee, cond) = (args[0], args[1], args[2], args[3]);
 
-    let add = test_typed::Add::operands(a, b).build(loc, &mut ctx);
+    let add = test_typed::Add::operands(a, b).build(&mut ctx, loc);
     assert_eq!(add.lhs(&ctx), a);
     assert_eq!(add.result_ty(&ctx), i32_ty);
 
     let cmp = test_typed::Cmp::operands(a, b)
         .predicate(Symbol::new("slt"))
         .results(i1_ty)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert_eq!(cmp.predicate(&ctx), Symbol::new("slt"));
     assert!(print_op(&ctx, cmp.op_ref()).contains("predicate = @slt"));
 
     let call = test_typed::Call::operands(callee, [a])
         .sig(sig)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert_eq!(call.sig(&ctx), sig);
     assert_eq!(call.args(&ctx), [a]);
     assert_eq!(ctx.op_result_types(call.op_ref()), [i1_ty]);
 
-    let ret = test_typed::Ret::operands([a, b]).build(loc, &mut ctx);
+    let ret = test_typed::Ret::operands([a, b]).build(&mut ctx, loc);
     assert_eq!(ret.values(&ctx), [a, b]);
 
     let then_region = empty_region(&mut ctx, loc);
     let declared = test_typed::Select::operands(cond)
         .results(None)
         .regions(then_region, None)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert!(ctx.op_result_types(declared.op_ref()).is_empty());
     assert_eq!(ctx.op(declared.op_ref()).regions.len(), 1);
     assert!(ctx.op(declared.op_ref()).attributes.get("label").is_none());
@@ -305,13 +305,13 @@ fn fluent_builders_group_inputs_by_kind() {
         .label(Symbol::new("l"))
         .results(i32_ty)
         .regions(then_region, else_region)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert_eq!(labeled.label(&ctx), Some(Symbol::new("l")));
     assert_eq!(labeled.result_ty(&ctx), i32_ty);
 
     let marker = test_typed::Marker::builder()
         .results(i1_ty)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
 
     let dest = ctx.create_block(BlockData {
         location: loc,
@@ -321,7 +321,7 @@ fn fluent_builders_group_inputs_by_kind() {
     });
     let jump = test_typed::Jump::operands([a])
         .successors(dest)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
     assert_eq!(jump.dest(&ctx), dest);
 
     for op in [
@@ -348,7 +348,7 @@ fn fluent_builder_rejects_missing_required_attribute() {
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty]);
     test_typed::Cmp::operands(args[0], args[1])
         .results(i32_ty)
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
 }
 
 #[test]
@@ -360,7 +360,7 @@ fn fluent_builder_rejects_missing_results() {
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty]);
     test_typed::Cmp::operands(args[0], args[1])
         .predicate(Symbol::new("slt"))
-        .build(loc, &mut ctx);
+        .build(&mut ctx, loc);
 }
 
 #[test]
@@ -373,10 +373,10 @@ fn fluent_builders_infer_bound_projected_and_fixed_results() {
     let pair_ty = test_typed::pair(&mut ctx, i64_ty, i1_ty).as_type_ref();
     let args = block_args(&mut ctx, loc, &[i64_ty, pair_ty]);
 
-    let first = test_typed::First::operands(args[1]).build(loc, &mut ctx);
+    let first = test_typed::First::operands(args[1]).build(&mut ctx, loc);
     assert_eq!(first.result_ty(&ctx), i64_ty);
 
-    let widen = test_typed::Widen::operands(args[0]).build(loc, &mut ctx);
+    let widen = test_typed::Widen::operands(args[0]).build(&mut ctx, loc);
     assert_eq!(ctx.op_result_types(widen.op_ref()), [i64_ty, i32_ty]);
     assert_eq!(I32::type_ref(&mut ctx), i32_ty);
 }
@@ -388,7 +388,7 @@ fn fluent_builder_rejects_unprojectable_sources() {
     let loc = location(&mut ctx);
     let i64_ty = scalar(&mut ctx, "i64");
     let args = block_args(&mut ctx, loc, &[i64_ty]);
-    test_typed::First::operands(args[0]).build(loc, &mut ctx);
+    test_typed::First::operands(args[0]).build(&mut ctx, loc);
 }
 
 #[test]
@@ -398,7 +398,7 @@ fn fluent_builder_rejects_missing_binding_attribute() {
     let loc = location(&mut ctx);
     let ptr_ty = crate::dialect::core::ptr(&mut ctx).as_type_ref();
     let args = block_args(&mut ctx, loc, &[ptr_ty]);
-    test_typed::Call::operands(args[0], []).build(loc, &mut ctx);
+    test_typed::Call::operands(args[0], []).build(&mut ctx, loc);
 }
 
 fn verify_errors(input: &str) -> String {

@@ -102,11 +102,11 @@ Typed operations generate a builder that groups inputs by entity kind instead
 of a positional constructor. For the declarations above:
 
 ```rust
-let sum = arith::Addi::operands(lhs, rhs).build(loc, ctx); // result is `T`
+let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
 let cmp = Cmpi::operands(lhs, rhs)        // or `Op::builder()` without operands
     .predicate(Symbol::new("slt"))        // attributes by name
     .results(i1_ty)                       // result types that are not inferred
-    .build(loc, ctx);
+    .build(ctx, loc);
 ```
 
 The builder infers result types that are fixed types, variables bound by a

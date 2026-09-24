@@ -147,7 +147,7 @@ impl RewritePattern for ArithBinOpPattern {
         let new_op = if name == Symbol::new("addi") {
             match suffix {
                 "i32" => wasm_dialect::I32Add::operands(lhs, rhs)
-                    .build(loc, ctx)
+                    .build(ctx, loc)
                     .op_ref(),
                 "i64" => wasm_dialect::i64_add(ctx, loc, lhs, rhs, result_ty).op_ref(),
                 _ => return false,

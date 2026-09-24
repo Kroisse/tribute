@@ -2266,7 +2266,7 @@ mod tests {
         ctx.push_op(entry, if_op.op_ref());
 
         // Use the if result in an add
-        let add = arith::Addi::operands(if_result, if_result).build(loc, &mut ctx);
+        let add = arith::Addi::operands(if_result, if_result).build(&mut ctx, loc);
         let add_result = add.result(&ctx);
         ctx.push_op(entry, add.op_ref());
 
