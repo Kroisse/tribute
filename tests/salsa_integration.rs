@@ -2,6 +2,7 @@
 
 use salsa::{Database as _, Setter as _};
 use salsa_test_macros::salsa_test;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use tree_sitter::{InputEdit, Parser, Point};
 use tribute::pipeline::compile_with_diagnostics;
 use tribute::{SourceCst, TributeDatabaseImpl, compile_frontend};
@@ -179,6 +180,46 @@ fn test_salsa_incremental_computation_detailed() {
         returned_constant(&ctx2, &module2, "value"),
         returned_constant(&ctx3, &module3, "value")
     );
+}
+
+static FUNCTION_COUNT_EXECUTIONS: AtomicUsize = AtomicUsize::new(0);
+
+#[salsa::tracked(returns(copy))]
+fn observed_function_count(db: &dyn salsa::Database, source: SourceCst) -> usize {
+    FUNCTION_COUNT_EXECUTIONS.fetch_add(1, Ordering::SeqCst);
+    tribute_front::query::func_names(db, source).len()
+}
+
+#[test]
+fn equal_query_results_do_not_reexecute_downstream() {
+    let mut db = TributeDatabaseImpl::default();
+    let mut parser = Parser::new();
+    parser
+        .set_language(&tree_sitter_tribute::LANGUAGE.into())
+        .expect("tree-sitter language");
+    let initial = "fn one() {}";
+    let source = SourceCst::from_path(
+        &db,
+        "incremental_names.trb",
+        initial.into(),
+        parser.parse(initial, None),
+    );
+    FUNCTION_COUNT_EXECUTIONS.store(0, Ordering::SeqCst);
+
+    assert_eq!(observed_function_count(&db, source), 1);
+    assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 1);
+
+    let same_names = "fn one() { 1 }";
+    source.set_text(&mut db).to(same_names.into());
+    source.set_tree(&mut db).to(parser.parse(same_names, None));
+    assert_eq!(observed_function_count(&db, source), 1);
+    assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 1);
+
+    let added_name = "fn one() { 1 }\nfn two() {}";
+    source.set_text(&mut db).to(added_name.into());
+    source.set_tree(&mut db).to(parser.parse(added_name, None));
+    assert_eq!(observed_function_count(&db, source), 2);
+    assert_eq!(FUNCTION_COUNT_EXECUTIONS.load(Ordering::SeqCst), 2);
 }
 
 #[test]
