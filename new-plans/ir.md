@@ -86,12 +86,11 @@ operation을 source location과 함께 conversion failure로 보고한다.
 ## Validation Layers
 
 TrunkIR validation is layered by responsibility. The compiler should use the
-smallest layer that can state an invariant precisely, and should not introduce a
-separate semantic-contract framework unless these layers leave a concrete gap.
+smallest layer that can state an invariant precisely.
 
 | Layer | Responsibility | Failure timing | Examples |
 | ---- | ---- | ---- | ---- |
-| Operation verifier | Local invariants of one operation: operand/result counts, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | During parsing/building when possible, or during explicit operation validation checkpoints. | `arith.cmpf` accepts only supported predicates; an op with regions requires the expected region count and terminator form. |
+| Operation verifier | Local invariants of one operation: operand/result/successor counts, operand/result/type-attribute type constraints and their equality or projection relations, required attributes, attribute domains, region shape, and terminator requirements that can be checked without global analysis. | At explicit operation validation checkpoints. Parsers, raw builders, and intermediate rewrites may temporarily violate schema constraints; only checks outside the schema, such as custom assembly parsing, may also fail at parse time. | `arith.cmpf` accepts only supported predicates; an op with regions requires the expected region count and terminator form. |
 | Conversion target | Dialect and type legality at a named lowering boundary. | Immediately after a pass or pass group claims a conversion boundary. Partial conversion rejects explicitly illegal operations; full conversion also rejects unknown operations. | Ability lowering leaves no `ability.perform`; backend-ready native IR contains only `clif.*` plus allowed infrastructure ops. |
 | Pass-manager verifier | Whole-IR consistency after transformations, with the offending pass identified. | After each pass registered in a `PassManager` when a verifier hook is installed. | SSA use-chain consistency, value visibility across isolated regions, or other graph-wide invariants. |
 | Operation interface | Shared behavior queried generically across dialects. | At the consumer that needs dialect-independent behavior. Interfaces should be introduced only for multiple concrete consumers or one generic transform. | `PureOps` for DCE removability; `IsolatedFromAboveOps` for nested pass-manager anchoring. |
@@ -101,6 +100,74 @@ Conversion targets must not duplicate local semantic checks. Pass-manager
 verifiers should remain responsible for graph-wide invariants that require
 walking use-def chains, symbol tables, or nested region relationships. Operation
 interfaces describe behavior, not validation phases.
+
+### 선언적 operation schema
+
+Operation verifier의 로컬 계약은 `#[dialect]` operation 정의에서 선언적으로
+기술할 수 있다. 이 schema는 operation verifier layer를 생성하는 표현이며,
+같은 정의에서 검증 코드, builder, 정적 schema descriptor를 만든다. Assembly
+format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 이 descriptor를
+소비한다.
+
+정의 문법은 Rust 함수 시그니처와 trait bound 모델을 따른다.
+
+- 파라미터 wrapper가 종류를 정한다. `Value<C>`는 operand 하나,
+  `Variadic<C>`는 같은 제약을 만족하는 0개 이상의 operand, `Values<L>`는
+  타입 목록 `L`과 개수·순서·타입이 정확히 일치하는 operand 목록이다.
+  `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다. 파라미터
+  선언 순서가 builder 인자 순서다. 가변 operand 구간은 operand 중 마지막
+  하나만 허용한다.
+- 결과는 `-> Value<C>`(accessor `result`) 또는 `-> Variadic<C>` /
+  `-> Values<L>`(accessor `results`)로 선언한다. 결과가 0개 또는 1개인
+  operation은 `-> Option<Value<C>>`로 선언한다. 결과가 없는 operation과
+  `core.nil` 결과 하나를 가진 operation은 서로 다르다.
+- Region은 선언 순서대로 저장된다. 외부 함수 선언의 body처럼 없을 수 있는
+  region은 선택 region으로 선언하며, 마지막 region만 선택일 수 있다.
+- 이름 있는 제네릭 파라미터는 논리적 타입 변수다. 같은 변수가 여러 위치에
+  나타나면 정확한 타입 동일성을 요구한다. `impl B`는 위치마다 독립인 익명
+  변수이고, `_`는 무제약이다. 타입 변수는 생성된 Rust 코드의 제네릭이나
+  monomorphization을 뜻하지 않는다.
+- Bound는 교집합이다. Exact bound는 하나의 dialect 타입과 그 wrapper의 내부
+  invariant를 요구하며, 한 변수에 서로 다른 exact bound를 둘 수 없다.
+  Category bound는 `IntegerLike`, `BoolLike`, `FloatLike`처럼 타입 범주를
+  요구하며 여러 개를 함께 둘 수 있다. 이 범주들은 `core` 스칼라 타입만 보는
+  닫힌 판별이다. 다른 dialect의 타입까지 포함해야 하는 실제 소비자가 생기기
+  전에는 dialect 등록형 범주를 두지 않는다.
+- 파생 타입은 투영으로 참조한다. `S::Type`은 변수 자체를 타입 attribute
+  값으로 쓰는 투영이다. Bound는 제공하는 투영의 이름과 종류(단일 타입 또는
+  타입 목록)를 선언한다. 예를 들어 signature 타입은 `Inputs`/`Results`
+  목록을, 파라미터형 dialect 타입은 선언된 파라미터를 제공한다. 둘 이상의
+  bound가 같은 이름을 제공하면 `<S as B>::X`로 명시해야 한다.
+- Schema로 표현할 수 없는 로컬 조건은 operation별 사용자 verifier가 맡는다.
+  사용자 verifier는 생성된 검사를 통과한 operation에서만 실행된다.
+
+생성된 검증은 다음 순서로 진행하며, 앞 단계가 실패하면 그 조건에 의존하는 뒤
+단계를 실행하지 않는다. Accessor는 이 순서를 거치지 않은 malformed operation에서
+panic하는 대신 진단을 남길 수 있어야 한다.
+
+1. Operand/result 개수와 필수 attribute 존재.
+2. 개별 타입 제약과 typed attribute의 내부 유효성.
+3. 타입 변수 바인딩과 동일성.
+4. 투영과 타입 목록 관계.
+5. 사용자 정의 로컬 verifier.
+
+진단은 operation, 위치, 필드 이름과 index, 기대 제약, 실제 타입을 포함한다.
+정의 자체의 오류(미선언 변수, 모호하거나 존재하지 않는 투영, 종류 불일치,
+exact bound 충돌)는 컴파일 시점에 거부한다. 다른 crate의 dialect 타입을
+참조하는 경우에도 bound가 내보내는 const descriptor로 같은 검사를 수행한다.
+
+선언적 제약은 verifier checkpoint에서만 강제한다. Parser, raw operation
+builder, operation clone, 결과 타입 재지정은 제약을 우회할 수 있으며, rewrite
+중간 상태가 일시적으로 제약을 위반하는 것도 허용한다. 생성된 builder는 결과
+타입이 고정 타입, 단일 operand나 필수 attribute로 바인딩된 변수, 또는 그
+변수의 투영으로 유일하게 결정될 때만 결과 타입을 추론한다. Builder는 cast를
+삽입하지 않는다. 심볼 해석, 소유 callable, conversion 경계, ownership처럼 한
+operation 밖의 정보가 필요한 조건은 schema가 아니라 기존 whole-IR verifier와
+conversion target이 소유한다.
+
+Operation schema는 해당 operation의 모든 유효한 등장에서 성립해야 하는 조건만
+담는다. 특정 target의 physical 대입 호환성이나 pipeline 단계에 따라 달라지는
+타입 합법성은 schema 제약이 아니다.
 
 Control-flow and SSA forwarding queries use three target-independent operation
 interfaces. `Branch` describes raw block successors and the operands forwarded

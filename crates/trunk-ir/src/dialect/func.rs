@@ -44,7 +44,7 @@ crate::register_isolated_op!(func.func);
 mod func {
     #[attr(sym_name: Symbol, r#type: Type)]
     fn func() {
-        #[region(body)]
+        #[region(body?)]
         {}
     }
 
@@ -918,7 +918,7 @@ mod result_list_tests {
             (
                 "callee = @sink",
                 "callee = 1",
-                "requires symbol callee attribute",
+                "attribute `callee` must be a Symbol attribute",
             ),
         ] {
             let text = verify(&valid.replace(old, new));

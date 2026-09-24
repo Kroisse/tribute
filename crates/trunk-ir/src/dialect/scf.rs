@@ -2,7 +2,7 @@
 
 #[trunk_ir::dialect]
 mod scf {
-    fn r#if(cond: ()) -> result {
+    fn r#if(cond: ()) -> Option<result> {
         #[region(then_region)]
         {}
         #[region(else_region)]
@@ -27,7 +27,7 @@ mod scf {
 
     fn r#yield(#[rest] values: ()) {}
 
-    fn r#loop(#[rest] init: ()) -> result {
+    fn r#loop(#[rest] init: ()) -> Option<result> {
         #[region(body)]
         {}
     }

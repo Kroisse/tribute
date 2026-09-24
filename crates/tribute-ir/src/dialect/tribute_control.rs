@@ -73,7 +73,7 @@ mod tribute_control {
     // FuncSig operations
     #[attr(sym_name: Symbol, r#type: Type)]
     fn func() {
-        #[region(body)]
+        #[region(body?)]
         {}
     }
 

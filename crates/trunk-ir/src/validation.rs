@@ -25,6 +25,7 @@ use super::op_interface::{
     BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
     RegionValueTransfer,
 };
+use super::op_schema::OpSchema;
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
@@ -325,6 +326,10 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 
     validate_func_sig_types(ctx, &mut errors);
 
+    // The root module is not visited by the body walk, so check its own
+    // schema (including a missing body region) first.
+    validate_op_schema(ctx, module.op(), &mut errors);
+
     let body = match module.body(ctx) {
         Some(r) => r,
         None => {
@@ -333,11 +338,12 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     };
 
     walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
+        if !validate_op_schema(ctx, op, &mut errors) {
+            return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
+        }
         let error_count = errors.len();
         validate_arith_cmpf_predicate(ctx, op, &mut errors);
         validate_scf_if_structure(ctx, op, &mut errors);
-        validate_scf_loop_result_arity(ctx, op, &mut errors);
-        validate_scf_switch_result_arity(ctx, op, &mut errors);
         validate_func_shapes(ctx, op, &mut errors);
         validate_func_indirect_call(ctx, op, &mut errors);
         if errors.len() == error_count {
@@ -349,6 +355,22 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     });
 
     ValidationResult { errors }
+}
+
+/// Check an operation against its registered declarative schema.
+///
+/// Returns `false` when the operation violates its schema. Later
+/// operation-local checks assume the declared shape, so callers skip them for
+/// that operation.
+fn validate_op_schema(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) -> bool {
+    let Some(schema) = OpSchema::of(ctx, op) else {
+        return true;
+    };
+    let violations = schema.verify_structure(ctx, op);
+    for violation in &violations {
+        errors.push(operation_verifier_error(ctx, op, violation.to_string()));
+    }
+    violations.is_empty()
 }
 
 fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
@@ -387,12 +409,8 @@ fn validate_func_indirect_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<Vali
         return;
     }
     let tail = data.name == Symbol::new("tail_call_indirect");
+    // The schema guarantees a callee operand.
     let Some((&callee, args)) = ctx.op_operands(op).split_first() else {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "requires a callee operand",
-        ));
         return;
     };
     let callee_ty = ctx.get_type(ctx.value_ty(callee));
@@ -471,13 +489,6 @@ fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
             ));
             return;
         };
-        if ctx.op(op).regions.len() > 1 {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                "expects at most one body",
-            ));
-        }
         if let Some(&region) = ctx.op(op).regions.first() {
             if let Some(&entry) = ctx.region(region).blocks.first() {
                 check_value_types(
@@ -506,33 +517,19 @@ fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
             "multiple call results are unsupported",
         ));
     }
-    if (func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op))
-        && ctx.op(op).attributes.get_symbol("callee").is_none()
+    if (func::Return::matches(ctx, op)
+        || func::TailCall::matches(ctx, op)
+        || func::TailCallIndirect::matches(ctx, op))
+        && ctx
+            .op(op)
+            .parent_block
+            .is_none_or(|b| ctx.block(b).ops.last() != Some(&op))
     {
         errors.push(operation_verifier_error(
             ctx,
             op,
-            "requires symbol callee attribute",
+            "must terminate its block",
         ));
-    }
-    if func::Return::matches(ctx, op)
-        || func::TailCall::matches(ctx, op)
-        || func::TailCallIndirect::matches(ctx, op)
-    {
-        if !ctx.op_results(op).is_empty() {
-            errors.push(operation_verifier_error(ctx, op, "must be resultless"));
-        }
-        if ctx
-            .op(op)
-            .parent_block
-            .is_none_or(|b| ctx.block(b).ops.last() != Some(&op))
-        {
-            errors.push(operation_verifier_error(
-                ctx,
-                op,
-                "must terminate its block",
-            ));
-        }
     }
     if func::Return::matches(ctx, op) && ctx.op_operands(op).len() > 1 {
         errors.push(operation_verifier_error(
@@ -757,12 +754,8 @@ fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<Va
         return;
     }
 
+    // The schema guarantees a Symbol `predicate`.
     let Some(predicate) = data.attributes.get_symbol("predicate") else {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            "requires symbol predicate attribute",
-        ));
         return;
     };
 
@@ -1175,26 +1168,7 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
         return;
     }
 
-    if ctx.op_operands(op).len() != 1 {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            format!(
-                "expects 1 condition operand, found {}",
-                ctx.op_operands(op).len()
-            ),
-        ));
-    }
-
-    if data.regions.len() != 2 {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            format!("expects 2 regions, found {}", data.regions.len()),
-        ));
-        return;
-    }
-
+    // The schema guarantees one condition operand and two regions.
     for (region_name, &region) in [
         ("then_region", &data.regions[0]),
         ("else_region", &data.regions[1]),
@@ -1237,33 +1211,6 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
             ));
             continue;
         }
-    }
-}
-
-fn validate_scf_loop_result_arity(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let data = ctx.op(op);
-    if data.dialect == Symbol::new("scf")
-        && data.name == Symbol::new("loop")
-        && ctx.op_results(op).len() > 1
-    {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            format!(
-                "supports zero or one result, found {}",
-                ctx.op_results(op).len()
-            ),
-        ));
-    }
-}
-
-fn validate_scf_switch_result_arity(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let data = ctx.op(op);
-    if data.dialect == Symbol::new("scf")
-        && data.name == Symbol::new("switch")
-        && !ctx.op_results(op).is_empty()
-    {
-        errors.push(operation_verifier_error(ctx, op, "must be resultless"));
     }
 }
 
@@ -1500,6 +1447,30 @@ mod tests {
                 Some(message.as_str())
             })
             .collect()
+    }
+
+    #[test]
+    fn root_module_schema_is_verified() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            "core.module @m { func.func @f() { func.return } }",
+        );
+        ctx.op_mut(module.op()).attributes.remove("sym_name");
+        let text = validate_all(&ctx, module).to_string();
+        assert!(
+            text.contains("core.module") && text.contains("missing required attribute `sym_name`"),
+            "{text}"
+        );
+
+        let loc = test_location(&mut ctx);
+        let bodyless = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+            .attr(Symbol::new("sym_name"), Attribute::Symbol(Symbol::new("m")))
+            .build(&mut ctx);
+        let bodyless = ctx.create_op(bodyless);
+        let bodyless = Module::new(&ctx, bodyless).unwrap();
+        let text = validate_operation_verifiers(&ctx, bodyless).to_string();
+        assert!(text.contains("expected 1 region(s), found 0"), "{text}");
     }
 
     fn empty_module(ctx: &mut IrContext) -> Module {
@@ -2468,6 +2439,9 @@ mod tests {
         let input = r#"core.module @test {
   func.func @result(%k: closure.closure(func.func_sig<() -> core.never>)) -> core.never {
     %bad = func.tail_call_indirect %k : core.i32
+  }
+  func.func @not_last(%k: func.func_sig<() -> core.never>) -> core.never {
+    func.tail_call_indirect %k
     func.unreachable
   }
   func.func @missing() -> core.never {
@@ -2490,8 +2464,11 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let result = validate_operation_verifiers(&ctx, module);
         let text = result.to_string();
-        assert!(text.contains("must be resultless"), "{text}");
-        assert!(text.contains("requires a callee operand"), "{text}");
+        assert!(text.contains("expected 0 result(s), found 1"), "{text}");
+        assert!(
+            text.contains("expected at least 1 operand(s), found 0"),
+            "{text}"
+        );
         assert!(
             text.contains("closure type must contain exactly one function type"),
             "{text}"
@@ -2739,7 +2716,7 @@ mod tests {
         let operation_errors = operation_error_messages(&result);
         assert_eq!(operation_errors.len(), 1);
         assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
-        assert!(operation_errors[0].contains("requires symbol predicate attribute"));
+        assert!(operation_errors[0].contains("missing required attribute `predicate`"));
     }
 
     #[test]
@@ -3489,7 +3466,7 @@ mod tests {
         let operation_errors = operation_error_messages(&result);
         assert_eq!(operation_errors.len(), 1);
         assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
-        assert!(operation_errors[0].contains("expects 1 condition operand, found 2"));
+        assert!(operation_errors[0].contains("expected 1 operand(s), found 2"));
     }
 
     #[test]
@@ -3519,7 +3496,7 @@ mod tests {
         let operation_errors = operation_error_messages(&result);
         assert_eq!(operation_errors.len(), 1);
         assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
-        assert!(operation_errors[0].contains("expects 2 regions, found 1"));
+        assert!(operation_errors[0].contains("expected 2 region(s), found 1"));
     }
 
     #[test]
