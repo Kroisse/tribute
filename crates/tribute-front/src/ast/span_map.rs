@@ -52,7 +52,7 @@ impl SpanMapBuilder {
 ///
 /// Note: `Hash` is implemented using Arc pointer identity for Salsa compatibility.
 /// Two SpanMaps hash the same only if they point to the same underlying data.
-#[derive(Clone, Debug, salsa::Update)]
+#[derive(Clone, Debug, salsa::SalsaValue)]
 pub struct SpanMap(Arc<HashMap<NodeId, Span>>);
 
 impl PartialEq for SpanMap {

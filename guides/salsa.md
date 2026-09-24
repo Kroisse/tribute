@@ -24,6 +24,23 @@ Salsa tracked values. A tracked artifact query may run a fresh compilation
 session internally. Individual rewrite mutations are handled by pass and
 analysis infrastructure, not Salsa dependency tracking.
 
+## Salsa 0.28 Value and Return Contracts
+
+Salsa field getters and tracked functions return references by default. Tribute
+explicitly uses `#[returns(copy)]` for small values and Salsa handles,
+`#[returns(clone)]` for owned data, and `#[returns(ref)]` or
+`returns(deref)` where callers already borrow data. This keeps existing
+ownership boundaries stable, especially when a caller retains a query result
+before mutating an input to start another revision.
+
+Salsa uses `PartialEq` to decide whether a recomputed value changed. Values
+that carry the database lifetime and are stored in tracked results derive
+`salsa::SalsaValue`; ordinary owned values still need `SalsaValue` when nested
+inside containers whose implementation requires it. The generic AST's three
+recursive child fields have narrow `salsa_value` proofs: they own their children,
+and the phase value `V` must itself implement `SalsaValue`. Do not store a
+reference tied to an old database revision in a tracked value.
+
 ## Creating a Source Input
 
 Use the existing constructor when a test needs parsed source:

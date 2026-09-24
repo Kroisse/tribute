@@ -79,7 +79,7 @@ impl Hash for ParsedCst {
 // =============================================================================
 
 /// Wrap a pre-parsed CST stored in the database.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parse_cst(db: &dyn salsa::Database, source: SourceCst) -> Option<ParsedCst> {
     let tree = source.tree(db).clone()?;
     Some(ParsedCst::new(tree))
@@ -93,7 +93,7 @@ pub fn parse_cst(db: &dyn salsa::Database, source: SourceCst) -> Option<ParsedCs
 ///
 /// This is the single tracking point for CST → AST conversion.
 /// Both `parsed_module` and `span_map` derive from this query.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn parsed_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -105,7 +105,7 @@ pub fn parsed_ast<'db>(
 ///
 /// This variant is used for parsing the prelude or other library modules
 /// where NodeIds need a different module path to avoid collisions.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn parsed_ast_with_module_path<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -118,7 +118,7 @@ pub fn parsed_ast_with_module_path<'db>(
 ///
 /// This is the entry point for parsing. The result is cached by Salsa.
 /// Use `span_map` to get the corresponding span information.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parsed_module(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -130,7 +130,7 @@ pub fn parsed_module(
 ///
 /// The SpanMap maps NodeId → Span for looking up source locations.
 /// Use together with `parsed_module` - both are derived from the same parse.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap> {
     parsed_ast(db, source).map(|parsed| parsed.span_map(db))
 }
@@ -138,7 +138,7 @@ pub fn span_map(db: &dyn salsa::Database, source: SourceCst) -> Option<SpanMap> 
 /// Get the list of function names in a module.
 ///
 /// This is used to iterate over functions for batch processing.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
     let Some(module) = parsed_module(db, source) else {
         return Vec::new();
@@ -157,7 +157,7 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
 /// Resolve all names in a module.
 ///
 /// Resolution currently processes the complete module in one tracked query.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -171,7 +171,7 @@ pub fn resolved_module<'db>(
 ///
 /// Returns a `TypeCheckOutput` containing both the typed AST module
 /// and function type schemes.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn type_check_output<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -184,7 +184,7 @@ pub fn type_check_output<'db>(
 /// Type check a module.
 ///
 /// Derives the typed module from `type_check_output`.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn typed_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -196,7 +196,7 @@ pub fn typed_module<'db>(
 ///
 /// Returns the function type schemes collected during type checking,
 /// keyed by function name (Symbol).
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn function_schemes<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -205,7 +205,7 @@ pub fn function_schemes<'db>(
 }
 
 /// TDNR on a typed module for remaining MethodCall transformations.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn tdnr_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -219,7 +219,7 @@ pub fn tdnr_module<'db>(
 // =============================================================================
 
 /// Get a parsed function by name.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn parsed_func(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -236,7 +236,7 @@ pub fn parsed_func(
 /// Resolve a single function by name.
 ///
 /// The function is resolved in the context of the full module environment.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn resolved_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -253,7 +253,7 @@ pub fn resolved_func<'db>(
 /// Type check a single function by name.
 ///
 /// The function is type checked in the context of the full module.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn typed_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,

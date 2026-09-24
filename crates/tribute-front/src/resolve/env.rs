@@ -10,7 +10,7 @@ use trunk_ir::Symbol;
 use crate::ast::{AbilityId, CtorId, FuncDefId, OpDeclKind, TypeDefId};
 
 /// Information about a resolved name binding.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Binding<'db> {
     /// A function defined in this module or imported.
     Function { id: FuncDefId<'db> },
@@ -65,7 +65,7 @@ pub enum Binding<'db> {
 /// Module environment for name resolution.
 ///
 /// Tracks all names visible in the current module.
-#[derive(Clone, Debug, Default, PartialEq, Eq, salsa::Update)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, salsa::SalsaValue)]
 pub struct ModuleEnv<'db> {
     /// Names defined in this module (simple name → binding).
     definitions: HashMap<Symbol, Binding<'db>>,

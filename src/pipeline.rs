@@ -108,14 +108,16 @@ impl From<tribute_passes::target_abi::TargetAbiError> for DumpIrError {
 #[salsa::input]
 pub struct CompilationConfig {
     /// Enable AddressSanitizer instrumentation.
+    #[returns(copy)]
     pub sanitize_address: bool,
     /// Stage-specific optimization policies.
+    #[returns(copy)]
     pub optimizations: OptimizationOptions,
 }
 
 /// Optimization policies for the source-logical production pipeline.
 ///
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct OptimizationOptions {
     pub native: NativeOptimizationOptions,
 }
@@ -137,7 +139,7 @@ impl OptimizationOptions {
 }
 
 /// Independently selectable native-backend optimizations.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct NativeOptimizationOptions {
     pub paired_rc_elimination: PairedRcEliminationPolicy,
     pub borrowed_parameters: BorrowedParameterPolicy,
@@ -163,21 +165,21 @@ impl NativeOptimizationOptions {
 }
 
 /// Policy for local retain/release pair elimination.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PairedRcEliminationPolicy {
     Disabled,
     Enabled,
 }
 
 /// Policy for eliding ownership of proven borrowed native parameters.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum BorrowedParameterPolicy {
     Preserve,
     ElideProvenBorrowed,
 }
 
 /// Policy for eliding ownership of proven field-derived native temporaries.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum TemporaryBorrowPolicy {
     Preserve,
     ElideProvenFieldBorrows,
@@ -190,7 +192,7 @@ impl Default for OptimizationOptions {
 }
 
 /// Stable native-pipeline boundaries available to optimization tests.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NativePipelineStage {
     /// Immediately after reference-counting operations are inserted.
     AfterRcInsertion,
@@ -233,7 +235,7 @@ const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 ///
 /// This is the first stage of prelude processing, shared by all prelude-related functions.
 /// Returns both the parsed AST and the SourceCst to avoid redundant creation.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn parse_prelude<'db>(db: &'db dyn salsa::Database) -> Option<(ParsedAst<'db>, crate::SourceCst)> {
     let prelude_source = create_prelude_source(db)?;
     let parsed = ast_query::parsed_ast_with_module_path(
@@ -270,7 +272,7 @@ fn resolve_prelude(
 ///
 /// Returns the typed AST (parse → resolve → typecheck → TDNR) without
 /// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'db>> {
     let (resolved, span_map, _prelude_source) = resolve_prelude(db)?;
 
@@ -319,7 +321,7 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 ///
 /// This parses the prelude to AST and builds its module environment.
 /// Cached by Salsa - computed once and reused.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
@@ -334,7 +336,7 @@ fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
 /// 3. Extracts PreludeExports (TypeSchemes only, no UniVars)
 ///
 /// Cached by Salsa - computed once and reused.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'db>> {
     let (resolved, span_map, _) = resolve_prelude(db)?;
 
@@ -371,7 +373,7 @@ fn merge_and_lower_to_ir<'db>(
 
 /// Specialized frontend output together with the exact compiler-intrinsic
 /// identities the shared CPS boundary needs.
-#[derive(Clone, PartialEq, Eq, salsa::Update)]
+#[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 struct PreparedFrontend<'db> {
     typed: ast_typeck::TypeCheckOutput<'db>,
     compiler_intrinsics: std::collections::HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
@@ -379,7 +381,7 @@ struct PreparedFrontend<'db> {
 
 /// Merge and specialize inside a tracked query so specialization failures
 /// become source diagnostics before either public IR lowering route runs.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn prepare_frontend_for_lowering<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
@@ -388,7 +390,7 @@ pub fn prepare_frontend_for_lowering<'db>(
     prepare_frontend_details(db, typed, source).map(|prepared| prepared.typed)
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn prepare_frontend_details<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
@@ -907,7 +909,7 @@ fn run_shared_pipeline(
 ///
 /// Optimization options apply to the native portion of the pipeline.
 /// Native emission is intentionally skipped.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn dump_native_ir_at_stage(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -1095,7 +1097,7 @@ fn enter_target_closure_storage_boundary(
 ///
 /// If `native` is true, runs the native pipeline; otherwise runs the WASM pipeline.
 /// Returns the IR text as a string, or an error. Diagnostics are accumulated.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn dump_ir(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -1115,7 +1117,7 @@ pub fn dump_ir(
     Ok(trunk_ir::printer::print_module(&ctx, m.op()))
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = match run_shared_pipeline(db, source) {
         Ok(Some(result)) => result,
@@ -1441,7 +1443,7 @@ fn wasm_lowering_failure(error: tribute_passes::wasm::lower::WasmLowerError) -> 
 /// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
 ///
 /// Returns `None` if compilation fails, with diagnostics accumulated.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn compile_to_native_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -1506,7 +1508,7 @@ pub fn compile_to_native_binary(
 /// 4. Inject prelude TypeSchemes into user's ModuleTypeEnv
 /// 5. Type check with injected types
 /// 6. Run TDNR
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 pub fn parse_and_lower_ast<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -1703,7 +1705,7 @@ fn report_unresolved_methods<'db>(
 ///
 /// This is a `#[salsa::tracked]` function so that diagnostics accumulated
 /// during compilation can be collected via `compile_ast_tracked::accumulated`.
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) {
     // Run the shared pipeline; diagnostics are accumulated as side effects
     match run_shared_pipeline(db, source) {

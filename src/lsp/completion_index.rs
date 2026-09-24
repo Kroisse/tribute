@@ -42,7 +42,7 @@ impl From<CompletionKind> for lsp_types::CompletionItemKind {
 }
 
 /// Completion item.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AstCompletionItem {
     /// Name of the item.
     pub name: Symbol,
@@ -173,7 +173,7 @@ pub enum SymbolKind {
 }
 
 /// Document symbol information.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct DocumentSymbolInfo {
     /// Symbol name.
     pub name: Symbol,
@@ -188,7 +188,7 @@ pub struct DocumentSymbolInfo {
 /// Build document symbols from a parsed module.
 ///
 /// Uses the parsed module (before type checking) for faster response.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<DocumentSymbolInfo> {
     let Some(module) = ast_query::parsed_module(db, source) else {
         return Vec::new();

@@ -64,7 +64,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 ///
 /// Diagnostics emitted during the pipeline are accumulated as Salsa
 /// accumulators and can be collected by the caller.
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
@@ -147,7 +147,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     print_module(&ir, module.module.op())
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
@@ -173,7 +173,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     let _ = tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
 }
 
-#[salsa::tracked]
+#[salsa::tracked(returns(clone))]
 fn tdnr_function_summary_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -232,13 +232,13 @@ fn function_body<'db>(module: &'db Module<TypedRef<'db>>, name: &str) -> &'db Ex
         .expect("function should exist")
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
 pub struct TdnrSummary {
     pub method_calls: Vec<String>,
     pub calls: Vec<TdnrCall>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TdnrCall {
     pub target: String,
     pub arg_count: usize,

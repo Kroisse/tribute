@@ -1065,7 +1065,7 @@ mod tests {
         assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Rune));
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_cons_constructed_type_inner(db: &dyn salsa::Database) -> bool {
         let resolver = TdnrResolver::new(db);
 
@@ -1121,7 +1121,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_cons_non_func_ctor_inner(db: &dyn salsa::Database) -> bool {
         let resolver = TdnrResolver::new(db);
 
@@ -1292,7 +1292,7 @@ mod tests {
     // lookup_method conflict detection tests (수정 1: ambiguity)
     // =========================================================================
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_lookup_single_candidate_inner(db: &dyn salsa::Database) -> bool {
         let mut resolver = TdnrResolver::new(db);
 
@@ -1346,7 +1346,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_lookup_ambiguous_inner(db: &dyn salsa::Database) -> bool {
         let mut resolver = TdnrResolver::new(db);
 
@@ -1411,7 +1411,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_lookup_no_candidates_inner(db: &dyn salsa::Database) -> bool {
         let resolver = TdnrResolver::new(db);
 
@@ -1436,7 +1436,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn test_lookup_app_receiver_inner(db: &dyn salsa::Database) -> bool {
         let mut resolver = TdnrResolver::new(db);
 

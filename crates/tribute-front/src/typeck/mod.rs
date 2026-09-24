@@ -49,7 +49,7 @@ use crate::ast::{
 /// This is deliberately separate from expression node types: a handler arm is
 /// not an expression, and lowering must not recover its operation instance from
 /// parameter/body shapes.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct InstantiatedHandlerOperation<'db> {
     pub ability: AbilityId<'db>,
     pub ability_args: Vec<Type<'db>>,
@@ -61,7 +61,7 @@ pub struct InstantiatedHandlerOperation<'db> {
 /// Exact, monomorphic semantic signature selected for an ability-operation
 /// call. This records the operation instance independently of expression node
 /// types so lowering never reconstructs a declaration from an erased value.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct InstantiatedPerformOperation<'db> {
     pub ability: AbilityId<'db>,
     pub ability_args: Vec<Type<'db>>,
@@ -74,7 +74,7 @@ pub struct InstantiatedPerformOperation<'db> {
 ///
 /// Lambdas are expressions, but their source-logical callable signature must
 /// not be recovered from their body or from a concrete expression node type.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct LambdaSignature<'db> {
     /// The solved full source function type.  Retaining its effect row avoids
     /// confusing the ABI lower bound with the selected convention.
@@ -129,7 +129,7 @@ pub fn ability_definitions_from_schemas<'db>(
 }
 
 /// Semantic identities supplied by the prelude and required downstream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct DefinitionIdentity {
     pub source: u64,
     pub start: usize,
@@ -147,14 +147,14 @@ impl DefinitionIdentity {
 }
 
 /// Semantic identities supplied by the prelude and required downstream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WellKnownType<'db> {
     pub ty: Type<'db>,
     pub definition: DefinitionIdentity,
 }
 
 /// Semantic identities supplied by the prelude and required downstream.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WellKnownTypes<'db> {
     pub string: Option<WellKnownType<'db>>,
 }
@@ -186,7 +186,7 @@ impl WellKnownTypes<'_> {
 /// both can be derived from a single type checking invocation.
 /// Also stores the SpanMap so that downstream stages (e.g., ast_to_ir)
 /// can look up source spans without a separate plumbing path.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum FunctionInstanceOrigin<'db> {
     Declaration,
     FieldAccessor {
@@ -197,7 +197,7 @@ pub enum FunctionInstanceOrigin<'db> {
 
 /// The instantiation chosen for one source function reference. Argument order
 /// is the source scheme's binder order, never recovered from a callable type.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct FunctionInstance<'db> {
     pub origin: FunctionInstanceOrigin<'db>,
     pub function: FuncDefId<'db>,
@@ -207,7 +207,7 @@ pub struct FunctionInstance<'db> {
     pub callable: Type<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct LocalCallableInstance<'db> {
     pub binding: NodeId,
     pub local: crate::ast::LocalId,
@@ -217,7 +217,7 @@ pub struct LocalCallableInstance<'db> {
     pub callable: Type<'db>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ExpressionTypeMetadata<'db> {
     pub node_types: Vec<(NodeId, Type<'db>)>,
     pub function_instances: Vec<(NodeId, FunctionInstance<'db>)>,
@@ -225,7 +225,7 @@ pub struct ExpressionTypeMetadata<'db> {
 }
 
 /// Constructor declarations and exact schemes for cloned enum variants.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ConstructorTypeMetadata<'db> {
     pub schemes: Vec<(CtorId<'db>, TypeScheme<'db>)>,
     pub specialized_enum_variants: Vec<(NodeId, TypeScheme<'db>)>,
@@ -276,8 +276,10 @@ pub struct TypeCheckOutput<'db> {
     #[returns(ref)]
     pub exhaustive_cases: Vec<NodeId>,
     /// Prelude-defined semantic type identities.
+    #[returns(copy)]
     pub well_known_types: WellKnownTypes<'db>,
     /// Source span information for AST nodes.
+    #[returns(clone)]
     pub span_map: SpanMap,
 }
 
@@ -326,6 +328,7 @@ pub struct PreludeExports<'db> {
         Vec<crate::typeck::context::AbilityOpInfo<'db>>,
     )>,
     /// Prelude-defined semantic type identities.
+    #[returns(copy)]
     pub well_known_types: WellKnownTypes<'db>,
 }
 

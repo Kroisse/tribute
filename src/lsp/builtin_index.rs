@@ -8,7 +8,7 @@ use tribute_front::query as ast_query;
 use trunk_ir::{Span, Symbol};
 
 /// A compiler-owned symbol referenced from source.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct BuiltinSymbolEntry {
     pub span: Span,
     pub name: Symbol,

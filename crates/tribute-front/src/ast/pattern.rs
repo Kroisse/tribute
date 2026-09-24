@@ -13,20 +13,22 @@ use super::expr::FloatBits;
 use super::node_id::NodeId;
 
 /// A pattern in the AST, parameterized by phase type `V`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Pattern<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Unique identifier for span lookup.
     pub id: NodeId,
     /// The kind of pattern.
+    // The recursive pattern owns its children; V carries the database lifetime.
+    #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
     pub kind: Box<PatternKind<V>>,
 }
 
 impl<V> Pattern<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Create a new pattern with the given ID and kind.
     pub fn new(id: NodeId, kind: PatternKind<V>) -> Self {
@@ -38,10 +40,10 @@ where
 }
 
 /// The different kinds of patterns.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum PatternKind<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Wildcard pattern: `_`
     ///
@@ -108,10 +110,10 @@ where
 }
 
 /// A field in a record pattern.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct FieldPattern<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Unique identifier for span lookup.
     pub id: NodeId,
@@ -123,7 +125,7 @@ where
 }
 
 /// Literal values in patterns.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum LiteralPattern {
     /// Natural number literal: `0`, `42`
     Nat(u64),

@@ -179,7 +179,7 @@ mod tests {
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(clone))]
     fn checked<'db>(
         db: &'db dyn salsa::Database,
         source: crate::SourceCst,

@@ -30,7 +30,7 @@ pub struct Type<'db> {
 ///
 /// This identifies where a type variable came from, enabling unique identification
 /// across functions and aiding debugging.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum UniVarSource<'db> {
     /// Type variable created within a specific function.
     /// - `func_id`: The function definition ID (provides unique identification)
@@ -53,13 +53,15 @@ pub enum UniVarSource<'db> {
 #[salsa::interned(debug)]
 pub struct UniVarId<'db> {
     /// The source of this type variable.
+    #[returns(copy)]
     pub source: UniVarSource<'db>,
     /// Index within the type scheme's parameters (0, 1, 2, ...).
+    #[returns(copy)]
     pub index: u32,
 }
 
 /// The different kinds of types.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum TypeKind<'db> {
     // === Primitive types ===
     /// Signed integer type (arbitrary precision)
@@ -214,18 +216,19 @@ pub struct TypeScheme<'db> {
     #[returns(ref)]
     pub row_removals: Vec<RowRemoval<'db>>,
     /// The body type with BoundVar references to type_params.
+    #[returns(copy)]
     pub body: Type<'db>,
 }
 
 /// An exact set union retained through inference and generalization.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct RowUnion<'db> {
     pub sources: Vec<EffectRow<'db>>,
     pub result: EffectRow<'db>,
 }
 
 /// Exact handler subtraction, retained while source tails or type arguments are open.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct RowRemoval<'db> {
     pub source: EffectRow<'db>,
     pub removed: EffectRow<'db>,
@@ -400,7 +403,7 @@ impl<'db> TypeSchemeBuilder<'db> {
 }
 
 /// A type parameter in a type scheme.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TypeParam {
     /// Optional name for the type parameter (for error messages).
     pub name: Option<Symbol>,
@@ -429,7 +432,7 @@ impl TypeParam {
 /// Kind (type of types) for higher-kinded type support.
 ///
 /// Currently simple, can be extended for full higher-kinded polymorphism.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Kind {
     /// The kind of concrete types (e.g., Int, Bool, List(Int)).
     Type,
@@ -450,6 +453,7 @@ pub struct EffectRow<'db> {
     ///
     /// If Some, this row can have additional unknown effects.
     /// If None, this is a closed row with exactly the listed effects.
+    #[returns(copy)]
     pub rest: Option<EffectVar>,
 }
 
@@ -476,7 +480,7 @@ impl<'db> EffectRow<'db> {
 }
 
 /// An individual effect (ability).
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Effect<'db> {
     /// The ability identifier (module path + name).
     pub ability_id: super::AbilityId<'db>,
@@ -485,7 +489,7 @@ pub struct Effect<'db> {
 }
 
 /// Effect row variable for row-polymorphic effects.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct EffectVar {
     pub id: u64,
 }
@@ -761,7 +765,7 @@ pub fn abilities_to_effect_row_with_origins<'db>(
 ///
 /// This represents a type before resolution and checking.
 /// It may contain unresolved names that need to be looked up.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TypeAnnotation {
     /// The node ID for span lookup.
     pub id: NodeId,
@@ -770,7 +774,7 @@ pub struct TypeAnnotation {
 }
 
 /// Kinds of type annotations in source code.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum TypeAnnotationKind {
     /// A simple type name: `Int`, `Bool`, `MyType`
     Named(Symbol),

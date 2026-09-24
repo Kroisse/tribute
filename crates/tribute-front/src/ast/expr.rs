@@ -20,20 +20,22 @@ use super::types::TypeAnnotation;
 /// - During parsing: `Expr<UnresolvedName>`
 /// - After resolve: `Expr<ResolvedRef<'db>>`
 /// - After typecheck: `Expr<TypedRef<'db>>`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Expr<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Unique identifier for span lookup.
     pub id: NodeId,
     /// The kind of expression.
+    // The recursive AST owns its children; V is the only phase-dependent value.
+    #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
     pub kind: Box<ExprKind<V>>,
 }
 
 impl<V> Expr<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Create a new expression with the given ID and kind.
     pub fn new(id: NodeId, kind: ExprKind<V>) -> Self {
@@ -45,10 +47,10 @@ where
 }
 
 /// The different kinds of expressions.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum ExprKind<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     // === References ===
     /// Variable or function reference.
@@ -153,10 +155,10 @@ where
 }
 
 /// A statement in a block.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum Stmt<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Let binding: `let pattern = expr`
     Let {
@@ -171,10 +173,10 @@ where
 }
 
 /// A case arm in pattern matching.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Arm<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -187,10 +189,10 @@ where
 }
 
 /// A handler arm in a handle expression.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct HandlerArm<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -201,10 +203,10 @@ where
 }
 
 /// The kind of handler arm.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum HandlerKind<V>
 where
-    V: salsa::Update,
+    V: salsa::SalsaValue,
 {
     /// Completion handler: `do result { body }`
     Do { binding: Pattern<V> },
@@ -229,7 +231,7 @@ where
 }
 
 /// A function parameter.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct Param {
     /// Node ID for span lookup.
     pub id: NodeId,

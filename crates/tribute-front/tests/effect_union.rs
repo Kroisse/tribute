@@ -3,7 +3,7 @@ use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::{SourceCst, ast::TypeKind, typeck::TypeCheckOutput};
 
-#[salsa::tracked]
+#[salsa::tracked(returns(copy))]
 fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
     let parsed = tribute_front::query::parsed_ast(db, source).unwrap();
     let spans = parsed.span_map(db).clone();

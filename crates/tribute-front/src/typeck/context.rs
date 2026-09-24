@@ -25,7 +25,7 @@ use crate::ast::{
 pub type StructFieldInfo<'db> = (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>);
 
 /// Information about an ability operation.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct AbilityOpInfo<'db> {
     /// Operation name.
     pub name: Symbol,
@@ -52,7 +52,7 @@ pub struct AbilityInfo<'db> {
 ///
 /// Stored in the method index, keyed by method name. Receiver type
 /// disambiguation happens at lookup time via `receiver_type_matches`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct MethodEntry<'db> {
     pub func_id: FuncDefId<'db>,
     pub func_ty: Type<'db>,

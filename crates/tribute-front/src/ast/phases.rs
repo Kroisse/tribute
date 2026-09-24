@@ -34,7 +34,7 @@ use super::types::Type;
 /// - `foo` → `{ qualified: "foo" }`
 /// - `State::get` → `{ qualified: "State::get" }`
 /// - `a::b::c` → `{ qualified: "a::b::c" }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct UnresolvedName {
     /// The full qualified symbol (e.g. `"std::io::State"` or `"foo"`).
     pub qualified: Symbol,
@@ -79,7 +79,7 @@ impl Display for UnresolvedName {
 /// LocalIds are unique within a function scope and are assigned
 /// during name resolution. They provide stable identity for
 /// variables even if the same name is shadowed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct LocalId(u32);
 
 impl LocalId {
@@ -113,6 +113,7 @@ impl LocalId {
 #[salsa::interned(debug)]
 pub struct FuncDefId<'db> {
     /// The fully qualified name (e.g., `"foo::bar::func_name"`).
+    #[returns(copy)]
     pub qualified: Symbol,
 }
 
@@ -124,13 +125,13 @@ impl<'db> FuncDefId<'db> {
 }
 
 /// Compiler-owned nominal types whose identity cannot be supplied by source.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum BuiltinType {
     List,
 }
 
 /// The origin of a nominal type definition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum TypeOrigin {
     /// A source declaration, identified independently of its spelling.
     Source(NodeId),
@@ -148,8 +149,10 @@ pub enum TypeOrigin {
 /// names are identical.
 #[salsa::interned(debug)]
 pub struct TypeDefId<'db> {
+    #[returns(copy)]
     pub origin: TypeOrigin,
     /// The fully qualified name (e.g., `"std::option::Option"`).
+    #[returns(copy)]
     pub qualified: Symbol,
 }
 
@@ -195,6 +198,7 @@ impl<'db> TypeDefId<'db> {
 #[salsa::interned(debug)]
 pub struct CtorId<'db> {
     /// The fully qualified name (e.g., `"std::option::Some"`).
+    #[returns(copy)]
     pub qualified: Symbol,
 }
 
@@ -206,13 +210,13 @@ impl<'db> CtorId<'db> {
 }
 
 /// Compiler-owned abilities with semantics that source declarations cannot request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum BuiltinAbility {
     Io,
 }
 
 /// The origin of an ability identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum AbilityOrigin {
     Source,
     Builtin(BuiltinAbility),
@@ -227,8 +231,10 @@ pub enum AbilityOrigin {
 /// name always produce the same AbilityId, regardless of where it's created.
 #[salsa::interned(debug)]
 pub struct AbilityId<'db> {
+    #[returns(copy)]
     pub origin: AbilityOrigin,
     /// The fully qualified name (e.g., `"std::state::State"`).
+    #[returns(copy)]
     pub qualified: Symbol,
 }
 
@@ -281,7 +287,7 @@ pub struct ModulePath<'db> {
 /// A resolved reference to a definition.
 ///
 /// After name resolution, we know exactly what each name refers to.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum ResolvedRef<'db> {
     /// Reference to a local variable (function parameter or let binding).
     Local {
@@ -378,7 +384,7 @@ impl<'db> ResolvedRef<'db> {
 /// A resolved reference with type information.
 ///
 /// After type checking, every reference has a known type.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::Update)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct TypedRef<'db> {
     /// The resolved reference.
     pub resolved: ResolvedRef<'db>,

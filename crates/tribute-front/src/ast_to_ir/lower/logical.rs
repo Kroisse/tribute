@@ -2384,7 +2384,7 @@ mod tests {
     use trunk_ir::context::BlockData;
     use trunk_ir::location::Span;
 
-    #[salsa::tracked]
+    #[salsa::tracked(returns(copy))]
     fn operation_arguments_use_resolved_parameter_types_inner(db: &dyn salsa::Database) -> bool {
         let mut ir = IrContext::new();
         let path = ir.intern_path("logical.trb".to_owned());
