@@ -4649,7 +4649,7 @@ mod tests {
     tribute_control.return %result
   }
 }"#,
-                "requires 'callee' attribute",
+                "missing required attribute `callee`",
             ),
             (
                 r#"core.module @test {
@@ -4667,7 +4667,7 @@ mod tests {
     tribute_control.return %result
   }
 }"#,
-                "callee operand must have tribute_control.func_sig type",
+                "expected S: tribute_control.func_sig",
             ),
             (
                 r#"core.module @test {
@@ -4676,7 +4676,7 @@ mod tests {
     tribute_control.return %result
   }
 }"#,
-                "requires 'ability_ref' attribute",
+                "missing required attribute `ability_ref`",
             ),
             (
                 r#"core.module @test {
@@ -4685,7 +4685,7 @@ mod tests {
     tribute_control.return %result
   }
 }"#,
-                "expects 3 region(s)",
+                "expected 3 region(s)",
             ),
         ];
         for (input, expected) in malformed {
@@ -4858,7 +4858,7 @@ mod tests {
 }"#;
         let (ctx, module) = parse(local_input);
         let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[]).unwrap_err();
-        assert!(error.to_string().contains("expects 1 operand"), "{error}");
+        assert!(error.to_string().contains("expected 1 operand"), "{error}");
 
         let core_input = r#"core.module @test {
   tribute_control.func @broken(%value: core.i32) -> core.i32 convention(direct) {

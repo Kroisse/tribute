@@ -10,6 +10,7 @@ use std::fmt;
 use itertools::Itertools;
 use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
+use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
@@ -71,32 +72,34 @@ mod tribute_control {
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
-    #[attr(sym_name: Symbol, r#type: Type)]
-    fn func() {
+    fn func<S: FuncSig>(sym_name: Attr<Symbol>, r#type: Attr<S::Type>) {
         #[region(body?)]
         {}
     }
 
-    fn lambda(#[rest] captures: ()) -> result {
+    fn lambda(captures: Variadic<_>) -> Value<impl FuncSig> {
         #[region(body)]
         {}
     }
 
-    #[attr(func_ref: Symbol)]
-    fn func_ref() -> result {}
+    fn func_ref(func_ref: Attr<Symbol>) -> Value<impl FuncSig> {}
 
-    #[attr(callee: Symbol)]
-    fn call(#[rest] args: ()) -> result {}
+    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Value<_> {}
 
-    fn call_indirect(callee: (), #[rest] args: ()) -> result {}
+    fn call_indirect<S: FuncSig>(callee: Value<S>, args: Values<S::Inputs>) -> Value<S::Result> {}
 
-    fn r#return(value: ()) {}
+    fn r#return(value: Value<_>) {}
 
     // Direct-style control operations
-    #[attr(ability_ref: Type, op_name: Symbol, operation_kind: Symbol)]
-    fn perform(#[rest] args: ()) -> result {}
+    fn perform(
+        ability_ref: Attr<Type>,
+        op_name: Attr<Symbol>,
+        operation_kind: Attr<Symbol>,
+        args: Variadic<_>,
+    ) -> Value<_> {
+    }
 
-    fn handle() -> result {
+    fn handle() -> Value<_> {
         #[region(body)]
         {}
         #[region(completion)]
@@ -105,20 +108,19 @@ mod tribute_control {
         {}
     }
 
-    #[attr(
-        ability_ref: Type,
-        op_name: Symbol,
-        kind: Symbol,
-        operation_result_type: Type
-    )]
-    fn handler() {
+    fn handler(
+        ability_ref: Attr<Type>,
+        op_name: Attr<Symbol>,
+        kind: Attr<Symbol>,
+        operation_result_type: Attr<Type>,
+    ) {
         #[region(body)]
         {}
     }
 
     fn resume<T: ResumeToken>(resume_token: Value<T>, value: Value<T::Input>) -> Value<T::Answer> {}
 
-    fn r#yield(value: ()) {}
+    fn r#yield(value: Value<_>) {}
 }
 
 /// Why a name-matching source signature does not satisfy its storage contract.
@@ -149,6 +151,38 @@ impl DialectType for FuncSig {
     fn as_type_ref(&self) -> TypeRef {
         self.0
     }
+}
+
+impl trunk_ir::type_constraint::TypeConstraint for FuncSig {
+    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
+        &trunk_ir::type_constraint::ConstraintDesc {
+            name: "tribute_control.func_sig",
+            exact: true,
+            projections: &[
+                trunk_ir::type_constraint::ProjectionDesc {
+                    name: "Inputs",
+                    kind: trunk_ir::type_constraint::ProjectionKind::List,
+                },
+                trunk_ir::type_constraint::ProjectionDesc {
+                    name: "Result",
+                    kind: trunk_ir::type_constraint::ProjectionKind::One,
+                },
+            ],
+            matches: |ctx, ty| FuncSig::from_type_ref(ctx, ty).is_some(),
+            project: |ctx, ty, index| {
+                let signature = FuncSig::from_type_ref(ctx, ty)?;
+                match index {
+                    0 => Some(trunk_ir::type_constraint::Projected::List(
+                        signature.inputs(ctx),
+                    )),
+                    1 => Some(trunk_ir::type_constraint::Projected::One(
+                        signature.result(ctx),
+                    )),
+                    _ => None,
+                }
+            },
+            fixed: None,
+        };
 }
 
 impl From<FuncSig> for TypeRef {
@@ -987,16 +1021,11 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
 fn validate_attr_keys(
     ctx: &IrContext,
     op: OpRef,
-    required: &[&str],
+    schema: &OpSchema,
     allowed_extra: bool,
     errors: &mut Vec<ValidationError>,
 ) {
     let data = ctx.op(op);
-    for key in required {
-        if data.attributes.get(*key).is_none() {
-            push_op_error(ctx, op, errors, format!("requires '{key}' attribute"));
-        }
-    }
     if data.attributes.get(CALLING_CONVENTION_ATTR).is_some() {
         push_op_error(
             ctx,
@@ -1007,112 +1036,19 @@ fn validate_attr_keys(
             ),
         );
     }
-    if !allowed_extra {
-        let allowed: HashSet<Symbol> = required
-            .iter()
-            .map(|key| Symbol::from_dynamic(key))
-            .collect();
-        for key in data.attributes.keys() {
-            if !allowed.contains(key) {
-                push_op_error(
-                    ctx,
-                    op,
-                    errors,
-                    format!("has unsupported attribute '{key}'"),
-                );
-            }
-        }
+    if allowed_extra {
+        return;
     }
-}
-
-#[derive(Clone, Copy)]
-enum AttributeKind {
-    Symbol,
-    Type,
-}
-
-impl AttributeKind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Symbol => "Symbol",
-            Self::Type => "Type",
-        }
-    }
-
-    fn matches(self, attribute: &Attribute) -> bool {
-        matches!(
-            (self, attribute),
-            (Self::Symbol, Attribute::Symbol(_)) | (Self::Type, Attribute::Type(_))
-        )
-    }
-}
-
-fn validate_attr_types(
-    ctx: &IrContext,
-    op: OpRef,
-    required: &[(&str, AttributeKind)],
-    errors: &mut Vec<ValidationError>,
-) {
-    for (key, kind) in required {
-        if let Some(attribute) = ctx.op(op).attributes.get(*key)
-            && !kind.matches(attribute)
-        {
+    for key in data.attributes.keys() {
+        let declared = key.with_str(|key| schema.attributes.iter().any(|attr| attr.name == key));
+        if !declared {
             push_op_error(
                 ctx,
                 op,
                 errors,
-                format!("attribute '{key}' must be {}", kind.name()),
+                format!("has unsupported attribute '{key}'"),
             );
         }
-    }
-}
-
-fn validate_arity(
-    ctx: &IrContext,
-    op: OpRef,
-    operands: Option<usize>,
-    results: Option<usize>,
-    regions: Option<usize>,
-    errors: &mut Vec<ValidationError>,
-) {
-    if let Some(expected) = operands
-        && ctx.op_operands(op).len() != expected
-    {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            format!(
-                "expects {expected} operand(s), found {}",
-                ctx.op_operands(op).len()
-            ),
-        );
-    }
-    if let Some(expected) = results
-        && ctx.op_results(op).len() != expected
-    {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            format!(
-                "expects {expected} result(s), found {}",
-                ctx.op_results(op).len()
-            ),
-        );
-    }
-    if let Some(expected) = regions
-        && ctx.op(op).regions.len() != expected
-    {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            format!(
-                "expects {expected} region(s), found {}",
-                ctx.op(op).regions.len()
-            ),
-        );
     }
 }
 
@@ -1207,15 +1143,8 @@ fn validate_callable_body(
     body: RegionRef,
     errors: &mut Vec<ValidationError>,
 ) {
-    let Some((result_ty, params, _)) = func_sig_parts(ctx, callable_ty) else {
-        push_op_error(
-            ctx,
-            owner,
-            errors,
-            "requires a valid tribute_control.func_sig signature",
-        );
-        return;
-    };
+    let (result_ty, params, _) =
+        func_sig_parts(ctx, callable_ty).expect("schema-verified tribute_control.func_sig");
     let Some(block) = single_block(ctx, owner, body, "body", errors) else {
         return;
     };
@@ -1290,8 +1219,6 @@ fn validate_func_isolation(
 }
 
 fn validate_return_or_yield_shape(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, Some(1), Some(0), Some(0), errors);
-    validate_attr_keys(ctx, op, &[], false, errors);
     let Some(block) = ctx.op(op).parent_block else {
         push_op_error(ctx, op, errors, "must be attached to a block");
         return;
@@ -1302,82 +1229,19 @@ fn validate_return_or_yield_shape(ctx: &IrContext, op: OpRef, errors: &mut Vec<V
 }
 
 fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, Some(0), Some(0), None, errors);
-    validate_attr_keys(ctx, op, &["sym_name", "type"], true, errors);
-    validate_attr_types(
-        ctx,
-        op,
-        &[
-            ("sym_name", AttributeKind::Symbol),
-            ("type", AttributeKind::Type),
-        ],
-        errors,
-    );
-    let Some(callable_ty) = ctx.op(op).attributes.get_type("type") else {
-        return;
-    };
-    if !FuncSig::matches(ctx, callable_ty) {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            "type attribute must be tribute_control.func_sig",
-        );
-    }
-    match ctx.op(op).regions.as_slice() {
-        [] => {}
-        [body] => {
-            validate_callable_body(ctx, op, callable_ty, *body, errors);
-            validate_func_isolation(ctx, op, *body, errors);
-        }
-        regions => push_op_error(
-            ctx,
-            op,
-            errors,
-            format!("expects zero or one body region, found {}", regions.len()),
-        ),
+    let func = Func::from_op(ctx, op).expect("schema-verified tribute_control.func");
+    if let Some(&body) = ctx.op(op).regions.first() {
+        validate_callable_body(ctx, op, func.r#type(ctx), body, errors);
+        validate_func_isolation(ctx, op, body, errors);
     }
 }
 
 fn validate_lambda(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, None, Some(1), Some(1), errors);
-    validate_attr_keys(ctx, op, &[], true, errors);
-    let Some(&callable_ty) = ctx.op_result_types(op).first() else {
-        return;
-    };
-    if !FuncSig::matches(ctx, callable_ty) {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            "result must have tribute_control.func_sig type",
-        );
-    }
-    if let Some(&body) = ctx.op(op).regions.first() {
-        validate_callable_body(ctx, op, callable_ty, body, errors);
-    }
-}
-
-fn validate_func_ref(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, Some(0), Some(1), Some(0), errors);
-    validate_attr_keys(ctx, op, &["func_ref"], false, errors);
-    validate_attr_types(ctx, op, &[("func_ref", AttributeKind::Symbol)], errors);
-    if let Some(&ty) = ctx.op_result_types(op).first()
-        && !FuncSig::matches(ctx, ty)
-    {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            "result must have tribute_control.func_sig type",
-        );
-    }
+    let lambda = Lambda::from_op(ctx, op).expect("schema-verified tribute_control.lambda");
+    validate_callable_body(ctx, op, lambda.result_ty(ctx), lambda.body(ctx), errors);
 }
 
 fn validate_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, None, Some(1), Some(0), errors);
-    validate_attr_keys(ctx, op, &["callee"], false, errors);
-    validate_attr_types(ctx, op, &[("callee", AttributeKind::Symbol)], errors);
     let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
         .into_iter()
         .chain(ctx.op_result_types(op).iter().copied())
@@ -1385,41 +1249,6 @@ fn validate_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) 
     if has_unresolved_type {
         push_op_error(ctx, op, errors, "operands and result must be resolved");
     }
-}
-
-fn validate_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, None, Some(1), Some(0), errors);
-    validate_attr_keys(ctx, op, &[], false, errors);
-    let Some((&callee, args)) = ctx.op_operands(op).split_first() else {
-        push_op_error(ctx, op, errors, "requires a callable callee operand");
-        return;
-    };
-    let callee_ty = ctx.value_ty(callee);
-    let Some((result, params, _)) = func_sig_parts(ctx, callee_ty) else {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            "callee operand must have tribute_control.func_sig type",
-        );
-        return;
-    };
-    check_types_equal(
-        ctx,
-        op,
-        &value_types(ctx, args),
-        &params,
-        "argument",
-        errors,
-    );
-    check_types_equal(
-        ctx,
-        op,
-        ctx.op_result_types(op),
-        &[result],
-        "result",
-        errors,
-    );
 }
 
 fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
@@ -1462,24 +1291,6 @@ fn validate_return(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
 }
 
 fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, None, Some(1), Some(0), errors);
-    validate_attr_keys(
-        ctx,
-        op,
-        &["ability_ref", "op_name", "operation_kind"],
-        false,
-        errors,
-    );
-    validate_attr_types(
-        ctx,
-        op,
-        &[
-            ("ability_ref", AttributeKind::Type),
-            ("op_name", AttributeKind::Symbol),
-            ("operation_kind", AttributeKind::Symbol),
-        ],
-        errors,
-    );
     match ctx.op(op).attributes.get_symbol("operation_kind") {
         Some(kind) if kind == Symbol::new("fn") || kind == Symbol::new("op") => {}
         Some(kind) => push_op_error(
@@ -1500,8 +1311,6 @@ fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
 }
 
 fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, Some(0), Some(1), Some(3), errors);
-    validate_attr_keys(ctx, op, &[], false, errors);
     let [body_region, completion_region, handlers_region] = ctx.op(op).regions.as_slice() else {
         return;
     };
@@ -1619,25 +1428,6 @@ fn region_contains_resume(ctx: &IrContext, region: RegionRef) -> bool {
 }
 
 fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, Some(0), Some(0), Some(1), errors);
-    validate_attr_keys(
-        ctx,
-        op,
-        &["ability_ref", "op_name", "kind", "operation_result_type"],
-        false,
-        errors,
-    );
-    validate_attr_types(
-        ctx,
-        op,
-        &[
-            ("ability_ref", AttributeKind::Type),
-            ("op_name", AttributeKind::Symbol),
-            ("kind", AttributeKind::Symbol),
-            ("operation_result_type", AttributeKind::Type),
-        ],
-        errors,
-    );
     let kind = ctx.op(op).attributes.get_symbol("kind");
     if !matches!(kind, Some(k) if k == Symbol::new("fn") || k == Symbol::new("op"))
         && let Some(kind) = kind
@@ -1759,14 +1549,6 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
     }
 }
 
-fn validate_resume(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_attr_keys(ctx, op, &[], false, errors);
-    // Counts and the token input/answer relation come from the declared schema.
-    for violation in Resume::SCHEMA.verify(ctx, op) {
-        push_op_error(ctx, op, errors, violation.to_string());
-    }
-}
-
 fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     validate_return_or_yield_shape(ctx, op, errors);
     if let Some(&value) = ctx.op_operands(op).first()
@@ -1800,24 +1582,42 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
     if data.dialect != Symbol::new("tribute_control") {
         return;
     }
-    match data.name.with_str(|name| name.to_owned()).as_str() {
-        "func" => validate_func(ctx, op, errors),
-        "lambda" => validate_lambda(ctx, op, errors),
-        "func_ref" => validate_func_ref(ctx, op, errors),
-        "call" => validate_call(ctx, op, errors),
-        "call_indirect" => validate_call_indirect(ctx, op, errors),
-        "return" => validate_return(ctx, op, errors),
-        "perform" => validate_perform(ctx, op, errors),
-        "handle" => validate_handle(ctx, op, errors),
-        "handler" => validate_handler(ctx, op, errors),
-        "resume" => validate_resume(ctx, op, errors),
-        "yield" => validate_yield(ctx, op, errors),
-        name => push_op_error(
+    let name = data.name.with_str(|name| name.to_owned());
+    let Some(schema) = OpSchema::of(ctx, op) else {
+        push_op_error(
             ctx,
             op,
             errors,
             format!("unsupported tribute_control operation '{name}'"),
-        ),
+        );
+        return;
+    };
+    // Counts, attribute kinds, and declared type relations come from the
+    // schema; the checks below assume them.
+    let violations = schema.verify(ctx, op);
+    if !violations.is_empty() {
+        for violation in violations {
+            push_op_error(ctx, op, errors, violation.to_string());
+        }
+        return;
+    }
+    validate_attr_keys(
+        ctx,
+        op,
+        schema,
+        matches!(name.as_str(), "func" | "lambda"),
+        errors,
+    );
+    match name.as_str() {
+        "func" => validate_func(ctx, op, errors),
+        "lambda" => validate_lambda(ctx, op, errors),
+        "call" => validate_call(ctx, op, errors),
+        "return" => validate_return(ctx, op, errors),
+        "perform" => validate_perform(ctx, op, errors),
+        "handle" => validate_handle(ctx, op, errors),
+        "handler" => validate_handler(ctx, op, errors),
+        "yield" => validate_yield(ctx, op, errors),
+        _ => {}
     }
 }
 
@@ -3366,10 +3166,14 @@ mod tests {
     ) -> Func {
         let entry = block(ctx, loc, &[value_ty]);
         let value = ctx.block_arg(entry, 0);
-        let ret = r#return(ctx, loc, value);
+        let ret = Return::operands(value).build(ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let body = region(ctx, loc, entry);
-        func(ctx, loc, Symbol::from_dynamic(symbol), ty, body)
+        Func::builder()
+            .sym_name(Symbol::from_dynamic(symbol))
+            .r#type(ty)
+            .regions(body)
+            .build(ctx, loc)
     }
 
     struct ValidFixture {
@@ -3392,41 +3196,47 @@ mod tests {
         let entry = block(&mut ctx, loc, &[i32_ty]);
         let x = ctx.block_arg(entry, 0);
 
-        let function_ref = func_ref(&mut ctx, loc, direct, Symbol::new("id"));
+        let function_ref = FuncRef::builder()
+            .func_ref(Symbol::new("id"))
+            .results(direct)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, function_ref.op_ref());
         let function_ref_value = function_ref.result(&ctx);
-        let direct_call = call(&mut ctx, loc, [x], i32_ty, Symbol::new("id"));
+        let direct_call = Call::operands([x])
+            .callee(Symbol::new("id"))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, direct_call.op_ref());
-        let indirect_call = call_indirect(&mut ctx, loc, function_ref_value, [x], i32_ty);
+        let indirect_call = CallIndirect::operands(function_ref_value, [x]).build(&mut ctx, loc);
         ctx.push_op(entry, indirect_call.op_ref());
 
         let lambda_ty = func_sig(&mut ctx, i32_ty, [], CallingConvention::Direct).as_type_ref();
         let lambda_block = block(&mut ctx, loc, &[]);
-        let lambda_return = r#return(&mut ctx, loc, x);
+        let lambda_return = Return::operands(x).build(&mut ctx, loc);
         ctx.push_op(lambda_block, lambda_return.op_ref());
         let lambda_body = region(&mut ctx, loc, lambda_block);
-        let lambda = lambda(&mut ctx, loc, [x], lambda_ty, lambda_body);
+        let lambda = Lambda::operands([x])
+            .results(lambda_ty)
+            .regions(lambda_body)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, lambda.op_ref());
 
         let body_block = block(&mut ctx, loc, &[]);
-        let perform = perform(
-            &mut ctx,
-            loc,
-            [x],
-            i32_ty,
-            ability,
-            Symbol::new("get"),
-            Symbol::new("op"),
-        );
+        let perform = Perform::operands([x])
+            .ability_ref(ability)
+            .op_name(Symbol::new("get"))
+            .operation_kind(Symbol::new("op"))
+            .results(i32_ty)
+            .build(&mut ctx, loc);
         ctx.push_op(body_block, perform.op_ref());
         let perform_result = perform.result(&ctx);
-        let body_yield = r#yield(&mut ctx, loc, perform_result);
+        let body_yield = Yield::operands(perform_result).build(&mut ctx, loc);
         ctx.push_op(body_block, body_yield.op_ref());
         let handle_body = region(&mut ctx, loc, body_block);
 
         let completion_block = block(&mut ctx, loc, &[i32_ty]);
         let completed = ctx.block_arg(completion_block, 0);
-        let completion_yield = r#yield(&mut ctx, loc, completed);
+        let completion_yield = Yield::operands(completed).build(&mut ctx, loc);
         ctx.push_op(completion_block, completion_yield.op_ref());
         let completion = region(&mut ctx, loc, completion_block);
 
@@ -3437,29 +3247,34 @@ mod tests {
         let resume_op = Resume::operands(token, operation_arg).build(&mut ctx, loc);
         ctx.push_op(handler_block, resume_op.op_ref());
         let resumed_value = resume_op.result(&ctx);
-        let handler_yield = r#yield(&mut ctx, loc, resumed_value);
+        let handler_yield = Yield::operands(resumed_value).build(&mut ctx, loc);
         ctx.push_op(handler_block, handler_yield.op_ref());
         let handler_body = region(&mut ctx, loc, handler_block);
-        let handler = handler(
-            &mut ctx,
-            loc,
-            ability,
-            Symbol::new("get"),
-            Symbol::new("op"),
-            i32_ty,
-            handler_body,
-        );
+        let handler = Handler::builder()
+            .ability_ref(ability)
+            .op_name(Symbol::new("get"))
+            .kind(Symbol::new("op"))
+            .operation_result_type(i32_ty)
+            .regions(handler_body)
+            .build(&mut ctx, loc);
 
         let handlers_block = block(&mut ctx, loc, &[]);
         ctx.push_op(handlers_block, handler.op_ref());
         let handlers = region(&mut ctx, loc, handlers_block);
-        let handle = handle(&mut ctx, loc, i32_ty, handle_body, completion, handlers);
+        let handle = Handle::builder()
+            .results(i32_ty)
+            .regions(handle_body, completion, handlers)
+            .build(&mut ctx, loc);
         ctx.push_op(entry, handle.op_ref());
         let handle_result = handle.result(&ctx);
-        let ret = r#return(&mut ctx, loc, handle_result);
+        let ret = Return::operands(handle_result).build(&mut ctx, loc);
         ctx.push_op(entry, ret.op_ref());
         let control_body = region(&mut ctx, loc, entry);
-        let control = func(&mut ctx, loc, Symbol::new("control"), direct, control_body);
+        let control = Func::builder()
+            .sym_name(Symbol::new("control"))
+            .r#type(direct)
+            .regions(control_body)
+            .build(&mut ctx, loc);
 
         let module = module(&mut ctx, loc, &[id.op_ref(), control.op_ref()]);
         let declarations = vec![OperationDeclaration::new(
@@ -3909,7 +3724,10 @@ mod tests {
 
         let errors = validate_local(&ctx, module);
         let errors = messages(&errors);
-        assert!(errors.contains("requires 'type' attribute"), "{errors}");
+        assert!(
+            errors.contains("missing required attribute `type`"),
+            "{errors}"
+        );
         assert!(
             errors.contains("malformed tribute_control.func_sig"),
             "{errors}"
@@ -4025,37 +3843,37 @@ mod tests {
             &result,
             malformed_func,
             &[
-                "attribute 'sym_name' must be Symbol",
-                "attribute 'type' must be Type",
+                "attribute `sym_name` must be a Symbol attribute",
+                "attribute `type` must be a Type attribute",
             ],
         );
         assert_op_diagnostics(
             &result,
             control_op(&ctx, module, "func_ref"),
-            &["attribute 'func_ref' must be Symbol"],
+            &["attribute `func_ref` must be a Symbol attribute"],
         );
         assert_op_diagnostics(
             &result,
             control_op(&ctx, module, "call"),
-            &["attribute 'callee' must be Symbol"],
+            &["attribute `callee` must be a Symbol attribute"],
         );
         assert_op_diagnostics(
             &result,
             control_op(&ctx, module, "perform"),
             &[
-                "attribute 'ability_ref' must be Type",
-                "attribute 'op_name' must be Symbol",
-                "attribute 'operation_kind' must be Symbol",
+                "attribute `ability_ref` must be a Type attribute",
+                "attribute `op_name` must be a Symbol attribute",
+                "attribute `operation_kind` must be a Symbol attribute",
             ],
         );
         assert_op_diagnostics(
             &result,
             control_op(&ctx, module, "handler"),
             &[
-                "attribute 'ability_ref' must be Type",
-                "attribute 'op_name' must be Symbol",
-                "attribute 'kind' must be Symbol",
-                "attribute 'operation_result_type' must be Type",
+                "attribute `ability_ref` must be a Type attribute",
+                "attribute `op_name` must be a Symbol attribute",
+                "attribute `kind` must be a Symbol attribute",
+                "attribute `operation_result_type` must be a Type attribute",
             ],
         );
     }
@@ -4139,9 +3957,9 @@ mod tests {
 
         let result = validate_local(&ctx, module);
         let messages = messages(&result);
-        assert!(messages.contains("expects 3 region(s), found 2"));
+        assert!(messages.contains("expected 3 region(s), found 2"));
         assert!(messages.contains("must terminate with tribute_control.return"));
-        assert!(messages.contains("requires a callable callee operand"));
+        assert!(messages.contains("expected at least 1 operand(s), found 0"));
     }
 
     #[test]
@@ -4159,14 +3977,17 @@ mod tests {
   %bad_lambda = tribute_control.lambda() -> core.i32 convention(direct) captures [%integer] {
     tribute_control.return %integer
   }
-  %bad_ref0, %bad_ref1 = tribute_control.func_ref %integer {func_ref = @bad_func, unexpected = 1} : core.i32, core.bool
+  %bad_ref = tribute_control.func_ref {func_ref = @bad_func, unexpected = 1} : !direct
   %bad_call0, %bad_call1 = tribute_control.call {unexpected = 1} : core.i32, core.bool {
   }
   %non_callable = tribute_control.call_indirect %integer, %boolean : core.i32
   %callable = tribute_control.func_ref {func_ref = @bad_func} : !direct
   %mismatched = tribute_control.call_indirect %callable, %boolean : core.bool
   %bad_perform = tribute_control.perform %integer {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @bogus} : core.i32
-  tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, op_name = @get, kind = @bogus, operation_result_type = core.i32}
+  tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, op_name = @get, kind = @bogus, operation_result_type = core.i32} {
+    ^clause(%argument: core.i32):
+      tribute_control.yield %argument
+  }
   %bad_resume = tribute_control.resume %integer, %boolean : core.bool
   %token = test.token : !token
   %mismatched_resume = tribute_control.resume %token, %boolean : core.bool
@@ -4249,55 +4070,42 @@ mod tests {
             &result,
             missing_func,
             &[
-                "expects 0 operand(s), found 1",
-                "requires 'sym_name' attribute",
-                "requires 'type' attribute",
+                "expected 0 operand(s), found 1",
+                "missing required attribute `sym_name`",
+                "missing required attribute `type`",
             ],
         );
-        assert_op_diagnostics(
-            &result,
-            bad_func,
-            &[
-                "type attribute must be tribute_control.func_sig",
-                "expects zero or one body region, found 2",
-            ],
-        );
+        assert_op_diagnostics(&result, bad_func, &["expected 0 to 1 region(s), found 2"]);
         assert_op_diagnostics(
             &result,
             bad_lambda,
-            &["result must have tribute_control.func_sig type"],
+            &["result #0 `result`: expected tribute_control.func_sig, found core.i32"],
         );
         assert_op_diagnostics(
             &result,
             bad_func_ref,
-            &[
-                "expects 0 operand(s), found 1",
-                "expects 1 result(s), found 2",
-                "has unsupported attribute 'unexpected'",
-                "result must have tribute_control.func_sig type",
-            ],
+            &["has unsupported attribute 'unexpected'"],
         );
         assert_op_diagnostics(
             &result,
             bad_call,
             &[
-                "expects 1 result(s), found 2",
-                "expects 0 region(s), found 1",
-                "requires 'callee' attribute",
-                "has unsupported attribute 'unexpected'",
+                "expected 1 result(s), found 2",
+                "expected 0 region(s), found 1",
+                "missing required attribute `callee`",
             ],
         );
         assert_op_diagnostics(
             &result,
             non_callable_indirect,
-            &["callee operand must have tribute_control.func_sig type"],
+            &["operand #0 `callee`: expected S: tribute_control.func_sig, found core.i32"],
         );
         assert_op_diagnostics(
             &result,
             mismatched_indirect,
             &[
-                "argument types do not match the logical signature",
-                "result types do not match the logical signature",
+                "operands `args`: expected S::Inputs = (core.i32), found (core.bool)",
+                "result #0 `result`: expected S::Result = core.i32, found core.bool",
             ],
         );
         assert_op_diagnostics(
@@ -4308,10 +4116,7 @@ mod tests {
         assert_op_diagnostics(
             &result,
             bad_handler,
-            &[
-                "kind must be @fn or @op, found @bogus",
-                "expects 1 region(s), found 0",
-            ],
+            &["kind must be @fn or @op, found @bogus"],
         );
         assert_op_diagnostics(
             &result,
@@ -4334,7 +4139,7 @@ mod tests {
             &["unsupported tribute_control operation 'unknown'"],
         );
 
-        let unattached_return = r#return(&mut ctx, loc, i32_value);
+        let unattached_return = Return::operands(i32_value).build(&mut ctx, loc);
         let mut return_errors = Vec::new();
         validate_local_operation(&ctx, unattached_return.op_ref(), &mut return_errors);
         let return_result = ValidationResult {
@@ -4349,7 +4154,7 @@ mod tests {
             ],
         );
 
-        let unattached_yield = r#yield(&mut ctx, loc, i32_value);
+        let unattached_yield = Yield::operands(i32_value).build(&mut ctx, loc);
         let mut yield_errors = Vec::new();
         validate_local_operation(&ctx, unattached_yield.op_ref(), &mut yield_errors);
         let yield_result = ValidationResult {
