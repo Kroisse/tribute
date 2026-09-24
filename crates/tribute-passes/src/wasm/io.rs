@@ -506,7 +506,7 @@ fn trap_if(
     nil_ty: TypeRef,
 ) {
     let trap = region(ctx, loc, |ctx, block| {
-        let unreachable = wasm_dialect::unreachable(ctx, loc);
+        let unreachable = wasm_dialect::Unreachable::builder().build(ctx, loc);
         ctx.push_op(block, unreachable.op_ref());
     });
     let ok = region(ctx, loc, |_, _| {});

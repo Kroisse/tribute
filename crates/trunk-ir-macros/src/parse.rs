@@ -25,24 +25,15 @@ pub enum DialectItem {
 pub struct OperationDef {
     /// Clean name without `r#` prefix (e.g., "return")
     pub name: String,
-    /// Original ident for use in generated code (e.g., `r#return`)
-    pub raw_ident: Ident,
     pub attrs: Vec<AttrDef>,
     pub operands: Vec<Operand>,
     pub results: ResultDef,
     pub regions: Vec<RegionOrSuccessor>,
-    pub syntax: Syntax,
     pub type_vars: Vec<TypeVar>,
     pub result_constraint: ValueExpr,
     /// `#[verify]`: call the wrapper's inherent `verify(self, ctx)` method
     /// after the schema checks. Holds the attribute's span for diagnostics.
     pub verify: Option<proc_macro2::Span>,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Syntax {
-    Legacy,
-    Typed,
 }
 
 pub struct TypeDefData {
@@ -102,7 +93,6 @@ pub struct Operand {
 pub enum ResultDef {
     None,
     Single(String),
-    Multi(Vec<String>),
     Variadic(String),
     /// Zero or one result, declared as `-> Option<result>`.
     Optional(String),
@@ -224,7 +214,16 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
 
     match kw.to_string().as_str() {
         "fn" => {
-            let mut op = parse_operation(iter, op_attrs, rest_results)?;
+            if !op_attrs.is_empty() {
+                return Err(
+                    "`#[attr(..)]` is not supported on operations; declare `Attr<..>` parameters"
+                        .into(),
+                );
+            }
+            if rest_results {
+                return Err("`#[rest_results]` is not supported; declare `-> Variadic<_>`".into());
+            }
+            let mut op = parse_operation(iter)?;
             if verify.is_some() && entity_names(&op).any(|name| name == "verify") {
                 return Err("#[verify] reserves the name `verify` for the verifier method".into());
             }
@@ -259,7 +258,6 @@ fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
         ResultDef::Single(name) | ResultDef::Variadic(name) | ResultDef::Optional(name) => {
             vec![name]
         }
-        ResultDef::Multi(names) => names.iter().map(String::as_str).collect(),
     };
     op.operands
         .iter()
@@ -378,178 +376,10 @@ fn parse_attr_type(ident: &Ident) -> Result<AttrType, String> {
 // Operation parsing
 // ============================================================================
 
-fn parse_operation(
-    iter: &mut TokenIter,
-    attrs: Vec<AttrDef>,
-    rest_results: bool,
-) -> Result<OperationDef, String> {
-    // Parse operation name
+fn parse_operation(iter: &mut TokenIter) -> Result<OperationDef, String> {
     let name_ident: Ident =
         Ident::parser(iter).map_err(|e| format!("expected operation name: {e}"))?;
-
-    if constraint::is_typed_operation(iter)? {
-        return constraint::parse_typed_operation(iter, name_ident, attrs, rest_results);
-    }
-
-    // Parse operands (with `: type` annotations)
-    let paren = expect_group(iter, Delimiter::Parenthesis)?;
-    let operands = parse_operands(paren.stream())?;
-
-    // Parse optional result: `-> result` or `-> (a, b)`
-    let results = if peek_punct(iter, '-') {
-        let r = parse_results(iter)?;
-        // Convert single result to variadic if #[rest_results] was present
-        if rest_results {
-            match r {
-                ResultDef::Single(name) => ResultDef::Variadic(name),
-                _ => {
-                    return Err(
-                        "#[rest_results] is only valid on single-name result forms (e.g., `-> results`)"
-                            .into(),
-                    );
-                }
-            }
-        } else {
-            r
-        }
-    } else if rest_results {
-        return Err("#[rest_results] requires a result definition (e.g., `-> results`)".into());
-    } else {
-        ResultDef::None
-    };
-
-    // Parse body `{ ... }` — always present, may contain regions/successors
-    let body = expect_group(iter, Delimiter::Brace)?;
-    let regions = parse_regions(body.stream())?;
-
-    Ok(OperationDef {
-        name: ident_str(&name_ident),
-        raw_ident: name_ident,
-        attrs,
-        operands,
-        results,
-        regions,
-        syntax: Syntax::Legacy,
-        type_vars: Vec::new(),
-        result_constraint: ValueExpr::Each(TypeExpr::Any),
-        verify: None,
-    })
-}
-
-/// Parse operand list: `a: (), b: (), #[rest] c: ()`.
-fn parse_operands(stream: proc_macro2::TokenStream) -> Result<Vec<Operand>, String> {
-    let mut iter = stream.to_token_iter();
-    let mut operands = Vec::new();
-
-    let mut seen_variadic = false;
-    let mut seen_names = std::collections::HashSet::new();
-
-    while has_remaining(&iter) {
-        // Check for #[rest] marker
-        let variadic = if peek_punct(&iter, '#') {
-            consume_punct(&mut iter)?;
-            let bracket = expect_group(&mut iter, Delimiter::Bracket)?;
-            let mut inner = bracket.stream().to_token_iter();
-            let kw: Ident =
-                Ident::parser(&mut inner).map_err(|e| format!("expected `rest`: {e}"))?;
-            if kw != "rest" {
-                return Err(format!("expected `rest`, got `{kw}`"));
-            }
-            expect_consumed(&inner, "#[rest]")?;
-            if seen_variadic {
-                return Err("at most one #[rest] operand is allowed".into());
-            }
-            seen_variadic = true;
-            true
-        } else {
-            if seen_variadic {
-                return Err("#[rest] operand must be the last operand".into());
-            }
-            false
-        };
-
-        let name_ident: Ident =
-            Ident::parser(&mut iter).map_err(|e| format!("expected operand name: {e}"))?;
-
-        let name = ident_str(&name_ident);
-        if !seen_names.insert(name.clone()) {
-            return Err(format!("duplicate operand name `{name}`"));
-        }
-
-        // Consume `: type` annotation (type is ignored, only name matters)
-        expect_punct(&mut iter, ':')?;
-        skip_type(&mut iter)?;
-
-        operands.push(Operand {
-            name,
-            raw_ident: name_ident,
-            variadic,
-            constraint: ValueExpr::Each(TypeExpr::Any),
-        });
-
-        // Require comma between elements (trailing comma is allowed)
-        if has_remaining(&iter) {
-            if !peek_punct(&iter, ',') {
-                return Err("expected `,` between operands".into());
-            }
-            consume_punct(&mut iter)?;
-        }
-    }
-
-    Ok(operands)
-}
-
-/// Parse result definition after `->`: single `result`, multi `(a, b)`.
-///
-/// Variadic results are indicated by the `#[rest_results]` outer attribute
-/// on the function, not by `-> #[rest] results` (which is not valid Rust).
-fn parse_results(iter: &mut TokenIter) -> Result<ResultDef, String> {
-    // Consume `->`
-    expect_punct(iter, '-')?;
-    expect_punct(iter, '>')?;
-
-    // Check for `(a, b)` (multi)
-    if peek_group(iter, Delimiter::Parenthesis) {
-        let paren = expect_group(iter, Delimiter::Parenthesis)?;
-        let mut inner = paren.stream().to_token_iter();
-
-        // Empty `-> ()` is canonicalized to no results
-        if !has_remaining(&inner) {
-            return Ok(ResultDef::None);
-        }
-
-        let mut names = Vec::new();
-        let mut seen_names = std::collections::HashSet::new();
-        while has_remaining(&inner) {
-            let ident: Ident =
-                Ident::parser(&mut inner).map_err(|e| format!("expected result name: {e}"))?;
-            let name = ident_str(&ident);
-            if !seen_names.insert(name.clone()) {
-                return Err(format!("duplicate result name: `{name}`"));
-            }
-            names.push(name);
-            if has_remaining(&inner) {
-                if peek_punct(&inner, ',') {
-                    consume_punct(&mut inner)?;
-                } else {
-                    return Err("expected `,` between result names".into());
-                }
-            }
-        }
-        return Ok(ResultDef::Multi(names));
-    }
-
-    // Single result, or `Option<name>` for zero or one result
-    let name_ident: Ident =
-        Ident::parser(iter).map_err(|e| format!("expected result name: {e}"))?;
-    if name_ident == "Option" && peek_punct(iter, '<') {
-        consume_punct(iter)?;
-        let inner: Ident = Ident::parser(iter)
-            .map_err(|e| format!("expected result name in `Option<..>`: {e}"))?;
-        expect_punct(iter, '>')?;
-        return Ok(ResultDef::Optional(ident_str(&inner)));
-    }
-    Ok(ResultDef::Single(ident_str(&name_ident)))
+    constraint::parse_typed_operation(iter, name_ident)
 }
 
 /// Parse body content: `#[region(name)] {}` and `#[successor(name)] {}`.
@@ -707,20 +537,6 @@ fn parse_angle_params(iter: &mut TokenIter) -> Result<Vec<TypeParam>, String> {
 // Helper functions
 // ============================================================================
 
-/// Skip a single type token tree in an operand's `: Type` annotation.
-///
-/// Only accepts single-token forms: an `Ident` (e.g., `Type`, `Symbol`) or a
-/// `Group` (e.g., `()`). Multi-token type expressions are not supported in the
-/// dialect macro DSL and will be rejected.
-fn skip_type(iter: &mut TokenIter) -> Result<(), String> {
-    let tt: TokenTree =
-        TokenTree::parser(iter).map_err(|e| format!("expected type annotation: {e}"))?;
-    match tt {
-        TokenTree::Ident(_) | TokenTree::Group(_) => Ok(()),
-        _ => Err(format!("expected a type name (Ident or Group), got `{tt}`")),
-    }
-}
-
 /// Strip `r#` prefix from an ident.
 fn ident_str(ident: &Ident) -> String {
     let s = ident.to_string();
@@ -729,10 +545,6 @@ fn ident_str(ident: &Ident) -> String {
 
 fn peek_punct(iter: &TokenIter, ch: char) -> bool {
     matches!(iter.clone().next(), Some(TokenTree::Punct(p)) if p.as_char() == ch)
-}
-
-fn peek_group(iter: &TokenIter, delim: Delimiter) -> bool {
-    matches!(iter.clone().next(), Some(TokenTree::Group(g)) if g.delimiter() == delim)
 }
 
 fn has_remaining(iter: &TokenIter) -> bool {
@@ -793,7 +605,7 @@ mod tests {
             quote! {},
             quote! {
                 mod arith {
-                    fn add(lhs: (), rhs: ()) -> result {}
+                    fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
                 }
             },
         )
@@ -811,7 +623,7 @@ mod tests {
             quote! { crate = crate },
             quote! {
                 mod arith {
-                    fn add(lhs: (), rhs: ()) -> result {}
+                    fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
                 }
             },
         );
@@ -826,7 +638,7 @@ mod tests {
     fn test_parse_simple_module() {
         let module = parse_test_module(quote! {
             mod arith {
-                fn add(lhs: (), rhs: ()) -> result {}
+                fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
             }
         })
         .unwrap();
@@ -849,7 +661,7 @@ mod tests {
     fn test_parse_variadic_operands() {
         let module = parse_test_module(quote! {
             mod func {
-                fn call(#[rest] args: ()) -> result {}
+                fn call(args: Variadic<_>) -> Value<_> {}
             }
         })
         .unwrap();
@@ -867,7 +679,7 @@ mod tests {
     fn test_parse_mixed_operands() {
         let module = parse_test_module(quote! {
             mod func {
-                fn call_indirect(callee: (), #[rest] args: ()) -> result {}
+                fn call_indirect(callee: Value<_>, args: Variadic<_>) -> Value<_> {}
             }
         })
         .unwrap();
@@ -887,8 +699,7 @@ mod tests {
     fn test_parse_attributes() {
         let module = parse_test_module(quote! {
             mod adt {
-                #[attr(r#type: Type, field: u32)]
-                fn struct_get(r#ref: ()) -> result {}
+                fn struct_get(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
             }
         })
         .unwrap();
@@ -909,8 +720,7 @@ mod tests {
     fn test_parse_optional_attributes() {
         let module = parse_test_module(quote! {
             mod wasm {
-                #[attr(reftype: Symbol, min: u32, max?: u32)]
-                fn table() {}
+                fn table(reftype: Attr<Symbol>, min: Attr<u32>, max: Option<Attr<u32>>) {}
             }
         })
         .unwrap();
@@ -930,8 +740,7 @@ mod tests {
     fn test_parse_regions() {
         let module = parse_test_module(quote! {
             mod func {
-                #[attr(sym_name: Symbol)]
-                fn func() {
+                fn func(sym_name: Attr<Symbol>) {
                     #[region(body)] {}
                 }
             }
@@ -953,7 +762,7 @@ mod tests {
     fn test_parse_successors() {
         let module = parse_test_module(quote! {
             mod cf {
-                fn cond_br(cond: ()) {
+                fn cond_br(cond: Value<_>) {
                     #[successor(then_dest)] {}
                     #[successor(else_dest)] {}
                 }
@@ -974,7 +783,7 @@ mod tests {
     fn test_parse_raw_identifiers() {
         let module = parse_test_module(quote! {
             mod scf {
-                fn r#return(#[rest] values: ()) {}
+                fn r#return(values: Variadic<_>) {}
             }
         })
         .unwrap();
@@ -1009,8 +818,7 @@ mod tests {
     fn test_parse_variadic_results() {
         let module = parse_test_module(quote! {
             mod wasm {
-                #[rest_results]
-                fn call(#[rest] args: ()) -> results {}
+                fn call(args: Variadic<_>) -> Variadic<_> {}
             }
         })
         .unwrap();
@@ -1026,7 +834,7 @@ mod tests {
     fn test_parse_optional_result_and_region() {
         let module = parse_test_module(quote! {
             mod test {
-                fn maybe(cond: ()) -> Option<result> {
+                fn maybe(cond: Value<_>) -> Option<Value<_>> {
                     #[region(first)]
                     {}
                     #[region(body?)]
@@ -1084,39 +892,6 @@ mod tests {
                 .unwrap()
                 .contains("successors cannot be optional")
         );
-
-        let rest = parse_test_module(quote! {
-            mod test {
-                #[rest_results]
-                fn f() -> Option<results> {}
-            }
-        });
-        assert!(
-            rest.err()
-                .unwrap()
-                .contains("#[rest_results] is only valid")
-        );
-    }
-
-    #[test]
-    fn test_parse_multi_results() {
-        let module = parse_test_module(quote! {
-            mod test {
-                fn multi() -> (a, b) {}
-            }
-        })
-        .unwrap();
-
-        let op = match &module.items[0] {
-            DialectItem::Operation(op) => op,
-            _ => panic!("expected operation"),
-        };
-        match &op.results {
-            ResultDef::Multi(names) => {
-                assert_eq!(names, &["a", "b"]);
-            }
-            _ => panic!("expected multi result"),
-        }
     }
 
     #[test]
@@ -1206,7 +981,7 @@ mod tests {
         let module = parse_test_module(quote! {
             mod core {
                 struct Nil;
-                fn add(lhs: (), rhs: ()) -> result {}
+                fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
             }
         })
         .unwrap();
@@ -1220,9 +995,9 @@ mod tests {
     fn test_parse_multiple_operations() {
         let module = parse_test_module(quote! {
             mod arith {
-                fn add(lhs: (), rhs: ()) -> result {}
-                fn sub(lhs: (), rhs: ()) -> result {}
-                fn neg(operand: ()) -> result {}
+                fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+                fn sub(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+                fn neg(operand: Value<_>) -> Value<_> {}
             }
         })
         .unwrap();
@@ -1231,91 +1006,11 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicate_attr_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                #[attr(a: u32)]
-                #[attr(b: u32)]
-                fn op() {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(err.contains("duplicate #[attr("), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn test_rest_must_be_last_operand() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn op(#[rest] a: (), b: ()) {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("must be the last operand"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_multiple_rest_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn op(#[rest] a: (), #[rest] b: ()) {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("rest") && err.contains("one"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_duplicate_attr_name_in_single_list_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                #[attr(name: Symbol, name: Type)]
-                fn op() {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("duplicate attribute name"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_rest_with_trailing_tokens_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn op(#[rest(extra)] a: ()) {}
-            }
-        });
-        assert!(result.is_err(), "should reject trailing tokens in #[rest]");
-    }
-
-    #[test]
-    fn test_rest_results_with_trailing_tokens_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                #[rest_results(foo)]
-                fn op() -> results {}
-            }
-        });
-        assert!(
-            result.is_err(),
-            "should reject trailing tokens in #[rest_results]"
-        );
-    }
-
-    #[test]
     fn test_verify_marks_operations() {
         let module = parse_test_module(quote! {
             mod test {
                 #[verify]
-                fn checked(x: ()) {}
+                fn checked(x: Value<_>) {}
                 fn plain(xs: Variadic<_>) {}
             }
         })
@@ -1363,7 +1058,7 @@ mod tests {
                 quote!(
                     mod test {
                         #[verify]
-                        fn op(verify: ()) {}
+                        fn op(verify: Value<_>) {}
                     }
                 ),
                 "reserves the name `verify`",
@@ -1378,7 +1073,7 @@ mod tests {
     fn test_parse_region_with_result() {
         let module = parse_test_module(quote! {
             mod scf {
-                fn r#if(cond: ()) -> result {
+                fn r#if(cond: Value<_>) -> Value<_> {
                     #[region(then_region)] {}
                     #[region(else_region)] {}
                 }
@@ -1408,124 +1103,24 @@ mod tests {
     }
 
     #[test]
-    fn test_duplicate_operand_name_rejected() {
+    fn test_duplicate_entity_name_rejected() {
         let result = parse_test_module(quote! {
             mod test {
-                fn op(a: (), a: ()) {}
+                fn op(a: Value<_>, a: Value<_>) {}
             }
         });
         let err = result.err().expect("should fail");
         assert!(
-            err.contains("duplicate operand name"),
+            err.contains("duplicate entity name `a`"),
             "unexpected error: {err}"
         );
     }
 
     #[test]
-    fn test_duplicate_rest_results_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                #[rest_results]
-                #[rest_results]
-                fn op() -> results {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("duplicate #[rest_results]"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_rest_results_without_arrow_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                #[rest_results]
-                fn op() {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(err.contains("#[rest_results]"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn test_multi_result_missing_comma_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn op() -> (a b) {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(err.contains(","), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn test_rest_results_with_multi_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                #[rest_results]
-                fn op() -> (a, b) {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("only valid on single-name result forms"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_empty_paren_result_is_none() {
+    fn test_trailing_comma_accepted_in_attr_params() {
         let module = parse_test_module(quote! {
             mod test {
-                fn op() -> () {}
-            }
-        })
-        .unwrap();
-
-        let op = match &module.items[0] {
-            DialectItem::Operation(op) => op,
-            _ => panic!("expected operation"),
-        };
-        assert!(matches!(op.results, ResultDef::None));
-    }
-
-    #[test]
-    fn test_attr_list_missing_comma_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                #[attr(a: u32 b: u32)]
-                fn op() {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("expected `,` between attributes"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_operand_list_missing_comma_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn op(a: () b: ()) {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("expected `,` between operands"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_trailing_comma_accepted_in_attrs() {
-        let module = parse_test_module(quote! {
-            mod test {
-                #[attr(a: u32, b: u32,)]
-                fn op() {}
+                fn op(a: Attr<u32>, b: Attr<u32>,) {}
             }
         })
         .unwrap();
@@ -1541,7 +1136,7 @@ mod tests {
     fn test_trailing_comma_accepted_in_operands() {
         let module = parse_test_module(quote! {
             mod test {
-                fn op(a: (), b: (),) {}
+                fn op(a: Value<_>, b: Value<_>,) {}
             }
         })
         .unwrap();
@@ -1563,20 +1158,6 @@ mod tests {
         let err = result.err().expect("should fail");
         assert!(
             err.contains("duplicate region/successor name"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_duplicate_result_name_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn op() -> (a, a) {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("duplicate result name"),
             "unexpected error: {err}"
         );
     }
@@ -1630,8 +1211,8 @@ mod tests {
     fn test_duplicate_operation_name_rejected() {
         let result = parse_test_module(quote! {
             mod test {
-                fn add(lhs: (), rhs: ()) -> result {}
-                fn add(a: ()) -> result {}
+                fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+                fn add(a: Value<_>) -> Value<_> {}
             }
         });
         let err = result.err().expect("should fail");

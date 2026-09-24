@@ -467,7 +467,7 @@ pub fn compose_root_entry_bridge(
         ops: smallvec![],
         parent_region: None,
     });
-    let dispatch_unreachable = func::unreachable(ctx, location);
+    let dispatch_unreachable = func::Unreachable::builder().build(ctx, location);
     ctx.push_op(dispatch_entry, dispatch_unreachable.op_ref());
     let dispatch_region = ctx.create_region(RegionData {
         location,

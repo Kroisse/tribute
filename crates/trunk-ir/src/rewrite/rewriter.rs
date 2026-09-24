@@ -290,7 +290,7 @@ mod tests {
             let block = ctx.region(region).blocks[0];
             let old = ctx.block(block).ops[0];
             let loc = ctx.op(old).location;
-            let replacement = func::unreachable(&mut ctx, loc).op_ref();
+            let replacement = func::Unreachable::builder().build(&mut ctx, loc).op_ref();
             let converter = TypeConverter::new();
             let mut rewriter = PatternRewriter::new(&converter);
             let before = print_module(&ctx, module.op());

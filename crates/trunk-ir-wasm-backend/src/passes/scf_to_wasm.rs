@@ -422,7 +422,7 @@ impl RewritePattern for ScfSwitchPattern {
             rewriter.insert_op(inserted);
         }
         if self.0.terminal_controls.contains(&op) {
-            let unreachable = wasm_dialect::unreachable(ctx, loc);
+            let unreachable = wasm_dialect::Unreachable::builder().build(ctx, loc);
             rewriter.insert_op(unreachable.op_ref());
         }
         rewriter.erase_op(vec![]);
@@ -718,7 +718,9 @@ fn replace_control(
 ) {
     let replacement = if terminal {
         rewriter.insert_op(lowered);
-        wasm_dialect::unreachable(ctx, ctx.op(op).location).op_ref()
+        wasm_dialect::Unreachable::builder()
+            .build(ctx, ctx.op(op).location)
+            .op_ref()
     } else {
         lowered
     };

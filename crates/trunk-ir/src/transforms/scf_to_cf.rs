@@ -2033,7 +2033,9 @@ mod tests {
             blocks: smallvec![default_block],
             parent_op: None,
         });
-        let default_op = scf::default(&mut ctx, loc, default_region);
+        let default_op = scf::Default::builder()
+            .regions(default_region)
+            .build(&mut ctx, loc);
 
         // Switch body region containing case and default ops
         let switch_body_block = ctx.create_block(BlockData {

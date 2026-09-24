@@ -1,4 +1,4 @@
-//! Parsing for typed operation signatures. The legacy DSL remains in `parse.rs`.
+//! Parsing for typed operation signatures.
 //!
 //! The signature after the operation name is parsed into a small type
 //! expression tree ([`Ty`]) and then interpreted as entity wrappers, type
@@ -295,52 +295,10 @@ fn bound_path(path: &TyPath) -> Result<BoundPath, String> {
 // Typed operation parsing
 // ============================================================================
 
-/// Whether the signature after the operation name uses the typed syntax:
-/// generic parameters, or a typed entity wrapper (`Value<..>`, `Variadic<..>`,
-/// `Values<..>`, `Attr<..>`) in the parameters or the return type. Legacy
-/// results may be `-> Option<result>`, so `Option` alone is not a marker.
-pub(super) fn is_typed_operation(iter: &TokenIter) -> Result<bool, String> {
-    if peek_punct(iter, '<') {
-        return Ok(true);
-    }
-    let mut signature = TokenStream::new();
-    for tt in iter.clone() {
-        if matches!(&tt, TokenTree::Group(g) if g.delimiter() == Delimiter::Brace) {
-            return Ok(has_typed_wrapper(signature));
-        }
-        signature.extend([tt]);
-    }
-    Err("expected operation body".into())
-}
-
-fn has_typed_wrapper(stream: TokenStream) -> bool {
-    let mut prev_wrapper = false;
-    for tt in stream {
-        match tt {
-            TokenTree::Punct(p) if p.as_char() == '<' && prev_wrapper => return true,
-            TokenTree::Group(g) if has_typed_wrapper(g.stream()) => return true,
-            TokenTree::Ident(ident) => {
-                prev_wrapper = ["Value", "Variadic", "Values", "Attr"]
-                    .iter()
-                    .any(|w| ident == w);
-                continue;
-            }
-            _ => {}
-        }
-        prev_wrapper = false;
-    }
-    false
-}
-
 pub(super) fn parse_typed_operation(
     iter: &mut TokenIter,
     name_ident: Ident,
-    legacy_attrs: Vec<AttrDef>,
-    rest_results: bool,
 ) -> Result<OperationDef, String> {
-    if !legacy_attrs.is_empty() || rest_results {
-        return Err("cannot mix legacy and new operation syntax".into());
-    }
     let mut sig_tokens = TokenStream::new();
     let body = loop {
         match iter.next().ok_or("expected operation body")? {
@@ -372,7 +330,9 @@ pub(super) fn parse_typed_operation(
         let name = ident_str(ident);
         check_name(&name, &mut names)?;
         if matches!(ty, Ty::Tuple(t) if t.is_empty()) {
-            return Err("cannot mix legacy and new operation syntax".into());
+            return Err(format!(
+                "operand `{name}: ()` is not supported; declare `Value<_>` or `Variadic<_>`"
+            ));
         }
         let (wrapper, inner, optional) = unwrap_wrapper(ty)?;
         match wrapper.as_str() {
@@ -433,7 +393,7 @@ pub(super) fn parse_typed_operation(
         }
     };
     if params.is_empty() && output.is_none() && !vars.is_empty() {
-        return Err("generics require new operation syntax".into());
+        return Err("type variables require an entity that uses them".into());
     }
     let regions = parse_regions(body.stream())?;
     for item in &regions {
@@ -444,12 +404,10 @@ pub(super) fn parse_typed_operation(
     }
     Ok(OperationDef {
         name: ident_str(&name_ident),
-        raw_ident: name_ident,
         attrs,
         operands,
         results,
         regions,
-        syntax: Syntax::Typed,
         type_vars: vars,
         result_constraint,
         verify: None,
@@ -516,7 +474,7 @@ fn parse_params(stream: TokenStream) -> Result<Vec<(Ident, Ty)>, String> {
     let mut params = Vec::new();
     while has_remaining(&iter) {
         if peek_punct(&iter, '#') {
-            return Err("cannot mix legacy and new operation syntax".into());
+            return Err("`#[rest]` is not supported on operands; declare `Variadic<_>`".into());
         }
         if peek_punct(&iter, '&') || peek_ident(&iter, "self") {
             return Err("self parameter is not supported".into());
@@ -712,7 +670,6 @@ mod tests {
             fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
         })
         .unwrap();
-        assert!(op.syntax == Syntax::Typed);
         assert_eq!(op.type_vars.len(), 1);
         assert_eq!(op.type_vars[0].bounds.len(), 1);
         assert!(matches!(
@@ -820,15 +777,31 @@ mod tests {
     }
 
     #[test]
-    fn legacy_optional_results_stay_legacy() {
-        let op = parse_op(quote! {
-            fn r#if(cond: ()) -> Option<result> {
-                #[region(then_region)] {}
-            }
-        })
-        .unwrap();
-        assert!(op.syntax == Syntax::Legacy);
-        assert!(matches!(op.results, ResultDef::Optional(_)));
+    fn legacy_syntax_is_rejected_with_its_typed_form() {
+        for (item, expected) in [
+            (
+                quote!(
+                    fn f(x: ()) {}
+                ),
+                "declare `Value<_>` or `Variadic<_>`",
+            ),
+            (
+                quote!(
+                    #[rest_results]
+                    fn f() -> results {}
+                ),
+                "declare `-> Variadic<_>`",
+            ),
+            (
+                quote!(
+                    fn f() -> Option<result> {}
+                ),
+                "expected wrapper",
+            ),
+        ] {
+            let err = parse_err(item);
+            assert!(err.contains(expected), "unexpected error: {err}");
+        }
     }
 
     #[test]
@@ -868,13 +841,13 @@ mod tests {
                     #[attr(p: Symbol)]
                     fn f(x: Value<_>) {}
                 ),
-                "cannot mix legacy and new operation syntax",
+                "declare `Attr<..>` parameters",
             ),
             (
                 quote!(
                     fn f(x: Value<_>, #[rest] ys: ()) {}
                 ),
-                "cannot mix legacy and new operation syntax",
+                "declare `Variadic<_>`",
             ),
             (
                 quote!(
@@ -994,7 +967,7 @@ mod tests {
                 quote!(
                     fn f<T>() {}
                 ),
-                "generics require new operation syntax",
+                "type variables require an entity that uses them",
             ),
             (
                 quote!(

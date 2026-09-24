@@ -134,7 +134,7 @@ fn lower_observation(
     ctx.push_op(block, empty.op_ref());
     ctx.push_op(block, branch.op_ref());
 
-    let trap = func::unreachable(ctx, location);
+    let trap = func::Unreachable::builder().build(ctx, location);
     ctx.push_op(trap_block, trap.op_ref());
 
     let node_ty = node_type(ctx, element_ty);

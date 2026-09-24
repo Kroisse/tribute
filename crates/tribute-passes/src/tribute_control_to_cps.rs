@@ -1832,7 +1832,10 @@ impl<'a> Converter<'a> {
                     .build(self.ctx, case_location)
                     .op_ref()
             } else {
-                scf::default(self.ctx, case_location, converted_region).op_ref()
+                scf::Default::builder()
+                    .regions(converted_region)
+                    .build(self.ctx, case_location)
+                    .op_ref()
             };
             self.ctx.push_op(switch_block, converted);
         }
@@ -2602,7 +2605,9 @@ impl<'a> Converter<'a> {
             [args[0], args[1], args[2], args[3], args[4], args[5]],
         )?;
         let foreign_region = self.single_block_region(location, default_block);
-        let default = scf::default(self.ctx, location, foreign_region);
+        let default = scf::Default::builder()
+            .regions(foreign_region)
+            .build(self.ctx, location);
         self.ctx.push_op(switch_block, default.op_ref());
         let switch_region = self.single_block_region(location, switch_block);
         let switch = scf::Switch::operands(args[4])
@@ -2692,7 +2697,7 @@ impl<'a> Converter<'a> {
         self.ctx.push_op(block, consumed.op_ref());
 
         let reject_block = self.make_block(location, &[]);
-        let unreachable = func::unreachable(self.ctx, location);
+        let unreachable = func::Unreachable::builder().build(self.ctx, location);
         self.ctx.push_op(reject_block, unreachable.op_ref());
         let reject_region = self.single_block_region(location, reject_block);
 
@@ -2749,7 +2754,7 @@ impl<'a> Converter<'a> {
         let frame_type = self.frame_types(answer_type).reference;
         let anyref = self.anyref_type();
         let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
-        let unreachable = func::unreachable(self.ctx, location);
+        let unreachable = func::Unreachable::builder().build(self.ctx, location);
         self.ctx.push_op(block, unreachable.op_ref());
         let region = self.single_block_region(location, block);
         let closure_type = cps_resume_type(self.ctx, evidence_type, frame_type, anyref);
@@ -3125,10 +3130,12 @@ impl<'a> Converter<'a> {
             self.ctx.push_op(switch_block, case.op_ref());
         }
         let reject_block = self.make_block(location, &[]);
-        let unreachable = func::unreachable(self.ctx, location);
+        let unreachable = func::Unreachable::builder().build(self.ctx, location);
         self.ctx.push_op(reject_block, unreachable.op_ref());
         let reject_region = self.single_block_region(location, reject_block);
-        let default = scf::default(self.ctx, location, reject_region);
+        let default = scf::Default::builder()
+            .regions(reject_region)
+            .build(self.ctx, location);
         self.ctx.push_op(switch_block, default.op_ref());
         let switch_region = self.single_block_region(location, switch_block);
         let switch = scf::Switch::operands(op_idx)

@@ -217,7 +217,7 @@ mod tests {
         // Remove the use and append an exit: only the final-position fact changes.
         ctx.detach_op(user.op_ref());
         ctx.remove_op(user.op_ref());
-        let trailing = func::unreachable(&mut ctx, loc);
+        let trailing = func::Unreachable::builder().build(&mut ctx, loc);
         ctx.push_op(entry, trailing.op_ref());
         assert!(
             cache

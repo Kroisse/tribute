@@ -694,7 +694,7 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
     ctx.push_op(body_block, loop_op.op_ref());
 
     // unreachable after loop (should never reach here - loop always returns)
-    let unreachable_op = wasm_dialect::unreachable(ctx, location);
+    let unreachable_op = wasm_dialect::Unreachable::builder().build(ctx, location);
     ctx.push_op(body_block, unreachable_op.op_ref());
 
     let body = ctx.create_region(RegionData {
@@ -758,7 +758,7 @@ fn build_lookup_loop_body(
             ops: smallvec![],
             parent_region: None,
         });
-        let unreachable_op = wasm_dialect::unreachable(ctx, location);
+        let unreachable_op = wasm_dialect::Unreachable::builder().build(ctx, location);
         ctx.push_op(inner_block, unreachable_op.op_ref());
         ctx.create_region(RegionData {
             location,

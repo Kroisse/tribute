@@ -707,7 +707,7 @@ impl RewritePattern for FuncUnreachablePattern {
 
         let loc = ctx.op(op).location;
 
-        let new_op = wasm_dialect::unreachable(ctx, loc);
+        let new_op = wasm_dialect::Unreachable::builder().build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }
