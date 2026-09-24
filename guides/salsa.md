@@ -33,13 +33,15 @@ explicitly uses `#[returns(copy)]` for small values and Salsa handles,
 ownership boundaries stable, especially when a caller retains a query result
 before mutating an input to start another revision.
 
-Salsa uses `PartialEq` to decide whether a recomputed value changed. Values
-that carry the database lifetime and are stored in tracked results derive
-`salsa::SalsaValue`; ordinary owned values still need `SalsaValue` when nested
-inside containers whose implementation requires it. The generic AST's three
-recursive child fields have narrow `salsa_value` proofs: they own their children,
-and the phase value `V` must itself implement `SalsaValue`. Do not store a
-reference tied to an old database revision in a tracked value.
+Salsa uses `PartialEq` to decide whether a recomputed value changed. Ordinary
+`'static` values do not need `SalsaValue` at a tracked storage boundary. Values
+that carry the database lifetime derive `salsa::SalsaValue`; owned leaf types
+also need the trait when nested in containers whose implementation requires it.
+The generic AST holds both `UnresolvedName` and database-lifetime references,
+so its phase bound is `V: SalsaValue`, not `V: 'static`. Its three recursive child
+fields have narrow `salsa_value` proofs: they own their children, and `V` must
+itself implement `SalsaValue`. Do not store a reference tied to an old database
+revision in a tracked value.
 
 ## Creating a Source Input
 

@@ -206,7 +206,6 @@ static NEXT_BLOCK_ID: AtomicU64 = AtomicU64::new(1);
 /// during IR transformations. This allows block arguments to maintain stable
 /// identity across rewrites.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-#[cfg_attr(feature = "salsa", derive(salsa::SalsaValue))]
 pub struct BlockId(pub u64);
 
 impl BlockId {
