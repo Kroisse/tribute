@@ -60,18 +60,17 @@ mod arith {
     fn negi(operand: ()) -> result {}
 
     // Float arithmetic
-    fn addf(lhs: (), rhs: ()) -> result {}
+    fn addf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
     fn subf(lhs: (), rhs: ()) -> result {}
     fn mulf(lhs: (), rhs: ()) -> result {}
     fn divf(lhs: (), rhs: ()) -> result {}
     fn negf(operand: ()) -> result {}
 
     // Comparisons
-    #[attr(predicate: Symbol)]
-    fn cmpi(lhs: (), rhs: ()) -> result {}
+    fn cmpi<T: IntegerLike>(predicate: Attr<Symbol>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
-    #[attr(predicate: Symbol)]
-    fn cmpf(lhs: (), rhs: ()) -> result {}
+    #[verify]
+    fn cmpf<T: FloatLike>(predicate: Attr<Symbol>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     // Bitwise (integer-only)
     fn and(lhs: (), rhs: ()) -> result {}
@@ -98,11 +97,28 @@ mod arith {
 // =========================================================================
 
 use crate::context::IrContext;
-use crate::dialect::core::IntegerLike;
+use crate::dialect::core::{FloatLike, I1, IntegerLike};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::transforms::canonicalize::FoldResult;
 use crate::types::Attribute;
+use itertools::Itertools;
+
+/// `arith.cmpf` predicates that every backend lowers.
+const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
+
+impl Cmpf {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        let predicate = self.predicate(ctx);
+        if predicate.with_str(|name| SUPPORTED_CMPF_PREDICATES.contains(&name)) {
+            return Ok(());
+        }
+        Err(format!(
+            "unsupported predicate '{predicate}'; supported predicates are {}",
+            SUPPORTED_CMPF_PREDICATES.iter().format(", "),
+        ))
+    }
+}
 
 // Folds this dialect contributes to `transforms::canonicalize`. Each
 // `#[trunk_ir::canonicalize_fold(...)]` attribute below registers the

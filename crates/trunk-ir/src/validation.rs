@@ -342,7 +342,6 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
         let error_count = errors.len();
-        validate_arith_cmpf_predicate(ctx, op, &mut errors);
         validate_scf_if_structure(ctx, op, &mut errors);
         validate_func_shapes(ctx, op, &mut errors);
         validate_func_indirect_call(ctx, op, &mut errors);
@@ -749,30 +748,6 @@ pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> Validatio
     ValidationResult { errors }
 }
 
-fn validate_arith_cmpf_predicate(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let data = ctx.op(op);
-    if data.dialect != Symbol::new("arith") || data.name != Symbol::new("cmpf") {
-        return;
-    }
-
-    // The schema guarantees a Symbol `predicate`.
-    let Some(predicate) = data.attributes.get_symbol("predicate") else {
-        return;
-    };
-
-    if !is_allowed_cmpf_predicate(predicate) {
-        errors.push(operation_verifier_error(
-            ctx,
-            op,
-            format!(
-                "has unsupported predicate '{}'; supported predicates are {}",
-                predicate,
-                supported_cmpf_predicates_text(),
-            ),
-        ));
-    }
-}
-
 fn operation_verifier_error(
     ctx: &IrContext,
     op: OpRef,
@@ -1124,21 +1099,6 @@ fn validate_region_branch_terminator_interface(
         op,
         "has no complete owning RegionBranch mapping",
     ));
-}
-
-const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
-
-fn supported_cmpf_predicates_text() -> String {
-    SUPPORTED_CMPF_PREDICATES.join(", ")
-}
-
-fn is_allowed_cmpf_predicate(predicate: Symbol) -> bool {
-    predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[0])
-        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[1])
-        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[2])
-        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[3])
-        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[4])
-        || predicate == Symbol::new(SUPPORTED_CMPF_PREDICATES[5])
 }
 
 /// Return whether `op` is a resultless transfer that may terminate a

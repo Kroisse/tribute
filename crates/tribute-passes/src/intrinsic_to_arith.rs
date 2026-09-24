@@ -166,9 +166,10 @@ impl ArithIntrinsicPattern {
         cmpi!("Nat::>=", "uge");
 
         // --- Float ---
-        binary!("Float::+", |ctx, loc, l, r, ty| arith::addf(
-            ctx, loc, l, r, ty
+        binary!("Float::+", |ctx, loc, l, r, _ty| arith::Addf::operands(
+            l, r
         )
+        .build(ctx, loc)
         .op_ref());
         binary!("Float::-", |ctx, loc, l, r, ty| arith::subf(
             ctx, loc, l, r, ty
@@ -232,11 +233,15 @@ impl RewritePattern for ArithIntrinsicPattern {
                 rewriter.replace_op(new_op);
             }
             ArithMapping::CmpI(predicate) => {
-                let cmp = arith::cmpi(ctx, loc, lhs, rhs, result_ty, Symbol::new(predicate));
+                let cmp = arith::Cmpi::operands(lhs, rhs)
+                    .predicate(Symbol::new(predicate))
+                    .build(ctx, loc);
                 rewriter.replace_op(cmp.op_ref());
             }
             ArithMapping::CmpF(predicate) => {
-                let cmp = arith::cmpf(ctx, loc, lhs, rhs, result_ty, Symbol::new(predicate));
+                let cmp = arith::Cmpf::operands(lhs, rhs)
+                    .predicate(Symbol::new(predicate))
+                    .build(ctx, loc);
                 rewriter.replace_op(cmp.op_ref());
             }
         }
@@ -313,12 +318,14 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         let result_op = match mapping {
             ArithMapping::BinaryOp(op_fn) => op_fn(ctx, loc, lhs, rhs, return_ty),
-            ArithMapping::CmpI(predicate) => {
-                arith::cmpi(ctx, loc, lhs, rhs, return_ty, Symbol::new(predicate)).op_ref()
-            }
-            ArithMapping::CmpF(predicate) => {
-                arith::cmpf(ctx, loc, lhs, rhs, return_ty, Symbol::new(predicate)).op_ref()
-            }
+            ArithMapping::CmpI(predicate) => arith::Cmpi::operands(lhs, rhs)
+                .predicate(Symbol::new(predicate))
+                .build(ctx, loc)
+                .op_ref(),
+            ArithMapping::CmpF(predicate) => arith::Cmpf::operands(lhs, rhs)
+                .predicate(Symbol::new(predicate))
+                .build(ctx, loc)
+                .op_ref(),
         };
         ctx.push_op(body_block, result_op);
 

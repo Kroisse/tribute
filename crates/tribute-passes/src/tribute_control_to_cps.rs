@@ -2521,19 +2521,11 @@ impl<'a> Converter<'a> {
         )?;
         self.ctx.push_op(block, foreign_op);
         let switch_block = self.make_block(location, &[]);
-        let i1_type = self
-            .ctx
-            .intern_type(TypeDataBuilder::new("core", "i1").build());
         for arm in arms.iter().filter(|arm| arm.kind == Symbol::new("op")) {
             let case_block = self.make_block(location, &[]);
-            let same_prompt = arith::cmpi(
-                self.ctx,
-                location,
-                args[2],
-                local_prompt,
-                i1_type,
-                Symbol::new("eq"),
-            );
+            let same_prompt = arith::Cmpi::operands(args[2], local_prompt)
+                .predicate(Symbol::new("eq"))
+                .build(self.ctx, location);
             self.ctx.push_op(case_block, same_prompt.op_ref());
 
             let local_block = self.make_block(location, &[]);
