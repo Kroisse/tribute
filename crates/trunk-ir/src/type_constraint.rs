@@ -205,3 +205,110 @@ pub const fn resolve_projection(
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const fn desc(
+        name: &'static str,
+        exact: bool,
+        projections: &'static [ProjectionDesc],
+    ) -> ConstraintDesc {
+        ConstraintDesc {
+            name,
+            exact,
+            projections,
+            matches: |_, _| true,
+            project: |_, _, _| None,
+        }
+    }
+
+    static SIG: ConstraintDesc = desc(
+        "test.sig",
+        true,
+        &[
+            ProjectionDesc {
+                name: "Inputs",
+                kind: ProjectionKind::List,
+            },
+            ProjectionDesc {
+                name: "Result",
+                kind: ProjectionKind::One,
+            },
+        ],
+    );
+    static OTHER_SIG: ConstraintDesc = desc(
+        "test.other_sig",
+        true,
+        &[ProjectionDesc {
+            name: "Inputs",
+            kind: ProjectionKind::List,
+        }],
+    );
+    static CATEGORY: ConstraintDesc = desc("Category", false, &[]);
+
+    #[test]
+    fn check_bounds_allows_categories_and_repeated_exact_bounds() {
+        static BOUNDS: [&ConstraintDesc; 3] = [&SIG, &CATEGORY, &SIG];
+        assert_eq!(check_bounds(&BOUNDS).len(), 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "type variable has two different exact bounds")]
+    fn check_bounds_rejects_different_exact_bounds() {
+        static BOUNDS: [&ConstraintDesc; 2] = [&SIG, &OTHER_SIG];
+        check_bounds(&BOUNDS);
+    }
+
+    #[test]
+    fn projections_resolve_by_name_and_kind() {
+        assert_eq!(
+            resolve_projection(&[&CATEGORY, &SIG], "Result", ProjectionKind::One),
+            (1, 1)
+        );
+        assert_eq!(projection_in(&SIG, "Inputs", ProjectionKind::List), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "is provided by more than one bound")]
+    fn resolve_projection_rejects_ambiguity() {
+        resolve_projection(&[&SIG, &OTHER_SIG], "Inputs", ProjectionKind::List);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not provided by any bound")]
+    fn resolve_projection_rejects_unknown_names() {
+        resolve_projection(&[&SIG], "Input", ProjectionKind::List);
+    }
+
+    #[test]
+    #[should_panic(expected = "is a type list but is used as a single type")]
+    fn resolve_projection_rejects_list_as_single() {
+        resolve_projection(&[&SIG], "Inputs", ProjectionKind::One);
+    }
+
+    #[test]
+    #[should_panic(expected = "is a single type but is used as a type list")]
+    fn resolve_projection_rejects_single_as_list() {
+        resolve_projection(&[&SIG], "Result", ProjectionKind::List);
+    }
+
+    #[test]
+    #[should_panic(expected = "is a type list but is used as a single type")]
+    fn projection_in_rejects_list_as_single() {
+        projection_in(&SIG, "Inputs", ProjectionKind::One);
+    }
+
+    #[test]
+    #[should_panic(expected = "is a single type but is used as a type list")]
+    fn projection_in_rejects_single_as_list() {
+        projection_in(&SIG, "Result", ProjectionKind::List);
+    }
+
+    #[test]
+    #[should_panic(expected = "is not provided by the selected bound")]
+    fn projection_in_rejects_unknown_names() {
+        projection_in(&SIG, "Results", ProjectionKind::List);
+    }
+}

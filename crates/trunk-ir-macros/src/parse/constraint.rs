@@ -85,11 +85,10 @@ pub(super) fn parse_typed_operation(
     }
     let mut sig_tokens = TokenStream::new();
     let body = loop {
-        let tt = iter.next().ok_or("expected operation body")?;
-        if matches!(&tt, TokenTree::Group(g) if g.delimiter() == Delimiter::Brace) {
-            break tt;
+        match iter.next().ok_or("expected operation body")? {
+            TokenTree::Group(g) if g.delimiter() == Delimiter::Brace => break g,
+            tt => sig_tokens.extend([tt]),
         }
-        sig_tokens.extend([tt]);
     };
     let signature = quote!(fn #name_ident #sig_tokens {});
     let func: syn::ItemFn =
@@ -209,9 +208,6 @@ pub(super) fn parse_typed_operation(
     if !typed_entity && !vars.is_empty() {
         return Err("generics require new operation syntax".into());
     }
-    let TokenTree::Group(body) = body else {
-        unreachable!()
-    };
     let regions = parse_regions(body.stream())?;
     for item in &regions {
         let name = match item {
@@ -259,7 +255,10 @@ fn paths(
     bounds
         .iter()
         .map(|bound| match bound {
-            TypeParamBound::Trait(tr) if tr.lifetimes.is_none() => {
+            TypeParamBound::Trait(tr)
+                if tr.lifetimes.is_none()
+                    && matches!(tr.modifier, syn::TraitBoundModifier::None) =>
+            {
                 check_path(&tr.path)?;
                 Ok(tr.path.clone())
             }
@@ -636,13 +635,185 @@ mod tests {
                 ),
                 "declared type variable",
             ),
+            (
+                quote!(
+                    fn f(x: Value<_>);
+                ),
+                "expected operation body",
+            ),
+            (
+                quote!(
+                    fn f<T, T>(x: Value<T>) {}
+                ),
+                "duplicate type variable",
+            ),
+            (
+                quote!(
+                    fn f<'a>(x: Value<_>) {}
+                ),
+                "only type variables",
+            ),
+            (
+                quote!(
+                    fn f<T>(x: Value<T>)
+                    where
+                        'a: 'b,
+                    {
+                    }
+                ),
+                "unsupported where predicate",
+            ),
+            (
+                quote!(
+                    fn f<T>(x: Value<T>)
+                    where
+                        (T,): A,
+                    {
+                    }
+                ),
+                "where bound must name a type variable",
+            ),
+            (
+                quote!(
+                    fn f<T>() {}
+                ),
+                "generics require new operation syntax",
+            ),
+            (
+                quote!(
+                    fn f(self, x: Value<_>) {}
+                ),
+                "self parameter",
+            ),
+            (
+                quote!(
+                    fn f((a, b): Value<_>) {}
+                ),
+                "parameter must have a name",
+            ),
+            (
+                quote!(
+                    fn f(x: Foo<_>, y: Value<_>) {}
+                ),
+                "expected Value, Variadic, Values, Attr",
+            ),
+            (
+                quote!(
+                    fn f() -> Option<Variadic<_>> {}
+                ),
+                "expected Value, Option<Value>",
+            ),
+            (
+                quote!(
+                    fn f<T: 'static>(x: Value<T>) {}
+                ),
+                "bounds must be plain Rust paths",
+            ),
+            (
+                quote!(
+                    fn f<T: ?Sized>(x: Value<T>) {}
+                ),
+                "bounds must be plain Rust paths",
+            ),
+            (
+                quote!(
+                    fn f<T: A<B>>(x: Value<T>) {}
+                ),
+                "generic arguments on bound paths",
+            ),
+            (
+                quote!(
+                    fn f(x: &Value<_>) {}
+                ),
+                "expected a typed entity wrapper",
+            ),
+            (
+                quote!(
+                    fn f(x: a::Value<_>) {}
+                ),
+                "expected a typed entity wrapper",
+            ),
+            (
+                quote!(
+                    fn f(x: Value<A, B>) {}
+                ),
+                "requires one type argument",
+            ),
+            (
+                quote!(
+                    fn f(x: Value<'a>) {}
+                ),
+                "requires a type argument",
+            ),
+            (
+                quote!(
+                    fn f(x: Option<Option<Attr<_>>>) {}
+                ),
+                "nested Option",
+            ),
+            (
+                quote!(
+                    fn f(x: Attr<&str>) {}
+                ),
+                "invalid attribute kind",
+            ),
+            (
+                quote!(
+                    fn f<S: B>(x: Attr<<S as B>::Type>) {}
+                ),
+                "invalid attribute projection",
+            ),
+            (
+                quote!(
+                    fn f(x: Attr<a::b::c>) {}
+                ),
+                "invalid attribute kind",
+            ),
+            (
+                quote!(
+                    fn f(x: Attr<Unknown>) {}
+                ),
+                "unknown attribute type",
+            ),
+            (
+                quote!(
+                    fn f<T>(x: Value<&T>) {}
+                ),
+                "invalid single-type constraint",
+            ),
+            (
+                quote!(
+                    fn f<T>(xs: Values<[T]>) {}
+                ),
+                "Values<..> requires a type list",
+            ),
+            (
+                quote!(
+                    fn f(x: Value<<(A,) as B>::X>) {}
+                ),
+                "projection needs a declared variable",
+            ),
+            (
+                quote!(
+                    fn f(x: Value<<U as B>::X>) {}
+                ),
+                "projection needs a declared variable",
+            ),
+            (
+                quote!(
+                    fn f<T>(x: Value<T<U>>) {}
+                ),
+                "generic arguments on bound paths",
+            ),
         ];
-        for (item, expected) in cases {
-            let err = parse_err(item.clone());
-            assert!(
-                err.contains(expected),
-                "`{item}`: expected `{expected}`, got `{err}`"
-            );
-        }
+        let failures: Vec<String> = cases
+            .into_iter()
+            .filter_map(|(item, expected)| {
+                let err = parse_err(item.clone());
+                (!err.contains(expected))
+                    .then(|| format!("`{item}`: expected `{expected}`, got `{err}`"))
+            })
+            .collect();
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 }

@@ -51,6 +51,11 @@ mod test_typed {
         }
 
         fn marker() -> Value<_> {}
+
+        fn jump(args: Variadic<_>) {
+            #[successor(dest)]
+            {}
+        }
     }
 }
 
@@ -208,6 +213,12 @@ fn generated_type_constraints_check_parameters_and_project() {
         (sig_desc.project)(&ctx, sig, 0),
         Some(crate::type_constraint::Projected::List([a, b])) if *a == i32_ty && *b == i1_ty
     ));
+    assert!(matches!(
+        (sig_desc.project)(&ctx, sig, 1),
+        Some(crate::type_constraint::Projected::List([r])) if *r == i32_ty
+    ));
+    assert!((sig_desc.project)(&ctx, sig, 2).is_none());
+    assert!((sig_desc.project)(&ctx, pair, 0).is_none());
     assert!(!(sig_desc.matches)(&ctx, pair));
 
     let integer = <IntegerLike as TypeConstraint>::DESC;
@@ -273,6 +284,17 @@ fn fluent_builders_group_inputs_by_kind() {
         .results(i1_ty)
         .build(loc, &mut ctx);
 
+    let dest = ctx.create_block(BlockData {
+        location: loc,
+        args: Vec::new(),
+        ops: Default::default(),
+        parent_region: None,
+    });
+    let jump = test_typed::Jump::operands([a])
+        .successors(dest)
+        .build(loc, &mut ctx);
+    assert_eq!(jump.dest(&ctx), dest);
+
     for op in [
         add.op_ref(),
         cmp.op_ref(),
@@ -281,6 +303,7 @@ fn fluent_builders_group_inputs_by_kind() {
         declared.op_ref(),
         labeled.op_ref(),
         marker.op_ref(),
+        jump.op_ref(),
     ] {
         let schema = OpSchema::of(&ctx, op).expect("typed ops are registered");
         assert_eq!(schema.verify_structure(&ctx, op), []);

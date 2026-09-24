@@ -653,14 +653,7 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             quote!(result: impl Into<Option<#type_ref>>),
             quote!(result.into().into_iter().collect()),
         )),
-        ResultDef::Multi(names) => {
-            let params = names.iter().map(|n| format_ident!("{n}"));
-            let values = params.clone();
-            Some((
-                quote!(#(#params: #type_ref),*),
-                quote!(::std::vec![#(#values),*]),
-            ))
-        }
+        ResultDef::Multi(_) => unreachable!("typed operations reserve fixed multi-results"),
         ResultDef::Variadic(_) => Some((
             quote!(results: impl IntoIterator<Item = #type_ref>),
             quote!(results.into_iter().collect()),
