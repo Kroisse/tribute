@@ -116,7 +116,7 @@ mod tribute_control {
         {}
     }
 
-    fn resume(resume_token: (), value: ()) -> result {}
+    fn resume<T: ResumeToken>(resume_token: Value<T>, value: Value<T::Input>) -> Value<T::Answer> {}
 
     fn r#yield(value: ()) {}
 }
@@ -1760,30 +1760,10 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
 }
 
 fn validate_resume(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    validate_arity(ctx, op, Some(2), Some(1), Some(0), errors);
     validate_attr_keys(ctx, op, &[], false, errors);
-    let [token_value, input_value] = ctx.op_operands(op) else {
-        return;
-    };
-    let Some((token_input, token_answer)) = resume_token_parts(ctx, ctx.value_ty(*token_value))
-    else {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            "first operand must have tribute_control.resume_token type",
-        );
-        return;
-    };
-    if ctx.value_ty(*input_value) != token_input
-        || ctx.op_result_types(op).first().copied() != Some(token_answer)
-    {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            "resume input/result types do not match the token input/answer types",
-        );
+    // Counts and the token input/answer relation come from the declared schema.
+    for violation in Resume::SCHEMA.verify(ctx, op) {
+        push_op_error(ctx, op, errors, violation.to_string());
     }
 }
 
@@ -3454,7 +3434,7 @@ mod tests {
         let handler_block = block(&mut ctx, loc, &[i32_ty, token_ty]);
         let operation_arg = ctx.block_arg(handler_block, 0);
         let token = ctx.block_arg(handler_block, 1);
-        let resume_op = resume(&mut ctx, loc, token, operation_arg, i32_ty);
+        let resume_op = Resume::operands(token, operation_arg).build(&mut ctx, loc);
         ctx.push_op(handler_block, resume_op.op_ref());
         let resumed_value = resume_op.result(&ctx);
         let handler_yield = r#yield(&mut ctx, loc, resumed_value);
@@ -4336,12 +4316,17 @@ mod tests {
         assert_op_diagnostics(
             &result,
             bad_resume,
-            &["first operand must have tribute_control.resume_token type"],
+            &[
+                "operand #0 `resume_token`: expected T: tribute_control.resume_token, found core.i32",
+            ],
         );
         assert_op_diagnostics(
             &result,
             mismatched_resume,
-            &["resume input/result types do not match the token input/answer types"],
+            &[
+                "operand #1 `value`: expected T::Input = core.i32, found core.bool",
+                "result #0 `result`: expected T::Answer = core.i32, found core.bool",
+            ],
         );
         assert_op_diagnostics(
             &result,
@@ -5028,7 +5013,7 @@ mod tests {
                 error.op == Some(resume)
                     && error
                         .message
-                        .contains("first operand must have tribute_control.resume_token type")
+                        .contains("expected T: tribute_control.resume_token, found")
             }),
             "{result}"
         );

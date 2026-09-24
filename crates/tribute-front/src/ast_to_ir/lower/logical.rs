@@ -1339,15 +1339,15 @@ fn lower_expr<'db>(
         }
         ExprKind::Resume { arg, local_id } => {
             let token = builder.ctx.lookup_resume(local_id?)?;
-            let (input_ty, answer_ty) =
+            let (input_ty, _) =
                 tribute_control::resume_token_parts(builder.ir, builder.ir.value_ty(token))
                     .expect("typechecked resume local must lower to a resume token");
             let value = lower_expr(builder, arg, declarations)?;
             let value = builder.cast_if_needed(location, value, input_ty);
-            let resume = op(builder.ir, builder.block, location, "resume", |builder| {
-                builder.operand(token).operand(value).result(answer_ty)
-            });
-            Some(result(builder.ir, resume))
+            let resume =
+                tribute_control::Resume::operands(token, value).build(builder.ir, location);
+            builder.ir.push_op(builder.block, resume.op_ref());
+            Some(resume.result(builder.ir))
         }
         ExprKind::Error => Some(builder.emit_nil(location)),
         _ => panic!("unsupported source expression at source-logical boundary"),
