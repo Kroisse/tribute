@@ -65,7 +65,7 @@ mod test_typed {
         fn maybe_call<S: func::FuncSig>(sig: Option<Attr<S::Type>>, args: Values<S::Inputs>) {}
     }
 
-    impl Nonempty {
+    impl crate::ops::Verify for Nonempty {
         fn verify(self, ctx: &IrContext) -> Result<(), String> {
             if self.values(ctx).is_empty() {
                 return Err("needs at least one value".into());

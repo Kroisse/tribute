@@ -328,13 +328,13 @@ impl IndirectCallLikeModel for CallIndirect {
     }
 }
 
-impl CallIndirect {
+impl crate::ops::Verify for CallIndirect {
     fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
         verify_typed_callee(ctx, self.callee(ctx), self.signature(ctx))
     }
 }
 
-impl TailCallIndirect {
+impl crate::ops::Verify for TailCallIndirect {
     fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
         verify_typed_callee(ctx, self.callee(ctx), self.signature(ctx))
     }

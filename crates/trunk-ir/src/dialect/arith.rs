@@ -106,7 +106,7 @@ use itertools::Itertools;
 /// `arith.cmpf` predicates that every backend lowers.
 const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
 
-impl Cmpf {
+impl crate::ops::Verify for Cmpf {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
         let predicate = self.predicate(ctx);
         if predicate.with_str(|name| SUPPORTED_CMPF_PREDICATES.contains(&name)) {
