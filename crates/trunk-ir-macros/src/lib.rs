@@ -39,8 +39,8 @@ mod parse;
 /// - Operand, result, attribute, region/successor accessors
 /// - A builder started by `OpName::operands(..)` (empty for operations
 ///   without operands) and finished by `.build(ctx, location)`
-/// - `OpSchema` registration; `#[verify]` on the operation adds a call to
-///   the wrapper's `trunk_ir::ops::Verify` impl after the generated checks
+/// - `OpDef` registration: the declarative `OpSchema`, plus a call to the
+///   wrapper's `trunk_ir::ops::Verify` impl for `#[verify]` operations
 #[proc_macro_attribute]
 pub fn dialect(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match dialect_impl(attr.into(), item.into()) {

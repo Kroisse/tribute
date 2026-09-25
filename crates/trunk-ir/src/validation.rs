@@ -21,11 +21,12 @@ use cranelift_entity::EntitySet;
 use derive_more::{Display, Error};
 
 use super::context::IrContext;
+use super::op_def::OpDef;
 use super::op_interface::{
     BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
     RegionValueTransfer,
 };
-use super::op_schema::{OpSchema, SchemaViolation};
+use super::op_schema::SchemaViolation;
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
@@ -360,14 +361,14 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
 ///
 /// Unlike [`validate_operation_verifiers`], this skips `#[verify]` hooks,
 /// the hand-written operation checks, and interface verification. It is the
-/// debug checkpoint run after each pipeline pass, where the IR must satisfy the declared
-/// constraints again; a pass nested under an operation checks only that
+/// debug checkpoint run after each pipeline pass, where the IR must satisfy
+/// the declared constraints again; a pass nested under an operation checks only that
 /// operation's subtree.
 pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
     let mut errors = Vec::new();
     let _ = walk::walk_op::<std::convert::Infallible>(ctx, root, &mut |op| {
-        if let Some(schema) = OpSchema::of(ctx, op) {
-            report_schema_violations(ctx, op, schema.verify_declarative(ctx, op), &mut errors);
+        if let Some(def) = OpDef::of(ctx, op) {
+            report_schema_violations(ctx, op, def.schema.verify(ctx, op), &mut errors);
         }
         std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
     });
@@ -381,10 +382,10 @@ pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
 /// operation-local checks assume the declared shape, so callers skip them for
 /// that operation.
 fn validate_op_schema(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) -> bool {
-    let Some(schema) = OpSchema::of(ctx, op) else {
+    let Some(def) = OpDef::of(ctx, op) else {
         return true;
     };
-    report_schema_violations(ctx, op, schema.verify(ctx, op), errors)
+    report_schema_violations(ctx, op, def.verify(ctx, op), errors)
 }
 
 /// Record each violation as an operation error; returns whether there were

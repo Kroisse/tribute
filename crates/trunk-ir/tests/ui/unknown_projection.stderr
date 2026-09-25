@@ -2,7 +2,7 @@ error[E0080]: evaluation panicked: type constraint projection is not provided by
  --> tests/ui/unknown_projection.rs:4:5
   |
 4 |     #[trunk_ir::dialect]
-  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::SCHEMA::P` failed inside this call
+  |     ^^^^^^^^^^^^^^^^^^^^ evaluation of `<d::Probe as trunk_ir::ops::DialectOp>::DEF::P` failed inside this call
   |
 note: inside `resolve_projection`
  --> $RUST/core/src/panic.rs

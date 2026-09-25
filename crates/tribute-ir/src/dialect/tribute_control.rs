@@ -9,6 +9,7 @@ use std::fmt;
 
 use itertools::Itertools;
 use trunk_ir::dialect::{adt, arith, core};
+use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
 use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -1573,7 +1574,7 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
         return;
     }
     let name = data.name.with_str(|name| name.to_owned());
-    let Some(schema) = OpSchema::of(ctx, op) else {
+    let Some(def) = OpDef::of(ctx, op) else {
         push_op_error(
             ctx,
             op,
@@ -1584,7 +1585,7 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
     };
     // Counts, attribute kinds, and declared type relations come from the
     // schema; the checks below assume them.
-    let violations = schema.verify(ctx, op);
+    let violations = def.verify(ctx, op);
     if !violations.is_empty() {
         for violation in violations {
             push_op_error(ctx, op, errors, violation.to_string());
@@ -1594,7 +1595,7 @@ fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<Validat
     validate_attr_keys(
         ctx,
         op,
-        schema,
+        &def.schema,
         matches!(name.as_str(), "func" | "lambda"),
         errors,
     );

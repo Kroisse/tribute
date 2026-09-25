@@ -1,6 +1,7 @@
 //! Tests for operations declared with the typed `#[dialect]` syntax.
 
 use super::*;
+use crate::Symbol;
 use crate::dialect::core::{BoolLike, I32, IntegerLike, Ptr};
 use crate::dialect::func;
 use crate::ops::DialectOp;
@@ -110,7 +111,7 @@ fn empty_region(ctx: &mut IrContext, loc: Location) -> crate::RegionRef {
 
 #[test]
 fn typed_schema_records_variables_and_constraints() {
-    let add = test_typed::Add::SCHEMA;
+    let add = &test_typed::Add::DEF.schema;
     assert_eq!(add.type_vars.len(), 1);
     assert_eq!(add.type_vars[0].name, "T");
     assert_eq!(add.type_vars[0].bounds[0].name, "IntegerLike");
@@ -123,14 +124,14 @@ fn typed_schema_records_variables_and_constraints() {
         ValueConstraint::Each(TypeSpec::Var(0))
     ));
 
-    let cmp = test_typed::Cmp::SCHEMA;
+    let cmp = &test_typed::Cmp::DEF.schema;
     let ValueConstraint::Each(TypeSpec::Anon(bounds)) = cmp.result_constraint else {
         panic!("expected an anonymous result bound");
     };
     assert_eq!(bounds[0].name, "BoolLike");
     assert_eq!(cmp.attributes[0].kind, AttributeKind::Symbol);
 
-    let first = test_typed::First::SCHEMA;
+    let first = &test_typed::First::DEF.schema;
     assert_eq!(first.type_vars[0].bounds[0].name, "test_typed.pair");
     assert!(matches!(
         first.result_constraint,
@@ -141,7 +142,7 @@ fn typed_schema_records_variables_and_constraints() {
         }))
     ));
 
-    let call = test_typed::Call::SCHEMA;
+    let call = &test_typed::Call::DEF.schema;
     assert_eq!(call.attributes[0].kind, AttributeKind::Type);
     assert_eq!(call.attributes[0].binds, Some(0));
     let ValueConstraint::Each(TypeSpec::Anon(callee)) = call.operands[0].constraint else {
@@ -159,7 +160,7 @@ fn typed_schema_records_variables_and_constraints() {
         ValueConstraint::List(ListSpec::Proj(ProjectionRef { index: 1, .. }))
     ));
 
-    let qualified = test_typed::CallQualified::SCHEMA;
+    let qualified = &test_typed::CallQualified::DEF.schema;
     assert_eq!(qualified.type_vars[0].bounds[0].name, "func.func_sig");
     assert!(matches!(
         qualified.operands[1].constraint,
@@ -170,7 +171,7 @@ fn typed_schema_records_variables_and_constraints() {
         }))
     ));
 
-    let pack = test_typed::Pack::SCHEMA;
+    let pack = &test_typed::Pack::DEF.schema;
     let ValueConstraint::List(ListSpec::Types(types)) = pack.operands[0].constraint else {
         panic!("expected an explicit type list");
     };
@@ -179,7 +180,7 @@ fn typed_schema_records_variables_and_constraints() {
         [TypeSpec::Var(0), TypeSpec::Var(0), TypeSpec::Anon(_)]
     ));
 
-    let select = test_typed::Select::SCHEMA;
+    let select = &test_typed::Select::DEF.schema;
     assert!(matches!(select.results, ResultSchema::Optional("result")));
     assert!(select.attributes[0].optional);
     assert!(select.regions[1].optional);
@@ -187,7 +188,7 @@ fn typed_schema_records_variables_and_constraints() {
 
 #[test]
 fn wildcard_entities_are_unconstrained() {
-    let schema = crate::dialect::arith::Subi::SCHEMA;
+    let schema = &crate::dialect::arith::Subi::DEF.schema;
     assert!(schema.type_vars.is_empty());
     assert!(matches!(
         schema.operands[0].constraint,
@@ -334,8 +335,8 @@ fn fluent_builders_group_inputs_by_kind() {
         marker.op_ref(),
         jump.op_ref(),
     ] {
-        let schema = OpSchema::of(&ctx, op).expect("typed ops are registered");
-        assert_eq!(schema.verify(&ctx, op), []);
+        let def = crate::op_def::OpDef::of(&ctx, op).expect("typed ops are registered");
+        assert_eq!(def.verify(&ctx, op), []);
     }
 }
 
@@ -488,7 +489,10 @@ fn verifier_counts_explicit_lists_and_runs_verify_hooks_last() {
   }
 }"#,
     );
-    assert_eq!(test_typed::Pack::SCHEMA.operand_count().to_string(), "3");
+    assert_eq!(
+        test_typed::Pack::DEF.schema.operand_count().to_string(),
+        "3"
+    );
     assert!(text.contains("test_typed.pack"), "{text}");
     assert!(text.contains("expected 3 operand(s), found 2"), "{text}");
     assert!(text.contains("needs at least one value"), "{text}");
