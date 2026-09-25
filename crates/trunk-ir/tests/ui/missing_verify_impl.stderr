@@ -1,0 +1,31 @@
+error[E0277]: `Probe` is declared with `#[verify]` but does not implement `Verify`
+ --> tests/ui/missing_verify_impl.rs:4:11
+  |
+4 |         #[verify]
+  |           ^^^^^^ `#[verify]` requires this implementation
+  |
+help: the trait `Verify` is not implemented for `Probe`
+ --> tests/ui/missing_verify_impl.rs:2:5
+  |
+2 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  = note: add `impl Verify for Probe { fn verify(self, ctx: &IrContext) -> Result<(), String> { .. } }`
+help: the following other types implement trait `Verify`
+ --> src/dialect/arith.rs
+  |
+  | impl crate::ops::Verify for Cmpf {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `Cmpf`
+  |
+ ::: src/dialect/func.rs
+  |
+  | impl crate::ops::Verify for CallIndirect {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `trunk_ir::dialect::func::CallIndirect`
+...
+  | impl crate::ops::Verify for TailCallIndirect {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `TailCallIndirect`
+  |
+ ::: src/dialect/clif.rs
+  |
+  | impl crate::ops::Verify for CallIndirect {
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `trunk_ir::dialect::clif::CallIndirect`
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

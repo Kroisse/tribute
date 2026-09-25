@@ -31,8 +31,7 @@ pub struct OperationDef {
     pub regions: Vec<RegionOrSuccessor>,
     pub type_vars: Vec<TypeVar>,
     pub result_constraint: ValueExpr,
-    /// `#[verify]`: call the wrapper's inherent `verify(self, ctx)` method
-    /// after the schema checks. Holds the attribute's span for diagnostics.
+    /// `#[verify]`: call the wrapper's `Verify` impl after the schema checks. Holds the attribute's span for diagnostics.
     pub verify: Option<proc_macro2::Span>,
 }
 
@@ -225,7 +224,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             }
             let mut op = parse_operation(iter)?;
             if verify.is_some() && entity_names(&op).any(|name| name == "verify") {
-                return Err("#[verify] reserves the name `verify` for the verifier method".into());
+                return Err("#[verify] reserves the name `verify` for `Verify::verify`".into());
             }
             op.verify = verify;
             Ok(DialectItem::Operation(op))
