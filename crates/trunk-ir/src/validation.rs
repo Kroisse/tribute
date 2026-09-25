@@ -25,7 +25,7 @@ use super::op_interface::{
     BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
     RegionValueTransfer,
 };
-use super::op_schema::OpSchema;
+use super::op_schema::{OpSchema, SchemaViolation};
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
@@ -355,6 +355,25 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     ValidationResult { errors }
 }
 
+/// Check `root` and every operation nested in it against its declarative
+/// schema only.
+///
+/// Unlike [`validate_operation_verifiers`], this skips `#[verify]` hooks,
+/// the hand-written operation checks, and interface verification. It is the
+/// debug checkpoint run after each pipeline pass, where the IR must satisfy the declared
+/// constraints again; a pass nested under an operation checks only that
+/// operation's subtree.
+pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
+    let mut errors = Vec::new();
+    let _ = walk::walk_op::<std::convert::Infallible>(ctx, root, &mut |op| {
+        if let Some(schema) = OpSchema::of(ctx, op) {
+            report_schema_violations(ctx, op, schema.verify_declarative(ctx, op), &mut errors);
+        }
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
+    ValidationResult { errors }
+}
+
 /// Check an operation against its registered declarative schema, including
 /// type constraints and its `#[verify]` hook.
 ///
@@ -365,7 +384,17 @@ fn validate_op_schema(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
     let Some(schema) = OpSchema::of(ctx, op) else {
         return true;
     };
-    let violations = schema.verify(ctx, op);
+    report_schema_violations(ctx, op, schema.verify(ctx, op), errors)
+}
+
+/// Record each violation as an operation error; returns whether there were
+/// none.
+fn report_schema_violations(
+    ctx: &IrContext,
+    op: OpRef,
+    violations: Vec<SchemaViolation>,
+    errors: &mut Vec<ValidationError>,
+) -> bool {
     for violation in &violations {
         errors.push(operation_verifier_error(ctx, op, violation.to_string()));
     }
@@ -3686,5 +3715,31 @@ mod tests {
         let result = validate_all(&ctx, module);
         assert!(!result.is_ok());
         assert_eq!(operation_error_messages(&result).len(), 1);
+    }
+
+    #[test]
+    fn validate_op_schemas_skips_verify_hooks() {
+        // The declared constraints hold, but the `#[verify]` hook rejects a
+        // callee whose function type differs from `signature`.
+        let input = r#"core.module @test {
+  func.func @main(%f: func.func_sig<(core.i32) -> core.i32>, %x: core.i64) -> core.i64 {
+    %r = func.call_indirect %f, %x {signature = func.func_sig<(core.i64) -> core.i64>} : core.i64
+    func.return %r
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let schemas = validate_op_schemas(&ctx, module.op());
+        assert!(schemas.is_ok(), "{:?}", schemas.errors);
+
+        let verifiers = validate_operation_verifiers(&ctx, module);
+        assert!(
+            operation_error_messages(&verifiers)
+                .iter()
+                .any(|message| message.contains("func.call_indirect")),
+            "{:?}",
+            verifiers.errors
+        );
     }
 }

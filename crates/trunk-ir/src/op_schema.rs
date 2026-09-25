@@ -507,11 +507,7 @@ impl OpSchema {
     /// Run every verifier stage on `op`, stopping after the first stage
     /// that reports a violation.
     pub fn verify(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
-        let violations = self.verify_structure(ctx, op);
-        if !violations.is_empty() {
-            return violations;
-        }
-        let violations = self.verify_types(ctx, op);
+        let violations = self.verify_declarative(ctx, op);
         if !violations.is_empty() {
             return violations;
         }
@@ -519,6 +515,17 @@ impl OpSchema {
             Some(Err(message)) => vec![SchemaViolation::Verifier(message)],
             _ => Vec::new(),
         }
+    }
+
+    /// Run the declarative stages on `op`: counts and attributes, then type
+    /// constraints. Unlike [`verify`](Self::verify), this skips the
+    /// `#[verify]` hook.
+    pub fn verify_declarative(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
+        let violations = self.verify_structure(ctx, op);
+        if !violations.is_empty() {
+            return violations;
+        }
+        self.verify_types(ctx, op)
     }
 
     /// Check type constraints, variable bindings, and projections.

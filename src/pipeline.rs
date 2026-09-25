@@ -846,7 +846,7 @@ fn structural_pass_pipeline(
     .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
     .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
     .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics);
-    install_debug_use_chain_verifier(&mut pm);
+    install_debug_verifier(&mut pm, DebugChecks::UseChainsAndSchemas);
     pm
 }
 
@@ -885,12 +885,12 @@ fn run_shared_pipeline(
     ability_pm
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform);
-    install_debug_use_chain_verifier(&mut ability_pm);
+    install_debug_verifier(&mut ability_pm, DebugChecks::UseChainsAndSchemas);
     ability_pm.run(&mut ctx, core_module)?;
 
     let mut evidence_pm = PassManager::new();
     evidence_pm.add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch);
-    install_debug_use_chain_verifier(&mut evidence_pm);
+    install_debug_verifier(&mut evidence_pm, DebugChecks::UseChainsAndSchemas);
     evidence_pm.run(&mut ctx, core_module)?;
 
     // Final function-local ability conversion. This consumes handle_dispatch ops
@@ -899,7 +899,7 @@ fn run_shared_pipeline(
     ability_boundary_pm
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_handle_dispatch::LowerHandleDispatch);
-    install_debug_use_chain_verifier(&mut ability_boundary_pm);
+    install_debug_verifier(&mut ability_boundary_pm, DebugChecks::UseChainsAndSchemas);
     ability_boundary_pm.run(&mut ctx, core_module)?;
 
     Ok(Some((ctx, m)))
@@ -929,32 +929,52 @@ pub fn dump_native_ir_at_stage(
     Ok(trunk_ir::printer::print_module(&ctx, module.op()))
 }
 
-fn install_debug_use_chain_verifier(pm: &mut PassManager) {
-    // Debug-only regression guard: re-check use-chain consistency after every
-    // shared pass. step 1+2 (#710) made this invariant hold across the shared
-    // middle-end; this catches any future pass that reintroduces a leak. The
-    // verifier only reports; the PassManager returns the offending pass's name
-    // with the verification error. Compiled out in release.
+/// Invariants the debug verifier re-checks after every pass.
+#[derive(Clone, Copy)]
+enum DebugChecks {
+    /// Use-chain consistency only. Target lowering passes leave values in
+    /// their pre-conversion types between passes, so their declared type
+    /// constraints are checked at the backend boundary instead.
+    UseChains,
+    /// Use-chain consistency, then every operation's declarative schema.
+    UseChainsAndSchemas,
+}
+
+fn install_debug_verifier(pm: &mut PassManager, checks: DebugChecks) {
+    // Debug-only regression guard run after every pass. Rewrites may break
+    // these invariants temporarily, but a finished pass must restore them.
+    // Use-chain consistency (#710) comes first; the schema check assumes it.
+    // The verifier only reports; the PassManager returns the offending pass's
+    // name with the verification error. Compiled out in release.
     if cfg!(debug_assertions) {
-        pm.with_verifier(|ctx, op| {
+        pm.with_verifier(move |ctx, op| {
             let Some(module) = enclosing_module(ctx, op) else {
                 return Ok(());
             };
-            let result = trunk_ir::validation::validate_use_chains(ctx, module);
-            if result.is_ok() {
-                return Ok(());
+            let mut results = vec![(
+                "use-chain",
+                trunk_ir::validation::validate_use_chains(ctx, module),
+            )];
+            if matches!(checks, DebugChecks::UseChainsAndSchemas) && results[0].1.is_ok() {
+                results.push(("schema", trunk_ir::validation::validate_op_schemas(ctx, op)));
             }
-            Err(trunk_ir::pass::VerifyError {
-                message: format!(
-                    "use-chain regression: {} error(s); first: {}",
-                    result.errors.len(),
-                    result
-                        .errors
-                        .first()
-                        .map(|e| e.to_string())
-                        .unwrap_or_default(),
-                ),
-            })
+            for (kind, result) in results {
+                if result.is_ok() {
+                    continue;
+                }
+                return Err(trunk_ir::pass::VerifyError {
+                    message: format!(
+                        "{kind} regression: {} error(s); first: {}",
+                        result.errors.len(),
+                        result
+                            .errors
+                            .first()
+                            .map(|e| e.to_string())
+                            .unwrap_or_default(),
+                    ),
+                });
+            }
+            Ok(())
         });
     }
 }
@@ -1016,7 +1036,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
             .add_pass(trunk_ir::transforms::dce_pass(
                 trunk_ir::transforms::DceConfig::default(),
             ));
-        install_debug_use_chain_verifier(&mut pm);
+        install_debug_verifier(&mut pm, DebugChecks::UseChains);
         if let Err(error) = pm.run(ctx, core_module) {
             tracing::warn!("cleanup function passes failed: {error}");
         }
@@ -1063,7 +1083,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
-        install_debug_use_chain_verifier(&mut pm);
+        install_debug_verifier(&mut pm, DebugChecks::UseChains);
         pm.run(ctx, core_module)?;
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
@@ -1088,7 +1108,7 @@ fn enter_target_closure_storage_boundary(
         .expect("target closure lowering requires a core.module");
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
-    install_debug_use_chain_verifier(&mut pm);
+    install_debug_verifier(&mut pm, DebugChecks::UseChains);
     pm.run(ctx, core_module)?;
     Ok(())
 }
@@ -1257,7 +1277,7 @@ fn prepare_module_to_native(
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(trunk_ir::transforms::scf_to_cf_pass());
-        install_debug_use_chain_verifier(&mut pm);
+        install_debug_verifier(&mut pm, DebugChecks::UseChains);
         pm.run(ctx, core_module).map_err(native_pass_failure)?;
     } else {
         trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
@@ -2380,7 +2400,7 @@ fn main() {
                 Ok(())
             },
         ));
-        install_debug_use_chain_verifier(&mut pm);
+        install_debug_verifier(&mut pm, DebugChecks::UseChains);
 
         let error = pm.run(&mut ctx, core_module).unwrap_err();
 
@@ -2395,6 +2415,46 @@ fn main() {
             error.to_string().contains("no such operand exists"),
             "{error}"
         );
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn debug_verifier_reports_schema_violations_after_a_pass() {
+        let input = r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %y = arith.addi %x, %x : core.i32
+    func.return %y
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(&mut ctx, input);
+        let core_module = core_dialect::Module::from_op(&ctx, module.op())
+            .expect("test input must parse a core.module");
+
+        let mut pm = PassManager::new();
+        pm.add_pass(trunk_ir::pass::pass_fn(
+            "break-schema",
+            |ctx: &mut IrContext, module: core_dialect::Module| {
+                let module_block = ctx.region(module.body(ctx)).blocks[0];
+                let func_op = ctx.block(module_block).ops[0];
+                let func_block = ctx.region(ctx.op(func_op).regions[0]).blocks[0];
+                let add_op = ctx.block(func_block).ops[0];
+                // Retype the result without touching use-chains, so only the
+                // `T` binding of `arith.addi` is violated.
+                let i64_ty =
+                    ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i64").build());
+                ctx.set_op_result_type(add_op, 0, i64_ty);
+                Ok(())
+            },
+        ));
+        install_debug_verifier(&mut pm, DebugChecks::UseChainsAndSchemas);
+
+        let error = pm.run(&mut ctx, core_module).unwrap_err();
+
+        assert_eq!(error.pass_name(), "break-schema");
+        let message = error.to_string();
+        assert!(message.contains("schema regression"), "{message}");
+        assert!(message.contains("arith.addi"), "{message}");
     }
 
     #[salsa_test]
