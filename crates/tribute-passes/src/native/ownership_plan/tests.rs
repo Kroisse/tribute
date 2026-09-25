@@ -2,85 +2,79 @@ use super::*;
 use crate::native::evidence::lower_evidence_to_native;
 use crate::native::rc_materialization::materialize;
 use crate::native::type_converter::native_type_converter;
-use trunk_ir::OpRef;
 use trunk_ir::op_interface::{
-    BranchRegistration, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
+    BranchModel, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
 };
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir_cranelift_backend::passes::func_to_clif;
 
-fn incomplete_test_branch(
-    _ctx: &IrContext,
-    _op: OpRef,
-) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-    Err(ControlFlowInterfaceError::new(
-        "test branch interface is incomplete",
-    ))
-}
+// Branch terminators whose interface models are deliberately wrong.
+#[trunk_ir::dialect]
+mod test {
+    fn incomplete_branch() {
+        #[successor(exit)]
+        {}
+    }
 
-fn missing_edge_test_branch(
-    _ctx: &IrContext,
-    _op: OpRef,
-) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-    Ok(BranchSuccessors::default())
-}
+    fn missing_edge_branch() {
+        #[successor(exit)]
+        {}
+    }
 
-fn reversed_test_branch(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-    let successors = &ctx.op(op).successors;
-    Ok(BranchSuccessors::new([
-        BranchSuccessor::new(successors[1], []),
-        BranchSuccessor::new(successors[0], []),
-    ]))
-}
+    fn reversed_branch() {
+        #[successor(left)]
+        {}
+        #[successor(right)]
+        {}
+    }
 
-fn multi_forwarding_test_branch(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-    let successors = &ctx.op(op).successors;
-    let forwarded = ctx.op_operands(op)[0];
-    Ok(BranchSuccessors::new([
-        BranchSuccessor::new(successors[0], [forwarded]),
-        BranchSuccessor::new(successors[1], [forwarded]),
-    ]))
-}
-
-trunk_ir::inventory::submit! {
-    BranchRegistration {
-        dialect: "test",
-        op_name: "incomplete_branch",
-        successors: incomplete_test_branch,
+    fn multi_forwarding_branch(value: Value<_>) {
+        #[successor(left)]
+        {}
+        #[successor(right)]
+        {}
     }
 }
 
-trunk_ir::inventory::submit! {
-    BranchRegistration {
-        dialect: "test",
-        op_name: "missing_edge_branch",
-        successors: missing_edge_test_branch,
+impl BranchModel for IncompleteBranch {
+    fn successors(self, _ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+        Err(ControlFlowInterfaceError::new(
+            "test branch interface is incomplete",
+        ))
     }
 }
 
-trunk_ir::inventory::submit! {
-    BranchRegistration {
-        dialect: "test",
-        op_name: "reversed_branch",
-        successors: reversed_test_branch,
+impl BranchModel for MissingEdgeBranch {
+    fn successors(self, _ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+        Ok(BranchSuccessors::default())
     }
 }
 
-trunk_ir::inventory::submit! {
-    BranchRegistration {
-        dialect: "test",
-        op_name: "multi_forwarding_branch",
-        successors: multi_forwarding_test_branch,
+impl BranchModel for ReversedBranch {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+        Ok(BranchSuccessors::new([
+            BranchSuccessor::new(self.right(ctx), []),
+            BranchSuccessor::new(self.left(ctx), []),
+        ]))
     }
 }
+
+impl BranchModel for MultiForwardingBranch {
+    fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
+        let forwarded = self.value(ctx);
+        Ok(BranchSuccessors::new([
+            BranchSuccessor::new(self.left(ctx), [forwarded]),
+            BranchSuccessor::new(self.right(ctx), [forwarded]),
+        ]))
+    }
+}
+
+trunk_ir::inventory::submit! { BranchOps::register::<IncompleteBranch>() }
+trunk_ir::inventory::submit! { BranchOps::register::<MissingEdgeBranch>() }
+trunk_ir::inventory::submit! { BranchOps::register::<ReversedBranch>() }
+trunk_ir::inventory::submit! { BranchOps::register::<MultiForwardingBranch>() }
 
 fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
     let mut ctx = IrContext::new();

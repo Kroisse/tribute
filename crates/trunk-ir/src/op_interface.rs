@@ -644,12 +644,12 @@ fn indirect_call_like_model_set_signature<T: IndirectCallLikeModel>(
 
 /// Registry entry for [`IndirectCallLike`].
 pub struct IndirectCallLikeRegistration {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
-    pub arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
-    pub exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
-    pub set_exact_signature: fn(&mut IrContext, OpRef, TypeRef) -> bool,
+    dialect: &'static str,
+    op_name: &'static str,
+    callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
+    arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
+    exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
+    set_exact_signature: fn(&mut IrContext, OpRef, TypeRef) -> bool,
 }
 
 impl IndirectCallLike for IndirectCallLikeRegistration {
@@ -769,9 +769,9 @@ pub type BranchSuccessorsFn =
 
 /// Registry entry for [`Branch`].
 pub struct BranchRegistration {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub successors: BranchSuccessorsFn,
+    dialect: &'static str,
+    op_name: &'static str,
+    successors: BranchSuccessorsFn,
 }
 
 impl Branch for BranchRegistration {
@@ -894,10 +894,10 @@ pub type EntrySuccessorOperandsFn =
 
 /// Registry entry for [`RegionBranch`].
 pub struct RegionBranchRegistration {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub successors: RegionSuccessorsFn,
-    pub entry_successor_operands: EntrySuccessorOperandsFn,
+    dialect: &'static str,
+    op_name: &'static str,
+    successors: RegionSuccessorsFn,
+    entry_successor_operands: EntrySuccessorOperandsFn,
 }
 
 impl RegionBranch for RegionBranchRegistration {
@@ -1042,9 +1042,9 @@ pub type RegionSuccessorOperandsFn =
 
 /// Registry entry for [`RegionBranchTerminator`].
 pub struct RegionBranchTerminatorRegistration {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub successor_operands: RegionSuccessorOperandsFn,
+    dialect: &'static str,
+    op_name: &'static str,
+    successor_operands: RegionSuccessorOperandsFn,
 }
 
 impl RegionBranchTerminator for RegionBranchTerminatorRegistration {
