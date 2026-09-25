@@ -355,6 +355,23 @@ pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> Validati
     ValidationResult { errors }
 }
 
+/// Check `root` and every operation nested in it against its declarative
+/// schema only.
+///
+/// Unlike [`validate_operation_verifiers`], this skips the hand-written
+/// operation checks and interface verification. It is the debug checkpoint
+/// run after each pipeline pass, where the IR must satisfy the declared
+/// constraints again; a pass nested under an operation checks only that
+/// operation's subtree.
+pub fn validate_op_schemas(ctx: &IrContext, root: OpRef) -> ValidationResult {
+    let mut errors = Vec::new();
+    let _ = walk::walk_op::<std::convert::Infallible>(ctx, root, &mut |op| {
+        validate_op_schema(ctx, op, &mut errors);
+        std::ops::ControlFlow::Continue(walk::WalkAction::Advance)
+    });
+    ValidationResult { errors }
+}
+
 /// Check an operation against its registered declarative schema, including
 /// type constraints and its `#[verify]` hook.
 ///

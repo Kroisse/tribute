@@ -123,6 +123,9 @@ and may assume the declared shape. The `tribute_control` local validator and
 the native backend boundary (`validate_clif_ir`) run the schema the same way
 before their own checks, so those checks cover only what the schema cannot
 express, such as symbol lookups, enclosing callables, and region contents.
+Debug builds also run `validate_op_schemas` after every shared middle-end
+pass, reporting the pass that left an operation in violation; target lowering
+passes are checked at the backend boundary.
 Typed accessors do not check the schema; for an optional region or result,
 inspect the operation before calling the accessor. Interface queries that may
 see unverified IR read attributes fallibly instead.
