@@ -161,7 +161,11 @@ exact bound 충돌)는 컴파일 시점에 거부한다. 다른 crate의 dialect
 
 선언적 제약은 verifier checkpoint에서만 강제한다. Parser, raw operation
 builder, operation clone, 결과 타입 재지정은 제약을 우회할 수 있으며, rewrite
-중간 상태가 일시적으로 제약을 위반하는 것도 허용한다.
+중간 상태가 일시적으로 제약을 위반하는 것도 허용한다. Pass 경계는 checkpoint다.
+각 pass가 끝나면 IR은 선언된 제약을 다시 만족해야 한다. 값의 타입만 먼저 바꾸는
+부분 변환은 `core.unrealized_conversion_cast`로 use가 선언한 타입을 유지하며,
+target 타입 변환이 양쪽 타입을 같게 만든 뒤에 cast를 해소한다. 표현이 같다는
+이유만으로 타입이 다른 값을 cast 없이 대입하지 않는다.
 
 생성된 builder는 entity 종류별로 입력을 묶는다. Operand 전체를 선언 순서대로
 받는 것으로 시작하고, attribute는 이름별로 받는다. 추론할 수 없는 결과 타입,
