@@ -182,8 +182,14 @@ impl CastResolver {
         // Get the cast result value
         let cast_result = ctx.op_result(op, 0);
 
-        // If types are the same, just RAUW and erase the cast
+        // If types are the same, just RAUW and erase the cast. Before the
+        // target conversion, "the same" must hold for the declared result
+        // type: a source that only matches its converted form still retypes
+        // the uses.
         if from_type == to_type {
+            if self.keep_retyping_casts && from_type != original_to_type {
+                return;
+            }
             ctx.replace_all_uses(cast_result, input_value);
             crate::rewrite::erase_op(ctx, op);
             self.resolved_count += 1;
@@ -407,36 +413,53 @@ mod tests {
             let (mut ctx, loc) = test_ctx();
             let i32_ty = i32_type(&mut ctx);
             let i64_ty = i64_type(&mut ctx);
+            let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
 
             let const_op = arith::Const::operands()
                 .value(Attribute::Int(42))
                 .results(i32_ty)
                 .build(&mut ctx, loc);
-            let retype = core::UnrealizedConversionCast::operands(const_op.result(&ctx))
+            let value = const_op.result(&ctx);
+            // i64 converts to i32, so this cast matches its source only in
+            // its converted form.
+            let converted = core::UnrealizedConversionCast::operands(value)
                 .results(i64_ty)
                 .build(&mut ctx, loc);
-            let same = core::UnrealizedConversionCast::operands(const_op.result(&ctx))
+            // f64 does not convert; the materializer treats it as a no-op.
+            let noop = core::UnrealizedConversionCast::operands(value)
+                .results(f64_ty)
+                .build(&mut ctx, loc);
+            let same = core::UnrealizedConversionCast::operands(value)
                 .results(i32_ty)
                 .build(&mut ctx, loc);
             let module = make_module(
                 &mut ctx,
                 loc,
-                vec![const_op.op_ref(), retype.op_ref(), same.op_ref()],
+                vec![
+                    const_op.op_ref(),
+                    converted.op_ref(),
+                    noop.op_ref(),
+                    same.op_ref(),
+                ],
             );
 
-            // A representation no-op between different types.
             let mut tc = TypeConverter::new();
+            tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(i32_ty));
             tc.set_materializer(|_ctx, _loc, value, _from_ty, _to_ty| {
                 Some(crate::rewrite::type_converter::MaterializeResult { value, ops: vec![] })
             });
 
+            // Both retyping casts survive; only the same-type cast goes.
             let result = resolve_type_preserving_casts(&mut ctx, module, &tc);
             assert!(result.unresolved.is_empty());
-            assert_eq!(result.resolved_count, 1, "only the same-type cast");
-            assert_eq!(module.ops(&ctx), [const_op.op_ref(), retype.op_ref()]);
+            assert_eq!(result.resolved_count, 1);
+            assert_eq!(
+                module.ops(&ctx),
+                [const_op.op_ref(), converted.op_ref(), noop.op_ref()]
+            );
 
             let result = resolve_unrealized_casts(&mut ctx, module, &tc);
-            assert_eq!(result.resolved_count, 1);
+            assert_eq!(result.resolved_count, 2);
             assert_eq!(module.ops(&ctx), [const_op.op_ref()]);
         }
     }
