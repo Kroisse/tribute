@@ -28,13 +28,13 @@ pub type OpVerifier = fn(&IrContext, OpRef) -> Result<(), String>;
 impl OpDef {
     /// Run the declarative schema stages and then the `#[verify]` hook,
     /// stopping after the first stage that reports a violation.
-    pub fn verify(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
+    pub fn verify(&self, ctx: &IrContext, op: OpRef) -> Vec<OpViolation> {
         let violations = self.schema.verify(ctx, op);
         if !violations.is_empty() {
-            return violations;
+            return violations.into_iter().map(OpViolation::Schema).collect();
         }
         match self.verifier.map(|verifier| verifier(ctx, op)) {
-            Some(Err(message)) => vec![SchemaViolation::Verifier(message)],
+            Some(Err(message)) => vec![OpViolation::Verifier(message)],
             _ => Vec::new(),
         }
     }
@@ -49,6 +49,17 @@ impl OpDef {
         let data = ctx.op(op);
         Self::lookup(data.dialect, data.name)
     }
+}
+
+/// One way an operation fails its definition.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display)]
+pub enum OpViolation {
+    /// The operation violates its declarative schema.
+    #[display("{_0}")]
+    Schema(SchemaViolation),
+    /// The operation's `#[verify]` hook rejected it.
+    #[display("{_0}")]
+    Verifier(String),
 }
 
 /// Inventory entry registering an [`OpDef`].

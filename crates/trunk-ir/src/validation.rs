@@ -26,7 +26,6 @@ use super::op_interface::{
     BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
     RegionValueTransfer,
 };
-use super::op_schema::SchemaViolation;
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
@@ -393,7 +392,7 @@ fn validate_op_schema(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationErr
 fn report_schema_violations(
     ctx: &IrContext,
     op: OpRef,
-    violations: Vec<SchemaViolation>,
+    violations: Vec<impl std::fmt::Display>,
     errors: &mut Vec<ValidationError>,
 ) -> bool {
     for violation in &violations {
