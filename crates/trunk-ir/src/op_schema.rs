@@ -259,8 +259,6 @@ pub enum SchemaViolation {
         projection: String,
         var: &'static str,
     },
-    /// The operation's own verifier rejected it.
-    Verifier(String),
 }
 
 /// Where a constrained type appears in an operation.
@@ -393,7 +391,6 @@ impl fmt::Display for SchemaViolation {
                 f,
                 "{site}: cannot check {projection} because `{var}` is not bound"
             ),
-            SchemaViolation::Verifier(message) => f.write_str(message),
         }
     }
 }
