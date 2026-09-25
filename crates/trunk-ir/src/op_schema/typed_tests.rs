@@ -188,7 +188,7 @@ fn typed_schema_records_variables_and_constraints() {
 
 #[test]
 fn wildcard_entities_are_unconstrained() {
-    let schema = &crate::dialect::arith::Subi::DEF.schema;
+    let schema = &crate::dialect::func::Call::DEF.schema;
     assert!(schema.type_vars.is_empty());
     assert!(matches!(
         schema.operands[0].constraint,

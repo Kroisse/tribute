@@ -70,9 +70,7 @@ pub(super) fn emit_logical_pattern_check<'db>(
             };
             let mut result = *first;
             for condition in rest {
-                let and = arith::And::operands(result, *condition)
-                    .results(bool_ty)
-                    .build(builder.ir, location);
+                let and = arith::And::operands(result, *condition).build(builder.ir, location);
                 builder.ir.push_op(builder.block, and.op_ref());
                 result = and.result(builder.ir);
             }
@@ -165,9 +163,7 @@ fn emit_logical_variant_pattern_check<'db>(
         }
         let mut combined = conditions[0];
         for condition in conditions.into_iter().skip(1) {
-            let and = arith::And::operands(combined, condition)
-                .results(bool_ty)
-                .build(nested.ir, location);
+            let and = arith::And::operands(combined, condition).build(nested.ir, location);
             nested.ir.push_op(nested.block, and.op_ref());
             combined = and.result(nested.ir);
         }
@@ -281,7 +277,6 @@ fn emit_logical_list_pattern_suffix<'db>(
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, true_value.op_ref());
     let non_empty = arith::Xor::operands(empty.result(builder.ir), true_value.result(builder.ir))
-        .results(bool_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, non_empty.op_ref());
     let then_block = builder.ir.create_block(BlockData {

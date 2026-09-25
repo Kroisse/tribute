@@ -50,20 +50,20 @@ mod arith {
 
     // Integer arithmetic
     fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    fn subi(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn muli(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn divsi(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn divui(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn remsi(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn remui(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn negi(operand: Value<_>) -> Value<_> {}
+    fn subi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn muli<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn divsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn divui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn remsi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn remui<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn negi<T: IntegerLike>(operand: Value<T>) -> Value<T> {}
 
     // Float arithmetic
     fn addf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
-    fn subf(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn mulf(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn divf(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn negf(operand: Value<_>) -> Value<_> {}
+    fn subf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn mulf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn divf<T: FloatLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn negf<T: FloatLike>(operand: Value<T>) -> Value<T> {}
 
     // Comparisons
     fn cmpi<T: IntegerLike>(predicate: Attr<Symbol>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
@@ -72,12 +72,12 @@ mod arith {
     fn cmpf<T: FloatLike>(predicate: Attr<Symbol>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     // Bitwise (integer-only)
-    fn and(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn or(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn xor(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-    fn shl(value: Value<_>, amount: Value<_>) -> Value<_> {}
-    fn shr(value: Value<_>, amount: Value<_>) -> Value<_> {}
-    fn shru(value: Value<_>, amount: Value<_>) -> Value<_> {}
+    fn and<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn or<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn xor<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
+    fn shl<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    fn shr<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
+    fn shru<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
 
     // Conversions
     fn cast(operand: Value<_>) -> Value<_> {}
@@ -1198,5 +1198,43 @@ mod canonicalize_tests {
         assert_eq!(count_ops(&ctx, module, "arith", "and"), 1);
         assert_eq!(count_ops(&ctx, module, "arith", "or"), 1);
         assert_eq!(count_ops(&ctx, module, "arith", "xor"), 1);
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use crate::parser::parse_test_module;
+
+    #[test]
+    fn arithmetic_operations_require_one_operand_and_result_type() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%a: core.i32, %b: core.i64, %x: core.f64) {
+    %sub = arith.subi %a, %b : core.i32
+    %shl = arith.shl %a, %b : core.i32
+    %mul = arith.mulf %x, %a : core.f64
+    %neg = arith.negi %x : core.f64
+    %and = arith.and %a, %a : core.i64
+    %ok = arith.divsi %a, %a : core.i32
+    func.return
+  }
+}"#,
+        );
+        let result = crate::validation::validate_operation_verifiers(&ctx, module);
+        let messages = result.to_string();
+        for op in [
+            "arith.subi",
+            "arith.shl",
+            "arith.mulf",
+            "arith.negi",
+            "arith.and",
+        ] {
+            assert!(messages.contains(op), "missing {op}: {messages}");
+        }
+        assert!(!messages.contains("arith.divsi"), "{messages}");
+        // `negi` reports both its operand and its result.
+        assert_eq!(result.errors.len(), 6, "{messages}");
     }
 }

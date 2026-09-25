@@ -77,7 +77,7 @@ impl Pass for LowerIntrinsicToArith {
 #[derive(Clone)]
 enum ArithMapping {
     /// Binary arithmetic: addi, addf, subi, etc.
-    BinaryOp(fn(&mut IrContext, Location, ValueRef, ValueRef, TypeRef) -> OpRef),
+    BinaryOp(fn(&mut IrContext, Location, ValueRef, ValueRef) -> OpRef),
     /// Integer comparison with predicate.
     CmpI(&'static str),
     /// Float comparison with predicate.
@@ -112,23 +112,19 @@ impl ArithIntrinsicPattern {
         }
 
         // --- Int (signed) ---
-        binary!("Int::+", |ctx, loc, l, r, _ty| arith::Addi::operands(l, r)
+        binary!("Int::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::-", |ctx, loc, l, r, ty| arith::Subi::operands(l, r)
-            .results(ty)
+        binary!("Int::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::*", |ctx, loc, l, r, ty| arith::Muli::operands(l, r)
-            .results(ty)
+        binary!("Int::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::/", |ctx, loc, l, r, ty| arith::Divsi::operands(l, r)
-            .results(ty)
+        binary!("Int::/", |ctx, loc, l, r| arith::Divsi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::%", |ctx, loc, l, r, ty| arith::Remsi::operands(l, r)
-            .results(ty)
+        binary!("Int::%", |ctx, loc, l, r| arith::Remsi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
         cmpi!("Int::==", "eq");
@@ -139,23 +135,19 @@ impl ArithIntrinsicPattern {
         cmpi!("Int::>=", "sge");
 
         // --- Nat (unsigned) ---
-        binary!("Nat::+", |ctx, loc, l, r, _ty| arith::Addi::operands(l, r)
+        binary!("Nat::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::-", |ctx, loc, l, r, ty| arith::Subi::operands(l, r)
-            .results(ty)
+        binary!("Nat::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::*", |ctx, loc, l, r, ty| arith::Muli::operands(l, r)
-            .results(ty)
+        binary!("Nat::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::/", |ctx, loc, l, r, ty| arith::Divui::operands(l, r)
-            .results(ty)
+        binary!("Nat::/", |ctx, loc, l, r| arith::Divui::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::%", |ctx, loc, l, r, ty| arith::Remui::operands(l, r)
-            .results(ty)
+        binary!("Nat::%", |ctx, loc, l, r| arith::Remui::operands(l, r)
             .build(ctx, loc)
             .op_ref());
         cmpi!("Nat::==", "eq");
@@ -166,21 +158,16 @@ impl ArithIntrinsicPattern {
         cmpi!("Nat::>=", "uge");
 
         // --- Float ---
-        binary!("Float::+", |ctx, loc, l, r, _ty| arith::Addf::operands(
-            l, r
-        )
-        .build(ctx, loc)
-        .op_ref());
-        binary!("Float::-", |ctx, loc, l, r, ty| arith::Subf::operands(l, r)
-            .results(ty)
+        binary!("Float::+", |ctx, loc, l, r| arith::Addf::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Float::*", |ctx, loc, l, r, ty| arith::Mulf::operands(l, r)
-            .results(ty)
+        binary!("Float::-", |ctx, loc, l, r| arith::Subf::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Float::/", |ctx, loc, l, r, ty| arith::Divf::operands(l, r)
-            .results(ty)
+        binary!("Float::*", |ctx, loc, l, r| arith::Mulf::operands(l, r)
+            .build(ctx, loc)
+            .op_ref());
+        binary!("Float::/", |ctx, loc, l, r| arith::Divf::operands(l, r)
             .build(ctx, loc)
             .op_ref());
         cmpf!("Float::==", "oeq");
@@ -222,14 +209,13 @@ impl RewritePattern for ArithIntrinsicPattern {
         };
 
         let loc = ctx.op(op).location;
-        let result_ty = ctx.op_result_types(op)[0];
         let operands = ctx.op_operands(op).to_vec();
         let lhs = operands[0];
         let rhs = operands[1];
 
         match mapping {
             ArithMapping::BinaryOp(op_fn) => {
-                let new_op = op_fn(ctx, loc, lhs, rhs, result_ty);
+                let new_op = op_fn(ctx, loc, lhs, rhs);
                 rewriter.replace_op(new_op);
             }
             ArithMapping::CmpI(predicate) => {
@@ -294,9 +280,9 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         // This will panic if a non-binary intrinsic is ever added to the map.
         let function = func::FuncSig::from_type_ref(ctx, func_ty)
             .expect("mapped intrinsic declaration must have a valid func.func_sig type");
-        let Some(return_ty) = function.single_result(ctx) else {
+        if function.single_result(ctx).is_none() {
             return false;
-        };
+        }
         let param_tys: Vec<TypeRef> = function.inputs(ctx).to_vec();
 
         // Build a new body: entry block with params → arith op → func.return
@@ -317,7 +303,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         let rhs = ctx.block_args(body_block)[1];
 
         let result_op = match mapping {
-            ArithMapping::BinaryOp(op_fn) => op_fn(ctx, loc, lhs, rhs, return_ty),
+            ArithMapping::BinaryOp(op_fn) => op_fn(ctx, loc, lhs, rhs),
             ArithMapping::CmpI(predicate) => arith::Cmpi::operands(lhs, rhs)
                 .predicate(Symbol::new(predicate))
                 .build(ctx, loc)
