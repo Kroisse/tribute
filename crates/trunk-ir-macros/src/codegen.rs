@@ -164,14 +164,13 @@ fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
         RegionOrSuccessor::Region { .. } => None,
     });
 
-    // The span points a missing `verify` method at the `#[verify]` attribute.
+    // The span points a missing `Verify` impl at the `#[verify]` attribute.
     let verifier = match op.verify {
         Some(span) => {
             let mut sname = struct_name(&op.name);
             sname.set_span(span);
             quote_spanned!(span=> Some(|ctx, op| {
-                use #crate_path::op_schema::__private::VerifyFallback as _;
-                #sname::verify(#sname(op), ctx)
+                <#sname as #crate_path::ops::Verify>::verify(#sname(op), ctx)
             }))
         }
         None => quote!(None),

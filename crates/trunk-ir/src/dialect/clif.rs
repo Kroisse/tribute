@@ -311,7 +311,7 @@ pub fn func_sig_with_attrs(
     FuncSig(ty)
 }
 
-impl CallIndirect {
+impl crate::ops::Verify for CallIndirect {
     /// Results match the signature's result list, or its projection without
     /// zero-width `core.nil` slots, which the emitter does not materialize.
     fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
