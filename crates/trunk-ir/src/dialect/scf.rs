@@ -511,7 +511,7 @@ use crate::transforms::canonicalize::FoldResult;
 /// post-`scf_to_cf`, where this pass doesn't run anyway. Bails out on
 /// any structural mismatch (yield arity, non-`i1` const, malformed
 /// regions).
-#[trunk_ir::canonicalize_fold(scf.r#if)]
+#[trunk_ir::canonicalize_fold(If)]
 pub(crate) fn fold_if(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let if_op = If::from_op(ctx, op).ok()?;
     let cond = if_op.cond(ctx);

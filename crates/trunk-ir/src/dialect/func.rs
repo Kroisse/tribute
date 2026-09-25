@@ -37,8 +37,8 @@ pub trait TailCallLike: CallLike {
 }
 
 // === Operation registrations ===
-crate::register_pure_op!(func.constant);
-crate::register_isolated_op!(func.func);
+crate::register_pure_op!(Constant);
+crate::register_isolated_op!(Func);
 
 #[trunk_ir::dialect]
 mod func {
@@ -715,12 +715,7 @@ fn parse_func<'a>(
 }
 
 inventory::submit! {
-    crate::op_interface::OpAsmFormat {
-        dialect: "func",
-        op_name: "func",
-        print_fn: print_func,
-        parse_fn: parse_func,
-    }
+    crate::op_interface::OpAsmFormat::new::<Func>(print_func, parse_func)
 }
 
 impl crate::op_interface::CallableOwnerModel for Func {

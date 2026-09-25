@@ -5,7 +5,7 @@ use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
 
-crate::register_isolated_op!(wasm.func);
+crate::register_isolated_op!(Func);
 
 #[trunk_ir::dialect]
 mod wasm {

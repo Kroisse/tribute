@@ -26,10 +26,10 @@ mod closure {
 // === Pure operation registrations ===
 // All closure operations are pure
 
-inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "new") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "func") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "env") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("closure", "lambda") }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<New>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Func>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Env>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Lambda>() }
 
 // === Custom assembly format for closure.lambda ===
 
@@ -249,12 +249,7 @@ fn parse_closure_lambda<'a>(
 }
 
 inventory::submit! {
-    trunk_ir::op_interface::OpAsmFormat {
-        dialect: "closure",
-        op_name: "lambda",
-        print_fn: print_closure_lambda,
-        parse_fn: parse_closure_lambda,
-    }
+    trunk_ir::op_interface::OpAsmFormat::new::<Lambda>(print_closure_lambda, parse_closure_lambda)
 }
 
 impl trunk_ir::op_interface::CallableOwnerModel for Lambda {

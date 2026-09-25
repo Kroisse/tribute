@@ -70,10 +70,6 @@ pub use trunk_ir_macros::canonicalize_fold;
 #[doc(hidden)]
 pub use inventory;
 
-// Re-export paste for use in macros
-#[doc(hidden)]
-pub use paste;
-
 // Re-export smallvec for use in macros and external crates
 pub use smallvec;
 

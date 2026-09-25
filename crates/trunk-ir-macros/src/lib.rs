@@ -61,15 +61,13 @@ fn dialect_impl(
 /// Register a per-op fold for the canonicalize pass.
 ///
 /// ```ignore
-/// #[trunk_ir::canonicalize_fold(arith.addi)]
+/// #[trunk_ir::canonicalize_fold(Addi)]
 /// pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> { ... }
 /// ```
 ///
-/// The attribute payload is `<dialect_ident>.<op_ident>`. Raw
-/// identifiers (`r#const`, `r#return`) are stripped so the registered
-/// op name matches the printed form. The original function item is
-/// preserved unchanged; the macro only emits an adjacent
-/// `inventory::submit!` block.
+/// The attribute payload is the operation's typed wrapper, so a misspelled
+/// operation fails to compile. The original function item is preserved
+/// unchanged; the macro only emits an adjacent `inventory::submit!` block.
 #[proc_macro_attribute]
 pub fn canonicalize_fold(attr: ProcTokenStream, item: ProcTokenStream) -> ProcTokenStream {
     match canonicalize::gen_fold(attr.into(), item.into()) {

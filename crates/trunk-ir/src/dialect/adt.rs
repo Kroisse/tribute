@@ -7,24 +7,24 @@ inventory::submit!(crate::op_interface::TypeAliasHint {
 });
 
 // === Pure operation registrations ===
-crate::register_pure_op!(adt.struct_new);
-crate::register_pure_op!(adt.struct_get);
+crate::register_pure_op!(StructNew);
+crate::register_pure_op!(StructGet);
 
-crate::register_pure_op!(adt.variant_new);
-crate::register_pure_op!(adt.variant_is);
-crate::register_pure_op!(adt.variant_cast);
-crate::register_pure_op!(adt.variant_get);
+crate::register_pure_op!(VariantNew);
+crate::register_pure_op!(VariantIs);
+crate::register_pure_op!(VariantCast);
+crate::register_pure_op!(VariantGet);
 
-crate::register_pure_op!(adt.array_new);
-crate::register_pure_op!(adt.array_get);
-crate::register_pure_op!(adt.array_len);
+crate::register_pure_op!(ArrayNew);
+crate::register_pure_op!(ArrayGet);
+crate::register_pure_op!(ArrayLen);
 
-crate::register_pure_op!(adt.ref_null);
-crate::register_pure_op!(adt.ref_is_null);
-crate::register_pure_op!(adt.ref_cast);
+crate::register_pure_op!(RefNull);
+crate::register_pure_op!(RefIsNull);
+crate::register_pure_op!(RefCast);
 
-crate::register_pure_op!(adt.string_const);
-crate::register_pure_op!(adt.bytes_const);
+crate::register_pure_op!(StringConst);
+crate::register_pure_op!(BytesConst);
 
 #[trunk_ir::dialect]
 mod adt {

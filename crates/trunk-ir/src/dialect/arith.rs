@@ -7,42 +7,42 @@
 //! - Float comparison: `cmpf` with predicate attribute (oeq, une, olt, ole, ogt, oge)
 
 // === Pure operation registrations ===
-crate::register_pure_op!(arith.r#const);
+crate::register_pure_op!(Const);
 
 // Integer arithmetic
-crate::register_pure_op!(arith.addi);
-crate::register_pure_op!(arith.subi);
-crate::register_pure_op!(arith.muli);
-crate::register_pure_op!(arith.divsi);
-crate::register_pure_op!(arith.divui);
-crate::register_pure_op!(arith.remsi);
-crate::register_pure_op!(arith.remui);
-crate::register_pure_op!(arith.negi);
+crate::register_pure_op!(Addi);
+crate::register_pure_op!(Subi);
+crate::register_pure_op!(Muli);
+crate::register_pure_op!(Divsi);
+crate::register_pure_op!(Divui);
+crate::register_pure_op!(Remsi);
+crate::register_pure_op!(Remui);
+crate::register_pure_op!(Negi);
 
 // Float arithmetic
-crate::register_pure_op!(arith.addf);
-crate::register_pure_op!(arith.subf);
-crate::register_pure_op!(arith.mulf);
-crate::register_pure_op!(arith.divf);
-crate::register_pure_op!(arith.negf);
+crate::register_pure_op!(Addf);
+crate::register_pure_op!(Subf);
+crate::register_pure_op!(Mulf);
+crate::register_pure_op!(Divf);
+crate::register_pure_op!(Negf);
 
 // Comparisons
-crate::register_pure_op!(arith.cmpi);
-crate::register_pure_op!(arith.cmpf);
+crate::register_pure_op!(Cmpi);
+crate::register_pure_op!(Cmpf);
 
 // Bitwise (integer-only, unchanged)
-crate::register_pure_op!(arith.and);
-crate::register_pure_op!(arith.or);
-crate::register_pure_op!(arith.xor);
-crate::register_pure_op!(arith.shl);
-crate::register_pure_op!(arith.shr);
-crate::register_pure_op!(arith.shru);
+crate::register_pure_op!(And);
+crate::register_pure_op!(Or);
+crate::register_pure_op!(Xor);
+crate::register_pure_op!(Shl);
+crate::register_pure_op!(Shr);
+crate::register_pure_op!(Shru);
 
 // Conversions (unchanged)
-crate::register_pure_op!(arith.cast);
-crate::register_pure_op!(arith.trunc);
-crate::register_pure_op!(arith.extend);
-crate::register_pure_op!(arith.convert);
+crate::register_pure_op!(Cast);
+crate::register_pure_op!(Trunc);
+crate::register_pure_op!(Extend);
+crate::register_pure_op!(Convert);
 
 #[trunk_ir::dialect]
 mod arith {
@@ -126,7 +126,7 @@ impl crate::ops::Verify for Cmpf {
 /// `arith.addi` folds:
 /// - `x + 0` / `0 + x` → `x`
 /// - `const(a) + const(b)` → `const(wrap(a+b))` at the result width
-#[trunk_ir::canonicalize_fold(arith.addi)]
+#[trunk_ir::canonicalize_fold(Addi)]
 pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     if const_int_value(ctx, rhs) == Some(0) {
@@ -146,7 +146,7 @@ pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// - `x - 0` → `x`. (`0 - x` is the `negi` semantic and is left for a
 ///   separate fold so the rewrite direction stays unambiguous.)
 /// - `const(a) - const(b)` → `const(wrap(a-b))` at the result width.
-#[trunk_ir::canonicalize_fold(arith.subi)]
+#[trunk_ir::canonicalize_fold(Subi)]
 pub(crate) fn fold_subi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     if const_int_value(ctx, rhs) == Some(0) {
@@ -163,7 +163,7 @@ pub(crate) fn fold_subi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// - `x * 0` / `0 * x` → `const 0` (checked before x*1 to short-circuit).
 /// - `x * 1` / `1 * x` → `x`.
 /// - `const(a) * const(b)` → `const(wrap(a*b))` at the result width.
-#[trunk_ir::canonicalize_fold(arith.muli)]
+#[trunk_ir::canonicalize_fold(Muli)]
 pub(crate) fn fold_muli(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
@@ -192,7 +192,7 @@ pub(crate) fn fold_muli(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 ///   down (`new-plans/types.md` doesn't specify wrap vs trap), so the
 ///   conservative choice is to leave the op alone — that way IR
 ///   semantics match whatever the backend does.
-#[trunk_ir::canonicalize_fold(arith.divsi)]
+#[trunk_ir::canonicalize_fold(Divsi)]
 pub(crate) fn fold_divsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
@@ -211,7 +211,7 @@ pub(crate) fn fold_divsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// `arith.divui const(a), const(b)` → `arith.const(a/b)` at the result
 /// width, interpreting both operands as unsigned `N`-bit values.
 /// Bails when the unsigned divisor is zero.
-#[trunk_ir::canonicalize_fold(arith.divui)]
+#[trunk_ir::canonicalize_fold(Divui)]
 pub(crate) fn fold_divui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
@@ -231,7 +231,7 @@ pub(crate) fn fold_divui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 ///
 /// Mirrors [`fold_divsi`]: bails on `b == 0` and on `INT_MIN % -1` (which
 /// also traps on Cranelift `srem` and WASM `i32.rem_s`).
-#[trunk_ir::canonicalize_fold(arith.remsi)]
+#[trunk_ir::canonicalize_fold(Remsi)]
 pub(crate) fn fold_remsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
@@ -250,7 +250,7 @@ pub(crate) fn fold_remsi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// `arith.remui const(a), const(b)` → `arith.const(a%b)` at the result
 /// width, interpreting both operands as unsigned `N`-bit values.
 /// Bails when the unsigned divisor is zero.
-#[trunk_ir::canonicalize_fold(arith.remui)]
+#[trunk_ir::canonicalize_fold(Remui)]
 pub(crate) fn fold_remui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     let (a, b) = (const_int_value(ctx, lhs)?, const_int_value(ctx, rhs)?);
@@ -273,7 +273,7 @@ pub(crate) fn fold_remui(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 ///   width, since `Attribute::Int` values are stored sign-extended in
 ///   `i128`.
 /// - `const(a) & const(b)` → `const(wrap(a&b))` at the result width.
-#[trunk_ir::canonicalize_fold(arith.and)]
+#[trunk_ir::canonicalize_fold(And)]
 pub(crate) fn fold_and(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     if const_int_value(ctx, rhs) == Some(0) || const_int_value(ctx, lhs) == Some(0) {
@@ -297,7 +297,7 @@ pub(crate) fn fold_and(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// - `x | -1` / `-1 | x` → `const -1` (all-ones; same value in any
 ///   width when interpreted as a sign-extended `i128`).
 /// - `const(a) | const(b)` → `const(wrap(a|b))` at the result width.
-#[trunk_ir::canonicalize_fold(arith.or)]
+#[trunk_ir::canonicalize_fold(Or)]
 pub(crate) fn fold_or(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     if const_int_value(ctx, rhs) == Some(0) {
@@ -323,7 +323,7 @@ pub(crate) fn fold_or(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
 /// `x ^ x → 0` would require same-operand detection and is left for a
 /// later pass that handles same-operand peepholes uniformly across
 /// the dialect (see `subi`, which doesn't fold `x - x → 0` either).
-#[trunk_ir::canonicalize_fold(arith.xor)]
+#[trunk_ir::canonicalize_fold(Xor)]
 pub(crate) fn fold_xor(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let (lhs, rhs) = two_operands(ctx, op)?;
     if const_int_value(ctx, rhs) == Some(0) {
