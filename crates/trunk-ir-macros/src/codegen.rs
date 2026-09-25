@@ -74,7 +74,7 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
     let sname = struct_name(&op.name);
     let op_name = &op.name;
     let full_name = format!("{dialect}.{op_name}");
-    let schema = gen_op_schema(crate_path, dialect, op);
+    let def = gen_op_def(crate_path, dialect, op);
 
     quote! {
         #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -83,7 +83,7 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
         impl #crate_path::ops::DialectOp for #sname {
             const DIALECT_NAME: &'static str = #dialect;
             const OP_NAME: &'static str = #op_name;
-            const SCHEMA: &'static #crate_path::op_schema::OpSchema = &#schema;
+            const DEF: &'static #crate_path::op_def::OpDef = &#def;
 
             fn from_op(
                 ctx: &#crate_path::IrContext,
@@ -106,15 +106,15 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
         }
 
         #crate_path::inventory::submit! {
-            #crate_path::op_schema::OpSchemaRegistration(
-                <#sname as #crate_path::ops::DialectOp>::SCHEMA
+            #crate_path::op_def::OpDefRegistration(
+                <#sname as #crate_path::ops::DialectOp>::DEF
             )
         }
     }
 }
 
-/// Build the static `OpSchema` expression for an operation.
-fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> TokenStream {
+/// Build the static `OpDef` expression for an operation.
+fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> TokenStream {
     let op_name = &op.name;
     let schema_mod = quote!(#crate_path::op_schema);
     let type_vars = op.type_vars.iter().map(|var| {
@@ -177,16 +177,18 @@ fn gen_op_schema(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> 
     };
 
     quote! {
-        #schema_mod::OpSchema {
-            dialect: #dialect,
-            name: #op_name,
-            type_vars: &[#(#type_vars),*],
-            operands: &[#(#operands),*],
-            results: #results,
-            result_constraint: #result_constraint,
-            attributes: &[#(#attributes),*],
-            regions: &[#(#regions),*],
-            successors: &[#(#successors),*],
+        #crate_path::op_def::OpDef {
+            schema: #schema_mod::OpSchema {
+                dialect: #dialect,
+                name: #op_name,
+                type_vars: &[#(#type_vars),*],
+                operands: &[#(#operands),*],
+                results: #results,
+                result_constraint: #result_constraint,
+                attributes: &[#(#attributes),*],
+                regions: &[#(#regions),*],
+                successors: &[#(#successors),*],
+            },
             verifier: #verifier,
         }
     }
@@ -539,7 +541,8 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
                 quote!((#name, self.#field.as_ref()))
             });
             pre_stmts.push(quote! {
-                let __results = <#sname as #crate_path::ops::DialectOp>::SCHEMA
+                let __results = <#sname as #crate_path::ops::DialectOp>::DEF
+                    .schema
                     .infer_result_types(ctx, &self.operands, &[#(#attrs),*]);
             });
             build_stmts.push(quote!(__builder = __builder.results(__results);));

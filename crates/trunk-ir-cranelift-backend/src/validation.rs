@@ -11,7 +11,7 @@ use trunk_ir::Symbol;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
-use trunk_ir::op_schema::OpSchema;
+use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::printer::print_type;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
@@ -86,7 +86,7 @@ fn collect_clif_function_signatures(
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
             // Malformed functions are reported by their schema.
-            if clif::Func::matches(ctx, op) && clif::Func::SCHEMA.verify(ctx, op).is_empty() {
+            if clif::Func::matches(ctx, op) && clif::Func::DEF.verify(ctx, op).is_empty() {
                 let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
                 let name = function.sym_name(ctx);
                 let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
@@ -262,8 +262,8 @@ fn validate_clif_region(
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
             // Operation-specific checks below assume the declared schema.
-            if let Some(schema) = OpSchema::of(ctx, op) {
-                let violations = schema.verify(ctx, op);
+            if let Some(def) = OpDef::of(ctx, op) {
+                let violations = def.verify(ctx, op);
                 if !violations.is_empty() {
                     let data = ctx.op(op);
                     errors.extend(

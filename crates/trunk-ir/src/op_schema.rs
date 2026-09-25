@@ -2,26 +2,24 @@
 //!
 //! Every operation declared through the dialect macro exposes a static
 //! [`OpSchema`] describing its operands, results, attributes, regions, and
-//! successors. Schemas are registered through `inventory` so that operation
-//! verification, assembly formats, and declarative rewrite tooling can look
-//! them up by operation name without duplicating the definition.
+//! successors. It is part of the operation's [`OpDef`](crate::op_def::OpDef),
+//! through which it is registered and looked up by operation name.
 //!
-//! [`OpSchema::verify`] runs the operation-verifier stages described in
-//! `new-plans/ir.md`: entity counts and attributes, individual type
-//! constraints, type-variable bindings, projection and list relations, and
-//! finally the operation's own [`Verify`](crate::ops::Verify) impl. Each
-//! stage runs only if the previous ones passed. Verification happens only at
+//! [`OpSchema::verify`] runs the declarative operation-verifier stages
+//! described in `new-plans/ir.md`: entity counts and attributes, individual
+//! type constraints, type-variable bindings, and projection and list
+//! relations. Each stage runs only if the previous ones passed;
+//! [`OpDef::verify`](crate::op_def::OpDef::verify) then runs the operation's
+//! own [`Verify`](crate::ops::Verify) impl. Verification happens only at
 //! explicit verifier checkpoints; parsers, raw builders, and rewrites may
 //! construct operations that violate the schema in the meantime.
 
-use std::collections::HashMap;
 use std::fmt;
-use std::sync::LazyLock;
 
 use crate::printer::print_type;
 use crate::type_constraint::{ConstraintDesc, Projected};
 use crate::types::Attribute;
-use crate::{IrContext, OpRef, Symbol, TypeRef, ValueRef};
+use crate::{IrContext, OpRef, TypeRef, ValueRef};
 
 /// Static description of one dialect operation.
 #[derive(Debug)]
@@ -45,14 +43,7 @@ pub struct OpSchema {
     pub regions: &'static [RegionSchema],
     /// Declared successor names in order.
     pub successors: &'static [&'static str],
-    /// Calls the wrapper's [`Verify`](crate::ops::Verify) impl for
-    /// `#[verify]` operations, after
-    /// every schema check passed.
-    pub verifier: Option<OpVerifier>,
 }
-
-/// An operation-local verifier generated from `#[verify]`.
-pub type OpVerifier = fn(&IrContext, OpRef) -> Result<(), String>;
 
 /// Static description of one declared operand.
 #[derive(Debug)]
@@ -504,23 +495,9 @@ impl OpSchema {
         violations
     }
 
-    /// Run every verifier stage on `op`, stopping after the first stage
-    /// that reports a violation.
-    pub fn verify(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
-        let violations = self.verify_declarative(ctx, op);
-        if !violations.is_empty() {
-            return violations;
-        }
-        match self.verifier.map(|verifier| verifier(ctx, op)) {
-            Some(Err(message)) => vec![SchemaViolation::Verifier(message)],
-            _ => Vec::new(),
-        }
-    }
-
     /// Run the declarative stages on `op`: counts and attributes, then type
-    /// constraints. Unlike [`verify`](Self::verify), this skips the
-    /// `#[verify]` hook.
-    pub fn verify_declarative(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
+    /// constraints, stopping after the first stage that reports a violation.
+    pub fn verify(&self, ctx: &IrContext, op: OpRef) -> Vec<SchemaViolation> {
         let violations = self.verify_structure(ctx, op);
         if !violations.is_empty() {
             return violations;
@@ -710,17 +687,6 @@ impl OpSchema {
             _ => unreachable!("{}.{}: results are not inferable", self.dialect, self.name),
         }
     }
-
-    /// Look up the registered schema for `dialect.name`.
-    pub fn lookup(dialect: Symbol, name: Symbol) -> Option<&'static OpSchema> {
-        REGISTRY.get(&(dialect, name)).copied()
-    }
-
-    /// Look up the registered schema for an operation.
-    pub fn of(ctx: &IrContext, op: OpRef) -> Option<&'static OpSchema> {
-        let data = ctx.op(op);
-        Self::lookup(data.dialect, data.name)
-    }
 }
 
 /// Allowed length of a variadic segment; explicit type lists are exact.
@@ -864,30 +830,6 @@ impl TypeSlots {
     }
 }
 
-/// Inventory entry registering an [`OpSchema`].
-///
-/// Emitted by the `#[dialect]` macro for every declared operation.
-pub struct OpSchemaRegistration(pub &'static OpSchema);
-
-inventory::collect!(OpSchemaRegistration);
-
-static REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpSchema>> = LazyLock::new(|| {
-    let mut registry = HashMap::new();
-    for OpSchemaRegistration(schema) in inventory::iter::<OpSchemaRegistration> {
-        let key = (
-            Symbol::from_dynamic(schema.dialect),
-            Symbol::from_dynamic(schema.name),
-        );
-        if let Some(previous) = registry.insert(key, *schema) {
-            panic!(
-                "operation schema {}.{} is registered twice ({previous:p} and {schema:p})",
-                schema.dialect, schema.name,
-            );
-        }
-    }
-    registry
-});
-
 #[cfg(test)]
 mod typed_tests;
 
@@ -899,7 +841,7 @@ mod tests {
 
     #[test]
     fn macro_generated_schemas_describe_declared_entities() {
-        let schema = arith::Cmpi::SCHEMA;
+        let schema = &arith::Cmpi::DEF.schema;
         assert_eq!((schema.dialect, schema.name), ("arith", "cmpi"));
         assert_eq!(
             schema.operands.iter().map(|o| o.name).collect::<Vec<_>>(),
@@ -911,23 +853,14 @@ mod tests {
         assert_eq!(schema.attributes[0].kind, AttributeKind::Symbol);
         assert!(!schema.attributes[0].optional);
 
-        let call = func::CallIndirect::SCHEMA;
+        let call = &func::CallIndirect::DEF.schema;
         assert_eq!(call.operands[1].arity, Arity::Variadic);
         assert!(matches!(call.results, ResultSchema::Variadic("results")));
         assert_eq!(call.attributes[0].name, "signature");
         assert!(!call.attributes[0].optional);
 
-        let r#if = scf::If::SCHEMA;
+        let r#if = &scf::If::DEF.schema;
         assert_eq!(r#if.regions.len(), 2);
-    }
-
-    #[test]
-    fn registry_finds_schemas_across_dialects() {
-        let schema = OpSchema::lookup(Symbol::new("func"), Symbol::new("return"))
-            .expect("func.return should be registered");
-        assert_eq!((schema.dialect, schema.name), ("func", "return"));
-        assert_eq!(schema.operands[0].arity, Arity::Variadic);
-        assert!(OpSchema::lookup(Symbol::new("func"), Symbol::new("no_such_op")).is_none());
     }
 
     fn schema_errors(input: &str) -> String {
@@ -952,8 +885,8 @@ mod tests {
 }"#,
         );
         assert_eq!(text, "validation passed");
-        assert_eq!(scf::If::SCHEMA.result_count().to_string(), "0 to 1");
-        assert_eq!(func::Func::SCHEMA.region_count().to_string(), "0 to 1");
+        assert_eq!(scf::If::DEF.schema.result_count().to_string(), "0 to 1");
+        assert_eq!(func::Func::DEF.schema.region_count().to_string(), "0 to 1");
     }
 
     #[test]

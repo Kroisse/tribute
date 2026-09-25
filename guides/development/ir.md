@@ -112,17 +112,20 @@ regions (`.regions(..)`), and successors (`.successors(..)`) are each set in
 one call, in declaration order. Missing required inputs panic in `build`; the
 builder does not check input types.
 
-**Operation schema**: every generated operation wrapper exposes
-`DialectOp::SCHEMA`, a static `op_schema::OpSchema` registered by operation
-name. `OpSchema::of(ctx, op)` looks it up for any operation.
-`validate_operation_verifiers` runs `OpSchema::verify` on each operation:
-counts and attributes, individual type constraints, variable bindings, then
-projections and type lists, and finally the `#[verify]` hook, each stage only
-if the earlier ones passed. Remaining operation-specific checks run afterwards
-and may assume the declared shape. The `tribute_control` local validator and
-the native backend boundary (`validate_clif_ir`) run the schema the same way
-before their own checks, so those checks cover only what the schema cannot
-express, such as symbol lookups, enclosing callables, and region contents.
+**Operation definition**: every generated operation wrapper exposes
+`DialectOp::DEF`, a static `op_def::OpDef` registered by operation name.
+`OpDef::of(ctx, op)` looks it up for any operation. An `OpDef` holds the
+declarative `op_schema::OpSchema` and the hooks its declaration opts into,
+such as `#[verify]`. `OpSchema::verify` runs the declarative stages: counts
+and attributes, individual type constraints, variable bindings, then
+projections and type lists. `OpDef::verify` adds the `#[verify]` hook after
+them; each stage runs only if the earlier ones passed.
+`validate_operation_verifiers` runs `OpDef::verify` on each operation.
+Remaining operation-specific checks run afterwards and may assume the
+declared shape. The `tribute_control` local validator and the native backend
+boundary (`validate_clif_ir`) run `OpDef::verify` the same way before their
+own checks, so those checks cover only what the definition cannot express,
+such as symbol lookups, enclosing callables, and region contents.
 Debug builds also run `validate_op_schemas`, the declarative stages without
 the `#[verify]` hook, after every shared middle-end pass, reporting the pass
 that left an operation in violation; target lowering passes are checked at the

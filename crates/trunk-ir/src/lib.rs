@@ -25,6 +25,7 @@ pub mod location;
 pub mod op_interface;
 
 // === Operation and type utilities ===
+pub mod op_def;
 pub mod op_schema;
 pub mod ops;
 pub mod type_constraint;
