@@ -281,9 +281,18 @@ impl RewritePattern for LowerEffectExtendToNative {
             .callee(Symbol::new(evidence_abi::EXTEND))
             .results([ptr_ty])
             .build(ctx, loc);
-        let new_result = extend_call.result(ctx);
         rewriter.insert_op(extend_call.op_ref());
-        rewriter.erase_op(vec![new_result]);
+        // Uses keep the declared evidence type until native type conversion.
+        let evidence_ty = ctx.op_result_types(op)[0];
+        let mut extended = extend_call.result(ctx);
+        if evidence_ty != ptr_ty {
+            let cast = core::UnrealizedConversionCast::operands(extended)
+                .results(evidence_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(cast.op_ref());
+            extended = cast.result(ctx);
+        }
+        rewriter.erase_op(vec![extended]);
         true
     }
 }
@@ -460,6 +469,30 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
     }
 }
 
+/// Replace an evidence value with the runtime's `core.ptr` evidence handle.
+///
+/// Uses keep the evidence type they declare (for example an indirect call's
+/// signature), so the handle is cast back to it; the native type conversion
+/// later maps both types to `core.ptr` and removes the cast.
+fn replace_with_runtime_evidence(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    before: OpRef,
+    old_value: ValueRef,
+    handle: ValueRef,
+) {
+    let evidence_ty = ctx.value_ty(old_value);
+    if evidence_ty == ctx.value_ty(handle) {
+        ctx.replace_all_uses(old_value, handle);
+        return;
+    }
+    let cast = core::UnrealizedConversionCast::operands(handle)
+        .results(evidence_ty)
+        .build(ctx, ctx.op(before).location);
+    ctx.insert_op_before(block, before, cast.op_ref());
+    ctx.replace_all_uses(old_value, cast.result(ctx));
+}
+
 fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRunResult {
     let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
     // Ops to erase after processing
@@ -484,9 +517,8 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                     .callee(Symbol::new(evidence_abi::EMPTY))
                     .results([ptr_ty])
                     .build(ctx, loc);
-                let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
-                ctx.replace_all_uses(old_result, new_result);
+                replace_with_runtime_evidence(ctx, block, op, old_result, call.result(ctx));
                 ops_to_erase.push(op);
                 continue;
             }
@@ -515,9 +547,8 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                     .callee(Symbol::new(evidence_abi::EMPTY))
                     .results([ptr_ty])
                     .build(ctx, loc);
-                let new_result = call.result(ctx);
                 ctx.insert_op_before(block, op, call.op_ref());
-                ctx.replace_all_uses(old_result, new_result);
+                replace_with_runtime_evidence(ctx, block, op, old_result, call.result(ctx));
                 ops_to_erase.push(op);
                 continue;
             }
