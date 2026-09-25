@@ -846,7 +846,7 @@ fn structural_pass_pipeline(
     .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
     .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
     .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics);
-    install_debug_verifier(&mut pm, DebugChecks::UseChainsAndSchemas);
+    install_debug_verifier(&mut pm);
     pm
 }
 
@@ -885,12 +885,12 @@ fn run_shared_pipeline(
     ability_pm
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform);
-    install_debug_verifier(&mut ability_pm, DebugChecks::UseChainsAndSchemas);
+    install_debug_verifier(&mut ability_pm);
     ability_pm.run(&mut ctx, core_module)?;
 
     let mut evidence_pm = PassManager::new();
     evidence_pm.add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch);
-    install_debug_verifier(&mut evidence_pm, DebugChecks::UseChainsAndSchemas);
+    install_debug_verifier(&mut evidence_pm);
     evidence_pm.run(&mut ctx, core_module)?;
 
     // Final function-local ability conversion. This consumes handle_dispatch ops
@@ -899,7 +899,7 @@ fn run_shared_pipeline(
     ability_boundary_pm
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_handle_dispatch::LowerHandleDispatch);
-    install_debug_verifier(&mut ability_boundary_pm, DebugChecks::UseChainsAndSchemas);
+    install_debug_verifier(&mut ability_boundary_pm);
     ability_boundary_pm.run(&mut ctx, core_module)?;
 
     Ok(Some((ctx, m)))
@@ -929,25 +929,14 @@ pub fn dump_native_ir_at_stage(
     Ok(trunk_ir::printer::print_module(&ctx, module.op()))
 }
 
-/// Invariants the debug verifier re-checks after every pass.
-#[derive(Clone, Copy)]
-enum DebugChecks {
-    /// Use-chain consistency only. Target lowering passes leave values in
-    /// their pre-conversion types between passes, so their declared type
-    /// constraints are checked at the backend boundary instead.
-    UseChains,
-    /// Use-chain consistency, then every operation's declarative schema.
-    UseChainsAndSchemas,
-}
-
-fn install_debug_verifier(pm: &mut PassManager, checks: DebugChecks) {
+fn install_debug_verifier(pm: &mut PassManager) {
     // Debug-only regression guard run after every pass. Rewrites may break
     // these invariants temporarily, but a finished pass must restore them.
     // Use-chain consistency (#710) comes first; the schema check assumes it.
     // The verifier only reports; the PassManager returns the offending pass's
     // name with the verification error. Compiled out in release.
     if cfg!(debug_assertions) {
-        pm.with_verifier(move |ctx, op| {
+        pm.with_verifier(|ctx, op| {
             let Some(module) = enclosing_module(ctx, op) else {
                 return Ok(());
             };
@@ -955,7 +944,7 @@ fn install_debug_verifier(pm: &mut PassManager, checks: DebugChecks) {
                 "use-chain",
                 trunk_ir::validation::validate_use_chains(ctx, module),
             )];
-            if matches!(checks, DebugChecks::UseChainsAndSchemas) && results[0].1.is_ok() {
+            if results[0].1.is_ok() {
                 results.push(("schema", trunk_ir::validation::validate_op_schemas(ctx, op)));
             }
             for (kind, result) in results {
@@ -1036,15 +1025,17 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
             .add_pass(trunk_ir::transforms::dce_pass(
                 trunk_ir::transforms::DceConfig::default(),
             ));
-        install_debug_verifier(&mut pm, DebugChecks::UseChains);
+        install_debug_verifier(&mut pm);
         if let Err(error) = pm.run(ctx, core_module) {
             tracing::warn!("cleanup function passes failed: {error}");
         }
     } else {
         tracing::warn!("cleanup skipped function passes: root op is not core.module");
     }
+    // Target type conversion has not run yet: keep casts that only retype a
+    // value, so every use still sees the type its operation declares.
     let tc = generic_type_converter(ctx);
-    resolve_unrealized_casts(ctx, m, &tc);
+    trunk_ir::conversion::resolve_type_preserving_casts(ctx, m, &tc);
 }
 
 /// Run the WASM target pipeline: lowering + cleanup.
@@ -1083,7 +1074,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
-        install_debug_verifier(&mut pm, DebugChecks::UseChains);
+        install_debug_verifier(&mut pm);
         pm.run(ctx, core_module)?;
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
@@ -1108,7 +1099,7 @@ fn enter_target_closure_storage_boundary(
         .expect("target closure lowering requires a core.module");
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
-    install_debug_verifier(&mut pm, DebugChecks::UseChains);
+    install_debug_verifier(&mut pm);
     pm.run(ctx, core_module)?;
     Ok(())
 }
@@ -1277,7 +1268,7 @@ fn prepare_module_to_native(
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(trunk_ir::transforms::scf_to_cf_pass());
-        install_debug_verifier(&mut pm, DebugChecks::UseChains);
+        install_debug_verifier(&mut pm);
         pm.run(ctx, core_module).map_err(native_pass_failure)?;
     } else {
         trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
@@ -2400,7 +2391,7 @@ fn main() {
                 Ok(())
             },
         ));
-        install_debug_verifier(&mut pm, DebugChecks::UseChains);
+        install_debug_verifier(&mut pm);
 
         let error = pm.run(&mut ctx, core_module).unwrap_err();
 
@@ -2447,7 +2438,7 @@ fn main() {
                 Ok(())
             },
         ));
-        install_debug_verifier(&mut pm, DebugChecks::UseChainsAndSchemas);
+        install_debug_verifier(&mut pm);
 
         let error = pm.run(&mut ctx, core_module).unwrap_err();
 

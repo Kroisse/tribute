@@ -127,9 +127,11 @@ boundary (`validate_clif_ir`) run `OpDef::verify` the same way before their
 own checks, so those checks cover only what the definition cannot express,
 such as symbol lookups, enclosing callables, and region contents.
 Debug builds also run `validate_op_schemas`, the declarative stages without
-the `#[verify]` hook, after every shared middle-end pass, reporting the pass
-that left an operation in violation; target lowering passes are checked at the
-backend boundary.
+the `#[verify]` hook, after every pipeline pass, reporting the pass that left
+an operation in violation. A pass that retypes a value before target type
+conversion inserts `core.unrealized_conversion_cast` back to the type its uses
+declare; `resolve_type_preserving_casts` keeps such casts until the target
+`resolve_unrealized_casts` removes them.
 Typed accessors do not check the schema; for an optional region or result,
 inspect the operation before calling the accessor. Interface queries that may
 see unverified IR read attributes fallibly instead.
