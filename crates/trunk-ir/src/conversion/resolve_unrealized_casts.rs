@@ -44,8 +44,34 @@ pub fn resolve_unrealized_casts(
     module: Module,
     tc: &TypeConverter,
 ) -> ResolveResult {
+    resolve(ctx, module, tc, false)
+}
+
+/// Resolve the casts that do not depend on a later type conversion.
+///
+/// A cast is resolved when its source already has the (converted) target
+/// type or when materialization emits conversion operations. A cast whose
+/// materialization is a no-op between different types (for example a managed
+/// reference to `tribute_rt.anyref`) is kept: replacing it by its operand
+/// would leave uses typed with the source type until the target type
+/// conversion runs. Kept casts are not reported as unresolved; a full
+/// [`resolve_unrealized_casts`] after type conversion removes them.
+pub fn resolve_type_preserving_casts(
+    ctx: &mut IrContext,
+    module: Module,
+    tc: &TypeConverter,
+) -> ResolveResult {
+    resolve(ctx, module, tc, true)
+}
+
+fn resolve(
+    ctx: &mut IrContext,
+    module: Module,
+    tc: &TypeConverter,
+    keep_retyping_casts: bool,
+) -> ResolveResult {
     tracing::debug!("resolve_unrealized_casts: starting resolution");
-    let mut resolver = CastResolver::new();
+    let mut resolver = CastResolver::new(keep_retyping_casts);
 
     let body = match module.body(ctx) {
         Some(r) => r,
@@ -75,13 +101,16 @@ pub fn resolve_unrealized_casts(
 struct CastResolver {
     unresolved: Vec<UnresolvedCast>,
     resolved_count: usize,
+    /// Keep casts whose materialization only changes the value's type.
+    keep_retyping_casts: bool,
 }
 
 impl CastResolver {
-    fn new() -> Self {
+    fn new(keep_retyping_casts: bool) -> Self {
         Self {
             unresolved: Vec::new(),
             resolved_count: 0,
+            keep_retyping_casts,
         }
     }
 
@@ -165,6 +194,10 @@ impl CastResolver {
         let mat_result = tc.materialize(ctx, location, input_value, from_type, to_type);
 
         match mat_result {
+            Some(mat) if self.keep_retyping_casts && mat.ops.is_empty() => {
+                // A representation no-op still changes the static type; keep
+                // the cast until the target conversion unifies both sides.
+            }
             Some(mat) => {
                 // Insert materialized ops before the cast
                 for &mat_op in &mat.ops {
@@ -193,7 +226,7 @@ mod tests {
     mod resolve_unrealized_casts_tests {
         use crate::OperationDataBuilder;
         use crate::context::{BlockData, IrContext, RegionData};
-        use crate::conversion::resolve_unrealized_casts;
+        use crate::conversion::{resolve_type_preserving_casts, resolve_unrealized_casts};
         use crate::dialect::arith;
         use crate::dialect::core;
         use crate::location::Span;
@@ -367,6 +400,44 @@ mod tests {
             let user_operands = ctx.op_operands(ops[2]);
             let sextend_result = ctx.op_result(ops[1], 0);
             assert_eq!(user_operands[0], sextend_result);
+        }
+
+        #[test]
+        fn type_preserving_resolution_keeps_retyping_noop_casts() {
+            let (mut ctx, loc) = test_ctx();
+            let i32_ty = i32_type(&mut ctx);
+            let i64_ty = i64_type(&mut ctx);
+
+            let const_op = arith::Const::operands()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(&mut ctx, loc);
+            let retype = core::UnrealizedConversionCast::operands(const_op.result(&ctx))
+                .results(i64_ty)
+                .build(&mut ctx, loc);
+            let same = core::UnrealizedConversionCast::operands(const_op.result(&ctx))
+                .results(i32_ty)
+                .build(&mut ctx, loc);
+            let module = make_module(
+                &mut ctx,
+                loc,
+                vec![const_op.op_ref(), retype.op_ref(), same.op_ref()],
+            );
+
+            // A representation no-op between different types.
+            let mut tc = TypeConverter::new();
+            tc.set_materializer(|_ctx, _loc, value, _from_ty, _to_ty| {
+                Some(crate::rewrite::type_converter::MaterializeResult { value, ops: vec![] })
+            });
+
+            let result = resolve_type_preserving_casts(&mut ctx, module, &tc);
+            assert!(result.unresolved.is_empty());
+            assert_eq!(result.resolved_count, 1, "only the same-type cast");
+            assert_eq!(module.ops(&ctx), [const_op.op_ref(), retype.op_ref()]);
+
+            let result = resolve_unrealized_casts(&mut ctx, module, &tc);
+            assert_eq!(result.resolved_count, 1);
+            assert_eq!(module.ops(&ctx), [const_op.op_ref()]);
         }
     }
 }

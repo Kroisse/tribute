@@ -31,4 +31,6 @@
 
 mod resolve_unrealized_casts;
 
-pub use resolve_unrealized_casts::{ResolveResult, UnresolvedCast, resolve_unrealized_casts};
+pub use resolve_unrealized_casts::{
+    ResolveResult, UnresolvedCast, resolve_type_preserving_casts, resolve_unrealized_casts,
+};
