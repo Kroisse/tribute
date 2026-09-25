@@ -1,7 +1,7 @@
 //! Arena-based mem dialect.
 
 // === Pure operation registrations ===
-crate::register_pure_op!(mem.data);
+crate::register_pure_op!(Data);
 // mem.load is intentionally NOT pure: loads depend on mutable memory and may trap.
 
 #[trunk_ir::dialect]

@@ -13,11 +13,11 @@ mod list {
     fn tail(element_type: Attr<Type>, list: Value<_>) -> Value<_> {}
 }
 
-inventory::submit! { trunk_ir::op_interface::PureOps::register("list", "empty") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("list", "prepend") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("list", "is_empty") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("list", "head") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("list", "tail") }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Empty>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Prepend>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<IsEmpty>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Head>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Tail>() }
 
 #[cfg(test)]
 mod tests {

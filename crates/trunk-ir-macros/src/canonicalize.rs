@@ -6,61 +6,22 @@
 use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::quote;
 
-/// Generate the expanded form for `#[canonicalize_fold(<dialect>.<op>)]`.
+/// Generate the expanded form for `#[canonicalize_fold(<OpWrapper>)]`.
 pub fn gen_fold(attr: TokenStream, item: TokenStream) -> Result<TokenStream, String> {
-    let (dialect, op_name) = parse_dialect_op(attr)?;
+    if attr.is_empty() {
+        return Err(
+            "expected the operation wrapper type, e.g. `#[canonicalize_fold(Addi)]`".into(),
+        );
+    }
     let (fn_attrs, fn_ident) = extract_fn_attrs_and_ident(&item)?;
     Ok(quote! {
         #item
 
         #fn_attrs
         ::trunk_ir::inventory::submit! {
-            ::trunk_ir::transforms::canonicalize::CanonicalizeFold {
-                dialect: #dialect,
-                op_name: #op_name,
-                fold: #fn_ident,
-            }
+            ::trunk_ir::transforms::canonicalize::CanonicalizeFold::new::<#attr>(#fn_ident)
         }
     })
-}
-
-/// Parse `<dialect_ident> . <op_ident>` from the attribute payload.
-/// Strips `r#` from raw identifiers so op names like `r#const` register
-/// as `"const"`.
-fn parse_dialect_op(attr: TokenStream) -> Result<(String, String), String> {
-    let mut iter = attr.into_iter();
-    let dialect = next_ident_str(&mut iter, "dialect name")?;
-    expect_dot(&mut iter)?;
-    let op_name = next_ident_str(&mut iter, "op name")?;
-    if let Some(extra) = iter.next() {
-        return Err(format!(
-            "unexpected token after `{dialect}.{op_name}`: `{extra}`"
-        ));
-    }
-    Ok((dialect, op_name))
-}
-
-fn next_ident_str(
-    iter: &mut impl Iterator<Item = TokenTree>,
-    what: &str,
-) -> Result<String, String> {
-    match iter.next() {
-        Some(TokenTree::Ident(id)) => Ok(strip_raw_prefix(&id.to_string())),
-        Some(other) => Err(format!("expected {what}, got `{other}`")),
-        None => Err(format!("expected {what}")),
-    }
-}
-
-fn expect_dot(iter: &mut impl Iterator<Item = TokenTree>) -> Result<(), String> {
-    match iter.next() {
-        Some(TokenTree::Punct(p)) if p.as_char() == '.' => Ok(()),
-        Some(other) => Err(format!("expected `.`, got `{other}`")),
-        None => Err("expected `.` between dialect and op name".to_string()),
-    }
-}
-
-fn strip_raw_prefix(s: &str) -> String {
-    s.strip_prefix("r#").unwrap_or(s).to_string()
 }
 
 /// Pull the cfg-gating outer attributes and function name out of the
@@ -132,39 +93,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn fold_emits_inventory_submit_for_plain_idents() {
-        let attr: TokenStream = quote! { arith.addi };
+    fn fold_emits_typed_inventory_submit() {
+        let attr: TokenStream = quote! { Addi };
         let item: TokenStream = quote! {
             pub(crate) fn fold_addi(ctx: &IrContext, op: OpRef) -> Option<FoldResult> { None }
         };
         let out = gen_fold(attr, item).unwrap().to_string();
-        assert!(out.contains("CanonicalizeFold"), "got: {out}");
-        assert!(out.contains("\"arith\""), "got: {out}");
-        assert!(out.contains("\"addi\""), "got: {out}");
-        assert!(out.contains("fold : fold_addi"), "got: {out}");
+        assert!(
+            out.contains("CanonicalizeFold :: new :: < Addi > (fold_addi)"),
+            "got: {out}"
+        );
     }
 
     #[test]
-    fn fold_strips_raw_prefix_from_op_name() {
-        // r#const should register as "const".
-        let attr: TokenStream = quote! { core.r#const };
-        let item: TokenStream = quote! {
-            fn fold_const(ctx: &IrContext, op: OpRef) -> Option<FoldResult> { None }
-        };
-        let out = gen_fold(attr, item).unwrap().to_string();
-        assert!(out.contains("\"const\""), "got: {out}");
-        assert!(!out.contains("\"r#const\""), "got: {out}");
-    }
-
-    #[test]
-    fn fold_rejects_missing_dot() {
-        let attr: TokenStream = quote! { arith addi };
+    fn fold_rejects_missing_wrapper() {
         let item: TokenStream = quote! { fn f() {} };
-        let err = match gen_fold(attr, item) {
+        let err = match gen_fold(TokenStream::new(), item) {
             Err(e) => e,
             Ok(_) => panic!("expected parse error"),
         };
-        assert!(err.contains("expected `.`"), "got: {err}");
+        assert!(err.contains("operation wrapper type"), "got: {err}");
     }
 
     #[test]
@@ -172,7 +120,7 @@ mod tests {
         // A `#[cfg(test)] fn fold_x` would only exist under cfg(test).
         // The inventory::submit! must observe the same gate so the
         // registration doesn't reference a non-existent function.
-        let attr: TokenStream = quote! { arith.foo };
+        let attr: TokenStream = quote! { Foo };
         let item: TokenStream = quote! {
             #[cfg(test)]
             fn fold_foo(ctx: &IrContext, op: OpRef) -> Option<FoldResult> { None }
@@ -187,7 +135,7 @@ mod tests {
 
     #[test]
     fn fold_forwards_cfg_attr_to_submit_block() {
-        let attr: TokenStream = quote! { arith.foo };
+        let attr: TokenStream = quote! { Foo };
         let item: TokenStream = quote! {
             #[cfg_attr(feature = "x", allow(dead_code))]
             fn fold_foo(ctx: &IrContext, op: OpRef) -> Option<FoldResult> { None }
@@ -202,7 +150,7 @@ mod tests {
         // Doc comments and `#[allow(...)]` etc. don't gate
         // compilation. Forwarding them onto the submit macro
         // produces spurious `unused_doc_comments` warnings.
-        let attr: TokenStream = quote! { arith.foo };
+        let attr: TokenStream = quote! { Foo };
         let item: TokenStream = quote! {
             /// fold doc comment
             #[allow(dead_code)]
@@ -229,7 +177,7 @@ mod tests {
         // External consumers shouldn't need a direct `inventory`
         // dependency — the submit path goes through trunk-ir's
         // re-export.
-        let attr: TokenStream = quote! { arith.foo };
+        let attr: TokenStream = quote! { Foo };
         let item: TokenStream = quote! {
             fn fold_foo(ctx: &IrContext, op: OpRef) -> Option<FoldResult> { None }
         };

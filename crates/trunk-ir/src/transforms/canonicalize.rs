@@ -234,11 +234,22 @@ fn apply_splice(
 /// via the [`canonicalize_fold`](crate::canonicalize_fold) attribute —
 /// never constructed directly from user code.
 pub struct CanonicalizeFold {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub fold: FoldFn,
+    dialect: &'static str,
+    op_name: &'static str,
+    fold: FoldFn,
 }
 inventory::collect!(CanonicalizeFold);
+
+impl CanonicalizeFold {
+    /// Fold registration for the operation wrapped by `T`.
+    pub const fn new<T: crate::ops::DialectOp>(fold: FoldFn) -> Self {
+        Self {
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            fold,
+        }
+    }
+}
 
 /// Iterate every fold registered via inventory, keyed by interned
 /// `(dialect, op_name)` symbols ready for [`FoldDispatchPattern::from_folds`].

@@ -38,14 +38,14 @@ pub use tribute_rc::RTTI_IDX_OFFSET;
 // === Pure operation registrations ===
 // Boxing and unboxing operations are pure (no side effects)
 
-inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "box_int") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "unbox_int") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "box_nat") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "unbox_nat") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "box_float") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "unbox_float") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "box_bool") }
-inventory::submit! { trunk_ir::op_interface::PureOps::register("tribute_rt", "unbox_bool") }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxInt>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxInt>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxNat>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxNat>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxFloat>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxFloat>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxBool>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxBool>() }
 
 #[cfg(test)]
 mod tests {

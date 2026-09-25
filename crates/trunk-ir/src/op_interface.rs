@@ -22,10 +22,8 @@ pub trait Pure {}
 ///
 /// Use `inventory::submit!` to register pure operations at the dialect definition site.
 pub struct PureOpRegistration {
-    /// Dialect name (e.g., "arith", "adt")
-    pub dialect: &'static str,
-    /// Operation name within the dialect (e.g., "add", "const")
-    pub op_name: &'static str,
+    dialect: &'static str,
+    op_name: &'static str,
 }
 
 inventory::collect!(PureOpRegistration);
@@ -69,11 +67,14 @@ impl PureOps {
     ///
     /// Use the `register_pure_op!` macro instead:
     /// ```text
-    /// register_pure_op!(arith.addi);
+    /// register_pure_op!(Addi);
     /// ```
     #[doc(hidden)]
-    pub const fn register(dialect: &'static str, op_name: &'static str) -> PureOpRegistration {
-        PureOpRegistration { dialect, op_name }
+    pub const fn register<T: DialectOp>() -> PureOpRegistration {
+        PureOpRegistration {
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+        }
     }
 
     /// Check if an arena operation is pure (no side effects, safe to remove if unused).
@@ -88,31 +89,27 @@ impl PureOps {
     }
 }
 
-/// Register a pure operation with simplified syntax.
+/// Register pure operations by their typed wrappers.
 ///
 /// # Example
 /// ```text
-/// register_pure_op!(arith.addi);
-/// register_pure_op!(adt.struct_new);
+/// register_pure_op!(Addi, Subi);
 /// ```
 ///
-/// This expands to an inventory registration:
+/// Each wrapper expands to an inventory registration:
 /// ```text
 /// inventory::submit! {
-///     op_interface::PureOps::register("arith", "addi")
+///     op_interface::PureOps::register::<Addi>()
 /// }
 /// ```
 #[macro_export]
 macro_rules! register_pure_op {
-    ($dialect:ident . $op_name:ident) => {
-        $crate::paste::paste! {
-            ::inventory::submit! {
-                $crate::op_interface::PureOps::register(
-                    $crate::raw_ident_str!($dialect),
-                    $crate::raw_ident_str!($op_name)
-                )
+    ($($op:path),+ $(,)?) => {
+        $(
+            $crate::inventory::submit! {
+                $crate::op_interface::PureOps::register::<$op>()
             }
-        }
+        )+
     };
 }
 
@@ -143,10 +140,8 @@ pub trait IsolatedFromAbove {}
 ///
 /// Use `inventory::submit!` to register isolated operations at the dialect definition site.
 pub struct IsolatedFromAboveRegistration {
-    /// Dialect name (e.g., "func", "core")
-    pub dialect: &'static str,
-    /// Operation name within the dialect (e.g., "func", "module")
-    pub op_name: &'static str,
+    dialect: &'static str,
+    op_name: &'static str,
 }
 
 inventory::collect!(IsolatedFromAboveRegistration);
@@ -190,14 +185,14 @@ impl IsolatedFromAboveOps {
     ///
     /// Use the `register_isolated_op!` macro instead:
     /// ```text
-    /// register_isolated_op!(func.func);
+    /// register_isolated_op!(Func);
     /// ```
     #[doc(hidden)]
-    pub const fn register(
-        dialect: &'static str,
-        op_name: &'static str,
-    ) -> IsolatedFromAboveRegistration {
-        IsolatedFromAboveRegistration { dialect, op_name }
+    pub const fn register<T: DialectOp>() -> IsolatedFromAboveRegistration {
+        IsolatedFromAboveRegistration {
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+        }
     }
 
     /// Check if an arena operation's regions are isolated from above.
@@ -207,30 +202,27 @@ impl IsolatedFromAboveOps {
     }
 }
 
-/// Register an isolated operation with simplified syntax.
+/// Register isolated operations by their typed wrappers.
 ///
 /// # Example
 /// ```text
-/// register_isolated_op!(func.func);
+/// register_isolated_op!(Func);
 /// ```
 ///
-/// This expands to an inventory registration:
+/// Each wrapper expands to an inventory registration:
 /// ```text
 /// inventory::submit! {
-///     op_interface::IsolatedFromAboveOps::register("func", "func")
+///     op_interface::IsolatedFromAboveOps::register::<Func>()
 /// }
 /// ```
 #[macro_export]
 macro_rules! register_isolated_op {
-    ($dialect:ident . $op_name:ident) => {
-        $crate::paste::paste! {
-            ::inventory::submit! {
-                $crate::op_interface::IsolatedFromAboveOps::register(
-                    $crate::raw_ident_str!($dialect),
-                    $crate::raw_ident_str!($op_name)
-                )
+    ($($op:path),+ $(,)?) => {
+        $(
+            $crate::inventory::submit! {
+                $crate::op_interface::IsolatedFromAboveOps::register::<$op>()
             }
-        }
+        )+
     };
 }
 
@@ -652,12 +644,12 @@ fn indirect_call_like_model_set_signature<T: IndirectCallLikeModel>(
 
 /// Registry entry for [`IndirectCallLike`].
 pub struct IndirectCallLikeRegistration {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
-    pub arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
-    pub exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
-    pub set_exact_signature: fn(&mut IrContext, OpRef, TypeRef) -> bool,
+    dialect: &'static str,
+    op_name: &'static str,
+    callee: fn(&IrContext, OpRef) -> Option<ValueRef>,
+    arguments: fn(&IrContext, OpRef) -> Option<&[ValueRef]>,
+    exact_signature: fn(&IrContext, OpRef) -> Option<TypeRef>,
+    set_exact_signature: fn(&mut IrContext, OpRef, TypeRef) -> bool,
 }
 
 impl IndirectCallLike for IndirectCallLikeRegistration {
@@ -777,9 +769,9 @@ pub type BranchSuccessorsFn =
 
 /// Registry entry for [`Branch`].
 pub struct BranchRegistration {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub successors: BranchSuccessorsFn,
+    dialect: &'static str,
+    op_name: &'static str,
+    successors: BranchSuccessorsFn,
 }
 
 impl Branch for BranchRegistration {
@@ -902,10 +894,10 @@ pub type EntrySuccessorOperandsFn =
 
 /// Registry entry for [`RegionBranch`].
 pub struct RegionBranchRegistration {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub successors: RegionSuccessorsFn,
-    pub entry_successor_operands: EntrySuccessorOperandsFn,
+    dialect: &'static str,
+    op_name: &'static str,
+    successors: RegionSuccessorsFn,
+    entry_successor_operands: EntrySuccessorOperandsFn,
 }
 
 impl RegionBranch for RegionBranchRegistration {
@@ -1050,9 +1042,9 @@ pub type RegionSuccessorOperandsFn =
 
 /// Registry entry for [`RegionBranchTerminator`].
 pub struct RegionBranchTerminatorRegistration {
-    pub dialect: &'static str,
-    pub op_name: &'static str,
-    pub successor_operands: RegionSuccessorOperandsFn,
+    dialect: &'static str,
+    op_name: &'static str,
+    successor_operands: RegionSuccessorOperandsFn,
 }
 
 impl RegionBranchTerminator for RegionBranchTerminatorRegistration {
@@ -1146,23 +1138,39 @@ pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
 
 /// Custom assembly format for an operation — bundles print + parse.
 ///
-/// Modeled after MLIR's `hasCustomAssemblyFormat`. Register via `inventory::submit!`
-/// at dialect definition sites. The printer/parser dispatch automatically routes to
-/// the registered format.
+/// Modeled after MLIR's `hasCustomAssemblyFormat`. Register
+/// [`OpAsmFormat::new`] via `inventory::submit!` at dialect definition sites.
+/// The printer/parser dispatch automatically routes to the registered format.
 pub struct OpAsmFormat {
-    /// Dialect name (e.g., "func", "closure")
-    pub dialect: &'static str,
-    /// Operation name within the dialect (e.g., "func", "lambda")
-    pub op_name: &'static str,
+    dialect: &'static str,
+    op_name: &'static str,
     /// Custom printer. Called instead of generic printing.
-    pub print_fn: fn(&mut crate::printer::OpPrintHelper<'_, '_>, OpRef, usize) -> fmt::Result,
+    pub print_fn: OpPrintFn,
     /// Custom parser. Called after `dialect.op` and optional `@sym_name` are consumed.
     /// `results` and `sym_name` are already parsed by the generic parser.
-    pub parse_fn: for<'a> fn(
-        input: &mut &'a str,
-        results: Vec<&'a str>,
-        sym_name: Option<String>,
-    ) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>>,
+    pub parse_fn: OpParseFn,
+}
+
+/// Custom printer of an [`OpAsmFormat`].
+pub type OpPrintFn = fn(&mut crate::printer::OpPrintHelper<'_, '_>, OpRef, usize) -> fmt::Result;
+
+/// Custom parser of an [`OpAsmFormat`].
+pub type OpParseFn = for<'a> fn(
+    input: &mut &'a str,
+    results: Vec<&'a str>,
+    sym_name: Option<String>,
+) -> winnow::ModalResult<crate::parser::raw::RawOperation<'a>>;
+
+impl OpAsmFormat {
+    /// Custom assembly format for the operation wrapped by `T`.
+    pub const fn new<T: DialectOp>(print_fn: OpPrintFn, parse_fn: OpParseFn) -> Self {
+        Self {
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            print_fn,
+            parse_fn,
+        }
+    }
 }
 
 inventory::collect!(OpAsmFormat);

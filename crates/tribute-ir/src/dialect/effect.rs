@@ -57,7 +57,7 @@ mod effect {
     }
 }
 
-inventory::submit! { trunk_ir::op_interface::PureOps::register("effect", "extend") }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Extend>() }
 
 impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
     fn verify_callable_exit(

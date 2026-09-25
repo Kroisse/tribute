@@ -3,7 +3,7 @@
 use crate::IrContext;
 
 // === Operation registrations ===
-crate::register_isolated_op!(core.module);
+crate::register_isolated_op!(Module);
 
 #[trunk_ir::dialect]
 mod core {
@@ -204,7 +204,7 @@ use crate::transforms::canonicalize::FoldResult;
 /// the same way (narrower intermediate types lose information). Once
 /// `resolve_unrealized_casts` has run, no `unrealized_conversion_cast`
 /// ops remain and this fold is a no-op.
-#[trunk_ir::canonicalize_fold(core.unrealized_conversion_cast)]
+#[trunk_ir::canonicalize_fold(UnrealizedConversionCast)]
 pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let operands = ctx.op_operands(op);
     let result_types = ctx.op_result_types(op);

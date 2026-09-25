@@ -17,7 +17,6 @@ inventory.workspace = true
 itertools.workspace = true
 lasso.workspace = true
 parking_lot.workspace = true
-paste.workspace = true
 salsa = { workspace = true, optional = true }
 serde.workspace = true
 smallvec.workspace = true

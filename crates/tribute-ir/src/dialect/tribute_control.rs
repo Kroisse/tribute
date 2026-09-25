@@ -370,15 +370,15 @@ impl Func {
 // Only the named function is isolated. Lambda intentionally remains
 // non-isolated so its exact external-reference/capture set can be validated.
 inventory::submit! {
-    trunk_ir::op_interface::IsolatedFromAboveOps::register("tribute_control", "func")
+    trunk_ir::op_interface::IsolatedFromAboveOps::register::<Func>()
 }
 
 // These operations only create/refer to values and are safe for DCE.
 inventory::submit! {
-    trunk_ir::op_interface::PureOps::register("tribute_control", "func_ref")
+    trunk_ir::op_interface::PureOps::register::<FuncRef>()
 }
 inventory::submit! {
-    trunk_ir::op_interface::PureOps::register("tribute_control", "lambda")
+    trunk_ir::op_interface::PureOps::register::<Lambda>()
 }
 
 // === Custom assembly: tribute_control.func ===
@@ -631,12 +631,7 @@ fn parse_func<'a>(
 }
 
 inventory::submit! {
-    trunk_ir::op_interface::OpAsmFormat {
-        dialect: "tribute_control",
-        op_name: "func",
-        print_fn: print_func,
-        parse_fn: parse_func,
-    }
+    trunk_ir::op_interface::OpAsmFormat::new::<Func>(print_func, parse_func)
 }
 
 // === Custom assembly: tribute_control.lambda ===
@@ -771,12 +766,7 @@ fn parse_lambda<'a>(
 }
 
 inventory::submit! {
-    trunk_ir::op_interface::OpAsmFormat {
-        dialect: "tribute_control",
-        op_name: "lambda",
-        print_fn: print_lambda,
-        parse_fn: parse_lambda,
-    }
+    trunk_ir::op_interface::OpAsmFormat::new::<Lambda>(print_lambda, parse_lambda)
 }
 
 // === Explicit Tribute validation entry point ===
