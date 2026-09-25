@@ -196,6 +196,12 @@ impl CastResolver {
             return;
         }
 
+        // Before the target conversion, a materialization toward a converted
+        // target type would retype the uses; keep the cast and create no ops.
+        if self.keep_retyping_casts && to_type != original_to_type {
+            return;
+        }
+
         // Try to materialize the conversion
         let mat_result = tc.materialize(ctx, location, input_value, from_type, to_type);
 
@@ -461,6 +467,58 @@ mod tests {
             let result = resolve_unrealized_casts(&mut ctx, module, &tc);
             assert_eq!(result.resolved_count, 2);
             assert_eq!(module.ops(&ctx), [const_op.op_ref()]);
+        }
+
+        #[test]
+        fn type_preserving_resolution_does_not_materialize_toward_a_converted_type() {
+            let (mut ctx, loc) = test_ctx();
+            let i32_ty = i32_type(&mut ctx);
+            let i64_ty = i64_type(&mut ctx);
+            let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+
+            let const_op = arith::Const::operands()
+                .value(Attribute::Int(42))
+                .results(i32_ty)
+                .build(&mut ctx, loc);
+            let cast = core::UnrealizedConversionCast::operands(const_op.result(&ctx))
+                .results(i64_ty)
+                .build(&mut ctx, loc);
+            let cast_result = cast.result(&ctx);
+            let user_data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("use"))
+                .operand(cast_result)
+                .build(&mut ctx);
+            let user = ctx.create_op(user_data);
+            let module = make_module(&mut ctx, loc, vec![const_op.op_ref(), cast.op_ref(), user]);
+
+            // i64 converts to f64, and the materializer emits a real op.
+            let mut tc = TypeConverter::new();
+            tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(f64_ty));
+            let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+            let counter = calls.clone();
+            tc.set_materializer(move |ctx, loc, value, _from_ty, to_ty| {
+                counter.set(counter.get() + 1);
+                let data =
+                    OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("convert"))
+                        .operand(value)
+                        .result(to_ty)
+                        .build(ctx);
+                let op = ctx.create_op(data);
+                Some(crate::rewrite::type_converter::MaterializeResult {
+                    value: ctx.op_result(op, 0),
+                    ops: vec![op],
+                })
+            });
+
+            let result = resolve_type_preserving_casts(&mut ctx, module, &tc);
+            assert_eq!(result.resolved_count, 0);
+            assert!(result.unresolved.is_empty());
+            assert_eq!(
+                module.ops(&ctx),
+                [const_op.op_ref(), cast.op_ref(), user],
+                "the cast stays and nothing is inserted"
+            );
+            assert_eq!(ctx.op_operands(user), [cast_result], "the use keeps i64");
+            assert_eq!(calls.get(), 0, "no materialization op is created");
         }
     }
 }
