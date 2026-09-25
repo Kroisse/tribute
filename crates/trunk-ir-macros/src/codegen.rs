@@ -170,7 +170,7 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
             let mut sname = struct_name(&op.name);
             sname.set_span(span);
             quote_spanned!(span=> Some(|ctx, op| {
-                <#sname as #crate_path::ops::Verify>::verify(#sname(op), ctx)
+                <#sname as #crate_path::ops::__private::DeclaredVerify>::verify_declared(#sname(op), ctx)
             }))
         }
         None => quote!(None),
