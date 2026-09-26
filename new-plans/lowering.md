@@ -151,18 +151,19 @@ prepare_wasm_evidence_runtime + evidence_to_wasm
 intrinsic_to_wasm
 wasm_lowerer
 verify_wasm_backend_ready
-resolve_unrealized_casts + cleanup
+convert_unrealized_casts + reconcile_unrealized_casts
 finalize_wasm_gc_types
 verify_wasm_emission_ready
 ```
 
 `wasm-backend-ready` is a partial conversion boundary after dialect lowering.
 It rejects residual `ability.*` and `effect.*` while allowing later-stage
-infrastructure such as unresolved casts. The target evidence stage creates its
+infrastructure such as unrealized casts. The target evidence stage creates its
 own runtime helpers and lowers dispatch to ordinary or proper-tail indirect
 calls with explicit exact signatures. Final GC indices are assigned only after
-cast materialization and cleanup; final emission validation checks the complete
-module before producing a binary.
+cast conversion and reconciliation; final emission validation rejects any
+remaining `core.unrealized_conversion_cast` and checks the complete module
+before producing a binary.
 
 The lower-level `trunk-ir-wasm-backend` pass group handles target-independent
 dialect conversion:
@@ -199,7 +200,7 @@ cf_to_clif
 adt_to_clif
 arith_to_clif + mem_to_clif
 runtime/constant/intrinsic lowering
-conversion-cast materialization + RC lowering
+convert_unrealized_casts + reconcile_unrealized_casts + RC lowering
 backend-ready verification
 ```
 

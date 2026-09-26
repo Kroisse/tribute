@@ -201,9 +201,9 @@ use crate::transforms::canonicalize::FoldResult;
 /// `core.unrealized_conversion_cast` — dialect-conversion placeholders
 /// that carry no value-level conversion semantics. A resolved cast pair
 /// like `arith.trunc` followed by `arith.extend` is *not* safe to collapse
-/// the same way (narrower intermediate types lose information). Once
-/// `resolve_unrealized_casts` has run, no `unrealized_conversion_cast`
-/// ops remain and this fold is a no-op.
+/// the same way (narrower intermediate types lose information).
+/// `reconcile_unrealized_casts` applies the same folds across longer cast
+/// chains after target type conversion.
 #[trunk_ir::canonicalize_fold(UnrealizedConversionCast)]
 pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     let operands = ctx.op_operands(op);

@@ -1,36 +1,24 @@
 //! Dialect conversion utilities for TrunkIR.
 //!
-//! This module provides utilities for converting between dialects, including
-//! resolution of `unrealized_conversion_cast` operations that may be inserted
-//! during dialect conversion.
-//!
-//! # Overview
-//!
-//! During dialect conversion (e.g., lowering from high-level to low-level dialects),
-//! type mismatches may occur between operations. The conversion infrastructure
-//! inserts `core.unrealized_conversion_cast` operations as placeholders for these
-//! mismatches. This module provides the resolution pass that eliminates these casts
-//! by applying appropriate materialization functions.
+//! Dialect conversion inserts `core.unrealized_conversion_cast` operations as
+//! placeholders where a value's type and the type its uses declare disagree.
+//! This module materializes them into real conversion operations and
+//! reconciles the ones that fold away.
 //!
 //! # Usage
 //!
 //! ```ignore
-//! use trunk_ir::conversion::resolve_unrealized_casts;
-//! use trunk_ir::rewrite::TypeConverter;
+//! use trunk_ir::conversion::{convert_unrealized_casts, reconcile_unrealized_casts};
 //!
-//! let mut tc = TypeConverter::new();
-//! tc.set_materializer(|ctx, loc, value, from_ty, to_ty| {
-//!     // Generate actual conversion operations
-//!     Some(MaterializeResult { value, ops: vec![] })
-//! });
-//!
-//! let result = resolve_unrealized_casts(&mut ctx, module, &tc);
-//! assert!(result.unresolved.is_empty());
-//! println!("Resolved {} casts", result.resolved_count);
+//! // Tail of the target type conversion.
+//! convert_unrealized_casts(&mut ctx, module, &target_converter);
+//! // Converter-free cleanup; a remaining cast is rejected by the target's
+//! // legality boundary.
+//! reconcile_unrealized_casts(&mut ctx, module);
 //! ```
 
-mod resolve_unrealized_casts;
+mod unrealized_casts;
 
-pub use resolve_unrealized_casts::{
-    ResolveResult, UnresolvedCast, resolve_type_preserving_casts, resolve_unrealized_casts,
+pub use unrealized_casts::{
+    convert_unrealized_casts, materialize_unrealized_casts, reconcile_unrealized_casts,
 };

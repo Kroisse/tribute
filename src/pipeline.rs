@@ -70,7 +70,9 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use tribute_front::source_file::parse_with_rope;
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
-use trunk_ir::conversion::resolve_unrealized_casts;
+use trunk_ir::conversion::{
+    convert_unrealized_casts, materialize_unrealized_casts, reconcile_unrealized_casts,
+};
 use trunk_ir::dialect::{core as core_dialect, func as func_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{PassError, PassManager, PassResult};
@@ -744,7 +746,7 @@ pub struct CompilationResult {
 ///
 /// Runs all WASM backend passes in a single arena session:
 /// 1. Lowers the module from func/scf/arith dialects to wasm dialect operations
-/// 2. Resolves unrealized conversion casts using WASM-specific type converter
+/// 2. Converts and reconciles unrealized conversion casts using the WASM type converter
 /// 3. Validates and emits the wasm binary (delegated to trunk-ir-wasm-backend)
 fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult<WasmBinary> {
     let _span = tracing::info_span!("compile_to_wasm").entered();
@@ -755,30 +757,14 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
         tribute_passes::wasm::lower::lower_to_wasm(ctx, module).map_err(wasm_lowering_failure)?;
     }
 
-    // Phase 2 - Resolve unrealized_conversion_cast operations (WASM type converter)
+    // Phase 2 - Convert and reconcile unrealized_conversion_cast operations
+    // (WASM type converter). A remaining cast is rejected by the emission
+    // boundary in `finalize_wasm_gc_types`.
     {
-        let _span = tracing::info_span!("resolve_unrealized_casts").entered();
+        let _span = tracing::info_span!("convert_unrealized_casts").entered();
         let tc = tribute_passes::wasm::type_converter::wasm_type_converter(ctx);
-        let result = resolve_unrealized_casts(ctx, module, &tc);
-        if !result.unresolved.is_empty() {
-            let details: Vec<String> = result
-                .unresolved
-                .iter()
-                .map(|c| {
-                    let from_td = ctx.get_type(c.from_type);
-                    let to_td = ctx.get_type(c.to_type);
-                    format!(
-                        "{}.{} -> {}.{}",
-                        from_td.dialect, from_td.name, to_td.dialect, to_td.name,
-                    )
-                })
-                .collect();
-            return Err(CompilationError::unresolved_casts(format!(
-                "{} unresolved cast(s) remain after WASM type conversion: [{}]",
-                result.unresolved.len(),
-                details.join(", "),
-            )));
-        }
+        convert_unrealized_casts(ctx, module, &tc);
+        reconcile_unrealized_casts(ctx, module);
     }
 
     // Materialization may introduce semantic WasmGC operations after the main
@@ -1014,7 +1000,7 @@ fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
     }
 }
 
-/// Run inlining + DCE + resolve_casts (shared cleanup after all lowering).
+/// Run inlining + DCE + cast materialization (shared cleanup after all lowering).
 ///
 fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
@@ -1032,10 +1018,11 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
     } else {
         tracing::warn!("cleanup skipped function passes: root op is not core.module");
     }
-    // Target type conversion has not run yet: keep casts that only retype a
-    // value, so every use still sees the type its operation declares.
+    // Target type conversion has not run yet: materialize only the casts that
+    // need real operations and keep the ones that only retype a value, so
+    // every use still sees the type its operation declares.
     let tc = generic_type_converter(ctx);
-    trunk_ir::conversion::resolve_type_preserving_casts(ctx, m, &tc);
+    materialize_unrealized_casts(ctx, m, &tc);
 }
 
 /// Run the WASM target pipeline: lowering + cleanup.
@@ -1231,7 +1218,7 @@ fn native_ownership_plan_options(
 /// 1. Generates native entrypoint
 /// 2. Lowers scf/func/cf/adt/arith dialects to `clif.*`
 /// 3. Runs RTTI, RC insertion, and RC lowering passes
-/// 4. Resolves unrealized conversion casts
+/// 4. Converts and reconciles unrealized conversion casts
 /// 5. Validates and emits the native object file via Cranelift
 fn prepare_module_to_native(
     ctx: &mut IrContext,
@@ -1379,32 +1366,13 @@ fn prepare_module_to_native(
         return Ok(None);
     }
 
-    // Phase 3 - Resolve unrealized_conversion_cast operations
+    // Phase 3 - Convert and reconcile unrealized_conversion_cast operations.
+    // A remaining cast is rejected by `validate_clif_ir` before emission.
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        let result = resolve_unrealized_casts(ctx, module, &type_converter);
-        if !result.unresolved.is_empty() {
-            let details: Vec<String> = result
-                .unresolved
-                .iter()
-                .map(|c| {
-                    let from_td = ctx.get_type(c.from_type);
-                    let to_td = ctx.get_type(c.to_type);
-                    format!(
-                        "{}.{} -> {}.{}",
-                        from_td.dialect, from_td.name, to_td.dialect, to_td.name,
-                    )
-                })
-                .collect();
-            return Err(trunk_ir_cranelift_backend::CompilationError::ir_validation(
-                format!(
-                    "{} unresolved cast(s) remain after native type conversion: [{}]",
-                    result.unresolved.len(),
-                    details.join(", "),
-                ),
-            ));
-        }
+        convert_unrealized_casts(ctx, module, &type_converter);
+        reconcile_unrealized_casts(ctx, module);
     }
 
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code

@@ -94,8 +94,13 @@ pub fn wasm_backend_ready_target() -> ConversionTarget {
 }
 
 /// Conversion target immediately before WebAssembly emission.
+///
+/// Every `core.unrealized_conversion_cast` must have been materialized or
+/// reconciled by now; a remaining one is a conversion bug.
 pub fn wasm_emission_ready_target() -> ConversionTarget {
-    wasm_backend_ready_target().illegal_dialect("wasm_gc")
+    wasm_backend_ready_target()
+        .illegal_dialect("wasm_gc")
+        .illegal_op("core", "unrealized_conversion_cast")
 }
 
 /// Run the full WASM lowering pipeline on arena IR.
@@ -217,7 +222,7 @@ pub fn finalize_wasm_gc_types(ctx: &mut IrContext, module: Module) -> Result<(),
 
 /// Verify the partial Wasm backend boundary.
 ///
-/// Unknown operations are still allowed because unresolved casts and backend
+/// Unknown operations are still allowed because unrealized casts and backend
 /// infrastructure may remain for later pipeline stages, but residual
 /// `ability.*` and `effect.*` operations are compiler bugs at this point.
 pub fn verify_wasm_backend_ready(
@@ -1203,6 +1208,31 @@ mod tests {
 
         verify_wasm_backend_ready(&mut ctx, module)
             .expect("partial wasm backend boundary should allow unknown later-stage ops");
+    }
+
+    #[test]
+    fn wasm_emission_ready_rejects_remaining_unrealized_cast() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main(%x: core.i32) -> core.i64 {
+    %r = core.unrealized_conversion_cast %x : core.i64
+    wasm.return %r
+  }
+}"#,
+        );
+
+        let error = finalize_wasm_gc_types(&mut ctx, module)
+            .expect_err("a remaining cast should fail the wasm emission boundary");
+
+        assert_eq!(error.operations().len(), 1);
+        assert_eq!(error.operations()[0].dialect, Symbol::new("core"));
+        assert_eq!(
+            error.operations()[0].name,
+            Symbol::new("unrealized_conversion_cast")
+        );
+        assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 //!
 //! ## Pipeline Position
 //!
-//! Runs after `resolve_unrealized_casts` (Phase 3) and before `emit_module_to_native`
+//! Runs after unrealized cast conversion and reconciliation (Phase 3) and before `emit_module_to_native`
 //! (Phase 4). At this point all types are resolved, and after lowering no
 //! `tribute_rt.*` ops should remain.
 //!
