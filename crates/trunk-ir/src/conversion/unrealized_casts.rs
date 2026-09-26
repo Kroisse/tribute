@@ -27,22 +27,22 @@ use crate::walk::{WalkAction, walk_op};
 /// Replace the casts whose conversion needs real operations.
 ///
 /// Runs before target type conversion. A cast is replaced only when its
-/// source differs from the converted result type and materialization emits
-/// operations. Casts that are identities, no-op materializations, or not
-/// materializable stay: they retype the value until the target conversion
-/// makes both sides agree.
+/// declared result type does not convert, its source differs from that type,
+/// and materialization emits operations. Other casts stay: they retype the
+/// value until the target conversion makes both sides agree. In particular,
+/// materializing toward a converted type would retype the uses before the
+/// target conversion, so such casts are left without calling the materializer.
 pub fn materialize_unrealized_casts(ctx: &mut IrContext, module: Module, tc: &TypeConverter) {
     for op in collect_casts(ctx, module) {
         let Some((block, input, declared)) = cast_parts(ctx, op) else {
             continue;
         };
         let from = ctx.value_ty(input);
-        let to = tc.convert_type_or_identity(ctx, declared);
-        if from == to {
+        if from == declared || tc.convert_type_or_identity(ctx, declared) != declared {
             continue;
         }
         let location = ctx.op(op).location;
-        match tc.materialize(ctx, location, input, from, to) {
+        match tc.materialize(ctx, location, input, from, declared) {
             Some(mat) if !mat.ops.is_empty() => {
                 for mat_op in mat.ops {
                     ctx.insert_op_before(block, op, mat_op);
@@ -284,6 +284,45 @@ mod tests {
         materialize_unrealized_casts(&mut ctx, module, &tc);
 
         assert_eq!(cast_count(&ctx, module), 1);
+    }
+
+    #[test]
+    fn materialize_does_not_materialize_toward_a_converted_type() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i64 {
+    %r = core.unrealized_conversion_cast %x : core.i64
+    func.return %r
+  }
+}"#,
+        );
+        // i64 converts to f64, and the materializer would emit a real op.
+        let i64_ty = named_type(&mut ctx, "i64");
+        let f64_ty = named_type(&mut ctx, "f64");
+        let mut tc = TypeConverter::new();
+        tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(f64_ty));
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = calls.clone();
+        tc.set_materializer(move |ctx, loc, value, _from, to| {
+            counter.set(counter.get() + 1);
+            let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("convert"))
+                .operand(value)
+                .result(to)
+                .build(ctx);
+            let op = ctx.create_op(data);
+            Some(MaterializeResult {
+                value: ctx.op_result(op, 0),
+                ops: vec![op],
+            })
+        });
+        let before = print_module(&ctx, module.op());
+
+        materialize_unrealized_casts(&mut ctx, module, &tc);
+
+        assert_eq!(print_module(&ctx, module.op()), before, "the cast stays");
+        assert_eq!(calls.get(), 0, "no materialization op is created");
     }
 
     #[test]
