@@ -71,12 +71,14 @@ use tribute_front::source_file::parse_with_rope;
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::conversion::{
-    convert_unrealized_casts, materialize_unrealized_casts, reconcile_unrealized_casts,
+    UnrealizedCastConversionPattern, convert_unrealized_casts, materialize_unrealized_casts,
+    reconcile_unrealized_casts,
 };
 use trunk_ir::dialect::{core as core_dialect, func as func_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{PassError, PassManager, PassResult};
 use trunk_ir::rewrite::ConversionError;
+use trunk_ir::rewrite::PatternApplicator;
 use trunk_ir::{IrContext, Module};
 
 /// Error returned while dumping shared or target-specific IR.
@@ -1366,12 +1368,16 @@ fn prepare_module_to_native(
         return Ok(None);
     }
 
-    // Phase 3 - Convert and reconcile unrealized_conversion_cast operations.
-    // A remaining cast is rejected by `validate_clif_ir` before emission.
+    // Phase 3 - Legalize unrealized_conversion_cast operations: convert their
+    // result types, materialize real representation changes, and reconcile
+    // the identities left behind. A remaining cast is rejected by
+    // `validate_clif_ir` before emission.
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        convert_unrealized_casts(ctx, module, &type_converter);
+        PatternApplicator::new(type_converter)
+            .add_pattern(UnrealizedCastConversionPattern)
+            .apply_partial(ctx, module);
         reconcile_unrealized_casts(ctx, module);
     }
 

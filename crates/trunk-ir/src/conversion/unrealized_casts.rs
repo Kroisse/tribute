@@ -7,8 +7,13 @@
 //! - [`materialize_unrealized_casts`] runs before target type conversion and
 //!   replaces only the casts whose conversion needs real operations (such as
 //!   boxing). Casts that only retype a value stay.
+//! - [`UnrealizedCastConversionPattern`] is the cast legalization pattern of a
+//!   target conversion. It converts each cast's result type and materializes
+//!   only conversions that need real operations; it never forwards a value of
+//!   another type.
 //! - [`convert_unrealized_casts`] runs with the target converter and converts
-//!   each cast's result type, materializing the conversions that remain.
+//!   each cast's result type, materializing the conversions that remain. A
+//!   materialization without operations forwards the source.
 //! - [`reconcile_unrealized_casts`] needs no converter. It removes casts that
 //!   fold away: identities, cast chains that return to an earlier type, and
 //!   dead casts. A cast it cannot remove stays for the target's legality
@@ -21,7 +26,7 @@ use crate::context::IrContext;
 use crate::dialect::core;
 use crate::ops::DialectOp;
 use crate::refs::{BlockRef, OpRef, TypeRef, ValueDef, ValueRef};
-use crate::rewrite::{Module, TypeConverter};
+use crate::rewrite::{Module, PatternRewriter, RewritePattern, TypeConverter};
 use crate::walk::{WalkAction, walk_op};
 
 /// Replace the casts whose conversion needs real operations.
@@ -81,6 +86,57 @@ pub fn convert_unrealized_casts(ctx: &mut IrContext, module: Module, tc: &TypeCo
             }
             replace_cast(ctx, op, mat.value);
         }
+    }
+}
+
+/// Cast legalization pattern for a target type conversion.
+///
+/// Retypes a cast's result to its converted form. When the source still
+/// differs from that type, the cast is replaced by the operations the
+/// converter materializes. A materialization without operations, or none at
+/// all, keeps the cast: forwarding the source would give its uses a value of
+/// another type. Identities are left to [`reconcile_unrealized_casts`], and a
+/// cast that stays is rejected by the target's emission boundary.
+pub struct UnrealizedCastConversionPattern;
+
+impl RewritePattern for UnrealizedCastConversionPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !core::UnrealizedConversionCast::matches(ctx, op) {
+            return false;
+        }
+        let (&[input], &[declared]) = (ctx.op_operands(op), ctx.op_result_types(op)) else {
+            return false;
+        };
+        let to = rewriter
+            .type_converter()
+            .convert_type_or_identity(ctx, declared);
+        let from = ctx.value_ty(input);
+        let location = ctx.op(op).location;
+        if from != to
+            && let Some(mat) = rewriter
+                .type_converter()
+                .materialize(ctx, location, input, from, to)
+            && !mat.ops.is_empty()
+        {
+            for mat_op in mat.ops {
+                rewriter.insert_op(mat_op);
+            }
+            rewriter.erase_op(vec![mat.value]);
+            return true;
+        }
+        if to == declared {
+            return false;
+        }
+        let cast = core::UnrealizedConversionCast::operands(input)
+            .results(to)
+            .build(ctx, location);
+        rewriter.replace_op(cast.op_ref());
+        true
     }
 }
 
@@ -374,6 +430,102 @@ mod tests {
         let casts = collect_casts(&ctx, module);
         assert_eq!(casts.len(), 1);
         assert_eq!(ctx.op_result_types(casts[0]), [i32_ty]);
+    }
+
+    fn apply_cast_pattern(ctx: &mut IrContext, module: Module, tc: TypeConverter) {
+        crate::rewrite::PatternApplicator::new(tc)
+            .add_pattern(UnrealizedCastConversionPattern)
+            .apply_partial(ctx, module);
+    }
+
+    #[test]
+    fn cast_pattern_retypes_result_to_an_identity() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %r = core.unrealized_conversion_cast %x : core.i64
+    func.return %r
+  }
+}"#,
+        );
+        let tc = test_converter(&mut ctx);
+
+        apply_cast_pattern(&mut ctx, module, tc);
+
+        assert_ir(
+            &ctx,
+            module,
+            r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i32 {
+    %r = core.unrealized_conversion_cast %x : core.i32
+    func.return %r
+  }
+}"#,
+        );
+        reconcile_unrealized_casts(&mut ctx, module);
+        assert_eq!(cast_count(&ctx, module), 0);
+    }
+
+    #[test]
+    fn cast_pattern_materializes_real_operations() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.f64 {
+    %r = core.unrealized_conversion_cast %x : core.f64
+    func.return %r
+  }
+}"#,
+        );
+        let tc = test_converter(&mut ctx);
+
+        apply_cast_pattern(&mut ctx, module, tc);
+
+        assert_eq!(cast_count(&ctx, module), 0);
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("test.box"), "{printed}");
+    }
+
+    #[test]
+    fn cast_pattern_keeps_casts_without_real_materialization() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%x: core.i32, %y: core.f32) -> core.i16 {
+    %noop = core.unrealized_conversion_cast %x : core.i16
+    %none = core.unrealized_conversion_cast %y : core.i64
+    func.return %noop
+  }
+}"#,
+        );
+        let i32_ty = named_type(&mut ctx, "i32");
+        let i64_ty = named_type(&mut ctx, "i64");
+        let mut tc = TypeConverter::new();
+        tc.add_conversion(move |_ctx, ty| (ty == i64_ty).then_some(i32_ty));
+        let f32_ty = named_type(&mut ctx, "f32");
+        tc.set_materializer(move |_ctx, _loc, value, from, _to| {
+            (from != f32_ty).then_some(MaterializeResult { value, ops: vec![] })
+        });
+
+        apply_cast_pattern(&mut ctx, module, tc);
+
+        // Neither the no-op nor the failed materialization forwards the
+        // source; the second cast only gets its converted result type.
+        assert_ir(
+            &ctx,
+            module,
+            r#"core.module @test {
+  func.func @f(%x: core.i32, %y: core.f32) -> core.i16 {
+    %noop = core.unrealized_conversion_cast %x : core.i16
+    %none = core.unrealized_conversion_cast %y : core.i32
+    func.return %noop
+  }
+}"#,
+        );
     }
 
     #[test]

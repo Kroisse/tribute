@@ -252,7 +252,7 @@ impl RewritePattern for ArithBinOpPattern {
 ///
 /// Cranelift's `icmp`/`fcmp` always return i8. If the converted result type
 /// is wider (e.g. i32), insert a `clif.uextend` after the comparison.
-fn finalize_cmp(
+pub(super) fn finalize_cmp(
     ctx: &mut IrContext,
     loc: trunk_ir::types::Location,
     rewriter: &mut trunk_ir::rewrite::PatternRewriter<'_>,

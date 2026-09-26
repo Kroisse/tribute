@@ -200,7 +200,7 @@ cf_to_clif
 adt_to_clif
 arith_to_clif + mem_to_clif
 runtime/constant/intrinsic lowering
-convert_unrealized_casts + reconcile_unrealized_casts + RC lowering
+cast legalization + reconcile_unrealized_casts + RC lowering
 backend-ready verification
 ```
 
