@@ -163,6 +163,28 @@ fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
     false
 }
 
+/// Whether WasmGC accepts a reference of type `from` where `to` is declared.
+///
+/// WasmGC references are implicitly upcast: every GC reference is an
+/// `anyref`, every struct reference a `structref`, and every array reference
+/// an `arrayref`. `anyref` itself is only a subtype of `anyref`.
+fn is_wasm_reference_subtype(ctx: &IrContext, from: TypeRef, to: TypeRef) -> bool {
+    let wasm = |ty, name| is_type(ctx, ty, Symbol::new("wasm"), Symbol::new(name));
+    let is_array =
+        |ty| wasm(ty, "arrayref") || is_type(ctx, ty, Symbol::new("core"), Symbol::new("array"));
+    let is_struct = |ty| is_struct_like(ctx, ty) && !wasm(ty, "anyref") || is_closure_type(ctx, ty);
+    if wasm(to, "anyref") {
+        return is_struct(from) || is_array(from) || wasm(from, "i31ref");
+    }
+    if wasm(to, "structref") {
+        return is_struct(from);
+    }
+    if wasm(to, "arrayref") {
+        return is_array(from);
+    }
+    false
+}
+
 /// Check if a type is a `closure.closure` type.
 fn is_closure_type(ctx: &IrContext, ty: TypeRef) -> bool {
     is_type(ctx, ty, Symbol::new("closure"), Symbol::new("closure"))
@@ -403,6 +425,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
+    tc.set_subsumption(is_wasm_reference_subtype);
+
     // =========================================================================
     // Single materializer combining all materialization rules
     // =========================================================================
@@ -417,27 +441,22 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // Struct-like bridging materializations
         // -----------------------------------------------------------------
 
-        // adt.typeref -> wasm.structref is a safe upcast (no-op).
-        // structref -> adt.typeref is a downcast and needs ref.cast (handled below).
-        let from_is_typeref = is_adt_typeref(ctx, from_ty);
+        // Reference upcasts (for example a concrete struct or `adt.typeref` to
+        // `structref`/`anyref`) are target subsumption, not materializations,
+        // and values of equal representation get equal types from the target
+        // conversion. Only real conversions are materialized below.
         let to_is_structref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref"));
-
-        if from_is_typeref && to_is_structref {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
 
         // Both are struct-like types but need actual bridging - generate ref_cast
         let from_is_struct_like = is_struct_like(ctx, from_ty);
         let to_is_struct_like = is_struct_like(ctx, to_ty);
 
         if from_is_struct_like && to_is_struct_like {
-            // Skip ref_cast for safe upcasts to abstract supertypes
-            // (e.g., concrete struct -> anyref, concrete struct -> structref).
-            // But anyref -> structref is a downcast and still needs ref_cast.
+            // Upcasts are subsumption; only downcasts need a ref_cast.
             let to_is_anyref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"));
             let from_is_anyref = is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"));
             if to_is_anyref || (to_is_structref && !from_is_anyref) {
-                return Some(MaterializeResult { value, ops: vec![] });
+                return None;
             }
 
             if is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref")) {
@@ -485,71 +504,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
 
         // -----------------------------------------------------------------
-        // Primitive type equivalences (no-op materializations)
-        // -----------------------------------------------------------------
-
-        // tribute_rt.int -> core.i32 (same representation)
-        if is_type(ctx, from_ty, Symbol::new("tribute_rt"), Symbol::new("int"))
-            && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("i32"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // tribute_rt.nat -> core.i32 (same representation)
-        if is_type(ctx, from_ty, Symbol::new("tribute_rt"), Symbol::new("nat"))
-            && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("i32"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // tribute_rt.bool -> core.i32 (same representation)
-        if is_type(ctx, from_ty, Symbol::new("tribute_rt"), Symbol::new("bool"))
-            && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("i32"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // core.i1 -> core.i32 (same representation for wasm)
-        if is_type(ctx, from_ty, Symbol::new("core"), Symbol::new("i1"))
-            && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("i32"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // tribute_rt.float -> core.f64 (same representation)
-        if is_type(
-            ctx,
-            from_ty,
-            Symbol::new("tribute_rt"),
-            Symbol::new("float"),
-        ) && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("f64"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // tribute_rt.intref -> wasm.i31ref (same representation)
-        if is_type(
-            ctx,
-            from_ty,
-            Symbol::new("tribute_rt"),
-            Symbol::new("intref"),
-        ) && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("i31ref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // tribute_rt.anyref -> wasm.anyref (same representation)
-        if is_type(
-            ctx,
-            from_ty,
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
-        ) && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // wasm.i31ref -> wasm.anyref (i31ref is a subtype of anyref)
-        if is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("i31ref"))
-            && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-
-        // -----------------------------------------------------------------
         // Boxing materializations (emit ops)
         // -----------------------------------------------------------------
 
@@ -578,39 +532,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
                 value: null_op.result(ctx),
                 ops: vec![null_op.op_ref()],
             });
-        }
-
-        // -----------------------------------------------------------------
-        // Subtype no-ops (continued)
-        // -----------------------------------------------------------------
-
-        // wasm.structref -> wasm.anyref (structref is a subtype of anyref)
-        if is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("structref"))
-            && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // wasm.arrayref -> wasm.anyref (arrayref is a subtype of anyref in WasmGC)
-        if is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("arrayref"))
-            && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // adt.struct -> wasm.anyref (GC struct is a subtype of anyref)
-        if is_adt_struct_type(ctx, from_ty)
-            && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // closure.closure -> adt.struct(name="_closure") (same representation)
-        if is_closure_type(ctx, from_ty) && to_ty == closure_ty {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // closure.closure -> wasm.structref (subtype relationship)
-        if is_closure_type(ctx, from_ty)
-            && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
         }
 
         // -----------------------------------------------------------------
@@ -651,66 +572,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
 
         // -----------------------------------------------------------------
-        // Pointer / nil equivalences
-        // -----------------------------------------------------------------
-
-        // wasm.anyref -> core.ptr (treat pointer as anyref subtype)
-        if is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"))
-            && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("ptr"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // tribute_rt.anyref -> core.ptr (same representation in WasmGC)
-        if is_type(
-            ctx,
-            from_ty,
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
-        ) && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("ptr"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // wasm.anyref -> core.nil (unit type, value ignored)
-        if is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"))
-            && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("nil"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // tribute_rt.anyref -> core.nil (unit type, value ignored)
-        if is_type(
-            ctx,
-            from_ty,
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
-        ) && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("nil"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-
-        // -----------------------------------------------------------------
-        // Evidence / marker equivalences
-        // -----------------------------------------------------------------
-
-        // evidence (core.array(Marker)) -> wasm.anyref (same representation)
-        if is_evidence_type_ref(ctx, from_ty)
-            && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // marker (adt.struct) -> wasm.structref (marker is a struct)
-        if is_marker_type_ref(ctx, from_ty)
-            && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-        // core.array -> wasm.arrayref (same representation)
-        if is_type(ctx, from_ty, Symbol::new("core"), Symbol::new("array"))
-            && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("arrayref"))
-        {
-            return Some(MaterializeResult { value, ops: vec![] });
-        }
-
-        // -----------------------------------------------------------------
         // anyref -> arrayref materialization (requires ref_cast)
         // -----------------------------------------------------------------
 
@@ -744,6 +605,47 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 mod tests {
     use super::*;
     use trunk_ir::ops::DialectOp;
+
+    #[test]
+    fn reference_upcasts_are_subsumption_not_materializations() {
+        let mut ctx = IrContext::new();
+        let path = ctx.intern_path("test.trb".to_owned());
+        let location = Location::new(path, trunk_ir::location::Span::new(0, 0));
+        let tc = wasm_type_converter(&mut ctx);
+        let wasm_ty =
+            |ctx: &mut IrContext, name| intern_type(ctx, Symbol::new("wasm"), Symbol::new(name));
+        let anyref = wasm_ty(&mut ctx, "anyref");
+        let structref = wasm_ty(&mut ctx, "structref");
+        let i31ref = wasm_ty(&mut ctx, "i31ref");
+        let ptr = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("ptr"));
+        let concrete = closure_adt_type(&mut ctx);
+
+        assert!(tc.is_subsumed(&ctx, concrete, structref));
+        assert!(tc.is_subsumed(&ctx, concrete, anyref));
+        assert!(tc.is_subsumed(&ctx, structref, anyref));
+        assert!(tc.is_subsumed(&ctx, i31ref, anyref));
+        assert!(!tc.is_subsumed(&ctx, anyref, structref));
+        assert!(!tc.is_subsumed(&ctx, anyref, ptr));
+
+        let source_data = trunk_ir::OperationDataBuilder::new(
+            location,
+            Symbol::new("test"),
+            Symbol::new("source"),
+        )
+        .result(anyref)
+        .build(&mut ctx);
+        let source = ctx.create_op(source_data);
+        let value = ctx.op_result(source, 0);
+        // Neither an upcast nor a representation match is a materialization.
+        assert!(
+            tc.materialize(&mut ctx, location, value, concrete, anyref)
+                .is_none()
+        );
+        assert!(
+            tc.materialize(&mut ctx, location, value, anyref, ptr)
+                .is_none()
+        );
+    }
 
     #[test]
     fn canonical_storage_conversion_updates_nested_block_argument_attributes() {

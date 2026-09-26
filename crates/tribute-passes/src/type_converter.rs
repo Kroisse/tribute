@@ -249,7 +249,7 @@ mod tests {
     use super::*;
     use trunk_ir::OperationDataBuilder;
     use trunk_ir::conversion::{
-        convert_unrealized_casts, materialize_unrealized_casts, reconcile_unrealized_casts,
+        UnrealizedCastConversionPattern, materialize_unrealized_casts, reconcile_unrealized_casts,
     };
     use trunk_ir::dialect::{func, wasm};
     use trunk_ir::location::Span;
@@ -292,7 +292,9 @@ mod tests {
 
             crate::wasm::lower::lower_to_wasm(&mut ctx, module).unwrap();
             let tc = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
-            convert_unrealized_casts(&mut ctx, module, &tc);
+            trunk_ir::rewrite::PatternApplicator::new(tc)
+                .add_pattern(UnrealizedCastConversionPattern)
+                .apply_partial(&mut ctx, module);
             reconcile_unrealized_casts(&mut ctx, module);
             crate::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
             let mut tails = Vec::new();

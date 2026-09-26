@@ -71,8 +71,7 @@ use tribute_front::source_file::parse_with_rope;
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::conversion::{
-    UnrealizedCastConversionPattern, convert_unrealized_casts, materialize_unrealized_casts,
-    reconcile_unrealized_casts,
+    UnrealizedCastConversionPattern, materialize_unrealized_casts, reconcile_unrealized_casts,
 };
 use trunk_ir::dialect::{core as core_dialect, func as func_dialect};
 use trunk_ir::ops::DialectOp;
@@ -759,13 +758,17 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
         tribute_passes::wasm::lower::lower_to_wasm(ctx, module).map_err(wasm_lowering_failure)?;
     }
 
-    // Phase 2 - Convert and reconcile unrealized_conversion_cast operations
-    // (WASM type converter). A remaining cast is rejected by the emission
-    // boundary in `finalize_wasm_gc_types`.
+    // Phase 2 - Legalize unrealized_conversion_cast operations (WASM type
+    // converter): convert their result types, use subtypes directly,
+    // materialize real representation changes, and reconcile the identities
+    // left behind. A remaining cast is rejected by the emission boundary in
+    // `finalize_wasm_gc_types`.
     {
-        let _span = tracing::info_span!("convert_unrealized_casts").entered();
+        let _span = tracing::info_span!("legalize_unrealized_casts").entered();
         let tc = tribute_passes::wasm::type_converter::wasm_type_converter(ctx);
-        convert_unrealized_casts(ctx, module, &tc);
+        PatternApplicator::new(tc)
+            .add_pattern(UnrealizedCastConversionPattern)
+            .apply_partial(ctx, module);
         reconcile_unrealized_casts(ctx, module);
     }
 

@@ -151,7 +151,7 @@ prepare_wasm_evidence_runtime + evidence_to_wasm
 intrinsic_to_wasm
 wasm_lowerer
 verify_wasm_backend_ready
-convert_unrealized_casts + reconcile_unrealized_casts
+cast legalization + reconcile_unrealized_casts
 finalize_wasm_gc_types
 verify_wasm_emission_ready
 ```
