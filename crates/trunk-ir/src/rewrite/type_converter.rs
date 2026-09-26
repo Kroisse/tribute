@@ -21,6 +21,10 @@ type ConversionFn = dyn Fn(&IrContext, TypeRef) -> Option<TypeRef>;
 type MaterializerFn =
     dyn Fn(&mut IrContext, Location, ValueRef, TypeRef, TypeRef) -> Option<MaterializeResult>;
 
+/// Subsumption predicate signature: whether the target accepts a value of the
+/// first type where the second is declared.
+type SubsumptionFn = dyn Fn(&IrContext, TypeRef, TypeRef) -> bool;
+
 /// Arena type converter — maps types during dialect conversion.
 ///
 /// Holds a collection of conversion functions and a materialization callback
@@ -30,6 +34,8 @@ pub struct TypeConverter {
     conversions: Vec<Box<ConversionFn>>,
     /// Materialization function: creates cast ops when needed.
     materializer: Option<Box<MaterializerFn>>,
+    /// Target subtyping: a value of a subtype is accepted without a conversion.
+    subsumption: Option<Box<SubsumptionFn>>,
 }
 
 impl TypeConverter {
@@ -38,6 +44,7 @@ impl TypeConverter {
         Self {
             conversions: Vec::new(),
             materializer: None,
+            subsumption: None,
         }
     }
 
@@ -53,6 +60,23 @@ impl TypeConverter {
         + 'static,
     ) {
         self.materializer = Some(Box::new(f));
+    }
+
+    /// Set the target's subtyping relation.
+    ///
+    /// A target whose type system accepts a value of a subtype where a
+    /// supertype is declared (such as WasmGC references) reports it here. A
+    /// cast from a subtype needs no conversion and its source is used
+    /// directly; a representation match alone is not subsumption.
+    pub fn set_subsumption(&mut self, f: impl Fn(&IrContext, TypeRef, TypeRef) -> bool + 'static) {
+        self.subsumption = Some(Box::new(f));
+    }
+
+    /// Whether the target accepts a value of `from_ty` where `to_ty` is declared.
+    pub fn is_subsumed(&self, ctx: &IrContext, from_ty: TypeRef, to_ty: TypeRef) -> bool {
+        self.subsumption
+            .as_ref()
+            .is_some_and(|subsumes| subsumes(ctx, from_ty, to_ty))
     }
 
     /// Convert a type, trying each conversion function in order.
@@ -86,7 +110,7 @@ impl TypeConverter {
 
     /// Check if this converter has any conversions or materializer.
     pub fn is_empty(&self) -> bool {
-        self.conversions.is_empty() && self.materializer.is_none()
+        self.conversions.is_empty() && self.materializer.is_none() && self.subsumption.is_none()
     }
 }
 

@@ -173,10 +173,17 @@ materialization은 boxing처럼 실제 operation이 필요한 cast만 물리화�
 포함한 모든 값의 타입을 변환한다. Target materialization은 boxing, unboxing,
 reference cast처럼 실제 representation을 바꾸는 operation만 만들며, 타입이 다른
 값을 그대로 넘기지 않는다. 표현이 같은 두 타입은 target 타입 변환 뒤 같은
-타입이 되므로 그 사이의 cast는 동일 타입 cast로 남는다. Reconciliation은 type
-converter 없이 동일 타입 cast, 원래 타입으로 돌아오는 cast chain, 사용되지 않는
-cast만 제거하므로 어느 지점에서 실행해도 의미를 바꾸지 않는다. Reconciliation 뒤에 남은 cast는 변환 버그이며
-target emission 경계의 legality 검사가 거부한다.
+타입이 되므로 그 사이의 cast는 동일 타입 cast로 남는다.
+
+유일한 예외는 target 타입 시스템이 검증하는 subsumption이다. WasmGC처럼 서브타입
+참조를 상위 타입 자리에 그대로 받는 target은 그 관계를 type converter에
+등록하고, 서브타입에서 상위 타입으로 가는 cast는 source 값을 그대로 쓴다.
+표현이 같다는 사실만으로는 subsumption이 아니다.
+
+Reconciliation은 type converter 없이 동일 타입 cast, 원래 타입으로 돌아오는 cast
+chain, 사용되지 않는 cast만 제거하므로 어느 지점에서 실행해도 의미를 바꾸지
+않는다. Reconciliation 뒤에 남은 cast는 변환 버그이며 target emission 경계의
+legality 검사가 거부한다.
 
 생성된 builder는 entity 종류별로 입력을 묶는다. Operand 전체를 선언 순서대로
 받는 것으로 시작하고, attribute는 이름별로 받는다. 추론할 수 없는 결과 타입,
