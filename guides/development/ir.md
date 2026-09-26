@@ -131,10 +131,12 @@ the `#[verify]` hook, after every pipeline pass, reporting the pass that left
 an operation in violation. A pass that retypes a value before target type
 conversion inserts `core.unrealized_conversion_cast` back to the type its uses
 declare. Shared cleanup's `materialize_unrealized_casts` materializes only
-casts that need real operations and keeps such retyping casts. The target's
-`convert_unrealized_casts` converts cast result types and materializes the
-rest, and the converter-free `reconcile_unrealized_casts` folds identities and
-cast chains. A cast left after that is rejected by the target emission
+casts that need real operations and keeps such retyping casts. A target
+conversion converts every value's type, including cast results through
+`UnrealizedCastConversionPattern`; its materializer builds only real
+representation changes and never forwards a value of another type. The
+converter-free `reconcile_unrealized_casts` then folds identities and cast
+chains, and a cast left after that is rejected by the target emission
 boundary.
 Typed accessors do not check the schema; for an optional region or result,
 inspect the operation before calling the accessor. Interface queries that may

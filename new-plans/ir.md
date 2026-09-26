@@ -169,10 +169,13 @@ target 타입 변환이 양쪽 타입을 같게 만든 뒤에 cast를 해소한�
 
 Cast 처리는 materialization과 reconciliation으로 나뉜다. Target 타입 변환 전의
 materialization은 boxing처럼 실제 operation이 필요한 cast만 물리화하고, 타입만
-바꾸는 cast는 남긴다. Target 타입 변환은 cast의 결과 타입까지 변환하고 남은
-변환을 물리화한다. Reconciliation은 type converter 없이 동일 타입 cast, 원래
-타입으로 돌아오는 cast chain, 사용되지 않는 cast만 제거하므로 어느 지점에서
-실행해도 의미를 바꾸지 않는다. Reconciliation 뒤에 남은 cast는 변환 버그이며
+바꾸는 cast는 남긴다. Target 타입 변환은 op 결과, block 인자, cast 결과를
+포함한 모든 값의 타입을 변환한다. Target materialization은 boxing, unboxing,
+reference cast처럼 실제 representation을 바꾸는 operation만 만들며, 타입이 다른
+값을 그대로 넘기지 않는다. 표현이 같은 두 타입은 target 타입 변환 뒤 같은
+타입이 되므로 그 사이의 cast는 동일 타입 cast로 남는다. Reconciliation은 type
+converter 없이 동일 타입 cast, 원래 타입으로 돌아오는 cast chain, 사용되지 않는
+cast만 제거하므로 어느 지점에서 실행해도 의미를 바꾸지 않는다. Reconciliation 뒤에 남은 cast는 변환 버그이며
 target emission 경계의 legality 검사가 거부한다.
 
 생성된 builder는 entity 종류별로 입력을 묶는다. Operand 전체를 선언 순서대로

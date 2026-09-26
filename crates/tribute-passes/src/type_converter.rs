@@ -349,12 +349,11 @@ mod tests {
                 .is_none()
         );
         let (native, native_types) = crate::native::type_converter::native_type_converter(&mut ctx);
+        // Native represents both sides as a pointer, so the recovery becomes an
+        // identity cast for reconciliation instead of a forwarded value.
         let target = native.convert_type(&ctx, canonical).unwrap();
         assert_eq!(target, native_types.core_ptr);
-        let native_result = native
-            .materialize(&mut ctx, location, value, anyref, target)
-            .unwrap();
-        assert!(native_result.ops.is_empty());
+        assert_eq!(native.convert_type(&ctx, anyref), Some(target));
 
         // Preserve the existing general struct policy, including same-named
         // types that are not the compiler's exact canonical storage.
@@ -421,14 +420,16 @@ mod tests {
 
         let (native_converter, native_refs) =
             crate::native::type_converter::native_type_converter(&mut ctx);
+        // Native represents both sides as a pointer, so the recovery becomes an
+        // identity cast for reconciliation instead of a forwarded value.
         let native_target = native_converter
             .convert_type(&ctx, nominal_ty)
             .expect("native nominal representation");
         assert_eq!(native_target, native_refs.core_ptr);
-        let native_result = native_converter
-            .materialize(&mut ctx, location, value, anyref_ty, native_target)
-            .expect("native target consumes nominal recovery");
-        assert!(native_result.ops.is_empty());
+        assert_eq!(
+            native_converter.convert_type(&ctx, anyref_ty),
+            Some(native_target)
+        );
 
         let wasm_converter = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
         let wasm_target = wasm_converter

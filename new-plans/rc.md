@@ -444,7 +444,7 @@ continue_block:
     // continue execution
 ```
 
-**Pipeline position:** After `convert_unrealized_casts` +
+**Pipeline position:** After unrealized cast legalization and
 `reconcile_unrealized_casts`, before `emit_module_to_native`.
 
 ---

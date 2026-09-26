@@ -160,55 +160,11 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
             return Some(materialize_result_noop(value));
         }
 
-        // Primitive equivalences (NoOp)
-        if (from_ty == r.tribute_rt_int
-            || from_ty == r.tribute_rt_nat
-            || from_ty == r.tribute_rt_bool
-            || from_ty == r.core_i1)
-            && to_ty == r.core_i32
-        {
-            return Some(materialize_result_noop(value));
-        }
-        if from_ty == r.tribute_rt_float && to_ty == r.core_f64 {
-            return Some(materialize_result_noop(value));
-        }
-        if from_ty == r.tribute_rt_intref && to_ty == r.core_ptr {
-            return Some(materialize_result_noop(value));
-        }
-        // anyref → ptr: no-op (same representation)
-        if from_ty == r.tribute_rt_anyref && to_ty == r.core_ptr {
-            return Some(materialize_result_noop(value));
-        }
-        // ptr → anyref: no-op (same representation)
-        if from_ty == r.core_ptr && to_ty == r.tribute_rt_anyref {
-            return Some(materialize_result_noop(value));
-        }
-        if from_ty == r.evidence_ty && to_ty == r.core_ptr {
-            return Some(materialize_result_noop(value));
-        }
-        if from_ty == r.core_ptr && to_ty == r.evidence_ty {
-            return Some(materialize_result_noop(value));
-        }
-        // core.bytes ↔ ptr: no-op (same representation in native)
-        if is_bytes_type(ctx, from_ty) && to_ty == r.core_ptr {
-            return Some(materialize_result_noop(value));
-        }
-        if from_ty == r.core_ptr && is_bytes_type(ctx, to_ty) {
-            return Some(materialize_result_noop(value));
-        }
-
-        // Pointer equivalences: ptr-like ↔ ptr ↔ anyref
-        let from_ptr_like = is_ptr_like(ctx, from_ty, r.evidence_ty, r.core_ptr);
-        let to_ptr_like = is_ptr_like(ctx, to_ty, r.evidence_ty, r.core_ptr);
-        let from_is_ptr = from_ty == r.core_ptr || from_ty == r.tribute_rt_anyref;
+        // Values of different types are never forwarded: a target conversion
+        // gives both sides of a representation-preserving cast the same type,
+        // and `reconcile_unrealized_casts` removes it. Only real
+        // representation changes are materialized here.
         let to_is_ptr = to_ty == r.core_ptr || to_ty == r.tribute_rt_anyref;
-
-        if (from_ptr_like && to_is_ptr)
-            || (from_is_ptr && to_ptr_like)
-            || (from_ptr_like && to_ptr_like)
-        {
-            return Some(materialize_result_noop(value));
-        }
 
         // Boxing: primitive → ptr/anyref
         if to_is_ptr {
@@ -276,9 +232,6 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
                     value: load.result(ctx),
                     ops: vec![load.op_ref()],
                 });
-            }
-            if to_ty == r.core_nil {
-                return Some(materialize_result_noop(value));
             }
         }
 

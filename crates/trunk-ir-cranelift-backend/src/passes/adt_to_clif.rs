@@ -23,6 +23,7 @@
 
 use tracing::warn;
 
+use super::arith_to_clif::finalize_cmp;
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
@@ -84,8 +85,19 @@ fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
 }
 
-fn intern_i1_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i1").build())
+/// The converted result type of a comparison-like op, if it can hold the `i8`
+/// that Cranelift's `icmp` produces. The comparison is widened to it.
+fn flag_result_type(ctx: &IrContext, op: OpRef, rewriter: &PatternRewriter<'_>) -> Option<TypeRef> {
+    let result_ty = rewriter.result_type(ctx, op, 0)?;
+    matches!(
+        core::IntegerLike::width(ctx, result_ty),
+        Some(8 | 16 | 32 | 64)
+    )
+    .then_some(result_ty)
+}
+
+fn intern_i8_type(ctx: &mut IrContext) -> TypeRef {
+    ctx.intern_type(TypeDataBuilder::new("core", "i8").build())
 }
 
 struct StructGetPattern;
@@ -204,9 +216,12 @@ impl RewritePattern for VariantIsPattern {
             return false;
         };
 
+        let Some(result_ty) = flag_result_type(ctx, op, rewriter) else {
+            return false;
+        };
         let loc = ctx.op(op).location;
         let i32_ty = intern_i32_type(ctx);
-        let i1_ty = intern_i1_type(ctx);
+        let i8_ty = intern_i8_type(ctx);
         let ref_val = variant_is.r#ref(ctx);
 
         // Load tag from payload_ptr + 0
@@ -223,12 +238,20 @@ impl RewritePattern for VariantIsPattern {
             .build(ctx, loc);
         let cmp_op = clif::Icmp::operands(tag_val, expected.result(ctx))
             .cond(Symbol::new("eq"))
-            .results(i1_ty)
+            .results(i8_ty)
             .build(ctx, loc);
 
         rewriter.insert_op(tag_load.op_ref());
         rewriter.insert_op(expected.op_ref());
-        rewriter.replace_op(cmp_op.op_ref());
+        finalize_cmp(
+            ctx,
+            loc,
+            rewriter,
+            cmp_op.op_ref(),
+            cmp_op.result(ctx),
+            result_ty,
+            i8_ty,
+        );
         true
     }
 }
@@ -380,22 +403,10 @@ impl RewritePattern for RefIsNullPattern {
 
         let loc = ctx.op(op).location;
         let ptr_ty = core::ptr(ctx).as_type_ref();
-        let Some(result_ty) = ctx.op_result_types(op).first().copied() else {
+        let Some(result_ty) = flag_result_type(ctx, op, rewriter) else {
             return false;
         };
-        let result_ty = rewriter
-            .type_converter()
-            .convert_type_or_identity(ctx, result_ty);
-        let result_data = ctx.get_type(result_ty);
-        let can_hold_i8 = result_data.dialect == Symbol::new("core")
-            && matches!(
-                result_data.name.to_string().as_str(),
-                "i8" | "i16" | "i32" | "i64"
-            );
-        if !can_hold_i8 {
-            return false;
-        }
-        let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
+        let i8_ty = intern_i8_type(ctx);
         let ref_val = ref_is_null.r#ref(ctx);
 
         let null_op = clif::Iconst::operands()
@@ -407,15 +418,15 @@ impl RewritePattern for RefIsNullPattern {
             .results(i8_ty)
             .build(ctx, loc);
         rewriter.insert_op(null_op.op_ref());
-        if result_ty == i8_ty {
-            rewriter.replace_op(icmp_op.op_ref());
-        } else {
-            rewriter.insert_op(icmp_op.op_ref());
-            let extended = clif::Uextend::operands(icmp_op.result(ctx))
-                .results(result_ty)
-                .build(ctx, loc);
-            rewriter.replace_op(extended.op_ref());
-        }
+        finalize_cmp(
+            ctx,
+            loc,
+            rewriter,
+            icmp_op.op_ref(),
+            icmp_op.result(ctx),
+            result_ty,
+            i8_ty,
+        );
         true
     }
 }
@@ -522,6 +533,39 @@ mod tests {
         );
         assert!(result.contains("clif.icmp"));
         assert!(!result.contains("clif.uextend"));
+    }
+
+    const VARIANT_IS_ENUM: &str =
+        "adt.enum() {name = @Choice, variants = [[@None, []], [@Some, [core.i32]]]}";
+
+    #[test]
+    fn test_variant_is_widens_icmp_to_result_type() {
+        let result = run_pass(&format!(
+            r#"core.module @test {{
+  func.func @test_fn() -> core.i32 {{
+    %0 = clif.iconst {{value = 42}} : core.ptr
+    %1 = adt.variant_is %0 {{tag = @Some, type = {VARIANT_IS_ENUM}}} : core.i32
+    func.return %1
+  }}
+}}"#
+        ));
+        assert!(result.contains("clif.icmp"), "{result}");
+        assert!(result.contains("clif.uextend"), "{result}");
+        assert!(!result.contains("core.i1"), "{result}");
+    }
+
+    #[test]
+    fn test_variant_is_rejects_unlowered_i1_result() {
+        let result = run_pass_result(&format!(
+            r#"core.module @test {{
+  func.func @test_fn() -> core.i1 {{
+    %0 = clif.iconst {{value = 42}} : core.ptr
+    %1 = adt.variant_is %0 {{tag = @Some, type = {VARIANT_IS_ENUM}}} : core.i1
+    func.return %1
+  }}
+}}"#
+        ));
+        assert!(result.is_err());
     }
 
     #[test]
