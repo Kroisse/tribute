@@ -456,6 +456,19 @@ mod tests {
     }
 
     #[test]
+    fn native_backend_ready_rejects_remaining_unrealized_cast() {
+        let error = validation_error(
+            r#"core.module @test {
+  clif.func @f(%x: core.i32) -> core.i64 {
+    %r = core.unrealized_conversion_cast %x : core.i64
+    clif.return %r
+  }
+}"#,
+        );
+        assert!(error.contains("core.unrealized_conversion_cast"), "{error}");
+    }
+
+    #[test]
     fn native_boundary_rejects_malformed_target_signature_storage() {
         let error = validation_error(
             r#"core.module @test {

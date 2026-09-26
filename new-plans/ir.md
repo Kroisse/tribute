@@ -167,6 +167,14 @@ builder, operation clone, 결과 타입 재지정은 제약을 우회할 수 있
 target 타입 변환이 양쪽 타입을 같게 만든 뒤에 cast를 해소한다. 표현이 같다는
 이유만으로 타입이 다른 값을 cast 없이 대입하지 않는다.
 
+Cast 처리는 materialization과 reconciliation으로 나뉜다. Target 타입 변환 전의
+materialization은 boxing처럼 실제 operation이 필요한 cast만 물리화하고, 타입만
+바꾸는 cast는 남긴다. Target 타입 변환은 cast의 결과 타입까지 변환하고 남은
+변환을 물리화한다. Reconciliation은 type converter 없이 동일 타입 cast, 원래
+타입으로 돌아오는 cast chain, 사용되지 않는 cast만 제거하므로 어느 지점에서
+실행해도 의미를 바꾸지 않는다. Reconciliation 뒤에 남은 cast는 변환 버그이며
+target emission 경계의 legality 검사가 거부한다.
+
 생성된 builder는 entity 종류별로 입력을 묶는다. Operand 전체를 선언 순서대로
 받는 것으로 시작하고, attribute는 이름별로 받는다. 추론할 수 없는 결과 타입,
 region, successor는 각각 한 묶음으로 받는다. 묶음 안의 순서는 선언 순서다.

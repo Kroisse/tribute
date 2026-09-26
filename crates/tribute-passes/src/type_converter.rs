@@ -248,7 +248,9 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 mod tests {
     use super::*;
     use trunk_ir::OperationDataBuilder;
-    use trunk_ir::conversion::resolve_unrealized_casts;
+    use trunk_ir::conversion::{
+        convert_unrealized_casts, materialize_unrealized_casts, reconcile_unrealized_casts,
+    };
     use trunk_ir::dialect::{func, wasm};
     use trunk_ir::location::Span;
     use trunk_ir::ops::DialectOp;
@@ -285,15 +287,13 @@ mod tests {
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());
             let tc = generic_type_converter(&mut ctx);
-            let result = resolve_unrealized_casts(&mut ctx, module, &tc);
-            assert_eq!(result.resolved_count, 0);
-            assert_eq!(result.unresolved.len(), usize::from(recover));
+            materialize_unrealized_casts(&mut ctx, module, &tc);
             assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
 
             crate::wasm::lower::lower_to_wasm(&mut ctx, module).unwrap();
             let tc = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
-            let result = resolve_unrealized_casts(&mut ctx, module, &tc);
-            assert!(result.unresolved.is_empty());
+            convert_unrealized_casts(&mut ctx, module, &tc);
+            reconcile_unrealized_casts(&mut ctx, module);
             crate::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
             let mut tails = Vec::new();
             let _: std::ops::ControlFlow<()> = walk_op(&ctx, module.op(), &mut |op| {
