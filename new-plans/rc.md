@@ -360,7 +360,7 @@ disables them for conformance comparisons.
 **Pipeline position:** Typed ownership/RTTI planning은 `scf_to_cf` 뒤와
 `func_to_clif` 앞에서 실행한다. Temporary borrow lifetime dependency는 같은
 plan의 owner liveness를 연장한다. Explicit materialization 뒤 paired elimination을
-실행하고, 그 뒤 unrealized cast resolution과 RC lowering을 실행한다.
+실행하고, 그 뒤 unrealized cast 변환·reconciliation과 RC lowering을 실행한다.
 
 #### Proper-tail ownership transfer
 

@@ -340,7 +340,7 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
 
 - A `core.module` owns the top-level region for a compilation unit.
 - `core.unrealized_conversion_cast` is temporary conversion glue and must not
-  remain at backend-ready boundaries. 두 타입이 모두 `tribute_control.func_sig`이면
+  remain at target emission boundaries. 두 타입이 모두 `tribute_control.func_sig`이면
   calling convention을 바꿀 수 없으며, pre-CPS whole-IR 검증에서 이를 거부한다.
   이 cast는 callable adapter를 생성하지 않는다. Named callable의 convention 강화는
   declaration provenance가 있는 `tribute_control.func_ref`로 표현하고 shared
@@ -1005,8 +1005,8 @@ nominal identity from an erased operand such as `anyref`. A module-wide type
 layout pass assigns binary type-section indices and fully converts these
 operations to `wasm.*` operations, whose required integer attributes correspond
 to WebAssembly instruction immediates. This pass runs once, after unrealized
-conversion casts have been materialized, because materialization may introduce
-additional typed GC operations.
+conversion casts have been converted and reconciled, because materialization
+may introduce additional typed GC operations.
 
 ```text
 wasm_gc.struct_get { type = !String$Leaf, field_idx = 0 }

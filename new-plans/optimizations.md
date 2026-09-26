@@ -25,7 +25,7 @@ evidence 전달과 target ABI 물리화는 필수 lowering이며 선택적인 �
 | ---- | ---- | ----------------- |
 | Frontend preparation | 함수·nominal 타입 monomorphization | 해석된 선언 identity, checked instance와 치환된 semantic metadata |
 | Shared CPS 이후, target closure storage 이전 | 일반 함수 inlining | exact callable ABI, 명시적 evidence·ContinuationFrame, proper-tail control flow |
-| Target cleanup | global DCE, canonicalization, local DCE, conversion cast 해소 | side effect, reachable transfer와 target type legality |
+| Target cleanup | global DCE, canonicalization, local DCE, 실제 operation이 필요한 conversion cast materialization | side effect, reachable transfer와 target type legality |
 | Native typed ownership planning | proven borrowed parameter·field temporary elision | managed layout, entry ownership와 사용·탈출 증명 |
 | Native RC lowering 이전 | paired retain/release elimination | alias barrier, 각 reference의 수명과 소유권 |
 
