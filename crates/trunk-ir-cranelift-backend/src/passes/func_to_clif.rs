@@ -592,16 +592,20 @@ fn function_call_convs(
 /// Map each `func.func` `sym_name` to its operation, including nested
 /// modules. Native emission registers nested functions under their own
 /// `sym_name` in one flat namespace, so `clif.symbol_addr` references resolve
-/// the same way here.
+/// the same way here. A name defined more than once is ambiguous (`None`);
+/// native validation rejects the duplicate definition as well.
 fn collect_function_symbols(
     ctx: &IrContext,
     region: RegionRef,
-    functions: &mut HashMap<Symbol, OpRef>,
+    functions: &mut HashMap<Symbol, Option<OpRef>>,
 ) {
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
             if let Ok(function) = func::Func::from_op(ctx, op) {
-                functions.insert(function.sym_name(ctx), op);
+                functions
+                    .entry(function.sym_name(ctx))
+                    .and_modify(|resolved| *resolved = None)
+                    .or_insert(Some(op));
             } else if core::Module::matches(ctx, op) {
                 for &nested in &ctx.op(op).regions {
                     collect_function_symbols(ctx, nested, functions);
@@ -617,7 +621,7 @@ fn collect_function_symbols(
 /// must name a known function with the same convention before it is erased.
 struct FuncConstantPattern {
     call_convs: Arc<FunctionCallConvs>,
-    functions: HashMap<Symbol, OpRef>,
+    functions: HashMap<Symbol, Option<OpRef>>,
 }
 
 impl RewritePattern for FuncConstantPattern {
@@ -638,7 +642,9 @@ impl RewritePattern for FuncConstantPattern {
             let target = self
                 .functions
                 .get(&func_ref)
-                .and_then(|&function| self.call_convs.get(function));
+                .copied()
+                .flatten()
+                .and_then(|function| self.call_convs.get(function));
             if target.is_none() || reference.call_conv(ctx) != target {
                 return false;
             }
@@ -1244,6 +1250,26 @@ mod tests {
 }"#,
         );
         assert!(unknown.contains("func.constant"), "{unknown}");
+
+        let ambiguous = lower(
+            r#"core.module @test {
+  core.module @left {
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+      func.return
+    }
+    func.func @take() {
+      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+      func.return
+    }
+  }
+  core.module @right {
+    func.func @helper(%value: core.i32) {
+      func.return
+    }
+  }
+}"#,
+        );
+        assert!(ambiguous.contains("func.constant"), "{ambiguous}");
 
         let malformed = lower(
             r#"core.module @test {
