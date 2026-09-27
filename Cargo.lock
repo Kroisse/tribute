@@ -1503,7 +1503,7 @@ checksum = "ca0d1bf6fdd806e43ae5198f82f527056d359def39e54e67a0f478ac09dac081"
 [[package]]
 name = "tree-sitter-tribute"
 version = "0.10.0"
-source = "git+https://github.com/Kroisse/tree-sitter-tribute?rev=5fb275cab12ceb9323c5662ecca1152689fa1cae#5fb275cab12ceb9323c5662ecca1152689fa1cae"
+source = "git+https://github.com/Kroisse/tree-sitter-tribute?rev=d80354a829f109cca8186a07c17a23b5f1817d89#d80354a829f109cca8186a07c17a23b5f1817d89"
 dependencies = [
  "cc",
  "tree-sitter-language",
