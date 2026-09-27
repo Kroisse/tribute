@@ -269,9 +269,11 @@ argument, 중첩 타입 attribute를 함께 변환한다. 일반 `never`·`nil` 
 Closure tail lowering은 caller·callee·exact indirect signature의 전체 결과 목록을
 비교하여 논리 `[never]`와 물리 `[]`를 각각 지원한다.
 
-Final native/Wasm backend-ready 경계는 `Cps` worker, continuation, `done_k`,
-handler-dispatch의 result vector가 비어 있고 모든 CPS transfer가
-`func.tail_call` 또는 `func.tail_call_indirect`로 끝나는지 검사한다.
+[Representation/ABI 경계](ir.md#representationabi-경계)의 출구 검증은 `Cps`
+worker, continuation, `done_k`, handler-dispatch의 result vector가 비어 있고 모든
+CPS transfer가 `func.tail_call` 또는 `func.tail_call_indirect`로 끝나는지 검사한 뒤
+의미적 convention을 소비한다. 출구 이후의 backend-ready 검증은 exact signature,
+`call_conv`, proper-tail operation만으로 같은 성질을 검사한다.
 `Step`, trampoline, CPS control-result 역할의 `anyref`와
 `__tribute_cps_control` private enum은 거부한다. Boxed source value, erased effect
 payload, closure environment와 dispatch closure field에 쓰는 일반 `anyref`는 이

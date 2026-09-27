@@ -1124,9 +1124,10 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   매개변수가 없는 platform 규약 physical 함수다. 초기 evidence 생성처럼 source
   calling convention에 따라 달라지는 부분은 bridge 합성이 소비한다. Target 진입점
   생성은 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더한다.
-- **Runtime helper 바인딩:** 출구에 남은 bodyless 선언은 target이 충족할 수 있는
-  명시적 바인딩을 가진다. Target이 충족할 수 없는 바인딩(예: 해당 target에 없는
-  runtime allocator)은 emission이 아니라 경계 출구 검증에서 거부한다.
+- **Runtime helper 바인딩:** 출구에서 참조가 남은 bodyless 선언은 명시적 바인딩
+  의도를 가진다. Target이 충족할 수 없다고 알려진 helper(예: 해당 target에 없는
+  runtime allocator)에 대한 참조는 emission이 아니라 경계 출구 검증에서 거부한다.
+  최종 import 등록과 미참조 선언의 처분은 target emission이 정한다.
 
 #### 출구 적법성
 
@@ -1153,10 +1154,11 @@ arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의�
 
 #### Unrealized cast
 
-출구에는 target type 변환을 기다리는 retyping `core.unrealized_conversion_cast`만
-남을 수 있다. 실제 operation이 필요한 cast는 경계 전에 materialize된다. Target type
-변환은 모든 cast 결과 타입을 변환하고, 그 끝에서 converter 없는
-`reconcile_unrealized_casts`가 cast를 닫는다. 그 뒤 남은 cast는 target emission
+공유 converter로 알 수 있는 materialization(boxing 등)은 출구 전에 끝난다.
+출구에는 target type 변환을 기다리는 `core.unrealized_conversion_cast`가 남을 수
+있다. 이런 cast의 적법성은 target 타입에 따라 정해지므로 target type 변환이 결과
+타입을 변환하고 필요한 representation 변경을 materialize한다. 그 끝에서 converter
+없는 `reconcile_unrealized_casts`가 cast를 닫으며, 그 뒤 남은 cast는 target emission
 경계가 거부한다.
 
 #### 직렬화

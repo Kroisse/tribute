@@ -245,7 +245,7 @@ Source → CST → AST
     → lambda lifting·intrinsic lowering
     → ability dispatch·evidence resolution·handle delimiter 제거
     → target ABI 검증·물리 CPS signature·root/entry bridge
-    → closure storage·target evidence lowering·경계 출구 검증
+    → target evidence lowering·closure storage·경계 출구 검증
     ├→ WasmGC lowering → Wasm binary
     └→ typed ownership/RTTI 계획 → native lowering → native binary
 ```

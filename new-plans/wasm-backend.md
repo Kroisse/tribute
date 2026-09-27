@@ -86,9 +86,11 @@ WebAssembly Binary
 
 Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect.*`를
 만들며 Marker field 번호나 closure layout을 검사하지 않는다.
-`wasm/evidence_to_wasm`은 evidence lookup/extend helper를 만들고 closure struct
-`(table_idx, env)`를 풀어 semantic role에 맞는 일반 호출 또는 proper-tail call을
-emit하여 해당 operation을 제거하는 Wasm 경계다.
+`wasm/evidence_to_wasm`은 [representation/ABI 경계](ir.md#representationabi-경계)
+안에서 evidence lookup/extend helper를 만들고 canonical closure layout을 풀어
+semantic role에 맞는 `func.call_indirect` 또는 proper-tail `func.tail_call*`을
+만들어 해당 operation을 제거한다. Wasm dialect lowering은 그 결과를 `wasm.*`
+호출로 바꿀 뿐 `effect.*`를 보지 않는다.
 
 ### Wasm 결과 슬롯
 
