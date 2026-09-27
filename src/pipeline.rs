@@ -79,6 +79,7 @@ use trunk_ir::pass::{PassError, PassManager, PassResult};
 use trunk_ir::rewrite::ConversionError;
 use trunk_ir::rewrite::PatternApplicator;
 use trunk_ir::{IrContext, Module};
+use trunk_ir_wasm_backend::passes::reference_upcast_erasure::ReferenceUpcastErasurePattern;
 
 /// Error returned while dumping shared or target-specific IR.
 #[derive(Debug, Clone, PartialEq, Eq, derive_more::Display, derive_more::Error)]
@@ -759,16 +760,20 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
     }
 
     // Phase 2 - Legalize unrealized_conversion_cast operations (WASM type
-    // converter): convert their result types, use subtypes directly,
-    // materialize real representation changes, and reconcile the identities
-    // left behind. A remaining cast is rejected by the emission boundary in
-    // `finalize_wasm_gc_types`.
+    // converter): convert their result types, materialize real
+    // representation changes, erase WasmGC reference upcasts, and reconcile
+    // the identities left behind. A remaining cast is rejected by the
+    // emission boundary in `finalize_wasm_gc_types`.
     {
         let _span = tracing::info_span!("legalize_unrealized_casts").entered();
         let tc = tribute_passes::wasm::type_converter::wasm_type_converter(ctx);
-        PatternApplicator::new(tc)
+        let result = PatternApplicator::new(tc)
             .add_pattern(UnrealizedCastConversionPattern)
+            .add_pattern(ReferenceUpcastErasurePattern)
             .apply_partial(ctx, module);
+        if !result.reached_fixpoint {
+            tracing::warn!("wasm cast legalization did not reach a fixpoint");
+        }
         reconcile_unrealized_casts(ctx, module);
     }
 

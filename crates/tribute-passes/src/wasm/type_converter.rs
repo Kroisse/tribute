@@ -163,28 +163,6 @@ fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
     false
 }
 
-/// Whether WasmGC accepts a reference of type `from` where `to` is declared.
-///
-/// WasmGC references are implicitly upcast: every GC reference is an
-/// `anyref`, every struct reference a `structref`, and every array reference
-/// an `arrayref`. `anyref` itself is only a subtype of `anyref`.
-fn is_wasm_reference_subtype(ctx: &IrContext, from: TypeRef, to: TypeRef) -> bool {
-    let wasm = |ty, name| is_type(ctx, ty, Symbol::new("wasm"), Symbol::new(name));
-    let is_array =
-        |ty| wasm(ty, "arrayref") || is_type(ctx, ty, Symbol::new("core"), Symbol::new("array"));
-    let is_struct = |ty| is_struct_like(ctx, ty) && !wasm(ty, "anyref") || is_closure_type(ctx, ty);
-    if wasm(to, "anyref") {
-        return is_struct(from) || is_array(from) || wasm(from, "i31ref");
-    }
-    if wasm(to, "structref") {
-        return is_struct(from);
-    }
-    if wasm(to, "arrayref") {
-        return is_array(from);
-    }
-    false
-}
-
 /// Check if a type is a `closure.closure` type.
 fn is_closure_type(ctx: &IrContext, ty: TypeRef) -> bool {
     is_type(ctx, ty, Symbol::new("closure"), Symbol::new("closure"))
@@ -425,8 +403,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    tc.set_subsumption(is_wasm_reference_subtype);
-
     // =========================================================================
     // Single materializer combining all materialization rules
     // =========================================================================
@@ -442,7 +418,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         // -----------------------------------------------------------------
 
         // Reference upcasts (for example a concrete struct or `adt.typeref` to
-        // `structref`/`anyref`) are target subsumption, not materializations,
+        // `structref`/`anyref`) are erased by the Wasm target's upcast erasure,
+        // not materialized,
         // and values of equal representation get equal types from the target
         // conversion. Only real conversions are materialized below.
         let to_is_structref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("structref"));
@@ -452,7 +429,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         let to_is_struct_like = is_struct_like(ctx, to_ty);
 
         if from_is_struct_like && to_is_struct_like {
-            // Upcasts are subsumption; only downcasts need a ref_cast.
+            // Upcasts are erased by the target; only downcasts need a ref_cast.
             let to_is_anyref = is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"));
             let from_is_anyref = is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"));
             if to_is_anyref || (to_is_structref && !from_is_anyref) {
@@ -607,25 +584,45 @@ mod tests {
     use trunk_ir::ops::DialectOp;
 
     #[test]
-    fn reference_upcasts_are_subsumption_not_materializations() {
+    fn cast_legalization_retypes_then_erases_reference_upcasts() {
+        use trunk_ir::conversion::{UnrealizedCastConversionPattern, reconcile_unrealized_casts};
+        use trunk_ir_wasm_backend::passes::reference_upcast_erasure::ReferenceUpcastErasurePattern;
+
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, wasm.anyref]]}
+  func.func @f(%c: !Closure) {
+    %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
+    func.call %erased {callee = @use}
+    func.return
+  }
+}"#,
+        );
+        let tc = wasm_type_converter(&mut ctx);
+
+        let result = trunk_ir::rewrite::PatternApplicator::new(tc)
+            .add_pattern(UnrealizedCastConversionPattern)
+            .add_pattern(ReferenceUpcastErasurePattern)
+            .apply_partial(&mut ctx, module);
+        reconcile_unrealized_casts(&mut ctx, module);
+
+        assert!(result.reached_fixpoint);
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!printed.contains("unrealized_conversion_cast"), "{printed}");
+        assert!(printed.contains("func.call %0"), "{printed}");
+    }
+
+    #[test]
+    fn reference_upcasts_and_representation_matches_are_not_materializations() {
         let mut ctx = IrContext::new();
         let path = ctx.intern_path("test.trb".to_owned());
         let location = Location::new(path, trunk_ir::location::Span::new(0, 0));
         let tc = wasm_type_converter(&mut ctx);
-        let wasm_ty =
-            |ctx: &mut IrContext, name| intern_type(ctx, Symbol::new("wasm"), Symbol::new(name));
-        let anyref = wasm_ty(&mut ctx, "anyref");
-        let structref = wasm_ty(&mut ctx, "structref");
-        let i31ref = wasm_ty(&mut ctx, "i31ref");
+        let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));
         let ptr = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("ptr"));
         let concrete = closure_adt_type(&mut ctx);
-
-        assert!(tc.is_subsumed(&ctx, concrete, structref));
-        assert!(tc.is_subsumed(&ctx, concrete, anyref));
-        assert!(tc.is_subsumed(&ctx, structref, anyref));
-        assert!(tc.is_subsumed(&ctx, i31ref, anyref));
-        assert!(!tc.is_subsumed(&ctx, anyref, structref));
-        assert!(!tc.is_subsumed(&ctx, anyref, ptr));
 
         let source_data = trunk_ir::OperationDataBuilder::new(
             location,
@@ -636,7 +633,8 @@ mod tests {
         .build(&mut ctx);
         let source = ctx.create_op(source_data);
         let value = ctx.op_result(source, 0);
-        // Neither an upcast nor a representation match is a materialization.
+        // An upcast is erased by the target, and a representation match is not
+        // a conversion; neither is materialized.
         assert!(
             tc.materialize(&mut ctx, location, value, concrete, anyref)
                 .is_none()

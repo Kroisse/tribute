@@ -134,9 +134,10 @@ declare. Shared cleanup's `materialize_unrealized_casts` materializes only
 casts that need real operations and keeps such retyping casts. A target
 conversion converts every value's type, including cast results through
 `UnrealizedCastConversionPattern`; its materializer builds only real
-representation changes and never forwards a value of another type, except a
-subtype the target's registered subsumption accepts (WasmGC reference
-upcasts). The converter-free `reconcile_unrealized_casts` then folds
+representation changes and never forwards a value of another type. A target
+whose type system accepts subtype references erases those upcasts itself; the
+Wasm target's `ReferenceUpcastErasurePattern` follows the backend's physical
+assignability rule. The converter-free `reconcile_unrealized_casts` then folds
 identities and cast chains, and a cast left after that is rejected by the
 target emission boundary.
 Typed accessors do not check the schema; for an optional region or result,

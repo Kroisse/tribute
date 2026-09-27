@@ -9,8 +9,8 @@
 //!   boxing). Casts that only retype a value stay.
 //! - [`UnrealizedCastConversionPattern`] is the cast legalization pattern of a
 //!   target conversion. It converts each cast's result type and materializes
-//!   only conversions that need real operations. It forwards a value of
-//!   another type only when the target accepts it as a subtype.
+//!   only conversions that need real operations; it never forwards a value of
+//!   another type.
 //! - [`reconcile_unrealized_casts`] needs no converter. It removes casts that
 //!   fold away: identities, cast chains that return to an earlier type, and
 //!   dead casts. A cast it cannot remove stays for the target's legality
@@ -61,13 +61,12 @@ pub fn materialize_unrealized_casts(ctx: &mut IrContext, module: Module, tc: &Ty
 /// Cast legalization pattern for a target type conversion.
 ///
 /// Retypes a cast's result to its converted form. When the source still
-/// differs from that type, a source the target accepts as a subtype
-/// ([`TypeConverter::is_subsumed`]) replaces the cast directly; otherwise the
-/// cast is replaced by the operations the converter materializes. A
-/// materialization without operations, or none at all, keeps the cast:
-/// forwarding the source would give its uses a value of another type.
-/// Identities are left to [`reconcile_unrealized_casts`], and a cast that
-/// stays is rejected by the target's emission boundary.
+/// differs from that type, the cast is replaced by the operations the
+/// converter materializes. A materialization without operations, or none at
+/// all, keeps the cast: forwarding the source would give its uses a value of
+/// another type. Identities are left to [`reconcile_unrealized_casts`], and a
+/// cast that stays is rejected by the target's emission boundary unless a
+/// target pass erases it (such as a WasmGC reference upcast).
 pub struct UnrealizedCastConversionPattern;
 
 impl RewritePattern for UnrealizedCastConversionPattern {
@@ -87,10 +86,6 @@ impl RewritePattern for UnrealizedCastConversionPattern {
             .type_converter()
             .convert_type_or_identity(ctx, declared);
         let from = ctx.value_ty(input);
-        if from != to && rewriter.type_converter().is_subsumed(ctx, from, to) {
-            rewriter.erase_op(vec![input]);
-            return true;
-        }
         let location = ctx.op(op).location;
         if from != to
             && let Some(mat) = rewriter
@@ -447,39 +442,6 @@ mod tests {
     %noop = core.unrealized_conversion_cast %x : core.i16
     %none = core.unrealized_conversion_cast %y : core.i32
     func.return %noop
-  }
-}"#,
-        );
-    }
-
-    #[test]
-    fn cast_pattern_forwards_only_subsumed_sources() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @f(%x: core.i16, %y: core.i8) -> core.i32 {
-    %up = core.unrealized_conversion_cast %x : core.i32
-    %kept = core.unrealized_conversion_cast %y : core.i32
-    func.return %up
-  }
-}"#,
-        );
-        let i16_ty = named_type(&mut ctx, "i16");
-        let i32_ty = named_type(&mut ctx, "i32");
-        let mut tc = TypeConverter::new();
-        tc.set_subsumption(move |_ctx, from, to| from == i16_ty && to == i32_ty);
-        tc.set_materializer(|_, _, value, _, _| Some(MaterializeResult { value, ops: vec![] }));
-
-        apply_cast_pattern(&mut ctx, module, tc);
-
-        assert_ir(
-            &ctx,
-            module,
-            r#"core.module @test {
-  func.func @f(%x: core.i16, %y: core.i8) -> core.i32 {
-    %kept = core.unrealized_conversion_cast %y : core.i32
-    func.return %x
   }
 }"#,
         );
