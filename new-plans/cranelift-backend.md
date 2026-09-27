@@ -195,7 +195,8 @@ Shared `tribute_control_to_cps`가 continuation과 proper tail transfer를 만�
 Shared ability/evidence lowering은 그 결과를 `effect.*` ABI로 바꾼다.
 Native target은 exact callable contract를 검증하고 CPS signature를 물리화한 뒤
 `native/evidence`에서 runtime lookup/extension과 handler closure 호출을 생성한다.
-여기까지가 [representation/ABI 경계](ir.md#representationabi-경계)이다.
+이어서 closure storage layout을 확정하고 경계 출구를 검증하며, 여기까지가
+`lower_to_clif` 이전의 [representation/ABI 경계](ir.md#representationabi-경계)이다.
 `func_to_clif`는 proper transfer operation을 `clif.return_call`과
 `clif.return_call_indirect`로 내리고, Cranelift 호출 규약은 signature의
 `call_conv`에서만 정한다.
