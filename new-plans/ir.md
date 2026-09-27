@@ -1103,11 +1103,12 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 - **Exact signature:** 모든 정의·선언·직접 호출·간접 호출은 exact `func.func_sig`를
   가진다. Environment, evidence, continuation 인자는 이미 signature의 순서 있는 입력이며
   별도 slot 속성으로 위치를 기록하지 않는다.
-- **기계 호출 규약:** Target이 구별해야 하는 기계 호출 규약은 physical
-  `func.func_sig`의 `call_conv` type 속성이 소유한다. 속성이 없으면 platform 규약이며,
-  proper tail transfer 전용 규약은 `call_conv = tail`이다. `call_conv`는 type identity에
-  참여하고 간접 호출 signature에도 그대로 남는다. Target lowering은 이 값을 target
-  signature로 옮기거나, 기계 규약이 없는 target에서는 검증 후 제거한다.
+- **기계 호출 규약:** 기계 호출 규약은 physical `func.func_sig`의 `call_conv` type
+  속성이 소유한다. 경계는 CPS signature를 물리화할 때 target과 무관하게 그 signature에
+  `call_conv = @tail`을 일괄 부여하며, 속성이 없으면 platform 규약이다. `call_conv`는
+  type identity에 참여하고 함수 정의, 직접 호출의 피호출자, 간접 호출 signature가 모두
+  같은 signature에서 읽는다. 기계 규약을 구별하는 target은 이 값을 target signature로
+  옮기고, 기계 규약이 없는 target은 이를 무시하고 target signature에서 버린다.
 - **제어 이전의 세 가지 구별:** 빈 결과 목록은 machine stack에 결과가 없다는 뜻일
   뿐이다. Proper tail transfer는 `func.tail_call`/`func.tail_call_indirect` operation
   자체로 표현한다. 기계 수준 noreturn은 `func.unreachable` 같은 명시적 terminator로
@@ -1281,9 +1282,11 @@ Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션
 시그니처를 재구성하지 않는다. 빈 결과 목록만으로
 CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물리적 CPS 함수의
 결과 구분은 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
-Wasm에는 별도의 기계 호출 규약이 없다. `func.func_sig`의 `call_conv`는
-`wasm.func_sig`로 옮기지 않으며, proper tail transfer는 `wasm.return_call`과
-`wasm.return_call_indirect` operation으로만 표현한다.
+Wasm에는 별도의 기계 호출 규약이 없다. Wasm lowering은 `func.func_sig`의
+`call_conv`를 무시하고 `wasm.func_sig`로 옮기지 않는다. 속성만 다른 두 Wasm
+signature가 생기지 않게 하기 위해서다. Proper tail transfer는 `wasm.return_call`과
+`wasm.return_call_indirect` operation으로만 표현하며, 그 검증은 피호출자와 둘러싼
+함수의 결과 목록 호환만 본다.
 
 ### `clif.func_sig` 네이티브 호출 계약
 

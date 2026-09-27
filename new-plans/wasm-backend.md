@@ -225,7 +225,9 @@ result matching을 정의한다. Tribute는 다음 경로를 구현한다:
 
 `func.tail_call_indirect` lowering은 callee table index와 argument를 기존
 `call_indirect`와 같은 순서로 평가하고, callee `func.func_sig`에서 `type_index`를
-결정한다. CPS caller/callee의 result vector는 모두 비어 있어야 하며
+결정한다. Tail transfer의 검증은 callee signature의 결과 목록이 둘러싼 함수의
+결과 목록과 호환되는지만 본다. 의미적 호출 규약이나 signature의 `call_conv`로
+판정하지 않으며, `call_conv`는 `type_index`를 정하는 Wasm signature에 옮기지 않는다.
 `wasm.return_call_indirect`는 result local을 만들지 않는다. 일반 source-data
 indirect call만 `wasm.call_indirect`를 유지한다.
 

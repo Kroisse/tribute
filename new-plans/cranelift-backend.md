@@ -201,7 +201,7 @@ Native target은 exact callable contract를 검증하고 CPS signature를 물리
 `call_conv`에서만 정한다.
 
 경계 안의 물리 CPS 판정은 exact `Cps` convention과 빈 결과 목록의 조합이며,
-경계 이후에는 `call_conv = tail` signature와 proper-tail operation만 남는다. 실제
+경계 이후에는 `call_conv = @tail` signature와 proper-tail operation만 남는다. 실제
 Direct/EvidenceDirect Unit 결과와 살아 있는 nil SSA 값의 zero-width 처리는 유지한다.
 최종 dispatch는 operand와 독립적인 compiler-owned canonical shared signature를
 기존 Native 변환으로 낮추며 machine 입력은 `ptr, ptr, ptr, i32, i32, i32, ptr`,
