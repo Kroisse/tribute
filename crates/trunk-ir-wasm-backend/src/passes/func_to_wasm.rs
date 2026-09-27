@@ -256,26 +256,6 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
 /// Pattern for `func.func` -> `wasm.func`
 struct FuncFuncPattern;
 
-/// Convert the complete shared callable contract once at the Wasm boundary.
-/// The shared type remains zero-or-one result; only the target-owned type may
-/// subsequently carry multiple results from low-level Wasm fixtures.
-fn convert_attribute_to_wasm(
-    ctx: &mut IrContext,
-    attribute: &Attribute,
-    converter: &TypeConverter,
-) -> Option<Attribute> {
-    match attribute {
-        Attribute::Type(ty) => Some(Attribute::Type(convert_type_to_wasm(ctx, *ty, converter)?)),
-        Attribute::List(values) => Some(Attribute::List(
-            values
-                .iter()
-                .map(|value| convert_attribute_to_wasm(ctx, value, converter))
-                .collect::<Option<_>>()?,
-        )),
-        other => Some(other.clone()),
-    }
-}
-
 /// Recurse through a composite type only to materialize nested callable
 /// contracts. Rewriting every nested physical type would desynchronize an ADT
 /// layout from already-typed values that use that layout.
@@ -398,16 +378,12 @@ fn convert_to_wasm_func_type(
     signature: TypeRef,
     converter: &TypeConverter,
 ) -> Option<TypeRef> {
+    // A Wasm function type is structural: only its parameter and result
+    // types reach the binary. Shared signature metadata such as `call_conv`
+    // has no Wasm meaning and would only split otherwise equal types.
     let shared = func::FuncSig::from_type_ref(ctx, signature)?;
     let input_types = shared.inputs(ctx).to_vec();
     let result_types = shared.results(ctx).to_vec();
-    // Wasm has no distinct machine calling conventions; tail transfers are
-    // explicit instructions. Drop `call_conv` so it cannot split Wasm types.
-    let type_attrs = shared
-        .non_reserved_attrs(ctx)
-        .filter(|(key, _)| **key != Symbol::new(func::CALL_CONV_ATTR))
-        .map(|(key, value)| (*key, value.clone()))
-        .collect::<Vec<_>>();
     let inputs = input_types
         .iter()
         .map(|ty| convert_type_to_wasm(ctx, *ty, converter))
@@ -416,11 +392,7 @@ fn convert_to_wasm_func_type(
         .iter()
         .map(|ty| convert_type_to_wasm(ctx, *ty, converter))
         .collect::<Option<Vec<_>>>()?;
-    let attrs = type_attrs
-        .iter()
-        .map(|(key, value)| Some((*key, convert_attribute_to_wasm(ctx, value, converter)?)))
-        .collect::<Option<_>>()?;
-    Some(wasm_dialect::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref())
+    Some(wasm_dialect::func_sig(ctx, inputs, results).as_type_ref())
 }
 
 impl RewritePattern for FuncFuncPattern {
@@ -841,17 +813,11 @@ mod tests {
         assert_eq!(ctx.value_ty(ctx.block_args(block)[0]), nested_input);
         let block_metadata = ctx.block(block).args[0].attrs.get_type("metadata").unwrap();
         assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, block_metadata).is_some());
-        let metadata = signature
-            .non_reserved_attrs(&ctx)
-            .find_map(|(key, value)| (*key == Symbol::new("metadata")).then_some(value))
-            .unwrap();
-        let Attribute::List(values) = metadata else {
-            panic!("metadata must remain a list")
-        };
-        let Attribute::Type(nested_attribute) = &values[0] else {
-            panic!("nested metadata must remain a type")
-        };
-        assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, *nested_attribute).is_some());
+        assert_eq!(
+            signature.non_reserved_attrs(&ctx).count(),
+            0,
+            "shared signature metadata has no Wasm meaning"
+        );
         crate::validate_wasm_ir(&ctx, module).expect("nested callable identity must validate");
         crate::emit_module_to_wasm(&mut ctx, module)
             .expect("nested callable identity and call must emit");
