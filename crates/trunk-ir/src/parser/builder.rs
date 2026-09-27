@@ -902,13 +902,13 @@ mod tests {
     fn test_roundtrip_namespaced_type_attribute_key() {
         let input = r#"
 core.module @test {
-  %0 = test.make : test.value() {tribute.calling_convention = 2}
+  %0 = test.make : test.value() {test.marker = 2}
 }
 "#;
         let mut ctx = IrContext::new();
         let root = parse_module(&mut ctx, input).expect("namespaced attribute key should parse");
         let printed = print_module(&ctx, root);
-        assert!(printed.contains("tribute.calling_convention = 2"));
+        assert!(printed.contains("test.marker = 2"));
         assert_roundtrip(&ctx, root);
     }
 

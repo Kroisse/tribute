@@ -2333,6 +2333,114 @@ fn main() {
         );
     }
 
+    /// A physical module carries its callable contract in signatures alone:
+    /// no semantic calling convention, root, or frame metadata is present.
+    fn physical_tail_chain_module(done_call_conv: &str, reference_call_conv: &str) -> String {
+        format!(
+            r#"core.module @physical {{
+  func.func @fail() {{
+    func.unreachable
+  }}
+
+  func.func @done(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {done_call_conv}}} {{
+    %expected = arith.const {{value = 3}} : core.i32
+    %ok = arith.cmpi %value, %expected {{predicate = @eq}} : core.i1
+    scf.if %ok {{
+      scf.yield
+    }} {{
+      func.call {{callee = @fail}}
+      scf.yield
+    }}
+    func.return
+  }}
+
+  func.func @step(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {{call_conv = @tail}}}} {{
+    %one = arith.const {{value = 1}} : core.i32
+    %next = arith.addi %value, %one : core.i32
+    %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> ()> {reference_call_conv}
+    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> ()> {{call_conv = @tail}}}}
+  }}
+
+  func.func @start(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {{call_conv = @tail}}}} {{
+    %one = arith.const {{value = 1}} : core.i32
+    %next = arith.addi %value, %one : core.i32
+    func.tail_call %next {{callee = @step}}
+  }}
+
+  func.func @main() -> core.i32 {{
+    %input = arith.const {{value = 1}} : core.i32
+    func.call %input {{callee = @start}}
+    %exit = arith.const {{value = 0}} : core.i32
+    func.return %exit
+  }}
+}}"#
+        )
+    }
+
+    #[test]
+    fn physical_module_without_control_metadata_runs_native_tail_calls() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            &physical_tail_chain_module("{call_conv = @tail}", "{call_conv = @tail}"),
+        );
+        let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
+        assert!(verified.is_ok(), "{verified}");
+
+        let object = compile_module_to_native(
+            &mut ctx,
+            module,
+            false,
+            NativeOptimizationOptions::production(),
+        )
+        .expect("a physical module must lower without semantic control metadata");
+        let temp = tempfile::tempdir().expect("temporary executable directory");
+        let executable = temp.path().join("physical-tail-chain");
+        link_native_binary(&object, &executable).expect("physical module must link");
+
+        let status = std::process::Command::new(executable)
+            .status()
+            .expect("physical module executable must start");
+        assert!(
+            status.success(),
+            "direct and indirect tail transfers must deliver the value, got {status}"
+        );
+    }
+
+    #[test]
+    fn physical_module_with_mismatched_tail_convention_is_rejected() {
+        // A reference typed like its platform target cannot flow into a
+        // tail-convention indirect call: the typed-callee verifier rejects it.
+        let mut ctx = IrContext::new();
+        let module =
+            trunk_ir::parser::parse_test_module(&mut ctx, &physical_tail_chain_module("", ""));
+        let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
+        assert!(
+            verified
+                .to_string()
+                .contains("exact indirect signature differs from typed callee"),
+            "{verified}"
+        );
+
+        // A reference typed with the wrong convention for its target passes
+        // the typed-callee check, so lowering must refuse to erase it.
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            &physical_tail_chain_module("", "{call_conv = @tail}"),
+        );
+        let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
+        assert!(verified.is_ok(), "{verified}");
+        let error = compile_module_to_native(
+            &mut ctx,
+            module,
+            false,
+            NativeOptimizationOptions::production(),
+        )
+        .expect_err("a tail transfer to a platform-convention function must not be emitted");
+        assert!(error.to_string().contains("func.constant"), "{error}");
+    }
+
     #[cfg(debug_assertions)]
     #[test]
     fn debug_use_chain_verifier_reports_offending_pass() {

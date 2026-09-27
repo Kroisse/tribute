@@ -11,36 +11,11 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif;
+use trunk_ir::dialect::{clif, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 
 use crate::{CompilationError, CompilationResult};
-
-pub(crate) const TRIBUTE_CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
-pub(crate) const CPS_CALLING_CONVENTION: u8 = 2;
-
-/// Select Cranelift's tail-call convention only for the physical CPS ABI.
-///
-/// The convention attribute is also present on pre-physical logical CPS
-/// callables, whose non-empty signatures must retain the platform convention.
-pub(crate) fn call_conv_for_cps_signature(
-    ctx: &IrContext,
-    signature: TypeRef,
-    is_cps: bool,
-    default: CallConv,
-) -> CallConv {
-    if is_cps && has_physical_empty_result(ctx, signature) {
-        CallConv::Tail
-    } else {
-        default
-    }
-}
-
-fn has_physical_empty_result(ctx: &IrContext, signature: TypeRef) -> bool {
-    clif::FuncSig::from_type_ref(ctx, signature)
-        .is_some_and(|function| function.results(ctx).is_empty())
-}
 
 pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let ty = ctx.get_type(ty);
@@ -137,16 +112,27 @@ pub(crate) fn translate_type(
 
 /// Translate a target-owned `clif.func_sig` type to a Cranelift `Signature`.
 ///
-/// `ptr_ty` is the platform pointer type, obtained from `target_config().pointer_type()`.
+/// The calling convention comes from the signature's `call_conv`; an absent
+/// attribute selects `platform_call_conv`. `ptr_ty` is the platform pointer
+/// type, obtained from `target_config().pointer_type()`.
 pub(crate) fn translate_signature(
     ctx: &IrContext,
     func_ty_ref: TypeRef,
-    call_conv: CallConv,
+    platform_call_conv: CallConv,
     ptr_ty: cl_types::Type,
 ) -> CompilationResult<cl_ir::Signature> {
     let function = clif::FuncSig::from_type_ref(ctx, func_ty_ref).ok_or_else(|| {
         CompilationError::type_error("expected valid clif.func_sig type for signature translation")
     })?;
+    let call_conv = match function.call_conv(ctx) {
+        Some(func::CallConv::Platform) => platform_call_conv,
+        Some(func::CallConv::Tail) => CallConv::Tail,
+        None => {
+            return Err(CompilationError::type_error(
+                "clif.func_sig has a malformed call_conv attribute",
+            ));
+        }
+    };
 
     let mut sig = cl_ir::Signature::new(call_conv);
 
@@ -558,7 +544,7 @@ impl<'a> FunctionTranslator<'a> {
             let args = self.runtime_values(&operands[1..])?;
 
             let sig_ty = rci.sig(ctx);
-            let sig = translate_signature(ctx, sig_ty, CallConv::Tail, self.ptr_ty)?;
+            let sig = translate_signature(ctx, sig_ty, self.default_call_conv, self.ptr_ty)?;
             let sig_ref = self.builder.import_signature(sig);
 
             self.builder
@@ -574,16 +560,7 @@ impl<'a> FunctionTranslator<'a> {
             let args = self.runtime_values(&operands[1..])?;
 
             let sig_ty = call_ind.sig(ctx);
-            let call_conv = call_conv_for_cps_signature(
-                ctx,
-                sig_ty,
-                ctx.op(op)
-                    .attributes
-                    .get_u8(TRIBUTE_CALLING_CONVENTION_ATTR)
-                    == Ok(Some(CPS_CALLING_CONVENTION)),
-                self.default_call_conv,
-            );
-            let sig = translate_signature(ctx, sig_ty, call_conv, self.ptr_ty)?;
+            let sig = translate_signature(ctx, sig_ty, self.default_call_conv, self.ptr_ty)?;
             let sig_ref = self.builder.import_signature(sig);
 
             let inst = self.builder.ins().call_indirect(sig_ref, callee, &args);
@@ -865,26 +842,26 @@ mod tests {
     }
 
     #[test]
-    fn logical_cps_indirect_signature_keeps_default_call_conv() {
+    fn signature_call_conv_selects_the_cranelift_convention() {
         let mut ctx = IrContext::new();
         let i32_ty = make_core_type(&mut ctx, "i32");
-        let nil_ty = make_core_type(&mut ctx, "nil");
-        let logical_signature = clif::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
-        let physical_signature = clif::func_sig(&mut ctx, [i32_ty], []).as_type_ref();
-        let unit_signature = clif::func_sig(&mut ctx, [i32_ty], [nil_ty]).as_type_ref();
-        assert_eq!(
-            call_conv_for_cps_signature(&ctx, unit_signature, true, CallConv::SystemV),
-            CallConv::SystemV
+        let platform = clif::func_sig(&mut ctx, [i32_ty], []).as_type_ref();
+        let mut attrs = trunk_ir::AttributeMap::new();
+        func::CallConv::Tail.set_in(&mut attrs);
+        let tail = clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs).as_type_ref();
+        let mut malformed_attrs = trunk_ir::AttributeMap::new();
+        malformed_attrs.insert(
+            Symbol::new(func::CALL_CONV_ATTR),
+            trunk_ir::Attribute::Symbol(Symbol::new("fast")),
         );
+        let malformed =
+            clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], malformed_attrs).as_type_ref();
 
-        assert_eq!(
-            call_conv_for_cps_signature(&ctx, logical_signature, true, CallConv::SystemV),
-            CallConv::SystemV,
-        );
-        assert_eq!(
-            call_conv_for_cps_signature(&ctx, physical_signature, true, CallConv::SystemV),
-            CallConv::Tail,
-        );
+        let sig = translate_signature(&ctx, platform, CallConv::SystemV, cl_types::I64).unwrap();
+        assert_eq!(sig.call_conv, CallConv::SystemV);
+        let sig = translate_signature(&ctx, tail, CallConv::SystemV, cl_types::I64).unwrap();
+        assert_eq!(sig.call_conv, CallConv::Tail);
+        assert!(translate_signature(&ctx, malformed, CallConv::SystemV, cl_types::I64).is_err());
     }
 }
 

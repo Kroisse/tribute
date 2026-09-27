@@ -467,7 +467,7 @@ pub fn raw_attr_dict<'a>(input: &mut &'a str) -> ModalResult<Vec<(&'a str, RawAt
 /// Parse an attribute key.
 ///
 /// Attribute symbols may be namespaced with dots (for example,
-/// `tribute.calling_convention`). The printer has always emitted the complete
+/// `test.marker`). The printer has always emitted the complete
 /// symbol, so accepting the same spelling here restores generic round-trips.
 pub fn attribute_key<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     let key = take_while(1.., |c: char| {

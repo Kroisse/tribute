@@ -175,18 +175,13 @@ pub(crate) fn exact_return_call_indirect_signature_with(
     op: OpRef,
     signature: TypeRef,
 ) -> CompilationResult<TypeRef> {
-    let (params, results) = func_type_parts(ctx, signature).ok_or_else(|| {
+    // Tail legality is the caller/callee result-list agreement checked by the
+    // emission validator; this helper validates only the exact call shape.
+    let (params, _results) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module(
             "wasm.return_call_indirect signature must be wasm.func_sig",
         )
     })?;
-    let cps = ctx.op(op).attributes.get("tribute.calling_convention")
-        == Some(&trunk_ir::types::Attribute::Int(2));
-    if !results.is_empty() && (cps || !matches!(results, [result] if is_nil_type(ctx, *result))) {
-        return Err(CompilationError::invalid_module(
-            "wasm.return_call_indirect signature must have an empty result",
-        ));
-    }
     let Some(table_index) = IndirectCallLikeOps::callee(ctx, op) else {
         return Err(CompilationError::invalid_module(
             "wasm.return_call_indirect requires a table index operand",

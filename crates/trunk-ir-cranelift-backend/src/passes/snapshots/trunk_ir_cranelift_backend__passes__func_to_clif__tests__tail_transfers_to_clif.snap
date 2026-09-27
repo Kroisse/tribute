@@ -3,18 +3,18 @@ source: crates/trunk-ir-cranelift-backend/src/passes/func_to_clif.rs
 expression: result
 ---
 core.module @test {
-  !t0 = clif.func_sig<(core.i32) -> ()>
+  !t0 = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}
 
-  clif.func {sym_name = @direct_target, tribute.calling_convention = 2, type = !t0} {
+  clif.func {sym_name = @direct_target, type = !t0} {
     ^bb0(%0: core.i32):
       clif.return
   }
-  clif.func {sym_name = @direct_caller, tribute.calling_convention = 2, type = !t0} {
+  clif.func {sym_name = @direct_caller, type = !t0} {
     ^bb0(%0: core.i32):
-      clif.return_call %0 {callee = @direct_target, tribute.calling_convention = 2}
+      clif.return_call %0 {callee = @direct_target}
   }
-  clif.func {sym_name = @indirect_caller, tribute.calling_convention = 2, type = clif.func_sig<(core.ptr, core.i32) -> ()>} {
+  clif.func {sym_name = @indirect_caller, type = clif.func_sig<(core.ptr, core.i32) -> ()> {call_conv = @tail}} {
     ^bb0(%0: core.ptr, %1: core.i32):
-      clif.return_call_indirect %0, %1 {sig = !t0, tribute.calling_convention = 2}
+      clif.return_call_indirect %0, %1 {sig = !t0}
   }
 }

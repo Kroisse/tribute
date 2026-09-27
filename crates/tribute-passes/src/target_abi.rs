@@ -404,8 +404,12 @@ pub fn compose_root_entry_bridge(
 
     let cell_ty = root_completion_cell_type(ctx, source_result);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let done_callable_ty = func::func_sig(ctx, [source_result], []).as_type_ref();
-    let done_function_ty = func::func_sig(ctx, [anyref_ty, source_result], []).as_type_ref();
+    let done_callable_ty = func::func_sig(ctx, [source_result], [])
+        .with_call_conv(ctx, func::CallConv::Tail)
+        .as_type_ref();
+    let done_function_ty = func::func_sig(ctx, [anyref_ty, source_result], [])
+        .with_call_conv(ctx, func::CallConv::Tail)
+        .as_type_ref();
     let done_entry = ctx.create_block(BlockData {
         location,
         args: vec![
@@ -1441,7 +1445,15 @@ impl<'a> PhysicalTypeConverter<'a> {
                 .map(|result| self.convert_embedded(result))
                 .collect::<Result<Vec<_>, _>>()?
         };
-        let attrs = self.convert_func_attributes(callable)?;
+        let mut attrs = self.convert_func_attributes(callable)?;
+        if attrs.contains_key(func::CALL_CONV_ATTR) {
+            return Err(TargetAbiError::new(
+                "target ABI: logical callable already carries a machine call_conv",
+            ));
+        }
+        if convention == CallingConvention::Cps {
+            func::CallConv::Tail.set_in(&mut attrs);
+        }
         let converted = func::func_sig_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
         self.callable.insert((ty, convention), converted);
         Ok(converted)
@@ -1826,13 +1838,13 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                "signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> ()>"
+                "signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> ()> {call_conv = @tail}"
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "closure.closure(func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> ()>)"
+                "closure.closure(func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> ()> {call_conv = @tail})"
             ),
             "{printed}"
         );

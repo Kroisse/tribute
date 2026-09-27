@@ -780,10 +780,10 @@ mod tests {
     fn lowers_resultless_switch_with_explicit_default() {
         let output = lower_text(
             r#"core.module @test {
-  func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%choice: core.i32, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
     scf.switch %choice {
       scf.case {value = 0} {
-        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
+        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
       }
       scf.default {
         func.unreachable
@@ -854,17 +854,17 @@ mod tests {
     fn lowers_nested_proper_tail_switch_arms() {
         let output = lower_text(
             r#"core.module @test {
-  func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @main(%choice: core.i32, %cond: core.i1, %callee: func.func_sig<(core.nil) -> core.never>, %unit: core.nil) -> core.never attributes {test.marker = 2} {
     scf.switch %choice {
       scf.case {value = 0} {
         %never = scf.if %cond : core.never {
           func.unreachable
         } {
-          func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
+          func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
         }
       }
       scf.default {
-        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
+        func.tail_call_indirect %callee, %unit {signature = func.func_sig<(core.nil) -> core.never>, test.marker = 2}
       }
     }
   }

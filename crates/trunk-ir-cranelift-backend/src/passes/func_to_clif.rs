@@ -10,25 +10,26 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::op_interface::IndirectCallLikeModel;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::transforms::FunctionCallConvs;
 use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_region};
-
-use crate::function::{CPS_CALLING_CONVENTION, TRIBUTE_CALLING_CONVENTION_ATTR};
 
 /// An exact type-identity rewrite performed by `func_to_clif`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +59,11 @@ pub fn lower(
     // Phase 1: Adapt closure structs for native backend. This identity rewrite
     // must see the semantic layout recorded by the typed ownership plan.
     let rtti_layout_rewrites = adapt_closure_structs(ctx, module);
+    let call_convs = function_call_convs(ctx, module)?;
+    let mut functions = HashMap::new();
+    if let Some(body) = module.body(ctx) {
+        collect_function_symbols(ctx, body, &mut functions);
+    }
 
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
@@ -68,7 +74,10 @@ pub fn lower(
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern)
+        .add_pattern(FuncConstantPattern {
+            call_convs,
+            functions,
+        })
         .with_target(func_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "func-to-clif")?;
     Ok(LoweringResult {
@@ -494,15 +503,6 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Ok(tail) = func::TailCallIndirect::from_op(ctx, op) else {
             return false;
         };
-        if ctx
-            .op(op)
-            .attributes
-            .get_u8(TRIBUTE_CALLING_CONVENTION_ATTR)
-            != Ok(Some(CPS_CALLING_CONVENTION))
-        {
-            return false;
-        }
-
         let Some(signature) = tail.exact_signature(ctx) else {
             return false;
         };
@@ -513,7 +513,8 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         let Some(callable) = clif::FuncSig::from_type_ref(ctx, signature) else {
             return false;
         };
-        if !callable.results(ctx).is_empty()
+        if callable.call_conv(ctx) != Some(func::CallConv::Tail)
+            || !callable.results(ctx).is_empty()
             || !TailCallLike::is_resultless(&tail, ctx)
             || callable.inputs(ctx).len() != CallLike::call_args(&tail, ctx).len()
             || callable
@@ -562,8 +563,66 @@ impl RewritePattern for FuncUnreachablePattern {
     }
 }
 
+/// Read every function's calling convention before references are erased.
+fn function_call_convs(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<Arc<FunctionCallConvs>, ConversionError> {
+    AnalysisCache::scope(ctx, |ctx, analyses| {
+        analyses.get::<FunctionCallConvs>(ctx, module.op())
+    })
+    .map_err(|error| {
+        let module_op = ctx.op(module.op());
+        ConversionError::new(
+            "func-to-clif",
+            vec![
+                IllegalOp {
+                    op: module.op(),
+                    dialect: module_op.dialect,
+                    name: module_op.name,
+                    legality: LegalityCheck::Illegal,
+                    reason: None,
+                }
+                .with_reason(error.to_string()),
+            ],
+        )
+    })
+}
+
+/// Map each `func.func` `sym_name` to its operation, including nested
+/// modules. Native emission registers nested functions under their own
+/// `sym_name` in one flat namespace, so `clif.symbol_addr` references resolve
+/// the same way here. A name defined more than once is ambiguous (`None`);
+/// native validation rejects the duplicate definition as well.
+fn collect_function_symbols(
+    ctx: &IrContext,
+    region: RegionRef,
+    functions: &mut HashMap<Symbol, Option<OpRef>>,
+) {
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            if let Ok(function) = func::Func::from_op(ctx, op) {
+                functions
+                    .entry(function.sym_name(ctx))
+                    .and_modify(|resolved| *resolved = None)
+                    .or_insert(Some(op));
+            } else if core::Module::matches(ctx, op) {
+                for &nested in &ctx.op(op).regions {
+                    collect_function_symbols(ctx, nested, functions);
+                }
+            }
+        }
+    }
+}
+
 /// Pattern: `func.constant` -> `clif.symbol_addr`
-struct FuncConstantPattern;
+///
+/// The resulting pointer no longer names a convention, so a typed reference
+/// must name a known function with the same convention before it is erased.
+struct FuncConstantPattern {
+    call_convs: Arc<FunctionCallConvs>,
+    functions: HashMap<Symbol, Option<OpRef>>,
+}
 
 impl RewritePattern for FuncConstantPattern {
     fn match_and_rewrite(
@@ -577,6 +636,19 @@ impl RewritePattern for FuncConstantPattern {
         };
 
         let func_ref = const_op.func_ref(ctx);
+        if let &[result] = ctx.op_result_types(op)
+            && let Some(reference) = func::FuncSig::from_type_ref(ctx, result)
+        {
+            let target = self
+                .functions
+                .get(&func_ref)
+                .copied()
+                .flatten()
+                .and_then(|function| self.call_convs.get(function));
+            if target.is_none() || reference.call_conv(ctx) != target {
+                return false;
+            }
+        }
         let loc = ctx.op(op).location;
         let ptr_ty = intern_ptr_type(ctx);
         let new_op = clif::SymbolAddr::operands()
@@ -669,14 +741,14 @@ mod tests {
     use trunk_ir::{Attribute, AttributeMap, Symbol};
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
-  func.func @direct_target(%value: core.i32) attributes {tribute.calling_convention = 2} {
+  func.func @direct_target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
     func.return
   }
-  func.func @direct_caller(%value: core.i32) attributes {tribute.calling_convention = 2} {
-    func.tail_call %value {callee = @direct_target, tribute.calling_convention = 2}
+  func.func @direct_caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+    func.tail_call %value {callee = @direct_target}
   }
-  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()>, tribute.calling_convention = 2}
+  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> ()> {call_conv = @tail}} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()> {call_conv = @tail}}
   }
 }"#;
 
@@ -947,8 +1019,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !evidence = core.array(core.i32)
-  func.func @caller(%callee: core.ptr, %evidence: !evidence) attributes {tribute.calling_convention = 2} {
-    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> ()>, tribute.calling_convention = 2}
+  func.func @caller(%callee: core.ptr, %evidence: !evidence) attributes {type = func.func_sig<(core.ptr, !evidence) -> ()> {call_conv = @tail}} {
+    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> ()> {call_conv = @tail}}
   }
 }"#,
         );
@@ -964,7 +1036,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.return_call_indirect")
-                && printed.contains("sig = clif.func_sig<(core.ptr) -> ()>"),
+                && printed.contains("sig = clif.func_sig<(core.ptr) -> ()> {call_conv = @tail}"),
             "{printed}"
         );
         assert!(
@@ -1022,7 +1094,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i64) -> core.nil>, tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i64) -> core.nil>}
   }
 }"#,
         );
@@ -1054,7 +1126,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %value
   }
 }"#,
         );
@@ -1073,7 +1145,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>, tribute.calling_convention = 2}
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#,
         );
@@ -1107,13 +1179,119 @@ mod tests {
     }
 
     #[test]
-    fn tail_call_indirect_with_non_cps_metadata_is_rejected_before_mutation() {
+    fn function_references_must_keep_their_target_call_conv() {
+        let lower_reference = |reference: &str| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {{call_conv = @tail}}}} {{
+    func.return
+  }}
+  func.func @take() {{
+    %reference = func.constant {{func_ref = @target}} : {reference}
+    func.return
+  }}
+}}"#
+                ),
+            );
+            super::lower(&mut ctx, module, TypeConverter::new()).map(|_| ())
+        };
+
+        lower_reference("func.func_sig<(core.i32) -> ()> {call_conv = @tail}")
+            .expect("a reference with the target convention lowers");
+        let error = lower_reference("func.func_sig<(core.i32) -> ()>")
+            .expect_err("a platform reference to a tail function must not be erased");
+        assert!(error.to_string().contains("func.constant"), "{error}");
+    }
+
+    #[test]
+    fn nested_function_references_resolve_like_native_emission() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @caller(%callee: core.ptr, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.nil>, tribute.calling_convention = 0}
+  core.module @inner {
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+      func.return
+    }
+    func.func @take() {
+      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+      func.return
+    }
+  }
+}"#,
+        );
+        super::lower(&mut ctx, module, TypeConverter::new())
+            .expect("a nested reference resolves to its flat native symbol");
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("clif.symbol_addr"), "{printed}");
+        assert!(!printed.contains("func.constant"), "{printed}");
+    }
+
+    #[test]
+    fn function_reference_conventions_fail_closed() {
+        let lower = |input: &str| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, input);
+            super::lower(&mut ctx, module, TypeConverter::new())
+                .map(|_| ())
+                .unwrap_err()
+                .to_string()
+        };
+
+        let unknown = lower(
+            r#"core.module @test {
+  func.func @take() {
+    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+    func.return
+  }
+}"#,
+        );
+        assert!(unknown.contains("func.constant"), "{unknown}");
+
+        let ambiguous = lower(
+            r#"core.module @test {
+  core.module @left {
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+      func.return
+    }
+    func.func @take() {
+      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+      func.return
+    }
+  }
+  core.module @right {
+    func.func @helper(%value: core.i32) {
+      func.return
+    }
+  }
+}"#,
+        );
+        assert!(ambiguous.contains("func.constant"), "{ambiguous}");
+
+        let malformed = lower(
+            r#"core.module @test {
+  func.func @fast(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @fast}} {
+    func.return
+  }
+}"#,
+        );
+        assert!(
+            malformed.contains("func.func @fast has a malformed call_conv attribute"),
+            "{malformed}"
+        );
+    }
+
+    #[test]
+    fn tail_call_indirect_without_tail_call_conv_is_rejected_before_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: core.ptr, %value: core.i32) {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()>}
   }
 }"#,
         );
