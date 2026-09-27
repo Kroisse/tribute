@@ -1273,7 +1273,11 @@ or an outer function, and does not select a physical CPS ABI.
 `num_inputs`·`num_results`를 사용하며, 결과는 0개 이상을 허용한다. 두 개수의
 합은 벡터 길이와 같아야 하고, 두 속성은 타입 동일성에 참여한다. 이 속성은 저장
 경계이지 ABI나 호출 규약의 증거가 아니다. 예약되지 않은 타입 속성도 타입
-동일성에 포함되며 파싱·출력·별칭·재귀 변환에서 보존된다.
+동일성에 포함되며 파싱·출력·별칭·재귀 변환에서 보존된다. 다만 공통
+`func.func_sig`를 `wasm.func_sig`로 변환할 때는 입력과 결과 타입만 옮기고
+예약되지 않은 속성은 모두 버린다. Wasm 함수 타입은 구조적이라 바이너리에는
+매개변수와 결과 타입만 남으므로, 공통 signature metadata는 Wasm에서 의미가 없고
+동일한 Wasm 타입을 갈라놓을 뿐이다.
 
 Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션 수집, 검증 및 코드
 생성은 이 타입을 사용한다. 모든 간접 호출은 exact `wasm.func_sig`를
@@ -1282,9 +1286,8 @@ Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션
 시그니처를 재구성하지 않는다. 빈 결과 목록만으로
 CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물리적 CPS 함수의
 결과 구분은 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
-Wasm에는 별도의 기계 호출 규약이 없다. Wasm lowering은 `func.func_sig`의
-`call_conv`를 무시하고 `wasm.func_sig`로 옮기지 않는다. 속성만 다른 두 Wasm
-signature가 생기지 않게 하기 위해서다. Proper tail transfer는 `wasm.return_call`과
+Wasm에는 별도의 기계 호출 규약이 없으므로 `call_conv`도 위 규칙에 따라 버린다.
+Proper tail transfer는 `wasm.return_call`과
 `wasm.return_call_indirect` operation으로만 표현하며, 그 검증은 피호출자와 둘러싼
 함수의 결과 목록 호환만 본다.
 
