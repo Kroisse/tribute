@@ -8,10 +8,13 @@
 //! # Usage
 //!
 //! ```ignore
-//! use trunk_ir::conversion::{convert_unrealized_casts, reconcile_unrealized_casts};
+//! use trunk_ir::conversion::{UnrealizedCastConversionPattern, reconcile_unrealized_casts};
+//! use trunk_ir::rewrite::PatternApplicator;
 //!
 //! // Tail of the target type conversion.
-//! convert_unrealized_casts(&mut ctx, module, &target_converter);
+//! PatternApplicator::new(target_converter)
+//!     .add_pattern(UnrealizedCastConversionPattern)
+//!     .apply_partial(&mut ctx, module);
 //! // Converter-free cleanup; a remaining cast is rejected by the target's
 //! // legality boundary.
 //! reconcile_unrealized_casts(&mut ctx, module);
@@ -20,6 +23,5 @@
 mod unrealized_casts;
 
 pub use unrealized_casts::{
-    UnrealizedCastConversionPattern, convert_unrealized_casts, materialize_unrealized_casts,
-    reconcile_unrealized_casts,
+    UnrealizedCastConversionPattern, materialize_unrealized_casts, reconcile_unrealized_casts,
 };

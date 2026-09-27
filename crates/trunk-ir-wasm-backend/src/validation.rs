@@ -184,7 +184,7 @@ fn is_wasm_physical_result_assignable(
             && produced_data.name == Symbol::new("i32")
             && received_data.dialect == Symbol::new("core")
             && received_data.name == Symbol::new("i1"))
-        || crate::emit::helpers::is_wasm_physical_argument_assignable(ctx, produced, received)
+        || crate::assignability::is_wasm_physical_argument_assignable(ctx, produced, received)
 }
 
 fn check_value_types(
@@ -272,7 +272,7 @@ fn validate_direct_callable_contracts(ctx: &IrContext, op: OpRef, errors: &mut V
         ));
     } else {
         for (index, (&operand, &input)) in operands.iter().zip(inputs).enumerate() {
-            if !crate::emit::helpers::is_wasm_physical_argument_assignable(
+            if !crate::assignability::is_wasm_physical_argument_assignable(
                 ctx,
                 ctx.value_ty(operand),
                 input,
