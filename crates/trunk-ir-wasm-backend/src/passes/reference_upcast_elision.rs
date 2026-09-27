@@ -1,9 +1,9 @@
-//! Erase WasmGC reference upcasts left as `core.unrealized_conversion_cast`.
+//! Elide WasmGC reference upcasts left as `core.unrealized_conversion_cast`.
 //!
 //! WasmGC accepts a reference of a subtype where a supertype is declared and
 //! has no upcast instruction. The shared cast legalization never forwards a
 //! value of another type, so a cast from a concrete reference to an abstract
-//! GC reference stays after it. This target pattern erases such a cast and
+//! GC reference stays after it. This target pattern elides such a cast and
 //! uses its source directly, following the backend's physical assignability
 //! rule ([`is_wasm_physical_argument_assignable`]): only widenings the
 //! emission performs without a runtime cast qualify.
@@ -17,14 +17,14 @@ use trunk_ir::rewrite::{PatternRewriter, RewritePattern};
 
 use crate::is_wasm_physical_argument_assignable;
 
-/// Erase a cast from a concrete WasmGC reference to an abstract supertype.
+/// Elide a cast from a concrete WasmGC reference to an abstract supertype.
 ///
 /// Matches only a cast whose result already has its converted type and is
 /// `wasm.anyref`, `wasm.structref`, or `wasm.arrayref`. Register it after the
 /// cast legalization pattern so that result types are converted first.
-pub struct ReferenceUpcastErasurePattern;
+pub struct ReferenceUpcastElisionPattern;
 
-impl RewritePattern for ReferenceUpcastErasurePattern {
+impl RewritePattern for ReferenceUpcastElisionPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -73,9 +73,9 @@ mod tests {
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::{Module, PatternApplicator, TypeConverter};
 
-    fn erase(ctx: &mut IrContext, module: Module, tc: TypeConverter) {
+    fn elide(ctx: &mut IrContext, module: Module, tc: TypeConverter) {
         let result = PatternApplicator::new(tc)
-            .add_pattern(ReferenceUpcastErasurePattern)
+            .add_pattern(ReferenceUpcastElisionPattern)
             .apply_partial(ctx, module);
         assert!(result.reached_fixpoint);
     }
@@ -91,7 +91,7 @@ mod tests {
     }
 
     #[test]
-    fn erases_registered_and_abstract_upcasts() {
+    fn elides_registered_and_abstract_upcasts() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -110,7 +110,7 @@ mod tests {
 }"#,
         );
 
-        erase(&mut ctx, module, TypeConverter::new());
+        elide(&mut ctx, module, TypeConverter::new());
 
         assert_ir(
             &ctx,
@@ -140,7 +140,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
 
-        erase(&mut ctx, module, TypeConverter::new());
+        elide(&mut ctx, module, TypeConverter::new());
 
         assert_ir(&ctx, module, input);
     }
@@ -167,7 +167,7 @@ mod tests {
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |_ctx, ty| (ty == structref).then_some(anyref));
 
-        erase(&mut ctx, module, tc);
+        elide(&mut ctx, module, tc);
 
         assert_ir(&ctx, module, input);
     }

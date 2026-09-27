@@ -135,8 +135,8 @@ casts that need real operations and keeps such retyping casts. A target
 conversion converts every value's type, including cast results through
 `UnrealizedCastConversionPattern`; its materializer builds only real
 representation changes and never forwards a value of another type. A target
-whose type system accepts subtype references erases those upcasts itself; the
-Wasm target's `ReferenceUpcastErasurePattern` follows the backend's physical
+whose type system accepts subtype references elides those upcasts itself; the
+Wasm target's `ReferenceUpcastElisionPattern` follows the backend's physical
 assignability rule. The converter-free `reconcile_unrealized_casts` then folds
 identities and cast chains, and a cast left after that is rejected by the
 target emission boundary.
