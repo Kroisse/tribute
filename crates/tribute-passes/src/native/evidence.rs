@@ -7,7 +7,7 @@
 //!
 use std::ops::ControlFlow;
 
-use tribute_core::{get_physical_closure_convention, set_calling_convention};
+use tribute_core::get_physical_closure_convention;
 use tribute_ir::dialect::ability::{self, compute_op_idx, evidence_abi, evidence_runtime_symbols};
 use tribute_ir::dialect::{effect, tribute_rt};
 use trunk_ir::Symbol;
@@ -407,6 +407,7 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
             ],
             [],
         )
+        .with_call_conv(ctx, func::CallConv::Tail)
         .as_type_ref();
         let (converter, _) = super::type_converter::native_type_converter(ctx);
         let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
@@ -463,7 +464,6 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         )
         .signature(signature)
         .build(ctx, loc);
-        set_calling_convention(ctx, tail.op_ref(), tribute_core::CallingConvention::Cps);
         rewriter.replace_op(tail.op_ref());
         true
     }
@@ -951,9 +951,10 @@ mod tests {
         );
         assert!(output.contains("func.tail_call_indirect"), "{output}");
         assert!(output.contains("signature"), "{output}");
+        assert!(output.contains("call_conv = @tail"), "{output}");
         assert!(
-            output.contains("tribute.calling_convention = 2"),
-            "{output}"
+            !output.contains("tribute.calling_convention"),
+            "the native tail must not recreate semantic convention metadata: {output}"
         );
     }
 }

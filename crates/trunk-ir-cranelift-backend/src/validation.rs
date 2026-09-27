@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::clif;
+use trunk_ir::dialect::{clif, func};
 use trunk_ir::op_def::OpDef;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::printer::print_type;
@@ -342,6 +342,7 @@ fn validate_clif_region(
                     {
                         errors.push("clif.return_call caller/callee result lists differ".into());
                     }
+                    check_tail_call_conv(ctx, op, caller, *signature, errors);
                 }
             } else if clif::ReturnCallIndirect::matches(ctx, op) {
                 let Some(caller) = owner else {
@@ -360,12 +361,31 @@ fn validate_clif_region(
                     errors
                         .push("clif.return_call_indirect caller/callee result lists differ".into());
                 }
+                check_tail_call_conv(ctx, op, caller, signature, errors);
             }
 
             for &nested in &ctx.op(op).regions {
                 validate_clif_region(ctx, nested, owner, functions, errors);
             }
         }
+    }
+}
+
+/// Cranelift emits a proper tail transfer only between functions that both use
+/// the tail calling convention, so both signatures must declare it.
+fn check_tail_call_conv(
+    ctx: &IrContext,
+    op: OpRef,
+    caller: clif::FuncSig,
+    callee: clif::FuncSig,
+    errors: &mut Vec<String>,
+) {
+    let tail = Some(func::CallConv::Tail);
+    if caller.call_conv(ctx) != tail || callee.call_conv(ctx) != tail {
+        errors.push(format!(
+            "clif.{} requires caller and callee signatures with call_conv = @tail",
+            ctx.op(op).name
+        ));
     }
 }
 
@@ -431,6 +451,61 @@ mod tests {
         validate_clif_ir(&ctx, module)
             .expect_err("native contract must fail closed")
             .to_string()
+    }
+
+    #[test]
+    fn tail_transfers_require_tail_call_conv_on_both_signatures() {
+        let error = validation_error(
+            r#"core.module @test {
+  clif.func {sym_name = @tail_target, type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+    ^entry(%value: core.i32):
+      clif.return
+  }
+  clif.func {sym_name = @platform_target, type = clif.func_sig<(core.i32) -> ()>} {
+    ^entry(%value: core.i32):
+      clif.return
+  }
+  clif.func {sym_name = @platform_caller, type = clif.func_sig<(core.i32) -> ()>} {
+    ^entry(%value: core.i32):
+      clif.return_call %value {callee = @tail_target}
+  }
+  clif.func {sym_name = @to_platform, type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+    ^entry(%value: core.i32):
+      clif.return_call %value {callee = @platform_target}
+  }
+  clif.func {sym_name = @indirect_platform, type = clif.func_sig<(core.ptr, core.i32) -> ()> {call_conv = @tail}} {
+    ^entry(%callee: core.ptr, %value: core.i32):
+      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> ()>}
+  }
+}"#,
+        );
+        assert_eq!(
+            error
+                .matches("requires caller and callee signatures with call_conv = @tail")
+                .count(),
+            3,
+            "{error}"
+        );
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.func {sym_name = @target, type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+    ^entry(%value: core.i32):
+      clif.return
+  }
+  clif.func {sym_name = @direct, type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+    ^entry(%value: core.i32):
+      clif.return_call %value {callee = @target}
+  }
+  clif.func {sym_name = @indirect, type = clif.func_sig<(core.ptr, core.i32) -> ()> {call_conv = @tail}} {
+    ^entry(%callee: core.ptr, %value: core.i32):
+      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}}
+  }
+}"#,
+        );
+        validate_clif_ir(&ctx, module).expect("tail transfers between tail signatures");
     }
 
     #[test]

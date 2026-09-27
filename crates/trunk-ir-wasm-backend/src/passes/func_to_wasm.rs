@@ -364,26 +364,8 @@ fn convert_type_to_wasm(
         return convert_type_to_wasm(ctx, converted, converter);
     }
 
-    if let Some(shared) = func::FuncSig::from_type_ref(ctx, ty) {
-        let input_types = shared.inputs(ctx).to_vec();
-        let result_types = shared.results(ctx).to_vec();
-        let type_attrs = shared
-            .non_reserved_attrs(ctx)
-            .map(|(key, value)| (*key, value.clone()))
-            .collect::<Vec<_>>();
-        let inputs = input_types
-            .iter()
-            .map(|ty| convert_type_to_wasm(ctx, *ty, converter))
-            .collect::<Option<Vec<_>>>()?;
-        let results = result_types
-            .iter()
-            .map(|ty| convert_type_to_wasm(ctx, *ty, converter))
-            .collect::<Option<Vec<_>>>()?;
-        let attrs = type_attrs
-            .iter()
-            .map(|(key, value)| Some((*key, convert_attribute_to_wasm(ctx, value, converter)?)))
-            .collect::<Option<_>>()?;
-        return Some(wasm_dialect::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref());
+    if func::FuncSig::from_type_ref(ctx, ty).is_some() {
+        return convert_to_wasm_func_type(ctx, ty, converter);
     }
 
     let data = ctx.get_type(ty).clone();
@@ -419,8 +401,11 @@ fn convert_to_wasm_func_type(
     let shared = func::FuncSig::from_type_ref(ctx, signature)?;
     let input_types = shared.inputs(ctx).to_vec();
     let result_types = shared.results(ctx).to_vec();
+    // Wasm has no distinct machine calling conventions; tail transfers are
+    // explicit instructions. Drop `call_conv` so it cannot split Wasm types.
     let type_attrs = shared
         .non_reserved_attrs(ctx)
+        .filter(|(key, _)| **key != Symbol::new(func::CALL_CONV_ATTR))
         .map(|(key, value)| (*key, value.clone()))
         .collect::<Vec<_>>();
     let inputs = input_types
@@ -1070,10 +1055,10 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @physical(%table_index: core.i32, %value: wasm.anyref) {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.anyref) -> ()>, table = 7, tribute.calling_convention = 2, type_idx = 9}
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.anyref) -> ()>, table = 7, test.marker = 2, type_idx = 9}
   }
   func.func @mismatch(%table_index: core.i32, %value: core.i32) {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.float) -> ()>, tribute.calling_convention = 2}
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(tribute_rt.float) -> ()>, test.marker = 2}
   }
 }"#,
         );
@@ -1101,7 +1086,7 @@ mod tests {
             "{output}"
         );
         assert!(
-            output.contains("wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> ()>, table = 0, tribute.calling_convention = 2, type_idx = 0}"),
+            output.contains("wasm.return_call_indirect %0, %1 {signature = wasm.func_sig<(wasm.anyref) -> ()>, table = 0, test.marker = 2, type_idx = 0}"),
             "the converted transfer must retain its calling convention: {output}"
         );
         assert!(
@@ -1113,7 +1098,7 @@ mod tests {
             "stale source table metadata must not reach Wasm: {output}"
         );
         assert!(
-            output.contains("func.tail_call_indirect %0, %1 {signature = func.func_sig<(tribute_rt.float) -> ()>, tribute.calling_convention = 2}"),
+            output.contains("func.tail_call_indirect %0, %1 {signature = func.func_sig<(tribute_rt.float) -> ()>, test.marker = 2}"),
             "the mismatched transfer must remain unchanged: {output}"
         );
     }
@@ -1174,7 +1159,29 @@ mod tests {
     }
 
     #[test]
-    fn leaves_indirect_tail_transfers_without_an_exact_empty_signature_unconverted() {
+    fn drops_call_conv_from_wasm_signatures() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @transfer(%table_index: core.i32, %value: core.i32) attributes {type = func.func_sig<(core.i32, core.i32) -> ()> {call_conv = @tail}} {
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> ()> {call_conv = @tail}}
+  }
+  func.func @nested(%callee: func.func_sig<(core.i32) -> ()> {call_conv = @tail}) {
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert!(output.contains("wasm.return_call_indirect"), "{output}");
+        assert!(!output.contains("call_conv"), "{output}");
+    }
+
+    #[test]
+    fn leaves_indirect_tail_transfers_without_an_exact_signature_unconverted() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1183,7 +1190,7 @@ mod tests {
     func.tail_call_indirect %table_index, %value
   }
   func.func @malformed(%table_index: core.i32, %value: core.i32) -> core.nil {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> core.i32>}
+    func.tail_call_indirect %table_index, %value {signature = core.i32}
   }
 }"#,
         );

@@ -23,31 +23,8 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
 
-use crate::function::{
-    CPS_CALLING_CONVENTION, FunctionTranslator, TRIBUTE_CALLING_CONVENTION_ATTR,
-    call_conv_for_cps_signature, is_nil_type, translate_signature, translate_type,
-};
+use crate::function::{FunctionTranslator, is_nil_type, translate_signature, translate_type};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
-
-/// CPS functions use Cranelift's internal tail-call convention.  The
-/// convention marker is part of the physical callable contract and is kept as
-/// an attribute so this language-agnostic backend does not depend on Tribute.
-fn function_call_conv(
-    ctx: &IrContext,
-    func_op: OpRef,
-    func_type: trunk_ir::refs::TypeRef,
-    default: isa::CallConv,
-) -> isa::CallConv {
-    call_conv_for_cps_signature(
-        ctx,
-        func_type,
-        ctx.op(func_op)
-            .attributes
-            .get_u8(TRIBUTE_CALLING_CONVENTION_ATTR)
-            == Ok(Some(CPS_CALLING_CONVENTION)),
-        default,
-    )
-}
 
 /// Mangle a TrunkIR symbol name for native linking.
 ///
@@ -434,7 +411,6 @@ fn emit_module_impl(
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = func_wrapped.sym_name(ctx);
         let func_type_ref = func_wrapped.r#type(ctx);
-        let func_call_conv = function_call_conv(ctx, func_op, func_type_ref, call_conv);
 
         let shape = classify_callable_body(ctx, func_op).map_err(|error| {
             CompilationError::ir_validation(format!("clif.func @{name_sym}: {error}"))
@@ -445,10 +421,9 @@ fn emit_module_impl(
             CallableBody::Definition { .. } => Linkage::Local,
         };
 
-        let sig =
-            translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty).map_err(|error| {
-                CompilationError::type_error(format!("clif.func @{name_sym}: {error}"))
-            })?;
+        let sig = translate_signature(ctx, func_type_ref, call_conv, ptr_ty).map_err(|error| {
+            CompilationError::type_error(format!("clif.func @{name_sym}: {error}"))
+        })?;
 
         let linker_name = if linkage == Linkage::Local {
             name_sym.with_str(mangle_native_name)
@@ -506,9 +481,8 @@ fn emit_module_impl(
             continue;
         };
         let func_type_ref = func_wrapped.r#type(ctx);
-        let func_call_conv = function_call_conv(ctx, func_op, func_type_ref, call_conv);
 
-        let sig = translate_signature(ctx, func_type_ref, func_call_conv, ptr_ty)?;
+        let sig = translate_signature(ctx, func_type_ref, call_conv, ptr_ty)?;
         let func_id = func_ids[&name_sym];
 
         let mut cl_func =
@@ -761,13 +735,13 @@ mod tests {
       %result = clif.call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
       clif.return %result
   }
-  clif.func {sym_name = @direct_tail, tribute.calling_convention = 2, type = clif.func_sig<(core.i32, core.nil, core.i64) -> ()>} {
+  clif.func {sym_name = @direct_tail, type = clif.func_sig<(core.i32, core.nil, core.i64) -> ()> {call_conv = @tail}} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.return_call %value, %unit, %last {callee = @direct_tail}
   }
-  clif.func {sym_name = @indirect_tail, tribute.calling_convention = 2, type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> ()>} {
+  clif.func {sym_name = @indirect_tail, type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> ()> {call_conv = @tail}} {
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.return_call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> ()>}
+      clif.return_call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> ()> {call_conv = @tail}}
   }
   clif.func {sym_name = @jump, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):

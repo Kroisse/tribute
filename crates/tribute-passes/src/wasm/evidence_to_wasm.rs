@@ -20,7 +20,6 @@
 //! to implementations that use binary search (O(log n)). The evidence array is
 //! maintained in sorted order by ability_id.
 
-use tribute_core::{CallingConvention, set_calling_convention};
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
@@ -481,7 +480,6 @@ impl RewritePattern for EffectDispatchCpsPattern {
         .table(0)
         .signature(Some(signature))
         .build(ctx, loc);
-        set_calling_convention(ctx, tail.op_ref(), CallingConvention::Cps);
         rewriter.replace_op(tail.op_ref());
         true
     }
@@ -1622,8 +1620,8 @@ mod tests {
 
         assert!(output.contains("wasm.return_call_indirect"), "{output}");
         assert!(
-            output.contains("tribute.calling_convention = 2"),
-            "{output}"
+            !output.contains("tribute.calling_convention"),
+            "the Wasm tail must not recreate semantic convention metadata: {output}"
         );
         assert!(output.contains("signature ="), "{output}");
         assert!(!output.contains("func.indirect_call_signature"), "{output}");

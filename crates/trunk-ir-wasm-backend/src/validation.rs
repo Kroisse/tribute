@@ -415,7 +415,7 @@ mod tests {
     wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.i32>, table = 0, type_idx = 0}
   }
 }"#,
-            "must have an empty result",
+            "tail caller/callee result lists differ",
         );
 
         rejects(

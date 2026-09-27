@@ -74,6 +74,55 @@ mod func {
     fn unreachable() {}
 }
 
+/// Signature attribute recording the machine calling convention.
+pub const CALL_CONV_ATTR: &str = "call_conv";
+
+/// Machine calling convention of a physical callable signature.
+///
+/// The convention belongs to the signature, so a definition, the direct
+/// callees it declares, and every indirect call read it from the same type.
+/// Targets without distinct machine conventions ignore it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum CallConv {
+    /// The platform's default convention; the attribute is absent.
+    #[default]
+    Platform,
+    /// The convention that supports guaranteed proper tail transfers.
+    Tail,
+}
+
+impl CallConv {
+    fn symbol(self) -> Option<Symbol> {
+        match self {
+            Self::Platform => None,
+            Self::Tail => Some(Symbol::new("tail")),
+        }
+    }
+
+    /// Read the convention from signature attributes.
+    ///
+    /// Returns `None` for a malformed `call_conv` value.
+    pub fn from_attrs(attrs: &AttributeMap) -> Option<Self> {
+        match attrs.get(CALL_CONV_ATTR) {
+            None => Some(Self::Platform),
+            Some(Attribute::Symbol(symbol)) if *symbol == Symbol::new("tail") => Some(Self::Tail),
+            Some(_) => None,
+        }
+    }
+
+    /// Write the convention into signature attributes.
+    pub fn set_in(self, attrs: &mut AttributeMap) {
+        match self.symbol() {
+            Some(symbol) => {
+                attrs.insert(Symbol::new(CALL_CONV_ATTR), Attribute::Symbol(symbol));
+            }
+            None => {
+                attrs.remove(CALL_CONV_ATTR);
+            }
+        }
+    }
+}
+
 /// Reserved delimiter attribute for the number of function inputs.
 pub const NUM_INPUTS_ATTR: &str = "num_inputs";
 
@@ -202,6 +251,21 @@ impl FuncSig {
 
     pub fn is_resultless(&self, ctx: &IrContext) -> bool {
         self.results(ctx).is_empty()
+    }
+
+    /// The machine calling convention, or `None` if `call_conv` is malformed.
+    pub fn call_conv(&self, ctx: &IrContext) -> Option<CallConv> {
+        CallConv::from_attrs(&ctx.get_type(self.0).attrs)
+    }
+
+    /// Return this signature with its machine calling convention replaced.
+    pub fn with_call_conv(self, ctx: &mut IrContext, call_conv: CallConv) -> Self {
+        let inputs = self.inputs(ctx).to_vec();
+        let results = self.results(ctx).to_vec();
+        let mut attrs = ctx.get_type(self.0).attrs.clone();
+        Self::remove_reserved_attrs(&mut attrs);
+        call_conv.set_in(&mut attrs);
+        func_sig_with_attrs(ctx, inputs, results, attrs)
     }
 }
 
@@ -735,6 +799,59 @@ mod tests {
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
+
+    #[test]
+    fn call_conv_is_a_signature_attribute_that_round_trips() {
+        let input = r#"core.module @test {
+  func.func @transfer(%callee: func.func_sig<(core.i32) -> ()> {call_conv = @tail}, %value: core.i32) attributes {type = func.func_sig<(func.func_sig<(core.i32) -> ()> {call_conv = @tail}, core.i32) -> ()> {call_conv = @tail}} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()> {call_conv = @tail}}
+  }
+}"#;
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let function = Func::from_op(&ctx, module.ops(&ctx)[0]).expect("function");
+        let signature = FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).expect("signature");
+        assert_eq!(signature.call_conv(&ctx), Some(CallConv::Tail));
+
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("call_conv = @tail"), "{printed}");
+        let mut reparsed_ctx = crate::IrContext::new();
+        let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
+        assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
+    }
+
+    #[test]
+    fn with_call_conv_changes_type_identity_and_preserves_the_rest() {
+        let mut ctx = crate::IrContext::new();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let mut attrs = AttributeMap::new();
+        attrs.insert(Symbol::new("note"), Attribute::Symbol(Symbol::new("kept")));
+        let platform = func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs);
+        assert_eq!(platform.call_conv(&ctx), Some(CallConv::Platform));
+
+        let tail = platform.with_call_conv(&mut ctx, CallConv::Tail);
+        assert_ne!(tail, platform);
+        assert_eq!(tail.call_conv(&ctx), Some(CallConv::Tail));
+        assert_eq!(tail.inputs(&ctx), [i32_ty]);
+        assert!(tail.results(&ctx).is_empty());
+        assert!(
+            tail.non_reserved_attrs(&ctx)
+                .any(|(key, _)| *key == Symbol::new("note"))
+        );
+        assert_eq!(tail.with_call_conv(&mut ctx, CallConv::Platform), platform);
+    }
+
+    #[test]
+    fn malformed_call_conv_is_reported_rather_than_defaulted() {
+        let mut ctx = crate::IrContext::new();
+        let mut attrs = AttributeMap::new();
+        attrs.insert(
+            Symbol::new(CALL_CONV_ATTR),
+            Attribute::Symbol(Symbol::new("fast")),
+        );
+        let signature = func_sig_with_attrs(&mut ctx, [], [], attrs);
+        assert_eq!(signature.call_conv(&ctx), None);
+    }
 
     #[test]
     fn indirect_signature_is_declared_and_round_trips() {
