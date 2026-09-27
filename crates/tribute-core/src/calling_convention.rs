@@ -10,7 +10,6 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
 /// Result type carried by a private immutable CPS continuation frame.
 pub const CPS_CONTINUATION_FRAME_RESULT_ATTR: &str = "tribute.cps_continuation_frame_result";
-pub const CLOSURE_CALLABLE_TYPE_ATTR: &str = "tribute.closure_callable_type";
 pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_index";
 
 /// The ABI strength required to call a function.
@@ -230,19 +229,6 @@ pub fn physical_closure_function_type(
 
 fn generated_cps_closure_type(ctx: &mut IrContext, function: TypeRef) -> TypeRef {
     physical_closure_type_with_environment_index(ctx, function, CallingConvention::Cps, 0)
-}
-
-/// Retain a typed closure contract on its canonical runtime pair.
-pub fn set_closure_callable_type(ctx: &mut IrContext, op: OpRef, closure: TypeRef) {
-    ctx.op_mut(op).attributes.insert(
-        Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR),
-        Attribute::Type(closure),
-    );
-}
-
-/// Read typed closure provenance from a canonical runtime pair.
-pub fn get_closure_callable_type(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
-    ctx.op(op).attributes.get_type(CLOSURE_CALLABLE_TYPE_ATTR)
 }
 
 /// Build a closure type whose outer occurrence carries exact convention

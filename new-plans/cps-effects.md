@@ -515,9 +515,12 @@ ABI validation은 convention-proven `closure.closure` callable type을 그대로
 소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
 surface를 canonical `_closure` layout으로 함께 바꾸고 target evidence/runtime
 lowering이 이를 소비한다. 경계 이후의 proper tail transfer lowering은 이 layout을
-명시적 layout 식별자로 구별하며 이름으로 판별하지 않는다. `tribute.closure_callable_type`은
-exact closure lowering에서만 잠시 쓰고 storage finalization에서 제거한다. 이는
-semantic type equivalence를 만들지 않는다.
+명시적 layout 식별자로 구별하며 이름으로 판별하지 않는다. Closure lowering이
+`closure.new`를 `_closure` pack으로 바꾸면 남은 사용처는
+`core.unrealized_conversion_cast`로 exact closure type을 유지한다. Storage
+finalization이 closure type을 `_closure`로 바꾸면 이 cast는 identity가 되어 제거된다.
+Pack에 별도 provenance 속성을 붙이지 않으며, 이는 semantic type equivalence를
+만들지 않는다.
 
 ## Effect ABI Boundary
 

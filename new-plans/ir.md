@@ -868,10 +868,11 @@ pointer representation.
 `closure.closure` keeps its exact callable type through shared effect lowering
 and target-ABI validation. Only after that validation may target lowering choose
 the canonical closure storage layout, rewriting every type-bearing surface
-coherently and removing transient storage-pack provenance; that provenance is
-not semantic type equivalence. Closures lower differently per backend: Wasm
-uses function references plus GC structures, while native uses function
-pointers plus heap environments.
+coherently. Until then a lowered storage pack keeps its exact closure type
+through an unrealized cast, which becomes an identity and is removed when the
+storage layout is selected; this is not semantic type equivalence. Closures
+lower differently per backend: Wasm uses function references plus GC
+structures, while native uses function pointers plus heap environments.
 
 Storage finalization 이후 erased `tribute_rt.anyref`에서 정확한 canonical closure
 storage로 복원하는 `core.unrealized_conversion_cast`는 generic cleanup에서
@@ -1102,7 +1103,9 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 
 - **Exact signature:** 모든 정의·선언·직접 호출·간접 호출은 exact `func.func_sig`를
   가진다. Environment, evidence, continuation 인자는 이미 signature의 순서 있는 입력이며
-  별도 slot 속성으로 위치를 기록하지 않는다.
+  별도 slot 속성으로 위치를 기록하지 않는다. 타입이 있는 `func.constant`의 결과는
+  참조 대상 함수의 signature와 정확히 같다. Closure의 호출자에게 보이는 signature처럼
+  environment를 뺀 타입은 경계 안에서만 쓰며, 함수 참조의 타입으로 경계를 넘지 않는다.
 - **기계 호출 규약:** 기계 호출 규약은 physical `func.func_sig`의 `call_conv` type
   속성이 소유한다. 경계는 CPS signature를 물리화할 때 target과 무관하게 그 signature에
   `call_conv = @tail`을 일괄 부여하며, 속성이 없으면 platform 규약이다. `call_conv`는
@@ -1139,8 +1142,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 - Callable 결과로서의 `core.never`. 논리 CPS 결과는 물리 결과 목록 `[]`로 바뀐다.
 - 의미적 호출 규약과 제어 metadata: `tribute.calling_convention`,
   `tribute.root_export_convention`, `tribute.root_source_result`,
-  `tribute.cps_continuation_frame_result`, `tribute.closure_environment_index`,
-  `tribute.closure_callable_type`
+  `tribute.cps_continuation_frame_result`, `tribute.closure_environment_index`
 - 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 effect row
 
 출구 이후에도 보존하는 것:

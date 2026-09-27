@@ -7,9 +7,8 @@ pub mod target;
 
 pub use callable_abi::CallableAbi;
 pub use calling_convention::{
-    CALLING_CONVENTION_ATTR, CLOSURE_CALLABLE_TYPE_ATTR, CallingConvention, get_calling_convention,
-    get_closure_callable_type, get_physical_closure_convention, physical_closure_type,
-    set_calling_convention, set_closure_callable_type,
+    CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
+    get_physical_closure_convention, physical_closure_type, set_calling_convention,
 };
 pub use diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 pub use target::*;

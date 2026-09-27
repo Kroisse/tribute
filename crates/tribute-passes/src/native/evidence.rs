@@ -450,12 +450,23 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let env_val = env_get.result(ctx);
         rewriter.insert_op(env_get.op_ref());
 
+        // Closure lowering keeps a packed continuation at its semantic closure
+        // type until storage finalization; retype it to the dispatch slot.
+        let mut resume = dispatch_op.resume(ctx);
+        if get_physical_closure_convention(ctx, ctx.value_ty(resume)).is_some() {
+            let cast = core::UnrealizedConversionCast::operands(resume)
+                .results(closure_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(cast.op_ref());
+            resume = cast.result(ctx);
+        }
+
         let tail = func::TailCallIndirect::operands(
             fn_ptr,
             [
                 dispatch_op.evidence(ctx),
                 env_val,
-                dispatch_op.resume(ctx),
+                resume,
                 prompt_val,
                 ability_id_val,
                 op_idx_val,
