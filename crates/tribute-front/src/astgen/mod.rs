@@ -15,6 +15,7 @@ mod declarations;
 mod diagnostics;
 mod expressions;
 mod helpers;
+mod numeric;
 mod patterns;
 
 use crate::ast::{Module, SpanMap, UnresolvedName};

@@ -987,6 +987,27 @@ fn main() {
 }
 
 #[test]
+fn test_native_numeric_literal_separators_exponents_and_suffixes() {
+    let output = compile_and_run_native(
+        "numeric_literal_forms.trb",
+        r#"
+fn main() {
+    print_line(Int::to_string(1_000i + 2e3i + 0xFFi))
+    print_line(Int::to_string(-1e3 + 0b1010_1010i))
+}
+"#,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout.trim(), "3255\n-830");
+}
+
+#[test]
 fn test_native_print_line_empty() {
     let output = compile_and_run_native(
         "print_line_empty.trb",
