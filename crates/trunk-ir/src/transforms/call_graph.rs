@@ -14,6 +14,8 @@ use std::ops::ControlFlow;
 
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
 use crate::context::IrContext;
+use crate::dialect::func::{self, CallConv};
+use crate::ops::{DialectOp, DialectType};
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
 use crate::symbol::Symbol;
@@ -57,6 +59,63 @@ impl Analysis for CallGraph {
         let module = Module::new(ctx.ir(), target)
             .expect("CallGraph analysis target must be a `core.module` op");
         Ok(build_call_graph(ctx.ir(), module))
+    }
+}
+
+/// Machine calling convention of every `func.func` in a module, keyed by the
+/// same (possibly qualified) names as [`CallGraph::func_ops`].
+///
+/// Lowering that erases function references to pointers reads this before
+/// erasure, while each reference can still be checked against its target.
+#[derive(Debug, Default)]
+pub struct FunctionCallConvs {
+    conventions: HashMap<Symbol, CallConv>,
+}
+
+impl FunctionCallConvs {
+    /// The convention of a function defined or declared in the module.
+    pub fn get(&self, function: Symbol) -> Option<CallConv> {
+        self.conventions.get(&function).copied()
+    }
+}
+
+/// Why a function's calling convention cannot be read.
+#[derive(Debug, derive_more::Display, derive_more::Error)]
+pub enum FunctionCallConvError {
+    #[display("func.func @{_0} has no valid func.func_sig type")]
+    MalformedSignature(#[error(not(source))] Symbol),
+    #[display("func.func @{_0} has a malformed call_conv attribute")]
+    MalformedCallConv(#[error(not(source))] Symbol),
+}
+
+impl Analysis for FunctionCallConvs {
+    fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+        let graph = ctx.get::<CallGraph>(target)?;
+        let ir = ctx.ir();
+        let mut conventions = HashMap::with_capacity(graph.func_ops.len());
+        // Visit in IR order so the first reported failure is deterministic.
+        let mut functions: Vec<_> = graph
+            .func_ops
+            .iter()
+            .map(|(&name, &op)| (op, name))
+            .collect();
+        functions.sort_unstable();
+        for (op, name) in functions {
+            let signature = func::Func::from_op(ir, op)
+                .ok()
+                .and_then(|function| func::FuncSig::from_type_ref(ir, function.r#type(ir)))
+                .ok_or_else(|| {
+                    AnalysisError::new::<Self>(
+                        target,
+                        FunctionCallConvError::MalformedSignature(name),
+                    )
+                })?;
+            let call_conv = signature.call_conv(ir).ok_or_else(|| {
+                AnalysisError::new::<Self>(target, FunctionCallConvError::MalformedCallConv(name))
+            })?;
+            conventions.insert(name, call_conv);
+        }
+        Ok(Self { conventions })
     }
 }
 
@@ -637,6 +696,61 @@ mod tests {
         // Second call should hit the cache.
         let cached2 = am.get::<CallGraph>(&ctx, module.op()).unwrap();
         assert!(std::sync::Arc::ptr_eq(&cached, &cached2));
+    }
+
+    #[test]
+    fn function_call_convs_follow_call_graph_names() {
+        let input = r#"core.module @test {
+  func.func @platform(%value: core.i32) {
+    func.return
+  }
+  func.func @tail(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+    func.return
+  }
+  core.module @inner {
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+      func.return
+    }
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let conventions = crate::analysis::AnalysisCache::new()
+            .get::<FunctionCallConvs>(&ctx, module.op())
+            .unwrap();
+        assert_eq!(
+            conventions.get(Symbol::new("platform")),
+            Some(CallConv::Platform)
+        );
+        assert_eq!(conventions.get(Symbol::new("tail")), Some(CallConv::Tail));
+        assert_eq!(
+            conventions.get(Symbol::from_dynamic("inner::helper")),
+            Some(CallConv::Tail)
+        );
+        assert_eq!(conventions.get(Symbol::new("helper")), None);
+    }
+
+    #[test]
+    fn function_call_convs_fail_closed_on_malformed_call_conv() {
+        let input = r#"core.module @test {
+  func.func @fast(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @fast}} {
+    func.return
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+
+        let mut analyses = crate::analysis::AnalysisCache::new();
+        let error = analyses
+            .get::<FunctionCallConvs>(&ctx, module.op())
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("func.func @fast has a malformed call_conv attribute"),
+            "{error}"
+        );
     }
 
     #[test]

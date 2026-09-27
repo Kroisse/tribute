@@ -10,10 +10,12 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -22,9 +24,10 @@ use trunk_ir::op_interface::IndirectCallLikeModel;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::transforms::FunctionCallConvs;
 use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_region};
 
@@ -56,6 +59,7 @@ pub fn lower(
     // Phase 1: Adapt closure structs for native backend. This identity rewrite
     // must see the semantic layout recorded by the typed ownership plan.
     let rtti_layout_rewrites = adapt_closure_structs(ctx, module);
+    let call_convs = function_call_convs(ctx, module)?;
 
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
@@ -66,9 +70,7 @@ pub fn lower(
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern {
-            call_convs: function_call_convs(ctx, module),
-        })
+        .add_pattern(FuncConstantPattern { call_convs })
         .with_target(func_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "func-to-clif")?;
     Ok(LoweringResult {
@@ -554,26 +556,38 @@ impl RewritePattern for FuncUnreachablePattern {
     }
 }
 
-/// Calling conventions of the module's `func.func` symbols, read before
-/// lowering erases function references to pointers.
-fn function_call_convs(ctx: &IrContext, module: Module) -> HashMap<Symbol, func::CallConv> {
-    module
-        .ops(ctx)
-        .into_iter()
-        .filter_map(|op| {
-            let function = func::Func::from_op(ctx, op).ok()?;
-            let signature = func::FuncSig::from_type_ref(ctx, function.r#type(ctx))?;
-            Some((function.sym_name(ctx), signature.call_conv(ctx)?))
-        })
-        .collect()
+/// Read every function's calling convention before references are erased.
+fn function_call_convs(
+    ctx: &mut IrContext,
+    module: Module,
+) -> Result<Arc<FunctionCallConvs>, ConversionError> {
+    AnalysisCache::scope(ctx, |ctx, analyses| {
+        analyses.get::<FunctionCallConvs>(ctx, module.op())
+    })
+    .map_err(|error| {
+        let module_op = ctx.op(module.op());
+        ConversionError::new(
+            "func-to-clif",
+            vec![
+                IllegalOp {
+                    op: module.op(),
+                    dialect: module_op.dialect,
+                    name: module_op.name,
+                    legality: LegalityCheck::Illegal,
+                    reason: None,
+                }
+                .with_reason(error.to_string()),
+            ],
+        )
+    })
 }
 
 /// Pattern: `func.constant` -> `clif.symbol_addr`
 ///
 /// The resulting pointer no longer names a convention, so a typed reference
-/// must agree with its target's convention before it is erased.
+/// must name a known function with the same convention before it is erased.
 struct FuncConstantPattern {
-    call_convs: HashMap<Symbol, func::CallConv>,
+    call_convs: Arc<FunctionCallConvs>,
 }
 
 impl RewritePattern for FuncConstantPattern {
@@ -590,8 +604,8 @@ impl RewritePattern for FuncConstantPattern {
         let func_ref = const_op.func_ref(ctx);
         if let &[result] = ctx.op_result_types(op)
             && let Some(reference) = func::FuncSig::from_type_ref(ctx, result)
-            && let Some(&target) = self.call_convs.get(&func_ref)
-            && reference.call_conv(ctx) != Some(target)
+            && (self.call_convs.get(func_ref).is_none()
+                || reference.call_conv(ctx) != self.call_convs.get(func_ref))
         {
             return false;
         }
@@ -1150,6 +1164,40 @@ mod tests {
         let error = lower_reference("func.func_sig<(core.i32) -> ()>")
             .expect_err("a platform reference to a tail function must not be erased");
         assert!(error.to_string().contains("func.constant"), "{error}");
+    }
+
+    #[test]
+    fn function_reference_conventions_fail_closed() {
+        let lower = |input: &str| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, input);
+            super::lower(&mut ctx, module, TypeConverter::new())
+                .map(|_| ())
+                .unwrap_err()
+                .to_string()
+        };
+
+        let unknown = lower(
+            r#"core.module @test {
+  func.func @take() {
+    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+    func.return
+  }
+}"#,
+        );
+        assert!(unknown.contains("func.constant"), "{unknown}");
+
+        let malformed = lower(
+            r#"core.module @test {
+  func.func @fast(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @fast}} {
+    func.return
+  }
+}"#,
+        );
+        assert!(
+            malformed.contains("func.func @fast has a malformed call_conv attribute"),
+            "{malformed}"
+        );
     }
 
     #[test]
