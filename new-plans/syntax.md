@@ -93,19 +93,22 @@ RawBytes     ::= 'r' 'b' '"' RawBytesContent* '"'         // rb"..."
                | 'b' 'r' '"' RawBytesContent* '"'         // br"..."
                | 'b' 'r' '#'+ '"' RawBytesContent* '"' '#'+ // br#"..."#
 
-StringContent     ::= TextChar | EscapeSeq | StringInterpolation
-BytesContent      ::= ByteChar | EscapeSeq | BytesInterpolation
+StringContent     ::= TextChar | StringEscape | StringInterpolation
+BytesContent      ::= ByteChar | BytesEscape | BytesInterpolation
 RawStringContent  ::= RawChar | StringInterpolation       // escape 처리 안 함
 RawBytesContent   ::= RawChar | BytesInterpolation        // escape 처리 안 함
 RawChar           ::= Any
 
-EscapeSeq    ::= '\' ('n' | 'r' | 't' | '0' | '"' | '\' | 'x' HexDigit{2} | 'u' HexDigit{4})
+StringEscape  ::= '\' ('n' | 'r' | 't' | '0' | '"' | '\' | 'x' AsciiHex) | UnicodeEscape
+BytesEscape   ::= '\' ('n' | 'r' | 't' | '0' | '"' | '\' | 'x' HexDigit{2})
+AsciiHex      ::= '0'..'7' HexDigit                 // \x00 ~ \x7F
+UnicodeEscape ::= '\' 'u' '{' HexDigit{1,6} '}'    // Unicode scalar value 하나
 StringInterpolation ::= '\{' Expression '}'   // Expression은 String 타입
 BytesInterpolation  ::= '\{' Expression '}'   // Expression은 Bytes 타입
 
 // Rune (Unicode codepoint)
 Rune       ::= '?' (PrintableChar | RuneEscape)
-RuneEscape ::= '\' ('n' | 'r' | 't' | '0' | '\' | 'x' HexDigit{2} | 'u' HexDigit{4})
+RuneEscape ::= '\' ('n' | 'r' | 't' | '0' | '\' | 'x' HexDigit{2}) | UnicodeEscape
 
 // Bool / Nil (키워드)
 Bool       ::= 'True' | 'False'
@@ -121,6 +124,16 @@ TypeId     ::= UpperLetter (Letter | Digit | '_')*   // 타입명은 대문자 �
 ```
 
 **Note:** `#` 개수는 양쪽이 일치해야 함. 내부에 `"#`이 포함된 경우 `##`로 감싸면 됨.
+
+**Escape 규칙:**
+
+- `\u{…}`는 1~6자리 16진수로 Unicode scalar value 하나를 나타낸다. Surrogate
+  (`D800`–`DFFF`)나 `10FFFF`를 넘는 값은 lexical error다. 고정 폭 4자리 형식은
+  없다.
+- String의 `\xHH`는 ASCII 범위(`00`–`7F`)만 허용한다. 그 밖의 문자는
+  `\u{…}`로 쓴다. Rune의 `\xHH`는 `U+0000`–`U+00FF`를 나타낸다.
+- Bytes는 `\u{…}`를 받지 않는다. 임의의 byte는 `\xHH`(`00`–`FF`)로 쓰고,
+  UTF-8 문자열이 필요하면 byte를 직접 나열한다.
 
 **String 리터럴 예시:**
 
@@ -148,13 +161,14 @@ rb"\x00"                    // raw bytes (문자 그대로 \x00)
 **Rune 리터럴 예시:**
 
 ```rust
-?a       // 'a'
-?Z       // 'Z'
-?\n      // newline
-?\t      // tab
-?\x41    // 'A' (hex)
-?\u0041  // 'A' (unicode)
-?\u3042  // 'あ' (unicode)
+?a          // 'a'
+?Z          // 'Z'
+?\n         // newline
+?\t         // tab
+?\x41       // 'A' (hex)
+?\u{41}     // 'A' (unicode)
+?\u{3042}   // 'あ' (unicode)
+?\u{1F600}  // '😀' (unicode, BMP 밖)
 ```
 
 **숫자 리터럴 예시:**
