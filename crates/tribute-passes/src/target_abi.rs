@@ -404,9 +404,6 @@ pub fn compose_root_entry_bridge(
 
     let cell_ty = root_completion_cell_type(ctx, source_result);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let done_callable_ty = func::func_sig(ctx, [source_result], [])
-        .with_call_conv(ctx, func::CallConv::Tail)
-        .as_type_ref();
     let done_function_ty = func::func_sig(ctx, [anyref_ty, source_result], [])
         .with_call_conv(ctx, func::CallConv::Tail)
         .as_type_ref();
@@ -523,7 +520,7 @@ pub fn compose_root_entry_bridge(
     ctx.push_op(wrapper_entry, erased_cell.op_ref());
     let done_constant = func::Constant::operands()
         .func_ref(root_done_k)
-        .results(done_callable_ty)
+        .results(done_function_ty)
         .build(ctx, location);
     ctx.push_op(wrapper_entry, done_constant.op_ref());
     let closure_struct_ty = crate::closure_lower::closure_struct_type_ref(ctx);
@@ -538,10 +535,9 @@ pub fn compose_root_entry_bridge(
         .build(ctx, location);
     ctx.push_op(wrapper_entry, typed_done.op_ref());
 
-    let dispatch_callable_ty = dispatch_callable_function_type(ctx, frame.dispatch)?;
     let dispatch_constant = func::Constant::operands()
         .func_ref(root_dispatch)
-        .results(dispatch_callable_ty)
+        .results(dispatch_function_ty)
         .build(ctx, location);
     ctx.push_op(wrapper_entry, dispatch_constant.op_ref());
     let dispatch_closure =

@@ -21,14 +21,10 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
+use std::sync::Arc;
 
-use tribute_core::calling_convention::{
-    CLOSURE_CALLABLE_TYPE_ATTR, get_physical_closure_environment_index,
-};
-use tribute_core::{
-    CallingConvention, get_calling_convention, get_closure_callable_type,
-    get_physical_closure_convention, set_closure_callable_type,
-};
+use tribute_core::calling_convention::get_physical_closure_environment_index;
+use tribute_core::{CallingConvention, get_calling_convention, get_physical_closure_convention};
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
@@ -83,7 +79,13 @@ pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 // ============================================================================
 
 /// Lower `closure.new` to `func.constant` + `adt.struct_new`.
-struct LowerClosureNewArena;
+///
+/// The function reference carries its target's exact physical signature,
+/// environment parameter included. Until storage finalization, remaining uses
+/// keep the semantic closure type through an unrealized cast of the pack.
+struct LowerClosureNewArena {
+    functions: Arc<HashMap<Symbol, Option<OpRef>>>,
+}
 
 impl RewritePattern for LowerClosureNewArena {
     fn match_and_rewrite(
@@ -100,31 +102,39 @@ impl RewritePattern for LowerClosureNewArena {
         let func_ref = closure_new.func_ref(ctx);
         let env = closure_new.env(ctx);
 
-        // Extract function type from closure.closure result type
         let result_ty = ctx.op_result_types(op)[0];
-        let func_ty = closure::Closure::from_type_ref(ctx, result_ty)
-            .map(|c| c.func_type(ctx))
-            .expect("closure.new result type must contain a valid func type (from func.constant)");
+        let Some(target_ty) = self
+            .functions
+            .get(&func_ref)
+            .copied()
+            .flatten()
+            .and_then(|target| func::Func::from_op(ctx, target).ok())
+            .map(|target| target.r#type(ctx))
+        else {
+            return false;
+        };
 
-        // Generate: %funcref = func.constant @func_ref : func_type
+        // %funcref = func.constant @func_ref : <target's exact signature>
         let constant_op = func::Constant::operands()
             .func_ref(func_ref)
-            .results(func_ty)
+            .results(target_ty)
             .build(ctx, loc);
         let funcref = ctx.op_result(constant_op.op_ref(), 0);
 
-        // Generate: %closure = adt.struct_new(%funcref, %env) : closure_struct_type
+        // %pack = adt.struct_new(%funcref, %env) : _closure
         let struct_ty = closure_struct_type_ref(ctx);
         let struct_new_op = adt::StructNew::operands(vec![funcref, env])
             .r#type(struct_ty)
             .results(struct_ty)
             .build(ctx, loc);
-        if get_physical_closure_convention(ctx, result_ty).is_some() {
-            set_closure_callable_type(ctx, struct_new_op.op_ref(), result_ty);
-        }
+        // %closure = core.unrealized_conversion_cast %pack : closure.closure(...)
+        let cast = core::UnrealizedConversionCast::operands(struct_new_op.result(ctx))
+            .results(result_ty)
+            .build(ctx, loc);
 
         rewriter.insert_op(constant_op.op_ref());
-        rewriter.replace_op(struct_new_op.op_ref());
+        rewriter.insert_op(struct_new_op.op_ref());
+        rewriter.replace_op(cast.op_ref());
         true
     }
 
@@ -156,9 +166,6 @@ impl RewritePattern for LowerClosureCallArena {
 
         // Determine if callee is a closure
         let callee_is_closure = if closure::Closure::matches(ctx, callee_ty) {
-            true
-        } else if is_closure_struct_type_ref(ctx, callee_ty) {
-            // Already lowered closure struct
             true
         } else if func::FuncSig::matches(ctx, callee_ty) {
             !matches!(
@@ -321,41 +328,9 @@ pub(crate) fn physical_closure_type_for_callee(
     callee: ValueRef,
 ) -> Option<TypeRef> {
     let ty = ctx.value_ty(callee);
-    if get_physical_closure_convention(ctx, ty).is_some() {
-        return Some(ty);
-    }
-    let trunk_ir::refs::ValueDef::OpResult(pack, _) = ctx.value_def(callee) else {
-        return None;
-    };
-    let closure_ty = get_closure_callable_type(ctx, pack)?;
-    (get_physical_closure_convention(ctx, closure_ty).is_some()
-        && is_lowered_closure_pack(ctx, pack, closure_ty))
-    .then_some(closure_ty)
-}
-
-fn is_lowered_closure_pack(ctx: &IrContext, op: OpRef, closure_ty: TypeRef) -> bool {
-    if adt::StructNew::from_op(ctx, op).is_err() {
-        return false;
-    }
-    let [result] = ctx.op_results(op) else {
-        return false;
-    };
-    if !is_closure_struct_type_ref(ctx, ctx.value_ty(*result)) {
-        return false;
-    }
-    let [function, _environment] = ctx.op_operands(op) else {
-        return false;
-    };
-    let trunk_ir::refs::ValueDef::OpResult(constant, _) = ctx.value_def(*function) else {
-        return false;
-    };
-    if func::Constant::from_op(ctx, constant).is_err() {
-        return false;
-    }
-    let Some(closure) = closure::Closure::from_type_ref(ctx, closure_ty) else {
-        return false;
-    };
-    ctx.value_ty(*function) == closure.func_type(ctx)
+    get_physical_closure_convention(ctx, ty)
+        .is_some()
+        .then_some(ty)
 }
 
 fn exact_tail_results(ctx: &IrContext, op: OpRef, callee: ValueRef) -> Option<Vec<TypeRef>> {
@@ -404,7 +379,7 @@ fn exact_physical_call_contract(
     for (index, (argument, expected)) in args.iter().zip(callable.inputs(ctx)).enumerate() {
         let actual = ctx.value_ty(*argument);
         if actual != *expected {
-            if !is_closure_struct_type_ref(ctx, actual) {
+            if !is_closure_struct_type_ref(ctx, actual) && !closure::Closure::matches(ctx, actual) {
                 return None;
             }
             if closure::Closure::matches(ctx, *expected) {
@@ -558,14 +533,22 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
 
     loop {
         let mut discovered = Vec::new();
+        // A name defined more than once is ambiguous (`None`), matching the
+        // flat resolution native lowering applies to function references.
+        let mut functions: HashMap<Symbol, Option<OpRef>> = HashMap::new();
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-            if let Ok(func_op) = func::Func::from_op(ctx, op)
-                && lowered.insert(op)
-            {
-                discovered.push(func_op);
+            if let Ok(func_op) = func::Func::from_op(ctx, op) {
+                functions
+                    .entry(func_op.sym_name(ctx))
+                    .and_modify(|resolved| *resolved = None)
+                    .or_insert(Some(op));
+                if lowered.insert(op) {
+                    discovered.push(func_op);
+                }
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
+        let functions = Arc::new(functions);
 
         // Validate the initial module as a whole before rewriting any body.
         // Later batches include newly generated functions and follow the same gate.
@@ -578,7 +561,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
             break;
         };
 
-        rewrite_validated_closures_in_func(ctx, func_op);
+        rewrite_validated_closures_in_func(ctx, func_op, functions);
     }
     Ok(())
 }
@@ -591,7 +574,11 @@ fn validate_closure_transfers(ctx: &mut IrContext, func_op: func::Func) -> PassR
     }
 }
 
-fn rewrite_validated_closures_in_func(ctx: &mut IrContext, func_op: func::Func) {
+fn rewrite_validated_closures_in_func(
+    ctx: &mut IrContext,
+    func_op: func::Func,
+    functions: Arc<HashMap<Symbol, Option<OpRef>>>,
+) {
     if ctx.op(func_op.op_ref()).regions.is_empty() {
         return;
     }
@@ -603,7 +590,7 @@ fn rewrite_validated_closures_in_func(ctx: &mut IrContext, func_op: func::Func) 
         )
         .add_pattern(LowerClosureCallArena)
         .add_pattern(LowerClosureTailCallArena)
-        .add_pattern(LowerClosureNewArena)
+        .add_pattern(LowerClosureNewArena { functions })
         .add_pattern(LowerClosureFuncArena)
         .add_pattern(LowerClosureEnvArena);
     applicator.apply_partial(ctx, func_op);
@@ -614,8 +601,8 @@ fn rewrite_validated_closures_in_func(ctx: &mut IrContext, func_op: func::Func) 
 ///
 /// The plan covers aliases, nested type parameters, type-bearing operation
 /// attributes, results, and block arguments before applying any update. The
-/// pack provenance is consumed by exact closure lowering, then removed: it is
-/// not a type-equivalence rule or final physical-IR contract.
+/// casts that kept lowered closure packs at their semantic closure type become
+/// identities and are removed.
 pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     let closure_struct = closure_struct_type_ref(ctx);
     rewrite_closure_storage_types(ctx, module, None, closure_struct);
@@ -642,7 +629,6 @@ fn rewrite_closure_storage_types(
     let aliases = ctx.type_aliases().to_vec();
     let mut physicalizer = ClosureTypePhysicalizer::new(ctx, closure_struct, source_storage);
     let mut alias_updates = Vec::new();
-    let mut attribute_removals = Vec::new();
     let mut attribute_updates = Vec::new();
     let mut result_updates = Vec::new();
     let mut block_arg_updates = Vec::new();
@@ -656,10 +642,6 @@ fn rewrite_closure_storage_types(
     }
     for op in ops {
         for (name, value) in physicalizer.ctx.op(op).attributes.clone() {
-            if source_storage.is_none() && name == Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR) {
-                attribute_removals.push(op);
-                continue;
-            }
             let converted = physicalizer.convert_attribute(value.clone());
             if converted != value {
                 attribute_updates.push((op, name, converted));
@@ -702,11 +684,6 @@ fn rewrite_closure_storage_types(
     for (name, ty) in alias_updates {
         ctx.register_type_alias(name, ty);
     }
-    for op in attribute_removals {
-        ctx.op_mut(op)
-            .attributes
-            .remove(Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR));
-    }
     for (op, name, value) in attribute_updates {
         ctx.op_mut(op).attributes.insert(name, value);
     }
@@ -718,6 +695,21 @@ fn rewrite_closure_storage_types(
     }
     for (block, index, attrs) in block_attribute_updates {
         ctx.block_mut(block).args[index].attrs = attrs;
+    }
+    erase_identity_casts(ctx, module);
+}
+
+/// Remove unrealized casts whose source already has the declared type.
+fn erase_identity_casts(ctx: &mut IrContext, module: Module) {
+    for op in collect_ops(ctx, module.op()) {
+        let Ok(cast) = core::UnrealizedConversionCast::from_op(ctx, op) else {
+            continue;
+        };
+        let (input, result) = (cast.value(ctx), cast.result(ctx));
+        if ctx.value_ty(input) == ctx.value_ty(result) {
+            ctx.replace_all_uses(result, input);
+            trunk_ir::rewrite::erase_op(ctx, op);
+        }
     }
 }
 
@@ -1095,7 +1087,7 @@ mod tests {
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
             // The rewrite pattern must also decline unsupported arities safely.
-            rewrite_validated_closures_in_func(&mut ctx, invalid);
+            rewrite_validated_closures_in_func(&mut ctx, invalid, Default::default());
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(collect_ops(&ctx, module.op()), ops);
         }
@@ -1137,11 +1129,6 @@ mod tests {
         );
 
         let run = func_by_name(&ctx, module, "run");
-        let logical = ctx
-            .type_aliases()
-            .iter()
-            .find_map(|(name, ty)| (*name == Symbol::new("closure")).then_some(*ty))
-            .expect("test module must define the logical closure alias");
         let pack = ctx
             .block(ctx.region(run.body(&ctx)).blocks[0])
             .ops
@@ -1149,10 +1136,6 @@ mod tests {
             .copied()
             .find(|op| closure::New::from_op(&ctx, *op).is_ok())
             .expect("test module must create a closure");
-        ctx.op_mut(pack).attributes.insert(
-            Symbol::new(CLOSURE_CALLABLE_TYPE_ATTR),
-            Attribute::Type(logical),
-        );
 
         finalize_closure_storage_layout(&mut ctx, module);
 
@@ -1164,17 +1147,7 @@ mod tests {
             physical
         );
         assert_eq!(ctx.op_result_types(pack), [physical]);
-        assert!(
-            !ctx.op(pack)
-                .attributes
-                .contains_key(CLOSURE_CALLABLE_TYPE_ATTR),
-            "final physical IR must not retain logical closure provenance"
-        );
         let printed = print_module(&ctx, module.op());
-        assert!(
-            !printed.contains(CLOSURE_CALLABLE_TYPE_ATTR),
-            "final physical IR must not retain logical closure provenance:\n{printed}"
-        );
         assert!(printed.contains("!closure = adt.struct"), "{printed}");
         assert!(
             printed.contains("!nested = core.tuple(!closure)"),
@@ -1313,6 +1286,74 @@ mod tests {
     }
 
     #[test]
+    fn lowered_closures_keep_exact_references_and_leave_no_casts_after_finalization() {
+        let mut ctx = IrContext::new();
+        let module = closure_test_module(&mut ctx);
+
+        lower_prepared_closures(&mut ctx, module).unwrap();
+        let mut references = Vec::new();
+        let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if let Ok(constant) = func::Constant::from_op(&ctx, op) {
+                references.push(constant);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        assert!(!references.is_empty());
+        for reference in references {
+            let name = reference.func_ref(&ctx);
+            let target = module
+                .ops(&ctx)
+                .into_iter()
+                .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+                .find(|function| function.sym_name(&ctx) == name)
+                .expect("referenced function must exist");
+            assert_eq!(
+                ctx.op_result_types(reference.op_ref()),
+                [target.r#type(&ctx)],
+                "a lowered closure reference carries its target's exact signature"
+            );
+        }
+
+        finalize_closure_storage_layout(&mut ctx, module);
+        let ir = print_module(&ctx, module.op());
+        assert!(!ir.contains("core.unrealized_conversion_cast"), "{ir}");
+        assert!(!ir.contains("closure.closure"), "{ir}");
+    }
+
+    #[test]
+    fn ambiguous_closure_target_is_not_typed_from_either_definition() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !closure = closure.closure(func.func_sig<(core.i32) -> core.i32>) {tribute.calling_convention = 0}
+  core.module @left {
+    func.func @helper(%env: tribute_rt.anyref, %value: core.i32) -> core.i32 {
+      func.return %value
+    }
+  }
+  core.module @right {
+    func.func @helper(%env: tribute_rt.anyref, %value: core.i64) -> core.i32 {
+      %zero = arith.const {value = 0} : core.i32
+      func.return %zero
+    }
+  }
+  func.func @make() -> !closure {
+    %environment = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %created = closure.new %environment {func_ref = @helper} : !closure
+    func.return %created
+  }
+}"#,
+        );
+
+        lower_prepared_closures(&mut ctx, module).unwrap();
+
+        let ir = print_module(&ctx, module.op());
+        assert!(ir.contains("closure.new"), "{ir}");
+        assert!(!ir.contains("func.constant"), "{ir}");
+    }
+
+    #[test]
     fn differently_typed_tagged_closure_pack_fails_closed() {
         let mut ctx = IrContext::new();
         let evidence = evidence_type_str();
@@ -1331,7 +1372,8 @@ mod tests {
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
     %function = func.constant {{func_ref = @actual_fn}} : func.func_sig<({evidence}, core.i32, core.bool) -> core.never>
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
-    %argument = adt.struct_new %function, %environment {{type = !_closure, tribute.closure_callable_type = !actual}} : !_closure
+    %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
+    %argument = core.unrealized_conversion_cast %pack : !actual
     func.tail_call_indirect %callee, %evidence, %done, %argument {{tribute.calling_convention = 2}}
   }}
 }}"#

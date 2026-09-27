@@ -678,12 +678,15 @@ fn test_closure_lowering() {
         assert!(function_ops::<closure::Env>(&ctx, apply).is_empty());
         let compute = named_function(&ctx, module, "compute");
         let source_call = function_ops::<func::TailCall>(&ctx, compute).into_iter().find(|call| call.callee(&ctx) == "apply").unwrap();
-        let pack = source_call.args(&ctx).iter().find_map(|&value| match ctx.value_def(value) {
-            ValueDef::OpResult(op, _) if tribute_core::get_closure_callable_type(&ctx, op) == Some(closure_ty) => adt::StructNew::from_op(&ctx, op).ok(), _ => None,
-        }).expect("source callback storage with exact callable contract");
+        let pack = source_call.args(&ctx).iter().find_map(|&value| {
+            let ValueDef::OpResult(cast, _) = ctx.value_def(value) else { return None };
+            let cast = core::UnrealizedConversionCast::from_op(&ctx, cast).ok()?;
+            (ctx.value_ty(value) == closure_ty).then(|| adt::StructNew::from_op(&ctx, defining_op(&ctx, cast.value(&ctx))).ok()).flatten()
+        }).expect("source callback storage kept at its exact callable type");
         let fields = pack.fields(&ctx);
         let function = func::Constant::from_op(&ctx, defining_op(&ctx, fields[0])).unwrap();
         let lifted = named_function(&ctx, module, &function.func_ref(&ctx).to_string());
+        assert_eq!(ctx.value_ty(function.result(&ctx)), lifted.r#type(&ctx), "the reference carries the target's exact signature");
         let environment = adt::StructNew::from_op(&ctx, defining_op(&ctx, fields[1])).unwrap();
         assert_eq!(environment.fields(&ctx).len(), 1);
         assert_eq!(arith::Const::from_op(&ctx, defining_op(&ctx, environment.fields(&ctx)[0])).unwrap().value(&ctx), Attribute::Int(1));
