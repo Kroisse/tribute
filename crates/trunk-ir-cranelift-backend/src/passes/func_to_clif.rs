@@ -10,7 +10,7 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
 use trunk_ir::Symbol;
@@ -66,7 +66,9 @@ pub fn lower(
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern)
+        .add_pattern(FuncConstantPattern {
+            call_convs: function_call_convs(ctx, module),
+        })
         .with_target(func_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "func-to-clif")?;
     Ok(LoweringResult {
@@ -552,8 +554,27 @@ impl RewritePattern for FuncUnreachablePattern {
     }
 }
 
+/// Calling conventions of the module's `func.func` symbols, read before
+/// lowering erases function references to pointers.
+fn function_call_convs(ctx: &IrContext, module: Module) -> HashMap<Symbol, func::CallConv> {
+    module
+        .ops(ctx)
+        .into_iter()
+        .filter_map(|op| {
+            let function = func::Func::from_op(ctx, op).ok()?;
+            let signature = func::FuncSig::from_type_ref(ctx, function.r#type(ctx))?;
+            Some((function.sym_name(ctx), signature.call_conv(ctx)?))
+        })
+        .collect()
+}
+
 /// Pattern: `func.constant` -> `clif.symbol_addr`
-struct FuncConstantPattern;
+///
+/// The resulting pointer no longer names a convention, so a typed reference
+/// must agree with its target's convention before it is erased.
+struct FuncConstantPattern {
+    call_convs: HashMap<Symbol, func::CallConv>,
+}
 
 impl RewritePattern for FuncConstantPattern {
     fn match_and_rewrite(
@@ -567,6 +588,13 @@ impl RewritePattern for FuncConstantPattern {
         };
 
         let func_ref = const_op.func_ref(ctx);
+        if let &[result] = ctx.op_result_types(op)
+            && let Some(reference) = func::FuncSig::from_type_ref(ctx, result)
+            && let Some(&target) = self.call_convs.get(&func_ref)
+            && reference.call_conv(ctx) != Some(target)
+        {
+            return false;
+        }
         let loc = ctx.op(op).location;
         let ptr_ty = intern_ptr_type(ctx);
         let new_op = clif::SymbolAddr::operands()
@@ -1094,6 +1122,34 @@ mod tests {
         let after = print_module(&ctx, module.op());
         assert!(after.contains("func.tail_call_indirect"), "{after}");
         assert!(!after.contains("clif.return_call_indirect"), "{after}");
+    }
+
+    #[test]
+    fn function_references_must_keep_their_target_call_conv() {
+        let lower_reference = |reference: &str| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {{call_conv = @tail}}}} {{
+    func.return
+  }}
+  func.func @take() {{
+    %reference = func.constant {{func_ref = @target}} : {reference}
+    func.return
+  }}
+}}"#
+                ),
+            );
+            super::lower(&mut ctx, module, TypeConverter::new()).map(|_| ())
+        };
+
+        lower_reference("func.func_sig<(core.i32) -> ()> {call_conv = @tail}")
+            .expect("a reference with the target convention lowers");
+        let error = lower_reference("func.func_sig<(core.i32) -> ()>")
+            .expect_err("a platform reference to a tail function must not be erased");
+        assert!(error.to_string().contains("func.constant"), "{error}");
     }
 
     #[test]

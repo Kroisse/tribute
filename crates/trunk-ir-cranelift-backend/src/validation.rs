@@ -224,6 +224,13 @@ fn validate_clif_function(
     let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
         .expect("schema-verified clif.func_sig");
     let has_abi = ctx.op(op).attributes.contains_key("abi");
+    // External callers of foreign bindings and the exported entry point use
+    // the platform convention.
+    if signature.call_conv(ctx) == Some(func::CallConv::Tail) && (has_abi || name == "main") {
+        errors.push(format!(
+            "clif.func @{name} is an external boundary and cannot use call_conv = @tail"
+        ));
+    }
     match classify_callable_body(ctx, op) {
         Err(error) => errors.push(format!("clif.func @{name}: {error}")),
         Ok(CallableBody::Declaration) => {
@@ -506,6 +513,27 @@ mod tests {
 }"#,
         );
         validate_clif_ir(&ctx, module).expect("tail transfers between tail signatures");
+    }
+
+    #[test]
+    fn external_boundaries_cannot_use_tail_call_conv() {
+        let error = validation_error(
+            r#"core.module @test {
+  clif.func {sym_name = @foreign, abi = "C", type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}}
+  clif.func {sym_name = @main, type = clif.func_sig<() -> ()> {call_conv = @tail}} {
+    ^entry:
+      clif.return
+  }
+}"#,
+        );
+        assert!(
+            error.contains("clif.func @foreign is an external boundary"),
+            "{error}"
+        );
+        assert!(
+            error.contains("clif.func @main is an external boundary"),
+            "{error}"
+        );
     }
 
     #[test]

@@ -295,7 +295,7 @@ fn validate_direct_callable_contracts(ctx: &IrContext, op: OpRef, errors: &mut V
             errors.push("wasm.return_call requires a valid enclosing wasm.func signature".into());
             return;
         };
-        if caller.results(ctx) != signature.results(ctx) {
+        if !tail_results_agree(ctx, caller.results(ctx), signature.results(ctx)) {
             errors.push("wasm.return_call tail caller/callee result lists differ".into());
         }
     } else if !result_list_matches(ctx, signature.results(ctx), ctx.op_result_types(op)) {
@@ -342,9 +342,22 @@ fn validate_return_call_indirect(ctx: &IrContext, op: OpRef, errors: &mut Vec<St
         // The exact helper above already produced the local diagnostic.
         return;
     };
-    if caller.results(ctx) != signature.results(ctx) {
+    if !tail_results_agree(ctx, caller.results(ctx), signature.results(ctx)) {
         errors.push("wasm.return_call_indirect tail caller/callee result lists differ".into());
     }
+}
+
+/// A tail callee returns straight to the caller's caller, so their machine
+/// result slots must agree. `core.nil` results occupy no Wasm slot.
+fn tail_results_agree(ctx: &IrContext, caller: &[TypeRef], callee: &[TypeRef]) -> bool {
+    let machine = |results: &[TypeRef]| {
+        results
+            .iter()
+            .copied()
+            .filter(|ty| !crate::emit::helpers::is_nil_type(ctx, *ty))
+            .collect::<Vec<_>>()
+    };
+    machine(caller) == machine(callee)
 }
 
 /// Check if an operation's dialect is allowed in the emit phase.
@@ -380,6 +393,26 @@ mod tests {
                 .contains("operands do not match its exact signature"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn tail_result_agreement_ignores_zero_width_nil_results() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @target(%value: core.i32) {
+    wasm.return
+  }
+  wasm.func @direct(%value: core.i32) -> core.nil {
+    wasm.return_call %value {callee = @target}
+  }
+  wasm.func @indirect(%table_index: core.i32, %value: core.i32) -> core.nil {
+    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> ()>, table = 0, type_idx = 0}
+  }
+}"#,
+        );
+        validate_wasm_ir(&ctx, module).expect("nil results occupy no Wasm result slot");
     }
 
     #[test]
