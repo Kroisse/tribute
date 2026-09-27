@@ -334,7 +334,7 @@ fn sort_by(xs: List(a), key: fn(a) -> k, compare: fn(k, k) -> Ordering) -> List(
 | `Eq` | `fn eq(a: T, b: T) -> Bool` 명시적 전달 |
 | `Ord` | `fn compare(a: T, b: T) -> Ordering` 명시적 전달 |
 | `Functor`/`Monad` | Ability system + type-directed `map`, `flat_map` |
-| `Numeric` literals | 타입 어노테이션 또는 suffix (`42i64`, `3.14f32`) |
+| `Numeric` literals | 타입 어노테이션 또는 suffix (`42i`, `1e3f`) |
 
 ---
 

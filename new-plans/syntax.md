@@ -58,16 +58,22 @@ type where in
 
 ```ebnf
 // 숫자 리터럴
-NatLiteral   ::= Digit+                        // 0, 1, 42 → Nat
-               | '0b' BinDigit+                // 0b1010 → Nat (binary)
-               | '0o' OctDigit+                // 0o777 → Nat (octal)
-               | '0x' HexDigit+                // 0xc0ffee → Nat (hexadecimal)
-IntLiteral   ::= ('+' | '-') Digit+            // +1, -1 → Int
-               | ('+' | '-') '0b' BinDigit+    // +0b1010, -0b1010 → Int
-               | ('+' | '-') '0o' OctDigit+    // +0o777, -0o777 → Int
-               | ('+' | '-') '0x' HexDigit+    // +0xc0ffee, -0xc0ffee → Int
-FloatLiteral ::= Digit+ '.' Digit+             // 1.0, 3.14 → Float
-               | ('+' | '-') Digit+ '.' Digit+ // +1.0, -3.14 → Float
+NatLiteral   ::= Magnitude NumSuffix?                  // 42, 0xFF, 1_000, 1e10 → Nat
+IntLiteral   ::= ('+' | '-') Magnitude NumSuffix?      // +1, -0b1010, -1e3 → Int
+FloatLiteral ::= ('+' | '-')? DecDigits '.' DecDigits Exponent? NumSuffix?
+                                                       // 1.0, -3.14, 1.5e-3 → Float
+Magnitude    ::= DecDigits Exponent?                   // 42, 1_000, 1e10
+               | '0b' BinDigits                        // 0b1010 (binary)
+               | '0o' OctDigits                        // 0o777 (octal)
+               | '0x' HexDigits                        // 0xc0ffee (hexadecimal)
+Exponent     ::= ('e' | 'E') ('+' | '-')? '_'* DecDigits // 10진 리터럴에만
+NumSuffix    ::= 'n' | 'i' | 'f'                       // Nat / Int / Float
+
+// '_'는 첫 문자가 아닌 곳이면 어디든 올 수 있다. 숫자는 최소 하나 있어야 한다.
+DecDigits  ::= Digit (Digit | '_')*
+BinDigits  ::= '_'* BinDigit (BinDigit | '_')*
+OctDigits  ::= '_'* OctDigit (OctDigit | '_')*
+HexDigits  ::= '_'* HexDigit (HexDigit | '_')*
 
 BinDigit   ::= '0' | '1'
 OctDigit   ::= '0' | '1' | '2' | '3' | '4' | '5' | '6' | '7'
@@ -124,6 +130,25 @@ TypeId     ::= UpperLetter (Letter | Digit | '_')*   // 타입명은 대문자 �
 ```
 
 **Note:** `#` 개수는 양쪽이 일치해야 함. 내부에 `"#`이 포함된 경우 `##`로 감싸면 됨.
+
+**숫자 리터럴 규칙:**
+
+- 리터럴의 모양이 기본 타입을 정한다. 소수점이 있으면 Float, 부호(`+`/`-`)가
+  있으면 Int, 둘 다 없으면 Nat이다. 지수만으로는 Float가 되지 않는다: `1e10`은
+  Nat, `-1e3`은 Int, `1.0e10`은 Float이다.
+- 소수점이 없는 리터럴의 음수 지수(`1e-3`)는 정수로 표현할 수 없으므로 오류다.
+  Float가 필요하면 `1.0e-3`이나 `1e-3f`로 쓴다.
+- 지수는 10진 리터럴에만 붙는다. 16진 리터럴에서 `e`는 숫자다(`0x1e`는 30).
+- 접미사는 기본 타입을 바꾼다.
+  - `n`(Nat): 부호도 소수점도 없는 리터럴에만 붙는다. `-1n`, `1.5n`은 오류다.
+  - `i`(Int): 정수 리터럴에 붙는다. `42i`, `0xFFi`, `1e3i`는 Int이고 `1.5i`는
+    오류다.
+  - `f`(Float): 10진 리터럴에만 붙는다. `42f`, `1e-3f`는 Float이다. 16진
+    리터럴에서 `f`는 숫자이므로(`0x1f`는 31) 2진·8진·16진 리터럴에는 쓸 수 없다.
+- 리터럴 바로 뒤에 붙은 식별자 문자(`[0-9A-Za-z_]`)는 lex 단계에서 모두
+  리터럴의 일부다. 정의되지 않은 접미사(`42u8`)나 진법에 맞지 않는
+  숫자(`0b102`)는 lexical error다. 따라서 접미사를 새로 추가해도 기존 코드의
+  의미가 바뀌지 않는다.
 
 **Escape 규칙:**
 
@@ -199,6 +224,30 @@ rb"\x00"                    // raw bytes (문자 그대로 \x00)
 +1.0
 -3.14
 0.5
+1.5e-3       // 0.0015
+6.02E23
+
+// 숫자 구분자
+1_000_000
+0xFF_FF
+0b1010_1010
+
+// 지수 (소수점이 없으면 정수)
+1e10         // Nat: 10000000000
+2E+3         // Nat: 2000
+-1e3         // Int: -1000
+
+// 접미사
+42i          // Int
+42f          // Float
+1e-3f        // Float: 0.001
+0xFFi        // Int: 255
+
+// 오류
+1e-3         // 소수점 없는 음수 지수 → 1.0e-3 또는 1e-3f
+42u8         // 정의되지 않은 접미사
+0b102        // 2진 리터럴에 맞지 않는 숫자
+1.5i         // Float 리터럴에 Int 접미사
 
 // UFCS와 구분
 1.abs        // Nat(1).abs() - UFCS 호출
