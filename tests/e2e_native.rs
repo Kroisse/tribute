@@ -967,12 +967,12 @@ fn main() {
 
 #[test]
 fn test_native_string_escape_unicode() {
-    // \u0041 = 'A', \u00E9 = 'é'
+    // \u{41} = 'A', \u{E9} = 'é', \u{1F600} = '😀' (outside the BMP)
     let output = compile_and_run_native(
         "string_escape_unicode.trb",
         r#"
 fn main() {
-    print_line("\u0041\u00E9")
+    print_line("\u{41}\u{E9}\u{1F600}")
 }
 "#,
     );
@@ -983,7 +983,7 @@ fn main() {
         output.status,
         String::from_utf8_lossy(&output.stderr),
     );
-    assert_eq!(stdout.trim(), "Aé");
+    assert_eq!(stdout.trim(), "Aé😀");
 }
 
 #[test]

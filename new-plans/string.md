@@ -36,6 +36,9 @@ b#"contains "quotes""#      // raw
 b"\x00\xFF"                 // escape sequences
 ```
 
+Bytes 리터럴은 `\u{…}`를 받지 않는다. 모든 byte 값은 `\xHH`(`00`–`FF`)로
+쓴다.
+
 ### 주요 연산
 
 ```rust
@@ -104,7 +107,11 @@ s#"
     text
 "#                          // multiline
 r"\d+\.\d+"                 // raw (escape 없음)
+"caf\u{E9} \u{1F600}"       // unicode escape (1~6자리 16진수)
 ```
+
+`\u{…}`는 Unicode scalar value 하나이며 surrogate와 `10FFFF` 초과 값은 lexical
+error다. `\xHH`는 ASCII(`00`–`7F`)만 허용한다.
 
 ### 주요 연산
 
@@ -185,7 +192,8 @@ stack도 사용할 수 있다.
 ?\t                         // tab (U+0009)
 ?\\                         // backslash
 ?\x41                       // hex (U+0041 = 'A')
-?\u0041                     // unicode (U+0041 = 'A')
+?\u{41}                     // unicode (U+0041 = 'A')
+?\u{1F600}                  // unicode (U+1F600, BMP 밖)
 ```
 
 ### 내부 표현
