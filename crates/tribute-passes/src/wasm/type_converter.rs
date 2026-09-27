@@ -547,6 +547,26 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         {
             return unbox_via_i31(ctx, location, value, i31ref_ty, i32_ty);
         }
+        // anyref -> core.nil: nil carries no data, so produce a fresh nil value
+        // the way nil constants lower (`wasm.nop : core.nil`) and discard the
+        // reference.
+        if (is_type(ctx, from_ty, Symbol::new("wasm"), Symbol::new("anyref"))
+            || is_type(
+                ctx,
+                from_ty,
+                Symbol::new("tribute_rt"),
+                Symbol::new("anyref"),
+            ))
+            && is_type(ctx, to_ty, Symbol::new("core"), Symbol::new("nil"))
+        {
+            let nil_op = wasm_dialect::Nop::operands()
+                .results(to_ty)
+                .build(ctx, location);
+            return Some(MaterializeResult {
+                value: nil_op.result(ctx),
+                ops: vec![nil_op.op_ref()],
+            });
+        }
 
         // -----------------------------------------------------------------
         // anyref -> arrayref materialization (requires ref_cast)
@@ -643,6 +663,29 @@ mod tests {
             tc.materialize(&mut ctx, location, value, anyref, ptr)
                 .is_none()
         );
+    }
+
+    #[test]
+    fn anyref_to_nil_materializes_a_fresh_nil_value() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%value: wasm.anyref) -> core.nil {
+    %unit = core.unrealized_conversion_cast %value : core.nil
+    func.return %unit
+  }
+}"#,
+        );
+        let tc = wasm_type_converter(&mut ctx);
+
+        trunk_ir::rewrite::PatternApplicator::new(tc)
+            .add_pattern(trunk_ir::conversion::UnrealizedCastConversionPattern)
+            .apply_partial(&mut ctx, module);
+
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!printed.contains("unrealized_conversion_cast"), "{printed}");
+        assert!(printed.contains("wasm.nop"), "{printed}");
     }
 
     #[test]
