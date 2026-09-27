@@ -1067,7 +1067,106 @@ Important stage invariants:
 | Shared lowering | 명시된 경계에서 high-level ability dispatch operation이 제거됨 |
 | Effect ABI | `effect.*` operations preserve dispatch semantics without backend layout details |
 | Native ownership | Typed managed value의 native raw handoff는 `tribute_rt.into_raw`가 one ownership unit을 소비할 때만 허용되며 `core.ptr`는 항상 unmanaged |
+| Representation/ABI 경계 | 아래 [경계 계약](#representationabi-경계)의 출구 적법성을 만족함 |
 | Backend lowering | Backend-ready 검증이 성공하고 `effect.*`, `tribute_rt.into_raw`, CPS control carrier, trampoline이 남지 않음 |
+
+<!-- markdownlint-disable-next-line MD033 -->
+<a id="representationabi-경계"></a>
+
+### Representation/ABI 경계
+
+Representation/ABI 경계는 상위 제어 의미를 물리적 호출·저장·runtime 계약으로
+소비하는 target별 단계다. 이 단계는 shared middle-end가 끝난 뒤 시작하고 target
+dialect lowering(`func_to_clif`, `func_to_wasm` 등) 앞에서 끝난다. 경계 이후의 모든
+pass — native ownership/RTTI 계획, target dialect lowering, backend 검증기, emitter —
+는 출구가 명시한 물리 계약만 소비한다.
+
+#### 단계 구성
+
+경계는 target별로 여러 pass로 이루어질 수 있으며 새 dialect, crate 또는 모든 target에
+같은 layout을 요구하지 않는다. 경계 안에서 다음을 순서대로 완결한다.
+
+1. Exact callable/dispatch/frame 계약 검증과 CPS signature 물리화
+2. Root/export 및 target 진입점 bridge 합성
+3. Closure operation lowering
+4. Target evidence lowering: `effect.*` dispatch, evidence 조회·확장, fresh prompt,
+   one-shot 검사를 runtime 호출과 ordinary/proper-tail transfer로 바꾼다. 이
+   lowering은 공유 value/control dialect 수준에서 수행하고 target dialect operation을
+   직접 만들지 않는다.
+5. Closure storage layout 확정
+6. 경계 출구 검증
+
+지원되는 FFI/intrinsic bridge의 의미도 이 단계 안에서 완결한다.
+
+#### 출구에서 확정되는 물리 계약
+
+- **Exact signature:** 모든 정의·선언·직접 호출·간접 호출은 exact `func.func_sig`를
+  가진다. Environment, evidence, continuation 인자는 이미 signature의 순서 있는 입력이며
+  별도 slot 속성으로 위치를 기록하지 않는다.
+- **기계 호출 규약:** 기계 호출 규약은 physical `func.func_sig`의 `call_conv` type
+  속성이 소유한다. 경계는 CPS signature를 물리화할 때 target과 무관하게 그 signature에
+  `call_conv = @tail`을 일괄 부여하며, 속성이 없으면 platform 규약이다. `call_conv`는
+  type identity에 참여하고 함수 정의, 직접 호출의 피호출자, 간접 호출 signature가 모두
+  같은 signature에서 읽는다. 기계 규약을 구별하는 target은 이 값을 target signature로
+  옮기고, 기계 규약이 없는 target은 이를 무시하고 target signature에서 버린다.
+- **제어 이전의 세 가지 구별:** 빈 결과 목록은 machine stack에 결과가 없다는 뜻일
+  뿐이다. Proper tail transfer는 `func.tail_call`/`func.tail_call_indirect` operation
+  자체로 표현한다. 기계 수준 noreturn은 `func.unreachable` 같은 명시적 terminator로
+  표현한다. 어느 하나에서 다른 것을 추론하지 않는다.
+- **매개변수 ownership:** RC target에서 managed 매개변수의 entry mode
+  (`borrowed`/`retained`/`consumed`,
+  [rc.md](rc.md#proper-tail-ownership-transfer)) 중 callable 계약이 요구하는
+  것은 exact physical signature의 일부로 표현한다. 그래서 직접 정의와
+  exact indirect signature 모두에서 같은 계약을 읽을 수 있다.
+- **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 경계가 부여한
+  명시적 layout 식별자로 구별한다. Struct 이름, field 모양, `arrayref` 같은 erased
+  heap 형상을 provenance로 쓰지 않는다.
+- **진입점:** Target 진입점(native `main`, Wasm `_start`)이 호출하는 함수는 hidden
+  매개변수가 없는 platform 규약 physical 함수다. 초기 evidence 생성처럼 source
+  calling convention에 따라 달라지는 부분은 bridge 합성이 소비한다. Target 진입점
+  생성은 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더한다.
+- **Runtime helper 바인딩:** 출구에서 참조가 남은 bodyless 선언은 명시적 바인딩
+  의도를 가진다. Target이 충족할 수 없다고 알려진 helper(예: 해당 target에 없는
+  runtime allocator)에 대한 참조는 emission이 아니라 경계 출구 검증에서 거부한다.
+  최종 import 등록과 미참조 선언의 처분은 target emission이 정한다.
+
+#### 출구 적법성
+
+출구에 남으면 안 되는 것:
+
+- `tribute_control.*`, `ability.*`, `effect.*`, `closure.*` operation과
+  `closure.closure` type
+- Callable 결과로서의 `core.never`. 논리 CPS 결과는 물리 결과 목록 `[]`로 바뀐다.
+- 의미적 호출 규약과 제어 metadata: `tribute.calling_convention`,
+  `tribute.root_export_convention`, `tribute.root_source_result`,
+  `tribute.cps_continuation_frame_result`, `tribute.closure_environment_index`,
+  `tribute.closure_callable_type`
+- 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 effect row
+
+출구 이후에도 보존하는 것:
+
+- 기계 호출 규약, exact signature, 외부 바인딩(`abi`)
+- Typed managed layout, 명시적 layout 식별자, ownership/RTTI 입력
+- Location과 `tribute.definition.*` 같은 실행에 관여하지 않는 source/debug 정보
+
+경계 이후 pass는 금지된 metadata를 조회하거나 다시 만들지 않는다. 이름, 포인터 형태,
+arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의미적 분류를 이름만 바꾼
+물리 속성으로 복제하는 것도 허용하지 않는다.
+
+#### Unrealized cast
+
+공유 converter로 알 수 있는 materialization(boxing 등)은 출구 전에 끝난다.
+출구에는 target type 변환을 기다리는 `core.unrealized_conversion_cast`가 남을 수
+있다. 이런 cast의 적법성은 target 타입에 따라 정해지므로 target type 변환이 결과
+타입을 변환하고 필요한 representation 변경을 materialize한다. 그 끝에서 converter
+없는 `reconcile_unrealized_casts`가 cast를 닫으며, 그 뒤 남은 cast는 target emission
+경계가 거부한다.
+
+#### 직렬화
+
+경계 출력은 textual IR로 출력한 뒤 새 `IrContext`에서 파싱해도 frontend나 control
+보조 테이블 없이 target pipeline을 계속 진행할 수 있어야 한다. 출구 계약에 필요한
+정보는 모두 IR의 operation, type, attribute로 표현한다.
 
 ## Type Model
 
@@ -1130,9 +1229,13 @@ logical CPS function:  results = [core.never]
 physical CPS function: results = []
 ```
 
-The physical proper-tail ABI is proven only by the combination of
-`tribute.calling_convention = Cps` and exact `results = []`. The stored counts
-are not an ABI marker, and general resultless IR need not be CPS.
+The stored counts are not an ABI marker, and general resultless IR need not be
+CPS. Before the [representation/ABI boundary](#representationabi-경계), the
+physical CPS callable is identified by its semantic calling convention together
+with `results = []`. After the boundary, the semantic convention is gone: a
+proper tail transfer is the `func.tail_call`/`func.tail_call_indirect` operation
+itself, and the machine calling convention is the signature's `call_conv`
+attribute.
 
 Shared `func.call` and `func.call_indirect` support zero or one SSA result.
 Calls match complete input/result lists; returns match the enclosing function's
@@ -1170,7 +1273,11 @@ or an outer function, and does not select a physical CPS ABI.
 `num_inputs`·`num_results`를 사용하며, 결과는 0개 이상을 허용한다. 두 개수의
 합은 벡터 길이와 같아야 하고, 두 속성은 타입 동일성에 참여한다. 이 속성은 저장
 경계이지 ABI나 호출 규약의 증거가 아니다. 예약되지 않은 타입 속성도 타입
-동일성에 포함되며 파싱·출력·별칭·재귀 변환에서 보존된다.
+동일성에 포함되며 파싱·출력·별칭·재귀 변환에서 보존된다. 다만 공통
+`func.func_sig`를 `wasm.func_sig`로 변환할 때는 입력과 결과 타입만 옮기고
+예약되지 않은 속성은 모두 버린다. Wasm 함수 타입은 구조적이라 바이너리에는
+매개변수와 결과 타입만 남으므로, 공통 signature metadata는 Wasm에서 의미가 없고
+동일한 Wasm 타입을 갈라놓을 뿐이다.
 
 Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션 수집, 검증 및 코드
 생성은 이 타입을 사용한다. 모든 간접 호출은 exact `wasm.func_sig`를
@@ -1179,6 +1286,10 @@ Wasm 함수와 가져오기 선언, 직접·간접 호출, 반환, 타입 섹션
 시그니처를 재구성하지 않는다. 빈 결과 목록만으로
 CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물리적 CPS 함수의
 결과 구분은 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
+Wasm에는 별도의 기계 호출 규약이 없으므로 `call_conv`도 위 규칙에 따라 버린다.
+Proper tail transfer는 `wasm.return_call`과
+`wasm.return_call_indirect` operation으로만 표현하며, 그 검증은 피호출자와 둘러싼
+함수의 결과 목록 호환만 본다.
 
 ### `clif.func_sig` 네이티브 호출 계약
 
@@ -1196,6 +1307,9 @@ CPS를 판정하지 않는다. 논리적 Unit 함수, 논리적 CPS 함수, 물�
 결과가 비었다는 사실만으로 CPS를 판정하지 않는다. 논리 Unit `[core.nil]`, 논리
 CPS `[core.never]`, 물리 CPS `[]`의 구분은
 [공통 `func.func_sig` 계약](#funcfunc_sig-function-type)을 따른다.
+Cranelift 호출 규약은 `clif.func_sig`의 `call_conv` 속성이 정하며, native
+lowering은 `func.func_sig`의 `call_conv`를 그대로 옮긴다. 속성이 없으면 platform
+규약이다. Emitter는 operation이나 함수의 다른 속성에서 호출 규약을 고르지 않는다.
 
 네이티브 최종 호출 계약의 각 operand와 result slot은 `clif.func_sig`의 같은 순서
 slot과 정확히 같은 TrunkIR type이어야 한다. semantic reference SSA 값은 native

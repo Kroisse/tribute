@@ -72,8 +72,10 @@ ordinary logical result types rather than absence-of-result markers: a Nil
 function has the logical result list `[core.nil]`, and a CPS-transformed
 function has the logical result list `[core.never]`. General TrunkIR also supports
 empty function result lists, distinct from both
-logical types. An empty list alone does not prove physical CPS: that requires
-the Cps calling convention together with the exact empty result list.
+logical types. An empty list alone does not prove physical CPS: before the
+[representation/ABI boundary](ir.md#representationabi-경계), that requires the Cps
+calling convention together with the exact empty result list. Past the boundary,
+only the signature's `call_conv` and the proper-tail operations remain.
 
 각 타겟은 callable contract를 독립적으로 소유한다. 특히 네이티브 타겟은
 `clif.func_sig`로 순서 있는 0개 이상의 결과 목록을 표현할 수 있지만, 이 사실이

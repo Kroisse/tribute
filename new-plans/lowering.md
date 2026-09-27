@@ -133,8 +133,11 @@ The Wasm pipeline lowers target-independent dialects into `wasm.*` while using
 analysis plans for type indices, function indices, data segments, imports, and
 memory layout.
 
-Target ABI validation, CPS signature physicalization, root bridge composition,
-closure lowering and storage finalization precede Wasm dialect lowering:
+The [representation/ABI boundary](ir.md#representationabi-경계) precedes Wasm
+dialect lowering. It performs target ABI validation, CPS signature
+physicalization, entry bridge composition, closure lowering, Wasm evidence
+lowering at the shared value/control level, and closure storage finalization,
+then verifies the boundary exit. Wasm dialect lowering then runs:
 
 ```text
 validate_lowerable_structured_control
@@ -147,7 +150,6 @@ wasm_func_signature_conversion
 tribute_rt_to_wasm
 const_to_wasm
 adt_to_wasm
-prepare_wasm_evidence_runtime + evidence_to_wasm
 intrinsic_to_wasm
 wasm_lowerer
 verify_wasm_backend_ready
@@ -158,9 +160,10 @@ verify_wasm_emission_ready
 
 `wasm-backend-ready` is a partial conversion boundary after dialect lowering.
 It rejects residual `ability.*` and `effect.*` while allowing later-stage
-infrastructure such as unrealized casts. The target evidence stage creates its
-own runtime helpers and lowers dispatch to ordinary or proper-tail indirect
-calls with explicit exact signatures. Final GC indices are assigned only after
+infrastructure such as unrealized casts. The boundary's Wasm evidence stage
+creates its own runtime helpers and lowers dispatch to ordinary or proper-tail
+indirect calls with explicit exact signatures, so Wasm dialect lowering never
+sees `effect.*`. Final GC indices are assigned only after
 cast conversion and reconciliation; final emission validation rejects any
 remaining `core.unrealized_conversion_cast` and checks the complete module
 before producing a binary.
@@ -185,13 +188,16 @@ target-independent dialects into `clif.*`, then validates the native backend
 boundary before emission.
 
 The shared route supplies legalized callable/control IR and the effect ABI.
-Native stages consume that result in this order:
+Native stages consume that result in this order. The first five lines form the
+[representation/ABI boundary](ir.md#representationabi-경계); every later stage
+consumes only its exit contract:
 
 ```text
-target ABI validation + CPS signature physicalization + root bridge composition
+target ABI validation + CPS signature physicalization
+root and entry bridge composition
 closure lowering
 prepare_native_evidence_runtime + evidence_to_native
-finalize_closure_storage_layout
+finalize_closure_storage_layout + boundary exit verification
 native String/Bytes/I/O/List lowering
 scf_to_cf
 typed ownership/RTTI planning + explicit RC materialization

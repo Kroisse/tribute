@@ -78,8 +78,8 @@ type metadata before source-to-shared conversion; no operation-local signature
 metadata clause or override exists.
 
 Wasm 대상 변환 경계는 공통 함수 시그니처와 그 안의 중첩 타입 메타데이터를
-`wasm.func_sig`로 변환한다. 입력·결과 개수와 예약되지 않은 타입 속성을
-보존한다. 저장 형식과 타입 동일성은
+`wasm.func_sig`로 변환한다. 입력·결과 타입과 개수만 옮기며, `call_conv`를
+포함한 예약되지 않은 타입 속성은 중첩 시그니처까지 모두 버린다. 저장 형식과 타입 동일성은
 [IR 계약](ir.md#wasmfunc_sig-wasm-호출-계약), 바이너리 결과 표현은
 [Wasm 백엔드 계약](wasm-backend.md#wasm-결과-슬롯)에서 정의한다.
 
@@ -620,10 +620,11 @@ op SomeOp::cancel() { fallback_value }      // 0회: 암묵적 drop
 WasmGC는 native와 같은 shared middle-end의 tail-call CPS / effect ABI 결과를
 입력으로 받는다.
 
-Wasm lowering은 `effect.extend`, `effect.dispatch_tail`,
-`effect.dispatch_cps`를 evidence helper, closure unpacking, and
-direct `wasm.return_call` 또는 indirect `wasm.return_call_indirect`로 낮춘다.
-일반 source data call은 계속 `wasm.call_indirect`를 사용할 수 있다.
+[Representation/ABI 경계](ir.md#representationabi-경계) 안의 Wasm evidence
+lowering은 `effect.extend`, `effect.dispatch_tail`, `effect.dispatch_cps`를 evidence
+helper 호출, closure unpacking, `func.call_indirect` 또는 `func.tail_call`/
+`func.tail_call_indirect`로 낮춘다. 그 뒤 Wasm dialect lowering이 이를
+`wasm.call_indirect`, `wasm.return_call`, `wasm.return_call_indirect`로 바꾼다.
 
 Ownership planning과 target emission은 [공통 callable 본문 구조](ir.md#callable-본문-구조)를
 사용한다. Backend-ready 경계에 남는 bodyless 선언의 바인딩과 처분은
@@ -659,13 +660,17 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
       → effect ABI verification → target ABI validation
       → CPS signature physicalization → root entry bridge composition
 
-WASM:   → lower_closures_in_func → finalize_closure_storage_layout
-        → lower_to_wasm [includes evidence_to_wasm]
-        → backend-ready verification → emit_wasm
+WASM:   → lower_closures_in_func → evidence_to_wasm
+        → finalize_closure_storage_layout → boundary exit verification
+        → lower_to_wasm → backend-ready verification → emit_wasm
 Native: → lower_closures_in_func → evidence_to_native
-        → finalize_closure_storage_layout → lower_to_clif
-        → backend-ready verification → emit_native
+        → finalize_closure_storage_layout → boundary exit verification
+        → lower_to_clif → backend-ready verification → emit_native
 ```
+
+Target ABI validation부터 boundary exit verification까지가
+[representation/ABI 경계](ir.md#representationabi-경계)이다. 그 뒤의 pass는
+의미적 호출 규약이나 제어 metadata를 읽지 않는다.
 
 `tribute_control_to_cps`의 출력은 physical callable/closure 표면과 logical
 `ability.*` 표면이다. `closure.closure`의 exact callable signature는 shared
@@ -807,8 +812,9 @@ flowchart TB
 | target ABI conversion | exact shared callable/dispatch/frame contracts | physical CPS signature와 root entry bridge |
 | `lower_closures_in_func` | validated `closure.new`/`func`/`env` | closure storage와 exact indirect calls; function-anchored |
 | `finalize_closure_storage_layout` | remaining closure type surfaces | alias/signature/value/type attribute의 canonical `_closure` layout |
-| target evidence preparation/lowering | `effect.*` | Native extern 또는 Wasm helper와 ordinary/proper-tail dispatch |
-| target dialect lowering | shared value/control/runtime IR | `clif.*` 또는 `wasm.*`; backend-ready 검증 뒤 emission |
+| target evidence preparation/lowering | `effect.*` | Native extern 또는 Wasm helper와 ordinary/proper-tail dispatch; 공유 value/control dialect 수준 |
+| boundary exit verification | 경계 안의 모든 pass 결과 | [출구 적법성](ir.md#representationabi-경계)을 만족하는 물리 IR; 위반은 pass failure |
+| target dialect lowering | 경계 출구의 물리 IR | `clif.*` 또는 `wasm.*`; backend-ready 검증 뒤 emission |
 | local cleanup | `func.func` body | canonicalization, DCE; function-anchored |
 | `global_dce` | module symbols | reachable symbols; module-wide |
 

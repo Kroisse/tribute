@@ -110,8 +110,10 @@ ContinuationFrame의 `Done<R>`처럼 동적인 target으로의 이전은 `func.t
 Shared IR의 caller/callee result는 `core.never`이고 target signature의 result
 vector는 비어 있어야 한다.
 생성한 continuation, `done_k`, handler-dispatch function에도
-`tribute.calling_convention = 2`를 붙여 backend-ready verifier가 semantic role을
-식별하게 한다.
+`tribute.calling_convention = 2`를 붙여 target ABI 검증이 semantic role을
+식별하게 한다. 이 속성은 [representation/ABI 경계](ir.md#representationabi-경계)
+안에서 소비되며, 경계 이후에는 signature의 `call_conv`와 proper-tail operation만
+남는다.
 
 기존 `CallableAbi::interpose_environment`에 따라 extracted lambda와 `func_ref`
 adapter의 최종 parameter 순서는 `Direct`에서 `environment, source...`,
@@ -267,9 +269,11 @@ argument, 중첩 타입 attribute를 함께 변환한다. 일반 `never`·`nil` 
 Closure tail lowering은 caller·callee·exact indirect signature의 전체 결과 목록을
 비교하여 논리 `[never]`와 물리 `[]`를 각각 지원한다.
 
-Final native/Wasm backend-ready 경계는 `Cps` worker, continuation, `done_k`,
-handler-dispatch의 result vector가 비어 있고 모든 CPS transfer가
-`func.tail_call` 또는 `func.tail_call_indirect`로 끝나는지 검사한다.
+[Representation/ABI 경계](ir.md#representationabi-경계)의 출구 검증은 `Cps`
+worker, continuation, `done_k`, handler-dispatch의 result vector가 비어 있고 모든
+CPS transfer가 `func.tail_call` 또는 `func.tail_call_indirect`로 끝나는지 검사한 뒤
+의미적 convention을 소비한다. 출구 이후의 backend-ready 검증은 exact signature,
+`call_conv`, proper-tail operation만으로 같은 성질을 검사한다.
 `Step`, trampoline, CPS control-result 역할의 `anyref`와
 `__tribute_cps_control` private enum은 거부한다. Boxed source value, erased effect
 payload, closure environment와 dispatch closure field에 쓰는 일반 `anyref`는 이
@@ -493,20 +497,25 @@ ast_to_ir (tribute_control callable/control + ordinary value IR)
 → resolve_evidence
 → lower_handle_dispatch
 → effect ABI verification
+── representation/ABI 경계 ──
 → target ABI validation and CPS signature physicalization
-→ root entry bridge composition
+→ root and entry bridge composition
 → lower_closures_in_func
-→ native evidence lowering → finalize_closure_storage_layout → native tail-call lowering
-  or finalize_closure_storage_layout → integrated Wasm evidence/tail-call lowering
+→ target evidence lowering (native 또는 Wasm)
+→ finalize_closure_storage_layout
+→ boundary exit verification
+── target dialect lowering ──
+→ proper-tail lowering과 target dialect conversion
 → backend-ready verification
 ```
 
 `tribute_control_to_cps`의 출력은 physical `func.*`/`closure.*` callable 표면과
 logical `ability.*` dispatch 표면이다. Shared ability/evidence pass와 strict target
 ABI validation은 convention-proven `closure.closure` callable type을 그대로
-소비한다. 그 뒤 target pipeline이 closure operation과 모든 type-bearing storage
-surface를 canonical `_closure` layout으로 함께 바꾸고 backend evidence/runtime와
-proper tail transfer lowering이 이를 소비한다. `tribute.closure_callable_type`은
+소비한다. 그 뒤 경계 안에서 closure operation과 모든 type-bearing storage
+surface를 canonical `_closure` layout으로 함께 바꾸고 target evidence/runtime
+lowering이 이를 소비한다. 경계 이후의 proper tail transfer lowering은 이 layout을
+명시적 layout 식별자로 구별하며 이름으로 판별하지 않는다. `tribute.closure_callable_type`은
 exact closure lowering에서만 잠시 쓰고 storage finalization에서 제거한다. 이는
 semantic type equivalence를 만들지 않는다.
 

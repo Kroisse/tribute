@@ -86,9 +86,11 @@ WebAssembly Binary
 
 Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect.*`를
 만들며 Marker field 번호나 closure layout을 검사하지 않는다.
-`wasm/evidence_to_wasm`은 evidence lookup/extend helper를 만들고 closure struct
-`(table_idx, env)`를 풀어 semantic role에 맞는 일반 호출 또는 proper-tail call을
-emit하여 해당 operation을 제거하는 Wasm 경계다.
+`wasm/evidence_to_wasm`은 [representation/ABI 경계](ir.md#representationabi-경계)
+안에서 evidence lookup/extend helper를 만들고 canonical closure layout을 풀어
+semantic role에 맞는 `func.call_indirect` 또는 proper-tail `func.tail_call*`을
+만들어 해당 operation을 제거한다. Wasm dialect lowering은 그 결과를 `wasm.*`
+호출로 바꿀 뿐 `effect.*`를 보지 않는다.
 
 ### Wasm 결과 슬롯
 
@@ -161,9 +163,13 @@ signature를 still-unconverted operation과 맞대지 않는다.
 The frontend accepts `main` only when its declared result is `Nil`. A frontend
 error is terminal, so the Wasm backend never receives a valid program whose
 `main` returns an `Int`, `Nat`, or another user value. The generated `_start`
-function therefore calls `main` for its side effects. A pure `main` is called
-directly; a `main ->{Io} Nil` receives target-provided initial evidence through
-the `EvidenceDirect` ABI. Other residual effects are rejected by the frontend.
+function therefore calls the entry function for its side effects. Entry bridge
+composition inside the [representation/ABI boundary](ir.md#representationabi-경계)
+supplies that function: a pure `main` is used directly, and a `main ->{Io} Nil`
+is wrapped so that the wrapper creates target-provided initial evidence and
+calls it through the `EvidenceDirect` ABI. `_start` therefore calls a
+parameterless platform-convention function and never reads a semantic calling
+convention. Other residual effects are rejected by the frontend.
 Printing program results belongs in explicit standard I/O calls such as
 `std::io::print_line`, which shared lowering maps to the target-independent I/O
 boundary described in [io.md](io.md), not in backend entrypoint lowering.
@@ -182,7 +188,10 @@ carrier가 아니다.
 새 handler delimiter의 prompt 생성은 `__tribute_next_tag` 호출을 요구한다.
 Wasm backend는 이 allocator의 import나 구현을 합성하지 않는다. Fresh prompt를
 요구하는 module에는 정확한 target signature의 명시적 import 또는 함수 본문이
-필요하다. 바인딩이 없으면 아래의 bodyless 선언 규칙에 따라 emission이 실패한다.
+필요하다. 바인딩이 없으면
+[representation/ABI 경계](ir.md#representationabi-경계)의 출구 검증이 모듈을
+거부한다. 아래의 bodyless 선언 규칙은 경계를 우회한 입력에 대한 emission의 마지막
+방어선이다.
 따라서 shared/native handler 실행 지원만으로 Wasm source handler 지원을 판정하지
 않는다.
 
@@ -216,7 +225,10 @@ result matching을 정의한다. Tribute는 다음 경로를 구현한다:
 
 `func.tail_call_indirect` lowering은 callee table index와 argument를 기존
 `call_indirect`와 같은 순서로 평가하고, callee `func.func_sig`에서 `type_index`를
-결정한다. CPS caller/callee의 result vector는 모두 비어 있어야 하며
+결정한다. Tail transfer의 검증은 callee signature의 결과 목록이 둘러싼 함수의
+결과 목록과 호환되는지만 본다. 의미적 호출 규약이나 signature의 `call_conv`로
+판정하지 않는다. Wasm signature는 공통 signature의 입력과 결과 타입만으로 만들어
+지므로 `call_conv`는 `type_index`에 영향을 주지 않는다.
 `wasm.return_call_indirect`는 result local을 만들지 않는다. 일반 source-data
 indirect call만 `wasm.call_indirect`를 유지한다.
 
