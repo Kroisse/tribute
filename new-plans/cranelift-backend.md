@@ -195,8 +195,10 @@ Shared `tribute_control_to_cps`가 continuation과 proper tail transfer를 만�
 Shared ability/evidence lowering은 그 결과를 `effect.*` ABI로 바꾼다.
 Native target은 exact callable contract를 검증하고 CPS signature를 물리화한 뒤
 `native/evidence`에서 runtime lookup/extension과 handler closure 호출을 생성한다.
-`func_to_clif`는 proper transfer를 `clif.return_call`과
-`clif.return_call_indirect`로 내린다.
+여기까지가 [representation/ABI 경계](ir.md#representationabi-경계)이다.
+`func_to_clif`는 proper transfer operation을 `clif.return_call`과
+`clif.return_call_indirect`로 내리고, Cranelift 호출 규약은 signature의
+`call_conv`에서만 정한다.
 
 물리 CPS 판정은 exact `Cps` convention과 빈 결과 목록의 조합이다. 실제
 Direct/EvidenceDirect Unit 결과와 살아 있는 nil SSA 값의 zero-width 처리는 유지한다.

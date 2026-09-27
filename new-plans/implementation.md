@@ -659,13 +659,17 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
       → effect ABI verification → target ABI validation
       → CPS signature physicalization → root entry bridge composition
 
-WASM:   → lower_closures_in_func → finalize_closure_storage_layout
-        → lower_to_wasm [includes evidence_to_wasm]
-        → backend-ready verification → emit_wasm
+WASM:   → lower_closures_in_func → evidence_to_wasm
+        → finalize_closure_storage_layout → boundary exit verification
+        → lower_to_wasm → backend-ready verification → emit_wasm
 Native: → lower_closures_in_func → evidence_to_native
-        → finalize_closure_storage_layout → lower_to_clif
-        → backend-ready verification → emit_native
+        → finalize_closure_storage_layout → boundary exit verification
+        → lower_to_clif → backend-ready verification → emit_native
 ```
+
+Target ABI validation부터 boundary exit verification까지가
+[representation/ABI 경계](ir.md#representationabi-경계)이다. 그 뒤의 pass는
+의미적 호출 규약이나 제어 metadata를 읽지 않는다.
 
 `tribute_control_to_cps`의 출력은 physical callable/closure 표면과 logical
 `ability.*` 표면이다. `closure.closure`의 exact callable signature는 shared
@@ -807,8 +811,9 @@ flowchart TB
 | target ABI conversion | exact shared callable/dispatch/frame contracts | physical CPS signature와 root entry bridge |
 | `lower_closures_in_func` | validated `closure.new`/`func`/`env` | closure storage와 exact indirect calls; function-anchored |
 | `finalize_closure_storage_layout` | remaining closure type surfaces | alias/signature/value/type attribute의 canonical `_closure` layout |
-| target evidence preparation/lowering | `effect.*` | Native extern 또는 Wasm helper와 ordinary/proper-tail dispatch |
-| target dialect lowering | shared value/control/runtime IR | `clif.*` 또는 `wasm.*`; backend-ready 검증 뒤 emission |
+| target evidence preparation/lowering | `effect.*` | Native extern 또는 Wasm helper와 ordinary/proper-tail dispatch; 공유 value/control dialect 수준 |
+| boundary exit verification | 경계 안의 모든 pass 결과 | [출구 적법성](ir.md#representationabi-경계)을 만족하는 물리 IR; 위반은 pass failure |
+| target dialect lowering | 경계 출구의 물리 IR | `clif.*` 또는 `wasm.*`; backend-ready 검증 뒤 emission |
 | local cleanup | `func.func` body | canonicalization, DCE; function-anchored |
 | `global_dce` | module symbols | reachable symbols; module-wide |
 

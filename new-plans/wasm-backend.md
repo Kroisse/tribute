@@ -161,9 +161,13 @@ signature를 still-unconverted operation과 맞대지 않는다.
 The frontend accepts `main` only when its declared result is `Nil`. A frontend
 error is terminal, so the Wasm backend never receives a valid program whose
 `main` returns an `Int`, `Nat`, or another user value. The generated `_start`
-function therefore calls `main` for its side effects. A pure `main` is called
-directly; a `main ->{Io} Nil` receives target-provided initial evidence through
-the `EvidenceDirect` ABI. Other residual effects are rejected by the frontend.
+function therefore calls the entry function for its side effects. Entry bridge
+composition inside the [representation/ABI boundary](ir.md#representationabi-경계)
+supplies that function: a pure `main` is used directly, and a `main ->{Io} Nil`
+is wrapped so that the wrapper creates target-provided initial evidence and
+calls it through the `EvidenceDirect` ABI. `_start` therefore calls a
+parameterless platform-convention function and never reads a semantic calling
+convention. Other residual effects are rejected by the frontend.
 Printing program results belongs in explicit standard I/O calls such as
 `std::io::print_line`, which shared lowering maps to the target-independent I/O
 boundary described in [io.md](io.md), not in backend entrypoint lowering.
@@ -182,7 +186,10 @@ carrier가 아니다.
 새 handler delimiter의 prompt 생성은 `__tribute_next_tag` 호출을 요구한다.
 Wasm backend는 이 allocator의 import나 구현을 합성하지 않는다. Fresh prompt를
 요구하는 module에는 정확한 target signature의 명시적 import 또는 함수 본문이
-필요하다. 바인딩이 없으면 아래의 bodyless 선언 규칙에 따라 emission이 실패한다.
+필요하다. 바인딩이 없으면
+[representation/ABI 경계](ir.md#representationabi-경계)의 출구 검증이 모듈을
+거부한다. 아래의 bodyless 선언 규칙은 경계를 우회한 입력에 대한 emission의 마지막
+방어선이다.
 따라서 shared/native handler 실행 지원만으로 Wasm source handler 지원을 판정하지
 않는다.
 
