@@ -79,7 +79,8 @@ metadata clause or override exists.
 
 Wasm 대상 변환 경계는 공통 함수 시그니처와 그 안의 중첩 타입 메타데이터를
 `wasm.func_sig`로 변환한다. 입력·결과 개수와 예약되지 않은 타입 속성을
-보존한다. 저장 형식과 타입 동일성은
+보존하되, 기계 호출 규약인 `call_conv`는 Wasm에 대응 개념이 없으므로 중첩
+시그니처를 포함해 버린다. 저장 형식과 타입 동일성은
 [IR 계약](ir.md#wasmfunc_sig-wasm-호출-계약), 바이너리 결과 표현은
 [Wasm 백엔드 계약](wasm-backend.md#wasm-결과-슬롯)에서 정의한다.
 
