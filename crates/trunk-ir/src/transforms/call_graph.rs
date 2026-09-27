@@ -62,19 +62,22 @@ impl Analysis for CallGraph {
     }
 }
 
-/// Machine calling convention of every `func.func` in a module, keyed by the
-/// same (possibly qualified) names as [`CallGraph::func_ops`].
+/// Machine calling convention of every `func.func` in a module, including
+/// nested modules, keyed by the function operation.
 ///
 /// Lowering that erases function references to pointers reads this before
 /// erasure, while each reference can still be checked against its target.
+/// Resolving a reference symbol to its function is left to the consumer:
+/// nested-module symbol policy differs between consumers ([`CallGraph`]
+/// qualifies names; native emission uses flat `sym_name`s).
 #[derive(Debug, Default)]
 pub struct FunctionCallConvs {
-    conventions: HashMap<Symbol, CallConv>,
+    conventions: HashMap<OpRef, CallConv>,
 }
 
 impl FunctionCallConvs {
-    /// The convention of a function defined or declared in the module.
-    pub fn get(&self, function: Symbol) -> Option<CallConv> {
+    /// The convention of a `func.func` defined or declared in the module.
+    pub fn get(&self, function: OpRef) -> Option<CallConv> {
         self.conventions.get(&function).copied()
     }
 }
@@ -113,7 +116,7 @@ impl Analysis for FunctionCallConvs {
             let call_conv = signature.call_conv(ir).ok_or_else(|| {
                 AnalysisError::new::<Self>(target, FunctionCallConvError::MalformedCallConv(name))
             })?;
-            conventions.insert(name, call_conv);
+            conventions.insert(op, call_conv);
         }
         Ok(Self { conventions })
     }
@@ -699,7 +702,7 @@ mod tests {
     }
 
     #[test]
-    fn function_call_convs_follow_call_graph_names() {
+    fn function_call_convs_cover_nested_functions() {
         let input = r#"core.module @test {
   func.func @platform(%value: core.i32) {
     func.return
@@ -716,19 +719,16 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let conventions = crate::analysis::AnalysisCache::new()
+        let mut analyses = crate::analysis::AnalysisCache::new();
+        let conventions = analyses
             .get::<FunctionCallConvs>(&ctx, module.op())
             .unwrap();
-        assert_eq!(
-            conventions.get(Symbol::new("platform")),
-            Some(CallConv::Platform)
-        );
-        assert_eq!(conventions.get(Symbol::new("tail")), Some(CallConv::Tail));
-        assert_eq!(
-            conventions.get(Symbol::from_dynamic("inner::helper")),
-            Some(CallConv::Tail)
-        );
-        assert_eq!(conventions.get(Symbol::new("helper")), None);
+        let graph = analyses.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let convention = |name: &str| conventions.get(graph.func_ops[&Symbol::from_dynamic(name)]);
+        assert_eq!(convention("platform"), Some(CallConv::Platform));
+        assert_eq!(convention("tail"), Some(CallConv::Tail));
+        assert_eq!(convention("inner::helper"), Some(CallConv::Tail));
+        assert_eq!(conventions.get(module.op()), None);
     }
 
     #[test]

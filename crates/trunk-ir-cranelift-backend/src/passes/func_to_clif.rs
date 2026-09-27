@@ -10,7 +10,7 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::op_interface::IndirectCallLikeModel;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, PatternApplicator,
     PatternRewriter, RewritePattern, TypeConverter,
@@ -60,6 +60,10 @@ pub fn lower(
     // must see the semantic layout recorded by the typed ownership plan.
     let rtti_layout_rewrites = adapt_closure_structs(ctx, module);
     let call_convs = function_call_convs(ctx, module)?;
+    let mut functions = HashMap::new();
+    if let Some(body) = module.body(ctx) {
+        collect_function_symbols(ctx, body, &mut functions);
+    }
 
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
@@ -70,7 +74,10 @@ pub fn lower(
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern { call_convs })
+        .add_pattern(FuncConstantPattern {
+            call_convs,
+            functions,
+        })
         .with_target(func_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "func-to-clif")?;
     Ok(LoweringResult {
@@ -582,12 +589,35 @@ fn function_call_convs(
     })
 }
 
+/// Map each `func.func` `sym_name` to its operation, including nested
+/// modules. Native emission registers nested functions under their own
+/// `sym_name` in one flat namespace, so `clif.symbol_addr` references resolve
+/// the same way here.
+fn collect_function_symbols(
+    ctx: &IrContext,
+    region: RegionRef,
+    functions: &mut HashMap<Symbol, OpRef>,
+) {
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
+            if let Ok(function) = func::Func::from_op(ctx, op) {
+                functions.insert(function.sym_name(ctx), op);
+            } else if core::Module::matches(ctx, op) {
+                for &nested in &ctx.op(op).regions {
+                    collect_function_symbols(ctx, nested, functions);
+                }
+            }
+        }
+    }
+}
+
 /// Pattern: `func.constant` -> `clif.symbol_addr`
 ///
 /// The resulting pointer no longer names a convention, so a typed reference
 /// must name a known function with the same convention before it is erased.
 struct FuncConstantPattern {
     call_convs: Arc<FunctionCallConvs>,
+    functions: HashMap<Symbol, OpRef>,
 }
 
 impl RewritePattern for FuncConstantPattern {
@@ -604,10 +634,14 @@ impl RewritePattern for FuncConstantPattern {
         let func_ref = const_op.func_ref(ctx);
         if let &[result] = ctx.op_result_types(op)
             && let Some(reference) = func::FuncSig::from_type_ref(ctx, result)
-            && (self.call_convs.get(func_ref).is_none()
-                || reference.call_conv(ctx) != self.call_convs.get(func_ref))
         {
-            return false;
+            let target = self
+                .functions
+                .get(&func_ref)
+                .and_then(|&function| self.call_convs.get(function));
+            if target.is_none() || reference.call_conv(ctx) != target {
+                return false;
+            }
         }
         let loc = ctx.op(op).location;
         let ptr_ty = intern_ptr_type(ctx);
@@ -1164,6 +1198,30 @@ mod tests {
         let error = lower_reference("func.func_sig<(core.i32) -> ()>")
             .expect_err("a platform reference to a tail function must not be erased");
         assert!(error.to_string().contains("func.constant"), "{error}");
+    }
+
+    #[test]
+    fn nested_function_references_resolve_like_native_emission() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  core.module @inner {
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+      func.return
+    }
+    func.func @take() {
+      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+      func.return
+    }
+  }
+}"#,
+        );
+        super::lower(&mut ctx, module, TypeConverter::new())
+            .expect("a nested reference resolves to its flat native symbol");
+        let printed = print_module(&ctx, module.op());
+        assert!(printed.contains("clif.symbol_addr"), "{printed}");
+        assert!(!printed.contains("func.constant"), "{printed}");
     }
 
     #[test]
