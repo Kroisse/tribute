@@ -6,6 +6,7 @@ use trunk_ir::Symbol;
 use crate::ast::{FieldPattern, FloatBits, LiteralPattern, Pattern, PatternKind, UnresolvedName};
 
 use super::context::AstLoweringCtx;
+use super::expressions::{parse_string_literal, report_escape_error};
 use super::helpers::is_comment;
 
 /// Lower a CST pattern node to an AST Pattern.
@@ -50,8 +51,13 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
         // grammar.js uses "string" for string patterns, not "string_literal"
         "string_literal" | "string" => {
             let text = ctx.node_text_owned(&node);
-            let content = parse_string_literal(&text);
-            PatternKind::Literal(LiteralPattern::String(content))
+            match parse_string_literal(&text) {
+                Ok(content) => PatternKind::Literal(LiteralPattern::String(content)),
+                Err(error) => {
+                    report_escape_error(ctx, &node, error);
+                    PatternKind::Error
+                }
+            }
         }
         "bool_literal" => {
             let text = ctx.node_text(&node);
@@ -368,87 +374,6 @@ fn parse_int_literal(text: &str) -> Option<i64> {
         // For positive numbers, must fit in i64::MAX
         i64::try_from(value).ok()
     }
-}
-
-/// Process escape sequences in a string.
-fn unescape_string(s: &str) -> String {
-    let mut result = String::with_capacity(s.len());
-    let mut chars = s.chars().peekable();
-
-    while let Some(c) = chars.next() {
-        if c == '\\' {
-            match chars.next() {
-                Some('n') => result.push('\n'),
-                Some('r') => result.push('\r'),
-                Some('t') => result.push('\t'),
-                Some('\\') => result.push('\\'),
-                Some('"') => result.push('"'),
-                Some('0') => result.push('\0'),
-                Some('x') => {
-                    // Hex escape: \xHH
-                    let hex: String = chars.by_ref().take(2).collect();
-                    if let Ok(code) = u8::from_str_radix(&hex, 16) {
-                        result.push(code as char);
-                    }
-                }
-                Some('u') => {
-                    // Unicode escape: \uHHHH or \u{H+}
-                    if chars.peek() == Some(&'{') {
-                        chars.next(); // consume '{'
-                        let hex: String = chars.by_ref().take_while(|&c| c != '}').collect();
-                        if let Some(ch) =
-                            u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
-                        {
-                            result.push(ch);
-                        }
-                    } else {
-                        // \uHHHH form
-                        let hex: String = chars.by_ref().take(4).collect();
-                        if let Some(ch) =
-                            u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32)
-                        {
-                            result.push(ch);
-                        }
-                    }
-                }
-                Some(c) => result.push(c),
-                None => {}
-            }
-        } else {
-            result.push(c);
-        }
-    }
-
-    result
-}
-
-fn parse_string_literal(text: &str) -> String {
-    let text = text.trim();
-
-    // Handle raw strings (no escape processing)
-    if text.starts_with("r\"") || text.starts_with("r#") {
-        // Raw string: strip the r and delimiters
-        let content = if text.starts_with("r#") {
-            // Find matching number of # at start and end
-            let hashes = text[1..].chars().take_while(|&c| c == '#').count();
-            let start = 2 + hashes; // r + # + "
-            let end = text.len() - hashes - 1; // " + #
-            if start < end { &text[start..end] } else { "" }
-        } else {
-            // r"..."
-            &text[2..text.len() - 1]
-        };
-        return content.to_string();
-    }
-
-    // Regular string: process escapes
-    let content = if text.starts_with('"') && text.ends_with('"') && text.len() >= 2 {
-        &text[1..text.len() - 1]
-    } else {
-        text
-    };
-
-    unescape_string(content)
 }
 
 #[cfg(test)]
@@ -971,14 +896,14 @@ mod tests {
 
     #[test]
     fn test_parse_string_literal_simple() {
-        assert_eq!(parse_string_literal("\"hello\""), "hello");
-        assert_eq!(parse_string_literal("\"\""), "");
+        assert_eq!(parse_string_literal("\"hello\"").unwrap(), "hello");
+        assert_eq!(parse_string_literal("\"\"").unwrap(), "");
     }
 
     #[test]
     fn test_parse_string_literal_no_quotes() {
         // Edge case: if quotes are missing, return as-is
-        assert_eq!(parse_string_literal("hello"), "hello");
+        assert_eq!(parse_string_literal("hello").unwrap(), "hello");
     }
 
     // === String Escape Sequence Tests ===

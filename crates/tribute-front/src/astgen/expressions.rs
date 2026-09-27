@@ -2,7 +2,7 @@
 
 use tree_sitter::Node;
 use tribute_ir::ModulePathExt;
-use trunk_ir::Symbol;
+use trunk_ir::{Span, Symbol};
 
 use crate::ast::{
     Arm, BinOpKind, Expr, ExprKind, FloatBits, HandlerArm, HandlerKind, Param, Pattern, Stmt,
@@ -10,7 +10,7 @@ use crate::ast::{
 };
 
 use super::context::AstLoweringCtx;
-use super::helpers::is_comment;
+use super::helpers::{EscapeError, decode_unicode_escape, is_comment, process_escape_sequences};
 use super::patterns::lower_pattern;
 
 /// Lower a CST expression node to an AST Expr.
@@ -43,14 +43,24 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
         // String literals: "...", s"...", raw strings, multiline strings
         "string" | "raw_string" | "raw_interpolated_string" | "multiline_string" => {
             let text = ctx.node_text_owned(&node);
-            let content = parse_string_literal(&text);
-            ExprKind::StringLit(content)
+            match parse_string_literal(&text) {
+                Ok(content) => ExprKind::StringLit(content),
+                Err(error) => {
+                    report_escape_error(ctx, &node, error);
+                    ExprKind::Error
+                }
+            }
         }
         // Bytes literals: b"...", raw bytes, multiline bytes
         "bytes_string" | "raw_bytes" | "raw_interpolated_bytes" | "multiline_bytes" => {
             let text = ctx.node_text_owned(&node);
-            let content = parse_bytes_literal(&text);
-            ExprKind::BytesLit(content)
+            match parse_bytes_literal(&text) {
+                Ok(content) => ExprKind::BytesLit(content),
+                Err(error) => {
+                    report_escape_error(ctx, &node, error);
+                    ExprKind::Error
+                }
+            }
         }
         // Boolean literals: True, False (capitalized keywords)
         "keyword_true" => ExprKind::BoolLit(true),
@@ -60,10 +70,14 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
 
         // Rune (character) literal: ?a, ?\n, etc.
         "rune" => {
-            let text = ctx.node_text(&node);
+            let text = ctx.node_text_owned(&node);
             match parse_rune_literal(&text) {
-                Some(c) => ExprKind::RuneLit(c),
-                None => ExprKind::Error,
+                Ok(Some(c)) => ExprKind::RuneLit(c),
+                Ok(None) => ExprKind::Error,
+                Err(error) => {
+                    report_escape_error(ctx, &node, error);
+                    ExprKind::Error
+                }
             }
         }
 
@@ -824,8 +838,12 @@ fn parse_int_literal(text: &str) -> Option<i64> {
     }
 }
 
-fn parse_string_literal(text: &str) -> String {
+/// Decode a string literal's text into its value.
+///
+/// Escape errors are reported relative to `text`.
+pub(super) fn parse_string_literal(text: &str) -> Result<String, EscapeError> {
     // Strip quotes and handle basic escapes for string literals
+    let literal = text;
     let text = text.trim();
 
     // Determine prefix and whether it's raw
@@ -859,7 +877,7 @@ fn parse_string_literal(text: &str) -> String {
 
         // Validate we have opening quote after hashes
         if text.get(quote_start..quote_start + 1) != Some("\"") {
-            return String::new();
+            return Ok(String::new());
         }
 
         // Content starts after the opening quote
@@ -868,7 +886,7 @@ fn parse_string_literal(text: &str) -> String {
         // Find content end: must have closing quote followed by same number of hashes
         let content_end = text.len().saturating_sub(expected_end_pattern_len);
         if content_end <= content_start {
-            return String::new();
+            return Ok(String::new());
         }
 
         // Validate closing pattern: " followed by hash_count #'s
@@ -877,36 +895,43 @@ fn parse_string_literal(text: &str) -> String {
             .chain(std::iter::repeat_n('#', hash_count))
             .collect();
         if closing != Some(&expected_closing) {
-            return String::new();
+            return Ok(String::new());
         }
 
-        text.get(content_start..content_end)
+        Ok(text
+            .get(content_start..content_end)
             .unwrap_or("")
-            .to_string()
+            .to_string())
     } else if is_raw {
         // Raw string without hashes: r"..." or rs"..."
         let quote_start = prefix_len;
         if text.get(quote_start..quote_start + 1) != Some("\"") {
-            return String::new();
+            return Ok(String::new());
         }
-        text.get(quote_start + 1..text.len().saturating_sub(1))
+        Ok(text
+            .get(quote_start + 1..text.len().saturating_sub(1))
             .unwrap_or("")
-            .to_string()
+            .to_string())
     } else if text.get(prefix_len..prefix_len + 1) == Some("\"") {
         // Regular string: "..." or s"..."
         let content = text
             .get(prefix_len + 1..text.len().saturating_sub(1))
             .unwrap_or("");
-        let bytes = process_escape_sequences(content);
-        String::from_utf8(bytes).expect("escape processing produced invalid UTF-8")
+        let bytes = process_escape_sequences(content)
+            .map_err(|error| error.offset_by(offset_within(literal, content)))?;
+        Ok(String::from_utf8(bytes).expect("escape processing produced invalid UTF-8"))
     } else {
         // Fallback
-        text.to_string()
+        Ok(text.to_string())
     }
 }
 
-fn parse_bytes_literal(text: &str) -> Vec<u8> {
+/// Decode a bytes literal's text into its value.
+///
+/// Escape errors are reported relative to `text`.
+fn parse_bytes_literal(text: &str) -> Result<Vec<u8>, EscapeError> {
     // Strip quotes and handle basic escapes for byte string literals
+    let literal = text;
     let text = text.trim();
 
     // Determine prefix and whether it's raw
@@ -915,7 +940,7 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
     } else if text.starts_with('b') {
         (1, false)
     } else {
-        return text.as_bytes().to_vec();
+        return Ok(text.as_bytes().to_vec());
     };
 
     let after_prefix = &text[prefix_len..];
@@ -933,7 +958,7 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
 
         // Validate we have opening quote after hashes
         if text.get(quote_start..quote_start + 1) != Some("\"") {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Content starts after the opening quote
@@ -942,7 +967,7 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
         // Find content end: must have closing quote followed by same number of hashes
         let content_end = text.len().saturating_sub(expected_end_pattern_len);
         if content_end <= content_start {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
         // Validate closing pattern: " followed by hash_count #'s
@@ -951,136 +976,84 @@ fn parse_bytes_literal(text: &str) -> Vec<u8> {
             .chain(std::iter::repeat_n('#', hash_count))
             .collect();
         if closing != Some(&expected_closing) {
-            return Vec::new();
+            return Ok(Vec::new());
         }
 
-        text.get(content_start..content_end)
+        Ok(text
+            .get(content_start..content_end)
             .unwrap_or("")
             .as_bytes()
-            .to_vec()
+            .to_vec())
     } else if is_raw {
         // Raw byte string without hashes: rb"..." or br"..."
-        text.get(prefix_len + 1..text.len().saturating_sub(1))
+        Ok(text
+            .get(prefix_len + 1..text.len().saturating_sub(1))
             .unwrap_or("")
             .as_bytes()
-            .to_vec()
+            .to_vec())
     } else {
         // Regular byte string: b"..."
         let content = text
             .get(prefix_len + 1..text.len().saturating_sub(1))
             .unwrap_or("");
         process_escape_sequences(content)
+            .map_err(|error| error.offset_by(offset_within(literal, content)))
     }
 }
 
-/// Process escape sequences in a string/bytes literal content.
-///
-/// Converts backslash escapes (`\n`, `\t`, `\r`, `\0`, `\\`, `\"`, `\xHH`, `\uHHHH`)
-/// into their byte values. Unknown escapes are not reachable here because
-/// tree-sitter's grammar rejects them at parse time.
-///
-/// Operates on raw bytes to avoid redundant UTF-8 decoding (the input is already
-/// validated by tree-sitter).
-fn process_escape_sequences(input: &str) -> Vec<u8> {
-    let bytes = input.as_bytes();
-    let mut result = Vec::with_capacity(bytes.len());
-    let mut i = 0;
+/// Byte offset of `inner`, a subslice of `outer`, from the start of `outer`.
+fn offset_within(outer: &str, inner: &str) -> usize {
+    inner.as_ptr() as usize - outer.as_ptr() as usize
+}
 
-    while i < bytes.len() {
-        if bytes[i] != b'\\' {
-            // Scan forward for the next backslash (or end), copy the whole run
-            let start = i;
-            while i < bytes.len() && bytes[i] != b'\\' {
-                i += 1;
-            }
-            result.extend_from_slice(&bytes[start..i]);
-            continue;
-        }
-        // Backslash — consume it and the escape character
-        i += 1; // skip '\'
-        if i >= bytes.len() {
-            result.push(b'\\');
-            break;
-        }
-        match bytes[i] {
-            b'n' => {
-                result.push(b'\n');
-                i += 1;
-            }
-            b'r' => {
-                result.push(b'\r');
-                i += 1;
-            }
-            b't' => {
-                result.push(b'\t');
-                i += 1;
-            }
-            b'0' => {
-                result.push(b'\0');
-                i += 1;
-            }
-            b'\\' => {
-                result.push(b'\\');
-                i += 1;
-            }
-            b'"' => {
-                result.push(b'"');
-                i += 1;
-            }
-            b'x' if i + 2 < bytes.len() => {
-                i += 1; // skip 'x'
-                let hex = &bytes[i..i + 2];
-                let byte =
-                    u8::from_str_radix(std::str::from_utf8(hex).unwrap_or("00"), 16).unwrap_or(0);
-                result.push(byte);
-                i += 2;
-            }
-            b'u' if i + 4 < bytes.len() => {
-                i += 1; // skip 'u'
-                let hex = &bytes[i..i + 4];
-                if let Some(ch) = std::str::from_utf8(hex)
-                    .ok()
-                    .and_then(|s| u32::from_str_radix(s, 16).ok())
-                    .and_then(char::from_u32)
-                {
-                    let buf = &mut [0u8; 4];
-                    result.extend_from_slice(ch.encode_utf8(buf).as_bytes());
-                }
-                i += 4;
-            }
-            _ => {
-                // Fallback: keep backslash as-is
-                result.push(b'\\');
-            }
-        }
-    }
-
-    result
+/// Report an invalid escape sequence at its position inside `node`.
+pub(super) fn report_escape_error(ctx: &mut AstLoweringCtx<'_>, node: &Node, error: EscapeError) {
+    let start = node.start_byte();
+    ctx.error(
+        Span::new(start + error.range.start, start + error.range.end),
+        error.to_string(),
+    );
 }
 
 /// Parse a rune (character) literal.
-fn parse_rune_literal(text: &str) -> Option<char> {
-    // Format: ?c, ?\n, ?\xHH, ?\uHHHH
-    let text = text.strip_prefix('?')?;
+///
+/// Returns `Ok(None)` for text the grammar does not produce, and an
+/// [`EscapeError`] relative to `text` for a `\u{…}` escape that is not a
+/// Unicode scalar value.
+fn parse_rune_literal(text: &str) -> Result<Option<char>, EscapeError> {
+    // Format: ?c, ?\n, ?\xHH, ?\u{H…}
+    let Some(body) = text.strip_prefix('?') else {
+        return Ok(None);
+    };
 
-    if let Some(escape) = text.strip_prefix('\\') {
-        match escape.chars().next()? {
-            'n' => Some('\n'),
-            'r' => Some('\r'),
-            't' => Some('\t'),
-            '\\' => Some('\\'),
-            '0' => Some('\0'),
-            'x' => {
-                let hex = &escape[1..];
-                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
-            }
-            'u' => {
-                let hex = &escape[1..];
-                u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
-            }
-            _ => None,
+    let Some(escape) = body.strip_prefix('\\') else {
+        return Ok(body.chars().next());
+    };
+    let Some(escape_char) = escape.chars().next() else {
+        return Ok(None);
+    };
+    Ok(match escape_char {
+        'n' => Some('\n'),
+        'r' => Some('\r'),
+        't' => Some('\t'),
+        '\\' => Some('\\'),
+        '0' => Some('\0'),
+        'x' => {
+            let hex = &escape[1..];
+            u32::from_str_radix(hex, 16).ok().and_then(char::from_u32)
         }
-    } else {
-        text.chars().next()
-    }
+        'u' => {
+            let Some(hex) = escape[1..]
+                .strip_prefix('{')
+                .and_then(|rest| rest.strip_suffix('}'))
+            else {
+                return Ok(None);
+            };
+            decode_unicode_escape(hex).map_err(|kind| EscapeError {
+                range: 1..text.len(),
+                kind,
+            })?
+        }
+        _ => None,
+    })
 }

@@ -1739,6 +1739,54 @@ fn test_rune_literal_escape_newline() {
     }
 }
 
+/// Lower `source` and return the value expression of its first function body.
+fn first_body_value(source: &str) -> ExprKind<UnresolvedName> {
+    let module = parse_and_lower(source);
+    let Decl::Function(func) = &module.decls[0] else {
+        panic!("Expected function");
+    };
+    let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+        panic!("Expected block");
+    };
+    value.kind.as_ref().clone()
+}
+
+#[test]
+fn test_rune_literal_unicode_escape() {
+    for (source, expected) in [
+        (r"fn main() { ?\u{41} }", 'A'),
+        (r"fn main() { ?\u{3042} }", '\u{3042}'),
+        (r"fn main() { ?\u{1F600} }", '😀'),
+    ] {
+        match first_body_value(source) {
+            ExprKind::RuneLit(c) => assert_eq!(c, expected, "{source}"),
+            other => panic!("Expected RuneLit for {source}, got {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn test_string_literal_unicode_escape() {
+    match first_body_value(r#"fn main() { "caf\u{E9} \u{1f600}" }"#) {
+        ExprKind::StringLit(s) => assert_eq!(s, "café 😀"),
+        other => panic!("Expected StringLit, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_invalid_unicode_escape_lowers_to_error() {
+    for source in [
+        r#"fn main() { "\u{D800}" }"#,
+        r#"fn main() { "\u{110000}" }"#,
+        r"fn main() { ?\u{DFFF} }",
+    ] {
+        assert!(
+            matches!(first_body_value(source), ExprKind::Error),
+            "{source} must lower to an error expression"
+        );
+    }
+}
+
 // =============================================================================
 // Lambda Parameter Tests
 // =============================================================================
