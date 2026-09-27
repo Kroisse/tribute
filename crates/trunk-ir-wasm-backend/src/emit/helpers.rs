@@ -14,6 +14,7 @@ use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
+use crate::assignability::is_wasm_physical_argument_assignable;
 use crate::errors::CompilationErrorKind;
 use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX};
 use crate::{CompilationError, CompilationResult};
@@ -87,109 +88,6 @@ fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str
 pub(crate) fn func_type_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef])> {
     let function = wasm::FuncSig::from_type_ref(ctx, ty)?;
     Some((function.inputs(ctx), function.results(ctx)))
-}
-
-/// Whether this IR type is registered by the backend as a concrete WasmGC
-/// struct reference, and is therefore assignable to the abstract `wasm.structref`
-/// without a runtime cast.
-///
-/// Registration follows the same structure the rest of the backend uses: builtin
-/// layouts at their reserved indices (`core.bytes`, `_closure`,
-/// `_Marker`, ...) and the ADT types that
-/// `emit::gc_types_collection::normalize_type_for_gc` physicalizes as the
-/// abstract struct supertype (`adt.typeref` and concrete variant instances
-/// carrying `base_enum`). An ADT spelling without that registration evidence
-/// proves nothing and stays rejected.
-fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
-    if let Some(index) = crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) {
-        return crate::gc_types::is_builtin_struct_index(index);
-    }
-    let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("adt")
-        && (data.name == Symbol::new("typeref") || data.attrs.get_type("base_enum").is_some())
-}
-
-/// Whether this IR type is registered by the backend as a concrete WasmGC array
-/// reference, and is therefore assignable to the abstract `wasm.arrayref`
-/// without a runtime cast. Only builtin array layouts (Bytes backing arrays and
-/// the Evidence array) qualify; `core.array` spellings are handled by the
-/// abstract array rule and never acquire a concrete index on their own.
-fn is_registered_gc_array_reference(ctx: &IrContext, ty: TypeRef) -> bool {
-    crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty)
-        .is_some_and(|index| !crate::gc_types::is_builtin_struct_index(index))
-}
-
-/// Whether an argument can satisfy an indirect-tail parameter after the Wasm
-/// backend's physical type mapping.
-///
-/// This is the narrow physical assignability relation shared by argument,
-/// result, exact indirect/tail signature, and CPS dispatch payload checks. It
-/// only accepts widenings that emission performs without a runtime cast.
-pub fn is_wasm_physical_argument_assignable(
-    ctx: &IrContext,
-    argument: TypeRef,
-    parameter: TypeRef,
-) -> bool {
-    if argument == parameter {
-        return true;
-    }
-
-    // `core.i1` is represented by an i32 in the Wasm value space.
-    if is_type(ctx, argument, "core", "i1") && is_type(ctx, parameter, "core", "i32") {
-        return true;
-    }
-
-    let argument_is_typeref = is_type(ctx, argument, "adt", "typeref");
-    let argument_is_structref = is_type(ctx, argument, "wasm", "structref");
-    let parameter_is_structref = is_type(ctx, parameter, "wasm", "structref");
-    let parameter_is_arrayref = is_type(ctx, parameter, "wasm", "arrayref");
-    let parameter_is_anyref = is_type(ctx, parameter, "wasm", "anyref");
-
-    // `adt.typeref` is emitted as the abstract Wasm `structref` type.
-    if argument_is_typeref && (parameter_is_structref || parameter_is_anyref) {
-        return true;
-    }
-
-    // Registered concrete GC references widen to the abstract heap type the
-    // emission chose for the slot. Reaching a concrete type from an abstract one
-    // still requires `wasm.ref_cast`, so the reverse directions remain false.
-    if parameter_is_structref && is_registered_gc_struct_reference(ctx, argument) {
-        return true;
-    }
-    if parameter_is_arrayref && is_registered_gc_array_reference(ctx, argument) {
-        return true;
-    }
-    // Every registered reference denotes a struct or array, and `anyref` is their
-    // common supertype, so the same registration evidence satisfies an `anyref`
-    // slot. `core.array` spellings are emitted as the abstract array reference.
-    if parameter_is_anyref
-        && (is_registered_gc_struct_reference(ctx, argument)
-            || is_registered_gc_array_reference(ctx, argument)
-            || is_type(ctx, argument, "core", "array"))
-    {
-        return true;
-    }
-
-    // An unregistered `adt.struct` spelling is emitted as the erased `anyref`
-    // reference, so it satisfies an `anyref` slot. A variant-marked type is not
-    // a second spelling of that erasure: it must carry registration evidence
-    // (`base_enum`), which the registered-struct rule above already accepts, and
-    // a variant instance without it is malformed rather than erased.
-    if parameter_is_anyref && is_type(ctx, argument, "adt", "struct") {
-        return true;
-    }
-
-    let argument_is_core_array = is_type(ctx, argument, "core", "array");
-    if argument_is_core_array && parameter_is_arrayref {
-        return true;
-    }
-
-    // WasmGC abstract-reference upcasts. The reverse directions are checked
-    // downcasts and therefore intentionally remain false here.
-    let argument_is_wasm_gc_ref = is_type(ctx, argument, "wasm", "i31ref")
-        || argument_is_structref
-        || is_type(ctx, argument, "wasm", "arrayref");
-    argument_is_wasm_gc_ref && parameter_is_anyref
 }
 
 /// Read and validate the exact physical function type required by an ordinary
