@@ -16,6 +16,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::printer::print_type;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionTarget, Module};
+use trunk_ir::symbol_table::qualified_name;
 
 use crate::{CompilationError, CompilationResult};
 
@@ -88,7 +89,8 @@ fn collect_clif_function_signatures(
             // Malformed functions are reported by their schema.
             if clif::Func::matches(ctx, op) && clif::Func::DEF.verify(ctx, op).is_empty() {
                 let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
-                let name = function.sym_name(ctx);
+                // References resolve by root-qualified path.
+                let name = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
                 let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
                     .expect("schema-verified clif.func_sig");
                 if functions.insert(name, signature).is_some() {
@@ -220,7 +222,7 @@ fn validate_clif_function(
     errors: &mut Vec<String>,
 ) -> Option<clif::FuncSig> {
     let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
-    let name = function.sym_name(ctx);
+    let name = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
     let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
         .expect("schema-verified clif.func_sig");
     let has_abi = ctx.op(op).attributes.contains_key("abi");

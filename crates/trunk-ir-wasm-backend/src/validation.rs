@@ -8,10 +8,10 @@
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::symbol_table::SymbolTable;
 
 use crate::{CompilationError, CompilationResult};
 
@@ -39,7 +39,11 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
     let body = module
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
-    validate_region(ctx, body, 0, &mut errors);
+    // Direct callees resolve by root-qualified path over the whole module.
+    let symbols = SymbolTable::collect(ctx, module, |ctx, op| {
+        ctx.op(op).attributes.get_symbol("sym_name").is_some()
+    });
+    validate_region(ctx, body, 0, &symbols, &mut errors);
 
     if errors.is_empty() {
         Ok(())
@@ -54,16 +58,28 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
 }
 
 /// Validate a region recursively.
-fn validate_region(ctx: &IrContext, region: RegionRef, depth: usize, errors: &mut Vec<String>) {
+fn validate_region(
+    ctx: &IrContext,
+    region: RegionRef,
+    depth: usize,
+    symbols: &SymbolTable,
+    errors: &mut Vec<String>,
+) {
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
-            validate_operation(ctx, op, depth, errors);
+            validate_operation(ctx, op, depth, symbols, errors);
         }
     }
 }
 
 /// Validate a single operation.
-fn validate_operation(ctx: &IrContext, op: OpRef, depth: usize, errors: &mut Vec<String>) {
+fn validate_operation(
+    ctx: &IrContext,
+    op: OpRef,
+    depth: usize,
+    symbols: &SymbolTable,
+    errors: &mut Vec<String>,
+) {
     let op_data = ctx.op(op);
     let dialect = op_data.dialect;
     let name = op_data.name;
@@ -78,11 +94,11 @@ fn validate_operation(ctx: &IrContext, op: OpRef, depth: usize, errors: &mut Vec
         errors.push(error.to_string());
     }
     validate_return_call_indirect(ctx, op, errors);
-    validate_direct_callable_contracts(ctx, op, errors);
+    validate_direct_callable_contracts(ctx, op, symbols, errors);
 
     // Recursively validate nested regions
     for &region in &op_data.regions {
-        validate_region(ctx, region, depth + 1, errors);
+        validate_region(ctx, region, depth + 1, symbols, errors);
     }
 }
 
@@ -102,43 +118,27 @@ fn enclosing_wasm_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<wasm_
     }
 }
 
-/// Resolve a direct target from the nearest enclosing module outwards. A known
-/// malformed or ambiguous target returns `Some(None)` so it cannot be treated
-/// as an undeclared runtime import.
+/// Resolve a direct target by its root-qualified path. A known malformed or
+/// duplicated target returns `Some(None)` so it cannot be treated as an
+/// undeclared runtime import.
 fn resolve_wasm_callee(
     ctx: &IrContext,
-    mut op: OpRef,
+    symbols: &SymbolTable,
     name: Symbol,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
-    loop {
-        let region = ctx.block(ctx.op(op).parent_block?).parent_region?;
-        let parent = ctx.region(region).parent_op?;
-        if core::Module::matches(ctx, parent) {
-            let mut matches = ctx
-                .region(region)
-                .blocks
-                .iter()
-                .flat_map(|&block| ctx.block(block).ops.iter().copied())
-                .filter(|&candidate| {
-                    ctx.op(candidate).attributes.get_symbol("sym_name") == Some(name)
-                });
-            if let Some(found) = matches.next() {
-                if matches.next().is_some()
-                    || (!wasm_dialect::Func::matches(ctx, found)
-                        && !wasm_dialect::ImportFunc::matches(ctx, found))
-                {
-                    return Some(None);
-                }
-                return Some(
-                    ctx.op(found)
-                        .attributes
-                        .get_type("type")
-                        .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty)),
-                );
-            }
-        }
-        op = parent;
+    let found = symbols.definition(name)?;
+    if symbols.resolve(name).is_none()
+        || (!wasm_dialect::Func::matches(ctx, found)
+            && !wasm_dialect::ImportFunc::matches(ctx, found))
+    {
+        return Some(None);
     }
+    Some(
+        ctx.op(found)
+            .attributes
+            .get_type("type")
+            .and_then(|ty| wasm_dialect::FuncSig::from_type_ref(ctx, ty)),
+    )
 }
 
 fn is_nil(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -218,7 +218,12 @@ fn check_value_types(
 /// This boundary is deliberately independent of binary validation: a malformed
 /// IR program must not be emitted just because a later section happens to have
 /// a compatible shape.
-fn validate_direct_callable_contracts(ctx: &IrContext, op: OpRef, errors: &mut Vec<String>) {
+fn validate_direct_callable_contracts(
+    ctx: &IrContext,
+    op: OpRef,
+    symbols: &SymbolTable,
+    errors: &mut Vec<String>,
+) {
     if wasm_dialect::Return::matches(ctx, op) {
         let Some(caller) = enclosing_wasm_func_signature(ctx, op) else {
             errors.push("wasm.return requires a valid enclosing wasm.func signature".into());
@@ -251,7 +256,7 @@ fn validate_direct_callable_contracts(ctx: &IrContext, op: OpRef, errors: &mut V
         ));
         return;
     };
-    let Some(resolved) = resolve_wasm_callee(ctx, op, callee) else {
+    let Some(resolved) = resolve_wasm_callee(ctx, symbols, callee) else {
         return;
     };
     let Some(signature) = resolved else {
@@ -787,22 +792,30 @@ mod tests {
     }
 
     #[test]
-    fn resolves_tail_call_against_the_nearest_module_owner() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @outer {
-  wasm.func @target() -> core.i32 {
-    %value = wasm.i32_const {value = 1} : core.i32
+    fn resolves_tail_calls_by_root_qualified_path() {
+        let source = |callee: &str| {
+            format!(
+                r#"core.module @outer {{
+  wasm.func @target() -> core.i32 {{
+    %value = wasm.i32_const {{value = 1}} : core.i32
     wasm.return %value
-  }
-  core.module @inner {
-    wasm.func @target() -> core.nil { wasm.return }
-    wasm.func @caller() -> core.i32 { wasm.return_call {callee = @target} }
-  }
-}"#,
-        );
-        let error = validate_wasm_ir(&ctx, module).expect_err("nearest target has Unit result");
+  }}
+  core.module @inner {{
+    wasm.func @target() -> core.nil {{ wasm.return }}
+    wasm.func @caller() -> core.i32 {{ wasm.return_call {{callee = {callee}}} }}
+  }}
+}}"#
+            )
+        };
+
+        // A bare name names the root definition, not the sibling in `inner`.
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &source("@target"));
+        validate_wasm_ir(&ctx, module).expect("root target has the caller's result");
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &source(r#"@"inner::target""#));
+        let error = validate_wasm_ir(&ctx, module).expect_err("nested target has Unit result");
         assert!(
             error
                 .to_string()
