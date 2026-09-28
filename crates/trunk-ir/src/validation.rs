@@ -20,6 +20,7 @@ use std::fmt;
 use cranelift_entity::EntitySet;
 use derive_more::{Display, Error};
 
+use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::op_def::OpDef;
 use super::op_interface::{
@@ -29,6 +30,7 @@ use super::op_interface::{
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
+use super::symbol_table::SymbolTable;
 use super::walk;
 
 use crate::Symbol;
@@ -564,6 +566,10 @@ fn check_value_types(
 /// `validate_operation_verifiers`. An undeclared runtime symbol has no known
 /// signature, but never exempts other fully typed contracts from validation.
 pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> ValidationResult {
+    function_contracts(ctx, module, &SymbolTable::collect(ctx, module))
+}
+
+fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) -> ValidationResult {
     use crate::dialect::func;
     use crate::ops::DialectOp;
     let mut errors = Vec::new();
@@ -573,7 +579,6 @@ pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> Validatio
     // References name their targets by root-qualified path. None is genuinely
     // undeclared. A found but invalid or duplicated declaration is Some(None),
     // so compatibility cannot hide malformed known contracts.
-    let symbols = crate::symbol_table::SymbolTable::collect(ctx, module);
     let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
         let found = *symbols.definitions_of(name).first()?;
         if symbols.resolve(name).is_none() || !func::Func::matches(ctx, found) {
@@ -1255,13 +1260,24 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 /// callees, exact indirect signatures and registered return/tail owners are
 /// checked here; undeclared runtime calls do not invent a signature.
 pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
+    validate_all_with_analyses(ctx, module, &mut AnalysisCache::new())
+}
+
+/// Like [`validate_all`], querying shared analyses such as the
+/// [`SymbolTable`] through `analyses`.
+pub fn validate_all_with_analyses(
+    ctx: &IrContext,
+    module: Module,
+    analyses: &mut AnalysisCache,
+) -> ValidationResult {
     let scope = validate_value_integrity(ctx, module);
     let uses = validate_use_chains(ctx, module);
     let ops = validate_operation_verifiers(ctx, module);
     let mut errors = scope.errors;
     errors.extend(uses.errors);
     errors.extend(ops.errors);
-    errors.extend(validate_function_contracts(ctx, module).errors);
+    let symbols = SymbolTable::cached(ctx, module, analyses);
+    errors.extend(function_contracts(ctx, module, &symbols).errors);
     ValidationResult { errors }
 }
 

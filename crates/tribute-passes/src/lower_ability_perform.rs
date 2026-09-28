@@ -19,6 +19,7 @@
 //! established by `LowerHandleDispatch` after evidence resolution.
 
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::DialectOp;
@@ -69,7 +70,12 @@ impl Pass for LowerAbilityPerform {
         "lower-ability-perform"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: func::Func,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         lower_ability_perform(ctx, target);
         Ok(())
     }

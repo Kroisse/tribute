@@ -18,6 +18,7 @@ use tribute_core::{
     set_calling_convention,
 };
 use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -325,7 +326,11 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
     failures
 }
 
-fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
+fn verify_physical_callable_graph(
+    ctx: &IrContext,
+    module: Module,
+    symbols: &SymbolTable,
+) -> Vec<BoundaryFailure> {
     fn visit(
         ctx: &IrContext,
         op: OpRef,
@@ -457,7 +462,7 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
     }
 
     // Callees resolve by root-qualified name across the whole module tree.
-    let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> = SymbolTable::collect(ctx, module)
+    let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> = symbols
         .iter()
         .filter_map(|(name, ops)| {
             let &[op] = ops else { return None };
@@ -570,8 +575,30 @@ pub fn verify_tribute_control_pre_cps(
     declarations: &[tribute_control::OperationDeclaration],
     compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
 ) -> Result<(), TributeControlToCpsError> {
+    verify_pre_cps(
+        ctx,
+        module,
+        declarations,
+        compiler_intrinsics,
+        &mut AnalysisCache::new(),
+    )
+}
+
+fn verify_pre_cps(
+    ctx: &IrContext,
+    module: Module,
+    declarations: &[tribute_control::OperationDeclaration],
+    compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
+    analyses: &mut AnalysisCache,
+) -> Result<(), TributeControlToCpsError> {
     let mut failures = Vec::new();
-    let validation = tribute_control::validate(ctx, module, declarations, compiler_intrinsics);
+    let validation = tribute_control::validate_with_analyses(
+        ctx,
+        module,
+        declarations,
+        compiler_intrinsics,
+        analyses,
+    );
     failures.extend(validation.errors.into_iter().map(|error| BoundaryFailure {
         op: error.op,
         location: error.location,
@@ -602,7 +629,7 @@ pub fn verify_tribute_control_pre_cps(
     failures.extend(verify_type_boundary(ctx, module, TypeBoundary::Pre));
     failures.extend(verify_source_conversion_shapes(ctx, module));
     failures.extend(
-        trunk_ir::validation::validate_all(ctx, module)
+        trunk_ir::validation::validate_all_with_analyses(ctx, module, analyses)
             .errors
             .into_iter()
             .map(|error| BoundaryFailure {
@@ -626,6 +653,14 @@ pub fn verify_tribute_control_pre_cps(
 pub fn verify_tribute_control_post_cps(
     ctx: &IrContext,
     module: Module,
+) -> Result<(), TributeControlToCpsError> {
+    verify_post_cps(ctx, module, &mut AnalysisCache::new())
+}
+
+fn verify_post_cps(
+    ctx: &IrContext,
+    module: Module,
+    analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     let mut failures = Vec::new();
     if let Some(body) = module.body(ctx) {
@@ -654,9 +689,10 @@ pub fn verify_tribute_control_post_cps(
         });
     }
     failures.extend(verify_final_handle_dispatch_types(ctx, module));
-    failures.extend(verify_physical_callable_graph(ctx, module));
+    let symbols = SymbolTable::cached(ctx, module, analyses);
+    failures.extend(verify_physical_callable_graph(ctx, module, &symbols));
     failures.extend(
-        trunk_ir::validation::validate_all(ctx, module)
+        trunk_ir::validation::validate_all_with_analyses(ctx, module, analyses)
             .errors
             .into_iter()
             .map(|error| BoundaryFailure {
@@ -3720,8 +3756,8 @@ fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> 
 }
 
 /// Every source callable, keyed by its root-qualified name.
-fn collect_callable_graph(ctx: &IrContext, module: Module) -> HashMap<Symbol, CallableInfo> {
-    SymbolTable::collect(ctx, module)
+fn collect_callable_graph(ctx: &IrContext, symbols: &SymbolTable) -> HashMap<Symbol, CallableInfo> {
+    symbols
         .iter()
         .filter(|&(_, ops)| tribute_control::Func::matches(ctx, ops[0]))
         .map(|(symbol, ops)| {
@@ -3753,8 +3789,9 @@ fn verify_candidate_or_restore_aliases(
     ctx: &mut IrContext,
     candidate: Module,
     source_aliases: &[(Symbol, TypeRef)],
+    analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
-    if let Err(error) = verify_tribute_control_post_cps(ctx, candidate) {
+    if let Err(error) = verify_post_cps(ctx, candidate, analyses) {
         for (name, ty) in source_aliases {
             ctx.register_type_alias(*name, *ty);
         }
@@ -3774,8 +3811,26 @@ pub fn tribute_control_to_cps(
     declarations: &[tribute_control::OperationDeclaration],
     compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
 ) -> Result<(), TributeControlToCpsError> {
-    verify_tribute_control_pre_cps(ctx, module, declarations, compiler_intrinsics)?;
-    let funcs = collect_callable_graph(ctx, module);
+    tribute_control_to_cps_with_analyses(
+        ctx,
+        module,
+        declarations,
+        compiler_intrinsics,
+        &mut AnalysisCache::new(),
+    )
+}
+
+/// Like [`tribute_control_to_cps`], reusing analyses cached in `analyses`
+/// while boundary verification and graph collection read unchanged IR.
+pub fn tribute_control_to_cps_with_analyses(
+    ctx: &mut IrContext,
+    module: Module,
+    declarations: &[tribute_control::OperationDeclaration],
+    compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
+    analyses: &mut AnalysisCache,
+) -> Result<(), TributeControlToCpsError> {
+    verify_pre_cps(ctx, module, declarations, compiler_intrinsics, analyses)?;
+    let funcs = collect_callable_graph(ctx, &SymbolTable::cached(ctx, module, analyses));
     let source_region = module.body(ctx).ok_or_else(|| {
         TributeControlToCpsError::one(
             PRE_CPS_BOUNDARY,
@@ -3843,14 +3898,14 @@ pub fn tribute_control_to_cps(
     for (name, ty) in &converted_aliases {
         ctx.register_type_alias(*name, *ty);
     }
-    verify_candidate_or_restore_aliases(ctx, candidate, &source_aliases)?;
+    verify_candidate_or_restore_aliases(ctx, candidate, &source_aliases, analyses)?;
 
     ctx.detach_region(new_region);
     ctx.remove_op(candidate.op());
     ctx.detach_region(source_region);
     ctx.op_mut(module.op()).regions.push(new_region);
     ctx.region_mut(new_region).parent_op = Some(module.op());
-    if let Err(error) = verify_tribute_control_post_cps(ctx, module) {
+    if let Err(error) = verify_post_cps(ctx, module, analyses) {
         ctx.detach_region(new_region);
         ctx.op_mut(module.op()).regions.push(source_region);
         ctx.region_mut(source_region).parent_op = Some(module.op());
@@ -3894,12 +3949,18 @@ impl Pass for TributeControlToCps {
         "tribute-control-to-cps"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
-        tribute_control_to_cps(
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        tribute_control_to_cps_with_analyses(
             ctx,
             target.into(),
             &self.declarations,
             &self.compiler_intrinsics,
+            analyses,
         )
         .map_err(|error| Box::new(error) as _)
     }
@@ -4106,7 +4167,8 @@ mod tests {
         let target = core::Module::from_op(&ctx, module.op()).unwrap();
         let mut pass = TributeControlToCps::new([]);
         assert_eq!(pass.name(), "tribute-control-to-cps");
-        pass.run(&mut ctx, target).unwrap();
+        pass.run(&mut ctx, target, &mut AnalysisCache::new())
+            .unwrap();
         verify_tribute_control_post_cps(&ctx, module).unwrap();
     }
 
@@ -4754,8 +4816,13 @@ mod tests {
         let converted_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         ctx.register_type_alias(alias_name, converted_type);
 
-        let error =
-            verify_candidate_or_restore_aliases(&mut ctx, candidate, &source_aliases).unwrap_err();
+        let error = verify_candidate_or_restore_aliases(
+            &mut ctx,
+            candidate,
+            &source_aliases,
+            &mut AnalysisCache::new(),
+        )
+        .unwrap_err();
         assert_eq!(error.boundary, POST_CPS_BOUNDARY);
         assert_eq!(ctx.type_alias_by_name(alias_name), Some(source_type));
         assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));

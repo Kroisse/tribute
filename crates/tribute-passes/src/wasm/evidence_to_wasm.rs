@@ -23,6 +23,7 @@
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -111,7 +112,12 @@ impl Pass for LowerEvidenceToWasm {
         "lower-evidence-to-wasm"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: wasm_dialect::Func) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: wasm_dialect::Func,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         lower_evidence_to_wasm_func(ctx, target).map_err(Into::into)
     }
 }
@@ -1588,7 +1594,9 @@ mod tests {
         );
         let function = wasm_dialect::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
         let before = print_module(&ctx, module.op());
-        let error = LowerEvidenceToWasm.run(&mut ctx, function).unwrap_err();
+        let error = LowerEvidenceToWasm
+            .run(&mut ctx, function, &mut AnalysisCache::new())
+            .unwrap_err();
         assert_eq!(
             error.downcast_ref::<EvidenceValidationError>(),
             Some(&EvidenceValidationError::DispatchOperandMismatch)
@@ -1738,7 +1746,8 @@ mod tests {
         let mut pass = LowerEvidenceToWasm;
 
         assert_eq!(pass.name(), "lower-evidence-to-wasm");
-        pass.run(&mut ctx, selected).unwrap();
+        pass.run(&mut ctx, selected, &mut AnalysisCache::new())
+            .unwrap();
 
         let output = print_module(&ctx, module.op());
         assert_eq!(output.matches("effect.dispatch_tail").count(), 1);

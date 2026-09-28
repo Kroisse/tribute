@@ -9,6 +9,7 @@ use std::fmt;
 use std::ops::ControlFlow;
 
 use itertools::Itertools;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
@@ -1739,8 +1740,12 @@ fn validate_symbol_use(
 }
 
 /// Resolve every function reference in the module tree by root-qualified name.
-fn validate_module_symbols(ctx: &IrContext, module: Module, errors: &mut Vec<ValidationError>) {
-    let funcs = SymbolTable::collect(ctx, module);
+fn validate_module_symbols(
+    ctx: &IrContext,
+    module: Module,
+    funcs: &SymbolTable,
+    errors: &mut Vec<ValidationError>,
+) {
     for (symbol, ops) in funcs.duplicates() {
         for &op in &ops[1..] {
             push_op_error(
@@ -1751,7 +1756,7 @@ fn validate_module_symbols(ctx: &IrContext, module: Module, errors: &mut Vec<Val
             );
         }
     }
-    validate_symbol_uses(ctx, module, &funcs, errors);
+    validate_symbol_uses(ctx, module, funcs, errors);
 }
 
 fn collect_external_references(
@@ -2398,20 +2403,15 @@ fn verified_callable_declaration(
 fn validate_callable_origins(
     ctx: &IrContext,
     body: RegionRef,
+    functions: &SymbolTable,
     declarations: &[CompilerIntrinsicDeclaration],
     operation_declarations: &HashMap<(TypeRef, Symbol), &OperationDeclaration>,
     nominal_layouts: &HashMap<Symbol, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
     let registered = compiler_intrinsic_map(ctx, declarations, errors);
-    let functions = ctx
-        .region(body)
-        .parent_op
-        .and_then(|module| Module::new(ctx, module))
-        .map(|module| SymbolTable::collect(ctx, module))
-        .unwrap_or_default();
     let provenance = CallableProvenance {
-        functions: &functions,
+        functions,
         registered: &registered,
         declarations: operation_declarations,
         nominal_layouts,
@@ -2990,11 +2990,27 @@ pub fn validate_whole_ir(
     declarations: &[OperationDeclaration],
     compiler_intrinsics: &[CompilerIntrinsicDeclaration],
 ) -> ValidationResult {
+    whole_ir(
+        ctx,
+        module,
+        &SymbolTable::collect(ctx, module),
+        declarations,
+        compiler_intrinsics,
+    )
+}
+
+fn whole_ir(
+    ctx: &IrContext,
+    module: Module,
+    symbols: &SymbolTable,
+    declarations: &[OperationDeclaration],
+    compiler_intrinsics: &[CompilerIntrinsicDeclaration],
+) -> ValidationResult {
     let mut errors = Vec::new();
     let Some(body) = module.body(ctx) else {
         return ValidationResult { errors };
     };
-    validate_module_symbols(ctx, module, &mut errors);
+    validate_module_symbols(ctx, module, symbols, &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(declarations, &mut errors);
     let reachable_types = collect_reachable_ir_types(ctx, module.op());
@@ -3010,6 +3026,7 @@ pub fn validate_whole_ir(
     validate_callable_origins(
         ctx,
         body,
+        symbols,
         compiler_intrinsics,
         &declarations,
         &nominal_layouts,
@@ -3032,10 +3049,28 @@ pub fn validate(
     declarations: &[OperationDeclaration],
     compiler_intrinsics: &[CompilerIntrinsicDeclaration],
 ) -> ValidationResult {
+    validate_with_analyses(
+        ctx,
+        module,
+        declarations,
+        compiler_intrinsics,
+        &mut AnalysisCache::new(),
+    )
+}
+
+/// Like [`validate`], reusing the [`SymbolTable`] cached in `analyses`.
+pub fn validate_with_analyses(
+    ctx: &IrContext,
+    module: Module,
+    declarations: &[OperationDeclaration],
+    compiler_intrinsics: &[CompilerIntrinsicDeclaration],
+    analyses: &mut AnalysisCache,
+) -> ValidationResult {
+    let symbols = SymbolTable::cached(ctx, module, analyses);
     let mut local = validate_local(ctx, module);
     local
         .errors
-        .extend(validate_whole_ir(ctx, module, declarations, compiler_intrinsics).errors);
+        .extend(whole_ir(ctx, module, &symbols, declarations, compiler_intrinsics).errors);
     local
 }
 

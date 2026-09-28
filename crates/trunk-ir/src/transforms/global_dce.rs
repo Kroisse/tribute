@@ -13,6 +13,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::{core, func, wasm};
 use crate::ops::DialectOp;
@@ -20,7 +21,7 @@ use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::Symbol;
 use crate::symbol_table::SymbolTable;
-use crate::transforms::call_graph::{CallGraph, build_call_graph};
+use crate::transforms::call_graph::CallGraph;
 use crate::walk::{WalkAction, walk_region};
 
 /// Configuration for global dead code elimination.
@@ -60,7 +61,18 @@ pub fn eliminate_dead_functions_with_config(
     module: Module,
     config: GlobalDceConfig,
 ) -> GlobalDceResult {
-    run(ctx, module, &config)
+    eliminate_dead_functions_with_analyses(ctx, module, config, &mut AnalysisCache::new())
+}
+
+/// Like [`eliminate_dead_functions_with_config`], reusing the
+/// [`SymbolTable`] and [`CallGraph`] cached in `analyses`.
+pub fn eliminate_dead_functions_with_analyses(
+    ctx: &mut IrContext,
+    module: Module,
+    config: GlobalDceConfig,
+    analyses: &mut AnalysisCache,
+) -> GlobalDceResult {
+    run(ctx, module, &config, analyses)
 }
 
 /// Eliminate the functions of `module` not reachable from its roots.
@@ -68,8 +80,13 @@ pub fn eliminate_dead_functions_with_config(
 /// Functions are keyed by root-qualified name. Every definition of a
 /// duplicated name shares its reachability. With `recursive: false`, functions
 /// in nested modules are neither removed nor analyzed; they are kept as roots.
-fn run(ctx: &mut IrContext, module: Module, config: &GlobalDceConfig) -> GlobalDceResult {
-    let symbols = SymbolTable::collect(ctx, module);
+fn run(
+    ctx: &mut IrContext,
+    module: Module,
+    config: &GlobalDceConfig,
+    analyses: &mut AnalysisCache,
+) -> GlobalDceResult {
+    let symbols = SymbolTable::cached(ctx, module, analyses);
     let functions = || {
         symbols
             .all_definitions()
@@ -92,7 +109,7 @@ fn run(ctx: &mut IrContext, module: Module, config: &GlobalDceConfig) -> GlobalD
         ControlFlow::Continue(WalkAction::Advance)
     });
 
-    let graph = build_call_graph(ctx, module);
+    let graph = CallGraph::cached(ctx, module, analyses);
     let reachable = compute_reachable(&graph, roots);
 
     // A function containing a reachable function definition is kept with it.

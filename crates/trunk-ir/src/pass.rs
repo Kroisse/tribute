@@ -26,6 +26,7 @@ use std::ops::ControlFlow;
 
 use derive_more::{Display, Error};
 
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::core;
 use crate::op_interface::IsolatedFromAboveOps;
@@ -39,6 +40,10 @@ use crate::walk::{WalkAction, walk_op};
 /// (counters, caches, accumulated stats) across invocations on different
 /// targets. The [`PassManager`] holds each pass exclusively for the
 /// duration of a [`PassManager::run`] call.
+///
+/// Every pass of one run receives the same [`AnalysisCache`]. The cache
+/// discards its results whenever the IR changes, so a pass may query
+/// analyses without invalidating them itself.
 pub trait Pass {
     /// Op type this pass operates on.
     ///
@@ -50,7 +55,12 @@ pub trait Pass {
 
     fn name(&self) -> &'static str;
 
-    fn run(&mut self, ctx: &mut IrContext, target: Self::Target) -> PassRunResult;
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: Self::Target,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult;
 }
 
 /// [`Pass`] adapter for a named function or closure.
@@ -73,7 +83,7 @@ impl<T, F> FnPass<T, F> {
 impl<T, F> Pass for FnPass<T, F>
 where
     T: DialectOp,
-    F: FnMut(&mut IrContext, T) -> PassRunResult,
+    F: FnMut(&mut IrContext, T, &mut AnalysisCache) -> PassRunResult,
 {
     type Target = T;
 
@@ -81,8 +91,13 @@ where
         self.name
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: T) -> PassRunResult {
-        (self.f)(ctx, target)
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: T,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        (self.f)(ctx, target, analyses)
     }
 }
 
@@ -90,7 +105,7 @@ where
 pub fn pass_fn<T, F>(name: &'static str, f: F) -> FnPass<T, F>
 where
     T: DialectOp,
-    F: FnMut(&mut IrContext, T) -> PassRunResult,
+    F: FnMut(&mut IrContext, T, &mut AnalysisCache) -> PassRunResult,
 {
     FnPass::new(name, f)
 }
@@ -98,15 +113,25 @@ where
 /// Object-safe view of [`Pass`] used inside [`PassManager`] storage.
 trait ErasedPass<T: DialectOp> {
     fn name(&self) -> &'static str;
-    fn run(&mut self, ctx: &mut IrContext, target: T) -> PassRunResult;
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: T,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult;
 }
 
 impl<P: Pass> ErasedPass<P::Target> for P {
     fn name(&self) -> &'static str {
         Pass::name(self)
     }
-    fn run(&mut self, ctx: &mut IrContext, target: P::Target) -> PassRunResult {
-        Pass::run(self, ctx, target)
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: P::Target,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        Pass::run(self, ctx, target, analyses)
     }
 }
 
@@ -221,6 +246,7 @@ trait NestedRunner: Any {
         &mut self,
         ctx: &mut IrContext,
         parent_op: OpRef,
+        analyses: &mut AnalysisCache,
         hooks: PostPassHooks<'_>,
     ) -> PassResult;
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -235,6 +261,7 @@ impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
         &mut self,
         ctx: &mut IrContext,
         parent_op: OpRef,
+        analyses: &mut AnalysisCache,
         hooks: PostPassHooks<'_>,
     ) -> PassResult {
         // Collect targets fresh on each entry so passes that erase or
@@ -247,7 +274,7 @@ impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
                 continue;
             }
             ensure_nested_anchor_is_isolated(ctx, target.op_ref())?;
-            self.pm.run_on_target_with(ctx, target, hooks)?;
+            self.pm.run_on_target_with(ctx, target, analyses, hooks)?;
         }
         Ok(())
     }
@@ -389,7 +416,20 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     /// Run all registered passes (and recursively nested managers) on
     /// `target`. Pass-level ordering is registration order; nested
     /// managers run after the parent's own passes.
+    ///
+    /// The passes share a fresh [`AnalysisCache`]; use
+    /// [`Self::run_with_analyses`] to share the pipeline phase's cache.
     pub fn run(&mut self, ctx: &mut IrContext, target: Root) -> PassResult {
+        self.run_with_analyses(ctx, target, &mut AnalysisCache::new())
+    }
+
+    /// Like [`Self::run`], with every pass querying `analyses`.
+    pub fn run_with_analyses(
+        &mut self,
+        ctx: &mut IrContext,
+        target: Root,
+        analyses: &mut AnalysisCache,
+    ) -> PassResult {
         // Split-borrow the hooks from `passes`/`nested` so we can hand
         // their references down to nested runners while iterating the pass
         // vec mutably.
@@ -403,7 +443,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             verifier: verifier.as_deref(),
             instrumentation: instrumentation.as_deref(),
         };
-        Self::run_passes(ctx, target, passes, nested, hooks)
+        Self::run_passes(ctx, target, passes, nested, analyses, hooks)
     }
 
     /// Entry point used by nested managers, threading parent-supplied hooks
@@ -412,6 +452,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         &mut self,
         ctx: &mut IrContext,
         target: Root,
+        analyses: &mut AnalysisCache,
         parent: PostPassHooks<'_>,
     ) -> PassResult {
         let Self {
@@ -427,7 +468,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             verifier: verifier.as_deref().or(parent.verifier),
             instrumentation: instrumentation.as_deref().or(parent.instrumentation),
         };
-        Self::run_passes(ctx, target, passes, nested, hooks)
+        Self::run_passes(ctx, target, passes, nested, analyses, hooks)
     }
 
     fn run_passes(
@@ -435,6 +476,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         target: Root,
         passes: &mut [Box<dyn ErasedPass<Root>>],
         nested: &mut [Box<dyn NestedRunner>],
+        analyses: &mut AnalysisCache,
         hooks: PostPassHooks<'_>,
     ) -> PassResult {
         // Capture attachment state at entry so we can detect a pass that
@@ -446,7 +488,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         for pass in passes.iter_mut() {
             let span = tracing::debug_span!("pass", name = pass.name());
             let _enter = span.enter();
-            pass.run(ctx, target)
+            pass.run(ctx, target, analyses)
                 .map_err(|failure| PassError::execution(pass.name(), failure))?;
             if !target_still_alive::<Root>(ctx, target.op_ref(), pre_attached) {
                 // The pass erased or retagged its own target. Subsequent
@@ -465,7 +507,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         }
         let parent_op = target.op_ref();
         for n in nested.iter_mut() {
-            n.run(ctx, parent_op, hooks)?;
+            n.run(ctx, parent_op, analyses, hooks)?;
         }
         Ok(())
     }
@@ -554,7 +596,12 @@ mod tests {
         fn name(&self) -> &'static str {
             "recorder"
         }
-        fn run(&mut self, _ctx: &mut IrContext, _target: T) -> PassRunResult {
+        fn run(
+            &mut self,
+            _ctx: &mut IrContext,
+            _target: T,
+            _analyses: &mut AnalysisCache,
+        ) -> PassRunResult {
             self.order.borrow_mut().push(self.tag);
             Ok(())
         }
@@ -583,7 +630,12 @@ mod tests {
             "failing"
         }
 
-        fn run(&mut self, _ctx: &mut IrContext, _target: T) -> PassRunResult {
+        fn run(
+            &mut self,
+            _ctx: &mut IrContext,
+            _target: T,
+            _analyses: &mut AnalysisCache,
+        ) -> PassRunResult {
             self.order.borrow_mut().push("failing");
             Err(Box::new(TestFailure("boom")))
         }
@@ -620,7 +672,12 @@ mod tests {
         fn name(&self) -> &'static str {
             "counting"
         }
-        fn run(&mut self, _ctx: &mut IrContext, _target: T) -> PassRunResult {
+        fn run(
+            &mut self,
+            _ctx: &mut IrContext,
+            _target: T,
+            _analyses: &mut AnalysisCache,
+        ) -> PassRunResult {
             self.count += 1;
             self.mirror.set(self.count);
             Ok(())
@@ -651,7 +708,7 @@ mod tests {
         let seen_name_clone = seen_name.clone();
 
         let mut pm = PassManager::new();
-        pm.add_pass(pass_fn("closure-pass", move |_ctx, _target| {
+        pm.add_pass(pass_fn("closure-pass", move |_ctx, _target, _analyses| {
             count_clone.set(count_clone.get() + 1);
             Ok(())
         }));
@@ -662,6 +719,52 @@ mod tests {
 
         assert_eq!(count.get(), 1);
         assert_eq!(&*seen_name.borrow(), "closure-pass");
+    }
+
+    #[test]
+    fn passes_share_the_run_analysis_cache() {
+        use crate::rewrite::Module;
+        use crate::symbol_table::SymbolTable;
+
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f");
+
+        let observed = Rc::new(Cell::new(0));
+        let observed_in_pass = observed.clone();
+        let mut pm = PassManager::new();
+        pm.add_pass(pass_fn(
+            "compute-symbols",
+            |ctx: &mut IrContext, target: core::Module, analyses: &mut AnalysisCache| {
+                let module = Module::new(ctx, target.op_ref()).expect("module target");
+                SymbolTable::cached(ctx, module, analyses);
+                Ok(())
+            },
+        ));
+        pm.nest::<func::Func>().add_pass(pass_fn(
+            "observe-symbols",
+            move |ctx: &mut IrContext, target: func::Func, analyses: &mut AnalysisCache| {
+                let module = ctx
+                    .op(target.op_ref())
+                    .parent_block
+                    .and_then(|block| ctx.region(ctx.block(block).parent_region?).parent_op);
+                let cached = analyses.get_cached::<SymbolTable>(ctx, module.expect("module"));
+                assert!(cached.is_some(), "unchanged IR keeps the earlier analysis");
+                observed_in_pass.set(observed_in_pass.get() + 1);
+                Ok(())
+            },
+        ));
+        let mut analyses = AnalysisCache::new();
+        pm.run_with_analyses(&mut ctx, module, &mut analyses)
+            .unwrap();
+
+        assert_eq!(observed.get(), 1);
+        assert!(
+            analyses
+                .get_cached::<SymbolTable>(&ctx, module.op_ref())
+                .is_some(),
+            "the caller's cache holds the analyses of the run"
+        );
     }
 
     #[test]
@@ -726,7 +829,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "erase-first"
             }
-            fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+            fn run(
+                &mut self,
+                ctx: &mut IrContext,
+                target: core::Module,
+                _analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
                 let region = target.body(ctx);
                 let block = ctx.region(region).blocks[0];
                 let first_op = ctx.block(block).ops[0];
@@ -762,7 +870,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "erase-self"
             }
-            fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+            fn run(
+                &mut self,
+                ctx: &mut IrContext,
+                target: func::Func,
+                _analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
                 crate::rewrite::erase_op(ctx, target.op_ref());
                 Ok(())
             }

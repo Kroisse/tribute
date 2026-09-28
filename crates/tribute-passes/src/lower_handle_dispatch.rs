@@ -5,6 +5,7 @@
 //!
 //! Uses `PatternApplicator` for declarative op-level rewriting.
 
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
@@ -49,7 +50,12 @@ impl Pass for LowerHandleDispatch {
         "lower-handle-dispatch"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: func::Func,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         lower_handle_dispatch(ctx, target).map_err(Into::into)
     }
 }

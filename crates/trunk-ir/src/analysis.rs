@@ -23,24 +23,26 @@
 //!
 //! An [`AnalysisCache`] is owned by the **pipeline orchestrator** for
 //! the duration of one pipeline phase and **injected** into each pass
-//! that needs it. The cache is short-lived — dropped when the phase
-//! returns. Reusing a cache with another [`IrContext`] discards the prior
-//! context's results before lookup.
+//! and boundary check that needs it. The cache is short-lived — dropped
+//! when the phase returns. Reusing a cache with another [`IrContext`]
+//! discards the prior context's results before lookup.
 //!
-//! The [`AnalysisCache::scope`] helper bundles this pattern:
+//! [`PassManager::run_with_analyses`](crate::pass::PassManager::run_with_analyses)
+//! hands the phase's cache to every [`Pass`](crate::pass::Pass). Consumers
+//! outside a pass manager take it as a parameter, often through a
+//! `*_with_analyses` variant of a function that otherwise uses a fresh cache:
 //!
 //! ```ignore
-//! fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
-//!     AnalysisCache::scope(ctx, |ctx, analyses| {
-//!         inline_functions(ctx, m, InlineConfig::default(), analyses);
-//!         // canonicalize(ctx, m, analyses); — future pass sharing `analyses`
-//!     });
+//! fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCache) {
+//!     eliminate_dead_functions_with_analyses(ctx, m, Default::default(), analyses);
+//!     function_pm.run_with_analyses(ctx, m.into(), analyses)?;
 //! }
 //! ```
 //!
-//! [`AnalysisCache::new`] is also available for tests or ad-hoc use,
-//! but orchestration code should prefer `scope` to make the phase
-//! boundary explicit.
+//! Since the cache discards its results after any IR change, sharing it is
+//! always safe; it saves work where consumers read unchanged IR back to
+//! back, such as the checks at a phase boundary. The [`AnalysisCache::scope`]
+//! helper bundles a cache with a closure for a self-contained phase.
 //!
 //! # Usage
 //!

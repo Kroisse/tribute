@@ -31,6 +31,7 @@ use tribute_core::{
     get_calling_convention, get_physical_closure_convention, set_calling_convention,
 };
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ir_mapping::IrMapping;
@@ -82,7 +83,12 @@ impl Pass for LowerClosureLambda {
         "lower-closure-lambda"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         lower_closure_lambda(ctx, target.into());
         Ok(())
     }

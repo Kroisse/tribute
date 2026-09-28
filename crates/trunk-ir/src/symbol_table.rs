@@ -9,11 +9,13 @@
 //! definitions share one namespace: a qualified name defined more than once is
 //! an IR error. Consumers check the kind of the definition they resolve.
 
+use std::sync::Arc;
+
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
+use crate::analysis::{Analysis, AnalysisCache, AnalysisContext, AnalysisError};
 use crate::context::IrContext;
 use crate::dialect::core;
 use crate::ops::DialectOp;
@@ -44,6 +46,14 @@ impl SymbolTable {
             table.collect_region(ctx, body, &module_path(ctx, module.op()));
         }
         table
+    }
+
+    /// The table of `module` from `analyses`, collected at most once per IR
+    /// revision.
+    pub fn cached(ctx: &IrContext, module: Module, analyses: &mut AnalysisCache) -> Arc<Self> {
+        analyses
+            .get::<Self>(ctx, module.op())
+            .expect("symbol table collection is infallible")
     }
 
     fn collect_region(&mut self, ctx: &IrContext, region: RegionRef, path: &[Symbol]) {

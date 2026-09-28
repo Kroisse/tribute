@@ -10,6 +10,7 @@ use std::rc::Rc;
 
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
@@ -67,7 +68,12 @@ impl Pass for LowerIntrinsicToArith {
         "lower-intrinsic-to-arith"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         lower_intrinsic_to_arith(ctx, target.into());
         Ok(())
     }

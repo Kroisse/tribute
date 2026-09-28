@@ -10,6 +10,7 @@ use std::fmt;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
@@ -305,7 +306,12 @@ impl Pass for ResolveEvidenceDispatch {
         "resolve-evidence-dispatch"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         resolve_evidence_dispatch(ctx, target.into()).map_err(Into::into)
     }
 }

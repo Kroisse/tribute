@@ -64,7 +64,7 @@ pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func) {
 
 /// Build a function-anchored SCF-to-CF lowering pass.
 pub fn scf_to_cf_pass() -> impl Pass<Target = func::Func> {
-    pass_fn("scf-to-cf-func", |ctx, target| {
+    pass_fn("scf-to-cf-func", |ctx, target, _analyses| {
         lower_scf_to_cf_func(ctx, target);
         Ok(())
     })
@@ -1071,7 +1071,9 @@ mod tests {
         let before = crate::printer::print_module(&ctx, module.op());
         let func = func::Func::from_op(&ctx, func_op).unwrap();
 
-        scf_to_cf_pass().run(&mut ctx, func).unwrap();
+        scf_to_cf_pass()
+            .run(&mut ctx, func, &mut AnalysisCache::new())
+            .unwrap();
 
         assert!(func.body_if_present(&ctx).is_none());
         assert!(ctx.op(func_op).regions.is_empty());
