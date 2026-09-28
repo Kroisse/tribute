@@ -66,10 +66,10 @@ impl Analysis for StructuredControlAnalysis {
                 continue;
             }
             analysis.terminal_successors.insert(op);
-            if !ir
+            if ir
                 .op(op)
                 .parent_block
-                .is_some_and(|block| ir.block(block).ops.last() == Some(&op))
+                .is_none_or(|block| ir.block(block).ops.last() != Some(&op))
             {
                 continue;
             }
