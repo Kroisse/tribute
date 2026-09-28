@@ -217,8 +217,10 @@ pub type PassResult<T = ()> = Result<T, PassError>;
 /// an invariant is blamed immediately rather than masked by a later pass; the
 /// [`PassManager`] returns a [`PassError`] with the offending pass's name.
 ///
-/// The verifier receives the run's [`AnalysisCache`]. It does not change the
-/// IR, so analyses it computes remain cached for the passes that follow.
+/// The verifier runs only after a pass that changed the IR, since a pass that
+/// left the IR unchanged cannot have broken an invariant. It receives the
+/// run's [`AnalysisCache`]; it does not change the IR, so analyses it computes
+/// remain cached for the passes that follow.
 type VerifierFn = dyn Fn(&IrContext, &mut AnalysisCache, OpRef) -> Result<(), VerifyError>;
 
 /// Observation-only hook invoked after each pass, mirroring the verifier's
@@ -231,7 +233,8 @@ type InstrumentFn = dyn Fn(&IrContext, &str, OpRef);
 
 /// Post-pass hooks threaded through the dispatch tree: a checking [`VerifierFn`]
 /// and an observation-only [`InstrumentFn`]. Both follow the same timing,
-/// propagation, and stale-target skip rules. Copyable since it only holds
+/// propagation, and stale-target skip rules, except that the verifier skips a
+/// pass that left the IR unchanged. Copyable since it only holds
 /// borrows.
 #[derive(Clone, Copy, Default)]
 struct PostPassHooks<'a> {
@@ -393,7 +396,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     }
 
     /// Register a verifier callback invoked after each pass on this manager
-    /// and any nested manager. Typical use: in debug builds, install a
+    /// and any nested manager that changed the IR. Typical use: in debug builds, install a
     /// validation routine so a broken invariant is attributed to the pass
     /// that caused it. Replaces any previously installed verifier.
     pub fn with_verifier<F>(&mut self, verifier: F) -> &mut Self
@@ -491,6 +494,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         for pass in passes.iter_mut() {
             let span = tracing::debug_span!("pass", name = pass.name());
             let _enter = span.enter();
+            let before = ctx.analysis_stamp();
             pass.run(ctx, target, analyses)
                 .map_err(|failure| PassError::execution(pass.name(), failure))?;
             if !target_still_alive::<Root>(ctx, target.op_ref(), pre_attached) {
@@ -503,6 +507,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
                 inst(ctx, pass.name(), target.op_ref());
             }
             if let Some(v) = hooks.verifier
+                && ctx.analysis_stamp() != before
                 && let Err(e) = v(ctx, analyses, target.op_ref())
             {
                 return Err(PassError::verification(pass.name(), e));
@@ -601,13 +606,19 @@ mod tests {
         }
         fn run(
             &mut self,
-            _ctx: &mut IrContext,
-            _target: T,
+            ctx: &mut IrContext,
+            target: T,
             _analyses: &mut AnalysisCache,
         ) -> PassRunResult {
             self.order.borrow_mut().push(self.tag);
+            touch(ctx, target.op_ref());
             Ok(())
         }
+    }
+
+    /// Record an IR change on `op`, so the verifier runs after the pass.
+    fn touch(ctx: &mut IrContext, op: OpRef) {
+        ctx.op_mut(op);
     }
 
     fn recorder<T: DialectOp + 'static>(
@@ -677,12 +688,13 @@ mod tests {
         }
         fn run(
             &mut self,
-            _ctx: &mut IrContext,
-            _target: T,
+            ctx: &mut IrContext,
+            target: T,
             _analyses: &mut AnalysisCache,
         ) -> PassRunResult {
             self.count += 1;
             self.mirror.set(self.count);
+            touch(ctx, target.op_ref());
             Ok(())
         }
     }
@@ -782,8 +794,11 @@ mod tests {
         let observed_in_pass = observed.clone();
         let mut pm = PassManager::new();
         pm.add_pass(pass_fn(
-            "unchanged",
-            |_ctx: &mut IrContext, _target: core::Module, _analyses: &mut AnalysisCache| Ok(()),
+            "change",
+            |ctx: &mut IrContext, target: core::Module, _analyses: &mut AnalysisCache| {
+                touch(ctx, target.op_ref());
+                Ok(())
+            },
         ))
         .add_pass(pass_fn(
             "observe-symbols",
@@ -1274,6 +1289,33 @@ mod tests {
             error.to_string(),
             "pass `counting` broke an IR invariant: nested boom"
         );
+    }
+
+    #[test]
+    fn verifier_skips_passes_that_leave_the_ir_unchanged() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f1");
+
+        let verified: Rc<RefCell<Vec<OpRef>>> = Rc::new(RefCell::new(Vec::new()));
+        let verified_clone = verified.clone();
+        let mut pm = PassManager::new();
+        pm.add_pass(pass_fn(
+            "unchanged",
+            |_ctx: &mut IrContext, _target: core::Module, _analyses: &mut AnalysisCache| Ok(()),
+        ))
+        .add_pass(recorder::<core::Module>("change", Rc::default()));
+        pm.nest::<func::Func>().add_pass(pass_fn(
+            "unchanged-func",
+            |_ctx: &mut IrContext, _target: func::Func, _analyses: &mut AnalysisCache| Ok(()),
+        ));
+        pm.with_verifier(move |_ctx, _analyses, op| {
+            verified_clone.borrow_mut().push(op);
+            Ok(())
+        });
+        pm.run(&mut ctx, module).unwrap();
+
+        assert_eq!(*verified.borrow(), vec![module.op_ref()]);
     }
 
     #[test]
