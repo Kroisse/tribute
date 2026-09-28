@@ -135,3 +135,14 @@ fn raw_path_keyword_is_rejected(db: &salsa::DatabaseImpl) {
         "`self` cannot be a raw identifier",
     );
 }
+
+#[salsa_test]
+fn path_keyword_binding_is_rejected(db: &salsa::DatabaseImpl) {
+    assert_error(
+        db,
+        "fn f() -> Nat {\n    let self = 1\n    1\n}\n",
+        "self",
+        CompilationPhase::Parsing,
+        "`self` is a keyword and cannot be used as a name",
+    );
+}

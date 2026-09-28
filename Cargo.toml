@@ -47,7 +47,7 @@ trybuild = "1.0"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tree-sitter = "0.26.13"
-tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", rev = "7bda690a944fbbc66d6732b15d64c46b36ff00f6" }
+tree-sitter-tribute = { git = "https://github.com/Kroisse/tree-sitter-tribute", rev = "f9384d8584c3a99f40a602216321494750817799" }
 tribute-core = { path = "crates/tribute-core" }
 tribute-rc = { path = "crates/tribute-rc" }
 tribute-front = { path = "crates/tribute-front" }

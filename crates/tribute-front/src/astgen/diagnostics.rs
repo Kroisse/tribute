@@ -23,10 +23,12 @@ pub(super) fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitte
             ctx.parse_error(span, msg);
         } else if let Some(keyword) = keyword_used_as_name(node) {
             let name = ctx.node_text(&keyword).into_owned();
-            ctx.parse_error(
-                Span::new(keyword.start_byte(), keyword.end_byte()),
-                format!("`{name}` is a keyword; write `r#{name}` to use it as a name"),
-            );
+            let message = if PATH_KEYWORDS.contains(&name.as_str()) {
+                format!("`{name}` is a keyword and cannot be used as a name")
+            } else {
+                format!("`{name}` is a keyword; write `r#{name}` to use it as a name")
+            };
+            ctx.parse_error(Span::new(keyword.start_byte(), keyword.end_byte()), message);
         } else {
             let parent_ctx = node
                 .parent()
@@ -51,18 +53,23 @@ pub(super) fn collect_error_nodes(ctx: &mut AstLoweringCtx<'_>, node: tree_sitte
 }
 
 /// A keyword inside an ERROR node that stands where a name belongs: after
-/// `.` or `::`, or before `:`, `=`, or `,`.
+/// `.` or `::`, or before `:`, `=`, or `,`. A path keyword legitimately
+/// follows `::`, so only the other positions count for it.
 fn keyword_used_as_name(error: Node<'_>) -> Option<Node<'_>> {
     let mut leaves = Vec::new();
     collect_leaves(error, &mut leaves);
     leaves.iter().enumerate().find_map(|(i, &leaf)| {
-        let is_keyword = leaf.kind().starts_with("keyword_")
-            && KEYWORDS.contains(&leaf.kind().trim_start_matches("keyword_"));
+        let word = leaf.kind().strip_prefix("keyword_")?;
+        let is_path = PATH_KEYWORDS.contains(&word);
+        if !is_path && !KEYWORDS.contains(&word) {
+            return None;
+        }
         let before = i.checked_sub(1).map(|j| leaves[j].kind());
         let after = leaves.get(i + 1).map(|next| next.kind());
-        let in_name_position =
-            matches!(before, Some("." | "::")) || matches!(after, Some(":" | "=" | ","));
-        (is_keyword && in_name_position).then_some(leaf)
+        let in_name_position = matches!(before, Some("."))
+            || (!is_path && matches!(before, Some("::")))
+            || matches!(after, Some(":" | "=" | ","));
+        in_name_position.then_some(leaf)
     })
 }
 
