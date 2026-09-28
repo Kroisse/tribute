@@ -355,14 +355,6 @@ fn build_dispatching_deep_release(
     builder.ins().return_(&[]);
 }
 
-/// Read-only data section entry for native code generation.
-pub struct RodataEntry {
-    /// Symbol name for this data section (e.g., `__tribute_rodata_0`).
-    pub symbol: Symbol,
-    /// Raw byte content.
-    pub data: Vec<u8>,
-}
-
 /// Emit a native object file from a lowered TrunkIR module.
 ///
 /// This function assumes the module has already been lowered to clif dialect
@@ -370,25 +362,17 @@ pub struct RodataEntry {
 /// 1. Validates the IR (checks for non-clif ops)
 /// 2. Emits native code via Cranelift
 ///
-/// `rodata` provides read-only data sections that can be referenced via
-/// `clif.symbol_addr` operations.
+/// Every `clif.data` declared in the module becomes a read-only data object
+/// that `clif.symbol_addr` operations can reference.
 ///
 /// For Tribute-specific compilation (including lowering from high-level IR),
 /// use the orchestration in the main crate's pipeline.
-pub fn emit_module_to_native(
-    ctx: &IrContext,
-    module: Module,
-    rodata: &[RodataEntry],
-) -> CompilationResult<Vec<u8>> {
+pub fn emit_module_to_native(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8>> {
     validate_clif_ir(ctx, module)?;
-    emit_module_impl(ctx, module, rodata)
+    emit_module_impl(ctx, module)
 }
 
-fn emit_module_impl(
-    ctx: &IrContext,
-    module: Module,
-    rodata: &[RodataEntry],
-) -> CompilationResult<Vec<u8>> {
+fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8>> {
     // 1. ISA setup — use host triple
     let isa = native_isa()?;
     let call_conv = isa.default_call_conv();
@@ -447,12 +431,13 @@ fn emit_module_impl(
     // 3c. RTTI infrastructure
     let rtti_info = collect_and_declare_rtti(&mut obj_module, &mut func_ids, call_conv)?;
 
-    // 3d. Declare and define rodata sections
+    // 3d. Declare and define the module's read-only data objects
     let mut data_ids: HashMap<Symbol, cranelift_module::DataId> = HashMap::new();
-    for entry in rodata {
+    for data in collect_clif_data(ctx, module) {
+        let symbol = data.sym_name(ctx);
         let data_id = obj_module
             .declare_data(
-                &entry.symbol.to_string(),
+                &symbol.to_string(),
                 Linkage::Local,
                 false, // not writable
                 false, // not TLS
@@ -460,13 +445,13 @@ fn emit_module_impl(
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
 
         let mut data_desc = DataDescription::new();
-        data_desc.define(entry.data.clone().into_boxed_slice());
-        data_desc.set_align(1); // byte-aligned rodata
+        data_desc.define(data.bytes(ctx).to_vec().into_boxed_slice());
+        data_desc.set_align(u64::from(data.align(ctx)));
         obj_module
             .define_data(data_id, &data_desc)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
 
-        data_ids.insert(entry.symbol, data_id);
+        data_ids.insert(symbol, data_id);
     }
 
     // 4. Second pass — define functions
@@ -647,6 +632,29 @@ fn host_object_triple() -> Triple {
 }
 
 /// Collect all `clif.func` operations from a Module.
+/// Collect the `clif.data` objects of a module, including nested modules.
+fn collect_clif_data(ctx: &IrContext, module: Module) -> Vec<clif::Data> {
+    fn collect(ctx: &IrContext, region: RegionRef, data: &mut Vec<clif::Data>) {
+        for &block in &ctx.region(region).blocks {
+            for &op in &ctx.block(block).ops {
+                if let Ok(declared) = clif::Data::from_op(ctx, op) {
+                    data.push(declared);
+                } else if trunk_ir::dialect::core::Module::matches(ctx, op) {
+                    for &nested in &ctx.op(op).regions {
+                        collect(ctx, nested, data);
+                    }
+                }
+            }
+        }
+    }
+
+    let mut data = Vec::new();
+    if let Some(body) = module.body(ctx) {
+        collect(ctx, body, &mut data);
+    }
+    data
+}
+
 fn collect_clif_funcs(ctx: &IrContext, module: Module) -> Vec<OpRef> {
     let mut funcs = Vec::new();
     if let Some(body) = module.body(ctx) {
@@ -806,7 +814,7 @@ mod tests {
                 ),
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());
-            let error = emit_module_to_native(&ctx, module, &[]).expect_err("invalid callable");
+            let error = emit_module_to_native(&ctx, module).expect_err("invalid callable");
             assert!(error.to_string().contains("clif.func @helper"), "{error}");
             assert!(error.to_string().contains(expected), "{error}");
             assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
@@ -827,7 +835,7 @@ mod tests {
             parent_op: Some(op),
         });
         ctx.op_mut(op).regions.push(extra);
-        let error = emit_module_to_native(&ctx, module, &[]).expect_err("multiple bodies");
+        let error = emit_module_to_native(&ctx, module).expect_err("multiple bodies");
         assert!(
             error
                 .to_string()
@@ -847,7 +855,7 @@ mod tests {
                 ),
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());
-            let error = emit_module_to_native(&ctx, module, &[])
+            let error = emit_module_to_native(&ctx, module)
                 .expect_err("unsupported declarations must not be silently omitted");
             assert!(error.to_string().contains("clif.func @helper"), "{error}");
             assert!(
@@ -891,7 +899,7 @@ mod tests {
         }"#,
         );
         validate_clif_ir(&ctx, module).expect("qualified names are distinct symbols");
-        let bytes = emit_module_to_native(&ctx, module, &[]).expect("native object");
+        let bytes = emit_module_to_native(&ctx, module).expect("native object");
         let object = object::File::parse(bytes.as_slice()).expect("parse native object");
         // Only the root `main` is exported; a nested `main` is an ordinary function.
         let exported_mains: Vec<_> = object
@@ -918,7 +926,7 @@ mod tests {
             }
         }"#,
         );
-        let bytes = emit_module_to_native(&ctx, module, &[]).expect("native object");
+        let bytes = emit_module_to_native(&ctx, module).expect("native object");
         let object = object::File::parse(bytes.as_slice()).expect("parse native object");
         for name in ["used", "unused", "main"] {
             let linker_name = if object.format() == object::BinaryFormat::MachO {
@@ -966,7 +974,7 @@ mod tests {
     fn core_nil_is_zero_width_across_native_cfg_and_calls() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, NIL_ZERO_WIDTH_NATIVE);
-        let object = emit_module_to_native(&ctx, module, &[]).unwrap();
+        let object = emit_module_to_native(&ctx, module).unwrap();
         assert!(!object.is_empty());
     }
 
@@ -982,15 +990,47 @@ mod tests {
   }
 }"#,
         );
-        let object = emit_module_to_native(&ctx, module, &[]).unwrap();
+        let object = emit_module_to_native(&ctx, module).unwrap();
         assert!(!object.is_empty());
+    }
+
+    #[test]
+    fn native_emission_defines_declared_data_objects() {
+        use object::{Object, ObjectSection, ObjectSymbol};
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.data {sym_name = @greeting, bytes = b"hi there", align = 1}
+  clif.func @main() -> core.i32 {
+    %greeting = clif.symbol_addr {sym = @greeting} : core.ptr
+    %result = clif.iconst {value = 0} : core.i32
+    clif.return %result
+  }
+}"#,
+        );
+
+        let bytes = emit_module_to_native(&ctx, module).expect("native object");
+
+        let file = object::File::parse(bytes.as_slice()).expect("parse native object");
+        let symbol = file
+            .symbols()
+            .find(|symbol| symbol.name().is_ok_and(|name| name.ends_with("greeting")))
+            .expect("declared data object should be a symbol");
+        let section = file
+            .section_by_index(symbol.section_index().expect("defined symbol"))
+            .expect("symbol section");
+        let offset = (symbol.address() - section.address()) as usize;
+        let contents = section.data().expect("section data");
+        assert_eq!(&contents[offset..offset + 8], b"hi there");
     }
 
     #[test]
     fn native_emission_preserves_zero_and_ordered_multiple_results() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ORDERED_RESULT_LISTS_NATIVE);
-        let object = emit_module_to_native(&ctx, module, &[]).unwrap();
+        let object = emit_module_to_native(&ctx, module).unwrap();
         let temp = tempfile::Builder::new()
             .prefix("tribute-ordered-results")
             .tempdir()

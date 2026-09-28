@@ -1041,8 +1041,8 @@ indices used by `call_indirect` are a separate concern and are not GC heap-type
 identities.
 
 `clif.*` is the native backend dialect. It models Cranelift-style functions,
-calls, arithmetic, CFG control flow, memory access, stack slots, symbol
-addresses, and numeric conversions.
+read-only data objects, calls, arithmetic, CFG control flow, memory access,
+stack slots, symbol addresses, and numeric conversions.
 
 Backend-ready full conversion targets must explicitly list which infrastructure
 operations are still allowed next to the backend dialect.

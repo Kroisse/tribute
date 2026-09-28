@@ -1,21 +1,22 @@
 //! Lower `adt.string_const` and `adt.bytes_const` to native (clif) operations.
 //!
 //! This pass uses a two-phase approach:
-//! 1. **Analysis**: Collect all string/bytes constants and assign data symbol names
-//! 2. **Lowering**: Replace const operations with clif operations that:
-//!    - Reference rodata via `clif.symbol_addr`
+//! 1. **Analysis**: Collect the distinct string/bytes payloads of the input IR
+//! 2. **Lowering**: Declare a `clif.data` object for each payload and replace
+//!    const operations with clif operations that:
+//!    - Reference the data object via `clif.symbol_addr`
 //!    - Allocate RC-managed `TributeBytes` structs
 //!    - Wrap bytes in `adt.variant_new(String, Leaf, bytes)` for string constants
 //!
-//! The analysis produces `NativeConstAnalysis` which is passed to the Cranelift
-//! backend for data section emission.
+//! The Cranelift backend emits the declared `clif.data` objects from the IR.
 //!
 //! ## Pipeline Position
 //!
 //! Runs before `adt_rc_header` (Phase 1.95) so that `adt.variant_new` operations
 //! produced here are handled by the existing variant lowering.
 
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -35,14 +36,13 @@ use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
 
-/// Result of const analysis — maps content to data symbol names.
-///
-/// Passed to Cranelift backend for data section emission.
+/// Prefix of the data objects this pass declares.
+const RODATA_PREFIX: &str = "__tribute_rodata_";
+
+/// Result of const analysis.
 pub struct NativeConstAnalysis {
-    /// (symbol_name, byte_content) pairs for rodata sections.
-    pub rodata: Vec<(Symbol, Vec<u8>)>,
-    /// Map from byte content to its assigned symbol name.
-    content_to_symbol: HashMap<Vec<u8>, Symbol>,
+    /// Distinct string/bytes payloads, in first-occurrence order.
+    contents: Vec<Vec<u8>>,
     /// Whether the module contains any `adt.string_const` ops.
     has_string_consts: bool,
     /// The exact prelude String enum type from module metadata.
@@ -51,37 +51,31 @@ pub struct NativeConstAnalysis {
 
 impl NativeConstAnalysis {
     pub fn is_empty(&self) -> bool {
-        self.rodata.is_empty()
+        self.contents.is_empty()
     }
 }
 
-/// Context for collecting const allocations during analysis.
+/// Context for collecting const payloads during analysis.
 struct ConstCollector {
-    rodata: Vec<(Symbol, Vec<u8>)>,
-    seen: HashMap<Vec<u8>, Symbol>,
-    next_idx: u32,
+    contents: Vec<Vec<u8>>,
+    seen: HashSet<Vec<u8>>,
     has_string_consts: bool,
 }
 
 impl ConstCollector {
     fn new() -> Self {
         Self {
-            rodata: Vec::new(),
-            seen: HashMap::new(),
-            next_idx: 0,
+            contents: Vec::new(),
+            seen: HashSet::new(),
             has_string_consts: false,
         }
     }
 
-    fn intern(&mut self, content: Vec<u8>) -> Symbol {
-        if let Some(&sym) = self.seen.get(&content) {
-            return sym;
+    fn intern(&mut self, content: Vec<u8>) {
+        if !self.seen.contains(&content) {
+            self.seen.insert(content.clone());
+            self.contents.push(content);
         }
-        let sym = Symbol::from_dynamic(&format!("__tribute_rodata_{}", self.next_idx));
-        self.next_idx += 1;
-        self.seen.insert(content.clone(), sym);
-        self.rodata.push((sym, content));
-        sym
     }
 
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
@@ -136,8 +130,7 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
         .flatten();
 
     NativeConstAnalysis {
-        content_to_symbol: collector.seen,
-        rodata: collector.rodata,
+        contents: collector.contents,
         has_string_consts: collector.has_string_consts,
         string_enum_ty,
     }
@@ -176,7 +169,7 @@ pub fn lower(
     let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
-    let content_to_symbol = analysis.content_to_symbol.clone();
+    let content_to_symbol = declare_rodata(ctx, module, &analysis.contents);
     let string_enum_ty = analysis.string_enum_ty;
 
     let mut applicator =
@@ -204,6 +197,59 @@ pub fn lower(
         .with_target(target)
         .apply_partial_conversion(ctx, module, "const-to-native")?;
     Ok(())
+}
+
+/// Map each payload to a byte-aligned `clif.data` object of the module.
+///
+/// Reuses an existing byte-aligned data object with the same bytes, and
+/// appends a new one at the end of the module for every other payload, under
+/// a symbol no module-level operation already uses.
+fn declare_rodata(
+    ctx: &mut IrContext,
+    module: Module,
+    contents: &[Vec<u8>],
+) -> HashMap<Vec<u8>, Symbol> {
+    let mut content_to_symbol = HashMap::new();
+    let Some(module_block) = module.first_block(ctx) else {
+        return content_to_symbol;
+    };
+
+    let mut taken = HashSet::new();
+    for &op in ctx.block(module_block).ops.iter() {
+        if let Some(name) = ctx.op(op).attributes.get_symbol("sym_name") {
+            taken.insert(name);
+        }
+        if let Ok(data) = clif::Data::from_op(ctx, op)
+            && data.align(ctx) == 1
+        {
+            content_to_symbol
+                .entry(data.bytes(ctx).to_vec())
+                .or_insert(data.sym_name(ctx));
+        }
+    }
+
+    let location = ctx.op(module.op()).location;
+    let mut next_idx = 0u32;
+    for content in contents {
+        let Entry::Vacant(entry) = content_to_symbol.entry(content.clone()) else {
+            continue;
+        };
+        let sym = loop {
+            let candidate = Symbol::from_dynamic(&format!("{RODATA_PREFIX}{next_idx}"));
+            next_idx += 1;
+            if !taken.contains(&candidate) {
+                break candidate;
+            }
+        };
+        let data = clif::Data::operands()
+            .sym_name(sym)
+            .bytes(content.as_slice().into())
+            .align(1)
+            .build(ctx, location);
+        ctx.push_op(module_block, data.op_ref());
+        entry.insert(sym);
+    }
+    content_to_symbol
 }
 
 /// Emit clif ops to allocate an RC-managed TributeBytes from a rodata symbol.
@@ -490,6 +536,104 @@ mod tests {
                 .operations()
                 .iter()
                 .any(|illegal| { illegal.dialect == "adt" && illegal.name == "string_const" })
+        );
+    }
+
+    fn data_objects(ctx: &IrContext, module: Module) -> Vec<(String, Vec<u8>, u32)> {
+        module
+            .ops(ctx)
+            .into_iter()
+            .filter_map(|op| clif::Data::from_op(ctx, op).ok())
+            .map(|data| {
+                (
+                    data.sym_name(ctx).to_string(),
+                    data.bytes(ctx).to_vec(),
+                    data.align(ctx),
+                )
+            })
+            .collect()
+    }
+
+    fn symbol_addrs(ctx: &IrContext, module: Module) -> Vec<String> {
+        let mut symbols = Vec::new();
+        if let Some(body) = module.body(ctx) {
+            walk_ops_in_region(ctx, body, &mut |ctx, op| {
+                if let Ok(addr) = clif::SymbolAddr::from_op(ctx, op) {
+                    symbols.push(addr.sym(ctx).to_string());
+                }
+            });
+        }
+        symbols
+    }
+
+    #[test]
+    fn lowering_declares_one_data_object_per_payload() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main() -> core.nil {
+    %first = adt.bytes_const {value = b"first"} : core.bytes
+    %second = adt.bytes_const {value = b"second"} : core.bytes
+    %again = adt.bytes_const {value = b"first"} : core.bytes
+    func.return
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis).expect("bytes constants should lower");
+
+        assert_eq!(
+            data_objects(&ctx, module),
+            [
+                ("__tribute_rodata_0".to_owned(), b"first".to_vec(), 1),
+                ("__tribute_rodata_1".to_owned(), b"second".to_vec(), 1),
+            ]
+        );
+        assert_eq!(
+            symbol_addrs(&ctx, module),
+            [
+                "__tribute_rodata_0",
+                "__tribute_rodata_1",
+                "__tribute_rodata_0"
+            ]
+        );
+    }
+
+    #[test]
+    fn lowering_reuses_data_objects_and_avoids_taken_symbols() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.data {sym_name = @__tribute_rodata_0, bytes = b"kept", align = 1}
+  clif.data {sym_name = @aligned, bytes = b"wide", align = 8}
+  func.func @__tribute_rodata_1() -> core.nil {
+    func.return
+  }
+  func.func @main() -> core.nil {
+    %kept = adt.bytes_const {value = b"kept"} : core.bytes
+    %wide = adt.bytes_const {value = b"wide"} : core.bytes
+    func.return
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis).expect("bytes constants should lower");
+
+        assert_eq!(
+            data_objects(&ctx, module),
+            [
+                ("__tribute_rodata_0".to_owned(), b"kept".to_vec(), 1),
+                ("aligned".to_owned(), b"wide".to_vec(), 8),
+                ("__tribute_rodata_2".to_owned(), b"wide".to_vec(), 1),
+            ]
+        );
+        assert_eq!(
+            symbol_addrs(&ctx, module),
+            ["__tribute_rodata_0", "__tribute_rodata_2"]
         );
     }
 }

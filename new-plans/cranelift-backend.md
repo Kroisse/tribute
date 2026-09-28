@@ -160,6 +160,15 @@ lowering이 그 producer 또는 block argument를 `core.ptr`로 명시적으로 
 `core.nil`의 정해진 zero-width projection과 별개이며, 다른 contract type 사이의
 호환성 규칙을 만들지 않는다.
 
+### 모듈 수준 data 선언
+
+`clif.func`처럼 `clif.data`도 Cranelift 명령어가 아니라 object 모듈 수준의
+선언이다. `clif.data`는 module-local 읽기 전용 data object의 기호, 바이트 내용,
+정렬을 가진다. Operation을 낮추는 단계는 자신이 `clif.symbol_addr`로 참조하는
+data object를 같은 단계에서 `clif.data`로 선언하며, 같은 내용과 정렬의 선언이
+이미 있으면 재사용한다. Emission은 IR에 선언된 `clif.data`만 object에 정의하고,
+앞 단계의 입력에서 정한 배치를 IR 밖으로 넘겨받지 않는다.
+
 ### Bodyless 선언의 바인딩
 
 Callable의 선언·정의·malformed 분류는 [공통 본문 구조](ir.md#callable-본문-구조)를

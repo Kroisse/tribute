@@ -875,7 +875,7 @@ mod tests {
         );
         assert!(printed.contains("clif.return %1"), "{printed}");
         assert!(
-            !crate::emit_module_to_native(&ctx, module, &[])
+            !crate::emit_module_to_native(&ctx, module)
                 .expect("native emitter projects nil to zero-width")
                 .is_empty()
         );
@@ -1060,7 +1060,7 @@ mod tests {
         let module = parse_test_module(&mut ctx, TAIL_TRANSFERS);
         super::lower(&mut ctx, module, TypeConverter::new()).unwrap();
 
-        let object = crate::emit_module_to_native(&ctx, module, &[]).unwrap();
+        let object = crate::emit_module_to_native(&ctx, module).unwrap();
         assert!(!object.is_empty());
     }
 

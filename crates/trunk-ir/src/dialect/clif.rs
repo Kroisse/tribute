@@ -13,6 +13,9 @@ mod clif {
         {}
     }
 
+    /// A module-local read-only data object that `symbol_addr` can reference.
+    fn data(sym_name: Attr<Symbol>, bytes: Attr<Bytes>, align: Attr<u32>) {}
+
     fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
