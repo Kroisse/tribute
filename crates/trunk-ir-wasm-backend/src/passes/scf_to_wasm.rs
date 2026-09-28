@@ -44,9 +44,7 @@ pub fn lower(
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
     AnalysisCache::scope(ctx, |ctx, cache| {
-        let analysis = cache
-            .get::<StructuredControlAnalysis>(ctx, module.op())
-            .expect("structured control analysis is infallible");
+        let analysis = cache.require::<StructuredControlAnalysis>(ctx, module.op());
         let mut plan = ScfLoweringPlan::default();
         validate_structured_control(ctx, module, &analysis, |op, decision| match decision {
             ControlLowering::DropNeverResult => {
@@ -83,9 +81,7 @@ pub fn validate_lowerable_structured_control(
     ctx: &IrContext,
     module: Module,
 ) -> Result<(), ConversionError> {
-    let analysis = AnalysisCache::new()
-        .get::<StructuredControlAnalysis>(ctx, module.op())
-        .expect("structured control analysis is infallible");
+    let analysis = AnalysisCache::new().require::<StructuredControlAnalysis>(ctx, module.op());
     validate_structured_control(ctx, module, &analysis, |_, _| {})
 }
 

@@ -1293,7 +1293,7 @@ fn prepare_module_to_native(
         pm.run(ctx, core_module, &mut analyses)
             .map_err(native_pass_failure)?;
     } else {
-        trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
+        trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module, &mut analyses);
     }
 
     // Phase 1 - Lower func dialect to clif dialect

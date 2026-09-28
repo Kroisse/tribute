@@ -46,26 +46,26 @@ use crate::types::{Attribute, Location};
 use crate::walk::{WalkAction, walk_op};
 
 /// Lower all `scf` operations in a module to `cf` operations.
-pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module) {
+pub fn lower_scf_to_cf(ctx: &mut IrContext, module: Module, analyses: &mut AnalysisCache) {
     let body = match module.body(ctx) {
         Some(r) => r,
         None => return,
     };
-    lower_region(ctx, module.op(), body);
+    lower_region(ctx, module.op(), body, analyses);
 }
 
 /// Lower all `scf` operations in one function to `cf` operations.
-pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func) {
+pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func, analyses: &mut AnalysisCache) {
     let Some(body) = func.body_if_present(ctx) else {
         return;
     };
-    lower_region(ctx, func.op_ref(), body);
+    lower_region(ctx, func.op_ref(), body, analyses);
 }
 
 /// Build a function-anchored SCF-to-CF lowering pass.
 pub fn scf_to_cf_pass() -> impl Pass<Target = func::Func> {
-    pass_fn("scf-to-cf-func", |ctx, target, _analyses| {
-        lower_scf_to_cf_func(ctx, target);
+    pass_fn("scf-to-cf-func", |ctx, target, analyses| {
+        lower_scf_to_cf_func(ctx, target, analyses);
         Ok(())
     })
 }
@@ -75,25 +75,21 @@ struct ScfToCfPlan {
     without_merge: HashSet<OpRef>,
 }
 
-fn lower_region(ctx: &mut IrContext, target: OpRef, body: RegionRef) {
-    AnalysisCache::scope(ctx, |ctx, cache| {
-        let analysis = cache
-            .get::<StructuredControlAnalysis>(ctx, target)
-            .expect("structured control analysis is infallible");
-        let mut plan = ScfToCfPlan {
-            without_merge: HashSet::new(),
-        };
-        let _ = walk_op::<()>(ctx, target, &mut |op| {
-            if (scf::If::matches(ctx, op) && analysis.has_terminal_unused_never_result(op))
-                || analysis.is_terminal_resultless_switch(op)
-            {
-                plan.without_merge.insert(op);
-            }
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-        cache.invalidate::<StructuredControlAnalysis>(target);
-        transform_region(ctx, body, &plan);
+fn lower_region(ctx: &mut IrContext, target: OpRef, body: RegionRef, analyses: &mut AnalysisCache) {
+    let analysis = analyses.require::<StructuredControlAnalysis>(ctx, target);
+    let mut plan = ScfToCfPlan {
+        without_merge: HashSet::new(),
+    };
+    let _ = walk_op::<()>(ctx, target, &mut |op| {
+        if (scf::If::matches(ctx, op) && analysis.has_terminal_unused_never_result(op))
+            || analysis.is_terminal_resultless_switch(op)
+        {
+            plan.without_merge.insert(op);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
     });
+    analyses.invalidate::<StructuredControlAnalysis>(target);
+    transform_region(ctx, body, &plan);
 }
 
 /// Transform all blocks in a region, lowering scf ops to cf.
@@ -1003,7 +999,7 @@ mod tests {
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
         // Lower scf to cf
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
         let use_chains = crate::validation::validate_use_chains(&ctx, module);
         assert!(
             use_chains.is_ok(),
@@ -1039,7 +1035,7 @@ mod tests {
         let untouched = build_void_if_func(&mut ctx, loc, "untouched");
         let _module = build_module(&mut ctx, loc, vec![selected.op_ref(), untouched.op_ref()]);
 
-        lower_scf_to_cf_func(&mut ctx, selected);
+        lower_scf_to_cf_func(&mut ctx, selected, &mut Default::default());
 
         let selected_names = collect_op_names(&ctx, selected.body(&ctx));
         let untouched_names = collect_op_names(&ctx, untouched.body(&ctx));
@@ -1147,7 +1143,7 @@ mod tests {
             .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
         let use_chains = crate::validation::validate_use_chains(&ctx, module);
         assert!(
             use_chains.is_ok(),
@@ -1170,7 +1166,7 @@ mod tests {
         let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
         assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let names = collect_op_names(&ctx, body);
@@ -1231,7 +1227,7 @@ mod tests {
         let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
         assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let names = collect_op_names(&ctx, body);
@@ -1289,7 +1285,7 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let names = collect_op_names(&ctx, body);
@@ -1338,7 +1334,7 @@ mod tests {
         let entry = ctx.region(function.body(&ctx)).blocks[0];
         let args = ctx.block_args(entry).to_vec();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let returns: Vec<_> = ctx
             .region(function.body(&ctx))
@@ -1380,7 +1376,7 @@ mod tests {
         let entry = ctx.region(function.body(&ctx)).blocks[0];
         let args = ctx.block_args(entry).to_vec();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let returns: Vec<_> = ctx
             .region(function.body(&ctx))
@@ -1413,7 +1409,7 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let returns: Vec<_> = ctx
             .region(function.body(&ctx))
@@ -1446,7 +1442,7 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
         assert!(
@@ -1526,9 +1522,8 @@ mod tests {
             let mut ctx = IrContext::new();
             let module = crate::parser::parse_test_module(&mut ctx, input);
             let (switch, arm) = first_switch_and_arm_region(&ctx, module);
-            let analysis = AnalysisCache::new()
-                .get::<StructuredControlAnalysis>(&ctx, module.op())
-                .unwrap();
+            let analysis =
+                AnalysisCache::new().require::<StructuredControlAnalysis>(&ctx, module.op());
             assert_eq!(
                 analysis.is_terminal_region(arm),
                 !arm_must_be_nonterminal,
@@ -1600,7 +1595,7 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let blocks = ctx.region(body).blocks.to_vec();
@@ -1651,7 +1646,7 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let blocks = ctx.region(body).blocks.to_vec();
@@ -1694,7 +1689,7 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let blocks = ctx.region(body).blocks.to_vec();
@@ -1745,7 +1740,7 @@ mod tests {
         let module = crate::parser::parse_test_module(&mut ctx, input);
         let func_op = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let blocks = ctx.region(body).blocks.to_vec();
@@ -1859,7 +1854,7 @@ mod tests {
             .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let names = collect_op_names(&ctx, body);
@@ -1930,7 +1925,7 @@ mod tests {
             .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let blocks = ctx.region(body).blocks.to_vec();
@@ -2076,7 +2071,7 @@ mod tests {
             .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let names = collect_op_names(&ctx, body);
@@ -2188,7 +2183,7 @@ mod tests {
             .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
         let names = collect_op_names(&ctx, body);
@@ -2250,7 +2245,7 @@ mod tests {
             .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let names = collect_op_names(&ctx, func_op.body(&ctx));
         assert!(names.iter().any(|name| name == "scf.switch"));
@@ -2290,7 +2285,7 @@ mod tests {
             .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         // Should remain unchanged
         let func_body = func_op.body(&ctx);
@@ -2388,7 +2383,7 @@ mod tests {
             .build(&mut ctx, loc);
         let module = build_module(&mut ctx, loc, vec![func_op.op_ref()]);
 
-        lower_scf_to_cf(&mut ctx, module);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         // Verify: the add op's operands should now reference the merge block arg,
         // not the old if_op result.
