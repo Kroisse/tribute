@@ -106,6 +106,11 @@ serde.workspace = true
 [profile.dev]
 debug = "line-tables-only"
 
+# Optimize dependencies (Cranelift, wasmtime, Salsa, ...) in dev and test
+# builds. Workspace crates stay unoptimized for fast rebuilds.
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.test]
 debug = "line-tables-only"
 
