@@ -387,3 +387,37 @@ fn partial() -> Nat {
         "partial Bool case should report exactly one error: {errors:?}"
     );
 }
+
+/// A pattern nested in a variant field is bound at the constructor's
+/// parameter type, not at the nested constructor pattern's callable type.
+#[salsa_test]
+fn test_case_nested_constructor_as_pattern_binds_field_type(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+enum Item { Number(Nat), Empty }
+enum Box { Boxed(Item) }
+
+fn weight(item: Item) -> Nat {
+    case item {
+        Number(n) -> n
+        Empty -> 0
+    }
+}
+
+fn test(b: Box) -> Nat {
+    case b {
+        Boxed(Number(n) as item) -> n + weight(item)
+        Boxed(Empty) -> 0
+    }
+}
+"#,
+    );
+
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors.is_empty(),
+        "an as-pattern around a nested constructor must bind the field type: {errors:#?}"
+    );
+}

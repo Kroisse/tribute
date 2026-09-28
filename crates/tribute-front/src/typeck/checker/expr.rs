@@ -2243,9 +2243,21 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             PatternKind::Variant { fields, .. } => {
-                for field in fields {
-                    let field_ty = ctx
-                        .get_node_type(field.id)
+                // Inference recorded the constructor's callable type on this
+                // pattern and constrained each field to its parameter. A
+                // field's own node type is not its value type when the field
+                // is itself a constructor pattern.
+                let params = match ctx.get_node_type(pattern.id).map(|ty| ty.kind(self.db())) {
+                    Some(TypeKind::Func { params, .. }) if params.len() == fields.len() => {
+                        Some(params.clone())
+                    }
+                    _ => None,
+                };
+                for (index, field) in fields.iter().enumerate() {
+                    let field_ty = params
+                        .as_ref()
+                        .map(|params| params[index])
+                        .or_else(|| ctx.get_node_type(field.id))
                         .unwrap_or_else(|| ctx.fresh_type_var());
                     self.bind_pattern_vars_with_ctx(ctx, field, field_ty);
                 }

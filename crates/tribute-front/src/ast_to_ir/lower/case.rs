@@ -6,16 +6,37 @@
 
 use tribute_ir::dialect::list;
 use trunk_ir::Symbol;
-use trunk_ir::adt_layout::get_enum_variants;
+use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, scf};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location};
 
-use crate::ast::{LiteralPattern, Pattern, PatternKind, ResolvedRef, TypedRef};
+use crate::ast::{LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, TypedRef};
 
 use super::super::context::IrLoweringCtx;
 use super::IrBuilder;
+
+/// The logical tuple layout of a tuple pattern and its field types.
+///
+/// Field types come from the tuple layout, not from the element patterns: a
+/// constructor pattern's node type is the constructor's callable type, not
+/// the field value it matches.
+fn logical_tuple_pattern_layout<'db>(
+    ctx: &mut IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    pattern: NodeId,
+) -> (TypeRef, Vec<TypeRef>) {
+    let struct_ty = super::get_or_create_logical_tuple_type(ctx, ir, pattern)
+        .unwrap_or_else(|| panic!("missing typechecked logical tuple layout"))
+        .1;
+    let field_tys = get_struct_fields(ir, struct_ty)
+        .expect("logical tuple layout must be an adt.struct")
+        .into_iter()
+        .map(|(_, ty)| ty)
+        .collect();
+    (struct_ty, field_tys)
+}
 
 pub(super) fn emit_logical_pattern_check<'db>(
     builder: &mut IrBuilder<'_, 'db>,
@@ -35,18 +56,10 @@ pub(super) fn emit_logical_pattern_check<'db>(
         }
         PatternKind::Literal(literal) => emit_literal_check(builder, location, scrutinee, literal),
         PatternKind::Tuple(elements) => {
-            let struct_ty =
-                super::get_or_create_logical_tuple_type(builder.ctx, builder.ir, pattern.id)
-                    .unwrap_or_else(|| panic!("missing typechecked logical tuple layout"))
-                    .1;
+            let (struct_ty, field_tys) =
+                logical_tuple_pattern_layout(builder.ctx, builder.ir, pattern.id);
             let mut conditions = Vec::with_capacity(elements.len());
-            for (index, element) in elements.iter().enumerate() {
-                let element_ty = builder
-                    .ctx
-                    .get_node_type(element.id)
-                    .copied()
-                    .map(|ty| builder.ctx.convert_logical_type(builder.ir, ty))
-                    .unwrap_or_else(|| panic!("missing typechecked logical tuple pattern field"));
+            for ((index, element), element_ty) in elements.iter().enumerate().zip(field_tys) {
                 let get = adt::StructGet::operands(scrutinee)
                     .r#type(struct_ty)
                     .field(index as u32)
@@ -462,15 +475,8 @@ pub(super) fn bind_logical_pattern_fields<'db>(
         PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
         PatternKind::Bind { local_id: None, .. } => {}
         PatternKind::Tuple(elements) => {
-            let struct_ty = super::get_or_create_logical_tuple_type(ctx, ir, pattern.id)
-                .unwrap_or_else(|| panic!("missing typechecked logical tuple layout"))
-                .1;
-            for (index, element) in elements.iter().enumerate() {
-                let element_ty = ctx
-                    .get_node_type(element.id)
-                    .copied()
-                    .map(|ty| ctx.convert_logical_type(ir, ty))
-                    .unwrap_or_else(|| panic!("missing logical tuple pattern field type"));
+            let (struct_ty, field_tys) = logical_tuple_pattern_layout(ctx, ir, pattern.id);
+            for ((index, element), element_ty) in elements.iter().enumerate().zip(field_tys) {
                 let get = adt::StructGet::operands(scrutinee)
                     .r#type(struct_ty)
                     .field(index as u32)
