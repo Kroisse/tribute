@@ -662,7 +662,9 @@ pub fn verify_tribute_control_post_cps(
         });
     }
     failures.extend(verify_final_handle_dispatch_types(ctx, module));
-    let symbols = SymbolTable::cached(ctx, module, analyses);
+    let symbols = analyses
+        .get::<SymbolTable>(ctx, module.op())
+        .expect("symbol table collection is infallible");
     failures.extend(verify_physical_callable_graph(ctx, module, &symbols));
     failures.extend(
         trunk_ir::validation::validate_all(ctx, module, analyses)
@@ -3789,7 +3791,12 @@ pub fn tribute_control_to_cps(
     analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     verify_tribute_control_pre_cps(ctx, module, declarations, compiler_intrinsics, analyses)?;
-    let funcs = collect_callable_graph(ctx, &SymbolTable::cached(ctx, module, analyses));
+    let funcs = collect_callable_graph(
+        ctx,
+        &analyses
+            .get::<SymbolTable>(ctx, module.op())
+            .expect("symbol table collection is infallible"),
+    );
     let source_region = module.body(ctx).ok_or_else(|| {
         TributeControlToCpsError::one(
             PRE_CPS_BOUNDARY,

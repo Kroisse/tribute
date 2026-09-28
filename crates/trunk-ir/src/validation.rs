@@ -1273,7 +1273,9 @@ pub fn validate_all(
     let mut errors = scope.errors;
     errors.extend(uses.errors);
     errors.extend(ops.errors);
-    let symbols = SymbolTable::cached(ctx, module, analyses);
+    let symbols = analyses
+        .get::<SymbolTable>(ctx, module.op())
+        .expect("symbol table collection is infallible");
     errors.extend(function_contracts(ctx, module, &symbols).errors);
     ValidationResult { errors }
 }

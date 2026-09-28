@@ -747,7 +747,9 @@ mod tests {
             "compute-symbols",
             |ctx: &mut IrContext, target: core::Module, analyses: &mut AnalysisCache| {
                 let module = Module::new(ctx, target.op_ref()).expect("module target");
-                SymbolTable::cached(ctx, module, analyses);
+                analyses
+                    .get::<SymbolTable>(ctx, module.op())
+                    .expect("symbol table collection is infallible");
                 Ok(())
             },
         ));
@@ -805,7 +807,9 @@ mod tests {
         ));
         pm.with_verifier(|ctx, analyses, op| {
             let module = Module::new(ctx, op).expect("module target");
-            SymbolTable::cached(ctx, module, analyses);
+            analyses
+                .get::<SymbolTable>(ctx, module.op())
+                .expect("symbol table collection is infallible");
             Ok(())
         });
         pm.run(&mut ctx, module, &mut Default::default()).unwrap();

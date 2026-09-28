@@ -11,9 +11,8 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
-use std::sync::Arc;
 
-use crate::analysis::{Analysis, AnalysisCache, AnalysisContext, AnalysisError};
+use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
 use crate::context::IrContext;
 use crate::dialect::func;
 use crate::ops::DialectOp;
@@ -51,16 +50,6 @@ pub struct CallGraph {
 /// recorded.
 pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
     call_graph_over(ctx, &SymbolTable::collect(ctx, module))
-}
-
-impl CallGraph {
-    /// The call graph of `module` from `analyses`, built at most once per IR
-    /// revision over the cached [`SymbolTable`].
-    pub fn cached(ctx: &IrContext, module: Module, analyses: &mut AnalysisCache) -> Arc<Self> {
-        analyses
-            .get::<Self>(ctx, module.op())
-            .expect("call graph construction is infallible")
-    }
 }
 
 fn call_graph_over(ctx: &IrContext, symbols: &SymbolTable) -> CallGraph {

@@ -81,7 +81,9 @@ fn run(
     config: &GlobalDceConfig,
     analyses: &mut AnalysisCache,
 ) -> GlobalDceResult {
-    let symbols = SymbolTable::cached(ctx, module, analyses);
+    let symbols = analyses
+        .get::<SymbolTable>(ctx, module.op())
+        .expect("symbol table collection is infallible");
     let functions = || {
         symbols
             .all_definitions()
@@ -104,7 +106,9 @@ fn run(
         ControlFlow::Continue(WalkAction::Advance)
     });
 
-    let graph = CallGraph::cached(ctx, module, analyses);
+    let graph = analyses
+        .get::<CallGraph>(ctx, module.op())
+        .expect("call graph construction is infallible");
     let reachable = compute_reachable(&graph, roots);
 
     // A function containing a reachable function definition is kept with it.
