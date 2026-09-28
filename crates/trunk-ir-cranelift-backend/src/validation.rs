@@ -291,6 +291,16 @@ fn validate_clif_region(
                     continue;
                 }
             }
+            if let Ok(data) = clif::Data::from_op(ctx, op) {
+                let align = data.align(ctx);
+                if !align.is_power_of_two() {
+                    errors.push(format!(
+                        "clif.data @{}: alignment {align} is not a power of two",
+                        data.sym_name(ctx)
+                    ));
+                }
+                continue;
+            }
             if clif::Func::matches(ctx, op) {
                 let function = validate_clif_function(ctx, op, errors);
                 for &body in &ctx.op(op).regions {

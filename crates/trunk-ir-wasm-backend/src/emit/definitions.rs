@@ -200,7 +200,16 @@ pub(crate) fn extract_data_def(
 ) -> CompilationResult<DataDef> {
     let passive = data_op.passive(ctx);
     let offset = if passive { 0 } else { data_op.offset(ctx) };
-    let bytes = data_op.bytes(ctx).to_vec();
+    // The emitter does not verify operation schemas, so read the attribute
+    // fallibly rather than through the typed accessor.
+    let bytes = match ctx.op(data_op.op_ref()).attributes.get("bytes") {
+        Some(Attribute::Bytes(value)) => value.to_vec(),
+        _ => {
+            return Err(CompilationError::invalid_attribute(
+                "missing or invalid 'bytes' attribute on wasm.data",
+            ));
+        }
+    };
     let offset = i32::try_from(offset)
         .map_err(|_| CompilationError::invalid_module("data segment offset exceeds i32::MAX"))?;
     Ok(DataDef {
@@ -323,5 +332,20 @@ mod tests {
                 .contains("requires valid wasm.func_sig type"),
             "{error}"
         );
+    }
+
+    #[test]
+    fn data_requires_a_bytes_attribute() {
+        let mut ctx = IrContext::new();
+        let location = Location::new(PathRef::from_u32(0), Span::default());
+        let data = wasm_dialect::Data::operands()
+            .offset(0)
+            .bytes(b"x".as_slice().into())
+            .passive(true)
+            .build(&mut ctx, location);
+        ctx.op_mut(data.op_ref()).attributes.remove("bytes");
+
+        let error = extract_data_def(&ctx, data).expect_err("missing bytes");
+        assert!(error.to_string().contains("'bytes' attribute"), "{error}");
     }
 }

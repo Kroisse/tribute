@@ -434,7 +434,8 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     // 3d. Declare and define the module's read-only data objects
     let mut data_ids: FxHashMap<Symbol, cranelift_module::DataId> = FxHashMap::default();
     for data in collect_clif_data(ctx, module) {
-        let symbol = data.sym_name(ctx);
+        // References name data objects by root-qualified path, like functions.
+        let symbol = qualified_name(ctx, data.op_ref()).unwrap_or_else(|| data.sym_name(ctx));
         let data_id = obj_module
             .declare_data(
                 &symbol.to_string(),
@@ -626,7 +627,6 @@ fn host_object_triple() -> Triple {
     triple
 }
 
-/// Collect all `clif.func` operations from a Module.
 /// Collect the `clif.data` objects of a module, including nested modules.
 fn collect_clif_data(ctx: &IrContext, module: Module) -> Vec<clif::Data> {
     fn collect(ctx: &IrContext, region: RegionRef, data: &mut Vec<clif::Data>) {
@@ -650,6 +650,7 @@ fn collect_clif_data(ctx: &IrContext, module: Module) -> Vec<clif::Data> {
     data
 }
 
+/// Collect all `clif.func` operations from a Module.
 fn collect_clif_funcs(ctx: &IrContext, module: Module) -> Vec<OpRef> {
     let mut funcs = Vec::new();
     if let Some(body) = module.body(ctx) {
@@ -1019,6 +1020,71 @@ mod tests {
         let offset = (symbol.address() - section.address()) as usize;
         let contents = section.data().expect("section data");
         assert_eq!(&contents[offset..offset + 8], b"hi there");
+    }
+
+    #[test]
+    fn nested_same_named_data_objects_emit_under_distinct_qualified_names() {
+        use object::{Object, ObjectSection, ObjectSymbol};
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  core.module @left {
+    clif.data {sym_name = @text, bytes = b"left", align = 1}
+  }
+  core.module @right {
+    clif.data {sym_name = @text, bytes = b"right", align = 1}
+  }
+  clif.func @main() -> core.i32 {
+    %left = clif.symbol_addr {sym = @"left::text"} : core.ptr
+    %right = clif.symbol_addr {sym = @"right::text"} : core.ptr
+    %result = clif.iconst {value = 0} : core.i32
+    clif.return %result
+  }
+}"#,
+        );
+
+        let bytes = emit_module_to_native(&ctx, module).expect("native object");
+
+        let file = object::File::parse(bytes.as_slice()).expect("parse native object");
+        for (name, expected) in [
+            ("left::text", b"left".as_slice()),
+            ("right::text", b"right"),
+        ] {
+            let symbol = file
+                .symbols()
+                .find(|symbol| symbol.name().is_ok_and(|symbol| symbol.ends_with(name)))
+                .unwrap_or_else(|| panic!("missing data symbol {name}"));
+            let section = file
+                .section_by_index(symbol.section_index().expect("defined symbol"))
+                .expect("symbol section");
+            let offset = (symbol.address() - section.address()) as usize;
+            let contents = section.data().expect("section data");
+            assert_eq!(
+                &contents[offset..offset + expected.len()],
+                expected,
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn native_emission_rejects_data_alignment_that_is_not_a_power_of_two() {
+        for align in [0, 3] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{ clif.data {{sym_name = @bad, bytes = b\"x\", align = {align}}} }}"
+                ),
+            );
+            let error = emit_module_to_native(&ctx, module).expect_err("invalid alignment");
+            assert!(
+                error.to_string().contains("clif.data @bad: alignment"),
+                "{error}"
+            );
+        }
     }
 
     #[test]
