@@ -80,6 +80,14 @@ impl SymbolTable {
         self.definitions.get(&reference).copied()
     }
 
+    /// The last definition of a qualified name, even if it is duplicated.
+    ///
+    /// For diagnostics that continue after [`Self::duplicates`] has already
+    /// been reported; lowering must use [`Self::resolve`].
+    pub fn definition(&self, reference: Symbol) -> Option<OpRef> {
+        self.definitions.get(&reference).copied()
+    }
+
     /// Qualified names defined more than once, with each later definition.
     pub fn duplicates(&self) -> &[(Symbol, OpRef)] {
         &self.duplicates
