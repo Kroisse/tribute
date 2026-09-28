@@ -10,6 +10,10 @@ use std::ops::Range;
 
 use derive_more::{Display, Error};
 use itertools::Itertools;
+use winnow::LocatingSlice;
+use winnow::combinator::{alt, opt, preceded};
+use winnow::prelude::*;
+use winnow::token::{one_of, rest, take_while};
 
 /// The decoded value of a numeric literal.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -109,120 +113,65 @@ fn radix_name(radix: u32) -> &'static str {
 /// Float, a sign makes an Int, and anything else is a Nat. A `n`, `i`, or
 /// `f` suffix overrides that default where the rules allow it.
 pub(crate) fn parse_numeric_literal(text: &str) -> Result<NumericValue, NumericError> {
-    let bytes = text.as_bytes();
     let error = |range: Range<usize>, kind| Err(NumericError { range, kind });
+    let Parts {
+        sign,
+        radix,
+        prefix,
+        digits,
+        fraction,
+        exponent,
+        suffix,
+    } = parts
+        .parse(LocatingSlice::new(text))
+        .expect("numeric literal lexing accepts any input");
+    let (digits, digits_range) = digits;
+    let (suffix_text, suffix_range) = suffix;
+    let signed = sign.is_some();
+    let negative = sign == Some('-');
 
-    let (negative, signed, mut i) = match bytes.first() {
-        Some(b'-') => (true, true, 1),
-        Some(b'+') => (false, true, 1),
-        _ => (false, false, 0),
-    };
-
-    // Radix prefix
-    let prefix_start = i;
-    let radix = match (bytes.get(i), bytes.get(i + 1).map(u8::to_ascii_lowercase)) {
-        (Some(b'0'), Some(b'x')) => 16,
-        (Some(b'0'), Some(b'o')) => 8,
-        (Some(b'0'), Some(b'b')) => 2,
-        _ => 10,
-    };
-    if radix != 10 {
-        i += 2;
-    }
-
-    // Integer digits. Binary and octal scan all decimal digits so that an
-    // out-of-radix digit is reported rather than read as a suffix.
-    let is_digit = |b: u8| match radix {
-        16 => b.is_ascii_hexdigit(),
-        _ => b.is_ascii_digit(),
-    };
-    let digits_start = i;
-    while i < bytes.len() && (is_digit(bytes[i]) || bytes[i] == b'_') {
-        i += 1;
-    }
-    let digits = &text[digits_start..i];
     if let Some(pos) = digits
         .bytes()
         .position(|b| b != b'_' && !(b as char).is_digit(radix))
     {
-        let at = digits_start + pos;
+        let at = digits_range.start + pos;
         return error(
             at..at + 1,
             NumericErrorKind::InvalidDigit {
-                digit: bytes[at] as char,
+                digit: digits.as_bytes()[pos] as char,
                 radix,
             },
         );
     }
     if !digits.bytes().any(|b| b != b'_') {
         return error(
-            prefix_start..i,
+            prefix.start..digits_range.end,
             NumericErrorKind::MissingRadixDigits { radix },
         );
     }
-    if radix != 10 && i < bytes.len() {
-        let suffix = &text[i..];
+    if radix != 10 && !suffix_text.is_empty() {
         return error(
-            i..bytes.len(),
+            suffix_range,
             NumericErrorKind::RadixSuffix {
                 radix,
-                suffix: suffix.to_string(),
-                int_form: (suffix == "i").then(|| {
-                    let magnitude = &text[prefix_start..i];
-                    match &text[..prefix_start] {
-                        "" => format!("+{magnitude}"),
-                        sign => format!("{sign}{magnitude}"),
-                    }
+                suffix: suffix_text.to_string(),
+                int_form: (suffix_text == "i").then(|| {
+                    let sign = sign.unwrap_or('+');
+                    format!("{sign}{}", &text[prefix.start..digits_range.end])
                 }),
             },
         );
     }
-
-    // Fraction and exponent (decimal only)
-    let mut fraction = None;
-    let mut exponent = None;
-    if radix == 10 {
-        if bytes.get(i) == Some(&b'.') {
-            let start = i + 1;
-            i = start;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
-                i += 1;
-            }
-            fraction = Some(&text[start..i]);
-        }
-        if matches!(bytes.get(i), Some(b'e' | b'E')) {
-            let start = i;
-            i += 1;
-            let exp_negative = match bytes.get(i) {
-                Some(b'-') => {
-                    i += 1;
-                    true
-                }
-                Some(b'+') => {
-                    i += 1;
-                    false
-                }
-                _ => false,
-            };
-            let exp_digits_start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_digit() || bytes[i] == b'_') {
-                i += 1;
-            }
-            let exp_digits = &text[exp_digits_start..i];
-            if !exp_digits.bytes().any(|b| b != b'_') {
-                return error(start..i, NumericErrorKind::MissingExponentDigits);
-            }
-            exponent = Some(Exponent {
-                range: start..i,
-                negative: exp_negative,
-                digits: exp_digits,
-            });
-        }
+    if let Some(exponent) = &exponent
+        && !exponent.digits.bytes().any(|b| b != b'_')
+    {
+        return error(
+            exponent.range.clone(),
+            NumericErrorKind::MissingExponentDigits,
+        );
     }
 
-    // Suffix
-    let suffix_range = i..bytes.len();
-    let suffix = match &text[i..] {
+    let suffix = match suffix_text {
         "" => None,
         "n" => Some('n'),
         "i" => Some('i'),
@@ -287,8 +236,8 @@ pub(crate) fn parse_numeric_literal(text: &str) -> Result<NumericValue, NumericE
     if let Some(exponent) = &exponent
         && exponent.negative
     {
-        let sign = &text[..prefix_start];
-        let mantissa = &text[prefix_start..exponent.range.start];
+        let sign = &text[..prefix.start];
+        let mantissa = &text[prefix.start..exponent.range.start];
         let exp_text = &text[exponent.range.clone()];
         return error(
             exponent.range.clone(),
@@ -343,10 +292,86 @@ pub(crate) fn parse_numeric_literal(text: &str) -> Result<NumericValue, NumericE
     }
 }
 
+type Input<'a> = LocatingSlice<&'a str>;
+
+/// The lexical parts of a numeric literal token.
+///
+/// Every part is optional or may be empty, so lexing accepts any text and
+/// all validation happens in [`parse_numeric_literal`].
+struct Parts<'a> {
+    sign: Option<char>,
+    radix: u32,
+    /// The radix prefix, or an empty range at the magnitude's start.
+    prefix: Range<usize>,
+    digits: (&'a str, Range<usize>),
+    /// Digits after the decimal point; decimal literals only.
+    fraction: Option<&'a str>,
+    /// Decimal literals only.
+    exponent: Option<Exponent<'a>>,
+    /// Everything after the number, possibly empty.
+    suffix: (&'a str, Range<usize>),
+}
+
 struct Exponent<'a> {
     range: Range<usize>,
     negative: bool,
     digits: &'a str,
+}
+
+fn parts<'a>(input: &mut Input<'a>) -> ModalResult<Parts<'a>> {
+    let sign = opt(one_of(['+', '-'])).parse_next(input)?;
+    let (radix, prefix) = opt(preceded(
+        '0',
+        alt((
+            one_of(['x', 'X']).value(16),
+            one_of(['o', 'O']).value(8),
+            one_of(['b', 'B']).value(2),
+        )),
+    ))
+    .with_span()
+    .parse_next(input)?;
+    let radix = radix.unwrap_or(10);
+    // Binary and octal take any decimal digit so that an out-of-radix digit
+    // is reported rather than read as a suffix.
+    let digits = take_while(0.., move |c: char| match radix {
+        16 => c.is_ascii_hexdigit() || c == '_',
+        _ => c.is_ascii_digit() || c == '_',
+    })
+    .with_span()
+    .parse_next(input)?;
+    let (fraction, exponent) = if radix == 10 {
+        (
+            opt(preceded('.', decimal_digits)).parse_next(input)?,
+            opt(exponent).parse_next(input)?,
+        )
+    } else {
+        (None, None)
+    };
+    let suffix = rest.with_span().parse_next(input)?;
+    Ok(Parts {
+        sign,
+        radix,
+        prefix,
+        digits,
+        fraction,
+        exponent,
+        suffix,
+    })
+}
+
+fn decimal_digits<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
+    take_while(0.., |c: char| c.is_ascii_digit() || c == '_').parse_next(input)
+}
+
+fn exponent<'a>(input: &mut Input<'a>) -> ModalResult<Exponent<'a>> {
+    (one_of(['e', 'E']), opt(one_of(['+', '-'])), decimal_digits)
+        .with_span()
+        .map(|((_, sign, digits), range)| Exponent {
+            range,
+            negative: sign == Some('-'),
+            digits,
+        })
+        .parse_next(input)
 }
 
 #[cfg(test)]
