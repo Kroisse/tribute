@@ -1155,72 +1155,65 @@ fn find_enclosing_call(tree: &tree_sitter::Tree, rope: &Rope, offset: usize) -> 
     // Find the smallest node containing the offset
     let mut node = root.descendant_for_byte_range(offset, offset)?;
 
-    // Walk up the tree to find a call_expression
+    // Walk up the tree to find a call or method call expression
     loop {
-        if node.kind() == "call_expression" {
-            return extract_call_info(node, rope, offset);
+        match node.kind() {
+            "call_expression" => return extract_call_info(node, "function", 0, rope, offset),
+            // `x.f(a)` is `f(x, a)` under UFCS: the receiver fills parameter 0.
+            "method_call_expression" => {
+                return extract_call_info(node, "method", 1, rope, offset);
+            }
+            _ => {}
         }
 
         node = node.parent()?;
     }
 }
 
-/// Extract call information from a call_expression node.
+/// Extract call information from a call or method call expression node.
+///
+/// `callee_field` names the field holding the callee, and `param_offset` is
+/// the number of parameters filled before the argument list (the receiver of
+/// a method call).
 fn extract_call_info(
     call_node: tree_sitter::Node,
+    callee_field: &str,
+    param_offset: u32,
     rope: &Rope,
     cursor_offset: usize,
 ) -> Option<CallInfo> {
-    // Get the callee (first child, typically an identifier or member expression)
-    let callee_node = call_node.child_by_field_name("function")?;
+    let callee_node = call_node.child_by_field_name(callee_field)?;
     let callee_start = callee_node.start_byte();
     let callee_end = callee_node.end_byte();
     let callee_name = rope
         .get_byte_slice(callee_start..callee_end)
         .map(|s| s.to_string())?;
 
-    // Find the arguments node
-    let args_node = call_node.child_by_field_name("arguments")?;
-
-    // Count commas before the cursor to determine active parameter
-    let active_param = count_commas_before(args_node, cursor_offset);
+    // The grammar gives `argument_list` no field name, so find it by kind.
+    // An empty call such as `f()` has no argument list at all.
+    let args_node = call_node
+        .children(&mut call_node.walk())
+        .find(|c| c.kind() == "argument_list");
+    let commas = args_node.map_or(0, |args| count_commas_before(args, cursor_offset));
 
     Some(CallInfo {
         callee_name,
-        active_param,
+        active_param: param_offset + commas,
     })
 }
 
-/// Count the number of commas before the cursor position within an argument list.
+/// Count the commas before the cursor position within an `argument_list`.
+///
+/// Commas are direct children of `argument_list`; the parentheses belong to
+/// the enclosing call expression.
 fn count_commas_before(args_node: tree_sitter::Node, cursor_offset: usize) -> u32 {
-    let mut count = 0;
     let mut cursor = args_node.walk();
-
-    // Skip the opening parenthesis
-    if !cursor.goto_first_child() {
-        return 0;
-    }
-
-    loop {
-        let node = cursor.node();
-        let node_end = node.end_byte();
-
-        // Stop if we've passed the cursor
-        if node.start_byte() >= cursor_offset {
-            break;
-        }
-
-        // Count commas
-        if node.kind() == "," && node_end <= cursor_offset {
-            count += 1;
-        }
-
-        if !cursor.goto_next_sibling() {
-            break;
-        }
-    }
-
-    count
+    let count = args_node
+        .children(&mut cursor)
+        .take_while(|node| node.start_byte() < cursor_offset)
+        .filter(|node| node.kind() == "," && node.end_byte() <= cursor_offset)
+        .count();
+    u32::try_from(count).unwrap_or(u32::MAX)
 }
 
 /// Find the doc comment for a function definition by name.
@@ -1886,36 +1879,89 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_signature_help_via_message() {
+    /// Request signature help at `line`/`character` in `source`.
+    fn signature_help_at(
+        name: &str,
+        source: &str,
+        line: u32,
+        character: u32,
+    ) -> Option<SignatureHelp> {
         let mut harness = TestHarness::new();
-        let uri = test_uri("sig_help_msg");
-        // Define a function and call it
-        let source = "fn add(x: Int, y: Int): Int { x + y }\nfn main() { add( }";
-
+        let uri = test_uri(name);
         harness.open_document(&uri, source);
 
         let params = SignatureHelpParams {
             text_document_position_params: TextDocumentPositionParams {
                 text_document: lsp_types::TextDocumentIdentifier { uri },
-                position: lsp_types::Position {
-                    line: 1,
-                    character: 16, // Inside add( call
-                },
+                position: lsp_types::Position { line, character },
             },
             work_done_progress_params: Default::default(),
             context: None,
         };
 
-        let result: Option<SignatureHelp> = harness.request::<SignatureHelpRequest>(params);
-        // Signature help may or may not find the function depending on parsing
-        // Just verify the request completes without error
-        if let Some(sig_help) = result {
-            assert!(
-                !sig_help.signatures.is_empty(),
-                "Should return signature information"
-            );
-        }
+        harness.request::<SignatureHelpRequest>(params)
+    }
+
+    #[test]
+    fn test_signature_help_via_message() {
+        let source = "fn cas(x: Nat) -> Nat { x }\nfn run() -> Nat { cas(1) }";
+        // On `1` inside `cas(1)`
+        let sig_help =
+            signature_help_at("sig_help_msg", source, 1, 22).expect("Should return signature help");
+
+        assert_eq!(sig_help.signatures.len(), 1);
+        assert_eq!(sig_help.signatures[0].label, "fn cas(x: Nat) -> Nat");
+        assert_eq!(sig_help.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn test_signature_help_active_parameter() {
+        let source = "fn add(x: Nat, y: Nat) -> Nat { x }\nfn run() -> Nat { add(1, 2) }";
+        // On `2`, after the comma
+        let sig_help = signature_help_at("sig_help_active", source, 1, 25)
+            .expect("Should return signature help");
+
+        assert_eq!(
+            sig_help.signatures[0].label,
+            "fn add(x: Nat, y: Nat) -> Nat"
+        );
+        assert_eq!(sig_help.active_parameter, Some(1));
+    }
+
+    #[test]
+    fn test_signature_help_empty_arguments() {
+        let source = "fn zero() -> Nat { 0 }\nfn run() -> Nat { zero() }";
+        // Between the parentheses of `zero()`
+        let sig_help = signature_help_at("sig_help_empty", source, 1, 23)
+            .expect("Should return signature help");
+
+        assert_eq!(sig_help.signatures[0].label, "fn zero() -> Nat");
+        assert_eq!(sig_help.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn test_signature_help_raw_callee() {
+        let source = "fn r#case(x: Nat) -> Nat { x }\nfn run() -> Nat { r#case(1) }";
+        // On `1` inside `r#case(1)`
+        let sig_help =
+            signature_help_at("sig_help_raw", source, 1, 25).expect("Should return signature help");
+
+        assert_eq!(sig_help.signatures.len(), 1);
+        assert_eq!(sig_help.signatures[0].label, "fn r#case(x: Nat) -> Nat");
+    }
+
+    #[test]
+    fn test_signature_help_method_call() {
+        let source = "fn add(x: Nat, y: Nat) -> Nat { x }\nfn run() -> Nat { 1.add(2) }";
+        // On `2`: the receiver fills `x` under UFCS, so `y` is active
+        let sig_help = signature_help_at("sig_help_method", source, 1, 24)
+            .expect("Should return signature help");
+
+        assert_eq!(
+            sig_help.signatures[0].label,
+            "fn add(x: Nat, y: Nat) -> Nat"
+        );
+        assert_eq!(sig_help.active_parameter, Some(1));
     }
 
     #[test]
