@@ -52,16 +52,15 @@ pub struct AstCompletionItem {
     pub detail: Option<String>,
 }
 
-/// Reserved keywords in Tribute.
-pub const KEYWORDS: &[&str] = &[
-    "fn", "let", "case", "struct", "enum", "ability", "const", "pub", "use", "mod", "if", "handle",
-    "as", "True", "False", "Nil",
-];
+/// Keywords offered as completions.
+fn keywords() -> impl Iterator<Item = &'static &'static str> {
+    use tribute_front::keywords::{KEYWORDS, LITERAL_KEYWORDS};
+    KEYWORDS.iter().chain(LITERAL_KEYWORDS)
+}
 
 /// Get keyword completions filtered by prefix.
 pub fn complete_keywords(prefix: &str) -> Vec<AstCompletionItem> {
-    KEYWORDS
-        .iter()
+    keywords()
         .filter(|kw| kw.starts_with(prefix))
         .map(|kw| AstCompletionItem {
             name: Symbol::new(kw),
@@ -388,6 +387,15 @@ pub fn find_signature(
     signatures.iter().find(|s| s.name == name)
 }
 
+/// Find the signature of a callee as written in source, e.g. `r#case`.
+pub fn find_callee_signature<'a>(
+    signatures: &'a [FunctionSignature],
+    callee: &str,
+) -> Option<&'a FunctionSignature> {
+    let name = Symbol::from_dynamic(&tribute_front::keywords::unraw(callee));
+    find_signature(signatures, name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -409,7 +417,7 @@ mod tests {
     #[test]
     fn test_complete_keywords_empty_prefix() {
         let completions = complete_keywords("");
-        assert_eq!(completions.len(), KEYWORDS.len());
+        assert_eq!(completions.len(), keywords().count());
     }
 
     #[test]
@@ -635,6 +643,23 @@ mod tests {
 
         let baz = find_signature(&signatures, trunk_ir::Symbol::new("baz"));
         assert!(baz.is_none());
+    }
+
+    #[test]
+    fn test_find_callee_signature_normalizes_raw_names() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn r#case(x: Nat) -> Nat { x }\nfn plain() { 1 }");
+
+        let signatures = function_signatures(&db, source);
+        for callee in ["r#case", "case"] {
+            let sig = find_callee_signature(&signatures, callee);
+            assert_eq!(
+                sig.map(|sig| sig.name),
+                Some(trunk_ir::Symbol::new("case")),
+                "{callee}"
+            );
+        }
+        assert!(find_callee_signature(&signatures, "r#plain").is_some());
     }
 
     #[test]

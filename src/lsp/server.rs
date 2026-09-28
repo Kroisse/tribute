@@ -33,12 +33,13 @@ use tree_sitter::{InputEdit, Point};
 
 use super::builtin_index::{builtin_at, builtin_symbols};
 use super::completion_index::{
-    self, complete_keywords, completion_items, filter_completions, find_signature,
+    self, complete_keywords, completion_items, filter_completions, find_callee_signature,
     function_signatures,
 };
 use super::definition_index::{definition_index, validate_identifier};
 use super::type_index::{AstTypeIndex, print_ast_type, type_index as ast_type_index};
 use tribute::{TributeDatabaseImpl, database::parse_with_thread_local};
+use tribute_front::keywords::unraw;
 
 /// Main LSP server state.
 struct LspServer {
@@ -441,14 +442,46 @@ impl LspServer {
             Some(completions)
         })?;
 
+        // After a typed `r#`, completions replace it too and are spelled raw;
+        // otherwise names that are keywords complete to their raw spelling.
+        let prefix_start = offset - prefix.len();
+        let raw_start = prefix_start.checked_sub(2).filter(|&start| {
+            rope.get_byte_slice(start..prefix_start)
+                .is_some_and(|t| t == "r#")
+        });
+        let raw_range = raw_start.map(|start| {
+            let (start_line, start_char) = position_from_offset(&rope, start);
+            let (end_line, end_char) = position_from_offset(&rope, offset);
+            lsp_types::Range {
+                start: lsp_types::Position::new(start_line, start_char),
+                end: lsp_types::Position::new(end_line, end_char),
+            }
+        });
+
         // Convert to LSP CompletionItems
         let completion_items: Vec<CompletionItem> = items
             .into_iter()
-            .map(|entry| CompletionItem {
-                label: entry.name.to_string(),
-                kind: Some(entry.kind.into()),
-                detail: entry.detail,
-                ..Default::default()
+            .filter(|entry| {
+                raw_range.is_none() || entry.name.with_str(tribute_front::keywords::can_be_raw)
+            })
+            .map(|entry| {
+                let label = entry.name.with_str(|name| match (raw_range, entry.kind) {
+                    (Some(_), _) => format!("r#{name}"),
+                    (None, completion_index::CompletionKind::Keyword) => name.to_string(),
+                    (None, _) => tribute_front::keywords::source_name(name).into_owned(),
+                });
+                CompletionItem {
+                    text_edit: raw_range.map(|range| {
+                        lsp_types::CompletionTextEdit::Edit(TextEdit {
+                            range,
+                            new_text: label.clone(),
+                        })
+                    }),
+                    label,
+                    kind: Some(entry.kind.into()),
+                    detail: entry.detail,
+                    ..Default::default()
+                }
             })
             .collect();
 
@@ -697,8 +730,7 @@ impl LspServer {
 
         let result = self.db.attach(|db| {
             let signatures = function_signatures(db, source_cst);
-            let callee_sym = trunk_ir::Symbol::from_dynamic(&callee_name);
-            let sig = find_signature(&signatures, callee_sym)?;
+            let sig = find_callee_signature(&signatures, &callee_name)?;
 
             Some(super::pretty::format_ast_signature(
                 sig,
@@ -1212,7 +1244,7 @@ fn find_function_node<'tree>(
             let start = name_node.start_byte();
             let end = name_node.end_byte();
             if let Some(name) = rope.get_byte_slice(start..end)
-                && name == func_name
+                && unraw(&name.to_string()) == unraw(func_name)
             {
                 return Some(*node);
             }
@@ -1884,6 +1916,55 @@ mod tests {
                 "Should return signature information"
             );
         }
+    }
+
+    #[test]
+    fn test_completion_after_raw_prefix_replaces_it() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("completion_raw");
+        let source = "struct Case { x: Nat }\nfn r#case() -> Nat { 1 }\nfn run() -> Nat { r#ca }";
+
+        harness.open_document(&uri, source);
+
+        let params = CompletionParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri },
+                position: lsp_types::Position {
+                    line: 2,
+                    character: 22, // After `r#ca`
+                },
+            },
+            work_done_progress_params: Default::default(),
+            partial_result_params: Default::default(),
+            context: None,
+        };
+
+        let result: Option<lsp_types::CompletionResponse> = harness.request::<Completion>(params);
+        let Some(lsp_types::CompletionResponse::List(list)) = result else {
+            panic!("Should return a completion list");
+        };
+        let item = list
+            .items
+            .iter()
+            .find(|item| item.kind == Some(lsp_types::CompletionItemKind::FUNCTION))
+            .expect("Should suggest the raw-named function");
+        assert_eq!(item.label, "r#case");
+        assert!(
+            list.items.iter().all(|item| item.label != "r#Case"),
+            "uppercase names have no raw form"
+        );
+        let Some(lsp_types::CompletionTextEdit::Edit(edit)) = &item.text_edit else {
+            panic!("Raw completion should carry a text edit: {item:?}");
+        };
+        assert_eq!(edit.new_text, "r#case");
+        assert_eq!(
+            (edit.range.start, edit.range.end),
+            (
+                lsp_types::Position::new(2, 18),
+                lsp_types::Position::new(2, 22)
+            ),
+            "the edit must replace the typed `r#ca`"
+        );
     }
 
     #[test]

@@ -26,7 +26,7 @@ use ropey::Rope;
 
 pub use context::AstLoweringCtx;
 pub use declarations::lower_module;
-use diagnostics::collect_error_nodes;
+use diagnostics::{check_identifiers, collect_error_nodes};
 pub use expressions::lower_expr;
 pub use helpers::is_comment;
 pub(super) use helpers::truncate_token_preview;
@@ -50,6 +50,7 @@ fn lower_cst_to_ast_internal(
 
     // Check for ERROR nodes anywhere in the CST
     collect_error_nodes(ctx, root);
+    check_identifiers(ctx, root);
 
     lower_module(ctx, root, module_name)
 }
