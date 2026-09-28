@@ -936,7 +936,7 @@ fn install_debug_verifier(pm: &mut PassManager) {
     // The verifier only reports; the PassManager returns the offending pass's
     // name with the verification error. Compiled out in release.
     if cfg!(debug_assertions) {
-        pm.with_verifier(|ctx, op| {
+        pm.with_verifier(|ctx, _analyses, op| {
             let Some(module) = enclosing_module(ctx, op) else {
                 return Ok(());
             };

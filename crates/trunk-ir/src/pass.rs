@@ -216,7 +216,10 @@ pub type PassResult<T = ()> = Result<T, PassError>;
 /// wrapping [`crate::validation::validate_use_chains`]) so any pass that breaks
 /// an invariant is blamed immediately rather than masked by a later pass; the
 /// [`PassManager`] returns a [`PassError`] with the offending pass's name.
-type VerifierFn = dyn Fn(&IrContext, OpRef) -> Result<(), VerifyError>;
+///
+/// The verifier receives the run's [`AnalysisCache`]. It does not change the
+/// IR, so analyses it computes remain cached for the passes that follow.
+type VerifierFn = dyn Fn(&IrContext, &mut AnalysisCache, OpRef) -> Result<(), VerifyError>;
 
 /// Observation-only hook invoked after each pass, mirroring the verifier's
 /// timing and propagation but without a result.
@@ -395,7 +398,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     /// that caused it. Replaces any previously installed verifier.
     pub fn with_verifier<F>(&mut self, verifier: F) -> &mut Self
     where
-        F: Fn(&IrContext, OpRef) -> Result<(), VerifyError> + 'static,
+        F: Fn(&IrContext, &mut AnalysisCache, OpRef) -> Result<(), VerifyError> + 'static,
     {
         self.verifier = Some(Box::new(verifier));
         self
@@ -500,7 +503,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
                 inst(ctx, pass.name(), target.op_ref());
             }
             if let Some(v) = hooks.verifier
-                && let Err(e) = v(ctx, target.op_ref())
+                && let Err(e) = v(ctx, analyses, target.op_ref())
             {
                 return Err(PassError::verification(pass.name(), e));
             }
@@ -768,6 +771,40 @@ mod tests {
     }
 
     #[test]
+    fn verifier_analyses_stay_cached_for_later_passes() {
+        use crate::rewrite::Module;
+        use crate::symbol_table::SymbolTable;
+
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+
+        let observed = Rc::new(Cell::new(0));
+        let observed_in_pass = observed.clone();
+        let mut pm = PassManager::new();
+        pm.add_pass(pass_fn(
+            "unchanged",
+            |_ctx: &mut IrContext, _target: core::Module, _analyses: &mut AnalysisCache| Ok(()),
+        ))
+        .add_pass(pass_fn(
+            "observe-symbols",
+            move |ctx: &mut IrContext, target: core::Module, analyses: &mut AnalysisCache| {
+                let cached = analyses.get_cached::<SymbolTable>(ctx, target.op_ref());
+                assert!(cached.is_some(), "the verifier's analysis is still cached");
+                observed_in_pass.set(observed_in_pass.get() + 1);
+                Ok(())
+            },
+        ));
+        pm.with_verifier(|ctx, analyses, op| {
+            let module = Module::new(ctx, op).expect("module target");
+            SymbolTable::cached(ctx, module, analyses);
+            Ok(())
+        });
+        pm.run(&mut ctx, module).unwrap();
+
+        assert_eq!(observed.get(), 1);
+    }
+
+    #[test]
     fn nested_func_pass_runs_per_func() {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
@@ -1009,7 +1046,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             instrumentation_count_clone.set(instrumentation_count_clone.get() + 1);
         });
-        pm.with_verifier(move |_ctx, _op| {
+        pm.with_verifier(move |_ctx, _analyses, _op| {
             verifier_count_clone.set(verifier_count_clone.get() + 1);
             Ok(())
         });
@@ -1196,7 +1233,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             instrumentation_count_clone.set(instrumentation_count_clone.get() + 1);
         });
-        pm.with_verifier(|_ctx, _op| {
+        pm.with_verifier(|_ctx, _analyses, _op| {
             Err(VerifyError {
                 message: "boom".to_string(),
             })
@@ -1225,7 +1262,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
-        pm.with_verifier(|_ctx, _op| {
+        pm.with_verifier(|_ctx, _analyses, _op| {
             Err(VerifyError {
                 message: "nested boom".to_string(),
             })
@@ -1251,7 +1288,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.add_pass(recorder::<core::Module>("a", order.clone()));
         pm.add_pass(recorder::<core::Module>("b", order.clone()));
-        pm.with_verifier(|_ctx, _op| Ok(()));
+        pm.with_verifier(|_ctx, _analyses, _op| Ok(()));
         pm.run(&mut ctx, module).unwrap();
 
         // Both module passes ran, in registration order.
