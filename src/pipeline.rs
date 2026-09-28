@@ -1049,6 +1049,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
 
     run_cleanup_passes(ctx, m);
+    debug_observe_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Wasm);
     Ok(())
 }
 
@@ -1080,7 +1081,25 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     debug_validate_value_integrity(ctx, m, "after evidence_to_native");
 
     run_cleanup_passes(ctx, m);
+    debug_observe_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Native);
     Ok(())
+}
+
+/// Debug-only check of the representation/ABI boundary exit.
+///
+/// Violations that later boundary work is known to remove are expected; any
+/// other violation is reported without failing compilation.
+fn debug_observe_boundary_exit(
+    ctx: &IrContext,
+    m: Module,
+    target: tribute_passes::abi_boundary::TargetKind,
+) {
+    if !cfg!(debug_assertions) {
+        return;
+    }
+    for violation in tribute_passes::abi_boundary::unexpected_boundary_violations(ctx, m, target) {
+        tracing::warn!(?target, "representation/ABI boundary exit: {violation}");
+    }
 }
 
 /// Enter the sole target-side closure storage boundary. Exact ABI validation
@@ -2096,6 +2115,126 @@ mod tests {
     fn source_from_str(path: &str, text: &str) -> SourceCst {
         salsa::with_attached_database(|db| SourceCst::from_source_str(db, path, text))
             .expect("attached db")
+    }
+
+    /// Programs whose boundary exit is observed on both targets. They cover
+    /// Direct and CPS callables, closures with captures, handlers with
+    /// resumption, the CPS root bridge, and standard I/O.
+    const BOUNDARY_EXIT_PROGRAMS: &[(&str, &str)] = &[
+        (
+            "native_calculator.trb",
+            include_str!("../lang-examples/native_calculator.trb"),
+        ),
+        (
+            "native_effects.trb",
+            include_str!("../lang-examples/native_effects.trb"),
+        ),
+        (
+            "wasm_dynamic_output.trb",
+            include_str!("../lang-examples/wasm_dynamic_output.trb"),
+        ),
+        (
+            "closure_capture.trb",
+            r#"fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn main() {
+    let a = +1
+    let _ = apply(fn(n) { n + a }, +41)
+}
+"#,
+        ),
+        (
+            "state_handler.trb",
+            r#"ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn set_then_get() ->{State(Int)} Int {
+    State::set(+100)
+    State::get()
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn main() {
+    let _ = run_state(fn() { set_then_get() }, +0)
+}
+"#,
+        ),
+    ];
+
+    /// Violation kinds observed at `target`'s boundary exit for every program.
+    fn observed_boundary_exit_kinds(
+        db: &crate::TributeDatabaseImpl,
+        target: tribute_passes::abi_boundary::TargetKind,
+    ) -> std::collections::BTreeSet<tribute_passes::abi_boundary::ViolationKind> {
+        use tribute_passes::abi_boundary::{TargetKind, verify_boundary_exit};
+        let mut kinds = std::collections::BTreeSet::new();
+        for (path, text) in BOUNDARY_EXIT_PROGRAMS {
+            let source = source_from_str(path, text);
+            let (mut ctx, module) = run_shared_pipeline(db, source)
+                .expect("shared pipeline must succeed")
+                .unwrap_or_else(|| panic!("{path} must lower"));
+            match target {
+                TargetKind::Native => run_native_target_pipeline(&mut ctx, module),
+                TargetKind::Wasm => run_wasm_target_pipeline(&mut ctx, module),
+            }
+            .unwrap_or_else(|error| panic!("{path}: target boundary failed: {error}"));
+            kinds.extend(
+                verify_boundary_exit(&ctx, module)
+                    .into_iter()
+                    .map(|violation| violation.kind),
+            );
+        }
+        kinds
+    }
+
+    fn assert_boundary_exit_is_observed(
+        db: &crate::TributeDatabaseImpl,
+        target: tribute_passes::abi_boundary::TargetKind,
+    ) -> Vec<String> {
+        use tribute_passes::abi_boundary::pending_boundary_violations;
+        let observed = observed_boundary_exit_kinds(db, target);
+        let pending = pending_boundary_violations(target);
+        let unexpected: Vec<_> = observed
+            .iter()
+            .filter(|kind| !pending.iter().any(|entry| entry.covers(kind)))
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            unexpected.is_empty(),
+            "{target:?} boundary exit has violations outside the pending list: {unexpected:#?}"
+        );
+        let stale: Vec<_> = pending
+            .iter()
+            .filter(|entry| !observed.iter().any(|kind| entry.covers(kind)))
+            .map(ToString::to_string)
+            .collect();
+        assert!(
+            stale.is_empty(),
+            "{target:?} pending boundary violations are no longer observed; remove them: {stale:#?}"
+        );
+        observed.iter().map(ToString::to_string).collect()
+    }
+
+    #[salsa_test]
+    fn native_boundary_exit_violations_are_all_pending(db: &crate::TributeDatabaseImpl) {
+        let observed =
+            assert_boundary_exit_is_observed(db, tribute_passes::abi_boundary::TargetKind::Native);
+        insta::assert_debug_snapshot!(observed);
+    }
+
+    #[salsa_test]
+    fn wasm_boundary_exit_violations_are_all_pending(db: &crate::TributeDatabaseImpl) {
+        let observed =
+            assert_boundary_exit_is_observed(db, tribute_passes::abi_boundary::TargetKind::Wasm);
+        insta::assert_debug_snapshot!(observed);
     }
 
     fn prepare_native_fixture(

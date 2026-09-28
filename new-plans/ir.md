@@ -1148,12 +1148,20 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 출구 이후에도 보존하는 것:
 
 - 기계 호출 규약, exact signature, 외부 바인딩(`abi`)
-- Typed managed layout, 명시적 layout 식별자, ownership/RTTI 입력
+- Typed managed layout, 명시적 layout 식별자, ownership/RTTI 입력과 `tribute.type.string`
+  같은 타입 식별 metadata
 - Location과 `tribute.definition.*` 같은 실행에 관여하지 않는 source/debug 정보
 
 경계 이후 pass는 금지된 metadata를 조회하거나 다시 만들지 않는다. 이름, 포인터 형태,
 arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의미적 분류를 이름만 바꾼
 물리 속성으로 복제하는 것도 허용하지 않는다.
+
+출구 검증기는 operation, callable type, alias, 중첩 type 속성, block 인자와 그
+속성을 재귀적으로 검사한다. 금지 목록뿐 아니라 보존 목록에도 없는 언어 전용
+`tribute.*` 속성은 분류되지 않은 metadata로 보고한다. 새 언어 전용 속성은 금지 또는
+보존 중 하나로 분류된 뒤에만 출구를 넘을 수 있다. 입력과 결과 타입이 같은
+unrealized cast, 대상 함수의 signature와 다른 타입의 `func.constant`도 위반으로
+보고한다.
 
 #### Unrealized cast
 
