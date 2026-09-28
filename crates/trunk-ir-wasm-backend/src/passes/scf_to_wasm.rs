@@ -42,46 +42,46 @@ pub fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,
+    analyses: &mut AnalysisCache,
 ) -> Result<(), ConversionError> {
-    AnalysisCache::scope(ctx, |ctx, cache| {
-        let analysis = cache.require::<StructuredControlAnalysis>(ctx, module.op());
-        let mut plan = ScfLoweringPlan::default();
-        validate_structured_control(ctx, module, &analysis, |op, decision| match decision {
-            ControlLowering::DropNeverResult => {
-                plan.drop_never_results.insert(op);
-                plan.terminal_controls.insert(op);
-            }
-            ControlLowering::ResultlessSwitch => {
-                plan.resultless_switches.insert(op);
-                plan.terminal_controls.insert(op);
-            }
-            ControlLowering::TerminalResultless => {
-                plan.terminal_controls.insert(op);
-            }
-        })?;
-        // Patterns consume decisions about source operations. They must not
-        // query cached source facts after nested operations have been rewritten.
-        cache.invalidate::<StructuredControlAnalysis>(module.op());
-        let plan = Arc::new(plan);
-        PatternApplicator::new(type_converter)
-            .add_pattern(ScfIfPattern(plan.clone()))
-            .add_pattern(ScfSwitchPattern(plan.clone()))
-            .add_pattern(ScfLoopPattern(plan))
-            .add_pattern(ScfYieldPattern)
-            .add_pattern(ScfContinuePattern)
-            .add_pattern(ScfBreakPattern)
-            .with_target(scf_to_wasm_target())
-            .apply_partial_conversion(ctx, module, SCF_TO_WASM_BOUNDARY)?;
-        Ok(())
-    })
+    let analysis = analyses.require::<StructuredControlAnalysis>(ctx, module.op());
+    let mut plan = ScfLoweringPlan::default();
+    validate_structured_control(ctx, module, &analysis, |op, decision| match decision {
+        ControlLowering::DropNeverResult => {
+            plan.drop_never_results.insert(op);
+            plan.terminal_controls.insert(op);
+        }
+        ControlLowering::ResultlessSwitch => {
+            plan.resultless_switches.insert(op);
+            plan.terminal_controls.insert(op);
+        }
+        ControlLowering::TerminalResultless => {
+            plan.terminal_controls.insert(op);
+        }
+    })?;
+    // Patterns consume decisions about source operations. They must not
+    // query cached source facts after nested operations have been rewritten.
+    analyses.invalidate::<StructuredControlAnalysis>(module.op());
+    let plan = Arc::new(plan);
+    PatternApplicator::new(type_converter)
+        .add_pattern(ScfIfPattern(plan.clone()))
+        .add_pattern(ScfSwitchPattern(plan.clone()))
+        .add_pattern(ScfLoopPattern(plan))
+        .add_pattern(ScfYieldPattern)
+        .add_pattern(ScfContinuePattern)
+        .add_pattern(ScfBreakPattern)
+        .with_target(scf_to_wasm_target())
+        .apply_partial_conversion(ctx, module, SCF_TO_WASM_BOUNDARY)?;
+    Ok(())
 }
 
 /// Validate structured control before any target pipeline mutation.
 pub fn validate_lowerable_structured_control(
     ctx: &IrContext,
     module: Module,
+    analyses: &mut AnalysisCache,
 ) -> Result<(), ConversionError> {
-    let analysis = AnalysisCache::new().require::<StructuredControlAnalysis>(ctx, module.op());
+    let analysis = analyses.require::<StructuredControlAnalysis>(ctx, module.op());
     validate_structured_control(ctx, module, &analysis, |_, _| {})
 }
 
@@ -736,7 +736,13 @@ mod tests {
     fn lower_text(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        lower(&mut ctx, module, TypeConverter::new()).expect("test module should lower to wasm");
+        lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .expect("test module should lower to wasm");
         let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
         assert!(use_chains.is_ok(), "{use_chains}");
         let verifiers = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
@@ -754,8 +760,13 @@ mod tests {
         let module = parse_test_module(&mut ctx, input);
         let before = print_module(&ctx, module.op());
 
-        let error = lower(&mut ctx, module, TypeConverter::new())
-            .expect_err("nonlowerable switch should reject the entire conversion");
+        let error = lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .expect_err("nonlowerable switch should reject the entire conversion");
 
         assert_eq!(error.boundary(), SCF_TO_WASM_BOUNDARY);
         assert_eq!(error.operations().len(), 1);
@@ -1004,7 +1015,8 @@ mod tests {
         );
 
         let type_converter = array_to_arrayref_converter(&mut ctx);
-        lower(&mut ctx, module, type_converter).expect("test module should lower to wasm");
+        lower(&mut ctx, module, type_converter, &mut Default::default())
+            .expect("test module should lower to wasm");
 
         let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
         assert!(use_chains.is_ok(), "{use_chains}");
@@ -1033,7 +1045,8 @@ mod tests {
         );
 
         let type_converter = array_to_arrayref_converter(&mut ctx);
-        lower(&mut ctx, module, type_converter).expect("test module should lower to wasm");
+        lower(&mut ctx, module, type_converter, &mut Default::default())
+            .expect("test module should lower to wasm");
 
         let use_chains = trunk_ir::validation::validate_use_chains(&ctx, module);
         assert!(use_chains.is_ok(), "{use_chains}");
@@ -1115,7 +1128,13 @@ mod tests {
         for (body, expected) in cases {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &control_fixture(body));
-            lower(&mut ctx, module, TypeConverter::new()).unwrap();
+            lower(
+                &mut ctx,
+                module,
+                TypeConverter::new(),
+                &mut Default::default(),
+            )
+            .unwrap();
             let mut controls = Vec::new();
             let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
                 let data = ctx.op(op);
@@ -1171,7 +1190,13 @@ mod tests {
                     "core.module @test {{ func.func @main(%cond: core.i1, %choice: core.i32) -> core.i32 {{ {body} }} }}"
                 ),
             );
-            lower(&mut ctx, module, TypeConverter::new()).unwrap();
+            lower(
+                &mut ctx,
+                module,
+                TypeConverter::new(),
+                &mut Default::default(),
+            )
+            .unwrap();
             crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
             let bytes = crate::emit_module_to_wasm(&mut ctx, module).unwrap().bytes;
             wasmparser::Validator::new()
@@ -1190,7 +1215,13 @@ mod tests {
             }
         }"#,
         );
-        lower(&mut ctx, module, TypeConverter::new()).unwrap();
+        lower(
+            &mut ctx,
+            module,
+            TypeConverter::new(),
+            &mut Default::default(),
+        )
+        .unwrap();
         crate::passes::func_to_wasm::lower(&mut ctx, module, TypeConverter::new());
         let bytes = crate::emit_module_to_wasm(&mut ctx, module).unwrap().bytes;
         assert!(wasmparser::Validator::new().validate_all(&bytes).is_err());
@@ -1224,7 +1255,13 @@ mod tests {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, &input);
             let before = print_module(&ctx, module.op());
-            let error = lower(&mut ctx, module, TypeConverter::new()).expect_err(body);
+            let error = lower(
+                &mut ctx,
+                module,
+                TypeConverter::new(),
+                &mut Default::default(),
+            )
+            .expect_err(body);
             assert_eq!(error.boundary(), SCF_TO_WASM_BOUNDARY);
             assert!(
                 error.to_string().contains("Never control requires"),
@@ -1253,7 +1290,15 @@ mod tests {
             let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
             let original = ctx.block(block).ops[0];
             let result_types = ctx.op_result_types(original).to_vec();
-            assert!(lower(&mut ctx, module, TypeConverter::new()).is_err());
+            assert!(
+                lower(
+                    &mut ctx,
+                    module,
+                    TypeConverter::new(),
+                    &mut Default::default()
+                )
+                .is_err()
+            );
             assert_eq!(ctx.op_result_types(original), result_types);
         }
     }
@@ -1270,7 +1315,13 @@ mod tests {
                 let mut ctx = IrContext::new();
                 let input = control_fixture(&body).replace("-> core.nil", &format!("-> {ty}"));
                 let module = parse_test_module(&mut ctx, &input);
-                lower(&mut ctx, module, TypeConverter::new()).unwrap();
+                lower(
+                    &mut ctx,
+                    module,
+                    TypeConverter::new(),
+                    &mut Default::default(),
+                )
+                .unwrap();
                 let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
                     let data = ctx.op(op);
                     if data.dialect == "wasm"
