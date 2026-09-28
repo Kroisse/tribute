@@ -6,8 +6,10 @@
 //! token against the literal rules in `new-plans/syntax.md` and decides its
 //! final type from its shape and suffix.
 
-use std::fmt;
 use std::ops::Range;
+
+use derive_more::{Display, Error};
+use itertools::Itertools;
 
 /// The decoded value of a numeric literal.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -18,24 +20,34 @@ pub(crate) enum NumericValue {
 }
 
 /// An invalid numeric literal.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Display, Error)]
+#[display("{kind}")]
 pub(crate) struct NumericError {
     /// Byte range of the offending part, relative to the literal text.
     pub range: Range<usize>,
     pub kind: NumericErrorKind,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Display)]
 pub(crate) enum NumericErrorKind {
     /// Trailing identifier characters that are not a known suffix.
+    #[display("unknown numeric literal suffix `{_0}`; expected `n`, `i`, or `f`")]
     UnknownSuffix(String),
     /// A known suffix on a literal whose shape it cannot apply to.
+    #[display("suffix `{suffix}` cannot be used on {conflict}")]
     SuffixNotAllowed {
         suffix: char,
         conflict: SuffixConflict,
     },
     /// Trailing characters after a binary, octal, or hexadecimal literal,
     /// which takes no suffix.
+    #[display(
+        "{} literals take no suffix, found `{suffix}`{}",
+        radix_name(*radix),
+        int_form
+            .iter()
+            .format_with("", |form, f| f(&format_args!("; write `{form}` for an Int")))
+    )]
     RadixSuffix {
         radix: u32,
         suffix: String,
@@ -43,103 +55,43 @@ pub(crate) enum NumericErrorKind {
         int_form: Option<String>,
     },
     /// A digit outside the literal's radix.
+    #[display("invalid digit `{digit}` in {} literal", radix_name(*radix))]
     InvalidDigit { digit: char, radix: u32 },
-    /// A radix prefix or exponent without any digit.
-    MissingDigits(DigitsOf),
+    /// A radix prefix without any digit.
+    #[display("{} literal has no digits", radix_name(*radix))]
+    MissingRadixDigits { radix: u32 },
+    /// An exponent without any digit.
+    #[display("exponent has no digits")]
+    MissingExponentDigits,
     /// A negative exponent on a literal that decodes to an integer.
+    #[display(
+        "an integer literal cannot have a negative exponent; \
+         write `{with_point}` or `{with_suffix}` for a Float"
+    )]
     NegativeIntegerExponent {
         with_point: String,
         with_suffix: String,
     },
     /// An integer that does not fit the current representation of its type.
+    #[display("integer literal exceeds the current implementation limit for `{_0}`")]
     Overflow(IntegerType),
     /// A float literal whose value is not finite.
+    #[display("float literal is too large to be represented as `Float`")]
     FloatNotFinite,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 pub(crate) enum SuffixConflict {
+    #[display("a signed literal")]
     Signed,
+    #[display("a literal with a decimal point")]
     Fractional,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum DigitsOf {
-    Radix(u32),
-    Exponent,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 pub(crate) enum IntegerType {
     Nat,
     Int,
-}
-
-impl fmt::Display for NumericError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match &self.kind {
-            NumericErrorKind::UnknownSuffix(suffix) => write!(
-                f,
-                "unknown numeric literal suffix `{suffix}`; expected `n`, `i`, or `f`"
-            ),
-            NumericErrorKind::SuffixNotAllowed { suffix, conflict } => {
-                let target = match conflict {
-                    SuffixConflict::Signed => "a signed literal",
-                    SuffixConflict::Fractional => "a literal with a decimal point",
-                };
-                write!(f, "suffix `{suffix}` cannot be used on {target}")
-            }
-            NumericErrorKind::RadixSuffix {
-                radix,
-                suffix,
-                int_form,
-            } => {
-                write!(
-                    f,
-                    "{} literals take no suffix, found `{suffix}`",
-                    radix_name(*radix)
-                )?;
-                if let Some(int_form) = int_form {
-                    write!(f, "; write `{int_form}` for an Int")?;
-                }
-                Ok(())
-            }
-            NumericErrorKind::InvalidDigit { digit, radix } => {
-                write!(
-                    f,
-                    "invalid digit `{digit}` in {} literal",
-                    radix_name(*radix)
-                )
-            }
-            NumericErrorKind::MissingDigits(DigitsOf::Radix(radix)) => {
-                write!(f, "{} literal has no digits", radix_name(*radix))
-            }
-            NumericErrorKind::MissingDigits(DigitsOf::Exponent) => {
-                f.write_str("exponent has no digits")
-            }
-            NumericErrorKind::NegativeIntegerExponent {
-                with_point,
-                with_suffix,
-            } => write!(
-                f,
-                "an integer literal cannot have a negative exponent; \
-                 write `{with_point}` or `{with_suffix}` for a Float"
-            ),
-            NumericErrorKind::Overflow(ty) => {
-                let ty = match ty {
-                    IntegerType::Nat => "Nat",
-                    IntegerType::Int => "Int",
-                };
-                write!(
-                    f,
-                    "integer literal exceeds the current implementation limit for `{ty}`"
-                )
-            }
-            NumericErrorKind::FloatNotFinite => {
-                f.write_str("float literal is too large to be represented as `Float`")
-            }
-        }
-    }
 }
 
 fn radix_name(radix: u32) -> &'static str {
@@ -205,7 +157,7 @@ pub(crate) fn parse_numeric_literal(text: &str) -> Result<NumericValue, NumericE
     if !digits.bytes().any(|b| b != b'_') {
         return error(
             prefix_start..i,
-            NumericErrorKind::MissingDigits(DigitsOf::Radix(radix)),
+            NumericErrorKind::MissingRadixDigits { radix },
         );
     }
     if radix != 10 && i < bytes.len() {
@@ -258,10 +210,7 @@ pub(crate) fn parse_numeric_literal(text: &str) -> Result<NumericValue, NumericE
             }
             let exp_digits = &text[exp_digits_start..i];
             if !exp_digits.bytes().any(|b| b != b'_') {
-                return error(
-                    start..i,
-                    NumericErrorKind::MissingDigits(DigitsOf::Exponent),
-                );
+                return error(start..i, NumericErrorKind::MissingExponentDigits);
             }
             exponent = Some(Exponent {
                 range: start..i,
@@ -564,10 +513,10 @@ mod tests {
                     radix: 8,
                 },
             ),
-            ("0x", 0..2, MissingDigits(DigitsOf::Radix(16))),
-            ("0x_", 0..3, MissingDigits(DigitsOf::Radix(16))),
-            ("1e", 1..2, MissingDigits(DigitsOf::Exponent)),
-            ("1.0e-_", 3..6, MissingDigits(DigitsOf::Exponent)),
+            ("0x", 0..2, MissingRadixDigits { radix: 16 }),
+            ("0x_", 0..3, MissingRadixDigits { radix: 16 }),
+            ("1e", 1..2, MissingExponentDigits),
+            ("1.0e-_", 3..6, MissingExponentDigits),
             (
                 "1e-3",
                 1..4,

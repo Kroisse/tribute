@@ -1557,6 +1557,7 @@ dependencies = [
 name = "tribute-front"
 version = "0.1.0"
 dependencies = [
+ "derive_more",
  "fluent-uri",
  "im",
  "insta",
