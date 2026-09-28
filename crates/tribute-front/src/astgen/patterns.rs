@@ -28,7 +28,7 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
         }
 
         // === Literal patterns ===
-        "nat_literal" | "int_literal" | "float_literal" => {
+        "number_literal" => {
             let text = ctx.node_text_owned(&node);
             match parse_numeric_literal(&text) {
                 Ok(NumericValue::Nat(value)) => PatternKind::Literal(LiteralPattern::Nat(value)),

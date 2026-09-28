@@ -22,7 +22,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
 
     let kind = match node.kind() {
         // === Literals ===
-        "nat_literal" | "int_literal" | "float_literal" => {
+        "number_literal" => {
             let text = ctx.node_text_owned(&node);
             match parse_numeric_literal(&text) {
                 Ok(NumericValue::Nat(value)) => ExprKind::NatLit(value),

@@ -150,13 +150,12 @@ mod tests {
         let func_id = NodeId::from_cst(&func_node, 0);
         builder.insert(func_id, Span::new(0, 16));
 
-        // Find the int_literal node by walking down the tree
-        // Tree-sitter uses "int_literal" or "nat_literal" for integers
+        // Find the number_literal node by walking down the tree
         let literal_node = root.descendant_for_byte_range(12, 13);
         let literal_registered = if let Some(node) = literal_node {
             let mut current = node;
             loop {
-                if current.kind() == "int_literal" || current.kind() == "nat_literal" {
+                if current.kind() == "number_literal" {
                     let literal_id = NodeId::from_cst(&current, 0);
                     builder.insert(literal_id, Span::new(12, 14));
                     break true;
@@ -172,7 +171,7 @@ mod tests {
 
         assert!(
             literal_registered,
-            "Should have found and registered int_literal/nat_literal"
+            "Should have found and registered number_literal"
         );
 
         let span_map = builder.finish();
@@ -198,12 +197,12 @@ mod tests {
         let func_id = NodeId::from_cst(&func_node, 0);
         builder.insert(func_id, Span::new(0, 16));
 
-        // Find the int_literal node by walking up from position 12
+        // Find the number_literal node by walking up from position 12
         let literal_node = root.descendant_for_byte_range(12, 13);
         if let Some(node) = literal_node {
             let mut current = node;
             loop {
-                if current.kind() == "int_literal" || current.kind() == "nat_literal" {
+                if current.kind() == "number_literal" {
                     let literal_id = NodeId::from_cst(&current, 0);
                     builder.insert(literal_id, Span::new(12, 14));
                     break;
