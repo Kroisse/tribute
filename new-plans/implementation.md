@@ -141,7 +141,7 @@ tribute        -> tribute-front + tribute-passes
 
 Typed frontend output은 operation declaration metadata와 같은 out-of-band 경계에
 compiler intrinsic declaration metadata를 둔다. 각 entry는 canonical semantic
-identity, module-local symbol, complete logical callable type을 포함하고 deterministic
+identity, qualified symbol, complete logical callable type을 포함하고 deterministic
 order로 전달된다. Pre-CPS verifier는 bodyless function과 metadata를 exact-match한 뒤에만
 intrinsic identity attribute를 lowering에 맡긴다. 이후 intrinsic lowering은 이 verified
 identity와 signature를 소비하며 이름이나 `abi` 문자열을 fallback으로 사용하지 않는다.
