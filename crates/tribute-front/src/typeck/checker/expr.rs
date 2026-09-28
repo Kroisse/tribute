@@ -5,14 +5,15 @@
 
 use std::collections::{HashMap, HashSet};
 
+use itertools::Itertools;
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
     AbilityId, Arm, BinOpKind, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
-    HandlerKind, LiteralPattern, LocalId, NodeId, OpDeclKind, Pattern, PatternKind, ResolvedRef,
-    Stmt, Type, TypeKind, TypeScheme, TypedRef, collect_effect_vars,
+    HandlerKind, LiteralPattern, LocalId, ModulePath, NodeId, OpDeclKind, Pattern, PatternKind,
+    ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, collect_effect_vars,
 };
 
 use super::super::constraint::ConstraintOriginKind;
@@ -968,7 +969,12 @@ impl<'db> TypeChecker<'db> {
         if let Some(ty) = ctx.get_constructor_reference_type(node_id) {
             return ty;
         }
-        let ty = self.infer_var_with_ctx(ctx, None, resolved);
+        let ty = match resolved {
+            ResolvedRef::Module { path } => {
+                self.report_module_reference(ctx, node_id, *path, "a constructor")
+            }
+            _ => self.infer_var_with_ctx(ctx, None, resolved),
+        };
         ctx.record_constructor_reference_type(node_id, ty);
         ty
     }
@@ -1069,6 +1075,29 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Infer the type of a variable reference.
+    /// Report a module named where `expected` is required, once per node.
+    fn report_module_reference(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        node: NodeId,
+        path: ModulePath<'db>,
+        expected: &str,
+    ) -> Type<'db> {
+        if ctx.mark_module_value_reported(node) {
+            Diagnostic::new(
+                format!(
+                    "expected {expected}, found module `{}`",
+                    path.segments(self.db()).iter().format("::")
+                ),
+                self.get_span(node),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
+        ctx.error_type()
+    }
+
     fn infer_var_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -1099,7 +1128,13 @@ impl<'db> TypeChecker<'db> {
                     .instantiate_constructor(*id)
                     .unwrap_or_else(|| ctx.fresh_type_var()),
             },
-            ResolvedRef::Module { .. } => ctx.error_type(),
+            ResolvedRef::Module { path } => match node {
+                // Name resolution accepts a module path in value position (an
+                // unresolved `use` leaves one behind), but no value has a
+                // module's type.
+                Some(node) => self.report_module_reference(ctx, node, *path, "a value"),
+                None => ctx.error_type(),
+            },
             ResolvedRef::TypeDef { .. } => {
                 // Type definitions cannot be used as values in expression context.
                 // This typically happens when an enum name like `Option` is used
@@ -2190,7 +2225,12 @@ impl<'db> TypeChecker<'db> {
                 LiteralPattern::Unit => ctx.nil_type(),
             },
             PatternKind::Variant { ctor, fields } => {
-                let ctor_ty = self.infer_var_with_ctx(ctx, None, ctor);
+                let ctor_ty = match ctor {
+                    ResolvedRef::Module { path } => {
+                        self.report_module_reference(ctx, pattern.id, *path, "a constructor")
+                    }
+                    _ => self.infer_var_with_ctx(ctx, None, ctor),
+                };
                 ctx.record_node_type(pattern.id, ctor_ty);
 
                 match ctor_ty.kind(self.db()) {

@@ -42,6 +42,28 @@ fn main() -> Int { compue(+42) }
 }
 
 #[salsa_test]
+fn diag_unresolved_import(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+mod basic {
+    pub fn add(a: Nat, b: Nat) -> Nat { a + b }
+}
+use self::basic::add
+use basic::sub
+
+fn main() {
+    let _ = add(1, 2)
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_unresolved_type(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(db, "test.trb", "fn main() -> Foo { 42 }");
     let result = compile_with_diagnostics(db, source);

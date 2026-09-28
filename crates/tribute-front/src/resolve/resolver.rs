@@ -17,6 +17,7 @@ use crate::ast::{
 };
 
 use super::env::{Binding, ModuleEnv};
+use crate::keywords::PATH_KEYWORDS;
 
 /// Find the best matches from `candidates` by a caller-provided score function.
 ///
@@ -475,9 +476,57 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve a use declaration.
+    ///
+    /// The environment already holds the import; this only reports a path
+    /// that names nothing, which would otherwise leave the import as a
+    /// module placeholder.
     fn resolve_use_decl(&self, u: UseDecl) -> UseDecl {
-        // Use declarations don't contain expressions to resolve
+        self.check_use_path(&u);
         u
+    }
+
+    fn check_use_path(&self, u: &UseDecl) {
+        let Some(first) = u.path.first() else {
+            return;
+        };
+        let message = if first.with_str(|name| PATH_KEYWORDS.contains(&name)) {
+            format!("path keyword `{first}` is not supported in `use` paths yet")
+        } else if self.use_path_resolves(&u.path) {
+            return;
+        } else {
+            format!("unresolved import `{}`", u.path.iter().format("::"))
+        };
+        Diagnostic::new(
+            message,
+            self.span_map.get_or_default(u.id),
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.db);
+    }
+
+    /// Whether `path` names a definition or a module, from the package root
+    /// or from the enclosing inline module.
+    fn use_path_resolves(&self, path: &[Symbol]) -> bool {
+        let names = |path: &[Symbol]| {
+            let Some((last, namespace)) = path.split_last() else {
+                return false;
+            };
+            let full = Symbol::from_dynamic(&path.iter().format("::").to_string());
+            // A single-segment path must name a definition: `env.lookup`
+            // would also find the module placeholder this import inserted.
+            let found = if namespace.is_empty() {
+                self.env.has_definition(*last)
+            } else {
+                let namespace = Symbol::from_dynamic(&namespace.iter().format("::").to_string());
+                self.env.lookup_qualified(namespace, *last).is_some()
+            };
+            found || self.env.has_namespace(full)
+        };
+        names(path) || {
+            let nested: Vec<Symbol> = self.module_path.iter().chain(path).copied().collect();
+            !self.module_path.is_empty() && names(&nested)
+        }
     }
 
     /// Resolve an expression.
