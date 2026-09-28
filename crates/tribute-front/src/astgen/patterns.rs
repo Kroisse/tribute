@@ -6,9 +6,9 @@ use trunk_ir::Symbol;
 use crate::ast::{FieldPattern, FloatBits, LiteralPattern, Pattern, PatternKind, UnresolvedName};
 
 use super::context::AstLoweringCtx;
-use super::expressions::parse_string_literal;
 use super::helpers::{is_comment, report_in_node};
 use super::numeric::{NumericValue, parse_numeric_literal};
+use super::text_literal::lower_text_literal;
 
 /// Lower a CST pattern node to an AST Pattern.
 pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<UnresolvedName> {
@@ -42,15 +42,12 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
                 }
             }
         }
-        // grammar.js uses "string" for string patterns, not "string_literal"
-        "string_literal" | "string" => {
-            let text = ctx.node_text_owned(&node);
-            match parse_string_literal(&text) {
-                Ok(content) => PatternKind::Literal(LiteralPattern::String(content)),
-                Err(error) => {
-                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
-                    PatternKind::Error
-                }
+        "string" | "raw_string" | "raw_interpolated_string" => {
+            match lower_text_literal(ctx, &node) {
+                Some(bytes) => PatternKind::Literal(LiteralPattern::String(
+                    String::from_utf8(bytes).expect("string literals decode to UTF-8"),
+                )),
+                None => PatternKind::Error,
             }
         }
         "bool_literal" => {
@@ -785,18 +782,6 @@ mod tests {
         };
         assert_eq!(name.to_string(), "all");
         assert!(matches!(inner.kind.as_ref(), PatternKind::Wildcard));
-    }
-
-    #[test]
-    fn test_parse_string_literal_simple() {
-        assert_eq!(parse_string_literal("\"hello\"").unwrap(), "hello");
-        assert_eq!(parse_string_literal("\"\"").unwrap(), "");
-    }
-
-    #[test]
-    fn test_parse_string_literal_no_quotes() {
-        // Edge case: if quotes are missing, return as-is
-        assert_eq!(parse_string_literal("hello").unwrap(), "hello");
     }
 
     // === String Escape Sequence Tests ===

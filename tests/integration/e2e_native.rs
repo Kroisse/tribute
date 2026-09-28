@@ -966,6 +966,29 @@ fn main() {
 }
 
 #[test]
+fn test_native_block_string_literal_strips_indentation() {
+    let output = compile_and_run_native(
+        "block_string_literal.trb",
+        r##"
+fn main() {
+    print_line(s#"
+        SELECT *
+          FROM t\tx
+        "#)
+}
+"##,
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "exit={:?}, stderr='{}'",
+        output.status,
+        String::from_utf8_lossy(&output.stderr),
+    );
+    assert_eq!(stdout, "SELECT *\n  FROM t\tx\n");
+}
+
+#[test]
 fn test_native_string_escape_unicode() {
     // \u{41} = 'A', \u{E9} = 'é', \u{1F600} = '😀' (outside the BMP)
     let output = compile_and_run_native(

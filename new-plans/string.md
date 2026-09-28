@@ -105,13 +105,17 @@ Backend는 이 ADT의 source variant와 field 순서를 보존해야 한다. 특
 s#"
     multiline
     text
-"#                          // multiline
+    "#                      // 블록 리터럴: "multiline\ntext"
 r"\d+\.\d+"                 // raw (escape 없음)
 "caf\u{E9} \u{1F600}"       // unicode escape (1~6자리 16진수)
 ```
 
 `\u{…}`는 Unicode scalar value 하나이며 surrogate와 `10FFFF` 초과 값은 lexical
 error다. `\xHH`는 ASCII(`00`–`7F`)만 허용한다.
+
+블록 리터럴은 닫는 구분자 앞의 공백을 들여쓰기 접두사로 삼아 모든 줄에서
+제거하고, 소스의 줄바꿈은 LF로 정규화한다. 자세한 규칙은
+[syntax.md](syntax.md)의 "블록 리터럴과 들여쓰기 제거"를 따른다.
 
 ### 주요 연산
 

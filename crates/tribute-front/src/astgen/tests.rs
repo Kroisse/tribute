@@ -2559,3 +2559,50 @@ fn test_truncate_token_preview_multibyte_chars() {
 fn test_truncate_token_preview_empty() {
     assert_eq!(truncate_token_preview("").to_string(), "");
 }
+
+// =============================================================================
+// Block Literal Tests
+// =============================================================================
+
+#[test]
+fn test_block_literals_strip_indentation() {
+    for (source, expected) in [
+        (
+            "fn main() -> String {\n    s#\"\n        SELECT *\n          FROM t\n        \"#\n}\n",
+            ExprKind::StringLit("SELECT *\n  FROM t".into()),
+        ),
+        (
+            "fn main() -> String {\n    r#\"\n        \\d+ \"x\"\n        \"#\n}\n",
+            ExprKind::StringLit(r#"\d+ "x""#.into()),
+        ),
+        (
+            "fn main() -> Bytes {\n    b#\"\n      \\x41\n      b\n    \"#\n}\n",
+            ExprKind::BytesLit(b"  A\n  b".to_vec()),
+        ),
+        (
+            "fn main() -> String {\r\n    #\"\r\n        a\r\n        b\r\n        \"#\r\n}\r\n",
+            ExprKind::StringLit("a\nb".into()),
+        ),
+    ] {
+        assert_eq!(first_body_value(source), expected, "{source:?}");
+    }
+}
+
+#[test]
+fn test_raw_string_pattern_is_decoded() {
+    let source = r##"fn f(s: String) -> Nat { case s { r#"a"b"# -> 1, _ -> 0 } }"##;
+    let module = parse_and_lower(source);
+    let Decl::Function(func) = &module.decls[0] else {
+        panic!("Expected function");
+    };
+    let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+        panic!("Expected block");
+    };
+    let ExprKind::Case { arms, .. } = value.kind.as_ref() else {
+        panic!("Expected case, got {:?}", value.kind);
+    };
+    assert_eq!(
+        *arms[0].pattern.kind,
+        PatternKind::Literal(crate::ast::LiteralPattern::String(r#"a"b"#.into()))
+    );
+}
