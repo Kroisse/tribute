@@ -405,8 +405,12 @@ adt.string_const(text)
 ```
 
 동일한 payload는 `String`과 `Bytes` 리터럴 사이에서도 data segment를 재사용할 수
-있다. `String::Leaf` 생성은 target의 일반 enum/variant lowering보다 먼저 일어나고,
-그 이후에는 source에서 작성한 `Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
+있다. Constant lowering은 자신이 참조하는 data segment를 같은 단계에서 모듈에
+선언한다([모듈 수준 자원의 선언][wasm-resources]). `String::Leaf` 생성은 target의
+일반 enum/variant lowering보다 먼저 일어나고, 그 이후에는 source에서 작성한
+`Leaf(bytes)`와 똑같은 ADT 경로를 따른다.
+
+[wasm-resources]: wasm-backend.md#모듈-수준-자원의-선언
 
 Native와 Wasm 모두 이 의미적 경계를 공유한다. Public I/O wrapper도 canonical
 `String`을 받아 명시적으로 `Bytes`로 변환한 뒤 target I/O operation에 전달한다.
