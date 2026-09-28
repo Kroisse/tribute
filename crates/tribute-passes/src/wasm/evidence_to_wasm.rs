@@ -1595,7 +1595,7 @@ mod tests {
         let function = wasm_dialect::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
         let before = print_module(&ctx, module.op());
         let error = LowerEvidenceToWasm
-            .run(&mut ctx, function, &mut AnalysisCache::new())
+            .run(&mut ctx, function, &mut Default::default())
             .unwrap_err();
         assert_eq!(
             error.downcast_ref::<EvidenceValidationError>(),
@@ -1746,7 +1746,7 @@ mod tests {
         let mut pass = LowerEvidenceToWasm;
 
         assert_eq!(pass.name(), "lower-evidence-to-wasm");
-        pass.run(&mut ctx, selected, &mut AnalysisCache::new())
+        pass.run(&mut ctx, selected, &mut Default::default())
             .unwrap();
 
         let output = print_module(&ctx, module.op());

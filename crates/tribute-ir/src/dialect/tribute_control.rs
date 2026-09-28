@@ -3710,7 +3710,7 @@ mod tests {
             fixture.module,
             &fixture.declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         );
         assert!(result.is_ok(), "{result}");
 
@@ -4461,7 +4461,7 @@ mod tests {
                 .get_type("operation_result_type")
                 .unwrap(),
         )];
-        let result = validate(&ctx, module, &declarations, &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &declarations, &[], &mut Default::default());
         let messages = messages(&result);
         assert!(messages.contains("duplicate handler clause"));
         assert!(messages.contains("kind does not match the resolved declaration"));
@@ -4927,7 +4927,7 @@ mod tests {
                 module,
                 &[],
                 std::slice::from_ref(&exact),
-                &mut AnalysisCache::new()
+                &mut Default::default()
             )
             .is_ok()
         );
@@ -4942,11 +4942,11 @@ mod tests {
             module,
             &[],
             &[wrong_signature],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         );
         assert!(messages(&result).contains("complete signature"), "{result}");
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("unregistered declaration"),
             "{result}"
@@ -4969,7 +4969,7 @@ mod tests {
             func_sig_type,
         );
 
-        let result = validate(&ctx, module, &[], &[declaration], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[declaration], &mut Default::default());
         assert!(
             messages(&result).contains("must use Direct calling convention"),
             "{result}"
@@ -5001,7 +5001,7 @@ mod tests {
             func_sig_type,
         );
 
-        let result = validate(&ctx, module, &[], &[declaration], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[declaration], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5038,7 +5038,7 @@ mod tests {
             module,
             &[],
             &[nat.clone(), int, nat],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         );
         let diagnostics = messages(&result);
         assert!(
@@ -5078,7 +5078,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(
             diagnostics.contains("requires nominal name metadata"),
@@ -5112,7 +5112,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5132,7 +5132,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("bodyless external"), "{result}");
         assert!(diagnostics.contains("core.ptr cast chain"), "{result}");
@@ -5150,7 +5150,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5163,7 +5163,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5182,7 +5182,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("compatible managed nominal reference types"),
             "{result}"
@@ -5201,7 +5201,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"
@@ -5227,7 +5227,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"
@@ -5258,7 +5258,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5302,7 +5302,7 @@ mod tests {
             operation_result,
         );
 
-        let result = validate(&ctx, module, &[declaration], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[declaration], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5326,7 +5326,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5350,7 +5350,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert_eq!(
             messages(&result).matches("callable provenance").count(),
             2,
@@ -5375,7 +5375,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("nominal layout @Tuple is declared more than once"));
         assert!(diagnostics.contains("callable provenance"), "{result}");
@@ -5393,7 +5393,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5411,7 +5411,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"

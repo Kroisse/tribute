@@ -702,7 +702,7 @@ mod tests {
         let count = Rc::new(Cell::new(0));
         let mut pm = PassManager::new();
         pm.add_pass(CountingPass::<core::Module>::new(count.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(count.get(), 1);
     }
@@ -725,7 +725,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, name, _op| {
             seen_name_clone.replace(name.to_string());
         });
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(count.get(), 1);
         assert_eq!(&*seen_name.borrow(), "closure-pass");
@@ -808,7 +808,7 @@ mod tests {
             SymbolTable::cached(ctx, module, analyses);
             Ok(())
         });
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(observed.get(), 1);
     }
@@ -825,7 +825,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(count.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(count.get(), 3);
     }
@@ -839,7 +839,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(count.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(count.get(), 0);
     }
@@ -855,7 +855,7 @@ mod tests {
         pm.add_pass(recorder::<core::Module>("module", order.clone()));
         pm.nest::<func::Func>()
             .add_pass(recorder::<func::Func>("func", order.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(*order.borrow(), vec!["module", "func"]);
     }
@@ -894,7 +894,7 @@ mod tests {
         pm.add_pass(EraseFirst);
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(count.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // One func remains after erase; counting pass sees it once.
         assert_eq!(count.get(), 1);
@@ -938,7 +938,7 @@ mod tests {
             .with_instrumentation(move |_ctx, _name, _op| {
                 inv_clone.set(inv_clone.get() + 1);
             });
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // EraseSelf runs once per func (f1, f2) and invalidates the target
         // each time, so the following pass and the instrumentation hook must
@@ -961,7 +961,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(mirror.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Mirror reflects the pass's internal counter after 3 calls,
         // proving `&mut self` mutation is observable across invocations.
@@ -983,7 +983,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             inv_clone.set(inv_clone.get() + 1);
         });
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Instrumentation fires once after each of the 2 module-level passes.
         assert_eq!(invocations.get(), 2);
@@ -1007,7 +1007,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             inv_clone.set(inv_clone.get() + 1);
         });
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // 1 module pass + 2 funcs * 1 nested pass = 3 instrumentation calls.
         assert_eq!(invocations.get(), 3);
@@ -1020,7 +1020,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
         let mut pm: PassManager = PassManager::new();
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
     }
 
     #[test]
@@ -1033,7 +1033,7 @@ mod tests {
         pm.add_pass(recorder::<core::Module>("a", order.clone()));
         pm.add_pass(recorder::<core::Module>("b", order.clone()));
         pm.add_pass(recorder::<core::Module>("c", order.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(*order.borrow(), vec!["a", "b", "c"]);
     }
@@ -1061,7 +1061,7 @@ mod tests {
         });
 
         let error = pm
-            .run(&mut ctx, module, &mut AnalysisCache::new())
+            .run(&mut ctx, module, &mut Default::default())
             .unwrap_err();
 
         assert_eq!(error.pass_name(), "failing");
@@ -1087,7 +1087,7 @@ mod tests {
             .add_pass(recorder::<func::Func>("sibling", order.clone()));
 
         let error = pm
-            .run(&mut ctx, module, &mut AnalysisCache::new())
+            .run(&mut ctx, module, &mut Default::default())
             .unwrap_err();
 
         assert_eq!(error.pass_name(), "failing");
@@ -1113,7 +1113,7 @@ mod tests {
             .add_pass(CountingPass::<arith::Addi>::new(count.clone()));
 
         let error = pm
-            .run(&mut ctx, module, &mut AnalysisCache::new())
+            .run(&mut ctx, module, &mut Default::default())
             .unwrap_err();
 
         assert_eq!(error.pass_name(), "nested-pass-manager");
@@ -1139,7 +1139,7 @@ mod tests {
             .add_pass(recorder::<func::Func>("first", order.clone()));
         pm.nest::<func::Func>()
             .add_pass(recorder::<func::Func>("second", order.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Each nested manager re-walks the module independently, so
         // labels are grouped by manager rather than interleaved per func.
@@ -1169,7 +1169,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             root_clone.set(root_clone.get() + 1);
         });
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Root instrumentation fires only for the module-level pass (1 call),
         // because the nested manager installs its own and does not inherit
@@ -1198,7 +1198,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, name, op| {
             seen_clone.borrow_mut().push((name.to_string(), op));
         });
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Module pass → hook("counting", module_op), then nested manager walks
         // for func ops → hook("counting", f1), hook("counting", f2).
@@ -1225,7 +1225,7 @@ mod tests {
         pm.add_pass(CountingPass::<core::Module>::new(count.clone()));
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(count.clone()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Both passes ran (each holds its own counter; the mirror
         // reflects the most recent set, which here is the func pass's
@@ -1254,7 +1254,7 @@ mod tests {
             })
         });
         let error = pm
-            .run(&mut ctx, module, &mut AnalysisCache::new())
+            .run(&mut ctx, module, &mut Default::default())
             .unwrap_err();
 
         assert_eq!(error.pass_name(), "counting");
@@ -1285,7 +1285,7 @@ mod tests {
             })
         });
         let error = pm
-            .run(&mut ctx, module, &mut AnalysisCache::new())
+            .run(&mut ctx, module, &mut Default::default())
             .unwrap_err();
 
         assert_eq!(error.pass_name(), "counting");
@@ -1317,7 +1317,7 @@ mod tests {
             verified_clone.borrow_mut().push(op);
             Ok(())
         });
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(*verified.borrow(), vec![module.op_ref()]);
     }
@@ -1335,7 +1335,7 @@ mod tests {
         pm.add_pass(recorder::<core::Module>("a", order.clone()));
         pm.add_pass(recorder::<core::Module>("b", order.clone()));
         pm.with_verifier(|_ctx, _analyses, _op| Ok(()));
-        pm.run(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Both module passes ran, in registration order.
         assert_eq!(*order.borrow(), vec!["a", "b"]);

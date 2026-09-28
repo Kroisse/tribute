@@ -681,12 +681,7 @@ mod malformed_owner_tests {
             let input = input.replace("func.tail_call_indirect %k", transfer);
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &input);
             assert!(
-                trunk_ir::validation::validate_all(
-                    &ctx,
-                    module,
-                    &mut trunk_ir::analysis::AnalysisCache::new()
-                )
-                .is_ok()
+                trunk_ir::validation::validate_all(&ctx, module, &mut Default::default()).is_ok()
             );
             let host = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
             let lambda = ctx.block(ctx.region(host.body(&ctx)).blocks[0]).ops[0];
@@ -697,11 +692,7 @@ mod malformed_owner_tests {
                 trunk_ir::op_interface::CallableOwnerOps::signature(&ctx, lambda),
                 Some(None)
             );
-            let result = trunk_ir::validation::validate_all(
-                &ctx,
-                module,
-                &mut trunk_ir::analysis::AnalysisCache::new(),
-            );
+            let result = trunk_ir::validation::validate_all(&ctx, module, &mut Default::default());
             assert!(
                 result
                     .to_string()
@@ -733,11 +724,7 @@ mod callable_owner_regressions {
             }}"
             );
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &input);
-            let result = trunk_ir::validation::validate_all(
-                &ctx,
-                module,
-                &mut trunk_ir::analysis::AnalysisCache::new(),
-            );
+            let result = trunk_ir::validation::validate_all(&ctx, module, &mut Default::default());
             if succeeds {
                 assert!(result.is_ok(), "{result}");
             } else {

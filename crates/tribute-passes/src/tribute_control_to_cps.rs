@@ -4099,8 +4099,8 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
-        verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(!printed.contains("tribute_control.func "));
         assert!(!printed.contains("tribute_control.func_ref "));
@@ -4112,7 +4112,7 @@ mod tests {
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut AnalysisCache::new())
+        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default())
             .unwrap();
     }
 
@@ -4127,9 +4127,8 @@ mod tests {
         let target = core::Module::from_op(&ctx, module.op()).unwrap();
         let mut pass = TributeControlToCps::new([]);
         assert_eq!(pass.name(), "tribute-control-to-cps");
-        pass.run(&mut ctx, target, &mut AnalysisCache::new())
-            .unwrap();
-        verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap();
+        pass.run(&mut ctx, target, &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     }
 
     #[test]
@@ -4164,7 +4163,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("func.call "));
         assert!(printed.contains("func.call_indirect"));
@@ -4265,7 +4264,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
 
         let transfers = convention_bearing_transfers(&ctx, module.op());
         let mut conventions: Vec<_> = transfers
@@ -4317,7 +4316,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("core.module @inner"));
         assert!(printed.contains("func.func @nested"));
@@ -4326,7 +4325,7 @@ mod tests {
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut AnalysisCache::new())
+        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default())
             .unwrap();
     }
 
@@ -4351,8 +4350,8 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
-        verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("func.func @same").count(), 2, "{printed}");
         assert!(printed.contains("func.func @outer_call"), "{printed}");
@@ -4362,7 +4361,7 @@ mod tests {
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut AnalysisCache::new())
+        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default())
             .unwrap();
     }
 
@@ -4376,7 +4375,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("name = @CallbackRecord"));
         assert!(
@@ -4391,7 +4390,7 @@ mod tests {
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut AnalysisCache::new())
+        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default())
             .unwrap();
     }
 
@@ -4422,7 +4421,7 @@ mod tests {
         );
         let (mut ctx, module) = parse(&printed_source);
 
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let lowered = module
             .ops(&ctx)
             .into_iter()
@@ -4498,7 +4497,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(error.to_string().contains("func.call"));
@@ -4553,9 +4552,8 @@ mod tests {
                 .insert(Symbol::new("type"), Attribute::Type(malformed));
 
             let before = print_module(&ctx, module.op());
-            let error =
-                tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
-                    .unwrap_err();
+            let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+                .unwrap_err();
             assert_eq!(error.boundary, PRE_CPS_BOUNDARY, "{name}: {error}");
             assert!(error.to_string().contains(expected), "{name}: {error}");
             assert_eq!(print_module(&ctx, module.op()), before, "{name}");
@@ -4570,7 +4568,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
@@ -4634,9 +4632,8 @@ mod tests {
         for (input, expected) in malformed {
             let (mut ctx, module) = parse(input);
             let before = print_module(&ctx, module.op());
-            let error =
-                tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
-                    .unwrap_err();
+            let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+                .unwrap_err();
             assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
             assert!(error.to_string().contains(expected), "{error}");
             assert_eq!(print_module(&ctx, module.op()), before);
@@ -4652,7 +4649,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
@@ -4679,7 +4676,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
@@ -4791,7 +4788,7 @@ mod tests {
             &mut ctx,
             candidate,
             &source_aliases,
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap_err();
         assert_eq!(error.boundary, POST_CPS_BOUNDARY);
@@ -4809,9 +4806,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(local_input);
-        let error =
-            verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut AnalysisCache::new())
-                .unwrap_err();
+        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert!(error.to_string().contains("expected 1 operand"), "{error}");
 
         let core_input = r#"core.module @test {
@@ -4821,9 +4817,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(core_input);
-        let error =
-            verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut AnalysisCache::new())
-                .unwrap_err();
+        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -4838,7 +4833,7 @@ mod tests {
 }"#;
         let (ctx, module) = parse(post_input);
         let error =
-            verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap_err();
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -4857,7 +4852,7 @@ mod tests {
 }"#;
         let (ctx, module) = parse(malformed_delimiter);
         let error =
-            verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap_err();
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(error.to_string().contains("requires an evidence operand"));
     }
 
@@ -4868,7 +4863,7 @@ mod tests {
 }"#;
         let (ctx, module) = parse(input);
         let error =
-            verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap_err();
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(error.to_string().contains("forbidden type"), "{error}");
     }
 
@@ -4878,9 +4873,8 @@ mod tests {
   !nested = core.tuple(func.func_sig<(core.i32) -> core.i32>)
 }"#;
         let (ctx, module) = parse(input);
-        let error =
-            verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut AnalysisCache::new())
-                .unwrap_err();
+        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert!(error.to_string().contains("forbidden type"), "{error}");
     }
 
@@ -4991,8 +4985,8 @@ mod tests {
         ];
         for (input, expected) in malformed {
             let (ctx, module) = parse(input);
-            let error = verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new())
-                .unwrap_err();
+            let error =
+                verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
         }
     }
@@ -5012,7 +5006,7 @@ mod tests {
 }"#;
         let (ctx, module) = parse(dispatcher_input);
         let error =
-            verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap_err();
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -5037,7 +5031,7 @@ mod tests {
 }"#;
         let (ctx, module) = parse(wrong_abi_input);
         let error =
-            verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap_err();
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         let text = error.to_string();
         assert!(
             text.contains("tail-resumptive dispatcher has the wrong"),
@@ -5062,7 +5056,7 @@ mod tests {
 }"#;
         let (ctx, module) = parse(wrong_metadata_input);
         let error =
-            verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap_err();
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         let text = error.to_string();
         assert!(text.contains("calling convention metadata 1"), "{text}");
         assert!(text.contains("calling convention metadata 2"), "{text}");
@@ -5074,7 +5068,7 @@ mod tests {
 }"#;
         let (ctx, module) = parse(residual_input);
         let error =
-            verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap_err();
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(error.to_string().contains("residual tribute_control.func"));
     }
 
@@ -5142,7 +5136,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
         let mut perform_resume = None;
@@ -5299,7 +5293,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
 
@@ -5404,7 +5398,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
         let printed = print_module(&ctx, module.op());
@@ -5480,7 +5474,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
         let printed = print_module(&ctx, module.op());
@@ -5648,7 +5642,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
@@ -5675,7 +5669,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("__tribute_func_ref_adapter"));
         assert!(printed.contains("closure.new"));
@@ -5713,8 +5707,8 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
-        verify_tribute_control_post_cps(&ctx, module, &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert_eq!(
             printed
@@ -5740,7 +5734,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
@@ -5769,7 +5763,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
@@ -5802,7 +5796,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
@@ -5834,7 +5828,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
@@ -5859,7 +5853,7 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new())
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
             .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(error.to_string().contains("core.ptr cast chain"), "{error}");
@@ -5890,7 +5884,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut AnalysisCache::new()).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
         assert!(printed.contains("effect.fresh_prompt_tag"));
@@ -5938,7 +5932,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
         assert_nested_resume_frames(&print_module(&ctx, module.op()));
@@ -5984,7 +5978,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
         assert_nested_resume_frames(&print_module(&ctx, module.op()));
@@ -6047,7 +6041,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
         let mut perform = None;
@@ -6180,7 +6174,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
         let printed = print_module(&ctx, module.op());
@@ -6266,7 +6260,7 @@ mod tests {
             module,
             &declarations,
             &[],
-            &mut trunk_ir::analysis::AnalysisCache::new(),
+            &mut Default::default(),
         )
         .unwrap();
         let printed = print_module(&ctx, module.op());
@@ -6294,24 +6288,15 @@ mod shared_contract_boundary_regressions {
         }";
         let mut ctx = trunk_ir::IrContext::new();
         let module = trunk_ir::parser::parse_test_module(&mut ctx, valid);
-        verify_tribute_control_post_cps(
-            &ctx,
-            module,
-            &mut trunk_ir::analysis::AnalysisCache::new(),
-        )
-        .unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         for (from, to, expected) in [
             ("} : core.i32", "} : core.nil", "call result list mismatch"),
             ("func.return %x", "func.return", "return count mismatch"),
         ] {
             let mut ctx = trunk_ir::IrContext::new();
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &valid.replace(from, to));
-            let error = verify_tribute_control_post_cps(
-                &ctx,
-                module,
-                &mut trunk_ir::analysis::AnalysisCache::new(),
-            )
-            .unwrap_err();
+            let error =
+                verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
         }
     }

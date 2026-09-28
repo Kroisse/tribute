@@ -820,7 +820,7 @@ pub fn run_through_cps_lowering(
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
-    pm.run(&mut ctx, core_module, &mut AnalysisCache::new())?;
+    pm.run(&mut ctx, core_module, &mut Default::default())?;
     Ok(Some((ctx, m)))
 }
 
@@ -1881,7 +1881,7 @@ mod tests {
     #[test]
     fn source_logical_root_defers_closure_storage_until_target_finalization() {
         let (mut ctx, module) = source_logical_cps_root_module("func.unreachable");
-        enter_target_closure_storage_boundary(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        enter_target_closure_storage_boundary(&mut ctx, module, &mut Default::default()).unwrap();
         let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(after_abi.contains("closure.closure"), "{after_abi}");
 
@@ -1980,7 +1980,7 @@ mod tests {
             effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.nil}
         "#,
         );
-        enter_target_closure_storage_boundary(&mut ctx, module, &mut AnalysisCache::new()).unwrap();
+        enter_target_closure_storage_boundary(&mut ctx, module, &mut Default::default()).unwrap();
         tribute_passes::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
         let binary = compile_to_wasm(&mut ctx, module).unwrap_or_else(|error| {
             panic!(
@@ -2646,7 +2646,7 @@ fn main() {
         install_debug_verifier(&mut pm);
 
         let error = pm
-            .run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .run(&mut ctx, core_module, &mut Default::default())
             .unwrap_err();
 
         assert_eq!(error.pass_name(), "break-use-chain");
@@ -2695,7 +2695,7 @@ fn main() {
         install_debug_verifier(&mut pm);
 
         let error = pm
-            .run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .run(&mut ctx, core_module, &mut Default::default())
             .unwrap_err();
 
         assert_eq!(error.pass_name(), "break-schema");
@@ -3345,7 +3345,7 @@ fn main() {}
                     logical.module,
                     &logical.operation_declarations,
                     &logical.compiler_intrinsics,
-                    &mut AnalysisCache::new(),
+                    &mut Default::default(),
                 )
                 .unwrap();
             }
@@ -3470,7 +3470,7 @@ fn main() {}
                     logical.module,
                     &logical.operation_declarations,
                     &logical.compiler_intrinsics,
-                    &mut AnalysisCache::new(),
+                    &mut Default::default(),
                 )
                 .expect("CPS converts published layout fields");
             }
@@ -3567,7 +3567,7 @@ fn main() {}
             logical.module,
             &logical.operation_declarations,
             &logical.compiler_intrinsics,
-            &mut AnalysisCache::new(),
+            &mut Default::default(),
         );
         assert!(validation.is_ok(), "{validation}");
     }

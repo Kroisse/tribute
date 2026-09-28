@@ -138,7 +138,7 @@ mod tests {
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
 
         LowerIoIntrinsics
-            .run(&mut ctx, core, &mut AnalysisCache::new())
+            .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
         let output = print_module(&ctx, module.op());
@@ -171,7 +171,7 @@ mod tests {
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
 
         LowerIoIntrinsics
-            .run(&mut ctx, core, &mut AnalysisCache::new())
+            .run(&mut ctx, core, &mut Default::default())
             .unwrap();
 
         let output = print_module(&ctx, module.op());

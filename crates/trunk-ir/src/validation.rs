@@ -1286,7 +1286,7 @@ pub fn debug_assert_valid(ctx: &IrContext, module: Module, pass_name: &str) {
     if !cfg!(debug_assertions) {
         return;
     }
-    let result = validate_all(ctx, module, &mut AnalysisCache::new());
+    let result = validate_all(ctx, module, &mut Default::default());
     if !result.is_ok() {
         panic!("Arena validation failed after `{}`:\n{}", pass_name, result,);
     }
@@ -1370,7 +1370,7 @@ mod tests {
             "core.module @m { func.func @f() { func.return } }",
         );
         ctx.op_mut(module.op()).attributes.remove("sym_name");
-        let text = validate_all(&ctx, module, &mut AnalysisCache::new()).to_string();
+        let text = validate_all(&ctx, module, &mut Default::default()).to_string();
         assert!(
             text.contains("core.module") && text.contains("missing required attribute `sym_name`"),
             "{text}"
@@ -1476,7 +1476,7 @@ mod tests {
             );
             for result in [
                 validate_operation_verifiers(&ctx, module),
-                validate_all(&ctx, module, &mut AnalysisCache::new()),
+                validate_all(&ctx, module, &mut Default::default()),
             ] {
                 let messages = operation_error_messages(&result);
                 assert!(
@@ -1496,7 +1496,7 @@ mod tests {
         assert!(func::FuncSig::from_type_ref(&ctx, legacy).is_none());
         for result in [
             validate_operation_verifiers(&ctx, module),
-            validate_all(&ctx, module, &mut AnalysisCache::new()),
+            validate_all(&ctx, module, &mut Default::default()),
         ] {
             let messages = operation_error_messages(&result);
             assert!(
@@ -2419,14 +2419,14 @@ mod tests {
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         // Validate before RAUW
-        let result = validate_all(&ctx, module, &mut AnalysisCache::new());
+        let result = validate_all(&ctx, module, &mut Default::default());
         assert!(result.is_ok(), "Before RAUW: {}", result);
 
         // Replace c0 with c1
         ctx.replace_all_uses(c0_val, c1_val);
 
         // Validate after RAUW
-        let result = validate_all(&ctx, module, &mut AnalysisCache::new());
+        let result = validate_all(&ctx, module, &mut Default::default());
         assert!(result.is_ok(), "After RAUW: {}", result);
 
         // Verify c1 now has the uses
@@ -2460,7 +2460,7 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
-        let result = validate_all(&ctx, module, &mut AnalysisCache::new());
+        let result = validate_all(&ctx, module, &mut Default::default());
         let text = result.to_string();
         assert!(text.contains("caller/callee result lists differ"), "{text}");
         assert!(
@@ -3711,7 +3711,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_all(&ctx, module, &mut AnalysisCache::new());
+        let result = validate_all(&ctx, module, &mut Default::default());
         assert!(!result.is_ok());
         assert_eq!(operation_error_messages(&result).len(), 1);
     }

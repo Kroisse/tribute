@@ -786,7 +786,7 @@ mod tests {
         let mut pass = LowerEvidenceToNative;
 
         assert_eq!(pass.name(), "lower-evidence-to-native");
-        pass.run(&mut ctx, selected, &mut AnalysisCache::new())
+        pass.run(&mut ctx, selected, &mut Default::default())
             .unwrap();
 
         let ir_text = print_module(&ctx, module.op());

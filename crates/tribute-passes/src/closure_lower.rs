@@ -1081,7 +1081,7 @@ mod tests {
 
         let core_module = core::Module::from_op(&ctx, module.op()).unwrap();
         let mut pass = LowerPreparedClosures;
-        pass.run(&mut ctx, core_module, &mut AnalysisCache::new())
+        pass.run(&mut ctx, core_module, &mut Default::default())
             .unwrap();
         assert_module_is_structurally_valid(&ctx, module);
 
