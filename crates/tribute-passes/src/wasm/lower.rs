@@ -5,6 +5,7 @@
 //! single arena session.
 
 use std::fmt;
+use std::rc::Rc;
 
 use tracing::{error, warn};
 use tribute_core::{CallingConvention, get_calling_convention};
@@ -16,7 +17,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::{PassError, PassManager};
+use trunk_ir::pass::{PassError, PassManager, pass_fn};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
@@ -36,8 +37,6 @@ const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
 pub enum WasmLowerError {
     Conversion(ConversionError),
     Pass(PassError),
-    Const(super::const_to_wasm::ConstValidationError),
-    Evidence(super::evidence_to_wasm::EvidenceValidationError),
 }
 
 impl fmt::Display for WasmLowerError {
@@ -45,8 +44,6 @@ impl fmt::Display for WasmLowerError {
         match self {
             Self::Conversion(error) => error.fmt(f),
             Self::Pass(error) => error.fmt(f),
-            Self::Const(error) => error.fmt(f),
-            Self::Evidence(error) => error.fmt(f),
         }
     }
 }
@@ -56,8 +53,6 @@ impl std::error::Error for WasmLowerError {
         match self {
             Self::Conversion(error) => Some(error),
             Self::Pass(error) => Some(error),
-            Self::Const(error) => Some(error),
-            Self::Evidence(error) => Some(error),
         }
     }
 }
@@ -71,18 +66,6 @@ impl From<ConversionError> for WasmLowerError {
 impl From<PassError> for WasmLowerError {
     fn from(error: PassError) -> Self {
         Self::Pass(error)
-    }
-}
-
-impl From<super::const_to_wasm::ConstValidationError> for WasmLowerError {
-    fn from(error: super::const_to_wasm::ConstValidationError) -> Self {
-        Self::Const(error)
-    }
-}
-
-impl From<super::evidence_to_wasm::EvidenceValidationError> for WasmLowerError {
-    fn from(error: super::evidence_to_wasm::EvidenceValidationError) -> Self {
-        Self::Evidence(error)
     }
 }
 
@@ -105,6 +88,11 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 }
 
 /// Run the full WASM lowering pipeline on arena IR.
+///
+/// The structured-control boundary check runs first, before any mutation.
+/// The lowering steps then run as passes of one [`PassManager`], so a debug
+/// build verifies IR invariants after every step that changed the IR, and
+/// every step shares `analyses`.
 pub fn lower_to_wasm(
     ctx: &mut IrContext,
     module: Module,
@@ -113,106 +101,131 @@ pub fn lower_to_wasm(
     trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_structured_control(
         ctx, module, analyses,
     )?;
-    super::type_converter::convert_canonical_closure_storage(ctx, module);
+    // Snapshots of the source IR that later steps consume after mutation, such
+    // as data segment offsets. They read only constant and I/O operations,
+    // which closure storage conversion leaves untouched.
+    let const_analysis = Rc::new(super::const_to_wasm::analyze_consts(ctx, module));
+    let io_analysis = Rc::new(IoAnalysis::analyze(
+        ctx,
+        module,
+        const_analysis.total_size(),
+    ));
 
-    let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
-    let io_analysis = IoAnalysis::analyze(ctx, module, const_analysis.total_size());
-    {
-        let _span = tracing::info_span!("io_to_wasm").entered();
-        super::io::lower(ctx, module, &io_analysis)?;
-    }
-
-    // Phase 1: Pattern-based lowering passes (using trunk-ir-wasm-backend)
-    {
-        let _span = tracing::info_span!("arith_to_wasm").entered();
-        let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::arith_to_wasm::lower(ctx, module, tc);
-    }
-    {
-        let _span = tracing::info_span!("scf_to_wasm").entered();
-        let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, module, tc, analyses)?;
-    }
-
-    // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
-    // Before target lowering so downstream passes use primitive target types.
-    {
-        let _span = tracing::info_span!("normalize_primitive_types").entered();
-        super::normalize_primitive_types::lower(ctx, module);
-    }
-
-    {
-        let _span = tracing::info_span!("func_to_wasm").entered();
-        let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, module, tc);
-    }
-    debug_func_params(ctx, module, "after func_to_wasm");
-
-    // Convert wasm.func signature types (e.g., core.array(Marker) → wasm.arrayref)
-    // This must run AFTER func_to_wasm so wasm.func operations exist, and BEFORE
-    // emit so function type attributes have WASM-level types.
-    {
-        let _span = tracing::info_span!("wasm_func_signature_conversion").entered();
-        let tc = wasm_type_converter(ctx);
-        PatternApplicator::new(tc)
-            .add_pattern(WasmFuncSignatureConversionPattern)
-            .apply_partial(ctx, module);
-    }
-    debug_func_params(ctx, module, "after wasm_func_signature_conversion");
-
-    // Lower tribute_rt operations (box_int, unbox_int) to wasm operations
-    // This must run BEFORE adt_to_wasm because float boxing/unboxing emits
-    // adt.struct_new / adt.ref_cast / adt.struct_get that need conversion.
-    {
-        let _span = tracing::info_span!("tribute_rt_to_wasm").entered();
-        super::tribute_rt_to_wasm::lower(ctx, module);
-    }
-    debug_func_params(ctx, module, "after tribute_rt_to_wasm");
-
-    // Lower constants before adt_to_wasm so string constants can become the
-    // ordinary prelude String::Leaf variant.
-    {
-        let _span = tracing::info_span!("const_to_wasm").entered();
-        super::const_to_wasm::validate_for_wasm(ctx, module, &const_analysis)?;
-        super::const_to_wasm::lower(ctx, module, &const_analysis);
-    }
-
-    // Convert ALL adt ops to wasm (including String::Leaf from const lowering).
-    {
-        let _span = tracing::info_span!("adt_to_wasm").entered();
-        let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(ctx, module, tc);
-    }
-    debug_func_params(ctx, module, "after adt_to_wasm");
-
-    // Materialize required evidence helpers and lower effect operations.
-    {
-        let _span = tracing::info_span!("evidence_to_wasm").entered();
-        if let Ok(core_module) = core::Module::from_op(ctx, module.op()) {
-            super::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, module)?;
-            let mut pm = PassManager::new();
-            pm.nest::<wasm_dialect::Func>()
-                .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
-            pm.run(ctx, core_module, analyses)?;
-        } else {
-            super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module)?;
-        }
-    }
-
-    {
-        let _span = tracing::info_span!("intrinsic_to_wasm").entered();
-        super::intrinsic_to_wasm::lower(ctx, module);
-    }
-
-    // Phase 2: Module-level operations via WasmLowerer (in-place)
-    {
-        let _span = tracing::info_span!("wasm_lowerer").entered();
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
-        lowerer.lower_module(ctx, module);
-    }
+    let core_module =
+        core::Module::from_op(ctx, module.op()).expect("Wasm lowering requires a core.module");
+    wasm_lowering_passes(const_analysis, io_analysis).run(ctx, core_module, analyses)?;
 
     verify_wasm_backend_ready(ctx, module)?;
     Ok(())
+}
+
+/// The Wasm lowering steps, in order.
+fn wasm_lowering_passes(
+    const_analysis: Rc<ConstAnalysis>,
+    io_analysis: Rc<IoAnalysis>,
+) -> PassManager {
+    let mut pm = PassManager::new();
+    pm.add_pass(pass_fn(
+        "convert-closure-storage",
+        |ctx, m: core::Module, _| {
+            super::type_converter::convert_canonical_closure_storage(ctx, m.into());
+            Ok(())
+        },
+    ))
+    .add_pass(pass_fn("io-to-wasm", {
+        let io_analysis = io_analysis.clone();
+        move |ctx, m: core::Module, _| {
+            super::io::lower(ctx, m.into(), &io_analysis)?;
+            Ok(())
+        }
+    }))
+    // Pattern-based lowering (trunk-ir-wasm-backend).
+    .add_pass(pass_fn("arith-to-wasm", |ctx, m: core::Module, _| {
+        let tc = wasm_type_converter(ctx);
+        trunk_ir_wasm_backend::passes::arith_to_wasm::lower(ctx, m.into(), tc);
+        Ok(())
+    }))
+    .add_pass(pass_fn("scf-to-wasm", |ctx, m: core::Module, analyses| {
+        let tc = wasm_type_converter(ctx);
+        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, m.into(), tc, analyses)?;
+        Ok(())
+    }))
+    // Normalize tribute_rt primitive types (int, nat, bool, float) to core
+    // types before target lowering, so later steps see primitive target types.
+    .add_pass(pass_fn(
+        "normalize-primitive-types",
+        |ctx, m: core::Module, _| {
+            super::normalize_primitive_types::lower(ctx, m.into());
+            Ok(())
+        },
+    ))
+    .add_pass(pass_fn("func-to-wasm", |ctx, m: core::Module, _| {
+        let tc = wasm_type_converter(ctx);
+        trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, m.into(), tc);
+        Ok(())
+    }))
+    // Convert wasm.func signature types (e.g., core.array(Marker) →
+    // wasm.arrayref). Runs after func_to_wasm creates the wasm.func operations
+    // and before emission reads their type attributes.
+    .add_pass(pass_fn(
+        "wasm-func-signature-conversion",
+        |ctx, m: core::Module, _| {
+            let tc = wasm_type_converter(ctx);
+            PatternApplicator::new(tc)
+                .add_pattern(WasmFuncSignatureConversionPattern)
+                .apply_partial(ctx, Module::from(m));
+            Ok(())
+        },
+    ))
+    // Lower tribute_rt operations (box_int, unbox_int). Runs before
+    // adt_to_wasm because float boxing emits adt operations that it converts.
+    .add_pass(pass_fn("tribute-rt-to-wasm", |ctx, m: core::Module, _| {
+        super::tribute_rt_to_wasm::lower(ctx, m.into());
+        Ok(())
+    }))
+    // Lower constants before adt_to_wasm so string constants can become the
+    // ordinary prelude String::Leaf variant.
+    .add_pass(pass_fn("const-to-wasm", {
+        let const_analysis = const_analysis.clone();
+        move |ctx, m: core::Module, _| {
+            super::const_to_wasm::validate_for_wasm(ctx, m.into(), &const_analysis)?;
+            super::const_to_wasm::lower(ctx, m.into(), &const_analysis);
+            Ok(())
+        }
+    }))
+    // Convert all adt operations, including String::Leaf from const lowering.
+    .add_pass(pass_fn("adt-to-wasm", |ctx, m: core::Module, _| {
+        let tc = wasm_type_converter(ctx);
+        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(ctx, m.into(), tc);
+        Ok(())
+    }))
+    // Materialize required evidence helpers, then lower effect operations
+    // per function.
+    .add_pass(pass_fn(
+        "prepare-evidence-runtime",
+        |ctx, m: core::Module, _| {
+            super::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m.into())?;
+            Ok(())
+        },
+    ));
+    pm.nest::<wasm_dialect::Func>()
+        .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
+    pm.add_pass(pass_fn("intrinsic-to-wasm", |ctx, m: core::Module, _| {
+        super::intrinsic_to_wasm::lower(ctx, m.into());
+        Ok(())
+    }))
+    // Module-level operations via WasmLowerer (in-place).
+    .add_pass(pass_fn("wasm-lowerer", move |ctx, m: core::Module, _| {
+        WasmLowerer::new(&const_analysis, &io_analysis).lower_module(ctx, m.into());
+        Ok(())
+    }));
+    pm.with_debug_verifier()
+        .with_instrumentation(|ctx, name, op| {
+            if let Some(module) = Module::new(ctx, op) {
+                debug_func_params(ctx, module, name);
+            }
+        });
+    pm
 }
 
 /// Assign module-local GC indices after all type-conversion materialization.
@@ -1353,33 +1366,6 @@ mod tests {
         assert!(!output.contains("effect.dispatch_tail"), "{output}");
         assert!(output.contains("__tribute_evidence_lookup"), "{output}");
         assert!(output.contains("wasm.call_indirect"), "{output}");
-    }
-
-    #[test]
-    fn wasm_lower_error_preserves_evidence_source_and_diagnostics() {
-        use super::super::evidence_to_wasm::EvidenceValidationError;
-        for (validation, message) in [
-            (
-                EvidenceValidationError::InvalidDispatchMetadata,
-                "Wasm CPS dispatch requires four operands, no results and typed metadata",
-            ),
-            (
-                EvidenceValidationError::DispatchOperandMismatch,
-                "Wasm CPS dispatch operands differ from the fixed target ABI",
-            ),
-        ] {
-            let error = WasmLowerError::from(validation);
-            let WasmLowerError::Evidence(expected) = &error else {
-                panic!("evidence variant");
-            };
-            let source = std::error::Error::source(&error).unwrap();
-            assert_eq!(
-                source.downcast_ref::<EvidenceValidationError>(),
-                Some(expected)
-            );
-            assert_eq!(error.to_string(), message);
-            assert_eq!(source.to_string(), message);
-        }
     }
 
     #[test]

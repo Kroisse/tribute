@@ -845,7 +845,7 @@ fn structural_pass_pipeline(
     .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
     .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)
     .add_pass(tribute_passes::io_lowering::LowerIoIntrinsics);
-    install_debug_verifier(&mut pm);
+    pm.with_debug_verifier();
     pm
 }
 
@@ -887,12 +887,12 @@ fn run_shared_pipeline(
     ability_pm
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform);
-    install_debug_verifier(&mut ability_pm);
+    ability_pm.with_debug_verifier();
     ability_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     let mut evidence_pm = PassManager::new();
     evidence_pm.add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch);
-    install_debug_verifier(&mut evidence_pm);
+    evidence_pm.with_debug_verifier();
     evidence_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     // Final function-local ability conversion. This consumes handle_dispatch ops
@@ -901,7 +901,7 @@ fn run_shared_pipeline(
     ability_boundary_pm
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_handle_dispatch::LowerHandleDispatch);
-    install_debug_verifier(&mut ability_boundary_pm);
+    ability_boundary_pm.with_debug_verifier();
     ability_boundary_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     Ok(Some((ctx, m)))
@@ -929,56 +929,6 @@ pub fn dump_native_ir_at_stage(
         },
     )?;
     Ok(trunk_ir::printer::print_module(&ctx, module.op()))
-}
-
-fn install_debug_verifier(pm: &mut PassManager) {
-    // Debug-only regression guard run after every pass. Rewrites may break
-    // these invariants temporarily, but a finished pass must restore them.
-    // Use-chain consistency (#710) comes first; the schema check assumes it.
-    // The verifier only reports; the PassManager returns the offending pass's
-    // name with the verification error. Compiled out in release.
-    if cfg!(debug_assertions) {
-        pm.with_verifier(|ctx, _analyses, op| {
-            let Some(module) = enclosing_module(ctx, op) else {
-                return Ok(());
-            };
-            let mut results = vec![(
-                "use-chain",
-                trunk_ir::validation::validate_use_chains(ctx, module),
-            )];
-            if results[0].1.is_ok() {
-                results.push(("schema", trunk_ir::validation::validate_op_schemas(ctx, op)));
-            }
-            for (kind, result) in results {
-                if result.is_ok() {
-                    continue;
-                }
-                return Err(trunk_ir::pass::VerifyError {
-                    message: format!(
-                        "{kind} regression: {} error(s); first: {}",
-                        result.errors.len(),
-                        result
-                            .errors
-                            .first()
-                            .map(|e| e.to_string())
-                            .unwrap_or_default(),
-                    ),
-                });
-            }
-            Ok(())
-        });
-    }
-}
-
-fn enclosing_module(ctx: &IrContext, mut op: trunk_ir::OpRef) -> Option<Module> {
-    loop {
-        if let Some(module) = Module::new(ctx, op) {
-            return Some(module);
-        }
-        let block = ctx.op(op).parent_block?;
-        let region = ctx.block(block).parent_region?;
-        op = ctx.region(region).parent_op?;
-    }
 }
 
 /// Validate call arity and report mismatches as diagnostics.
@@ -1027,7 +977,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCac
             .add_pass(trunk_ir::transforms::dce_pass(
                 trunk_ir::transforms::DceConfig::default(),
             ));
-        install_debug_verifier(&mut pm);
+        pm.with_debug_verifier();
         if let Err(error) = pm.run(ctx, core_module, analyses) {
             tracing::warn!("cleanup function passes failed: {error}");
         }
@@ -1077,7 +1027,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
-        install_debug_verifier(&mut pm);
+        pm.with_debug_verifier();
         pm.run(ctx, core_module, &mut analyses)?;
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
@@ -1121,7 +1071,7 @@ fn enter_target_closure_storage_boundary(
         .expect("target closure lowering requires a core.module");
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
-    install_debug_verifier(&mut pm);
+    pm.with_debug_verifier();
     pm.run(ctx, core_module, analyses)?;
     Ok(())
 }
@@ -1291,7 +1241,7 @@ fn prepare_module_to_native(
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
             .add_pass(trunk_ir::transforms::scf_to_cf_pass());
-        install_debug_verifier(&mut pm);
+        pm.with_debug_verifier();
         pm.run(ctx, core_module, &mut analyses)
             .map_err(native_pass_failure)?;
     } else {
@@ -2644,7 +2594,7 @@ fn main() {
                 Ok(())
             },
         ));
-        install_debug_verifier(&mut pm);
+        pm.with_debug_verifier();
 
         let error = pm
             .run(&mut ctx, core_module, &mut Default::default())
@@ -2693,7 +2643,7 @@ fn main() {
                 Ok(())
             },
         ));
-        install_debug_verifier(&mut pm);
+        pm.with_debug_verifier();
 
         let error = pm
             .run(&mut ctx, core_module, &mut Default::default())

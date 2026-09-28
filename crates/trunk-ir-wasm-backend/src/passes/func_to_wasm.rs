@@ -872,6 +872,9 @@ mod tests {
             "{output}"
         );
         assert!(output.contains("wasm.return %0"), "{output}");
+        // A bodyless wasm.func is a declaration, not a schema violation.
+        let schemas = trunk_ir::validation::validate_op_schemas(&ctx, module.op());
+        assert!(schemas.is_ok(), "{schemas}");
     }
 
     #[test]

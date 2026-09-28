@@ -47,7 +47,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
         .add_pattern(FuncSignatureConversionPattern)
         .add_pattern(WasmFuncSignatureConversionPattern)
         .add_pattern(NormalizeCallPattern)
-        .add_pattern(NormalizeCallIndirectPattern)
+        .add_pattern(NormalizeIndirectCallPattern)
         .add_pattern(NormalizeOpResultPattern);
     applicator.apply_partial(ctx, module);
 }
@@ -162,67 +162,88 @@ impl RewritePattern for NormalizeCallPattern {
     }
 }
 
-/// Normalize func.call_indirect operation result types.
-struct NormalizeCallIndirectPattern;
+/// Normalize the exact signature and result types of indirect calls.
+///
+/// `func.call_indirect` and `func.tail_call_indirect` declare their operand
+/// and result types through the `signature` attribute, including for
+/// resultless tail calls. Arguments are retyped by other patterns: function
+/// parameters through the full type converter, operation results through the
+/// primitive rules. An input slot therefore follows its argument only once the
+/// argument holds a conversion of the declared type, which keeps the signature
+/// equal to the argument types whatever order the patterns apply in.
+struct NormalizeIndirectCallPattern;
 
-impl RewritePattern for NormalizeCallIndirectPattern {
+impl RewritePattern for NormalizeIndirectCallPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(_call_op) = func::CallIndirect::from_op(ctx, op) else {
+        let Some(signature_ty) = IndirectCallLikeOps::exact_signature(ctx, op) else {
             return false;
         };
+        let Some(signature) = func::FuncSig::from_type_ref(ctx, signature_ty) else {
+            return false;
+        };
+        let declared = signature.inputs(ctx).to_vec();
+        let results = signature.results(ctx).to_vec();
+        let Some(arguments) = IndirectCallLikeOps::arguments(ctx, op) else {
+            return false;
+        };
+        let arguments: Vec<_> = arguments.iter().map(|&arg| ctx.value_ty(arg)).collect();
+        if arguments.len() != declared.len() {
+            return false;
+        }
+        let mut inputs = Vec::with_capacity(declared.len());
+        for (declared, actual) in declared.into_iter().zip(arguments) {
+            let converted = actual != declared
+                && (rewriter.type_converter().convert_type(ctx, declared) == Some(actual)
+                    || convert_primitive_type(ctx, declared) == Some(actual));
+            inputs.push(if converted { actual } else { declared });
+        }
+        let results: Vec<_> = results
+            .into_iter()
+            .map(|ty| convert_primitive_type(ctx, ty).unwrap_or(ty))
+            .collect();
+        let mut attrs = ctx.get_type(signature_ty).attrs.clone();
+        attrs.remove(func::NUM_INPUTS_ATTR);
+        attrs.remove(func::NUM_RESULTS_ATTR);
+        let new_signature = func::func_sig_with_attrs(ctx, inputs, results, attrs).as_type_ref();
 
         let result_types = ctx.op_result_types(op).to_vec();
-        if result_types.is_empty() {
+        let new_result_types: Vec<_> = result_types
+            .iter()
+            .map(|&ty| convert_primitive_type(ctx, ty).unwrap_or(ty))
+            .collect();
+        if new_signature == signature_ty && new_result_types == result_types {
             return false;
         }
 
-        let result_ty = result_types[0];
-        let Some(new_result_ty) = convert_primitive_type(ctx, result_ty) else {
-            return false;
-        };
-
-        debug!("normalize_primitive_types: func.call_indirect result type normalized");
-
-        let loc = ctx.op(op).location;
-        let Some(callee) = IndirectCallLikeOps::callee(ctx, op) else {
-            return false;
-        };
-        let Some(args) = IndirectCallLikeOps::arguments(ctx, op) else {
-            return false;
-        };
-        // Constructing the replacement mutates the context, so release the
-        // interface's borrowed view before creating the new operation.
-        let args = args.to_vec();
-
-        // Keep the exact contract in step with the normalized result list.
-        let Some(signature) = IndirectCallLikeOps::exact_signature(ctx, op)
-            .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
-        else {
-            return false;
-        };
-        let inputs = signature.inputs(ctx).to_vec();
-        let inputs = inputs
-            .into_iter()
-            .map(|ty| convert_primitive_type(ctx, ty).unwrap_or(ty))
-            .collect::<Vec<_>>();
-        let mut attrs = ctx.get_type(signature.as_type_ref()).attrs.clone();
-        attrs.remove(func::NUM_INPUTS_ATTR);
-        attrs.remove(func::NUM_RESULTS_ATTR);
-        let signature = func::func_sig_with_attrs(ctx, inputs, [new_result_ty], attrs);
-        let new_op = func::CallIndirect::operands(callee, args)
-            .signature(signature.as_type_ref())
-            .build(ctx, loc);
-        rewriter.replace_op(new_op.op_ref());
+        let data = ctx.op(op);
+        debug!(
+            "normalize_primitive_types: {}.{} signature normalized",
+            data.dialect, data.name
+        );
+        let mut builder =
+            trunk_ir::context::OperationDataBuilder::new(data.location, data.dialect, data.name)
+                .operands(ctx.op_operands(op).to_vec())
+                .results(new_result_types);
+        for (key, value) in data.attributes.clone() {
+            builder = builder.attr(key, value);
+        }
+        let op_data = builder.build(ctx);
+        let new_op = ctx.create_op(op_data);
+        assert!(
+            IndirectCallLikeOps::set_exact_signature(ctx, new_op, new_signature),
+            "a rebuilt indirect call keeps its signature slot"
+        );
+        rewriter.replace_op(new_op);
         true
     }
 
     fn name(&self) -> &'static str {
-        "NormalizeCallIndirectPattern"
+        "NormalizeIndirectCallPattern"
     }
 }
 
@@ -267,10 +288,11 @@ impl RewritePattern for NormalizeOpResultPattern {
         let dialect = data.dialect;
         let name = data.name;
         if dialect == Symbol::new("func")
-            && (name == Symbol::new("func")
-                || name == Symbol::new("call")
-                || name == Symbol::new("call_indirect"))
+            && (name == Symbol::new("func") || name == Symbol::new("call"))
         {
+            return false;
+        }
+        if IndirectCallLikeOps::exact_signature(ctx, op).is_some() {
             return false;
         }
         if dialect == Symbol::new("wasm") && name == Symbol::new("func") {
@@ -316,5 +338,49 @@ impl RewritePattern for NormalizeOpResultPattern {
 
     fn name(&self) -> &'static str {
         "NormalizeOpResultPattern"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+    use trunk_ir::validation::validate_op_schemas;
+
+    #[test]
+    fn resultless_indirect_tail_call_signature_follows_normalized_arguments() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @transfer(%callee: core.i32, %value: tribute_rt.anyref) {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(tribute_rt.anyref) -> ()>}
+  }
+}"#,
+        );
+        lower(&mut ctx, module);
+
+        let output = print_module(&ctx, module.op());
+        assert!(!output.contains("tribute_rt.anyref"), "{output}");
+        let schemas = validate_op_schemas(&ctx, module.op());
+        assert!(schemas.is_ok(), "{schemas}\n{output}");
+    }
+
+    #[test]
+    fn indirect_call_signature_keeps_slots_whose_argument_is_unconverted() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @transfer(%callee: core.i32, %value: core.i32) {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()>}
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+        lower(&mut ctx, module);
+
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }
