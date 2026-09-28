@@ -6,8 +6,9 @@ use trunk_ir::Symbol;
 use crate::ast::{FieldPattern, FloatBits, LiteralPattern, Pattern, PatternKind, UnresolvedName};
 
 use super::context::AstLoweringCtx;
-use super::expressions::{parse_string_literal, report_escape_error};
-use super::helpers::is_comment;
+use super::expressions::parse_string_literal;
+use super::helpers::{is_comment, report_in_node};
+use super::numeric::{NumericValue, parse_numeric_literal};
 
 /// Lower a CST pattern node to an AST Pattern.
 pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<UnresolvedName> {
@@ -27,25 +28,18 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
         }
 
         // === Literal patterns ===
-        "nat_literal" => {
-            let text = ctx.node_text(&node);
-            match parse_nat_literal(&text) {
-                Some(value) => PatternKind::Literal(LiteralPattern::Nat(value)),
-                None => PatternKind::Error,
-            }
-        }
-        "int_literal" => {
-            let text = ctx.node_text(&node);
-            match parse_int_literal(&text) {
-                Some(value) => PatternKind::Literal(LiteralPattern::Int(value)),
-                None => PatternKind::Error,
-            }
-        }
-        "float_literal" => {
-            let text = ctx.node_text(&node);
-            match text.parse::<f64>() {
-                Ok(value) => PatternKind::Literal(LiteralPattern::Float(FloatBits::new(value))),
-                Err(_) => PatternKind::Error,
+        "number_literal" => {
+            let text = ctx.node_text_owned(&node);
+            match parse_numeric_literal(&text) {
+                Ok(NumericValue::Nat(value)) => PatternKind::Literal(LiteralPattern::Nat(value)),
+                Ok(NumericValue::Int(value)) => PatternKind::Literal(LiteralPattern::Int(value)),
+                Ok(NumericValue::Float(value)) => {
+                    PatternKind::Literal(LiteralPattern::Float(FloatBits::new(value)))
+                }
+                Err(error) => {
+                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
+                    PatternKind::Error
+                }
             }
         }
         // grammar.js uses "string" for string patterns, not "string_literal"
@@ -54,7 +48,7 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
             match parse_string_literal(&text) {
                 Ok(content) => PatternKind::Literal(LiteralPattern::String(content)),
                 Err(error) => {
-                    report_escape_error(ctx, &node, error);
+                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
                     PatternKind::Error
                 }
             }
@@ -325,55 +319,6 @@ fn lower_pattern_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Pattern<U
     }
 
     patterns
-}
-
-// === Literal parsing helpers ===
-
-fn parse_nat_literal(text: &str) -> Option<u64> {
-    if text.starts_with("0b") || text.starts_with("0B") {
-        u64::from_str_radix(&text[2..].replace('_', ""), 2).ok()
-    } else if text.starts_with("0o") || text.starts_with("0O") {
-        u64::from_str_radix(&text[2..].replace('_', ""), 8).ok()
-    } else if text.starts_with("0x") || text.starts_with("0X") {
-        u64::from_str_radix(&text[2..].replace('_', ""), 16).ok()
-    } else {
-        text.replace('_', "").parse().ok()
-    }
-}
-
-fn parse_int_literal(text: &str) -> Option<i64> {
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-
-    let (is_negative, rest) = if let Some(rest) = text.strip_prefix('+') {
-        (false, rest)
-    } else if let Some(rest) = text.strip_prefix('-') {
-        (true, rest)
-    } else {
-        (false, text)
-    };
-
-    let value = parse_nat_literal(rest)?;
-
-    if is_negative {
-        // For negative numbers, the maximum magnitude is |i64::MIN| = 2^63
-        // i64::MAX = 2^63 - 1, so i64::MIN's magnitude is (i64::MAX as u64) + 1
-        if value <= i64::MAX as u64 {
-            // Safe to convert and negate
-            Some(-(value as i64))
-        } else if value == (i64::MAX as u64) + 1 {
-            // Special case: -9223372036854775808 (i64::MIN)
-            Some(i64::MIN)
-        } else {
-            // Overflow: magnitude too large for i64
-            None
-        }
-    } else {
-        // For positive numbers, must fit in i64::MAX
-        i64::try_from(value).ok()
-    }
 }
 
 #[cfg(test)]
@@ -840,58 +785,6 @@ mod tests {
         };
         assert_eq!(name.to_string(), "all");
         assert!(matches!(inner.kind.as_ref(), PatternKind::Wildcard));
-    }
-
-    // === Literal Parsing Helpers ===
-
-    #[test]
-    fn test_parse_nat_literal_decimal() {
-        assert_eq!(parse_nat_literal("42"), Some(42));
-        assert_eq!(parse_nat_literal("0"), Some(0));
-        assert_eq!(parse_nat_literal("123_456"), Some(123456));
-    }
-
-    #[test]
-    fn test_parse_nat_literal_binary() {
-        assert_eq!(parse_nat_literal("0b1010"), Some(10));
-        assert_eq!(parse_nat_literal("0B1111"), Some(15));
-        assert_eq!(parse_nat_literal("0b1010_1010"), Some(170));
-    }
-
-    #[test]
-    fn test_parse_nat_literal_octal() {
-        assert_eq!(parse_nat_literal("0o777"), Some(511));
-        assert_eq!(parse_nat_literal("0O10"), Some(8));
-    }
-
-    #[test]
-    fn test_parse_nat_literal_hex() {
-        assert_eq!(parse_nat_literal("0xFF"), Some(255));
-        assert_eq!(parse_nat_literal("0xDEAD_BEEF"), Some(0xDEADBEEF));
-    }
-
-    #[test]
-    fn test_parse_int_literal_positive() {
-        assert_eq!(parse_int_literal("42"), Some(42));
-        assert_eq!(parse_int_literal("+42"), Some(42));
-    }
-
-    #[test]
-    fn test_parse_int_literal_negative() {
-        assert_eq!(parse_int_literal("-42"), Some(-42));
-        assert_eq!(parse_int_literal("-0xFF"), Some(-255));
-    }
-
-    #[test]
-    fn test_parse_int_literal_bounds() {
-        // i64::MAX
-        assert_eq!(parse_int_literal("9223372036854775807"), Some(i64::MAX));
-        // i64::MIN (special case: magnitude exceeds i64::MAX)
-        assert_eq!(parse_int_literal("-9223372036854775808"), Some(i64::MIN));
-        // Overflow: positive value exceeds i64::MAX
-        assert_eq!(parse_int_literal("9223372036854775808"), None);
-        // Overflow: negative magnitude exceeds |i64::MIN|
-        assert_eq!(parse_int_literal("-9223372036854775809"), None);
     }
 
     #[test]

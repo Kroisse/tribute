@@ -7,6 +7,7 @@ license.workspace = true
 description = "Front-end utilities for Tribute (CST parsing and text helpers)"
 
 [dependencies]
+derive_more.workspace = true
 fluent-uri.workspace = true
 im.workspace = true
 itertools.workspace = true
@@ -20,6 +21,7 @@ tree-sitter-tribute.workspace = true
 tribute-core.workspace = true
 tribute-ir.workspace = true
 trunk-ir = { workspace = true, features = ["salsa"] }
+winnow.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

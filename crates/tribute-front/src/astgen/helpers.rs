@@ -1,5 +1,13 @@
 //! CST navigation helpers and utility functions for AST lowering.
 
+use std::ops::Range;
+
+use derive_more::{Display, Error};
+use tree_sitter::Node;
+use trunk_ir::Span;
+
+use super::context::AstLoweringCtx;
+
 /// Check if a node is a comment that should be skipped.
 pub fn is_comment(kind: &str) -> bool {
     matches!(
@@ -31,19 +39,36 @@ pub(crate) fn truncate_token_preview(text: &str) -> impl std::fmt::Display + '_ 
     TruncatedToken(first_line)
 }
 
+/// Report an error at `range`, given relative to the start of `node`.
+pub(crate) fn report_in_node(
+    ctx: &mut AstLoweringCtx<'_>,
+    node: &Node,
+    range: Range<usize>,
+    message: impl Into<String>,
+) {
+    let start = node.start_byte();
+    ctx.error(Span::new(start + range.start, start + range.end), message);
+}
+
 /// An invalid escape sequence found while decoding a literal.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Display, Error)]
+#[display("{kind}")]
 pub(crate) struct EscapeError {
     /// Byte range of the escape sequence, relative to the decoded text.
-    pub range: std::ops::Range<usize>,
+    pub range: Range<usize>,
     pub kind: EscapeErrorKind,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Display)]
 pub(crate) enum EscapeErrorKind {
     /// A `\u{…}` escape naming a surrogate code point (`D800`–`DFFF`).
+    #[display(
+        "invalid Unicode escape: U+{_0:04X} is a surrogate code point, \
+         not a Unicode scalar value"
+    )]
     Surrogate(u32),
     /// A `\u{…}` escape naming a value above `10FFFF`.
+    #[display("invalid Unicode escape: U+{_0:04X} exceeds the maximum U+10FFFF")]
     OutOfRange(u32),
 }
 
@@ -54,22 +79,6 @@ impl EscapeError {
         Self {
             range: self.range.start + offset..self.range.end + offset,
             kind: self.kind,
-        }
-    }
-}
-
-impl std::fmt::Display for EscapeError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.kind {
-            EscapeErrorKind::Surrogate(value) => write!(
-                f,
-                "invalid Unicode escape: U+{value:04X} is a surrogate code point, \
-                 not a Unicode scalar value"
-            ),
-            EscapeErrorKind::OutOfRange(value) => write!(
-                f,
-                "invalid Unicode escape: U+{value:04X} exceeds the maximum U+10FFFF"
-            ),
         }
     }
 }

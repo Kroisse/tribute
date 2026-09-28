@@ -2,7 +2,7 @@
 
 use tree_sitter::Node;
 use tribute_ir::ModulePathExt;
-use trunk_ir::{Span, Symbol};
+use trunk_ir::Symbol;
 
 use crate::ast::{
     Arm, BinOpKind, Expr, ExprKind, FloatBits, HandlerArm, HandlerKind, Param, Pattern, Stmt,
@@ -10,7 +10,10 @@ use crate::ast::{
 };
 
 use super::context::AstLoweringCtx;
-use super::helpers::{EscapeError, decode_unicode_escape, is_comment, process_escape_sequences};
+use super::helpers::{
+    EscapeError, decode_unicode_escape, is_comment, process_escape_sequences, report_in_node,
+};
+use super::numeric::{NumericValue, parse_numeric_literal};
 use super::patterns::lower_pattern;
 
 /// Lower a CST expression node to an AST Expr.
@@ -19,25 +22,16 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
 
     let kind = match node.kind() {
         // === Literals ===
-        "nat_literal" => {
-            let text = ctx.node_text(&node);
-            match parse_nat_literal(&text) {
-                Some(value) => ExprKind::NatLit(value),
-                None => ExprKind::Error,
-            }
-        }
-        "int_literal" => {
-            let text = ctx.node_text(&node);
-            match parse_int_literal(&text) {
-                Some(value) => ExprKind::IntLit(value),
-                None => ExprKind::Error,
-            }
-        }
-        "float_literal" => {
-            let text = ctx.node_text(&node);
-            match text.parse::<f64>() {
-                Ok(value) if value.is_finite() => ExprKind::FloatLit(FloatBits::new(value)),
-                _ => ExprKind::Error,
+        "number_literal" => {
+            let text = ctx.node_text_owned(&node);
+            match parse_numeric_literal(&text) {
+                Ok(NumericValue::Nat(value)) => ExprKind::NatLit(value),
+                Ok(NumericValue::Int(value)) => ExprKind::IntLit(value),
+                Ok(NumericValue::Float(value)) => ExprKind::FloatLit(FloatBits::new(value)),
+                Err(error) => {
+                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
+                    ExprKind::Error
+                }
             }
         }
         // String literals: "...", s"...", raw strings, multiline strings
@@ -46,7 +40,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
             match parse_string_literal(&text) {
                 Ok(content) => ExprKind::StringLit(content),
                 Err(error) => {
-                    report_escape_error(ctx, &node, error);
+                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
                     ExprKind::Error
                 }
             }
@@ -57,7 +51,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
             match parse_bytes_literal(&text) {
                 Ok(content) => ExprKind::BytesLit(content),
                 Err(error) => {
-                    report_escape_error(ctx, &node, error);
+                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
                     ExprKind::Error
                 }
             }
@@ -75,7 +69,7 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
                 Ok(Some(c)) => ExprKind::RuneLit(c),
                 Ok(None) => ExprKind::Error,
                 Err(error) => {
-                    report_escape_error(ctx, &node, error);
+                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
                     ExprKind::Error
                 }
             }
@@ -792,52 +786,6 @@ fn lower_argument_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Expr<Unr
 
 // === Literal parsing helpers ===
 
-fn parse_nat_literal(text: &str) -> Option<u64> {
-    if text.starts_with("0b") || text.starts_with("0B") {
-        u64::from_str_radix(&text[2..].replace('_', ""), 2).ok()
-    } else if text.starts_with("0o") || text.starts_with("0O") {
-        u64::from_str_radix(&text[2..].replace('_', ""), 8).ok()
-    } else if text.starts_with("0x") || text.starts_with("0X") {
-        u64::from_str_radix(&text[2..].replace('_', ""), 16).ok()
-    } else {
-        text.replace('_', "").parse().ok()
-    }
-}
-
-fn parse_int_literal(text: &str) -> Option<i64> {
-    let text = text.trim();
-    if text.is_empty() {
-        return None;
-    }
-
-    let (is_negative, rest) = if let Some(rest) = text.strip_prefix('+') {
-        (false, rest)
-    } else if let Some(rest) = text.strip_prefix('-') {
-        (true, rest)
-    } else {
-        (false, text)
-    };
-
-    let value_u = parse_nat_literal(rest)?;
-
-    if is_negative {
-        // Allow values up to i64::MAX + 1 for i64::MIN (-9223372036854775808)
-        const MIN_ABS: u64 = (i64::MAX as u64) + 1;
-        if value_u > MIN_ABS {
-            return None; // Overflow
-        }
-        if value_u == MIN_ABS {
-            Some(i64::MIN)
-        } else {
-            // Safe: value_u <= i64::MAX, so it fits in i64
-            Some(-(value_u as i64))
-        }
-    } else {
-        // Positive: must fit in i64
-        i64::try_from(value_u).ok()
-    }
-}
-
 /// Decode a string literal's text into its value.
 ///
 /// Escape errors are reported relative to `text`.
@@ -1004,15 +952,6 @@ fn parse_bytes_literal(text: &str) -> Result<Vec<u8>, EscapeError> {
 /// Byte offset of `inner`, a subslice of `outer`, from the start of `outer`.
 fn offset_within(outer: &str, inner: &str) -> usize {
     inner.as_ptr() as usize - outer.as_ptr() as usize
-}
-
-/// Report an invalid escape sequence at its position inside `node`.
-pub(super) fn report_escape_error(ctx: &mut AstLoweringCtx<'_>, node: &Node, error: EscapeError) {
-    let start = node.start_byte();
-    ctx.error(
-        Span::new(start + error.range.start, start + error.range.end),
-        error.to_string(),
-    );
 }
 
 /// Parse a rune (character) literal.
