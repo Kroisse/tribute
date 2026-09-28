@@ -437,6 +437,7 @@ fn declare_runtime_functions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
     use trunk_ir::parser::parse_test_module;
 
     const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
@@ -814,7 +815,10 @@ mod tests {
   clif.func @second() -> core.nil {
     clif.return
   }
-  clif.data {sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8, function_relocs = [[16, @first], [0, @second]]}
+  clif.data {sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
+    clif.func_reloc {offset = 16, func = @first}
+    clif.func_reloc {offset = 0, func = @second}
+  }
   clif.func @main() -> core.i32 {
     %table = clif.symbol_addr {sym = @table} : core.ptr
     %result = clif.iconst {value = 0} : core.i32
@@ -855,18 +859,22 @@ mod tests {
     #[test]
     fn native_emission_rejects_invalid_data_relocations() {
         for (relocs, expected) in [
-            ("[[0, @missing]]", "unknown function @missing"),
-            ("[[12, @helper]]", "exceeds its 16 bytes"),
+            (&[(0, "missing")][..], "unknown function @missing"),
+            (&[(12, "helper")], "exceeds its 16 bytes"),
             (
-                "[[0, @helper], [4, @helper]]",
+                &[(0, "helper"), (4, "helper")],
                 "offset 4 overlaps the previous one",
             ),
             (
-                "[[0, @helper], [0, @helper]]",
+                &[(0, "helper"), (0, "helper")],
                 "duplicate relocation offset 0",
             ),
-            ("[@helper]", "`[offset, @function]` pair"),
         ] {
+            let relocs = relocs.iter().format_with("\n", |(offset, func), f| {
+                f(&format_args!(
+                    "    clif.func_reloc {{offset = {offset}, func = @{func}}}"
+                ))
+            });
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
@@ -875,12 +883,42 @@ mod tests {
   clif.func @helper() -> core.nil {{
     clif.return
   }}
-  clif.data {{sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8, function_relocs = {relocs}}}
+  clif.data {{sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}} {{
+{relocs}
+  }}
 }}"#
                 ),
             );
-            let error = emit_module_to_native(&ctx, module).expect_err(relocs);
-            assert!(error.to_string().contains(expected), "{relocs}: {error}");
+            let error = emit_module_to_native(&ctx, module).expect_err(expected);
+            assert!(error.to_string().contains(expected), "{expected}: {error}");
+        }
+    }
+
+    #[test]
+    fn native_emission_rejects_misplaced_relocation_declarations() {
+        for (module_text, expected) in [
+            (
+                r#"core.module @test {
+  clif.data {sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
+    %zero = clif.iconst {value = 0} : core.i64
+  }
+}"#,
+                "relocation region holds clif.iconst",
+            ),
+            (
+                r#"core.module @test {
+  clif.func @helper() -> core.nil {
+    clif.return
+  }
+  clif.func_reloc {offset = 0, func = @helper}
+}"#,
+                "must be inside a clif.data relocation region",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, module_text);
+            let error = emit_module_to_native(&ctx, module).expect_err(module_text);
+            assert!(error.to_string().contains(expected), "{error}");
         }
     }
 

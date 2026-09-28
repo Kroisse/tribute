@@ -245,6 +245,7 @@ fn declare_rodata(
             .sym_name(sym)
             .bytes(content.as_slice().into())
             .align(1)
+            .regions(None)
             .build(ctx, location);
         ctx.push_op(module_block, data.op_ref());
         entry.insert(sym);

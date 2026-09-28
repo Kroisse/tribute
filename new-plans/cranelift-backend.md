@@ -169,11 +169,16 @@ data object를 같은 단계에서 `clif.data`로 선언하며, 같은 내용과
 이미 있으면 재사용한다. Emission은 IR에 선언된 `clif.data`만 object에 정의하고,
 앞 단계의 입력에서 정한 배치를 IR 밖으로 넘겨받지 않는다.
 
-`clif.data`의 선택적 `function_relocs`는 `[offset, @function]` 쌍의 목록이며,
-cranelift-module `DataDescription`의 함수 재배치와 같은 의미를 갖는다. 바이트는
-object의 실제 내용이고, 링커가 각 offset의 포인터 폭 바이트를 해당 함수의 주소로
-덮어쓴다. 재배치마다 덮어쓰는 포인터 폭 구간은 바이트 안에 들어가야 하고 서로 겹치지
-않아야 하며, 대상은 모듈에 선언된 함수여야 한다.
+`clif` dialect는 cranelift-codegen 명령어와 cranelift-module 선언을 함께
+표현하며, 모듈 수준 선언을 위한 별도 dialect를 두지 않는다.
+
+`clif.data`의 선택적 region은 재배치 선언 목록이다. Region 안의 각
+`clif.func_reloc {offset, func}`는 cranelift-module `DataDescription`의 함수
+재배치와 같은 의미를 갖는다. 바이트는 object의 실제 내용이고, 링커가 offset의
+포인터 폭 바이트를 `func` 함수의 주소로 덮어쓴다. 이 region은 실행되는 코드가 아니므로
+재배치 선언만 담으며, `clif.func_reloc`은 `clif.data` region 밖에 올 수 없다.
+재배치마다 덮어쓰는 포인터 폭 구간은 바이트 안에 들어가야 하고 서로 겹치지 않아야
+하며, 대상은 모듈에 선언된 함수여야 한다.
 
 ### Bodyless 선언의 바인딩
 

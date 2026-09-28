@@ -26,7 +26,9 @@ core.module @test {
       %4 = clif.call %2, %3 {callee = @__tribute_dealloc} : core.nil
       clif.return
   }
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", function_relocs = [[40, @__tribute_release_5]], sym_name = @__tribute_rtti_table}
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_rtti_table} {
+      clif.func_reloc {func = @__tribute_release_5, offset = 40}
+  }
   clif.func {sym_name = @__tribute_deep_release, type = clif.func_sig<(core.ptr, core.i64) -> core.nil>} {
     ^bb0(%0: core.ptr, %1: core.i64):
       %2 = clif.iconst {value = 8} : core.i64
