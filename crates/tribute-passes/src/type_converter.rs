@@ -290,7 +290,19 @@ mod tests {
             materialize_unrealized_casts(&mut ctx, module, &tc);
             assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
 
-            crate::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default()).unwrap();
+            let lowered =
+                crate::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default());
+            if !recover && cfg!(debug_assertions) {
+                // The erased argument breaks the exact closure slot of the tail
+                // call's signature, so the debug pass verifier rejects it.
+                let error = lowered.expect_err("erased argument must not fill the closure slot");
+                assert!(
+                    error.to_string().contains("func.tail_call_indirect"),
+                    "{error}"
+                );
+                continue;
+            }
+            lowered.unwrap();
             let tc = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
             trunk_ir::rewrite::PatternApplicator::new(tc)
                 .add_pattern(UnrealizedCastConversionPattern)
