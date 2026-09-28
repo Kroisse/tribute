@@ -716,3 +716,95 @@ fn make() ->{} fn(a) ->{} a {
         assert!(func_ref_has_param_and_result(db, instance.callable, bound));
     }
 }
+
+/// Every `LocalBoundVar` scope that occurs in `ty`.
+fn local_bound_scopes(db: &dyn salsa::Database, ty: Type<'_>, scopes: &mut Vec<NodeId>) {
+    match ty.kind(db) {
+        TypeKind::LocalBoundVar { scope, .. } => scopes.push(*scope),
+        TypeKind::Func { params, result, .. } => {
+            for param in params {
+                local_bound_scopes(db, *param, scopes);
+            }
+            local_bound_scopes(db, *result, scopes);
+        }
+        TypeKind::Tuple(elements) => {
+            for element in elements {
+                local_bound_scopes(db, *element, scopes);
+            }
+        }
+        TypeKind::Named { args, .. } => {
+            for arg in args {
+                local_bound_scopes(db, *arg, scopes);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The root pattern of each top-level `let` in a function body.
+fn let_pattern_roots(body: &Expr<TypedRef<'_>>) -> Vec<NodeId> {
+    let ExprKind::Block { stmts, .. } = &*body.kind else {
+        panic!("function body must be a block");
+    };
+    stmts
+        .iter()
+        .filter_map(|stmt| match stmt {
+            tribute_front::ast::Stmt::Let { pattern, .. } => Some(pattern.id),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A `let` that gives several names one generalized variable owns that
+/// variable once, at its root pattern, whichever name is recorded last.
+#[salsa_test]
+fn names_sharing_a_generalized_variable_have_one_owner(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn aliased() -> #(Nat, Bool) {
+    let f as g = fn(value) value
+    #(f(1), g(True))
+}
+
+fn nested() -> #(Nat, Bool, Nat) {
+    let #(f as g, n) = #(fn(value) value, 1)
+    #(f(n), g(True), n)
+}
+"#,
+    );
+
+    let errors = type_errors(db, source);
+    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+
+    let output = tribute_front::query::type_check_output(db, source)
+        .expect("type checking should produce output");
+    let module = output.module(db);
+    let mut roots = Vec::new();
+    for function in ["aliased", "nested"] {
+        let function_roots = let_pattern_roots(typed_function_body(module, Symbol::new(function)));
+        assert_eq!(function_roots.len(), 1, "{function} has one let");
+        roots.extend(function_roots);
+    }
+
+    let mut scopes = Vec::new();
+    for (_, signature) in output.lambda_signatures(db).iter() {
+        assert!(
+            is_local_identity_signature(db, signature.function_type),
+            "each identity lambda must use one local quantifier: {:?}",
+            signature.function_type
+        );
+        local_bound_scopes(db, signature.function_type, &mut scopes);
+    }
+    assert!(
+        !scopes.is_empty(),
+        "the identity lambdas must be generalized"
+    );
+    for scope in scopes {
+        assert!(
+            roots.contains(&scope),
+            "a local quantifier must be owned by its let's root pattern, not {scope:?}"
+        );
+    }
+}

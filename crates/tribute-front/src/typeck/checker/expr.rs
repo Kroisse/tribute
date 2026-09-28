@@ -3,7 +3,7 @@
 //! All expression checking methods take a `FunctionInferenceContext` as parameter,
 //! enabling per-function type inference with isolated constraints.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -1976,6 +1976,11 @@ impl<'db> TypeChecker<'db> {
             &mut bindings,
         );
 
+        // Every name of this `let` shares one set of local quantifiers owned
+        // by the root pattern: the right-hand side is checked once, so a
+        // variable shared by several names (`let f as g = ...`) must have a
+        // single owner.
+        let mut let_quantifiers = HashMap::new();
         for PatternBinding {
             name,
             local_id,
@@ -2009,7 +2014,13 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .map(|union| solver.generalize_row_union(union, &mapping))
                     .collect();
-                ctx.record_local_generalization(scope, mapping.clone());
+                let mut by_index: Vec<_> =
+                    mapping.iter().map(|(var, index)| (*index, *var)).collect();
+                by_index.sort_unstable_by_key(|(index, _)| *index);
+                for (_, var) in by_index {
+                    let next = let_quantifiers.len() as u32;
+                    let_quantifiers.entry(var).or_insert(next);
+                }
                 let mut effect_params = Vec::new();
                 for var in collect_effect_vars(self.db(), generalized)
                     .into_iter()
@@ -2036,6 +2047,9 @@ impl<'db> TypeChecker<'db> {
                 ctx.record_local_binding_owner(local_id, scope);
             }
             ctx.bind_local_scheme_by_name(name, scheme);
+        }
+        if !let_quantifiers.is_empty() {
+            ctx.record_local_generalization(pattern.id, let_quantifiers);
         }
     }
 
