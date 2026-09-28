@@ -13,7 +13,7 @@ use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
-use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
+use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
 use crate::dialect::core;
 use crate::ops::DialectOp;
@@ -122,6 +122,8 @@ impl Analysis for SymbolTable {
         Ok(Self::collect(ctx.ir(), module))
     }
 }
+
+impl InfallibleAnalysis for SymbolTable {}
 
 /// The root-qualified name of the definition `op`, which must carry a
 /// `sym_name`.
@@ -275,9 +277,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, NESTED);
         let mut analyses = crate::analysis::AnalysisCache::new();
-        let table = analyses
-            .get::<SymbolTable>(&ctx, module.op())
-            .expect("symbol table computes infallibly");
+        let table = analyses.require::<SymbolTable>(&ctx, module.op());
         let direct = SymbolTable::collect(&ctx, module);
 
         let mut names: Vec<_> = table

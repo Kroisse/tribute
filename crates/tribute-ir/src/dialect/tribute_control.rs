@@ -3051,9 +3051,7 @@ pub fn validate(
     compiler_intrinsics: &[CompilerIntrinsicDeclaration],
     analyses: &mut AnalysisCache,
 ) -> ValidationResult {
-    let symbols = analyses
-        .get::<SymbolTable>(ctx, module.op())
-        .expect("symbol table collection is infallible");
+    let symbols = analyses.require::<SymbolTable>(ctx, module.op());
     let mut local = validate_local(ctx, module);
     local
         .errors

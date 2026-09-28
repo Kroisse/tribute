@@ -209,6 +209,14 @@ pub trait Analysis: Any + Send + Sync {
         Self: Sized;
 }
 
+/// An [`Analysis`] whose computation never fails for a valid target.
+///
+/// Implementing this trait promises that [`Analysis::compute`] returns `Ok`
+/// whenever its target satisfies the analysis contract, and that the
+/// analysis depends on no fallible analysis. [`AnalysisCache::require`] then
+/// returns the result directly.
+pub trait InfallibleAnalysis: Analysis {}
+
 /// Read-only IR access and dependent-analysis lookup for one computation.
 ///
 /// A context is created only while one [`Analysis::compute`] call is active.
@@ -358,6 +366,17 @@ impl AnalysisCache {
         self.replace_dependencies(key, dependencies);
         self.cache.insert(key, entry);
         Ok(analysis)
+    }
+
+    /// Compute (or return cached) infallible analysis `A` for `target`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the computation fails anyway, which breaks the
+    /// [`InfallibleAnalysis`] promise of `A`.
+    pub fn require<A: InfallibleAnalysis>(&mut self, ctx: &IrContext, target: OpRef) -> Arc<A> {
+        self.get(ctx, target)
+            .unwrap_or_else(|error| panic!("infallible analysis failed: {error}"))
     }
 
     /// Return the cached analysis `A` for `target` without computing it.

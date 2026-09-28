@@ -401,9 +401,7 @@ pub fn build_native_ownership_plan_with_analyses(
     let rtti_types = build_rtti_plan(ctx, module, &managed_layouts)?;
     let entry_contracts = compute_entry_contracts(
         ctx,
-        &analyses
-            .get::<CallGraph>(ctx, module.op())
-            .expect("call graph construction is infallible"),
+        &analyses.require::<CallGraph>(ctx, module.op()),
         definitions,
         &managed_layouts,
         options.elide_proven_borrowed_parameters,
