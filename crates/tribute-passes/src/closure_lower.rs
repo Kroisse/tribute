@@ -162,27 +162,9 @@ impl RewritePattern for LowerClosureCallArena {
             return false;
         }
         let callee = operands[0];
-        let callee_ty = ctx.value_ty(callee);
-
-        // Determine if callee is a closure
-        let callee_is_closure = if closure::Closure::matches(ctx, callee_ty) {
-            true
-        } else if func::FuncSig::matches(ctx, callee_ty) {
-            !matches!(
-                ctx.value_def(callee),
-                trunk_ir::refs::ValueDef::OpResult(defining_op, _)
-                    if func::Constant::from_op(ctx, defining_op).is_ok()
-            )
-        } else {
-            // Fallback: check if result of closure.new
-            if let trunk_ir::refs::ValueDef::OpResult(def_op, _) = ctx.value_def(callee) {
-                closure::New::from_op(ctx, def_op).is_ok()
-            } else {
-                false
-            }
-        };
-
-        if !callee_is_closure {
+        // Only a value typed as a convention-proven closure carries an
+        // environment; a `func.func_sig` callee is a plain function pointer.
+        if physical_closure_type_for_callee(ctx, callee).is_none() {
             return false;
         }
 
@@ -1274,6 +1256,25 @@ mod tests {
   func.func @caller(%value: core.i32) -> core.i32 {
     %callee = func.constant {func_ref = @external} : func.func_sig<(core.i32) -> core.i32>
     %result = func.call_indirect %callee, %value : core.i32
+    func.return %result
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        lower_prepared_closures(&mut ctx, module).unwrap();
+
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn function_pointer_argument_callee_is_not_a_closure() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @caller(%callee: func.func_sig<(core.i32) -> core.i32>, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
+    %result = func.call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> core.i32>, tribute.calling_convention = 0} : core.i32
     func.return %result
   }
 }"#,
