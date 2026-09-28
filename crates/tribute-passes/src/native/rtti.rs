@@ -261,24 +261,31 @@ pub fn generate_rtti(
 fn generate_rtti_table(ctx: &mut IrContext, release_indices: &[u32], loc: Location) -> OpRef {
     let max_idx = *release_indices.iter().max().expect("a release index");
     let entries = max_idx as usize + 1;
-    let relocations = release_indices
-        .iter()
-        .map(|&idx| {
-            trunk_ir::Attribute::List(vec![
-                trunk_ir::Attribute::Int(i128::from(idx * RTTI_TABLE_ENTRY_SIZE)),
-                trunk_ir::Attribute::Symbol(Symbol::from_dynamic(&format!(
-                    "{RELEASE_FN_PREFIX}{idx}"
-                ))),
-            ])
-        })
-        .collect();
+    let relocs = ctx.create_block(BlockData {
+        location: loc,
+        args: vec![],
+        ops: smallvec![],
+        parent_region: None,
+    });
+    for &idx in release_indices {
+        let reloc = clif::FuncReloc::operands()
+            .offset(idx * RTTI_TABLE_ENTRY_SIZE)
+            .func(Symbol::from_dynamic(&format!("{RELEASE_FN_PREFIX}{idx}")))
+            .build(ctx, loc);
+        ctx.push_op(relocs, reloc.op_ref());
+    }
+    let relocs = ctx.create_region(RegionData {
+        location: loc,
+        blocks: smallvec![relocs],
+        parent_op: None,
+    });
     // Zero bytes rather than zero-initialized data, so the table lives in a
     // data section: macOS linkers reject relocations in zero-fill sections.
     clif::Data::operands()
         .sym_name(Symbol::new(RTTI_TABLE))
         .bytes(vec![0u8; entries * RTTI_TABLE_ENTRY_SIZE as usize].into())
         .align(RTTI_TABLE_ENTRY_SIZE)
-        .function_relocs(trunk_ir::Attribute::List(relocations))
+        .regions(relocs)
         .build(ctx, loc)
         .op_ref()
 }

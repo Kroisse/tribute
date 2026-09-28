@@ -15,19 +15,20 @@ mod clif {
 
     /// A module-local read-only data object that `symbol_addr` can reference.
     ///
-    /// `function_relocs`, a list of `[offset, @function]` pairs, asks the
-    /// linker to write each function's address over the pointer-sized bytes
-    /// at its offset, like cranelift-module's `DataDescription::function_relocs`.
-    /// The pointer-width ranges must fit in `bytes` and must not overlap;
+    /// The optional `relocs` region lists `func_reloc` declarations, like
+    /// cranelift-module's `DataDescription::function_relocs`. Their
+    /// pointer-width ranges must fit in `bytes` and must not overlap;
     /// emission checks both against the target pointer width.
     #[verify]
-    fn data(
-        sym_name: Attr<Symbol>,
-        bytes: Attr<Bytes>,
-        align: Attr<u32>,
-        function_relocs: Option<Attr<_>>,
-    ) {
+    fn data(sym_name: Attr<Symbol>, bytes: Attr<Bytes>, align: Attr<u32>) {
+        #[region(relocs?)]
+        {}
     }
+
+    /// Asks the linker to write the address of `func` over the pointer-sized
+    /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
+    #[verify]
+    fn func_reloc(offset: Attr<u32>, func: Attr<Symbol>) {}
 
     fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
 
@@ -365,51 +366,59 @@ impl Data {
     /// The `(offset, function)` relocations of a verified data object, in
     /// declaration order.
     pub fn relocations(self, ctx: &crate::IrContext) -> Vec<(u32, crate::Symbol)> {
-        parse_function_relocs(ctx.op(self.op_ref()).attributes.get("function_relocs"))
-            .expect("verified clif.data relocations")
+        reloc_ops(ctx, self.op_ref())
+            .map(|op| {
+                let reloc = FuncReloc::from_op(ctx, op).expect("verified clif.data relocations");
+                (reloc.offset(ctx), reloc.func(ctx))
+            })
+            .collect()
     }
 }
 
-fn parse_function_relocs(
-    attribute: Option<&Attribute>,
-) -> Result<Vec<(u32, crate::Symbol)>, String> {
-    let Some(attribute) = attribute else {
-        return Ok(Vec::new());
-    };
-    let Attribute::List(entries) = attribute else {
-        return Err("`function_relocs` must be a list of `[offset, @function]` pairs".into());
-    };
-    let mut relocations = Vec::with_capacity(entries.len());
-    for entry in entries {
-        match entry {
-            Attribute::List(pair) => match pair.as_slice() {
-                [Attribute::Int(offset), Attribute::Symbol(function)] => {
-                    let offset = u32::try_from(*offset)
-                        .map_err(|_| format!("relocation offset {offset} is not a u32"))?;
-                    relocations.push((offset, *function));
-                }
-                _ => {
-                    return Err("each relocation must be an `[offset, @function]` pair".into());
-                }
-            },
-            _ => return Err("each relocation must be an `[offset, @function]` pair".into()),
-        }
-    }
-    Ok(relocations)
+/// The operations of a data object's relocation region, if it has one.
+fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = crate::OpRef> + '_ {
+    ctx.op(op)
+        .regions
+        .first()
+        .into_iter()
+        .flat_map(|&region| ctx.region(region).blocks.iter())
+        .flat_map(|&block| ctx.block(block).ops.iter().copied())
 }
 
 impl crate::ops::Verify for Data {
-    /// Relocations are well-formed pairs at distinct offsets.
+    /// The relocation region holds only `func_reloc` declarations at distinct
+    /// offsets.
     fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
-        let relocations =
-            parse_function_relocs(ctx.op(self.op_ref()).attributes.get("function_relocs"))?;
         let mut offsets = std::collections::HashSet::new();
-        for (offset, _) in relocations {
+        for op in reloc_ops(ctx, self.op_ref()) {
+            let Ok(reloc) = FuncReloc::from_op(ctx, op) else {
+                let data = ctx.op(op);
+                return Err(format!(
+                    "relocation region holds {}.{}, not clif.func_reloc",
+                    data.dialect, data.name
+                ));
+            };
+            let offset = reloc.offset(ctx);
             if !offsets.insert(offset) {
                 return Err(format!("duplicate relocation offset {offset}"));
             }
         }
         Ok(())
+    }
+}
+
+impl crate::ops::Verify for FuncReloc {
+    /// A relocation belongs to the region of a `data` object.
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+        let owner = ctx
+            .op(self.op_ref())
+            .parent_block
+            .and_then(|block| ctx.block(block).parent_region)
+            .and_then(|region| ctx.region(region).parent_op);
+        match owner {
+            Some(owner) if Data::matches(ctx, owner) => Ok(()),
+            _ => Err("clif.func_reloc must be inside a clif.data relocation region".into()),
+        }
     }
 }
 
