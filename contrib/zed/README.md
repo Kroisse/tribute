@@ -84,6 +84,22 @@ LSP logs can be viewed via `Cmd+Shift+P` → "lsp: open log".
 The tree-sitter grammar is fetched from the external repository:
 <https://github.com/Kroisse/tree-sitter-tribute>
 
+The `rev` pinned under `[grammars.tribute]` in `extension.toml` must track the
+grammar version used by the root `Cargo.toml` (`tree-sitter-tribute` `tag`).
+When bumping the grammar, update both, then check that every query in
+`languages/tribute/*.scm` still compiles against the new grammar — a query that
+references a missing node or field fails to load, and Zed drops highlighting.
+For example, from a checkout of the grammar at the pinned tag:
+
+```bash
+tree-sitter build
+tree-sitter query path/to/contrib/zed/languages/tribute/highlights.scm path/to/file.trb
+```
+
+(`tree-sitter query` locates the grammar via the `parser-directories` in its
+config; pass `--config-path` to point it at the checkout's parent directory.)
+Compare node and field names against the grammar's `src/node-types.json`.
+
 To update syntax highlighting queries, edit `languages/tribute/highlights.scm`.
 
 ## Structure
@@ -98,5 +114,6 @@ contrib/zed/
 └── languages/
     └── tribute/
         ├── config.toml      # Language configuration
-        └── highlights.scm   # Syntax highlighting queries
+        ├── highlights.scm   # Syntax highlighting queries
+        └── outline.scm      # Outline/symbol queries
 ```
