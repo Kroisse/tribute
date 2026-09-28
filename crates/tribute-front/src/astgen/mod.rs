@@ -17,6 +17,7 @@ mod expressions;
 mod helpers;
 mod numeric;
 mod patterns;
+mod text_literal;
 
 use crate::ast::{Module, SpanMap, UnresolvedName};
 use crate::query::ParsedCst;

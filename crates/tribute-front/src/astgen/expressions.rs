@@ -10,11 +10,10 @@ use crate::ast::{
 };
 
 use super::context::AstLoweringCtx;
-use super::helpers::{
-    EscapeError, decode_unicode_escape, is_comment, process_escape_sequences, report_in_node,
-};
+use super::helpers::{is_comment, report_in_node};
 use super::numeric::{NumericValue, parse_numeric_literal};
 use super::patterns::lower_pattern;
+use super::text_literal::{LiteralError, decode_unicode_escape, lower_text_literal};
 
 /// Lower a CST expression node to an AST Expr.
 pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedName> {
@@ -36,24 +35,18 @@ pub fn lower_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Expr<UnresolvedNa
         }
         // String literals: "...", s"...", raw strings, multiline strings
         "string" | "raw_string" | "raw_interpolated_string" | "multiline_string" => {
-            let text = ctx.node_text_owned(&node);
-            match parse_string_literal(&text) {
-                Ok(content) => ExprKind::StringLit(content),
-                Err(error) => {
-                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
-                    ExprKind::Error
-                }
+            match lower_text_literal(ctx, &node) {
+                Some(bytes) => ExprKind::StringLit(
+                    String::from_utf8(bytes).expect("string literals decode to UTF-8"),
+                ),
+                None => ExprKind::Error,
             }
         }
         // Bytes literals: b"...", raw bytes, multiline bytes
         "bytes_string" | "raw_bytes" | "raw_interpolated_bytes" | "multiline_bytes" => {
-            let text = ctx.node_text_owned(&node);
-            match parse_bytes_literal(&text) {
-                Ok(content) => ExprKind::BytesLit(content),
-                Err(error) => {
-                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
-                    ExprKind::Error
-                }
+            match lower_text_literal(ctx, &node) {
+                Some(bytes) => ExprKind::BytesLit(bytes),
+                None => ExprKind::Error,
             }
         }
         // Boolean literals: True, False (capitalized keywords)
@@ -786,180 +779,12 @@ fn lower_argument_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Expr<Unr
 
 // === Literal parsing helpers ===
 
-/// Decode a string literal's text into its value.
-///
-/// Escape errors are reported relative to `text`.
-pub(super) fn parse_string_literal(text: &str) -> Result<String, EscapeError> {
-    // Strip quotes and handle basic escapes for string literals
-    let literal = text;
-    let text = text.trim();
-
-    // Determine prefix and whether it's raw
-    // Supported prefixes: "", "s", "r", "rs", "sr"
-    let (prefix_len, is_raw) = if text.starts_with("rs") || text.starts_with("sr") {
-        (2, true)
-    } else if text.starts_with('r') {
-        (1, true)
-    } else if text.starts_with('s') {
-        (1, false)
-    } else {
-        (0, false)
-    };
-
-    let after_prefix = &text[prefix_len..];
-
-    // Count consecutive '#' characters before the opening quote (for raw strings)
-    let hash_count = if is_raw {
-        after_prefix.chars().take_while(|&c| c == '#').count()
-    } else {
-        0
-    };
-
-    // For raw strings with hashes: r#"..."# or rs##"..."##
-    // For regular raw strings: r"..." or rs"..."
-    // For regular strings: "..." or s"..."
-    if hash_count > 0 {
-        // Raw string with hashes
-        let quote_start = prefix_len + hash_count;
-        let expected_end_pattern_len = 1 + hash_count; // closing quote + hashes
-
-        // Validate we have opening quote after hashes
-        if text.get(quote_start..quote_start + 1) != Some("\"") {
-            return Ok(String::new());
-        }
-
-        // Content starts after the opening quote
-        let content_start = quote_start + 1;
-
-        // Find content end: must have closing quote followed by same number of hashes
-        let content_end = text.len().saturating_sub(expected_end_pattern_len);
-        if content_end <= content_start {
-            return Ok(String::new());
-        }
-
-        // Validate closing pattern: " followed by hash_count #'s
-        let closing = text.get(content_end..);
-        let expected_closing: String = std::iter::once('"')
-            .chain(std::iter::repeat_n('#', hash_count))
-            .collect();
-        if closing != Some(&expected_closing) {
-            return Ok(String::new());
-        }
-
-        Ok(text
-            .get(content_start..content_end)
-            .unwrap_or("")
-            .to_string())
-    } else if is_raw {
-        // Raw string without hashes: r"..." or rs"..."
-        let quote_start = prefix_len;
-        if text.get(quote_start..quote_start + 1) != Some("\"") {
-            return Ok(String::new());
-        }
-        Ok(text
-            .get(quote_start + 1..text.len().saturating_sub(1))
-            .unwrap_or("")
-            .to_string())
-    } else if text.get(prefix_len..prefix_len + 1) == Some("\"") {
-        // Regular string: "..." or s"..."
-        let content = text
-            .get(prefix_len + 1..text.len().saturating_sub(1))
-            .unwrap_or("");
-        let bytes = process_escape_sequences(content)
-            .map_err(|error| error.offset_by(offset_within(literal, content)))?;
-        Ok(String::from_utf8(bytes).expect("escape processing produced invalid UTF-8"))
-    } else {
-        // Fallback
-        Ok(text.to_string())
-    }
-}
-
-/// Decode a bytes literal's text into its value.
-///
-/// Escape errors are reported relative to `text`.
-fn parse_bytes_literal(text: &str) -> Result<Vec<u8>, EscapeError> {
-    // Strip quotes and handle basic escapes for byte string literals
-    let literal = text;
-    let text = text.trim();
-
-    // Determine prefix and whether it's raw
-    let (prefix_len, is_raw) = if text.starts_with("rb") || text.starts_with("br") {
-        (2, true)
-    } else if text.starts_with('b') {
-        (1, false)
-    } else {
-        return Ok(text.as_bytes().to_vec());
-    };
-
-    let after_prefix = &text[prefix_len..];
-
-    // Count consecutive '#' characters before the opening quote
-    let hash_count = after_prefix.chars().take_while(|&c| c == '#').count();
-
-    // For raw strings with hashes: rb#"..."# or br##"..."##
-    // For regular raw strings: rb"..." or br"..."
-    // For regular byte strings: b"..."
-    if hash_count > 0 {
-        // Raw byte string with hashes: b#"..."# or rb##"..."##
-        let quote_start = prefix_len + hash_count;
-        let expected_end_pattern_len = 1 + hash_count; // closing quote + hashes
-
-        // Validate we have opening quote after hashes
-        if text.get(quote_start..quote_start + 1) != Some("\"") {
-            return Ok(Vec::new());
-        }
-
-        // Content starts after the opening quote
-        let content_start = quote_start + 1;
-
-        // Find content end: must have closing quote followed by same number of hashes
-        let content_end = text.len().saturating_sub(expected_end_pattern_len);
-        if content_end <= content_start {
-            return Ok(Vec::new());
-        }
-
-        // Validate closing pattern: " followed by hash_count #'s
-        let closing = text.get(content_end..);
-        let expected_closing: String = std::iter::once('"')
-            .chain(std::iter::repeat_n('#', hash_count))
-            .collect();
-        if closing != Some(&expected_closing) {
-            return Ok(Vec::new());
-        }
-
-        Ok(text
-            .get(content_start..content_end)
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec())
-    } else if is_raw {
-        // Raw byte string without hashes: rb"..." or br"..."
-        Ok(text
-            .get(prefix_len + 1..text.len().saturating_sub(1))
-            .unwrap_or("")
-            .as_bytes()
-            .to_vec())
-    } else {
-        // Regular byte string: b"..."
-        let content = text
-            .get(prefix_len + 1..text.len().saturating_sub(1))
-            .unwrap_or("");
-        process_escape_sequences(content)
-            .map_err(|error| error.offset_by(offset_within(literal, content)))
-    }
-}
-
-/// Byte offset of `inner`, a subslice of `outer`, from the start of `outer`.
-fn offset_within(outer: &str, inner: &str) -> usize {
-    inner.as_ptr() as usize - outer.as_ptr() as usize
-}
-
 /// Parse a rune (character) literal.
 ///
 /// Returns `Ok(None)` for text the grammar does not produce, and an
-/// [`EscapeError`] relative to `text` for a `\u{…}` escape that is not a
+/// [`LiteralError`] relative to `text` for a `\u{…}` escape that is not a
 /// Unicode scalar value.
-fn parse_rune_literal(text: &str) -> Result<Option<char>, EscapeError> {
+fn parse_rune_literal(text: &str) -> Result<Option<char>, LiteralError> {
     // Format: ?c, ?\n, ?\xHH, ?\u{H…}
     let Some(body) = text.strip_prefix('?') else {
         return Ok(None);
@@ -988,7 +813,7 @@ fn parse_rune_literal(text: &str) -> Result<Option<char>, EscapeError> {
             else {
                 return Ok(None);
             };
-            decode_unicode_escape(hex).map_err(|kind| EscapeError {
+            decode_unicode_escape(hex).map_err(|kind| LiteralError {
                 range: 1..text.len(),
                 kind,
             })?
