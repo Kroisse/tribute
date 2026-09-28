@@ -5,9 +5,21 @@
   name: (_) @name) @item
 
 ; Functions
-(function_definition
+(regular_function
   (visibility_marker)? @context
   (keyword_fn) @context
+  name: (_) @name) @item
+
+(extern_function
+  (visibility_marker)? @context
+  (extern_marker) @context
+  (keyword_fn) @context
+  name: (_) @name) @item
+
+; Constants
+(const_declaration
+  (visibility_marker)? @context
+  (keyword_const) @context
   name: (identifier) @name) @item
 
 ; Structs
@@ -30,7 +42,7 @@
 
 ; Ability operations
 (ability_operation
-  (keyword_fn) @context
+  kind: (_) @context
   name: (identifier) @name) @item
 
 ; Struct fields
