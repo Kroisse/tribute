@@ -32,6 +32,8 @@ use crate::dialect::core;
 use crate::op_interface::IsolatedFromAboveOps;
 use crate::ops::DialectOp;
 use crate::refs::OpRef;
+use crate::rewrite::Module;
+use crate::validation;
 use crate::walk::{WalkAction, walk_op};
 
 /// A 1st-class transformation that runs on instances of [`Self::Target`].
@@ -331,23 +333,70 @@ fn ensure_nested_anchor_is_isolated(ctx: &IrContext, op: OpRef) -> PassResult {
     ))
 }
 
+/// Verifier installed by [`PassManager::with_debug_verifier`]. Use-chain
+/// consistency (#710) comes first; the schema check assumes it.
+fn verify_ir_invariants(
+    ctx: &IrContext,
+    _analyses: &mut AnalysisCache,
+    op: OpRef,
+) -> Result<(), VerifyError> {
+    let Some(module) = enclosing_module(ctx, op) else {
+        return Ok(());
+    };
+    let uses = validation::validate_use_chains(ctx, module);
+    let (kind, result) = if !uses.is_ok() {
+        ("use-chain", uses)
+    } else {
+        ("schema", validation::validate_op_schemas(ctx, op))
+    };
+    match result.errors.first() {
+        None => Ok(()),
+        Some(first) => Err(VerifyError {
+            message: format!(
+                "{kind} regression: {} error(s); first: {first}",
+                result.errors.len()
+            ),
+        }),
+    }
+}
+
+/// The innermost `core.module` enclosing `op`, including `op` itself.
+fn enclosing_module(ctx: &IrContext, mut op: OpRef) -> Option<Module> {
+    loop {
+        if let Some(module) = Module::new(ctx, op) {
+            return Some(module);
+        }
+        let block = ctx.op(op).parent_block?;
+        let region = ctx.block(block).parent_region?;
+        op = ctx.region(region).parent_op?;
+    }
+}
+
+/// One registered step of a [`PassManager`]: a pass on the root, or a nested
+/// manager applied to the root's descendants.
+enum Entry<Root: DialectOp> {
+    Pass(Box<dyn ErasedPass<Root>>),
+    Nested(Box<dyn NestedRunner>),
+}
+
 /// Orchestrates a sequence of [`Pass`] instances plus nested sub-managers.
 ///
 /// `Root` is the op type each registered pass operates on. The default
 /// [`core::Module`] matches the top of a frontend-produced IR; nested
-/// managers may target any [`DialectOp`].
+/// managers may target any [`DialectOp`]. Passes and nested managers run in
+/// registration order, so a module pass may follow a function-level
+/// sub-pipeline.
 ///
 /// ```text
 /// PassManager<core::Module>
 ///   ├─ pass A (Target = core::Module)
-///   ├─ pass B (Target = core::Module)
-///   └─ nest::<func::Func>()
-///        ├─ pass X (Target = func::Func)  ← runs once per func.func
-///        └─ pass Y (Target = func::Func)
+///   ├─ nest::<func::Func>()
+///   │    ├─ pass X (Target = func::Func)  ← runs once per func.func
+///   │    └─ pass Y (Target = func::Func)
+///   └─ pass B (Target = core::Module)     ← runs after every X and Y
 /// ```
 pub struct PassManager<Root: DialectOp + 'static = core::Module> {
-    passes: Vec<Box<dyn ErasedPass<Root>>>,
-    nested: Vec<Box<dyn NestedRunner>>,
+    entries: Vec<Entry<Root>>,
     verifier: Option<Box<VerifierFn>>,
     instrumentation: Option<Box<InstrumentFn>>,
 }
@@ -361,8 +410,7 @@ impl<Root: DialectOp + 'static> Default for PassManager<Root> {
 impl<Root: DialectOp + 'static> PassManager<Root> {
     pub fn new() -> Self {
         Self {
-            passes: Vec::new(),
-            nested: Vec::new(),
+            entries: Vec::new(),
             verifier: None,
             instrumentation: None,
         }
@@ -373,7 +421,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     where
         P: Pass<Target = Root> + 'static,
     {
-        self.passes.push(Box::new(pass));
+        self.entries.push(Entry::Pass(Box::new(pass)));
         self
     }
 
@@ -386,8 +434,10 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         let typed = TypedNested {
             pm: PassManager::<T>::new(),
         };
-        self.nested.push(Box::new(typed));
-        let last = self.nested.last_mut().expect("just pushed");
+        self.entries.push(Entry::Nested(Box::new(typed)));
+        let Some(Entry::Nested(last)) = self.entries.last_mut() else {
+            unreachable!("just pushed a nested manager");
+        };
         let typed = last
             .as_any_mut()
             .downcast_mut::<TypedNested<T>>()
@@ -396,14 +446,26 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     }
 
     /// Register a verifier callback invoked after each pass on this manager
-    /// and any nested manager that changed the IR. Typical use: in debug builds, install a
-    /// validation routine so a broken invariant is attributed to the pass
-    /// that caused it. Replaces any previously installed verifier.
+    /// and any nested manager that changed the IR. Typical use: in debug
+    /// builds, install a validation routine so a broken invariant is
+    /// attributed to the pass that caused it. Replaces any previously installed verifier.
     pub fn with_verifier<F>(&mut self, verifier: F) -> &mut Self
     where
         F: Fn(&IrContext, &mut AnalysisCache, OpRef) -> Result<(), VerifyError> + 'static,
     {
         self.verifier = Some(Box::new(verifier));
+        self
+    }
+
+    /// In debug builds, install the standard IR-invariant verifier: use-chain
+    /// consistency of the enclosing module, then the declarative schemas of
+    /// the pass target's subtree. Rewrites may break these invariants
+    /// temporarily, but a finished pass must restore them. Does nothing in
+    /// release builds. Replaces any previously installed verifier.
+    pub fn with_debug_verifier(&mut self) -> &mut Self {
+        if cfg!(debug_assertions) {
+            self.with_verifier(verify_ir_invariants);
+        }
         self
     }
 
@@ -419,9 +481,8 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         self
     }
 
-    /// Run all registered passes (and recursively nested managers) on
-    /// `target`. Pass-level ordering is registration order; nested
-    /// managers run after the parent's own passes.
+    /// Run all registered passes and nested managers on `target`, in
+    /// registration order.
     ///
     /// Every pass and the verifier query `analyses`, typically the cache of
     /// the enclosing pipeline phase.
@@ -431,12 +492,11 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         target: Root,
         analyses: &mut AnalysisCache,
     ) -> PassResult {
-        // Split-borrow the hooks from `passes`/`nested` so we can hand
-        // their references down to nested runners while iterating the pass
-        // vec mutably.
+        // Split-borrow the hooks from `entries` so we can hand their
+        // references down to nested runners while iterating the entries
+        // mutably.
         let Self {
-            passes,
-            nested,
+            entries,
             verifier,
             instrumentation,
         } = self;
@@ -444,7 +504,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             verifier: verifier.as_deref(),
             instrumentation: instrumentation.as_deref(),
         };
-        Self::run_passes(ctx, target, passes, nested, analyses, hooks)
+        Self::run_entries(ctx, target, entries, analyses, hooks)
     }
 
     /// Entry point used by nested managers, threading parent-supplied hooks
@@ -457,8 +517,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         parent: PostPassHooks<'_>,
     ) -> PassResult {
         let Self {
-            passes,
-            nested,
+            entries,
             verifier,
             instrumentation,
         } = self;
@@ -469,14 +528,13 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             verifier: verifier.as_deref().or(parent.verifier),
             instrumentation: instrumentation.as_deref().or(parent.instrumentation),
         };
-        Self::run_passes(ctx, target, passes, nested, analyses, hooks)
+        Self::run_entries(ctx, target, entries, analyses, hooks)
     }
 
-    fn run_passes(
+    fn run_entries(
         ctx: &mut IrContext,
         target: Root,
-        passes: &mut [Box<dyn ErasedPass<Root>>],
-        nested: &mut [Box<dyn NestedRunner>],
+        entries: &mut [Entry<Root>],
         analyses: &mut AnalysisCache,
         hooks: PostPassHooks<'_>,
     ) -> PassResult {
@@ -486,16 +544,27 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         // design, so we only enforce the post-attached invariant when the
         // target was attached on entry.
         let pre_attached = ctx.op(target.op_ref()).parent_block.is_some();
-        for pass in passes.iter_mut() {
+        for entry in entries.iter_mut() {
+            let pass = match entry {
+                Entry::Pass(pass) => pass,
+                Entry::Nested(nested) => {
+                    nested.run(ctx, target.op_ref(), analyses, hooks)?;
+                    // A nested pass may erase or retag an ancestor as well.
+                    if !target_still_alive::<Root>(ctx, target.op_ref(), pre_attached) {
+                        return Ok(());
+                    }
+                    continue;
+                }
+            };
             let span = tracing::debug_span!("pass", name = pass.name());
             let _enter = span.enter();
             let before = ctx.analysis_stamp();
             pass.run(ctx, target, analyses)
                 .map_err(|failure| PassError::execution(pass.name(), failure))?;
             if !target_still_alive::<Root>(ctx, target.op_ref(), pre_attached) {
-                // The pass erased or retagged its own target. Subsequent
-                // passes, the verifier, and nested managers would all see
-                // a stale OpRef, so stop dispatch here.
+                // The pass erased or retagged its own target. Later
+                // entries and the verifier would all see a stale OpRef, so
+                // stop dispatch here.
                 return Ok(());
             }
             if let Some(inst) = hooks.instrumentation {
@@ -507,10 +576,6 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             {
                 return Err(PassError::verification(pass.name(), e));
             }
-        }
-        let parent_op = target.op_ref();
-        for n in nested.iter_mut() {
-            n.run(ctx, parent_op, analyses, hooks)?;
         }
         Ok(())
     }
@@ -858,6 +923,24 @@ mod tests {
         pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(*order.borrow(), vec!["module", "func"]);
+    }
+
+    #[test]
+    fn passes_and_nested_managers_run_in_registration_order() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f1");
+        append_func(&mut ctx, module, loc, "f2");
+
+        let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut pm = PassManager::new();
+        pm.add_pass(recorder::<core::Module>("before", order.clone()));
+        pm.nest::<func::Func>()
+            .add_pass(recorder::<func::Func>("func", order.clone()));
+        pm.add_pass(recorder::<core::Module>("after", order.clone()));
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
+
+        assert_eq!(*order.borrow(), vec!["before", "func", "func", "after"]);
     }
 
     /// Erasing a target op mid-pipeline must not crash the manager. The
