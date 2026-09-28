@@ -364,29 +364,13 @@ fn is_anyref_type(ctx: &IrContext, ty: TypeRef) -> bool {
     data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref")
 }
 
-pub fn build_native_ownership_plan(
-    ctx: &IrContext,
-    module: Module,
-) -> Result<NativeOwnershipPlan, OwnershipPlanError> {
-    build_native_ownership_plan_with_options(ctx, module, NativeOwnershipPlanOptions::production())
-}
-
-pub fn build_native_ownership_plan_with_options(
-    ctx: &IrContext,
-    module: Module,
-    options: NativeOwnershipPlanOptions,
-) -> Result<NativeOwnershipPlan, OwnershipPlanError> {
-    let mut analyses = AnalysisCache::new();
-    build_native_ownership_plan_with_analyses(ctx, module, options, &mut analyses)
-}
-
 /// Build the plan while reusing cached policy-neutral ownership flow facts.
 ///
 /// Callers inside one pipeline phase share an [`AnalysisCache`] so the module
 /// and function facts are computed once per target. The facts never depend on
 /// `options`; borrow elision and entry ownership stay policy decisions made
 /// here.
-pub fn build_native_ownership_plan_with_analyses(
+pub fn build_native_ownership_plan(
     ctx: &IrContext,
     module: Module,
     options: NativeOwnershipPlanOptions,

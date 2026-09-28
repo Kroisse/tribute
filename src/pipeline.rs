@@ -1303,16 +1303,15 @@ fn prepare_module_to_native(
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         let plan_options = native_ownership_plan_options(stop_after, optimizations);
-        ownership_plan =
-            tribute_passes::native::ownership_plan::build_native_ownership_plan_with_analyses(
-                ctx,
-                module,
-                plan_options,
-                &mut analyses,
-            )
-            .map_err(|error| {
-                trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
-            })?;
+        ownership_plan = tribute_passes::native::ownership_plan::build_native_ownership_plan(
+            ctx,
+            module,
+            plan_options,
+            &mut analyses,
+        )
+        .map_err(|error| {
+            trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+        })?;
         tribute_passes::native::rc_materialization::materialize(ctx, module, &ownership_plan)
             .map_err(|error| {
                 trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())

@@ -802,8 +802,13 @@ mod tests {
     use trunk_ir::types::Attribute;
 
     fn rtti_plan(ctx: &IrContext, module: Module) -> Vec<RttiTypePlan> {
-        let plan = crate::native::ownership_plan::build_native_ownership_plan(ctx, module)
-            .expect("typed ownership plan");
+        let plan = crate::native::ownership_plan::build_native_ownership_plan(
+            ctx,
+            module,
+            crate::native::ownership_plan::NativeOwnershipPlanOptions::production(),
+            &mut Default::default(),
+        )
+        .expect("typed ownership plan");
         plan.remap_rtti_types(ctx, module, &[])
             .expect("exact RTTI identities")
     }

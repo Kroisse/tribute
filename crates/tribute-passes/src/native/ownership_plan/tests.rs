@@ -80,7 +80,13 @@ fn build(ir: &str) -> (IrContext, Module, NativeOwnershipPlan) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
     let before = print_module(&ctx, module.op());
-    let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("typed ownership plan");
     assert_eq!(print_module(&ctx, module.op()), before);
     (ctx, module, plan)
 }
@@ -97,7 +103,13 @@ fn assert_plan_error_unchanged(ir: &str, expected: &str) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
     let before = print_module(&ctx, module.op());
-    let error = build_native_ownership_plan(&ctx, module).expect_err("invalid ownership input");
+    let error = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect_err("invalid ownership input");
     assert!(
         error.to_string().contains(expected),
         "unexpected error: {error}"
@@ -163,7 +175,13 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
     });
     ctx.op_mut(op).regions.push(extra);
     let before = ctx.op(op).regions.clone();
-    let error = build_native_ownership_plan(&ctx, module).expect_err("multiple bodies");
+    let error = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect_err("multiple bodies");
     assert!(
         error
             .to_string()
@@ -251,19 +269,21 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
-    let preserved = build_native_ownership_plan_with_options(
+    let preserved = build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions {
             elide_proven_borrowed_parameters: false,
             elide_proven_field_borrows: false,
         },
+        &mut Default::default(),
     )
     .expect("preserved typed plan");
-    let elided = build_native_ownership_plan_with_options(
+    let elided = build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
     )
     .expect("elided typed plan");
 
@@ -345,7 +365,13 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
-    let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("typed ownership plan");
     let capture = plan.function(Symbol::new("capture")).unwrap();
     assert_eq!(
         count(capture, ActionKind::EntryAcquire) + count(capture, ActionKind::StoreAcquire),
@@ -411,7 +437,13 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
 }"#,
     );
     lower_evidence_to_native(&mut ctx, module);
-    let mut plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let mut plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("typed ownership plan");
     let install = plan.function(Symbol::new("install")).unwrap();
     let transfer = install
         .actions()
@@ -475,7 +507,13 @@ fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
 }"#,
     );
     lower_evidence_to_native(&mut ctx, module);
-    let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("typed ownership plan");
     let install = plan.function(Symbol::new("install")).unwrap();
     assert_eq!(count(install, ActionKind::IntoRawTransfer), 2);
     let lowered = print_module(&ctx, module.op());
@@ -679,13 +717,14 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
 }"#;
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
-    let plan = build_native_ownership_plan_with_options(
+    let plan = build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions {
             elide_proven_borrowed_parameters: true,
             elide_proven_field_borrows: false,
         },
+        &mut Default::default(),
     )
     .expect("typed ownership plan with preserved field borrows");
     let function = plan.function(Symbol::new("transfers")).unwrap();
@@ -917,7 +956,15 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
             .clone();
         ctx.op_mut(projection).attributes.insert(key, invalid);
         let before = print_module(&ctx, module.op());
-        assert!(build_native_ownership_plan(&ctx, module).is_err());
+        assert!(
+            build_native_ownership_plan(
+                &ctx,
+                module,
+                NativeOwnershipPlanOptions::production(),
+                &mut Default::default()
+            )
+            .is_err()
+        );
         assert_eq!(print_module(&ctx, module.op()), before);
         ctx.op_mut(projection).attributes.insert(key, original);
     }
@@ -1301,7 +1348,13 @@ fn semantic_closure_release_uses_its_compiler_generated_allocation_layout() {
     );
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
 
-    let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
     let materialized = print_module(&ctx, module.op());
 
@@ -1470,7 +1523,15 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let before = print_module(&ctx, module.op());
-        assert!(build_native_ownership_plan(&ctx, module).is_err());
+        assert!(
+            build_native_ownership_plan(
+                &ctx,
+                module,
+                NativeOwnershipPlanOptions::production(),
+                &mut Default::default()
+            )
+            .is_err()
+        );
         assert_eq!(print_module(&ctx, module.op()), before);
     }
 }
@@ -1487,8 +1548,13 @@ fn unused_frame_alias_with_missing_nominal_result_is_not_a_live_ownership_root()
 }"#,
     );
 
-    let plan = build_native_ownership_plan(&ctx, module)
-        .expect("unused continuation-frame aliases must not affect ownership planning");
+    let plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("unused continuation-frame aliases must not affect ownership planning");
     let dead_frame = ctx
         .type_alias_by_name(Symbol::new("DeadFrame"))
         .expect("parsed dead frame alias");
@@ -1577,8 +1643,13 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
             .build(),
     );
     assert!(ctx.type_alias_by_type(stale).is_none());
-    build_native_ownership_plan(&ctx, module)
-        .expect("an unreachable stale layout must not shadow the module declaration");
+    build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("an unreachable stale layout must not shadow the module declaration");
 
     let mut ambiguous_ctx = IrContext::new();
     let ambiguous = parse_test_module(
@@ -1592,7 +1663,15 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
   }
 }"#,
     );
-    assert!(build_native_ownership_plan(&ambiguous_ctx, ambiguous).is_err());
+    assert!(
+        build_native_ownership_plan(
+            &ambiguous_ctx,
+            ambiguous,
+            NativeOwnershipPlanOptions::production(),
+            &mut Default::default()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -1604,7 +1683,13 @@ fn plan_order_is_deterministic_and_duplicate_actions_fail_validation() {
   func.func @f(%value: !R) -> !R { func.return %value }
 }"#,
     );
-    let second = build_native_ownership_plan(&ctx, module).unwrap();
+    let second = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .unwrap();
     assert_eq!(plan.functions(), second.functions());
     assert_eq!(plan.rtti_types(), second.rtti_types());
     let mut invalid = plan.clone();
@@ -1745,7 +1830,13 @@ fn closure_rtti_bitmap_follows_the_exact_func_to_clif_type_rewrite() {
   }
 }"#,
     );
-    let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("typed ownership plan");
     let semantic = plan.rtti_types()[0].ty;
     assert!(matches!(
         &plan.rtti_types()[0].fields,
@@ -1778,7 +1869,13 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
   }
 }"#,
     );
-    let plan = build_native_ownership_plan(&ctx, module).expect("typed ownership plan");
+    let plan = build_native_ownership_plan(
+        &ctx,
+        module,
+        NativeOwnershipPlanOptions::production(),
+        &mut Default::default(),
+    )
+    .expect("typed ownership plan");
     let mut allocation = None;
     walk_module(&ctx, module, |op| {
         if adt::StructNew::matches(&ctx, op) {

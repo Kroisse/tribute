@@ -59,7 +59,7 @@ fn both_planner_modes_reuse_one_cached_fact_set() {
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
 
-    let preserved = build_native_ownership_plan_with_analyses(
+    let preserved = build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions {
@@ -73,7 +73,7 @@ fn both_planner_modes_reuse_one_cached_fact_set() {
         .get::<NativeOwnershipFunctionFacts>(&ctx, op)
         .expect("function facts");
 
-    let elided = build_native_ownership_plan_with_analyses(
+    let elided = build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions::production(),

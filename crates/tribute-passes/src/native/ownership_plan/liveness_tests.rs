@@ -308,7 +308,7 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
 
-    let preserved = build_native_ownership_plan_with_analyses(
+    let preserved = build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions {
@@ -321,7 +321,7 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
     let liveness = cache.get_cached::<NativeManagedLiveness>(&ctx, op).unwrap();
     assert_eq!(liveness.computed_views(), (true, false));
 
-    build_native_ownership_plan_with_analyses(
+    build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions {
@@ -337,7 +337,7 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
     ));
     assert_eq!(liveness.computed_views(), (true, false));
 
-    let field_borrows = build_native_ownership_plan_with_analyses(
+    let field_borrows = build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions {
@@ -355,7 +355,7 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
             .unwrap()
             .actions()
     );
-    build_native_ownership_plan_with_analyses(
+    build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions::production(),
@@ -375,7 +375,7 @@ fn production_plan_computes_only_owner_extended_view() {
     let op = function_op(&ctx, module, "load");
     let mut cache = AnalysisCache::new();
 
-    build_native_ownership_plan_with_analyses(
+    build_native_ownership_plan(
         &ctx,
         module,
         NativeOwnershipPlanOptions::production(),
