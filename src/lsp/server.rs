@@ -445,7 +445,13 @@ impl LspServer {
         let completion_items: Vec<CompletionItem> = items
             .into_iter()
             .map(|entry| CompletionItem {
-                label: entry.name.to_string(),
+                // Names that are keywords complete to their raw spelling.
+                label: match entry.kind {
+                    completion_index::CompletionKind::Keyword => entry.name.to_string(),
+                    _ => entry
+                        .name
+                        .with_str(|name| tribute_front::keywords::source_name(name).into_owned()),
+                },
                 kind: Some(entry.kind.into()),
                 detail: entry.detail,
                 ..Default::default()

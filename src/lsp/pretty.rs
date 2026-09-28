@@ -6,6 +6,14 @@ use lsp_types::{
     Documentation, MarkupContent, MarkupKind, ParameterInformation, ParameterLabel, SignatureHelp,
     SignatureInformation,
 };
+use tribute_front::keywords::source_name;
+use trunk_ir::Symbol;
+
+/// A name as written in source: raw when it is a keyword.
+fn spelled(name: Symbol) -> String {
+    name.with_str(|name| source_name(name).into_owned())
+}
+
 /// Format a function signature for LSP signature help (AST-based).
 pub fn format_ast_signature(
     sig: &super::completion_index::FunctionSignature,
@@ -17,10 +25,11 @@ pub fn format_ast_signature(
     let mut label_parts = Vec::with_capacity(sig.params.len());
 
     for (name, ty_str) in &sig.params {
+        let name = spelled(*name);
         let label = if let Some(ty) = ty_str {
             format!("{}: {}", name, ty)
         } else {
-            name.to_string()
+            name
         };
 
         label_parts.push(label.clone());
@@ -34,13 +43,14 @@ pub fn format_ast_signature(
     // Build the full signature label
     let params_str = label_parts.join(", ");
     let return_str = sig.return_ty.as_deref().unwrap_or("_");
+    let name = spelled(sig.name);
     let signature_label = if let Some(effects) = &sig.effects {
         format!(
             "fn {}({}) ->{{{}}} {}",
-            sig.name, params_str, effects, return_str
+            name, params_str, effects, return_str
         )
     } else {
-        format!("fn {}({}) -> {}", sig.name, params_str, return_str)
+        format!("fn {}({}) -> {}", name, params_str, return_str)
     };
 
     let documentation = doc_comment.map(|doc| {
@@ -88,6 +98,22 @@ mod tests {
         assert_eq!(result.signatures.len(), 1);
         assert_eq!(result.signatures[0].label, "fn add(a: Int, b: Int) -> Int");
         assert_eq!(result.active_parameter, Some(0));
+    }
+
+    #[test]
+    fn test_format_ast_signature_spells_keywords_raw() {
+        use super::super::completion_index::FunctionSignature;
+
+        let sig = FunctionSignature {
+            name: Symbol::new("case"),
+            params: vec![(Symbol::new("type"), Some("Int".to_string()))],
+            return_ty: Some("Int".to_string()),
+            effects: None,
+            span: Span::default(),
+        };
+
+        let result = format_ast_signature(&sig, None, 0);
+        assert_eq!(result.signatures[0].label, "fn r#case(r#type: Int) -> Int");
     }
 
     #[test]

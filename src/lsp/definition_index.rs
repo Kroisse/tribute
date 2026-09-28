@@ -15,8 +15,6 @@ use tribute_front::ast::{
 };
 use tribute_front::query as ast_query;
 
-use super::completion_index::KEYWORDS;
-
 // =============================================================================
 // Definition Index
 // =============================================================================
@@ -840,6 +838,7 @@ pub enum RenameError {
     InvalidTypeIdentifier,
     InvalidCharacter,
     ReservedKeyword,
+    InvalidRawIdentifier,
 }
 
 impl std::fmt::Display for RenameError {
@@ -856,22 +855,43 @@ impl std::fmt::Display for RenameError {
                 write!(f, "Type identifier must start with uppercase letter")
             }
             RenameError::InvalidCharacter => write!(f, "Name contains invalid characters"),
-            RenameError::ReservedKeyword => write!(f, "Name is a reserved keyword"),
+            RenameError::ReservedKeyword => {
+                write!(
+                    f,
+                    "Name is a reserved keyword; write it as a raw identifier (`r#name`)"
+                )
+            }
+            RenameError::InvalidRawIdentifier => write!(
+                f,
+                "Raw identifiers name lowercase names other than `pkg`, `super`, and `self`"
+            ),
         }
     }
 }
 
 impl std::error::Error for RenameError {}
 
-/// Check if a name is a reserved keyword.
+/// Check if a name is a keyword or reserved word, which cannot be written as
+/// a bare identifier.
 pub fn is_keyword(name: &str) -> bool {
-    KEYWORDS.contains(&name)
+    tribute_front::keywords::is_reserved(name)
 }
 
 /// Validate an identifier for renaming.
 pub fn validate_identifier(name: &str, kind: DefinitionKind) -> Result<(), RenameError> {
+    // `r#name` spells a lowercase name, keywords included.
+    let (name, raw) = match name.strip_prefix("r#") {
+        Some(name) => (name, true),
+        None => (name, false),
+    };
     if name.is_empty() {
         return Err(RenameError::EmptyName);
+    }
+    if raw
+        && (tribute_front::keywords::PATH_KEYWORDS.contains(&name)
+            || name.starts_with(|c: char| c.is_ascii_uppercase()))
+    {
+        return Err(RenameError::InvalidRawIdentifier);
     }
 
     let first = name.chars().next().unwrap();
@@ -900,7 +920,7 @@ pub fn validate_identifier(name: &str, kind: DefinitionKind) -> Result<(), Renam
         return Err(RenameError::InvalidCharacter);
     }
 
-    if is_keyword(name) {
+    if !raw && is_keyword(name) {
         return Err(RenameError::ReservedKeyword);
     }
 
@@ -1363,6 +1383,36 @@ fn unwrap(opt: Option) -> Int {
     fn test_validate_identifier_reserved_keyword() {
         let result = validate_identifier("fn", DefinitionKind::Local);
         assert!(matches!(result, Err(RenameError::ReservedKeyword)));
+        let result = validate_identifier(
+            "type",
+            DefinitionKind::Field {
+                owner: trunk_ir::Symbol::new("Token"),
+            },
+        );
+        assert!(matches!(result, Err(RenameError::ReservedKeyword)));
+    }
+
+    #[test]
+    fn test_validate_identifier_raw() {
+        assert!(validate_identifier("r#fn", DefinitionKind::Local).is_ok());
+        assert!(validate_identifier("r#type", DefinitionKind::Function).is_ok());
+        assert!(validate_identifier("r#x", DefinitionKind::Parameter).is_ok());
+        for (name, kind) in [
+            ("r#self", DefinitionKind::Local),
+            ("r#Foo", DefinitionKind::Struct),
+        ] {
+            assert!(
+                matches!(
+                    validate_identifier(name, kind),
+                    Err(RenameError::InvalidRawIdentifier)
+                ),
+                "{name}"
+            );
+        }
+        assert!(matches!(
+            validate_identifier("r#", DefinitionKind::Local),
+            Err(RenameError::EmptyName)
+        ));
     }
 
     #[test]
@@ -1376,6 +1426,8 @@ fn unwrap(opt: Option) -> Int {
         assert!(is_keyword("fn"));
         assert!(is_keyword("let"));
         assert!(is_keyword("struct"));
+        assert!(is_keyword("op"));
+        assert!(is_keyword("type"));
         assert!(!is_keyword("foo"));
         assert!(!is_keyword("main"));
     }

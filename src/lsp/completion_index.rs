@@ -52,16 +52,15 @@ pub struct AstCompletionItem {
     pub detail: Option<String>,
 }
 
-/// Reserved keywords in Tribute.
-pub const KEYWORDS: &[&str] = &[
-    "fn", "let", "case", "struct", "enum", "ability", "const", "pub", "use", "mod", "if", "handle",
-    "as", "True", "False", "Nil",
-];
+/// Keywords offered as completions.
+fn keywords() -> impl Iterator<Item = &'static &'static str> {
+    use tribute_front::keywords::{KEYWORDS, LITERAL_KEYWORDS};
+    KEYWORDS.iter().chain(LITERAL_KEYWORDS)
+}
 
 /// Get keyword completions filtered by prefix.
 pub fn complete_keywords(prefix: &str) -> Vec<AstCompletionItem> {
-    KEYWORDS
-        .iter()
+    keywords()
         .filter(|kw| kw.starts_with(prefix))
         .map(|kw| AstCompletionItem {
             name: Symbol::new(kw),
@@ -409,7 +408,7 @@ mod tests {
     #[test]
     fn test_complete_keywords_empty_prefix() {
         let completions = complete_keywords("");
-        assert_eq!(completions.len(), KEYWORDS.len());
+        assert_eq!(completions.len(), keywords().count());
     }
 
     #[test]

@@ -21,11 +21,13 @@ A?          선택적 (0개 또는 1개)
 ### Keywords
 
 ```text
-fn op do let const struct enum ability mod pub use case handle resume if as
+fn op do let const struct enum ability mod pub use extern case handle resume if as
 True False Nil
+pkg super self
 ```
 
-**Note:** `if`는 guard 문법에서만 사용 (독립적인 if expression 없음)
+**Note:** `if`는 guard 문법에서만 사용 (독립적인 if expression 없음). `pkg`,
+`super`, `self`는 경로의 첫 segment로 쓰는 경로 키워드다.
 
 ### Reserved (향후 사용)
 
@@ -34,6 +36,24 @@ type where in
 ```
 
 **Note:** 대부분의 제어 흐름은 algebraic effect로 처리하므로 예약어를 최소화함
+
+### 키워드 규칙
+
+- 위의 키워드와 예약어는 모두 **strict**하다. 문맥과 관계없이 식별자로 쓸 수
+  없다. `let op = 1`, `struct T { type: Int }`, `x.as`는 모두 오류다.
+- **Raw identifier** `r#name`은 소문자로 시작하는 이름을 키워드 여부와 관계없이
+  식별자로 쓴다. `r#type`은 이름 `type`이고, 키워드가 아닌 이름에도 쓸 수
+  있다(`r#x`와 `x`는 같은 이름). 바인딩, 함수, 필드, 경로 segment, `use` 항목
+  등 식별자가 오는 모든 자리에 쓸 수 있다. Raw string은 `r#"`로 시작하므로 `#`
+  다음 문자로 둘을 구분한다.
+- 경로 키워드(`pkg`, `super`, `self`)는 raw identifier가 될 수 없다. 대문자로
+  시작하는 키워드(`True`, `False`, `Nil`)도 raw 형식이 없다.
+- 새 구문에 필요한 키워드는 **contextual keyword**로 추가한다. 그 구문의 특정
+  위치에서만 키워드로 읽고 다른 곳에서는 식별자로 남기므로, 키워드를 추가해도
+  기존 코드가 깨지지 않는다. 예약어도 도입할 때 strict로 둘지 contextual로
+  바꿀지 정한다.
+- 새 strict 키워드가 필요해지면 그때 manifest 단위의 edition으로 도입한다.
+  Edition 이전의 코드는 그 단어를 raw identifier로 옮겨 쓸 수 있다.
 
 ### Operators
 
@@ -125,7 +145,9 @@ StringLit  ::= String | RawString
 BytesLit   ::= Bytes | RawBytes
 Literal    ::= Number | StringLit | BytesLit | Rune | Bool | Unit
 
-Identifier ::= (Letter | '_') (Letter | Digit | '_')*
+Identifier ::= IdentStart (Letter | Digit | '_')*    // 키워드와 예약어 제외
+             | 'r#' IdentStart (Letter | Digit | '_')* // raw identifier
+IdentStart ::= LowerLetter | '_'
 TypeId     ::= UpperLetter (Letter | Digit | '_')*   // 타입명은 대문자 시작
 ```
 

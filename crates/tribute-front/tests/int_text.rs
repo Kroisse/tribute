@@ -532,7 +532,7 @@ ability Audit(a) {
     op bounce(value: a) -> a
 }
 
-fn use() ->{Audit(Int)} Int {
+fn use_int() ->{Audit(Int)} Int {
     handle Audit::echo(Audit::bounce(+1)) {
         do result { result }
         fn Audit::echo(value) { value }
