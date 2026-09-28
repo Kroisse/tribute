@@ -18,6 +18,10 @@ jobs:
   clippy:
     name: Clippy
     runs-on: [self-hosted, macOS]
+    # The self-hosted runner cleans target/ on checkout and has no Actions
+    # cache; kache keeps compiled crates across runs instead.
+    env:
+      RUSTC_WRAPPER: kache
     steps:
       - uses: actions/checkout@v7
         with:
@@ -49,7 +53,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           components: rustfmt
-          cache: true
+          cache: false
 
       - name: Check formatting
         uses: actions-rust-lang/rustfmt@v1
@@ -57,6 +61,10 @@ jobs:
   test:
     name: Test
     runs-on: [self-hosted, macOS]
+    # The self-hosted runner cleans target/ on checkout and has no Actions
+    # cache; kache keeps compiled crates across runs instead.
+    env:
+      RUSTC_WRAPPER: kache
     steps:
       - uses: actions/checkout@v7
         with:
@@ -97,10 +105,15 @@ jobs:
           - platform: macOS
             runner_json: '["self-hosted", "macOS"]'
             cache: false
+            rustc_wrapper: kache
           - platform: Ubuntu
             runner_json: '"ubuntu-latest"'
             cache: true
+            # An empty wrapper tells Cargo to run rustc directly.
+            rustc_wrapper: ''
     runs-on: ${{ fromJSON(matrix.runner_json) }}
+    env:
+      RUSTC_WRAPPER: ${{ matrix.rustc_wrapper }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -111,6 +124,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: ${{ matrix.cache }}
+          # Only main saves caches; PRs restore them without evicting main's.
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build runtime sysroot
         run: cargo xtask runtime
@@ -157,6 +172,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
+          # Only main saves caches; PRs restore them without evicting main's.
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install wasmtime
         uses: taiki-e/install-action@v2
@@ -196,6 +213,8 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: true
+          # Only main saves caches; PRs restore them without evicting main's.
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@v2
@@ -237,6 +256,8 @@ jobs:
         with:
           components: llvm-tools-preview, rust-src
           cache: true
+          # Only main saves caches; PRs restore them without evicting main's.
+          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install cargo-llvm-cov, cargo-nextest, and wasmtime
         uses: taiki-e/install-action@v2
