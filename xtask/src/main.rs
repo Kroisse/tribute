@@ -1,5 +1,6 @@
 //! Development tasks for the Tribute workspace, run as `cargo xtask <task>`.
 
+use clap::{Parser, Subcommand};
 use std::error::Error;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
@@ -7,20 +8,23 @@ use std::process::{Command, ExitCode, Stdio};
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
-const USAGE: &str = "\
-usage: cargo xtask <task>
+/// Development tasks for the Tribute workspace.
+#[derive(Parser)]
+#[command(bin_name = "cargo xtask")]
+struct Cli {
+    #[command(subcommand)]
+    task: Task,
+}
 
-tasks:
-  runtime    build tribute-runtime into the development sysroot (target/sysroot)";
+#[derive(Subcommand)]
+enum Task {
+    /// Build tribute-runtime into the development sysroot (target/sysroot)
+    Runtime,
+}
 
 fn main() -> ExitCode {
-    let task = std::env::args().nth(1);
-    let result = match task.as_deref() {
-        Some("runtime") => runtime(),
-        _ => {
-            eprintln!("{USAGE}");
-            return ExitCode::FAILURE;
-        }
+    let result = match Cli::parse().task {
+        Task::Runtime => runtime(),
     };
     match result {
         Ok(()) => ExitCode::SUCCESS,
