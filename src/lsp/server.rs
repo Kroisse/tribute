@@ -462,10 +462,7 @@ impl LspServer {
         let completion_items: Vec<CompletionItem> = items
             .into_iter()
             .filter(|entry| {
-                raw_range.is_none()
-                    || entry
-                        .name
-                        .with_str(|name| !tribute_front::keywords::LITERAL_KEYWORDS.contains(&name))
+                raw_range.is_none() || entry.name.with_str(tribute_front::keywords::can_be_raw)
             })
             .map(|entry| {
                 let label = entry.name.with_str(|name| match (raw_range, entry.kind) {
@@ -1925,7 +1922,7 @@ mod tests {
     fn test_completion_after_raw_prefix_replaces_it() {
         let mut harness = TestHarness::new();
         let uri = test_uri("completion_raw");
-        let source = "fn r#case() -> Nat { 1 }\nfn run() -> Nat { r#ca }";
+        let source = "struct Case { x: Nat }\nfn r#case() -> Nat { 1 }\nfn run() -> Nat { r#ca }";
 
         harness.open_document(&uri, source);
 
@@ -1933,7 +1930,7 @@ mod tests {
             text_document_position: TextDocumentPositionParams {
                 text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
-                    line: 1,
+                    line: 2,
                     character: 22, // After `r#ca`
                 },
             },
@@ -1952,6 +1949,10 @@ mod tests {
             .find(|item| item.kind == Some(lsp_types::CompletionItemKind::FUNCTION))
             .expect("Should suggest the raw-named function");
         assert_eq!(item.label, "r#case");
+        assert!(
+            list.items.iter().all(|item| item.label != "r#Case"),
+            "uppercase names have no raw form"
+        );
         let Some(lsp_types::CompletionTextEdit::Edit(edit)) = &item.text_edit else {
             panic!("Raw completion should carry a text edit: {item:?}");
         };
@@ -1959,8 +1960,8 @@ mod tests {
         assert_eq!(
             (edit.range.start, edit.range.end),
             (
-                lsp_types::Position::new(1, 18),
-                lsp_types::Position::new(1, 22)
+                lsp_types::Position::new(2, 18),
+                lsp_types::Position::new(2, 22)
             ),
             "the edit must replace the typed `r#ca`"
         );

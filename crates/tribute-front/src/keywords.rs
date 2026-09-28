@@ -36,6 +36,14 @@ pub fn is_reserved(name: &str) -> bool {
     needs_raw(name) || LITERAL_KEYWORDS.contains(&name) || PATH_KEYWORDS.contains(&name)
 }
 
+/// Whether `name` can be written as a raw identifier `r#name`: a lowercase
+/// name other than a path keyword.
+pub fn can_be_raw(name: &str) -> bool {
+    name.starts_with(|c: char| c.is_ascii_lowercase() || c == '_')
+        && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+        && !PATH_KEYWORDS.contains(&name)
+}
+
 /// The source spelling of the name `name`: raw when it is a keyword.
 pub fn source_name(name: &str) -> Cow<'_, str> {
     if needs_raw(name) {
@@ -93,5 +101,10 @@ mod tests {
         assert!(is_reserved("self"));
         assert!(is_reserved("True"));
         assert!(!needs_raw("self"));
+        assert!(can_be_raw("type"));
+        assert!(can_be_raw("_x1"));
+        assert!(!can_be_raw("self"));
+        assert!(!can_be_raw("Token"));
+        assert!(!can_be_raw("True"));
     }
 }
