@@ -18,6 +18,7 @@ use tribute_core::{
     set_calling_convention,
 };
 use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -325,7 +326,11 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
     failures
 }
 
-fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
+fn verify_physical_callable_graph(
+    ctx: &IrContext,
+    module: Module,
+    symbols: &SymbolTable,
+) -> Vec<BoundaryFailure> {
     fn visit(
         ctx: &IrContext,
         op: OpRef,
@@ -457,7 +462,7 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
     }
 
     // Callees resolve by root-qualified name across the whole module tree.
-    let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> = SymbolTable::collect(ctx, module)
+    let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> = symbols
         .iter()
         .filter_map(|(name, ops)| {
             let &[op] = ops else { return None };
@@ -569,9 +574,11 @@ pub fn verify_tribute_control_pre_cps(
     module: Module,
     declarations: &[tribute_control::OperationDeclaration],
     compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
+    analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     let mut failures = Vec::new();
-    let validation = tribute_control::validate(ctx, module, declarations, compiler_intrinsics);
+    let validation =
+        tribute_control::validate(ctx, module, declarations, compiler_intrinsics, analyses);
     failures.extend(validation.errors.into_iter().map(|error| BoundaryFailure {
         op: error.op,
         location: error.location,
@@ -602,7 +609,7 @@ pub fn verify_tribute_control_pre_cps(
     failures.extend(verify_type_boundary(ctx, module, TypeBoundary::Pre));
     failures.extend(verify_source_conversion_shapes(ctx, module));
     failures.extend(
-        trunk_ir::validation::validate_all(ctx, module)
+        trunk_ir::validation::validate_all(ctx, module, analyses)
             .errors
             .into_iter()
             .map(|error| BoundaryFailure {
@@ -626,6 +633,7 @@ pub fn verify_tribute_control_pre_cps(
 pub fn verify_tribute_control_post_cps(
     ctx: &IrContext,
     module: Module,
+    analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
     let mut failures = Vec::new();
     if let Some(body) = module.body(ctx) {
@@ -654,9 +662,10 @@ pub fn verify_tribute_control_post_cps(
         });
     }
     failures.extend(verify_final_handle_dispatch_types(ctx, module));
-    failures.extend(verify_physical_callable_graph(ctx, module));
+    let symbols = analyses.require::<SymbolTable>(ctx, module.op());
+    failures.extend(verify_physical_callable_graph(ctx, module, &symbols));
     failures.extend(
-        trunk_ir::validation::validate_all(ctx, module)
+        trunk_ir::validation::validate_all(ctx, module, analyses)
             .errors
             .into_iter()
             .map(|error| BoundaryFailure {
@@ -3720,8 +3729,8 @@ fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> 
 }
 
 /// Every source callable, keyed by its root-qualified name.
-fn collect_callable_graph(ctx: &IrContext, module: Module) -> HashMap<Symbol, CallableInfo> {
-    SymbolTable::collect(ctx, module)
+fn collect_callable_graph(ctx: &IrContext, symbols: &SymbolTable) -> HashMap<Symbol, CallableInfo> {
+    symbols
         .iter()
         .filter(|&(_, ops)| tribute_control::Func::matches(ctx, ops[0]))
         .map(|(symbol, ops)| {
@@ -3753,8 +3762,9 @@ fn verify_candidate_or_restore_aliases(
     ctx: &mut IrContext,
     candidate: Module,
     source_aliases: &[(Symbol, TypeRef)],
+    analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
-    if let Err(error) = verify_tribute_control_post_cps(ctx, candidate) {
+    if let Err(error) = verify_tribute_control_post_cps(ctx, candidate, analyses) {
         for (name, ty) in source_aliases {
             ctx.register_type_alias(*name, *ty);
         }
@@ -3768,14 +3778,18 @@ fn verify_candidate_or_restore_aliases(
 ///
 /// The existing module region is not detached until a separately built module
 /// has passed the post-CPS operation and recursive type boundary.
+///
+/// Boundary verification and graph collection share the analyses cached in
+/// `analyses` while they read unchanged IR.
 pub fn tribute_control_to_cps(
     ctx: &mut IrContext,
     module: Module,
     declarations: &[tribute_control::OperationDeclaration],
     compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
+    analyses: &mut AnalysisCache,
 ) -> Result<(), TributeControlToCpsError> {
-    verify_tribute_control_pre_cps(ctx, module, declarations, compiler_intrinsics)?;
-    let funcs = collect_callable_graph(ctx, module);
+    verify_tribute_control_pre_cps(ctx, module, declarations, compiler_intrinsics, analyses)?;
+    let funcs = collect_callable_graph(ctx, &analyses.require::<SymbolTable>(ctx, module.op()));
     let source_region = module.body(ctx).ok_or_else(|| {
         TributeControlToCpsError::one(
             PRE_CPS_BOUNDARY,
@@ -3843,14 +3857,14 @@ pub fn tribute_control_to_cps(
     for (name, ty) in &converted_aliases {
         ctx.register_type_alias(*name, *ty);
     }
-    verify_candidate_or_restore_aliases(ctx, candidate, &source_aliases)?;
+    verify_candidate_or_restore_aliases(ctx, candidate, &source_aliases, analyses)?;
 
     ctx.detach_region(new_region);
     ctx.remove_op(candidate.op());
     ctx.detach_region(source_region);
     ctx.op_mut(module.op()).regions.push(new_region);
     ctx.region_mut(new_region).parent_op = Some(module.op());
-    if let Err(error) = verify_tribute_control_post_cps(ctx, module) {
+    if let Err(error) = verify_tribute_control_post_cps(ctx, module, analyses) {
         ctx.detach_region(new_region);
         ctx.op_mut(module.op()).regions.push(source_region);
         ctx.region_mut(source_region).parent_op = Some(module.op());
@@ -3894,12 +3908,18 @@ impl Pass for TributeControlToCps {
         "tribute-control-to-cps"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         tribute_control_to_cps(
             ctx,
             target.into(),
             &self.declarations,
             &self.compiler_intrinsics,
+            analyses,
         )
         .map_err(|error| Box::new(error) as _)
     }
@@ -4079,8 +4099,8 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
-        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(!printed.contains("tribute_control.func "));
         assert!(!printed.contains("tribute_control.func_ref "));
@@ -4092,7 +4112,8 @@ mod tests {
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default())
+            .unwrap();
     }
 
     #[test]
@@ -4106,8 +4127,8 @@ mod tests {
         let target = core::Module::from_op(&ctx, module.op()).unwrap();
         let mut pass = TributeControlToCps::new([]);
         assert_eq!(pass.name(), "tribute-control-to-cps");
-        pass.run(&mut ctx, target).unwrap();
-        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        pass.run(&mut ctx, target, &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     }
 
     #[test]
@@ -4142,7 +4163,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("func.call "));
         assert!(printed.contains("func.call_indirect"));
@@ -4243,7 +4264,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
 
         let transfers = convention_bearing_transfers(&ctx, module.op());
         let mut conventions: Vec<_> = transfers
@@ -4295,7 +4316,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("core.module @inner"));
         assert!(printed.contains("func.func @nested"));
@@ -4304,7 +4325,8 @@ mod tests {
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default())
+            .unwrap();
     }
 
     #[test]
@@ -4328,8 +4350,8 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
-        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("func.func @same").count(), 2, "{printed}");
         assert!(printed.contains("func.func @outer_call"), "{printed}");
@@ -4339,7 +4361,8 @@ mod tests {
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default())
+            .unwrap();
     }
 
     #[test]
@@ -4352,7 +4375,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("name = @CallbackRecord"));
         assert!(
@@ -4367,7 +4390,8 @@ mod tests {
 
         let mut reparsed = IrContext::new();
         let reparsed_module = parse_test_module(&mut reparsed, &printed);
-        verify_tribute_control_post_cps(&reparsed, reparsed_module).unwrap();
+        verify_tribute_control_post_cps(&reparsed, reparsed_module, &mut Default::default())
+            .unwrap();
     }
 
     #[test]
@@ -4397,7 +4421,7 @@ mod tests {
         );
         let (mut ctx, module) = parse(&printed_source);
 
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let lowered = module
             .ops(&ctx)
             .into_iter()
@@ -4473,7 +4497,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(error.to_string().contains("func.call"));
         assert_eq!(print_module(&ctx, module.op()), before);
@@ -4527,7 +4552,8 @@ mod tests {
                 .insert(Symbol::new("type"), Attribute::Type(malformed));
 
             let before = print_module(&ctx, module.op());
-            let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+            let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+                .unwrap_err();
             assert_eq!(error.boundary, PRE_CPS_BOUNDARY, "{name}: {error}");
             assert!(error.to_string().contains(expected), "{name}: {error}");
             assert_eq!(print_module(&ctx, module.op()), before, "{name}");
@@ -4542,7 +4568,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
             error
@@ -4605,7 +4632,8 @@ mod tests {
         for (input, expected) in malformed {
             let (mut ctx, module) = parse(input);
             let before = print_module(&ctx, module.op());
-            let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+            let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+                .unwrap_err();
             assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
             assert!(error.to_string().contains(expected), "{error}");
             assert_eq!(print_module(&ctx, module.op()), before);
@@ -4621,7 +4649,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
             error.to_string().contains("forbids block successors"),
@@ -4647,7 +4676,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
             error.to_string().contains("scf.case requires a value"),
@@ -4754,8 +4784,13 @@ mod tests {
         let converted_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         ctx.register_type_alias(alias_name, converted_type);
 
-        let error =
-            verify_candidate_or_restore_aliases(&mut ctx, candidate, &source_aliases).unwrap_err();
+        let error = verify_candidate_or_restore_aliases(
+            &mut ctx,
+            candidate,
+            &source_aliases,
+            &mut Default::default(),
+        )
+        .unwrap_err();
         assert_eq!(error.boundary, POST_CPS_BOUNDARY);
         assert_eq!(ctx.type_alias_by_name(alias_name), Some(source_type));
         assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
@@ -4771,7 +4806,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(local_input);
-        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[]).unwrap_err();
+        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert!(error.to_string().contains("expected 1 operand"), "{error}");
 
         let core_input = r#"core.module @test {
@@ -4781,7 +4817,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(core_input);
-        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[]).unwrap_err();
+        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert!(
             error
                 .to_string()
@@ -4795,7 +4832,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(post_input);
-        let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+        let error =
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -4813,7 +4851,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(malformed_delimiter);
-        let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+        let error =
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(error.to_string().contains("requires an evidence operand"));
     }
 
@@ -4823,7 +4862,8 @@ mod tests {
   !nested = core.tuple(closure.closure(func.func_sig<(tribute_control.resume_token(core.i32, core.i32)) -> core.i32>))
 }"#;
         let (ctx, module) = parse(input);
-        let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+        let error =
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(error.to_string().contains("forbidden type"), "{error}");
     }
 
@@ -4833,7 +4873,8 @@ mod tests {
   !nested = core.tuple(func.func_sig<(core.i32) -> core.i32>)
 }"#;
         let (ctx, module) = parse(input);
-        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[]).unwrap_err();
+        let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert!(error.to_string().contains("forbidden type"), "{error}");
     }
 
@@ -4944,7 +4985,8 @@ mod tests {
         ];
         for (input, expected) in malformed {
             let (ctx, module) = parse(input);
-            let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+            let error =
+                verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
         }
     }
@@ -4963,7 +5005,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(dispatcher_input);
-        let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+        let error =
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(
             error
                 .to_string()
@@ -4987,7 +5030,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(wrong_abi_input);
-        let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+        let error =
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         let text = error.to_string();
         assert!(
             text.contains("tail-resumptive dispatcher has the wrong"),
@@ -5011,7 +5055,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(wrong_metadata_input);
-        let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+        let error =
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         let text = error.to_string();
         assert!(text.contains("calling convention metadata 1"), "{text}");
         assert!(text.contains("calling convention metadata 2"), "{text}");
@@ -5022,7 +5067,8 @@ mod tests {
   }
 }"#;
         let (ctx, module) = parse(residual_input);
-        let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+        let error =
+            verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
         assert!(error.to_string().contains("residual tribute_control.func"));
     }
 
@@ -5085,7 +5131,14 @@ mod tests {
             vec![i32_type],
             i32_type,
         )];
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
         let mut perform_resume = None;
         fn find_perform_resume(ctx: &IrContext, op: OpRef, found: &mut Option<ValueRef>) {
             if let Ok(perform) = ability::Perform::from_op(ctx, op) {
@@ -5235,7 +5288,14 @@ mod tests {
                 i32_type,
             ),
         ];
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
 
         let mut delimiters = Vec::new();
         fn collect_delimiters(ctx: &IrContext, op: OpRef, found: &mut Vec<OpRef>) {
@@ -5333,7 +5393,14 @@ mod tests {
             vec![i32_type],
             i32_type,
         )];
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("scf.if"));
         assert!(printed.contains(" : core.never"));
@@ -5402,7 +5469,14 @@ mod tests {
                 i32_type,
             ),
         ];
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
         let printed = print_module(&ctx, module.op());
         let scf_ifs: Vec<_> = printed
             .lines()
@@ -5563,7 +5637,14 @@ mod tests {
             [i32_type],
             i32_type,
         )];
-        let error = tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap_err();
+        let error = tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
             error
@@ -5588,7 +5669,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("__tribute_func_ref_adapter"));
         assert!(printed.contains("closure.new"));
@@ -5626,8 +5707,8 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
-        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert_eq!(
             printed
@@ -5653,7 +5734,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
             error
@@ -5681,7 +5763,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
             error
@@ -5713,7 +5796,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
             error
@@ -5744,7 +5828,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(
             error
@@ -5768,7 +5853,8 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap_err();
+        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
+            .unwrap_err();
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(error.to_string().contains("core.ptr cast chain"), "{error}");
         assert_eq!(print_module(&ctx, module.op()), before);
@@ -5798,7 +5884,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        tribute_control_to_cps(&mut ctx, module, &[], &[]).unwrap();
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
         assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
         assert!(printed.contains("effect.fresh_prompt_tag"));
@@ -5841,7 +5927,14 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let declarations = operation_declarations(&ctx, &[("State", "get")]);
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
         assert_nested_resume_frames(&print_module(&ctx, module.op()));
     }
 
@@ -5880,7 +5973,14 @@ mod tests {
 }"#;
         let (mut ctx, module) = parse(input);
         let declarations = operation_declarations(&ctx, &[("State", "get"), ("Console", "read")]);
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
         assert_nested_resume_frames(&print_module(&ctx, module.op()));
     }
     #[test]
@@ -5936,7 +6036,14 @@ mod tests {
             vec![i32_type],
             never_type,
         )];
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
         let mut perform = None;
         fn find_perform(ctx: &IrContext, op: OpRef, found: &mut Option<ability::Perform>) {
             if let Ok(candidate) = ability::Perform::from_op(ctx, op) {
@@ -6062,7 +6169,14 @@ mod tests {
             vec![i32_type],
             i32_type,
         )];
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("ability.call"));
         assert!(!printed.contains("ability.perform"));
@@ -6141,7 +6255,14 @@ mod tests {
             vec![i32_type],
             i32_type,
         )];
-        tribute_control_to_cps(&mut ctx, module, &declarations, &[]).unwrap();
+        tribute_control_to_cps(
+            &mut ctx,
+            module,
+            &declarations,
+            &[],
+            &mut Default::default(),
+        )
+        .unwrap();
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("scf.switch"));
         assert!(printed.contains("scf.case"));
@@ -6167,14 +6288,15 @@ mod shared_contract_boundary_regressions {
         }";
         let mut ctx = trunk_ir::IrContext::new();
         let module = trunk_ir::parser::parse_test_module(&mut ctx, valid);
-        verify_tribute_control_post_cps(&ctx, module).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
         for (from, to, expected) in [
             ("} : core.i32", "} : core.nil", "call result list mismatch"),
             ("func.return %x", "func.return", "return count mismatch"),
         ] {
             let mut ctx = trunk_ir::IrContext::new();
             let module = trunk_ir::parser::parse_test_module(&mut ctx, &valid.replace(from, to));
-            let error = verify_tribute_control_post_cps(&ctx, module).unwrap_err();
+            let error =
+                verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
             assert!(error.to_string().contains(expected), "{error}");
         }
     }

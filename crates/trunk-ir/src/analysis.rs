@@ -23,24 +23,25 @@
 //!
 //! An [`AnalysisCache`] is owned by the **pipeline orchestrator** for
 //! the duration of one pipeline phase and **injected** into each pass
-//! that needs it. The cache is short-lived — dropped when the phase
-//! returns. Reusing a cache with another [`IrContext`] discards the prior
-//! context's results before lookup.
+//! and boundary check that needs it. The cache is short-lived — dropped
+//! when the phase returns. Reusing a cache with another [`IrContext`]
+//! discards the prior context's results before lookup.
 //!
-//! The [`AnalysisCache::scope`] helper bundles this pattern:
+//! [`PassManager::run`](crate::pass::PassManager::run) hands the phase's
+//! cache to every [`Pass`](crate::pass::Pass). Consumers outside a pass
+//! manager take it as a parameter:
 //!
 //! ```ignore
-//! fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
-//!     AnalysisCache::scope(ctx, |ctx, analyses| {
-//!         inline_functions(ctx, m, InlineConfig::default(), analyses);
-//!         // canonicalize(ctx, m, analyses); — future pass sharing `analyses`
-//!     });
+//! fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCache) {
+//!     eliminate_dead_functions(ctx, m, analyses);
+//!     function_pm.run(ctx, m.into(), analyses)?;
 //! }
 //! ```
 //!
-//! [`AnalysisCache::new`] is also available for tests or ad-hoc use,
-//! but orchestration code should prefer `scope` to make the phase
-//! boundary explicit.
+//! Since the cache discards its results after any IR change, sharing it is
+//! always safe; it saves work where consumers read unchanged IR back to
+//! back, such as the checks at a phase boundary. The [`AnalysisCache::scope`]
+//! helper bundles a cache with a closure for a self-contained phase.
 //!
 //! # Usage
 //!
@@ -208,6 +209,14 @@ pub trait Analysis: Any + Send + Sync {
         Self: Sized;
 }
 
+/// An [`Analysis`] whose computation never fails for a valid target.
+///
+/// Implementing this trait promises that [`Analysis::compute`] returns `Ok`
+/// whenever its target satisfies the analysis contract, and that the
+/// analysis depends on no fallible analysis. [`AnalysisCache::require`] then
+/// returns the result directly.
+pub trait InfallibleAnalysis: Analysis {}
+
 /// Read-only IR access and dependent-analysis lookup for one computation.
 ///
 /// A context is created only while one [`Analysis::compute`] call is active.
@@ -357,6 +366,17 @@ impl AnalysisCache {
         self.replace_dependencies(key, dependencies);
         self.cache.insert(key, entry);
         Ok(analysis)
+    }
+
+    /// Compute (or return cached) infallible analysis `A` for `target`.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the computation fails anyway, which breaks the
+    /// [`InfallibleAnalysis`] promise of `A`.
+    pub fn require<A: InfallibleAnalysis>(&mut self, ctx: &IrContext, target: OpRef) -> Arc<A> {
+        self.get(ctx, target)
+            .unwrap_or_else(|error| panic!("infallible analysis failed: {error}"))
     }
 
     /// Return the cached analysis `A` for `target` without computing it.

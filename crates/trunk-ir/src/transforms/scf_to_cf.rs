@@ -64,7 +64,7 @@ pub fn lower_scf_to_cf_func(ctx: &mut IrContext, func: func::Func) {
 
 /// Build a function-anchored SCF-to-CF lowering pass.
 pub fn scf_to_cf_pass() -> impl Pass<Target = func::Func> {
-    pass_fn("scf-to-cf-func", |ctx, target| {
+    pass_fn("scf-to-cf-func", |ctx, target, _analyses| {
         lower_scf_to_cf_func(ctx, target);
         Ok(())
     })
@@ -1071,7 +1071,9 @@ mod tests {
         let before = crate::printer::print_module(&ctx, module.op());
         let func = func::Func::from_op(&ctx, func_op).unwrap();
 
-        scf_to_cf_pass().run(&mut ctx, func).unwrap();
+        scf_to_cf_pass()
+            .run(&mut ctx, func, &mut Default::default())
+            .unwrap();
 
         assert!(func.body_if_present(&ctx).is_none());
         assert!(ctx.op(func_op).regions.is_empty());
@@ -1348,7 +1350,7 @@ mod tests {
             .collect();
         assert_eq!(returns, vec![vec![args[1]], vec![args[2]]]);
         assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
-        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+        assert!(crate::validation::validate_all(&ctx, module, &mut Default::default()).is_ok());
     }
 
     #[test]
@@ -1390,7 +1392,7 @@ mod tests {
             .collect();
         assert_eq!(returns, vec![vec![args[2]], vec![args[3]], vec![args[4]]]);
         assert_eq!(count_blocks(&ctx, function.body(&ctx)), 5);
-        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+        assert!(crate::validation::validate_all(&ctx, module, &mut Default::default()).is_ok());
     }
 
     #[test]
@@ -1423,7 +1425,7 @@ mod tests {
         assert_eq!(returns.len(), 1);
         assert!(ctx.op_operands(returns[0]).is_empty());
         assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
-        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+        assert!(crate::validation::validate_all(&ctx, module, &mut Default::default()).is_ok());
     }
 
     #[test]

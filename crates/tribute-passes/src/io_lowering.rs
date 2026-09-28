@@ -1,5 +1,6 @@
 //! Lower embedded standard-library I/O intrinsics to the shared I/O dialect.
 
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
@@ -23,7 +24,12 @@ impl Pass for LowerIoIntrinsics {
         "lower-io-intrinsics"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         let applicator = PatternApplicator::new(TypeConverter::new())
             .add_pattern(IoCallPattern)
             .add_pattern(IoDeclarationPattern);
@@ -131,7 +137,9 @@ mod tests {
         );
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
 
-        LowerIoIntrinsics.run(&mut ctx, core).unwrap();
+        LowerIoIntrinsics
+            .run(&mut ctx, core, &mut Default::default())
+            .unwrap();
 
         let output = print_module(&ctx, module.op());
         assert!(output.contains("tribute_io.write"), "{output}");
@@ -162,7 +170,9 @@ mod tests {
         );
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
 
-        LowerIoIntrinsics.run(&mut ctx, core).unwrap();
+        LowerIoIntrinsics
+            .run(&mut ctx, core, &mut Default::default())
+            .unwrap();
 
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("tribute_io."), "{output}");

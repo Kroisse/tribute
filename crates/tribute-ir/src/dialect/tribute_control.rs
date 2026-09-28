@@ -9,6 +9,7 @@ use std::fmt;
 use std::ops::ControlFlow;
 
 use itertools::Itertools;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
@@ -1739,8 +1740,12 @@ fn validate_symbol_use(
 }
 
 /// Resolve every function reference in the module tree by root-qualified name.
-fn validate_module_symbols(ctx: &IrContext, module: Module, errors: &mut Vec<ValidationError>) {
-    let funcs = SymbolTable::collect(ctx, module);
+fn validate_module_symbols(
+    ctx: &IrContext,
+    module: Module,
+    funcs: &SymbolTable,
+    errors: &mut Vec<ValidationError>,
+) {
     for (symbol, ops) in funcs.duplicates() {
         for &op in &ops[1..] {
             push_op_error(
@@ -1751,7 +1756,7 @@ fn validate_module_symbols(ctx: &IrContext, module: Module, errors: &mut Vec<Val
             );
         }
     }
-    validate_symbol_uses(ctx, module, &funcs, errors);
+    validate_symbol_uses(ctx, module, funcs, errors);
 }
 
 fn collect_external_references(
@@ -2398,20 +2403,15 @@ fn verified_callable_declaration(
 fn validate_callable_origins(
     ctx: &IrContext,
     body: RegionRef,
+    functions: &SymbolTable,
     declarations: &[CompilerIntrinsicDeclaration],
     operation_declarations: &HashMap<(TypeRef, Symbol), &OperationDeclaration>,
     nominal_layouts: &HashMap<Symbol, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
     let registered = compiler_intrinsic_map(ctx, declarations, errors);
-    let functions = ctx
-        .region(body)
-        .parent_op
-        .and_then(|module| Module::new(ctx, module))
-        .map(|module| SymbolTable::collect(ctx, module))
-        .unwrap_or_default();
     let provenance = CallableProvenance {
-        functions: &functions,
+        functions,
         registered: &registered,
         declarations: operation_declarations,
         nominal_layouts,
@@ -2990,11 +2990,27 @@ pub fn validate_whole_ir(
     declarations: &[OperationDeclaration],
     compiler_intrinsics: &[CompilerIntrinsicDeclaration],
 ) -> ValidationResult {
+    whole_ir(
+        ctx,
+        module,
+        &SymbolTable::collect(ctx, module),
+        declarations,
+        compiler_intrinsics,
+    )
+}
+
+fn whole_ir(
+    ctx: &IrContext,
+    module: Module,
+    symbols: &SymbolTable,
+    declarations: &[OperationDeclaration],
+    compiler_intrinsics: &[CompilerIntrinsicDeclaration],
+) -> ValidationResult {
     let mut errors = Vec::new();
     let Some(body) = module.body(ctx) else {
         return ValidationResult { errors };
     };
-    validate_module_symbols(ctx, module, &mut errors);
+    validate_module_symbols(ctx, module, symbols, &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(declarations, &mut errors);
     let reachable_types = collect_reachable_ir_types(ctx, module.op());
@@ -3010,6 +3026,7 @@ pub fn validate_whole_ir(
     validate_callable_origins(
         ctx,
         body,
+        symbols,
         compiler_intrinsics,
         &declarations,
         &nominal_layouts,
@@ -3026,16 +3043,19 @@ pub fn validate_whole_ir(
 ///
 /// The caller supplies resolved source operation declarations because those
 /// declarations are frontend semantic metadata rather than TrunkIR operations.
+/// The [`SymbolTable`] is queried through `analyses`.
 pub fn validate(
     ctx: &IrContext,
     module: Module,
     declarations: &[OperationDeclaration],
     compiler_intrinsics: &[CompilerIntrinsicDeclaration],
+    analyses: &mut AnalysisCache,
 ) -> ValidationResult {
+    let symbols = analyses.require::<SymbolTable>(ctx, module.op());
     let mut local = validate_local(ctx, module);
     local
         .errors
-        .extend(validate_whole_ir(ctx, module, declarations, compiler_intrinsics).errors);
+        .extend(whole_ir(ctx, module, &symbols, declarations, compiler_intrinsics).errors);
     local
 }
 
@@ -3685,7 +3705,13 @@ mod tests {
     #[test]
     fn generic_control_operations_round_trip_and_validate() {
         let fixture = valid_fixture();
-        let result = validate(&fixture.ctx, fixture.module, &fixture.declarations, &[]);
+        let result = validate(
+            &fixture.ctx,
+            fixture.module,
+            &fixture.declarations,
+            &[],
+            &mut Default::default(),
+        );
         assert!(result.is_ok(), "{result}");
 
         let printed = assert_round_trip(&fixture.ctx, fixture.module);
@@ -4435,7 +4461,7 @@ mod tests {
                 .get_type("operation_result_type")
                 .unwrap(),
         )];
-        let result = validate(&ctx, module, &declarations, &[]);
+        let result = validate(&ctx, module, &declarations, &[], &mut Default::default());
         let messages = messages(&result);
         assert!(messages.contains("duplicate handler clause"));
         assert!(messages.contains("kind does not match the resolved declaration"));
@@ -4895,17 +4921,32 @@ mod tests {
             Symbol::new("Nat::+"),
             func_sig_type,
         );
-        assert!(validate(&ctx, module, &[], std::slice::from_ref(&exact)).is_ok());
+        assert!(
+            validate(
+                &ctx,
+                module,
+                &[],
+                std::slice::from_ref(&exact),
+                &mut Default::default()
+            )
+            .is_ok()
+        );
 
         let wrong_signature = CompilerIntrinsicDeclaration::new(
             exact.symbol,
             exact.identity,
             ctx.get_type(func_sig_type).params[0],
         );
-        let result = validate(&ctx, module, &[], &[wrong_signature]);
+        let result = validate(
+            &ctx,
+            module,
+            &[],
+            &[wrong_signature],
+            &mut Default::default(),
+        );
         assert!(messages(&result).contains("complete signature"), "{result}");
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("unregistered declaration"),
             "{result}"
@@ -4928,7 +4969,7 @@ mod tests {
             func_sig_type,
         );
 
-        let result = validate(&ctx, module, &[], &[declaration]);
+        let result = validate(&ctx, module, &[], &[declaration], &mut Default::default());
         assert!(
             messages(&result).contains("must use Direct calling convention"),
             "{result}"
@@ -4960,7 +5001,7 @@ mod tests {
             func_sig_type,
         );
 
-        let result = validate(&ctx, module, &[], &[declaration]);
+        let result = validate(&ctx, module, &[], &[declaration], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -4992,7 +5033,13 @@ mod tests {
         let nat = declaration(Symbol::new("Nat::+"));
         let int = declaration(Symbol::new("Int::+"));
 
-        let result = validate(&ctx, module, &[], &[nat.clone(), int, nat]);
+        let result = validate(
+            &ctx,
+            module,
+            &[],
+            &[nat.clone(), int, nat],
+            &mut Default::default(),
+        );
         let diagnostics = messages(&result);
         assert!(
             diagnostics.contains("not deterministically ordered"),
@@ -5031,7 +5078,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(
             diagnostics.contains("requires nominal name metadata"),
@@ -5065,7 +5112,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5085,7 +5132,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("bodyless external"), "{result}");
         assert!(diagnostics.contains("core.ptr cast chain"), "{result}");
@@ -5103,7 +5150,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5116,7 +5163,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5135,7 +5182,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("compatible managed nominal reference types"),
             "{result}"
@@ -5154,7 +5201,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"
@@ -5180,7 +5227,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"
@@ -5211,7 +5258,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5255,7 +5302,7 @@ mod tests {
             operation_result,
         );
 
-        let result = validate(&ctx, module, &[declaration], &[]);
+        let result = validate(&ctx, module, &[declaration], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5279,7 +5326,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5303,7 +5350,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert_eq!(
             messages(&result).matches("callable provenance").count(),
             2,
@@ -5328,7 +5375,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("nominal layout @Tuple is declared more than once"));
         assert!(diagnostics.contains("callable provenance"), "{result}");
@@ -5346,7 +5393,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5364,7 +5411,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut Default::default());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"

@@ -12,7 +12,7 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
-use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
+use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
 use crate::dialect::func;
 use crate::ops::DialectOp;
@@ -104,6 +104,9 @@ impl Analysis for CallGraph {
         Ok(call_graph_over(ctx.ir(), &symbols))
     }
 }
+
+/// Depends only on the infallible [`SymbolTable`].
+impl InfallibleAnalysis for CallGraph {}
 
 /// Compute the SCC id for every function in the call graph using Tarjan's algorithm.
 ///
@@ -414,7 +417,7 @@ mod tests {
         let caller = func_that_calls(&mut ctx, loc, "caller", &["leaf"]);
         let module = build_module(&mut ctx, loc, vec![leaf, other, caller]);
         let mut analyses = AnalysisCache::new();
-        let old = analyses.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let old = analyses.require::<CallGraph>(&ctx, module.op());
         assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
 
         let body = ctx.op(caller).regions[0];
@@ -429,7 +432,7 @@ mod tests {
                 .get_cached::<CallGraph>(&ctx, module.op())
                 .is_none()
         );
-        let fresh = analyses.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let fresh = analyses.require::<CallGraph>(&ctx, module.op());
         assert_eq!(fresh.call_site_count.get(&Symbol::new("leaf")), None);
         assert_eq!(fresh.call_site_count.get(&Symbol::new("other")), Some(&1));
         assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
@@ -515,7 +518,7 @@ mod tests {
         let direct = build_call_graph(&ctx, module);
 
         let mut am = AnalysisCache::new();
-        let cached = am.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let cached = am.require::<CallGraph>(&ctx, module.op());
 
         assert_eq!(direct.func_ops.len(), cached.func_ops.len());
         assert_eq!(direct.edges.len(), cached.edges.len());
@@ -526,7 +529,7 @@ mod tests {
         assert!(cached.edges.contains_key(&Symbol::new("main")));
 
         // Second call should hit the cache.
-        let cached2 = am.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let cached2 = am.require::<CallGraph>(&ctx, module.op());
         assert!(std::sync::Arc::ptr_eq(&cached, &cached2));
     }
 

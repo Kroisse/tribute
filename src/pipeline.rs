@@ -70,6 +70,7 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use tribute_front::source_file::parse_with_rope;
 use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::conversion::{
     UnrealizedCastConversionPattern, materialize_unrealized_casts, reconcile_unrealized_casts,
 };
@@ -819,7 +820,7 @@ pub fn run_through_cps_lowering(
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
-    pm.run(&mut ctx, core_module)?;
+    pm.run(&mut ctx, core_module, &mut Default::default())?;
     Ok(Some((ctx, m)))
 }
 
@@ -872,8 +873,11 @@ fn run_shared_pipeline(
     // Registration order == execution order.
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
+    // One cache for the phase: every pass and boundary check reuses analyses
+    // of unchanged IR, and any IR change discards them.
+    let mut analyses = AnalysisCache::new();
     let mut structural_pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
-    structural_pm.run(&mut ctx, core_module)?;
+    structural_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     // CPS effect handling, function-local phase: lower_ability_perform produces
     // explicit effect dispatches; evidence resolution then extends handler scopes.
@@ -882,12 +886,12 @@ fn run_shared_pipeline(
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform);
     install_debug_verifier(&mut ability_pm);
-    ability_pm.run(&mut ctx, core_module)?;
+    ability_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     let mut evidence_pm = PassManager::new();
     evidence_pm.add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch);
     install_debug_verifier(&mut evidence_pm);
-    evidence_pm.run(&mut ctx, core_module)?;
+    evidence_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     // Final function-local ability conversion. This consumes handle_dispatch ops
     // after resolve_evidence expands evidence setup.
@@ -896,7 +900,7 @@ fn run_shared_pipeline(
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_handle_dispatch::LowerHandleDispatch);
     install_debug_verifier(&mut ability_boundary_pm);
-    ability_boundary_pm.run(&mut ctx, core_module)?;
+    ability_boundary_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     Ok(Some((ctx, m)))
 }
@@ -932,7 +936,7 @@ fn install_debug_verifier(pm: &mut PassManager) {
     // The verifier only reports; the PassManager returns the offending pass's
     // name with the verification error. Compiled out in release.
     if cfg!(debug_assertions) {
-        pm.with_verifier(|ctx, op| {
+        pm.with_verifier(|ctx, _analyses, op| {
             let Some(module) = enclosing_module(ctx, op) else {
                 return Ok(());
             };
@@ -1012,8 +1016,8 @@ fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
 
 /// Run inlining + DCE + cast materialization (shared cleanup after all lowering).
 ///
-fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
-    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m);
+fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCache) {
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, analyses);
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
@@ -1022,7 +1026,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
                 trunk_ir::transforms::DceConfig::default(),
             ));
         install_debug_verifier(&mut pm);
-        if let Err(error) = pm.run(ctx, core_module) {
+        if let Err(error) = pm.run(ctx, core_module, analyses) {
             tracing::warn!("cleanup function passes failed: {error}");
         }
     } else {
@@ -1039,16 +1043,16 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module) {
 fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     debug_validate_value_integrity(ctx, m, "before Wasm target lowering");
 
+    let mut analyses = AnalysisCache::new();
+
     // General function inlining. The pass is single-block-only and cf-free,
     // so its output stays within dialects WASM lowering already handles.
-    trunk_ir::analysis::AnalysisCache::scope(ctx, |ctx, analyses| {
-        trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
-    });
+    trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
 
-    enter_target_closure_storage_boundary(ctx, m)?;
+    enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
 
-    run_cleanup_passes(ctx, m);
+    run_cleanup_passes(ctx, m, &mut analyses);
     debug_observe_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Wasm);
     Ok(())
 }
@@ -1061,11 +1065,10 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     // dependency), so it preserves the caller's block structure. That
     // keeps `evidence_to_native`'s per-block producer/consumer correlation
     // assumptions intact, and lets the same pass work on both backend paths.
-    trunk_ir::analysis::AnalysisCache::scope(ctx, |ctx, analyses| {
-        trunk_ir::transforms::inline::inline_functions(ctx, m, analyses);
-    });
+    let mut analyses = AnalysisCache::new();
+    trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
 
-    enter_target_closure_storage_boundary(ctx, m)?;
+    enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
 
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         tribute_passes::native::evidence::prepare_native_evidence_runtime(ctx, m);
@@ -1073,14 +1076,14 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         pm.nest::<func_dialect::Func>()
             .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
         install_debug_verifier(&mut pm);
-        pm.run(ctx, core_module)?;
+        pm.run(ctx, core_module, &mut analyses)?;
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     }
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
     debug_validate_value_integrity(ctx, m, "after evidence_to_native");
 
-    run_cleanup_passes(ctx, m);
+    run_cleanup_passes(ctx, m, &mut analyses);
     debug_observe_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Native);
     Ok(())
 }
@@ -1108,6 +1111,7 @@ fn debug_observe_boundary_exit(
 fn enter_target_closure_storage_boundary(
     ctx: &mut IrContext,
     m: Module,
+    analyses: &mut AnalysisCache,
 ) -> Result<(), DumpIrError> {
     tribute_passes::target_abi::lower_cps_signatures_to_physical(ctx, m)?;
     tribute_passes::target_abi::compose_root_entry_bridge(ctx, m)?;
@@ -1116,7 +1120,7 @@ fn enter_target_closure_storage_boundary(
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
     install_debug_verifier(&mut pm);
-    pm.run(ctx, core_module)?;
+    pm.run(ctx, core_module, analyses)?;
     Ok(())
 }
 
@@ -1257,6 +1261,7 @@ fn prepare_module_to_native(
     stop_after: Option<NativePipelineStage>,
 ) -> NativeCompilationResult<Option<Vec<RodataEntry>>> {
     let _span = tracing::info_span!("prepare_module_to_native").entered();
+    let mut analyses = AnalysisCache::new();
 
     // Phase -1 - Generate native entrypoint
     tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, module, sanitize);
@@ -1285,7 +1290,8 @@ fn prepare_module_to_native(
         pm.nest::<func_dialect::Func>()
             .add_pass(trunk_ir::transforms::scf_to_cf_pass());
         install_debug_verifier(&mut pm);
-        pm.run(ctx, core_module).map_err(native_pass_failure)?;
+        pm.run(ctx, core_module, &mut analyses)
+            .map_err(native_pass_failure)?;
     } else {
         trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
     }
@@ -1297,17 +1303,16 @@ fn prepare_module_to_native(
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         let plan_options = native_ownership_plan_options(stop_after, optimizations);
-        ownership_plan = trunk_ir::analysis::AnalysisCache::scope(ctx, |ctx, analyses| {
+        ownership_plan =
             tribute_passes::native::ownership_plan::build_native_ownership_plan_with_analyses(
                 ctx,
                 module,
                 plan_options,
-                analyses,
+                &mut analyses,
             )
-        })
-        .map_err(|error| {
-            trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
-        })?;
+            .map_err(|error| {
+                trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
+            })?;
         tribute_passes::native::rc_materialization::materialize(ctx, module, &ownership_plan)
             .map_err(|error| {
                 trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
@@ -1876,7 +1881,7 @@ mod tests {
     #[test]
     fn source_logical_root_defers_closure_storage_until_target_finalization() {
         let (mut ctx, module) = source_logical_cps_root_module("func.unreachable");
-        enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
+        enter_target_closure_storage_boundary(&mut ctx, module, &mut Default::default()).unwrap();
         let after_abi = trunk_ir::printer::print_module(&ctx, module.op());
         assert!(after_abi.contains("closure.closure"), "{after_abi}");
 
@@ -1975,7 +1980,7 @@ mod tests {
             effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.nil}
         "#,
         );
-        enter_target_closure_storage_boundary(&mut ctx, module).unwrap();
+        enter_target_closure_storage_boundary(&mut ctx, module, &mut Default::default()).unwrap();
         tribute_passes::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
         let binary = compile_to_wasm(&mut ctx, module).unwrap_or_else(|error| {
             panic!(
@@ -2615,7 +2620,7 @@ fn main() {
         let mut pm = PassManager::new();
         pm.add_pass(trunk_ir::pass::pass_fn(
             "break-use-chain",
-            |ctx: &mut IrContext, module: core_dialect::Module| {
+            |ctx: &mut IrContext, module: core_dialect::Module, _analyses: &mut AnalysisCache| {
                 let module_block = ctx.region(module.body(ctx)).blocks[0];
                 let func_op = ctx.block(module_block).ops[0];
                 let func_region = ctx.op(func_op).regions[0];
@@ -2640,7 +2645,9 @@ fn main() {
         ));
         install_debug_verifier(&mut pm);
 
-        let error = pm.run(&mut ctx, core_module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, core_module, &mut Default::default())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "break-use-chain");
         assert!(
@@ -2672,7 +2679,7 @@ fn main() {
         let mut pm = PassManager::new();
         pm.add_pass(trunk_ir::pass::pass_fn(
             "break-schema",
-            |ctx: &mut IrContext, module: core_dialect::Module| {
+            |ctx: &mut IrContext, module: core_dialect::Module, _analyses: &mut AnalysisCache| {
                 let module_block = ctx.region(module.body(ctx)).blocks[0];
                 let func_op = ctx.block(module_block).ops[0];
                 let func_block = ctx.region(ctx.op(func_op).regions[0]).blocks[0];
@@ -2687,7 +2694,9 @@ fn main() {
         ));
         install_debug_verifier(&mut pm);
 
-        let error = pm.run(&mut ctx, core_module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, core_module, &mut Default::default())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "break-schema");
         let message = error.to_string();
@@ -3336,6 +3345,7 @@ fn main() {}
                     logical.module,
                     &logical.operation_declarations,
                     &logical.compiler_intrinsics,
+                    &mut Default::default(),
                 )
                 .unwrap();
             }
@@ -3460,6 +3470,7 @@ fn main() {}
                     logical.module,
                     &logical.operation_declarations,
                     &logical.compiler_intrinsics,
+                    &mut Default::default(),
                 )
                 .expect("CPS converts published layout fields");
             }
@@ -3556,6 +3567,7 @@ fn main() {}
             logical.module,
             &logical.operation_declarations,
             &logical.compiler_intrinsics,
+            &mut Default::default(),
         );
         assert!(validation.is_ok(), "{validation}");
     }

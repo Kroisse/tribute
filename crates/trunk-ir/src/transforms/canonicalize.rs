@@ -327,7 +327,7 @@ pub fn canonicalize<S: RewriteScope>(ctx: &mut IrContext, scope: S) -> Canonical
 
 /// Build a function-anchored canonicalization pass.
 pub fn canonicalize_pass() -> impl Pass<Target = func::Func> {
-    pass_fn("canonicalize-func", |ctx, target| {
+    pass_fn("canonicalize-func", |ctx, target, _analyses| {
         let result = canonicalize(ctx, target);
         if !result.reached_fixpoint {
             tracing::warn!(

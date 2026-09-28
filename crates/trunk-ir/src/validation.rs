@@ -20,6 +20,7 @@ use std::fmt;
 use cranelift_entity::EntitySet;
 use derive_more::{Display, Error};
 
+use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::op_def::OpDef;
 use super::op_interface::{
@@ -29,6 +30,7 @@ use super::op_interface::{
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
+use super::symbol_table::SymbolTable;
 use super::walk;
 
 use crate::Symbol;
@@ -564,6 +566,10 @@ fn check_value_types(
 /// `validate_operation_verifiers`. An undeclared runtime symbol has no known
 /// signature, but never exempts other fully typed contracts from validation.
 pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> ValidationResult {
+    function_contracts(ctx, module, &SymbolTable::collect(ctx, module))
+}
+
+fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) -> ValidationResult {
     use crate::dialect::func;
     use crate::ops::DialectOp;
     let mut errors = Vec::new();
@@ -573,7 +579,6 @@ pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> Validatio
     // References name their targets by root-qualified path. None is genuinely
     // undeclared. A found but invalid or duplicated declaration is Some(None),
     // so compatibility cannot hide malformed known contracts.
-    let symbols = crate::symbol_table::SymbolTable::collect(ctx, module);
     let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
         let found = *symbols.definitions_of(name).first()?;
         if symbols.resolve(name).is_none() || !func::Func::matches(ctx, found) {
@@ -1254,14 +1259,22 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 /// Local shapes and contextual contracts are separate checks. Known direct
 /// callees, exact indirect signatures and registered return/tail owners are
 /// checked here; undeclared runtime calls do not invent a signature.
-pub fn validate_all(ctx: &IrContext, module: Module) -> ValidationResult {
+///
+/// Shared analyses such as the [`SymbolTable`] are queried through
+/// `analyses`.
+pub fn validate_all(
+    ctx: &IrContext,
+    module: Module,
+    analyses: &mut AnalysisCache,
+) -> ValidationResult {
     let scope = validate_value_integrity(ctx, module);
     let uses = validate_use_chains(ctx, module);
     let ops = validate_operation_verifiers(ctx, module);
     let mut errors = scope.errors;
     errors.extend(uses.errors);
     errors.extend(ops.errors);
-    errors.extend(validate_function_contracts(ctx, module).errors);
+    let symbols = analyses.require::<SymbolTable>(ctx, module.op());
+    errors.extend(function_contracts(ctx, module, &symbols).errors);
     ValidationResult { errors }
 }
 
@@ -1273,7 +1286,7 @@ pub fn debug_assert_valid(ctx: &IrContext, module: Module, pass_name: &str) {
     if !cfg!(debug_assertions) {
         return;
     }
-    let result = validate_all(ctx, module);
+    let result = validate_all(ctx, module, &mut Default::default());
     if !result.is_ok() {
         panic!("Arena validation failed after `{}`:\n{}", pass_name, result,);
     }
@@ -1357,7 +1370,7 @@ mod tests {
             "core.module @m { func.func @f() { func.return } }",
         );
         ctx.op_mut(module.op()).attributes.remove("sym_name");
-        let text = validate_all(&ctx, module).to_string();
+        let text = validate_all(&ctx, module, &mut Default::default()).to_string();
         assert!(
             text.contains("core.module") && text.contains("missing required attribute `sym_name`"),
             "{text}"
@@ -1463,7 +1476,7 @@ mod tests {
             );
             for result in [
                 validate_operation_verifiers(&ctx, module),
-                validate_all(&ctx, module),
+                validate_all(&ctx, module, &mut Default::default()),
             ] {
                 let messages = operation_error_messages(&result);
                 assert!(
@@ -1483,7 +1496,7 @@ mod tests {
         assert!(func::FuncSig::from_type_ref(&ctx, legacy).is_none());
         for result in [
             validate_operation_verifiers(&ctx, module),
-            validate_all(&ctx, module),
+            validate_all(&ctx, module, &mut Default::default()),
         ] {
             let messages = operation_error_messages(&result);
             assert!(
@@ -2406,14 +2419,14 @@ mod tests {
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
 
         // Validate before RAUW
-        let result = validate_all(&ctx, module);
+        let result = validate_all(&ctx, module, &mut Default::default());
         assert!(result.is_ok(), "Before RAUW: {}", result);
 
         // Replace c0 with c1
         ctx.replace_all_uses(c0_val, c1_val);
 
         // Validate after RAUW
-        let result = validate_all(&ctx, module);
+        let result = validate_all(&ctx, module, &mut Default::default());
         assert!(result.is_ok(), "After RAUW: {}", result);
 
         // Verify c1 now has the uses
@@ -2447,7 +2460,7 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
-        let result = validate_all(&ctx, module);
+        let result = validate_all(&ctx, module, &mut Default::default());
         let text = result.to_string();
         assert!(text.contains("caller/callee result lists differ"), "{text}");
         assert!(
@@ -3698,7 +3711,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
-        let result = validate_all(&ctx, module);
+        let result = validate_all(&ctx, module, &mut Default::default());
         assert!(!result.is_ok());
         assert_eq!(operation_error_messages(&result).len(), 1);
     }

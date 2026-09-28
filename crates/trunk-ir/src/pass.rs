@@ -18,7 +18,7 @@
 //! let mut pm = PassManager::new();
 //! pm.add_pass(MyModulePass);
 //! pm.nest::<func::Func>().add_pass(MyFunctionPass);
-//! pm.run(&mut ctx, root_module)?;
+//! pm.run(&mut ctx, root_module, &mut analyses)?;
 //! ```
 use std::any::Any;
 use std::error::Error;
@@ -26,6 +26,7 @@ use std::ops::ControlFlow;
 
 use derive_more::{Display, Error};
 
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::core;
 use crate::op_interface::IsolatedFromAboveOps;
@@ -39,6 +40,10 @@ use crate::walk::{WalkAction, walk_op};
 /// (counters, caches, accumulated stats) across invocations on different
 /// targets. The [`PassManager`] holds each pass exclusively for the
 /// duration of a [`PassManager::run`] call.
+///
+/// Every pass of one run receives the same [`AnalysisCache`]. The cache
+/// discards its results whenever the IR changes, so a pass may query
+/// analyses without invalidating them itself.
 pub trait Pass {
     /// Op type this pass operates on.
     ///
@@ -50,7 +55,12 @@ pub trait Pass {
 
     fn name(&self) -> &'static str;
 
-    fn run(&mut self, ctx: &mut IrContext, target: Self::Target) -> PassRunResult;
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: Self::Target,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult;
 }
 
 /// [`Pass`] adapter for a named function or closure.
@@ -73,7 +83,7 @@ impl<T, F> FnPass<T, F> {
 impl<T, F> Pass for FnPass<T, F>
 where
     T: DialectOp,
-    F: FnMut(&mut IrContext, T) -> PassRunResult,
+    F: FnMut(&mut IrContext, T, &mut AnalysisCache) -> PassRunResult,
 {
     type Target = T;
 
@@ -81,8 +91,13 @@ where
         self.name
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: T) -> PassRunResult {
-        (self.f)(ctx, target)
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: T,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        (self.f)(ctx, target, analyses)
     }
 }
 
@@ -90,7 +105,7 @@ where
 pub fn pass_fn<T, F>(name: &'static str, f: F) -> FnPass<T, F>
 where
     T: DialectOp,
-    F: FnMut(&mut IrContext, T) -> PassRunResult,
+    F: FnMut(&mut IrContext, T, &mut AnalysisCache) -> PassRunResult,
 {
     FnPass::new(name, f)
 }
@@ -98,15 +113,25 @@ where
 /// Object-safe view of [`Pass`] used inside [`PassManager`] storage.
 trait ErasedPass<T: DialectOp> {
     fn name(&self) -> &'static str;
-    fn run(&mut self, ctx: &mut IrContext, target: T) -> PassRunResult;
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: T,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult;
 }
 
 impl<P: Pass> ErasedPass<P::Target> for P {
     fn name(&self) -> &'static str {
         Pass::name(self)
     }
-    fn run(&mut self, ctx: &mut IrContext, target: P::Target) -> PassRunResult {
-        Pass::run(self, ctx, target)
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: P::Target,
+        analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        Pass::run(self, ctx, target, analyses)
     }
 }
 
@@ -191,7 +216,12 @@ pub type PassResult<T = ()> = Result<T, PassError>;
 /// wrapping [`crate::validation::validate_use_chains`]) so any pass that breaks
 /// an invariant is blamed immediately rather than masked by a later pass; the
 /// [`PassManager`] returns a [`PassError`] with the offending pass's name.
-type VerifierFn = dyn Fn(&IrContext, OpRef) -> Result<(), VerifyError>;
+///
+/// The verifier runs only after a pass that changed the IR, since a pass that
+/// left the IR unchanged cannot have broken an invariant. It receives the
+/// run's [`AnalysisCache`]; it does not change the IR, so analyses it computes
+/// remain cached for the passes that follow.
+type VerifierFn = dyn Fn(&IrContext, &mut AnalysisCache, OpRef) -> Result<(), VerifyError>;
 
 /// Observation-only hook invoked after each pass, mirroring the verifier's
 /// timing and propagation but without a result.
@@ -203,7 +233,8 @@ type InstrumentFn = dyn Fn(&IrContext, &str, OpRef);
 
 /// Post-pass hooks threaded through the dispatch tree: a checking [`VerifierFn`]
 /// and an observation-only [`InstrumentFn`]. Both follow the same timing,
-/// propagation, and stale-target skip rules. Copyable since it only holds
+/// propagation, and stale-target skip rules, except that the verifier skips a
+/// pass that left the IR unchanged. Copyable since it only holds
 /// borrows.
 #[derive(Clone, Copy, Default)]
 struct PostPassHooks<'a> {
@@ -221,6 +252,7 @@ trait NestedRunner: Any {
         &mut self,
         ctx: &mut IrContext,
         parent_op: OpRef,
+        analyses: &mut AnalysisCache,
         hooks: PostPassHooks<'_>,
     ) -> PassResult;
     fn as_any_mut(&mut self) -> &mut dyn Any;
@@ -235,6 +267,7 @@ impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
         &mut self,
         ctx: &mut IrContext,
         parent_op: OpRef,
+        analyses: &mut AnalysisCache,
         hooks: PostPassHooks<'_>,
     ) -> PassResult {
         // Collect targets fresh on each entry so passes that erase or
@@ -247,7 +280,7 @@ impl<T: DialectOp + 'static> NestedRunner for TypedNested<T> {
                 continue;
             }
             ensure_nested_anchor_is_isolated(ctx, target.op_ref())?;
-            self.pm.run_on_target_with(ctx, target, hooks)?;
+            self.pm.run_on_target_with(ctx, target, analyses, hooks)?;
         }
         Ok(())
     }
@@ -363,12 +396,12 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     }
 
     /// Register a verifier callback invoked after each pass on this manager
-    /// and any nested manager. Typical use: in debug builds, install a
+    /// and any nested manager that changed the IR. Typical use: in debug builds, install a
     /// validation routine so a broken invariant is attributed to the pass
     /// that caused it. Replaces any previously installed verifier.
     pub fn with_verifier<F>(&mut self, verifier: F) -> &mut Self
     where
-        F: Fn(&IrContext, OpRef) -> Result<(), VerifyError> + 'static,
+        F: Fn(&IrContext, &mut AnalysisCache, OpRef) -> Result<(), VerifyError> + 'static,
     {
         self.verifier = Some(Box::new(verifier));
         self
@@ -389,7 +422,15 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     /// Run all registered passes (and recursively nested managers) on
     /// `target`. Pass-level ordering is registration order; nested
     /// managers run after the parent's own passes.
-    pub fn run(&mut self, ctx: &mut IrContext, target: Root) -> PassResult {
+    ///
+    /// Every pass and the verifier query `analyses`, typically the cache of
+    /// the enclosing pipeline phase.
+    pub fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: Root,
+        analyses: &mut AnalysisCache,
+    ) -> PassResult {
         // Split-borrow the hooks from `passes`/`nested` so we can hand
         // their references down to nested runners while iterating the pass
         // vec mutably.
@@ -403,7 +444,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             verifier: verifier.as_deref(),
             instrumentation: instrumentation.as_deref(),
         };
-        Self::run_passes(ctx, target, passes, nested, hooks)
+        Self::run_passes(ctx, target, passes, nested, analyses, hooks)
     }
 
     /// Entry point used by nested managers, threading parent-supplied hooks
@@ -412,6 +453,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         &mut self,
         ctx: &mut IrContext,
         target: Root,
+        analyses: &mut AnalysisCache,
         parent: PostPassHooks<'_>,
     ) -> PassResult {
         let Self {
@@ -427,7 +469,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             verifier: verifier.as_deref().or(parent.verifier),
             instrumentation: instrumentation.as_deref().or(parent.instrumentation),
         };
-        Self::run_passes(ctx, target, passes, nested, hooks)
+        Self::run_passes(ctx, target, passes, nested, analyses, hooks)
     }
 
     fn run_passes(
@@ -435,6 +477,7 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         target: Root,
         passes: &mut [Box<dyn ErasedPass<Root>>],
         nested: &mut [Box<dyn NestedRunner>],
+        analyses: &mut AnalysisCache,
         hooks: PostPassHooks<'_>,
     ) -> PassResult {
         // Capture attachment state at entry so we can detect a pass that
@@ -446,7 +489,8 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
         for pass in passes.iter_mut() {
             let span = tracing::debug_span!("pass", name = pass.name());
             let _enter = span.enter();
-            pass.run(ctx, target)
+            let before = ctx.analysis_stamp();
+            pass.run(ctx, target, analyses)
                 .map_err(|failure| PassError::execution(pass.name(), failure))?;
             if !target_still_alive::<Root>(ctx, target.op_ref(), pre_attached) {
                 // The pass erased or retagged its own target. Subsequent
@@ -458,14 +502,15 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
                 inst(ctx, pass.name(), target.op_ref());
             }
             if let Some(v) = hooks.verifier
-                && let Err(e) = v(ctx, target.op_ref())
+                && ctx.analysis_stamp() != before
+                && let Err(e) = v(ctx, analyses, target.op_ref())
             {
                 return Err(PassError::verification(pass.name(), e));
             }
         }
         let parent_op = target.op_ref();
         for n in nested.iter_mut() {
-            n.run(ctx, parent_op, hooks)?;
+            n.run(ctx, parent_op, analyses, hooks)?;
         }
         Ok(())
     }
@@ -554,10 +599,21 @@ mod tests {
         fn name(&self) -> &'static str {
             "recorder"
         }
-        fn run(&mut self, _ctx: &mut IrContext, _target: T) -> PassRunResult {
+        fn run(
+            &mut self,
+            ctx: &mut IrContext,
+            target: T,
+            _analyses: &mut AnalysisCache,
+        ) -> PassRunResult {
             self.order.borrow_mut().push(self.tag);
+            touch(ctx, target.op_ref());
             Ok(())
         }
+    }
+
+    /// Record an IR change on `op`, so the verifier runs after the pass.
+    fn touch(ctx: &mut IrContext, op: OpRef) {
+        ctx.op_mut(op);
     }
 
     fn recorder<T: DialectOp + 'static>(
@@ -583,7 +639,12 @@ mod tests {
             "failing"
         }
 
-        fn run(&mut self, _ctx: &mut IrContext, _target: T) -> PassRunResult {
+        fn run(
+            &mut self,
+            _ctx: &mut IrContext,
+            _target: T,
+            _analyses: &mut AnalysisCache,
+        ) -> PassRunResult {
             self.order.borrow_mut().push("failing");
             Err(Box::new(TestFailure("boom")))
         }
@@ -620,9 +681,15 @@ mod tests {
         fn name(&self) -> &'static str {
             "counting"
         }
-        fn run(&mut self, _ctx: &mut IrContext, _target: T) -> PassRunResult {
+        fn run(
+            &mut self,
+            ctx: &mut IrContext,
+            target: T,
+            _analyses: &mut AnalysisCache,
+        ) -> PassRunResult {
             self.count += 1;
             self.mirror.set(self.count);
+            touch(ctx, target.op_ref());
             Ok(())
         }
     }
@@ -635,7 +702,7 @@ mod tests {
         let count = Rc::new(Cell::new(0));
         let mut pm = PassManager::new();
         pm.add_pass(CountingPass::<core::Module>::new(count.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(count.get(), 1);
     }
@@ -651,17 +718,99 @@ mod tests {
         let seen_name_clone = seen_name.clone();
 
         let mut pm = PassManager::new();
-        pm.add_pass(pass_fn("closure-pass", move |_ctx, _target| {
+        pm.add_pass(pass_fn("closure-pass", move |_ctx, _target, _analyses| {
             count_clone.set(count_clone.get() + 1);
             Ok(())
         }));
         pm.with_instrumentation(move |_ctx, name, _op| {
             seen_name_clone.replace(name.to_string());
         });
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(count.get(), 1);
         assert_eq!(&*seen_name.borrow(), "closure-pass");
+    }
+
+    #[test]
+    fn passes_share_the_run_analysis_cache() {
+        use crate::rewrite::Module;
+        use crate::symbol_table::SymbolTable;
+
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f");
+
+        let observed = Rc::new(Cell::new(0));
+        let observed_in_pass = observed.clone();
+        let mut pm = PassManager::new();
+        pm.add_pass(pass_fn(
+            "compute-symbols",
+            |ctx: &mut IrContext, target: core::Module, analyses: &mut AnalysisCache| {
+                let module = Module::new(ctx, target.op_ref()).expect("module target");
+                analyses.require::<SymbolTable>(ctx, module.op());
+                Ok(())
+            },
+        ));
+        pm.nest::<func::Func>().add_pass(pass_fn(
+            "observe-symbols",
+            move |ctx: &mut IrContext, target: func::Func, analyses: &mut AnalysisCache| {
+                let module = ctx
+                    .op(target.op_ref())
+                    .parent_block
+                    .and_then(|block| ctx.region(ctx.block(block).parent_region?).parent_op);
+                let cached = analyses.get_cached::<SymbolTable>(ctx, module.expect("module"));
+                assert!(cached.is_some(), "unchanged IR keeps the earlier analysis");
+                observed_in_pass.set(observed_in_pass.get() + 1);
+                Ok(())
+            },
+        ));
+        let mut analyses = AnalysisCache::new();
+        pm.run(&mut ctx, module, &mut analyses).unwrap();
+
+        assert_eq!(observed.get(), 1);
+        assert!(
+            analyses
+                .get_cached::<SymbolTable>(&ctx, module.op_ref())
+                .is_some(),
+            "the caller's cache holds the analyses of the run"
+        );
+    }
+
+    #[test]
+    fn verifier_analyses_stay_cached_for_later_passes() {
+        use crate::rewrite::Module;
+        use crate::symbol_table::SymbolTable;
+
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+
+        let observed = Rc::new(Cell::new(0));
+        let observed_in_pass = observed.clone();
+        let mut pm = PassManager::new();
+        pm.add_pass(pass_fn(
+            "change",
+            |ctx: &mut IrContext, target: core::Module, _analyses: &mut AnalysisCache| {
+                touch(ctx, target.op_ref());
+                Ok(())
+            },
+        ))
+        .add_pass(pass_fn(
+            "observe-symbols",
+            move |ctx: &mut IrContext, target: core::Module, analyses: &mut AnalysisCache| {
+                let cached = analyses.get_cached::<SymbolTable>(ctx, target.op_ref());
+                assert!(cached.is_some(), "the verifier's analysis is still cached");
+                observed_in_pass.set(observed_in_pass.get() + 1);
+                Ok(())
+            },
+        ));
+        pm.with_verifier(|ctx, analyses, op| {
+            let module = Module::new(ctx, op).expect("module target");
+            analyses.require::<SymbolTable>(ctx, module.op());
+            Ok(())
+        });
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
+
+        assert_eq!(observed.get(), 1);
     }
 
     #[test]
@@ -676,7 +825,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(count.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(count.get(), 3);
     }
@@ -690,7 +839,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(count.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(count.get(), 0);
     }
@@ -706,7 +855,7 @@ mod tests {
         pm.add_pass(recorder::<core::Module>("module", order.clone()));
         pm.nest::<func::Func>()
             .add_pass(recorder::<func::Func>("func", order.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(*order.borrow(), vec!["module", "func"]);
     }
@@ -726,7 +875,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "erase-first"
             }
-            fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+            fn run(
+                &mut self,
+                ctx: &mut IrContext,
+                target: core::Module,
+                _analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
                 let region = target.body(ctx);
                 let block = ctx.region(region).blocks[0];
                 let first_op = ctx.block(block).ops[0];
@@ -740,7 +894,7 @@ mod tests {
         pm.add_pass(EraseFirst);
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(count.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // One func remains after erase; counting pass sees it once.
         assert_eq!(count.get(), 1);
@@ -762,7 +916,12 @@ mod tests {
             fn name(&self) -> &'static str {
                 "erase-self"
             }
-            fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+            fn run(
+                &mut self,
+                ctx: &mut IrContext,
+                target: func::Func,
+                _analyses: &mut AnalysisCache,
+            ) -> PassRunResult {
                 crate::rewrite::erase_op(ctx, target.op_ref());
                 Ok(())
             }
@@ -779,7 +938,7 @@ mod tests {
             .with_instrumentation(move |_ctx, _name, _op| {
                 inv_clone.set(inv_clone.get() + 1);
             });
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // EraseSelf runs once per func (f1, f2) and invalidates the target
         // each time, so the following pass and the instrumentation hook must
@@ -802,7 +961,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(mirror.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Mirror reflects the pass's internal counter after 3 calls,
         // proving `&mut self` mutation is observable across invocations.
@@ -824,7 +983,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             inv_clone.set(inv_clone.get() + 1);
         });
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Instrumentation fires once after each of the 2 module-level passes.
         assert_eq!(invocations.get(), 2);
@@ -848,7 +1007,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             inv_clone.set(inv_clone.get() + 1);
         });
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // 1 module pass + 2 funcs * 1 nested pass = 3 instrumentation calls.
         assert_eq!(invocations.get(), 3);
@@ -861,7 +1020,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let module = empty_module(&mut ctx, loc);
         let mut pm: PassManager = PassManager::new();
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
     }
 
     #[test]
@@ -874,7 +1033,7 @@ mod tests {
         pm.add_pass(recorder::<core::Module>("a", order.clone()));
         pm.add_pass(recorder::<core::Module>("b", order.clone()));
         pm.add_pass(recorder::<core::Module>("c", order.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         assert_eq!(*order.borrow(), vec!["a", "b", "c"]);
     }
@@ -896,12 +1055,14 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             instrumentation_count_clone.set(instrumentation_count_clone.get() + 1);
         });
-        pm.with_verifier(move |_ctx, _op| {
+        pm.with_verifier(move |_ctx, _analyses, _op| {
             verifier_count_clone.set(verifier_count_clone.get() + 1);
             Ok(())
         });
 
-        let error = pm.run(&mut ctx, module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, module, &mut Default::default())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "failing");
         assert!(matches!(error.kind(), PassErrorKind::Execution(_)));
@@ -925,7 +1086,9 @@ mod tests {
         pm.nest::<func::Func>()
             .add_pass(recorder::<func::Func>("sibling", order.clone()));
 
-        let error = pm.run(&mut ctx, module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, module, &mut Default::default())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "failing");
         assert_eq!(*order.borrow(), vec!["failing"]);
@@ -949,7 +1112,9 @@ mod tests {
         pm.nest::<arith::Addi>()
             .add_pass(CountingPass::<arith::Addi>::new(count.clone()));
 
-        let error = pm.run(&mut ctx, module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, module, &mut Default::default())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "nested-pass-manager");
         assert!(matches!(error.kind(), PassErrorKind::Verification(_)));
@@ -974,7 +1139,7 @@ mod tests {
             .add_pass(recorder::<func::Func>("first", order.clone()));
         pm.nest::<func::Func>()
             .add_pass(recorder::<func::Func>("second", order.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Each nested manager re-walks the module independently, so
         // labels are grouped by manager rather than interleaved per func.
@@ -1004,7 +1169,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             root_clone.set(root_clone.get() + 1);
         });
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Root instrumentation fires only for the module-level pass (1 call),
         // because the nested manager installs its own and does not inherit
@@ -1033,7 +1198,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, name, op| {
             seen_clone.borrow_mut().push((name.to_string(), op));
         });
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Module pass → hook("counting", module_op), then nested manager walks
         // for func ops → hook("counting", f1), hook("counting", f2).
@@ -1060,7 +1225,7 @@ mod tests {
         pm.add_pass(CountingPass::<core::Module>::new(count.clone()));
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(count.clone()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Both passes ran (each holds its own counter; the mirror
         // reflects the most recent set, which here is the func pass's
@@ -1083,12 +1248,14 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             instrumentation_count_clone.set(instrumentation_count_clone.get() + 1);
         });
-        pm.with_verifier(|_ctx, _op| {
+        pm.with_verifier(|_ctx, _analyses, _op| {
             Err(VerifyError {
                 message: "boom".to_string(),
             })
         });
-        let error = pm.run(&mut ctx, module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, module, &mut Default::default())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "counting");
         assert!(matches!(error.kind(), PassErrorKind::Verification(_)));
@@ -1112,18 +1279,47 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
-        pm.with_verifier(|_ctx, _op| {
+        pm.with_verifier(|_ctx, _analyses, _op| {
             Err(VerifyError {
                 message: "nested boom".to_string(),
             })
         });
-        let error = pm.run(&mut ctx, module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, module, &mut Default::default())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "counting");
         assert_eq!(
             error.to_string(),
             "pass `counting` broke an IR invariant: nested boom"
         );
+    }
+
+    #[test]
+    fn verifier_skips_passes_that_leave_the_ir_unchanged() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+        append_func(&mut ctx, module, loc, "f1");
+
+        let verified: Rc<RefCell<Vec<OpRef>>> = Rc::new(RefCell::new(Vec::new()));
+        let verified_clone = verified.clone();
+        let mut pm = PassManager::new();
+        pm.add_pass(pass_fn(
+            "unchanged",
+            |_ctx: &mut IrContext, _target: core::Module, _analyses: &mut AnalysisCache| Ok(()),
+        ))
+        .add_pass(recorder::<core::Module>("change", Rc::default()));
+        pm.nest::<func::Func>().add_pass(pass_fn(
+            "unchanged-func",
+            |_ctx: &mut IrContext, _target: func::Func, _analyses: &mut AnalysisCache| Ok(()),
+        ));
+        pm.with_verifier(move |_ctx, _analyses, op| {
+            verified_clone.borrow_mut().push(op);
+            Ok(())
+        });
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
+
+        assert_eq!(*verified.borrow(), vec![module.op_ref()]);
     }
 
     #[test]
@@ -1138,8 +1334,8 @@ mod tests {
         let mut pm = PassManager::new();
         pm.add_pass(recorder::<core::Module>("a", order.clone()));
         pm.add_pass(recorder::<core::Module>("b", order.clone()));
-        pm.with_verifier(|_ctx, _op| Ok(()));
-        pm.run(&mut ctx, module).unwrap();
+        pm.with_verifier(|_ctx, _analyses, _op| Ok(()));
+        pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
         // Both module passes ran, in registration order.
         assert_eq!(*order.borrow(), vec!["a", "b"]);

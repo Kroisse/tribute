@@ -75,7 +75,7 @@ pub fn eliminate_dead_code<S: RewriteScope>(
 
 /// Build a function-anchored DCE pass.
 pub fn dce_pass(config: DceConfig) -> impl Pass<Target = func::Func> {
-    pass_fn("dce-func", move |ctx, target| {
+    pass_fn("dce-func", move |ctx, target, _analyses| {
         let result = eliminate_dead_code(ctx, target, config.clone());
         if !result.reached_fixpoint {
             tracing::warn!(

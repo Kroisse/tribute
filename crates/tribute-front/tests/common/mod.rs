@@ -139,6 +139,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         module.module,
         &module.operation_declarations,
         &module.compiler_intrinsics,
+        &mut Default::default(),
     );
     assert!(
         validation.is_ok(),

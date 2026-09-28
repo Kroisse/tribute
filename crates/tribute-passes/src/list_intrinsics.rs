@@ -6,6 +6,7 @@ use std::rc::Rc;
 use tribute_ir::dialect::list;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
@@ -45,7 +46,12 @@ impl Pass for LowerListIntrinsics {
         "lower-list-intrinsics"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         let module = Module::from(target);
         let mut intrinsic_declarations = IntrinsicDeclarations::default();
         for op in module.ops(ctx) {
@@ -193,7 +199,9 @@ mod tests {
         );
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
 
-        LowerListIntrinsics.run(&mut ctx, core).unwrap();
+        LowerListIntrinsics
+            .run(&mut ctx, core, &mut Default::default())
+            .unwrap();
 
         let output = print_module(&ctx, module.op());
         assert!(output.contains("list.prepend"), "{output}");
@@ -224,7 +232,9 @@ mod tests {
         );
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
 
-        LowerListIntrinsics.run(&mut ctx, core).unwrap();
+        LowerListIntrinsics
+            .run(&mut ctx, core, &mut Default::default())
+            .unwrap();
 
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("list.prepend"), "{output}");
@@ -253,7 +263,9 @@ mod tests {
         );
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
 
-        LowerListIntrinsics.run(&mut ctx, core).unwrap();
+        LowerListIntrinsics
+            .run(&mut ctx, core, &mut Default::default())
+            .unwrap();
 
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("list.prepend"), "{output}");
@@ -289,7 +301,9 @@ mod tests {
         );
         let core = core::Module::from_op(&ctx, module.op()).expect("core.module");
 
-        LowerListIntrinsics.run(&mut ctx, core).unwrap();
+        LowerListIntrinsics
+            .run(&mut ctx, core, &mut Default::default())
+            .unwrap();
 
         let output = print_module(&ctx, module.op());
         assert!(!output.contains("list.prepend"), "{output}");

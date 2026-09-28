@@ -186,7 +186,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
             let mut pm = PassManager::new();
             pm.nest::<wasm_dialect::Func>()
                 .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
-            pm.run(ctx, core_module)?;
+            pm.run(ctx, core_module, &mut Default::default())?;
         } else {
             super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module)?;
         }

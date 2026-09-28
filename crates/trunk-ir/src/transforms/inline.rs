@@ -338,9 +338,7 @@ pub fn inline_functions_with_config(
     let mut inlined_count = 0usize;
 
     loop {
-        let graph = am
-            .get::<CallGraph>(ctx, module.op())
-            .expect("CallGraph analysis computes infallibly for a core.module target");
+        let graph = am.require::<CallGraph>(ctx, module.op());
         let recursive = recursive_functions(&graph);
 
         let pattern = InlineCallSite::new(Arc::clone(&graph), recursive, config.clone());
@@ -1228,7 +1226,7 @@ mod pass {
 
         let mut am = AnalysisCache::new();
         // Seed the cache by pulling the graph once.
-        let pre = am.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let pre = am.require::<CallGraph>(&ctx, module.op());
         assert_eq!(pre.call_site_count.get(&Symbol::new("helper")), Some(&1));
 
         let result = inline_functions(&mut ctx, module, &mut am);
@@ -1244,7 +1242,7 @@ mod pass {
         assert_eq!(post.call_site_count.get(&Symbol::new("helper")), None);
         // And a subsequent explicit `get` must coincide with the cached
         // Arc (no recomputation).
-        let fetched = am.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let fetched = am.require::<CallGraph>(&ctx, module.op());
         assert!(std::sync::Arc::ptr_eq(&post, &fetched));
     }
 
@@ -1265,7 +1263,7 @@ mod pass {
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
         let mut am = AnalysisCache::new();
-        let before = am.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let before = am.require::<CallGraph>(&ctx, module.op());
 
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 0);
@@ -1325,7 +1323,7 @@ mod pass {
 
         // After the pass, `a` and `b` must still contain exactly one
         // `func.call` (to `@large`) — not a copy of `large`'s body.
-        let post = am.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let post = am.require::<CallGraph>(&ctx, module.op());
         for name in ["a", "b"] {
             let f = post
                 .func_ops
@@ -1384,7 +1382,7 @@ mod pass {
         assert_eq!(result.inlined_count, 2);
 
         // Fresh graph must contain no call edges at all.
-        let post = am.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let post = am.require::<CallGraph>(&ctx, module.op());
         assert!(post.call_site_count.is_empty());
     }
 
@@ -1420,7 +1418,7 @@ mod pass {
         let module = crate::parser::parse_test_module(&mut ctx, input);
 
         let mut am = AnalysisCache::new();
-        let graph = am.get::<CallGraph>(&ctx, module.op()).unwrap();
+        let graph = am.require::<CallGraph>(&ctx, module.op());
         let recursive = recursive_functions(&graph);
 
         let inline_pattern =

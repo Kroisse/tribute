@@ -11,6 +11,7 @@ use tribute_core::get_physical_closure_convention;
 use tribute_ir::dialect::ability::{self, compute_op_idx, evidence_abi, evidence_runtime_symbols};
 use tribute_ir::dialect::{effect, tribute_rt};
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::{adt, arith, core};
@@ -65,7 +66,12 @@ impl Pass for LowerEvidenceToNative {
         "lower-evidence-to-native"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: func::Func) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: func::Func,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         try_lower_evidence_to_native_func(ctx, target)
     }
 }
@@ -780,7 +786,8 @@ mod tests {
         let mut pass = LowerEvidenceToNative;
 
         assert_eq!(pass.name(), "lower-evidence-to-native");
-        pass.run(&mut ctx, selected).unwrap();
+        pass.run(&mut ctx, selected, &mut Default::default())
+            .unwrap();
 
         let ir_text = print_module(&ctx, module.op());
         assert_eq!(ir_text.matches("effect.dispatch_tail").count(), 1);

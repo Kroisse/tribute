@@ -513,6 +513,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         output.module,
         declarations,
         &output.compiler_intrinsics,
+        &mut Default::default(),
     );
     assert!(
         validation.is_ok(),
@@ -611,6 +612,7 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         output.module,
         &output.operation_declarations,
         &output.compiler_intrinsics,
+        &mut Default::default(),
     );
     assert!(
         validation.is_ok(),

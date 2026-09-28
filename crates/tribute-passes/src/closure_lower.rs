@@ -28,6 +28,7 @@ use tribute_core::{CallingConvention, get_calling_convention, get_physical_closu
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core;
@@ -781,7 +782,12 @@ impl Pass for LowerPreparedClosures {
         "lower-prepared-closures"
     }
 
-    fn run(&mut self, ctx: &mut IrContext, target: core::Module) -> PassRunResult {
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
         lower_prepared_closures(ctx, target.into())
     }
 }
@@ -1075,7 +1081,8 @@ mod tests {
 
         let core_module = core::Module::from_op(&ctx, module.op()).unwrap();
         let mut pass = LowerPreparedClosures;
-        pass.run(&mut ctx, core_module).unwrap();
+        pass.run(&mut ctx, core_module, &mut Default::default())
+            .unwrap();
         assert_module_is_structurally_valid(&ctx, module);
 
         let inner = func_by_name_recursive(&ctx, module, "inner");

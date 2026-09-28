@@ -13,6 +13,7 @@
 use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::{core, func, wasm};
 use crate::ops::DialectOp;
@@ -20,7 +21,7 @@ use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::Symbol;
 use crate::symbol_table::SymbolTable;
-use crate::transforms::call_graph::{CallGraph, build_call_graph};
+use crate::transforms::call_graph::CallGraph;
 use crate::walk::{WalkAction, walk_region};
 
 /// Configuration for global dead code elimination.
@@ -50,17 +51,23 @@ pub struct GlobalDceResult {
 }
 
 /// Eliminate unreachable functions from a module using default configuration.
-pub fn eliminate_dead_functions(ctx: &mut IrContext, module: Module) -> GlobalDceResult {
-    eliminate_dead_functions_with_config(ctx, module, GlobalDceConfig::default())
+pub fn eliminate_dead_functions(
+    ctx: &mut IrContext,
+    module: Module,
+    analyses: &mut AnalysisCache,
+) -> GlobalDceResult {
+    eliminate_dead_functions_with_config(ctx, module, GlobalDceConfig::default(), analyses)
 }
 
-/// Eliminate unreachable functions with custom configuration.
+/// Eliminate unreachable functions with custom configuration, using the
+/// [`SymbolTable`] and [`CallGraph`] cached in `analyses`.
 pub fn eliminate_dead_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: GlobalDceConfig,
+    analyses: &mut AnalysisCache,
 ) -> GlobalDceResult {
-    run(ctx, module, &config)
+    run(ctx, module, &config, analyses)
 }
 
 /// Eliminate the functions of `module` not reachable from its roots.
@@ -68,8 +75,13 @@ pub fn eliminate_dead_functions_with_config(
 /// Functions are keyed by root-qualified name. Every definition of a
 /// duplicated name shares its reachability. With `recursive: false`, functions
 /// in nested modules are neither removed nor analyzed; they are kept as roots.
-fn run(ctx: &mut IrContext, module: Module, config: &GlobalDceConfig) -> GlobalDceResult {
-    let symbols = SymbolTable::collect(ctx, module);
+fn run(
+    ctx: &mut IrContext,
+    module: Module,
+    config: &GlobalDceConfig,
+    analyses: &mut AnalysisCache,
+) -> GlobalDceResult {
+    let symbols = analyses.require::<SymbolTable>(ctx, module.op());
     let functions = || {
         symbols
             .all_definitions()
@@ -92,7 +104,7 @@ fn run(ctx: &mut IrContext, module: Module, config: &GlobalDceConfig) -> GlobalD
         ControlFlow::Continue(WalkAction::Advance)
     });
 
-    let graph = build_call_graph(ctx, module);
+    let graph = analyses.require::<CallGraph>(ctx, module.op());
     let reachable = compute_reachable(&graph, roots);
 
     // A function containing a reachable function definition is kept with it.
@@ -314,7 +326,7 @@ mod tests {
         let unused = build_simple_func(&mut ctx, loc, "unused");
         let module = build_module(&mut ctx, loc, vec![main, unused]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 1);
         assert_eq!(count_funcs(&ctx, module), 1);
@@ -327,7 +339,7 @@ mod tests {
         let main = build_func_with_call(&mut ctx, loc, "main", "helper");
         let module = build_module(&mut ctx, loc, vec![helper, main]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 0);
         assert_eq!(count_funcs(&ctx, module), 2);
@@ -342,7 +354,7 @@ mod tests {
         let unreachable = build_simple_func(&mut ctx, loc, "unreachable");
         let module = build_module(&mut ctx, loc, vec![leaf, middle, main, unreachable]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 1);
         assert_eq!(count_funcs(&ctx, module), 3);
@@ -383,7 +395,7 @@ mod tests {
 
         let module = build_module(&mut ctx, loc, vec![callback, main]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 0);
     }
@@ -394,7 +406,7 @@ mod tests {
         let start = build_simple_func(&mut ctx, loc, "_start");
         let module = build_module(&mut ctx, loc, vec![start]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 0);
     }
@@ -409,7 +421,8 @@ mod tests {
             extra_entry_points: vec!["custom_init".to_string()],
             recursive: true,
         };
-        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+        let result =
+            eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
 
         assert_eq!(result.removed_count, 0);
     }
@@ -430,7 +443,7 @@ mod tests {
 
         let module = build_module(&mut ctx, loc, vec![exported, export_op, unused]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 1); // Only unused_func removed
     }
@@ -463,7 +476,7 @@ mod tests {
 
         let module = build_module(&mut ctx, loc, vec![main, extern_op]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 0);
         assert_eq!(count_funcs(&ctx, module), 2);
@@ -509,7 +522,7 @@ mod tests {
 
         let module = build_module(&mut ctx, loc, vec![main, helper, extern_op]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         // extern_fn is preserved (abi) and helper is reachable from extern_fn
         assert_eq!(result.removed_count, 0);
@@ -553,7 +566,8 @@ mod tests {
             extra_entry_points: vec![],
             recursive: true,
         };
-        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+        let result =
+            eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
 
         assert_eq!(result.removed_count, 2);
         assert_eq!(
@@ -598,7 +612,8 @@ mod tests {
             extra_entry_points: vec![],
             recursive: false,
         };
-        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+        let result =
+            eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
 
         // With recursive=false, nested module is not analyzed
         assert_eq!(result.removed_count, 0);
@@ -635,7 +650,7 @@ mod tests {
 }"#,
         );
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_functions, [Symbol::from_dynamic("b::same")]);
         assert_eq!(
@@ -672,7 +687,8 @@ mod tests {
             extra_entry_points: vec![],
             recursive: false,
         };
-        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+        let result =
+            eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
 
         assert_eq!(result.removed_functions, [Symbol::new("unused")]);
     }
@@ -702,7 +718,7 @@ mod tests {
 }"#,
         );
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(
             HashSet::<Symbol>::from_iter(result.removed_functions),

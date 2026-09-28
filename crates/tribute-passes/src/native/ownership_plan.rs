@@ -18,7 +18,7 @@ use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::qualified_name;
-use trunk_ir::transforms::call_graph::{build_call_graph, recursive_functions};
+use trunk_ir::transforms::call_graph::{CallGraph, recursive_functions};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{BlockRef, OpRef, RegionRef, Symbol, TypeRef, ValueDef, ValueRef};
 use trunk_ir_cranelift_backend::passes::func_to_clif::TypeRewrite;
@@ -401,7 +401,7 @@ pub fn build_native_ownership_plan_with_analyses(
     let rtti_types = build_rtti_plan(ctx, module, &managed_layouts)?;
     let entry_contracts = compute_entry_contracts(
         ctx,
-        module,
+        &analyses.require::<CallGraph>(ctx, module.op()),
         definitions,
         &managed_layouts,
         options.elide_proven_borrowed_parameters,
@@ -850,12 +850,12 @@ fn build_managed_field_bitmap(
 
 fn compute_entry_contracts(
     ctx: &IrContext,
-    module: Module,
+    call_graph: &CallGraph,
     definitions: &HashMap<Symbol, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
     elide_proven_borrowed_parameters: bool,
 ) -> Result<HashMap<Symbol, Vec<EntryOwnership>>, OwnershipPlanError> {
-    let recursive = recursive_functions(&build_call_graph(ctx, module));
+    let recursive = recursive_functions(call_graph);
     let mut summaries = HashMap::new();
     for (&symbol, &op) in definitions {
         let entry = match ownership_callable_body(ctx, op)? {
