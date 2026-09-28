@@ -3,7 +3,7 @@
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 
-use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
+use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
 use crate::dialect::scf;
 use crate::op_interface::{CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionSuccessor};
@@ -88,6 +88,9 @@ impl Analysis for StructuredControlAnalysis {
     }
 }
 
+/// Unproven terminal properties are ordinary results, never failures.
+impl InfallibleAnalysis for StructuredControlAnalysis {}
+
 impl StructuredControlAnalysis {
     /// Whether a single-block region is proven to exit its callable.
     pub fn is_terminal_region(&self, region: RegionRef) -> bool {
@@ -157,16 +160,10 @@ mod tests {
         let first = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
         let second = func::Func::from_op(&ctx, module.ops(&ctx)[1]).unwrap();
         let mut cache = AnalysisCache::new();
-        let all = cache
-            .get::<StructuredControlAnalysis>(&ctx, module.op())
-            .unwrap();
-        let again = cache
-            .get::<StructuredControlAnalysis>(&ctx, module.op())
-            .unwrap();
+        let all = cache.require::<StructuredControlAnalysis>(&ctx, module.op());
+        let again = cache.require::<StructuredControlAnalysis>(&ctx, module.op());
         assert!(Arc::ptr_eq(&all, &again));
-        let scoped = cache
-            .get::<StructuredControlAnalysis>(&ctx, first.op_ref())
-            .unwrap();
+        let scoped = cache.require::<StructuredControlAnalysis>(&ctx, first.op_ref());
         assert!(all.is_terminal_region(first.body(&ctx)));
         assert!(all.is_terminal_region(second.body(&ctx)));
         assert!(scoped.is_terminal_region(first.body(&ctx)));
@@ -192,9 +189,7 @@ mod tests {
         let control = ctx.block(entry).ops[0];
         let never = ctx.op_results(control)[0];
         let mut cache = AnalysisCache::new();
-        let original = cache
-            .get::<StructuredControlAnalysis>(&ctx, module.op())
-            .unwrap();
+        let original = cache.require::<StructuredControlAnalysis>(&ctx, module.op());
         assert!(original.has_terminal_unused_never_result(control));
 
         // A synthetic use before the control isolates liveness from final position.
@@ -206,9 +201,7 @@ mod tests {
                 .get_cached::<StructuredControlAnalysis>(&ctx, module.op())
                 .is_none()
         );
-        let used = cache
-            .get::<StructuredControlAnalysis>(&ctx, module.op())
-            .unwrap();
+        let used = cache.require::<StructuredControlAnalysis>(&ctx, module.op());
         assert!(!Arc::ptr_eq(&original, &used));
         assert!(used.has_only_terminal_region_successors(control));
         assert!(!used.has_terminal_unused_never_result(control));
@@ -224,9 +217,7 @@ mod tests {
                 .get_cached::<StructuredControlAnalysis>(&ctx, module.op())
                 .is_none()
         );
-        let followed = cache
-            .get::<StructuredControlAnalysis>(&ctx, module.op())
-            .unwrap();
+        let followed = cache.require::<StructuredControlAnalysis>(&ctx, module.op());
         assert!(followed.has_only_terminal_region_successors(control));
         assert!(!followed.has_terminal_unused_never_result(control));
         assert!(followed.is_terminal_region(body));
@@ -252,9 +243,7 @@ mod tests {
                 .get_cached::<StructuredControlAnalysis>(&ctx, module.op())
                 .is_none()
         );
-        let changed = cache
-            .get::<StructuredControlAnalysis>(&ctx, module.op())
-            .unwrap();
+        let changed = cache.require::<StructuredControlAnalysis>(&ctx, module.op());
         assert!(!changed.has_only_terminal_region_successors(control));
         assert!(!changed.has_terminal_unused_never_result(control));
         assert!(!changed.is_terminal_region(body));

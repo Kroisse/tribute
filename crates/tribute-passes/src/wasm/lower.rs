@@ -10,6 +10,7 @@ use tracing::{error, warn};
 use tribute_core::{CallingConvention, get_calling_convention};
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
@@ -104,8 +105,14 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 }
 
 /// Run the full WASM lowering pipeline on arena IR.
-pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowerError> {
-    trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_structured_control(ctx, module)?;
+pub fn lower_to_wasm(
+    ctx: &mut IrContext,
+    module: Module,
+    analyses: &mut AnalysisCache,
+) -> Result<(), WasmLowerError> {
+    trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_structured_control(
+        ctx, module, analyses,
+    )?;
     super::type_converter::convert_canonical_closure_storage(ctx, module);
 
     let const_analysis = super::const_to_wasm::analyze_consts(ctx, module);
@@ -124,7 +131,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
     {
         let _span = tracing::info_span!("scf_to_wasm").entered();
         let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, module, tc)?;
+        trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, module, tc, analyses)?;
     }
 
     // Normalize tribute_rt primitive types (int, nat, bool, float) to core types
@@ -186,7 +193,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
             let mut pm = PassManager::new();
             pm.nest::<wasm_dialect::Func>()
                 .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
-            pm.run(ctx, core_module, &mut Default::default())?;
+            pm.run(ctx, core_module, analyses)?;
         } else {
             super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module)?;
         }
@@ -706,7 +713,8 @@ mod tests {
     fn lower_text(ir: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        lower_to_wasm(&mut ctx, module).expect("test module should lower to wasm");
+        lower_to_wasm(&mut ctx, module, &mut Default::default())
+            .expect("test module should lower to wasm");
         print_module(&ctx, module.op())
     }
 
@@ -1258,7 +1266,7 @@ mod tests {
         }
         .attach(&mut ctx, module.op());
 
-        let error = lower_to_wasm(&mut ctx, module)
+        let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
             .expect_err("non-reference string constant result must be rejected");
 
         assert!(
@@ -1287,7 +1295,8 @@ mod tests {
 }"#,
         );
         let before = print_module(&ctx, module.op());
-        let error = lower_to_wasm(&mut ctx, module).expect_err("used Never must reject");
+        let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
+            .expect_err("used Never must reject");
         assert!(matches!(error, WasmLowerError::Conversion(_)), "{error}");
         assert!(error.to_string().contains("scf-to-wasm"), "{error}");
         assert!(
@@ -1316,7 +1325,7 @@ mod tests {
         let before = print_module(&ctx, module.op());
         assert!(before.contains("tribute_io.write"), "{before}");
 
-        let error = lower_to_wasm(&mut ctx, module)
+        let error = lower_to_wasm(&mut ctx, module, &mut Default::default())
             .expect_err("nonlowerable switch must fail the wasm lowering boundary");
 
         assert!(matches!(error, WasmLowerError::Conversion(_)), "{error}");

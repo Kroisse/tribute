@@ -290,7 +290,7 @@ mod tests {
             materialize_unrealized_casts(&mut ctx, module, &tc);
             assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
 
-            crate::wasm::lower::lower_to_wasm(&mut ctx, module).unwrap();
+            crate::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default()).unwrap();
             let tc = crate::wasm::type_converter::wasm_type_converter(&mut ctx);
             trunk_ir::rewrite::PatternApplicator::new(tc)
                 .add_pattern(UnrealizedCastConversionPattern)

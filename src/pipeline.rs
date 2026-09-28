@@ -753,11 +753,13 @@ pub struct CompilationResult {
 /// 3. Validates and emits the wasm binary (delegated to trunk-ir-wasm-backend)
 fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult<WasmBinary> {
     let _span = tracing::info_span!("compile_to_wasm").entered();
+    let mut analyses = AnalysisCache::new();
 
     // Phase 1 - Lower to wasm dialect (Tribute-specific)
     {
         let _span = tracing::info_span!("lower_to_wasm").entered();
-        tribute_passes::wasm::lower::lower_to_wasm(ctx, module).map_err(wasm_lowering_failure)?;
+        tribute_passes::wasm::lower::lower_to_wasm(ctx, module, &mut analyses)
+            .map_err(wasm_lowering_failure)?;
     }
 
     // Phase 2 - Legalize unrealized_conversion_cast operations (WASM type
@@ -1293,7 +1295,7 @@ fn prepare_module_to_native(
         pm.run(ctx, core_module, &mut analyses)
             .map_err(native_pass_failure)?;
     } else {
-        trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
+        trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module, &mut analyses);
     }
 
     // Phase 1 - Lower func dialect to clif dialect

@@ -234,7 +234,7 @@ fn test_execute_dynamic_bytes_write_boundary() {
 }}"#
     );
     let module = trunk_ir::parser::parse_test_module(&mut ctx, &ir);
-    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module)
+    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default())
         .expect("lower dynamic output to Wasm");
     tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module)
         .expect("finalize semantic WasmGC types");
@@ -504,7 +504,7 @@ fn test_validate_fixed_wasm_dispatch_abis() {
         }
     }"#,
     );
-    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module).unwrap();
+    tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default()).unwrap();
     tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())

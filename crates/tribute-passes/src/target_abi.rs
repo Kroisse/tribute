@@ -1601,7 +1601,7 @@ mod tests {
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         crate::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
-        let result = crate::wasm::lower::lower_to_wasm(&mut ctx, module);
+        let result = crate::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default());
         let printed = print_module(&ctx, module.op());
         assert!(result.is_ok(), "{result:?}\n{printed}");
         assert!(!printed.contains("effect.dispatch_cps"), "{printed}");
