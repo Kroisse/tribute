@@ -454,8 +454,20 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
             )
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
 
+        let contents = data.bytes(ctx).to_vec();
         let mut data_desc = DataDescription::new();
-        data_desc.define(data.bytes(ctx).to_vec().into_boxed_slice());
+        for (offset, function) in data.relocations(ctx) {
+            let end = u64::from(offset) + u64::from(ptr_ty.bytes());
+            if end > contents.len() as u64 {
+                return Err(CompilationError::ir_validation(format!(
+                    "clif.data @{symbol}: relocation at offset {offset} exceeds its {} bytes",
+                    contents.len()
+                )));
+            }
+            let func_ref = obj_module.declare_func_in_data(func_ids[&function], &mut data_desc);
+            data_desc.write_function_addr(offset, func_ref);
+        }
+        data_desc.define(contents.into_boxed_slice());
         data_desc.set_align(u64::from(data.align(ctx)));
         obj_module
             .define_data(data_id, &data_desc)
@@ -1095,6 +1107,86 @@ mod tests {
                     .contains(&format!("clif.data @{name}: symbol is reserved")),
                 "{error}"
             );
+        }
+    }
+
+    #[test]
+    fn native_emission_relocates_function_addresses_in_data() {
+        use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  clif.func @first() -> core.nil {
+    clif.return
+  }
+  clif.func @second() -> core.nil {
+    clif.return
+  }
+  clif.data {sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8, function_relocs = [[16, @first], [0, @second]]}
+  clif.func @main() -> core.i32 {
+    %table = clif.symbol_addr {sym = @table} : core.ptr
+    %result = clif.iconst {value = 0} : core.i32
+    clif.return %result
+  }
+}"#,
+        );
+
+        let bytes = emit_module_to_native(&ctx, module).expect("native object");
+
+        let file = object::File::parse(bytes.as_slice()).expect("parse native object");
+        let table = file
+            .symbols()
+            .find(|symbol| symbol.name().is_ok_and(|name| name.ends_with("table")))
+            .expect("table symbol");
+        let section = file
+            .section_by_index(table.section_index().expect("defined table"))
+            .expect("table section");
+        let base = table.address() - section.address();
+        let mut targets = section
+            .relocations()
+            .filter_map(|(offset, relocation)| {
+                let RelocationTarget::Symbol(index) = relocation.target() else {
+                    return None;
+                };
+                let name = file.symbol_by_index(index).ok()?.name().ok()?.to_owned();
+                Some((offset - base, name))
+            })
+            .collect::<Vec<_>>();
+        targets.sort();
+        assert_eq!(targets.len(), 2, "{targets:?}");
+        assert_eq!(targets[0].0, 0);
+        assert!(targets[0].1.contains("second"), "{targets:?}");
+        assert_eq!(targets[1].0, 16);
+        assert!(targets[1].1.contains("first"), "{targets:?}");
+    }
+
+    #[test]
+    fn native_emission_rejects_invalid_data_relocations() {
+        for (relocs, expected) in [
+            ("[[0, @missing]]", "unknown function @missing"),
+            ("[[4, @helper]]", "exceeds its 8 bytes"),
+            (
+                "[[0, @helper], [0, @helper]]",
+                "duplicate relocation offset 0",
+            ),
+            ("[@helper]", "`[offset, @function]` pair"),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  clif.func @helper() -> core.nil {{
+    clif.return
+  }}
+  clif.data {{sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8, function_relocs = {relocs}}}
+}}"#
+                ),
+            );
+            let error = emit_module_to_native(&ctx, module).expect_err(relocs);
+            assert!(error.to_string().contains(expected), "{relocs}: {error}");
         }
     }
 
