@@ -1,0 +1,17 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+assertion_line: 39
+expression: result.diagnostics
+---
+- message: "unresolved name `compue`; did you mean `compute`?"
+  span:
+    start: 66
+    end: 72
+  severity: Error
+  phase: NameResolution
+- message: "function 'main' must return Nil, but returns `Int`"
+  span:
+    start: 47
+    end: 79
+  severity: Error
+  phase: TypeChecking

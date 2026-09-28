@@ -1,0 +1,10 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "type error in function 'test': effect mismatch: expected `{Foo}`, found `{Bar, Foo}`"
+  span:
+    start: 75
+    end: 115
+  severity: Error
+  phase: TypeChecking

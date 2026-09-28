@@ -1,5 +1,0 @@
----
-source: tests/diagnostic_snapshots.rs
-expression: result.diagnostics
----
-[]
