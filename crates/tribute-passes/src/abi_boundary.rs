@@ -7,7 +7,6 @@
 //! of violations that later boundary work is known to remove.
 
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
@@ -53,56 +52,42 @@ pub enum TargetKind {
 }
 
 /// One class of boundary exit violation.
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, derive_more::Display)]
 pub enum ViolationKind {
     /// An operation of a dialect that the boundary must consume.
+    #[display("forbidden op {dialect}.{name}")]
     ForbiddenOp { dialect: String, name: String },
     /// A `closure.closure` type.
+    #[display("forbidden type {dialect}.{name}")]
     ForbiddenType { dialect: String, name: String },
     /// Semantic control metadata listed by the exit contract.
+    #[display("forbidden attribute {_0}")]
     ForbiddenAttribute(String),
     /// A language-specific attribute that is neither forbidden nor preserved.
+    #[display("unclassified attribute {_0}")]
     UnclassifiedAttribute(String),
     /// A callable signature whose result is `core.never`.
+    #[display("callable result core.never")]
     NeverCallableResult,
     /// An unrealized cast whose source already has the declared type.
+    #[display("identity unrealized cast")]
     IdentityCast,
     /// A `func.constant` whose type is not its target's exact signature.
+    #[display("function reference differs from its target signature")]
     ReferenceSignatureMismatch,
     /// A function definition or indirect call without an exact signature.
+    #[display("missing exact callable signature")]
     MissingExactSignature,
 }
 
-impl fmt::Display for ViolationKind {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::ForbiddenOp { dialect, name } => write!(f, "forbidden op {dialect}.{name}"),
-            Self::ForbiddenType { dialect, name } => write!(f, "forbidden type {dialect}.{name}"),
-            Self::ForbiddenAttribute(name) => write!(f, "forbidden attribute {name}"),
-            Self::UnclassifiedAttribute(name) => write!(f, "unclassified attribute {name}"),
-            Self::NeverCallableResult => write!(f, "callable result core.never"),
-            Self::IdentityCast => write!(f, "identity unrealized cast"),
-            Self::ReferenceSignatureMismatch => {
-                write!(f, "function reference differs from its target signature")
-            }
-            Self::MissingExactSignature => write!(f, "missing exact callable signature"),
-        }
-    }
-}
-
 /// A single boundary exit violation.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display)]
+#[display("{kind}: {detail}")]
 pub struct BoundaryViolation {
     pub kind: ViolationKind,
     /// The operation where the violation was found, if it is not an alias.
     pub op: Option<OpRef>,
     pub detail: String,
-}
-
-impl fmt::Display for BoundaryViolation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}: {}", self.kind, self.detail)
-    }
 }
 
 /// Report every boundary exit violation in `module`, in IR order.
@@ -127,13 +112,16 @@ pub fn verify_boundary_exit(ctx: &IrContext, module: Module) -> Vec<BoundaryViol
 }
 
 /// A violation class that later boundary work is known to remove.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display)]
 pub enum PendingViolation {
     /// An operation `dialect.name`.
+    #[display("forbidden op {_0}.{_1}")]
     Op(&'static str, &'static str),
     /// A forbidden attribute.
+    #[display("forbidden attribute {_0}")]
     Attribute(&'static str),
     /// An attribute that has not been classified yet.
+    #[display("unclassified attribute {_0}")]
     Unclassified(&'static str),
 }
 
@@ -152,16 +140,6 @@ impl PendingViolation {
                 name == expected
             }
             _ => false,
-        }
-    }
-}
-
-impl fmt::Display for PendingViolation {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Op(dialect, name) => write!(f, "forbidden op {dialect}.{name}"),
-            Self::Attribute(name) => write!(f, "forbidden attribute {name}"),
-            Self::Unclassified(name) => write!(f, "unclassified attribute {name}"),
         }
     }
 }

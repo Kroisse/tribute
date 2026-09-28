@@ -1591,6 +1591,7 @@ dependencies = [
 name = "tribute-passes"
 version = "0.1.0"
 dependencies = [
+ "derive_more",
  "insta",
  "tracing",
  "tribute-core",
