@@ -1339,6 +1339,38 @@ fn test_use_group_expands_to_multiple_decls() {
 }
 
 #[test]
+fn test_use_path_keyword_prefixes() {
+    let source = "use self::basic::{add, sub}\nuse super::x\nuse pkg::y as z";
+    let module = parse_and_lower(source);
+
+    let paths: Vec<_> = module
+        .decls
+        .iter()
+        .map(|d| {
+            let Decl::Use(use_decl) = d else {
+                panic!("Expected Use declaration");
+            };
+            let path = use_decl
+                .path
+                .iter()
+                .map(|s| s.to_string())
+                .collect::<Vec<_>>();
+            (path.join("::"), use_decl.alias.map(|a| a.to_string()))
+        })
+        .collect();
+
+    assert_eq!(
+        paths,
+        [
+            ("self::basic::add".to_string(), None),
+            ("self::basic::sub".to_string(), None),
+            ("super::x".to_string(), None),
+            ("pkg::y".to_string(), Some("z".to_string())),
+        ]
+    );
+}
+
+#[test]
 fn test_use_nested_group() {
     let source = "use a::{b::{c, d}, e}";
     let module = parse_and_lower(source);
