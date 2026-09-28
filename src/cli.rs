@@ -41,6 +41,11 @@ pub enum Command {
         /// Enable sanitizer instrumentation (e.g., "address")
         #[arg(long)]
         sanitize: Option<String>,
+
+        /// Sysroot containing the native runtime library
+        /// (default: $TRIBUTE_SYSROOT, then the compiler's installation prefix)
+        #[arg(long)]
+        sysroot: Option<PathBuf>,
     },
 
     /// Debug compilation of a source file

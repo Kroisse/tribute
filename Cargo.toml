@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "crates/*"]
+members = [".", "crates/*", "xtask"]
 
 [workspace.package]
 version = "0.1.0"
@@ -83,6 +83,7 @@ parking_lot.workspace = true
 ropey.workspace = true
 salsa.workspace = true
 serde_json.workspace = true
+target-lexicon.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 tree-sitter.workspace = true
@@ -118,7 +119,7 @@ opt-level = 2
 debug = "line-tables-only"
 
 # Profile for building tribute-runtime as a lean no_std staticlib.
-# Usage: cargo build -p tribute-runtime --profile runtime
+# `cargo xtask runtime` builds it into the development sysroot.
 [profile.runtime]
 inherits = "release"
 panic = "abort"

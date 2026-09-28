@@ -7,6 +7,9 @@ cd "$SCRIPT_DIR/.."
 
 "$SCRIPT_DIR/lint.sh"
 
+echo "Building the runtime sysroot..."
+cargo xtask runtime
+
 echo "Running tests..."
 cargo nextest run --workspace -j 4
 

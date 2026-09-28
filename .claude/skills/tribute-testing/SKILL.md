@@ -16,6 +16,7 @@ description: |
 ## Running Tests
 
 ```bash
+cargo xtask runtime                     # Build the native runtime sysroot first
 cargo nextest run --workspace -j 4      # All tests (preferred)
 cargo nextest run -p tribute            # Specific crate
 cargo nextest run -p tree-sitter-tribute

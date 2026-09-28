@@ -76,6 +76,7 @@ expect_commands() {
 FMT='cargo fmt --all --check'
 CLIPPY='cargo clippy --workspace --all-targets --message-format=short -- -D warnings'
 MARKDOWN='npx markdownlint-cli2 **/*.md #node_modules'
+RUNTIME='cargo xtask runtime'
 TESTS='cargo nextest run --workspace -j 4'
 
 # Quick lint succeeds even though the Clippy fixture fails by default.
@@ -99,7 +100,7 @@ expect_commands "$FMT" "$CLIPPY" "$MARKDOWN"
 
 # Full validation runs tests only after every lint check passes.
 expect_status 0 env LINT_TEST_CLIPPY_STATUS=0 "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$TESTS"
+expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$RUNTIME" "$TESTS"
 
 expect_status 2 "$SCRIPT_DIR/check.sh"
 expect_commands "$FMT" "$CLIPPY"
@@ -110,7 +111,11 @@ expect_commands "$FMT" "$CLIPPY" "$MARKDOWN"
 
 expect_status 7 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_NEXTEST_STATUS=7 \
     "$SCRIPT_DIR/check.sh"
-expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$TESTS"
+expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$RUNTIME" "$TESTS"
+
+expect_status 5 env LINT_TEST_CLIPPY_STATUS=0 LINT_TEST_XTASK_STATUS=5 \
+    "$SCRIPT_DIR/check.sh"
+expect_commands "$FMT" "$CLIPPY" "$MARKDOWN" "$RUNTIME"
 
 # Exercise real commits without touching the caller's index or hooks.
 (

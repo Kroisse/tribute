@@ -64,7 +64,7 @@
 use crate::SourceCst;
 use ropey::Rope;
 use salsa::Accumulator;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use tree_sitter::Parser;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_front::source_file::parse_with_rope;
@@ -1757,22 +1757,81 @@ pub enum LinkError {
     LinkerNotFound(std::io::Error),
     #[display("linker failed with exit code {_0}")]
     LinkerFailed(i32),
+    #[display("failed to locate the compiler executable for the default sysroot: {_0}")]
+    SysrootNotFound(std::io::Error),
+    #[display(
+        "tribute runtime library not found at {}; pass --sysroot, set {SYSROOT_ENV}, \
+         or run `cargo xtask runtime` in a development checkout",
+        _0.display()
+    )]
+    RuntimeNotFound(PathBuf),
 }
 
 impl std::error::Error for LinkError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
-            LinkError::TempFile(e) | LinkError::LinkerNotFound(e) => Some(e),
-            LinkError::LinkerFailed(_) => None,
+            LinkError::TempFile(e)
+            | LinkError::LinkerNotFound(e)
+            | LinkError::SysrootNotFound(e) => Some(e),
+            LinkError::LinkerFailed(_) | LinkError::RuntimeNotFound(_) => None,
         }
     }
+}
+
+/// Environment variable that selects the Tribute sysroot.
+pub const SYSROOT_ENV: &str = "TRIBUTE_SYSROOT";
+
+/// File name of the native runtime staticlib inside a sysroot.
+const RUNTIME_LIB_NAME: &str = "libtribute_runtime.a";
+
+/// Choose the sysroot for native linking.
+///
+/// An explicit path wins over [`SYSROOT_ENV`]; without either, the sysroot is
+/// the parent of the directory holding the compiler executable, so an
+/// installed `<prefix>/bin/tribute` uses `<prefix>`.
+pub fn resolve_sysroot(explicit: Option<&Path>) -> Result<PathBuf, LinkError> {
+    if let Some(sysroot) = explicit {
+        return Ok(sysroot.to_path_buf());
+    }
+    if let Some(sysroot) = std::env::var_os(SYSROOT_ENV).filter(|value| !value.is_empty()) {
+        return Ok(PathBuf::from(sysroot));
+    }
+    let exe = std::env::current_exe().map_err(LinkError::SysrootNotFound)?;
+    exe.ancestors()
+        .nth(2)
+        .map(Path::to_path_buf)
+        .ok_or_else(|| {
+            LinkError::SysrootNotFound(std::io::Error::other(format!(
+                "{} has no parent directory",
+                exe.display()
+            )))
+        })
+}
+
+/// Path of the native runtime staticlib for the host target inside `sysroot`.
+pub fn runtime_library_path(sysroot: &Path) -> PathBuf {
+    sysroot
+        .join("lib")
+        .join("tribute")
+        .join(target_lexicon::HOST.to_string())
+        .join(RUNTIME_LIB_NAME)
 }
 
 /// Link native object bytes into an executable.
 ///
 /// Writes object bytes to a temp file and invokes the system linker (`cc`),
-/// linking against the tribute runtime library.
-pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), LinkError> {
+/// linking against the tribute runtime library from the sysroot chosen by
+/// [`resolve_sysroot`].
+pub fn link_native_binary(
+    object_bytes: &[u8],
+    output: &Path,
+    sysroot: Option<&Path>,
+) -> Result<(), LinkError> {
+    let runtime_lib = runtime_library_path(&resolve_sysroot(sysroot)?);
+    if !runtime_lib.is_file() {
+        return Err(LinkError::RuntimeNotFound(runtime_lib));
+    }
+
     let obj_file = tempfile::Builder::new()
         .suffix(".o")
         .tempfile()
@@ -1781,13 +1840,7 @@ pub fn link_native_binary(object_bytes: &[u8], output: &Path) -> Result<(), Link
 
     let mut cmd = std::process::Command::new("cc");
     cmd.arg(obj_file.path());
-
-    // Link tribute-runtime staticlib.
-    // The library directory is set at build time by build.rs.
-    if let Some(static_lib_dir) = option_env!("TRIBUTE_RUNTIME_STATIC_LIB_DIR") {
-        cmd.arg("-L").arg(static_lib_dir);
-        cmd.arg("-ltribute_runtime");
-    }
+    cmd.arg(&runtime_lib);
     if !cfg!(windows) {
         cmd.arg("-lpthread");
     }
@@ -1888,7 +1941,7 @@ mod tests {
         .expect("empty-result root emits native code");
         let temp = tempfile::tempdir().unwrap();
         let executable = temp.path().join("empty-result-cps-root");
-        link_native_binary(&object, &executable).expect("empty-result root links");
+        link_native_binary(&object, &executable, None).expect("empty-result root links");
         let output = std::process::Command::new(executable)
             .output()
             .expect("empty-result root starts");
@@ -2435,7 +2488,7 @@ fn main() {
         .expect("one-shot wrapper must compile to native code");
         let temp = tempfile::tempdir().expect("temporary executable directory");
         let executable = temp.path().join("one-shot-wrapper");
-        link_native_binary(&object, &executable).expect("one-shot wrapper must link");
+        link_native_binary(&object, &executable, None).expect("one-shot wrapper must link");
 
         let status = std::process::Command::new(executable)
             .status()
@@ -2509,7 +2562,7 @@ fn main() {
         .expect("a physical module must lower without semantic control metadata");
         let temp = tempfile::tempdir().expect("temporary executable directory");
         let executable = temp.path().join("physical-tail-chain");
-        link_native_binary(&object, &executable).expect("physical module must link");
+        link_native_binary(&object, &executable, None).expect("physical module must link");
 
         let status = std::process::Command::new(executable)
             .status()
@@ -3884,7 +3937,7 @@ fn main() -> String { "hello" }
     fn test_link_native_binary_invalid_object() {
         // Passing garbage bytes should cause the linker to fail
         let output = std::env::temp_dir().join("tribute_test_invalid_link");
-        let result = link_native_binary(b"not valid object code", &output);
+        let result = link_native_binary(b"not valid object code", &output, None);
         assert!(result.is_err());
         match result.unwrap_err() {
             LinkError::LinkerNotFound(_) => {
@@ -3898,5 +3951,33 @@ fn main() -> String { "hello" }
         }
         // Clean up in case it somehow succeeded
         let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn test_explicit_sysroot_takes_precedence() {
+        let sysroot = Path::new("/opt/tribute");
+        assert_eq!(resolve_sysroot(Some(sysroot)).unwrap(), sysroot);
+    }
+
+    #[test]
+    fn test_runtime_library_path_uses_target_layout() {
+        let path = runtime_library_path(Path::new("/opt/tribute"));
+        let expected = Path::new("/opt/tribute/lib/tribute")
+            .join(target_lexicon::HOST.to_string())
+            .join("libtribute_runtime.a");
+        assert_eq!(path, expected);
+    }
+
+    #[test]
+    fn test_link_native_binary_requires_runtime_library() {
+        let sysroot = tempfile::tempdir().unwrap();
+        let output = sysroot.path().join("never-linked");
+        match link_native_binary(b"not valid object code", &output, Some(sysroot.path())) {
+            Err(LinkError::RuntimeNotFound(path)) => {
+                assert_eq!(path, runtime_library_path(sysroot.path()));
+            }
+            other => panic!("expected RuntimeNotFound, got: {other:?}"),
+        }
+        assert!(!output.exists());
     }
 }

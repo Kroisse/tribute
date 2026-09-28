@@ -9,7 +9,7 @@ use cli::{Cli, Command};
 use diagnostics::{print_diagnostic, report_diagnostics};
 use ropey::Rope;
 use salsa::Database;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
 use tribute::pipeline::{
@@ -37,10 +37,18 @@ fn main() {
             target,
             dump_ir,
             sanitize,
+            sysroot,
         } => {
             init_tracing(&cli.log);
             let sanitize_address = sanitize.as_deref() == Some("address");
-            compile_file(file, output, &target, dump_ir, sanitize_address);
+            compile_file(
+                file,
+                output,
+                &target,
+                dump_ir,
+                sanitize_address,
+                sysroot.as_deref(),
+            );
         }
         Command::Debug { file, show_env } => {
             init_tracing(&cli.log);
@@ -67,6 +75,7 @@ fn compile_file(
     target: &str,
     dump_ir: bool,
     sanitize_address: bool,
+    sysroot: Option<&Path>,
 ) {
     let source_code = {
         match std::fs::File::open(&input_path).and_then(Rope::from_reader) {
@@ -133,7 +142,7 @@ fn compile_file(
                 );
                 if let Some(object_bytes) = compile_to_native_binary(db, source, config) {
                     let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
-                    if let Err(e) = link_native_binary(&object_bytes, &output) {
+                    if let Err(e) = link_native_binary(&object_bytes, &output, sysroot) {
                         eprintln!("Linking failed: {e}");
                         std::process::exit(1);
                     }

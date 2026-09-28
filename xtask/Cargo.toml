@@ -1,0 +1,11 @@
+[package]
+name = "xtask"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde_json.workspace = true
+target-lexicon.workspace = true

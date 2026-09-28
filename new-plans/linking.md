@@ -28,6 +28,30 @@ Private runtime helper, allocator와 external C symbol은 target에서 정한 ph
 ABI를 사용한다. 이 native link 단계가 별도 Tribute compilation unit 사이의
 source-level ABI를 제공하는 것은 아니다.
 
+### Runtime sysroot
+
+Native executable은 `tribute-runtime` staticlib(`libtribute_runtime.a`)과 링크한다.
+컴파일러는 이 라이브러리를 sysroot에서 찾는다. Target별 runtime 디렉토리는
+`<sysroot>/lib/tribute/<target-triple>/`이다.
+
+Sysroot는 링크 시점에 다음 순서로 정한다.
+
+1. CLI의 `--sysroot <path>`
+2. 환경 변수 `TRIBUTE_SYSROOT`
+3. 컴파일러 실행 파일 기준 `<exe_dir>/..`
+   (`<prefix>/bin/tribute`와 `<prefix>/lib/tribute/<target-triple>/`)
+
+컴파일러는 빌드 머신의 경로를 자신의 바이너리에 기록하지 않는다. Runtime
+위치는 컴파일러를 빌드할 때가 아니라 실행할 때 결정하므로, 설치된 컴파일러는
+prefix를 옮겨도 동작하고 컴파일러 빌드 산출물은 checkout 경로에 의존하지 않는다.
+선택된 sysroot에 runtime 라이브러리가 없으면 runtime 없이 링크하지 않고, 확인한
+경로를 포함한 link 오류를 보고한다.
+
+Runtime은 `runtime` profile의 `no_std` staticlib으로 빌드하며, 컴파일러 crate의
+build script가 만들지 않는다. 개발 checkout에서는 `cargo xtask runtime`이
+`target/sysroot`에 같은 layout을 만들고, workspace의 Cargo 설정이
+`TRIBUTE_SYSROOT`를 그 경로로 지정한다.
+
 ## Separate Compilation의 요구 조건
 
 별도 compilation unit을 도입하려면 다음 계약을 함께 정의해야 한다.

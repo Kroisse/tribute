@@ -8,6 +8,13 @@ the wider frontend and target status.
 
 ## Canonical runnable examples
 
+Native examples link against the runtime sysroot. Build it once, and again
+after changing `crates/tribute-runtime`:
+
+```bash
+cargo xtask runtime
+```
+
 ### M1 native calculator
 
 [`native_calculator.trb`](native_calculator.trb) is the canonical M1 native
