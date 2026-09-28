@@ -146,3 +146,25 @@ fn path_keyword_binding_is_rejected(db: &salsa::DatabaseImpl) {
         "`self` is a keyword and cannot be used as a name",
     );
 }
+
+#[salsa_test]
+fn reserved_word_path_segment_is_rejected(db: &salsa::DatabaseImpl) {
+    assert_error(
+        db,
+        "fn f() -> Nat { foo::where::bar }\n",
+        "where",
+        CompilationPhase::AstGeneration,
+        "`where` is reserved for future use",
+    );
+}
+
+#[salsa_test]
+fn raw_path_keyword_path_segment_is_rejected(db: &salsa::DatabaseImpl) {
+    assert_error(
+        db,
+        "fn f() -> Nat { foo::r#self::bar }\n",
+        "r#self",
+        CompilationPhase::AstGeneration,
+        "`self` cannot be a raw identifier",
+    );
+}

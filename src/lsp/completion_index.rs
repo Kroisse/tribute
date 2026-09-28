@@ -387,6 +387,15 @@ pub fn find_signature(
     signatures.iter().find(|s| s.name == name)
 }
 
+/// Find the signature of a callee as written in source, e.g. `r#case`.
+pub fn find_callee_signature<'a>(
+    signatures: &'a [FunctionSignature],
+    callee: &str,
+) -> Option<&'a FunctionSignature> {
+    let name = Symbol::from_dynamic(&tribute_front::keywords::unraw(callee));
+    find_signature(signatures, name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -634,6 +643,23 @@ mod tests {
 
         let baz = find_signature(&signatures, trunk_ir::Symbol::new("baz"));
         assert!(baz.is_none());
+    }
+
+    #[test]
+    fn test_find_callee_signature_normalizes_raw_names() {
+        let db = salsa::DatabaseImpl::default();
+        let source = make_source(&db, "fn r#case(x: Nat) -> Nat { x }\nfn plain() { 1 }");
+
+        let signatures = function_signatures(&db, source);
+        for callee in ["r#case", "case"] {
+            let sig = find_callee_signature(&signatures, callee);
+            assert_eq!(
+                sig.map(|sig| sig.name),
+                Some(trunk_ir::Symbol::new("case")),
+                "{callee}"
+            );
+        }
+        assert!(find_callee_signature(&signatures, "r#plain").is_some());
     }
 
     #[test]

@@ -386,7 +386,8 @@ Item ::= UseDecl
 ```ebnf
 UseDecl ::= 'use' UsePath
 
-UsePath ::= PathSegment ('::' PathSegment)* UseTree?
+UsePath ::= UseStart ('::' PathSegment)* UseTree?
+UseStart ::= 'pkg' | 'super' | PathSegment
 
 UseTree ::= '::' '{' UseItem (',' UseItem)* ','? '}'
           | 'as' Identifier
@@ -419,10 +420,13 @@ pub mod Option {
 ### Item Paths
 
 ```ebnf
-Path ::= PathSegment ('::' PathSegment)*
+Path ::= PathStart ('::' PathSegment)*
+PathStart ::= PathKeyword | PathSegment        // 경로 키워드는 첫 segment에만
+PathKeyword ::= 'pkg' | 'super' | 'self'
 PathSegment ::= Identifier | TypeId
-ValuePath ::= (PathSegment '::')* Identifier
-TypePath ::= (PathSegment '::')* TypeId
+PathPrefix ::= PathStart '::' (PathSegment '::')*
+ValuePath ::= PathPrefix? Identifier
+TypePath ::= PathPrefix? TypeId
 ```
 
 선언 이름은 단일 `Identifier` 또는 `TypeId`지만, 참조 위치의 CST는 단일
@@ -544,7 +548,7 @@ Type ::= TypePath TypeArgs?
 
 TupleType ::= '#(' TypeList? ')'              // #(Int, String, Float)
 
-TypePath ::= (PathSegment '::')* TypeId
+TypePath ::= PathPrefix? TypeId
 TypeArgs ::= '(' Type (',' Type)* ','? ')'
 
 FunctionType ::= 'fn' '(' TypeList? ')' ReturnType
