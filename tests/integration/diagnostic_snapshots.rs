@@ -625,6 +625,29 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 }
 
 #[salsa_test]
+fn diag_resume_in_never_operation_arm(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+ability Stop {
+    op stop() -> Never
+}
+
+fn test() -> Nat {
+    handle Stop::stop() {
+        do result { 0 }
+        op Stop::stop() { resume 0 }
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_effect_arg_arity_mismatch(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

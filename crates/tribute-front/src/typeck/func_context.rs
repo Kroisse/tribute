@@ -109,6 +109,10 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Handler validation is revisited during conversion; report each error once.
     reported_handler_errors: HashSet<(NodeId, &'static str)>,
 
+    /// Synthetic `resume` locals of `op` arms whose operation returns `Never`,
+    /// mapped to the ability and operation names for diagnostics.
+    non_resumptive_resume_locals: HashMap<LocalId, (Symbol, Symbol)>,
+
     /// Exact instantiated metadata for ability-operation call expressions.
     perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
 
@@ -209,6 +213,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_instances: HashMap::new(),
             handler_operations: HashMap::new(),
             reported_handler_errors: HashSet::new(),
+            non_resumptive_resume_locals: HashMap::new(),
             perform_operations: HashMap::new(),
             ability_op_callee_types: HashMap::new(),
             lambda_signatures: HashMap::new(),
@@ -257,6 +262,22 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn mark_handler_error(&mut self, arm: NodeId, reason: &'static str) -> bool {
         self.reported_handler_errors.insert((arm, reason))
+    }
+
+    /// Record that `local` is the `resume` of an arm for `ability::op`, which
+    /// returns `Never` and therefore cannot be resumed.
+    pub(crate) fn record_non_resumptive_resume(
+        &mut self,
+        local: LocalId,
+        ability: Symbol,
+        op: Symbol,
+    ) {
+        self.non_resumptive_resume_locals
+            .insert(local, (ability, op));
+    }
+
+    pub(crate) fn non_resumptive_resume_op(&self, local: LocalId) -> Option<(Symbol, Symbol)> {
+        self.non_resumptive_resume_locals.get(&local).copied()
     }
 
     pub(crate) fn mark_record_shape_checked(&mut self, record: NodeId) -> bool {

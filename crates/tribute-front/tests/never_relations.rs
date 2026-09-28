@@ -892,3 +892,58 @@ fn late_method() -> Nat {
     );
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+#[salsa_test]
+fn never_operation_arm_rejects_resume(db: &salsa::DatabaseImpl) {
+    for (name, arm) in [
+        ("direct", "op Stop::stop() { resume 0 }"),
+        ("nested", "op Stop::stop() { let k = fn() { resume 0 }; 0 }"),
+    ] {
+        let errors = type_errors(
+            db,
+            name,
+            &format!(
+                r#"
+ability Stop {{ op stop() -> Never }}
+
+fn test() -> Nat {{
+    handle Stop::stop() {{
+        do result {{ 0 }}
+        {arm}
+    }}
+}}
+"#
+            ),
+        );
+        let resume_errors = errors
+            .iter()
+            .filter(|error| error.contains("cannot `resume`") && error.contains("`Stop::stop`"))
+            .count();
+        assert_eq!(
+            resume_errors, 1,
+            "{name}: resume in a Never operation arm must be reported once: {errors:#?}"
+        );
+    }
+}
+
+#[salsa_test]
+fn never_operation_arm_without_resume_is_valid(db: &salsa::DatabaseImpl) {
+    let errors = type_errors(
+        db,
+        "never_operation_arm_without_resume_is_valid.trb",
+        r#"
+ability Stop { op stop() -> Never }
+
+fn test() -> Nat {
+    handle Stop::stop() {
+        do result { 0 }
+        op Stop::stop() { 1 }
+    }
+}
+"#,
+    );
+    assert!(
+        errors.is_empty(),
+        "a Never operation arm may return the handler result: {errors:#?}"
+    );
+}
