@@ -9,6 +9,10 @@ on:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # setup-rust-toolchain sets CARGO_PROFILE_DEV_DEBUG=0 unless it is already
+  # set. Match Cargo.toml's dev profile, which the test profile shares, so
+  # `cargo run` and `cargo test` in one job do not rebuild every dependency.
+  CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
 jobs:
   clippy:
@@ -74,8 +78,10 @@ jobs:
       - name: Build runtime sysroot
         run: cargo xtask runtime
 
-      - name: Build workspace
-        run: cargo build --workspace
+      # Build with the test profile and dev-dependency features, so the test
+      # run reuses these artifacts instead of rebuilding dependencies.
+      - name: Build tests
+        run: cargo nextest run --workspace --no-run
 
       - name: Run tests
         run: cargo nextest run --workspace -j 8
