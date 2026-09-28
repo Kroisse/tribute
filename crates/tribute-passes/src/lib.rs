@@ -9,6 +9,7 @@
 //! Name resolution and TDNR are handled at the AST level in `tribute-front`.
 
 // === TrunkIR passes ===
+pub mod abi_boundary;
 pub mod closure_lower;
 pub mod intrinsic_to_arith;
 pub mod io_lowering;
