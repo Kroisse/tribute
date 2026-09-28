@@ -583,21 +583,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.canonical_list_type(elem_ty)
             }
             ExprKind::Resume { arg, local_id } => {
-                let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
-                if let Some(lid) = local_id
-                    && let Some(cont_ty) = ctx.lookup_local(*lid)
-                    && let TypeKind::Continuation {
-                        arg: cont_arg,
-                        result: cont_result,
-                        effect,
-                    } = cont_ty.kind(self.db())
-                {
-                    ctx.constrain_coerce(arg_ty, *cont_arg, arg.id);
-                    ctx.record_lambda_resume_effect(*effect);
-                    *cont_result
-                } else {
-                    ctx.fresh_type_var()
-                }
+                self.infer_resume_type_with_ctx(ctx, expr.id, arg, *local_id)
             }
             ExprKind::Error => ctx.error_type(),
         };
@@ -678,6 +664,48 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Infer the type of an expression (just returns the type, doesn't convert).
+    /// Type `resume arg` against the continuation bound by the enclosing
+    /// `op` arm.
+    fn infer_resume_type_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        resume: NodeId,
+        arg: &Expr<ResolvedRef<'db>>,
+        local_id: Option<LocalId>,
+    ) -> Type<'db> {
+        let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
+        let Some(local_id) = local_id else {
+            return ctx.fresh_type_var();
+        };
+        if let Some((ability, op)) = ctx.non_resumptive_resume_op(local_id) {
+            if ctx.mark_handler_error(resume, "resume in Never operation") {
+                Diagnostic::new(
+                    format!(
+                        "cannot `resume` in the handler for `{ability}::{op}`, which returns `Never`"
+                    ),
+                    self.get_span(resume),
+                    DiagnosticSeverity::Error,
+                    CompilationPhase::TypeChecking,
+                )
+                .accumulate(self.db());
+            }
+            return ctx.error_type();
+        }
+        if let Some(cont_ty) = ctx.lookup_local(local_id)
+            && let TypeKind::Continuation {
+                arg: cont_arg,
+                result: cont_result,
+                effect,
+            } = cont_ty.kind(self.db())
+        {
+            ctx.constrain_coerce(arg_ty, *cont_arg, arg.id);
+            ctx.record_lambda_resume_effect(*effect);
+            *cont_result
+        } else {
+            ctx.fresh_type_var()
+        }
+    }
+
     fn infer_expr_type_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -828,21 +856,7 @@ impl<'db> TypeChecker<'db> {
                     .expect("checked expression has a type")
             }
             ExprKind::Resume { arg, local_id } => {
-                let arg_ty = self.infer_expr_type_with_ctx(ctx, arg);
-                if let Some(local_id) = local_id
-                    && let Some(cont_ty) = ctx.lookup_local(*local_id)
-                    && let TypeKind::Continuation {
-                        arg: cont_arg,
-                        result: cont_result,
-                        effect,
-                    } = cont_ty.kind(self.db())
-                {
-                    ctx.constrain_coerce(arg_ty, *cont_arg, arg.id);
-                    ctx.record_lambda_resume_effect(*effect);
-                    *cont_result
-                } else {
-                    ctx.fresh_type_var()
-                }
+                self.infer_resume_type_with_ctx(ctx, expr.id, arg, *local_id)
             }
             ExprKind::Tuple(elems) => {
                 let elem_tys = elems
@@ -2635,11 +2649,15 @@ impl<'db> TypeChecker<'db> {
 
                 // Bind the synthetic `resume` local with a Continuation type
                 // so that `resume(value)` calls inside `op` arms are typed correctly.
-                // For `-> Never` operations, skip binding — resume cannot be used.
+                // A `-> Never` operation cannot be resumed: any `resume` in its
+                // arm is reported and typed as an error.
                 if let Some(k_local_id) = resume_local_id {
                     if is_non_resumptive {
-                        // Bind to Error type so that any use of `resume` in the body
-                        // produces a type error without cascading.
+                        ctx.record_non_resumptive_resume(
+                            k_local_id,
+                            operation.ability.name(self.db()),
+                            op,
+                        );
                         ctx.bind_local(k_local_id, ctx.error_type());
                     } else {
                         let arg_ty = operation.result;
