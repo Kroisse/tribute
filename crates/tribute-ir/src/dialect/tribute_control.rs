@@ -1660,7 +1660,12 @@ fn validate_symbol_use(
             let Some(symbol) = ctx.op(op).attributes.get_symbol("func_ref") else {
                 return;
             };
-            let Some(target) = funcs.definitions_of(symbol).first().copied() else {
+            let Some(target) = funcs
+                .definitions_of(symbol)
+                .first()
+                .copied()
+                .filter(|&target| is_control_op(ctx, target, "func"))
+            else {
                 push_op_error(
                     ctx,
                     op,
@@ -1698,7 +1703,12 @@ fn validate_symbol_use(
             let Some(symbol) = ctx.op(op).attributes.get_symbol("callee") else {
                 return;
             };
-            let Some(target) = funcs.definitions_of(symbol).first().copied() else {
+            let Some(target) = funcs
+                .definitions_of(symbol)
+                .first()
+                .copied()
+                .filter(|&target| is_control_op(ctx, target, "func"))
+            else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
             };
@@ -1730,7 +1740,7 @@ fn validate_symbol_use(
 
 /// Resolve every function reference in the module tree by root-qualified name.
 fn validate_module_symbols(ctx: &IrContext, module: Module, errors: &mut Vec<ValidationError>) {
-    let funcs = SymbolTable::collect(ctx, module, |ctx, op| is_control_op(ctx, op, "func"));
+    let funcs = SymbolTable::collect(ctx, module);
     for (symbol, ops) in funcs.duplicates() {
         for &op in &ops[1..] {
             push_op_error(
@@ -2340,6 +2350,7 @@ fn callable_has_semantic_provenance(
                             "callee"
                         })
                         .and_then(|symbol| provenance.functions.resolve(symbol))
+                        .filter(|&function| is_control_op(ctx, function, "func"))
                         .is_some_and(|function| {
                             verified_callable_declaration(ctx, function, provenance.registered)
                         }))
@@ -2397,7 +2408,7 @@ fn validate_callable_origins(
         .region(body)
         .parent_op
         .and_then(|module| Module::new(ctx, module))
-        .map(|module| SymbolTable::collect(ctx, module, |ctx, op| is_control_op(ctx, op, "func")))
+        .map(|module| SymbolTable::collect(ctx, module))
         .unwrap_or_default();
     let provenance = CallableProvenance {
         functions: &functions,

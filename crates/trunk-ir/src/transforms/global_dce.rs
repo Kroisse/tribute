@@ -69,15 +69,17 @@ pub fn eliminate_dead_functions_with_config(
 /// duplicated name shares its reachability. With `recursive: false`, functions
 /// in nested modules are neither removed nor analyzed; they are kept as roots.
 fn run(ctx: &mut IrContext, module: Module, config: &GlobalDceConfig) -> GlobalDceResult {
-    let functions = SymbolTable::collect(ctx, module, func::Func::matches);
+    let symbols = SymbolTable::collect(ctx, module);
+    let functions = || {
+        symbols
+            .all_definitions()
+            .filter(|&(_, op)| func::Func::matches(ctx, op))
+    };
     let is_candidate = |op| config.recursive || !in_nested_module(ctx, module, op);
-    let candidates: Vec<(Symbol, OpRef)> = functions
-        .all_definitions()
-        .filter(|&(_, op)| is_candidate(op))
-        .collect();
+    let candidates: Vec<(Symbol, OpRef)> =
+        functions().filter(|&(_, op)| is_candidate(op)).collect();
 
-    let mut roots: HashSet<Symbol> = functions
-        .all_definitions()
+    let mut roots: HashSet<Symbol> = functions()
         .filter(|&(name, op)| !is_candidate(op) || is_root(ctx, name, op, config))
         .map(|(name, _)| name)
         .collect();
@@ -572,8 +574,9 @@ mod tests {
     }
 
     fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
-        SymbolTable::collect(ctx, module, func::Func::matches)
+        SymbolTable::collect(ctx, module)
             .all_definitions()
+            .filter(|&(_, op)| func::Func::matches(ctx, op))
             .map(|(name, _)| name)
             .collect()
     }

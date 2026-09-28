@@ -4,13 +4,16 @@
 //! module: the names of the nested `core.module`s that enclose the
 //! definition, excluding the root module itself, joined with `::` and followed
 //! by the definition's `sym_name`. References are never resolved relative to
-//! the referencing operation's module. A qualified name defined more than once
-//! is an IR error.
+//! the referencing operation's module. Every operation other than a
+//! `core.module` that carries a symbol `sym_name` is a definition, and all
+//! definitions share one namespace: a qualified name defined more than once is
+//! an IR error. Consumers check the kind of the definition they resolve.
 
 use itertools::Itertools;
 use rustc_hash::FxHashMap;
 use smallvec::SmallVec;
 
+use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
 use crate::context::IrContext;
 use crate::dialect::core;
 use crate::ops::DialectOp;
@@ -30,39 +33,29 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
-    /// Collect every operation accepted by `is_definition` in `module` and its
-    /// nested modules.
-    pub fn collect(
-        ctx: &IrContext,
-        module: Module,
-        is_definition: impl Fn(&IrContext, OpRef) -> bool,
-    ) -> Self {
+    /// Collect every definition in `module` and its nested modules.
+    ///
+    /// Within an [`AnalysisCache`](crate::analysis::AnalysisCache), query the
+    /// table as an analysis instead.
+    pub fn collect(ctx: &IrContext, module: Module) -> Self {
         let mut table = Self::default();
         if let Some(body) = module.body(ctx) {
-            table.collect_region(ctx, body, &[], &is_definition);
+            table.collect_region(ctx, body, &[]);
         }
         table
     }
 
-    fn collect_region(
-        &mut self,
-        ctx: &IrContext,
-        region: RegionRef,
-        path: &[Symbol],
-        is_definition: &impl Fn(&IrContext, OpRef) -> bool,
-    ) {
+    fn collect_region(&mut self, ctx: &IrContext, region: RegionRef, path: &[Symbol]) {
         for &block in &ctx.region(region).blocks {
             for &op in &ctx.block(block).ops {
                 if core::Module::matches(ctx, op) {
                     let mut nested = path.to_vec();
                     nested.extend(ctx.op(op).attributes.get_symbol(SYM_NAME));
                     for &region in &ctx.op(op).regions {
-                        self.collect_region(ctx, region, &nested, is_definition);
+                        self.collect_region(ctx, region, &nested);
                     }
                 } else {
-                    if is_definition(ctx, op)
-                        && let Some(name) = ctx.op(op).attributes.get_symbol(SYM_NAME)
-                    {
+                    if let Some(name) = ctx.op(op).attributes.get_symbol(SYM_NAME) {
                         self.definitions
                             .entry(qualify(path, name))
                             .or_default()
@@ -71,7 +64,7 @@ impl SymbolTable {
                     // Only modules contribute path components, as in
                     // `qualified_name`.
                     for &region in &ctx.op(op).regions {
-                        self.collect_region(ctx, region, path, is_definition);
+                        self.collect_region(ctx, region, path);
                     }
                 }
             }
@@ -119,6 +112,16 @@ impl SymbolTable {
     }
 }
 
+/// `SymbolTable` as an [`Analysis`]: expects `target` to be a `core.module` op
+/// and delegates to [`SymbolTable::collect`].
+impl Analysis for SymbolTable {
+    fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
+        let module = Module::new(ctx.ir(), target)
+            .expect("SymbolTable analysis target must be a `core.module` op");
+        Ok(Self::collect(ctx.ir(), module))
+    }
+}
+
 /// The root-qualified name of the definition `op`, which must carry a
 /// `sym_name`.
 pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
@@ -151,7 +154,6 @@ fn qualify(path: &[Symbol], name: Symbol) -> Symbol {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::func;
     use crate::parser::parse_test_module;
 
     const NESTED: &str = r#"core.module @root {
@@ -170,15 +172,11 @@ mod tests {
   }
 }"#;
 
-    fn is_func(ctx: &IrContext, op: OpRef) -> bool {
-        func::Func::matches(ctx, op)
-    }
-
     #[test]
     fn definitions_are_keyed_by_root_qualified_path() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, NESTED);
-        let table = SymbolTable::collect(&ctx, module, is_func);
+        let table = SymbolTable::collect(&ctx, module);
 
         for name in ["top", "outer::same", "outer::inner::same"] {
             let op = table
@@ -208,7 +206,7 @@ mod tests {
   }
 }"#,
         );
-        let table = SymbolTable::collect(&ctx, module, is_func);
+        let table = SymbolTable::collect(&ctx, module);
         let twice = Symbol::from_dynamic("outer::twice");
         assert_eq!(table.resolve(twice), None);
         let duplicates = table.duplicates();
@@ -235,7 +233,7 @@ mod tests {
   }
 }"#,
         );
-        let table = SymbolTable::collect(&ctx, module, is_func);
+        let table = SymbolTable::collect(&ctx, module);
         let hidden = table
             .resolve(Symbol::from_dynamic("outer::hidden"))
             .expect("a definition nested in a function body is still collected");
@@ -243,5 +241,28 @@ mod tests {
             qualified_name(&ctx, hidden),
             Some(Symbol::from_dynamic("outer::hidden"))
         );
+    }
+
+    #[test]
+    fn analysis_matches_direct_collection() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, NESTED);
+        let mut analyses = crate::analysis::AnalysisCache::new();
+        let table = analyses
+            .get::<SymbolTable>(&ctx, module.op())
+            .expect("symbol table computes infallibly");
+        let direct = SymbolTable::collect(&ctx, module);
+
+        let mut names: Vec<_> = table
+            .iter()
+            .map(|(name, ops)| (name, ops.to_vec()))
+            .collect();
+        let mut expected: Vec<_> = direct
+            .iter()
+            .map(|(name, ops)| (name, ops.to_vec()))
+            .collect();
+        names.sort_unstable_by_key(|&(name, _)| name);
+        expected.sort_unstable_by_key(|&(name, _)| name);
+        assert_eq!(names, expected);
     }
 }

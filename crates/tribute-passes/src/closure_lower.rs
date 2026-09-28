@@ -523,7 +523,7 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
             ControlFlow::Continue(WalkAction::Advance)
         });
         // Rebuilt per batch so functions introduced by lowering resolve too.
-        let functions = Arc::new(SymbolTable::collect(ctx, module, func::Func::matches));
+        let functions = Arc::new(SymbolTable::collect(ctx, module));
 
         // Validate the initial module as a whole before rewriting any body.
         // Later batches include newly generated functions and follow the same gate.

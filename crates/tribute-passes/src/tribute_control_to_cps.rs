@@ -457,16 +457,18 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
     }
 
     // Callees resolve by root-qualified name across the whole module tree.
-    let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> =
-        SymbolTable::collect(ctx, module, func::Func::matches)
-            .iter()
-            .filter_map(|(name, ops)| {
-                let &[op] = ops else { return None };
-                let attributes = &ctx.op(op).attributes;
-                let convention = attributes.get_i64(CALLING_CONVENTION_ATTR).ok().flatten();
-                Some((name, (attributes.get_type("type")?, convention)))
-            })
-            .collect();
+    let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> = SymbolTable::collect(ctx, module)
+        .iter()
+        .filter_map(|(name, ops)| {
+            let &[op] = ops else { return None };
+            if !func::Func::matches(ctx, op) {
+                return None;
+            }
+            let attributes = &ctx.op(op).attributes;
+            let convention = attributes.get_i64(CALLING_CONVENTION_ATTR).ok().flatten();
+            Some((name, (attributes.get_type("type")?, convention)))
+        })
+        .collect();
     let mut failures = Vec::new();
     for op in module.ops(ctx) {
         visit(ctx, op, &signatures, &mut failures);
@@ -3719,33 +3721,32 @@ fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> 
 
 /// Every source callable, keyed by its root-qualified name.
 fn collect_callable_graph(ctx: &IrContext, module: Module) -> HashMap<Symbol, CallableInfo> {
-    SymbolTable::collect(ctx, module, |ctx, op| {
-        tribute_control::Func::matches(ctx, op)
-    })
-    .iter()
-    .map(|(symbol, ops)| {
-        // Pre-CPS validation rejects duplicated qualified names.
-        let op = ops[0];
-        let logical_type = ctx
-            .op(op)
-            .attributes
-            .get_type("type")
-            .expect("pre-CPS validation checked function type");
-        let callable = tribute_control::FuncSig::from_type_ref(ctx, logical_type)
-            .expect("pre-CPS validation checked callable type");
-        let convention = tribute_control::func_sig_convention(ctx, logical_type)
-            .expect("pre-CPS validation checked callable convention");
-        (
-            symbol,
-            CallableInfo {
+    SymbolTable::collect(ctx, module)
+        .iter()
+        .filter(|&(_, ops)| tribute_control::Func::matches(ctx, ops[0]))
+        .map(|(symbol, ops)| {
+            // Pre-CPS validation rejects duplicated qualified names.
+            let op = ops[0];
+            let logical_type = ctx
+                .op(op)
+                .attributes
+                .get_type("type")
+                .expect("pre-CPS validation checked function type");
+            let callable = tribute_control::FuncSig::from_type_ref(ctx, logical_type)
+                .expect("pre-CPS validation checked callable type");
+            let convention = tribute_control::func_sig_convention(ctx, logical_type)
+                .expect("pre-CPS validation checked callable convention");
+            (
                 symbol,
-                convention: convert_convention(convention),
-                source_result: callable.result(ctx),
-                source_params: callable.inputs(ctx).to_vec(),
-            },
-        )
-    })
-    .collect()
+                CallableInfo {
+                    symbol,
+                    convention: convert_convention(convention),
+                    source_result: callable.result(ctx),
+                    source_params: callable.inputs(ctx).to_vec(),
+                },
+            )
+        })
+        .collect()
 }
 
 fn verify_candidate_or_restore_aliases(

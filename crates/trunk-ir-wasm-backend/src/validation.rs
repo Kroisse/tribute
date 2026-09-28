@@ -40,9 +40,7 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
     // Direct callees resolve by root-qualified path over the whole module.
-    let symbols = SymbolTable::collect(ctx, module, |ctx, op| {
-        ctx.op(op).attributes.get_symbol("sym_name").is_some()
-    });
+    let symbols = SymbolTable::collect(ctx, module);
     for (name, _) in symbols.duplicates() {
         errors.push(format!("symbol @{name} is defined more than once"));
     }

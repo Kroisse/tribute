@@ -573,9 +573,7 @@ pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> Validatio
     // References name their targets by root-qualified path. None is genuinely
     // undeclared. A found but invalid or duplicated declaration is Some(None),
     // so compatibility cannot hide malformed known contracts.
-    let symbols = crate::symbol_table::SymbolTable::collect(ctx, module, |ctx, op| {
-        ctx.op(op).attributes.get_symbol("sym_name").is_some()
-    });
+    let symbols = crate::symbol_table::SymbolTable::collect(ctx, module);
     let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
         let found = *symbols.definitions_of(name).first()?;
         if symbols.resolve(name).is_none() || !func::Func::matches(ctx, found) {

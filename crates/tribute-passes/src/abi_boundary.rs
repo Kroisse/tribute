@@ -105,7 +105,7 @@ pub fn verify_boundary_exit(ctx: &IrContext, module: Module) -> Vec<BoundaryViol
         ops.push(op);
         ControlFlow::Continue(WalkAction::Advance)
     });
-    let functions = SymbolTable::collect(ctx, module, func::Func::matches);
+    let functions = SymbolTable::collect(ctx, module);
     for op in ops {
         verifier.check_op(op, &functions);
     }

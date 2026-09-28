@@ -557,7 +557,7 @@ impl RewritePattern for FuncUnreachablePattern {
 /// Each uniquely defined `func.func` by root-qualified name, with its exact
 /// signature captured before lowering converts it.
 fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<Symbol, TypeRef> {
-    let table = SymbolTable::collect(ctx, module, func::Func::matches);
+    let table = SymbolTable::collect(ctx, module);
     table
         .iter()
         .filter_map(|(name, ops)| match ops {

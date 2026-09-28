@@ -49,13 +49,18 @@ pub struct CallGraph {
 /// name has no entry in `func_ops`, but calls in each of its bodies are still
 /// recorded.
 pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
-    let functions = SymbolTable::collect(ctx, module, func::Func::matches);
+    call_graph_over(ctx, &SymbolTable::collect(ctx, module))
+}
+
+fn call_graph_over(ctx: &IrContext, symbols: &SymbolTable) -> CallGraph {
     let mut graph = CallGraph::default();
-    for (name, ops) in functions.iter() {
-        if let &[op] = ops {
+    for (name, ops) in symbols.iter() {
+        if let &[op] = ops
+            && func::Func::matches(ctx, op)
+        {
             graph.func_ops.insert(name, op);
         }
-        for &op in ops {
+        for &op in ops.iter().filter(|&&op| func::Func::matches(ctx, op)) {
             for &region in &ctx.op(op).regions {
                 collect_calls(ctx, region, name, &mut graph);
             }
@@ -91,13 +96,12 @@ fn record_call(graph: &mut CallGraph, caller: Symbol, callee: Symbol) {
     *graph.call_site_count.entry(callee).or_insert(0) += 1;
 }
 
-/// `CallGraph` as an [`Analysis`]: expects `target` to be a `core.module` op
-/// and delegates to [`build_call_graph`].
+/// `CallGraph` as an [`Analysis`] over the [`SymbolTable`] of `target`, which
+/// must be a `core.module` op.
 impl Analysis for CallGraph {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-        let module = Module::new(ctx.ir(), target)
-            .expect("CallGraph analysis target must be a `core.module` op");
-        Ok(build_call_graph(ctx.ir(), module))
+        let symbols = ctx.get::<SymbolTable>(target)?;
+        Ok(call_graph_over(ctx.ir(), &symbols))
     }
 }
 
