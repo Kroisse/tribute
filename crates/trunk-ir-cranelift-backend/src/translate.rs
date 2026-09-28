@@ -477,25 +477,20 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         let mut cl_func =
             cl_ir::Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), sig);
 
-        // Declare all known functions as FuncRefs
-        let mut func_refs: FxHashMap<Symbol, cl_ir::FuncRef> = FxHashMap::default();
-        for (&sym, &fid) in &func_ids {
-            let fref = obj_module.declare_func_in_func(fid, &mut cl_func);
-            func_refs.insert(sym, fref);
-        }
-
-        // Declare all data sections as GlobalValues
-        let mut data_refs: FxHashMap<Symbol, cl_ir::GlobalValue> = FxHashMap::default();
-        for (&sym, &did) in &data_ids {
-            let gv = obj_module.declare_data_in_func(did, &mut cl_func);
-            data_refs.insert(sym, gv);
-        }
-
-        // Build the function body
+        // Build the function body. Referenced functions and data objects are
+        // declared in this function as the body first references them.
+        let target_config = obj_module.target_config();
         {
             let builder = FunctionBuilder::new(&mut cl_func, &mut fb_ctx);
-            let mut translator =
-                FunctionTranslator::new(ctx, builder, &func_refs, &data_refs, call_conv, ptr_ty);
+            let mut translator = FunctionTranslator::new(
+                ctx,
+                builder,
+                &mut obj_module,
+                &func_ids,
+                &data_ids,
+                call_conv,
+                ptr_ty,
+            );
 
             let body_region = ctx.region(func_body);
             let ir_blocks: &[BlockRef] = &body_region.blocks;
@@ -585,7 +580,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
             }
 
             translator.builder.seal_all_blocks();
-            translator.builder.finalize(obj_module.target_config());
+            translator.builder.finalize(target_config);
         }
 
         // Compile the function via Cranelift
