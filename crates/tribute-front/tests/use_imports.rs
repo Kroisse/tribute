@@ -24,9 +24,13 @@ mod outer {
     }
     use inner::one
 }
+use basic
 use basic::add
 use basic::add as plus
 use outer::inner
+use helper
+
+fn helper() -> Nat { 1 }
 
 fn main() {
     let _ = add(1, plus(2, 3))
@@ -46,6 +50,7 @@ mod basic {
 }
 use basic::sub
 use nowhere::thing
+use nothing_here
 
 fn main() {}
 "#,
@@ -55,6 +60,7 @@ fn main() {}
         [
             "unresolved import `basic::sub`",
             "unresolved import `nowhere::thing`",
+            "unresolved import `nothing_here`",
         ],
     );
 }
@@ -83,4 +89,33 @@ fn main() {
             "expected a value, found module `self::basic::add`",
         ],
     );
+}
+
+/// A module named where a pattern expects a constructor is rejected before
+/// lowering instead of crashing there.
+#[salsa_test]
+fn module_in_pattern_is_reported(db: &salsa::DatabaseImpl) {
+    for (name, pattern) in [("tuple-style", "M(x)"), ("struct-style", "M { x }")] {
+        let errors = errors(
+            db,
+            &format!(
+                r#"
+mod M {{ pub fn f() -> Nat {{ 1 }} }}
+enum E {{ A(Nat) }}
+
+fn g(e: E) -> Nat {{
+    case e {{
+        {pattern} -> x
+        _ -> 0
+    }}
+}}
+"#
+            ),
+        );
+        assert_eq!(
+            errors,
+            ["expected a constructor, found module `M`"],
+            "{name}"
+        );
+    }
 }

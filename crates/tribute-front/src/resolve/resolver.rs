@@ -513,8 +513,10 @@ impl<'db> Resolver<'db> {
                 return false;
             };
             let full = Symbol::from_dynamic(&path.iter().format("::").to_string());
+            // A single-segment path must name a definition: `env.lookup`
+            // would also find the module placeholder this import inserted.
             let found = if namespace.is_empty() {
-                self.env.lookup(*last).is_some()
+                self.env.has_definition(*last)
             } else {
                 let namespace = Symbol::from_dynamic(&namespace.iter().format("::").to_string());
                 self.env.lookup_qualified(namespace, *last).is_some()
