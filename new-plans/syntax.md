@@ -386,8 +386,7 @@ Item ::= UseDecl
 ```ebnf
 UseDecl ::= 'use' UsePath
 
-UsePath ::= UseStart ('::' PathSegment)* UseTree?
-UseStart ::= 'pkg' | 'super' | PathSegment
+UsePath ::= PathStart ('::' PathSegment)* UseTree?
 
 UseTree ::= '::' '{' UseItem (',' UseItem)* ','? '}'
           | 'as' Identifier
