@@ -38,6 +38,7 @@ use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
@@ -84,7 +85,7 @@ pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
 /// environment parameter included. Until storage finalization, remaining uses
 /// keep the semantic closure type through an unrealized cast of the pack.
 struct LowerClosureNewArena {
-    functions: Arc<HashMap<Symbol, Option<OpRef>>>,
+    functions: Arc<SymbolTable>,
 }
 
 impl RewritePattern for LowerClosureNewArena {
@@ -105,9 +106,7 @@ impl RewritePattern for LowerClosureNewArena {
         let result_ty = ctx.op_result_types(op)[0];
         let Some(target_ty) = self
             .functions
-            .get(&func_ref)
-            .copied()
-            .flatten()
+            .resolve(func_ref)
             .and_then(|target| func::Func::from_op(ctx, target).ok())
             .map(|target| target.r#type(ctx))
         else {
@@ -515,22 +514,16 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
 
     loop {
         let mut discovered = Vec::new();
-        // A name defined more than once is ambiguous (`None`), matching the
-        // flat resolution native lowering applies to function references.
-        let mut functions: HashMap<Symbol, Option<OpRef>> = HashMap::new();
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-            if let Ok(func_op) = func::Func::from_op(ctx, op) {
-                functions
-                    .entry(func_op.sym_name(ctx))
-                    .and_modify(|resolved| *resolved = None)
-                    .or_insert(Some(op));
-                if lowered.insert(op) {
-                    discovered.push(func_op);
-                }
+            if let Ok(func_op) = func::Func::from_op(ctx, op)
+                && lowered.insert(op)
+            {
+                discovered.push(func_op);
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
-        let functions = Arc::new(functions);
+        // Rebuilt per batch so functions introduced by lowering resolve too.
+        let functions = Arc::new(SymbolTable::collect(ctx, module, func::Func::matches));
 
         // Validate the initial module as a whole before rewriting any body.
         // Later batches include newly generated functions and follow the same gate.
@@ -559,7 +552,7 @@ fn validate_closure_transfers(ctx: &mut IrContext, func_op: func::Func) -> PassR
 fn rewrite_validated_closures_in_func(
     ctx: &mut IrContext,
     func_op: func::Func,
-    functions: Arc<HashMap<Symbol, Option<OpRef>>>,
+    functions: Arc<SymbolTable>,
 ) {
     if ctx.op(func_op.op_ref()).regions.is_empty() {
         return;
@@ -1322,33 +1315,47 @@ mod tests {
     }
 
     #[test]
-    fn ambiguous_closure_target_is_not_typed_from_either_definition() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  !closure = closure.closure(func.func_sig<(core.i32) -> core.i32>) {tribute.calling_convention = 0}
-  core.module @left {
-    func.func @helper(%env: tribute_rt.anyref, %value: core.i32) -> core.i32 {
+    fn closure_targets_resolve_by_root_qualified_path() {
+        let source = |reference: &str| {
+            format!(
+                r#"core.module @test {{
+  !closure = closure.closure(func.func_sig<(core.i32) -> core.i32>) {{tribute.calling_convention = 0}}
+  core.module @left {{
+    func.func @helper(%env: tribute_rt.anyref, %value: core.i32) -> core.i32 {{
       func.return %value
-    }
-  }
-  core.module @right {
-    func.func @helper(%env: tribute_rt.anyref, %value: core.i64) -> core.i32 {
-      %zero = arith.const {value = 0} : core.i32
+    }}
+  }}
+  core.module @right {{
+    func.func @helper(%env: tribute_rt.anyref, %value: core.i64) -> core.i32 {{
+      %zero = arith.const {{value = 0}} : core.i32
       func.return %zero
-    }
-  }
-  func.func @make() -> !closure {
-    %environment = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
-    %created = closure.new %environment {func_ref = @helper} : !closure
+    }}
+  }}
+  func.func @make() -> !closure {{
+    %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
+    %created = closure.new %environment {{func_ref = {reference}}} : !closure
     func.return %created
-  }
-}"#,
+  }}
+}}"#
+            )
+        };
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &source(r#"@"left::helper""#));
+        lower_prepared_closures(&mut ctx, module).unwrap();
+        let ir = print_module(&ctx, module.op());
+        assert!(!ir.contains("closure.new"), "{ir}");
+        assert!(
+            ir.contains(
+                r#"func.constant {func_ref = @"left::helper"} : func.func_sig<(tribute_rt.anyref, core.i32) -> core.i32>"#
+            ),
+            "{ir}"
         );
 
+        // A bare name does not resolve relative to any nested module.
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &source("@helper"));
         lower_prepared_closures(&mut ctx, module).unwrap();
-
         let ir = print_module(&ctx, module.op());
         assert!(ir.contains("closure.new"), "{ir}");
         assert!(!ir.contains("func.constant"), "{ir}");

@@ -20,11 +20,12 @@ use trunk_ir::dialect::core;
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::op_interface::IndirectCallLikeModel;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
+use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
+use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_region};
 
@@ -56,10 +57,7 @@ pub fn lower(
     // Phase 1: Adapt closure structs for native backend. This identity rewrite
     // must see the semantic layout recorded by the typed ownership plan.
     let rtti_layout_rewrites = adapt_closure_structs(ctx, module);
-    let mut functions = HashMap::new();
-    if let Some(body) = module.body(ctx) {
-        collect_function_symbols(ctx, body, &mut functions);
-    }
+    let functions = function_signatures(ctx, module);
 
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
@@ -556,31 +554,15 @@ impl RewritePattern for FuncUnreachablePattern {
     }
 }
 
-/// Map each `func.func` `sym_name` to its exact signature, including nested
-/// modules, before lowering converts the signatures. Native emission registers
-/// nested functions under their own `sym_name` in one flat namespace, so
-/// `clif.symbol_addr` references resolve the same way here. A name defined
-/// more than once is ambiguous (`None`); native validation rejects the
-/// duplicate definition as well.
-fn collect_function_symbols(
-    ctx: &IrContext,
-    region: RegionRef,
-    functions: &mut HashMap<Symbol, Option<TypeRef>>,
-) {
-    for &block in &ctx.region(region).blocks {
-        for &op in &ctx.block(block).ops {
-            if let Ok(function) = func::Func::from_op(ctx, op) {
-                functions
-                    .entry(function.sym_name(ctx))
-                    .and_modify(|resolved| *resolved = None)
-                    .or_insert(Some(function.r#type(ctx)));
-            } else if core::Module::matches(ctx, op) {
-                for &nested in &ctx.op(op).regions {
-                    collect_function_symbols(ctx, nested, functions);
-                }
-            }
-        }
-    }
+/// Each uniquely defined `func.func` by root-qualified name, with its exact
+/// signature captured before lowering converts it.
+fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<Symbol, TypeRef> {
+    let table = SymbolTable::collect(ctx, module, func::Func::matches);
+    table
+        .iter()
+        .filter(|&(name, _)| table.resolve(name).is_some())
+        .filter_map(|(name, op)| Some((name, func::Func::from_op(ctx, op).ok()?.r#type(ctx))))
+        .collect()
 }
 
 /// Pattern: `func.constant` -> `clif.symbol_addr`
@@ -589,7 +571,7 @@ fn collect_function_symbols(
 /// reference must carry exactly its target's signature, calling convention
 /// included, before it is erased.
 struct FuncConstantPattern {
-    functions: HashMap<Symbol, Option<TypeRef>>,
+    functions: HashMap<Symbol, TypeRef>,
 }
 
 impl RewritePattern for FuncConstantPattern {
@@ -606,7 +588,7 @@ impl RewritePattern for FuncConstantPattern {
         let func_ref = const_op.func_ref(ctx);
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
-            && self.functions.get(&func_ref).copied().flatten() != Some(result)
+            && self.functions.get(&func_ref).copied() != Some(result)
         {
             return false;
         }
@@ -1168,7 +1150,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_function_references_resolve_like_native_emission() {
+    fn nested_function_references_resolve_by_root_qualified_path() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -1178,14 +1160,14 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+      %reference = func.constant {func_ref = @"inner::helper"} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
       func.return
     }
   }
 }"#,
         );
         super::lower(&mut ctx, module, TypeConverter::new())
-            .expect("a nested reference resolves to its flat native symbol");
+            .expect("a nested reference resolves by its qualified path");
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("clif.symbol_addr"), "{printed}");
         assert!(!printed.contains("func.constant"), "{printed}");
@@ -1212,25 +1194,23 @@ mod tests {
         );
         assert!(unknown.contains("func.constant"), "{unknown}");
 
-        let ambiguous = lower(
+        let duplicated = lower(
             r#"core.module @test {
   core.module @left {
     func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
       func.return
     }
-    func.func @take() {
-      %reference = func.constant {func_ref = @helper} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
       func.return
     }
-  }
-  core.module @right {
-    func.func @helper(%value: core.i32) {
+    func.func @take() {
+      %reference = func.constant {func_ref = @"left::helper"} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
       func.return
     }
   }
 }"#,
         );
-        assert!(ambiguous.contains("func.constant"), "{ambiguous}");
+        assert!(duplicated.contains("func.constant"), "{duplicated}");
 
         let different_inputs = lower(
             r#"core.module @test {
