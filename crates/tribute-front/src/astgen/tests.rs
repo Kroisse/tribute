@@ -2580,6 +2580,10 @@ fn test_block_literals_strip_indentation() {
             ExprKind::BytesLit(b"  A\n  b".to_vec()),
         ),
         (
+            r##"fn main() -> String { #"a\\{x}"# }"##,
+            ExprKind::StringLit(r"a\{x}".into()),
+        ),
+        (
             "fn main() -> String {\r\n    #\"\r\n        a\r\n        b\r\n        \"#\r\n}\r\n",
             ExprKind::StringLit("a\nb".into()),
         ),
