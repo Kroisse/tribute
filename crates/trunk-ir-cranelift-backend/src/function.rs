@@ -3,12 +3,14 @@
 //! Translates `clif.*` dialect operations within a single function body
 //! to Cranelift IR instructions using `FunctionBuilder`.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{self as cl_ir, InstBuilder, TrapCode};
 use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
+use cranelift_module::{DataId, FuncId, Module as _};
+use cranelift_object::ObjectModule;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
@@ -164,13 +166,19 @@ pub(crate) struct FunctionTranslator<'a> {
     ctx: &'a IrContext,
     pub(crate) builder: FunctionBuilder<'a>,
     /// Maps TrunkIR arena values to Cranelift IR values.
-    pub(crate) values: HashMap<ValueRef, cl_ir::Value>,
-    /// Maps function symbols to Cranelift FuncRefs.
-    func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
-    /// Maps data symbols to Cranelift GlobalValues.
-    data_refs: &'a HashMap<Symbol, cl_ir::GlobalValue>,
+    pub(crate) values: FxHashMap<ValueRef, cl_ir::Value>,
+    /// The object module that owns the function and data declarations.
+    module: &'a mut ObjectModule,
+    /// Module-level functions a body may reference.
+    func_ids: &'a FxHashMap<Symbol, FuncId>,
+    /// Module-level data objects a body may reference.
+    data_ids: &'a FxHashMap<Symbol, DataId>,
+    /// Functions this body referenced, declared on first reference.
+    func_refs: FxHashMap<Symbol, cl_ir::FuncRef>,
+    /// Data objects this body referenced, declared on first reference.
+    data_refs: FxHashMap<Symbol, cl_ir::GlobalValue>,
     /// Maps TrunkIR block refs to Cranelift blocks.
-    pub(crate) block_map: HashMap<BlockRef, cl_ir::Block>,
+    pub(crate) block_map: FxHashMap<BlockRef, cl_ir::Block>,
     /// The platform's ordinary calling convention for non-CPS indirect calls.
     default_call_conv: CallConv,
     /// The platform pointer type (e.g. I64 on 64-bit).
@@ -181,21 +189,49 @@ impl<'a> FunctionTranslator<'a> {
     pub(crate) fn new(
         ctx: &'a IrContext,
         builder: FunctionBuilder<'a>,
-        func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
-        data_refs: &'a HashMap<Symbol, cl_ir::GlobalValue>,
+        module: &'a mut ObjectModule,
+        func_ids: &'a FxHashMap<Symbol, FuncId>,
+        data_ids: &'a FxHashMap<Symbol, DataId>,
         default_call_conv: CallConv,
         ptr_ty: cl_types::Type,
     ) -> Self {
         Self {
             ctx,
             builder,
-            values: HashMap::new(),
-            func_refs,
-            data_refs,
-            block_map: HashMap::new(),
+            values: FxHashMap::default(),
+            module,
+            func_ids,
+            data_ids,
+            func_refs: FxHashMap::default(),
+            data_refs: FxHashMap::default(),
+            block_map: FxHashMap::default(),
             default_call_conv,
             ptr_ty,
         }
+    }
+
+    /// The reference to a module function, declared in this function the
+    /// first time the body references it.
+    fn func_ref(&mut self, sym: Symbol) -> Option<cl_ir::FuncRef> {
+        if let Some(&func_ref) = self.func_refs.get(&sym) {
+            return Some(func_ref);
+        }
+        let func_id = *self.func_ids.get(&sym)?;
+        let func_ref = self.module.declare_func_in_func(func_id, self.builder.func);
+        self.func_refs.insert(sym, func_ref);
+        Some(func_ref)
+    }
+
+    /// The reference to a module data object, declared in this function the
+    /// first time the body references it.
+    fn data_ref(&mut self, sym: Symbol) -> Option<cl_ir::GlobalValue> {
+        if let Some(&gv) = self.data_refs.get(&sym) {
+            return Some(gv);
+        }
+        let data_id = *self.data_ids.get(&sym)?;
+        let gv = self.module.declare_data_in_func(data_id, self.builder.func);
+        self.data_refs.insert(sym, gv);
+        Some(gv)
     }
 
     fn lookup(&self, ir_val: ValueRef) -> CompilationResult<cl_ir::Value> {
@@ -359,9 +395,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(call) = clif::Call::from_op(ctx, op) {
             let callee_sym = call.callee(ctx);
             let func_ref = self
-                .func_refs
-                .get(&callee_sym)
-                .copied()
+                .func_ref(callee_sym)
                 .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
 
             let operands = ctx.op_operands(op);
@@ -500,9 +534,9 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(sym_addr) = clif::SymbolAddr::from_op(ctx, op) {
             let sym = sym_addr.sym(ctx);
             // Check function refs first, then data refs
-            let val = if let Some(&func_ref) = self.func_refs.get(&sym) {
+            let val = if let Some(func_ref) = self.func_ref(sym) {
                 self.builder.ins().func_addr(self.ptr_ty, func_ref)
-            } else if let Some(&gv) = self.data_refs.get(&sym) {
+            } else if let Some(gv) = self.data_ref(sym) {
                 self.builder.ins().symbol_value(self.ptr_ty, gv)
             } else {
                 return Err(CompilationError::codegen(format!(
@@ -525,9 +559,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(rc) = clif::ReturnCall::from_op(ctx, op) {
             let callee_sym = rc.callee(ctx);
             let func_ref = self
-                .func_refs
-                .get(&callee_sym)
-                .copied()
+                .func_ref(callee_sym)
                 .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
 
             let operands = ctx.op_operands(op);

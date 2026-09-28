@@ -88,7 +88,7 @@ mod wasm {
 
     fn memory(min: Attr<u32>, max: Attr<u32>, shared: Attr<bool>, memory64: Attr<bool>) {}
 
-    fn data(offset: Attr<u32>, bytes: Attr<_>, passive: Attr<bool>) {}
+    fn data(offset: Attr<u32>, bytes: Attr<Bytes>, passive: Attr<bool>) {}
 
     fn table(reftype: Attr<Symbol>, min: Attr<u32>, max: Option<Attr<u32>>) {}
 

@@ -22,5 +22,5 @@ mod translate;
 mod validation;
 
 pub use errors::{CompilationError, CompilationErrorKind, CompilationResult};
-pub use translate::{RodataEntry, emit_module_to_native};
+pub use translate::emit_module_to_native;
 pub use validation::{ValidationError, native_backend_ready_target, validate_clif_ir};

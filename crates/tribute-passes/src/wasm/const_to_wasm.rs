@@ -211,10 +211,8 @@ fn declare_data_segments(
         let Ok(data) = wasm_dialect::Data::from_op(ctx, op) else {
             continue;
         };
-        if data.passive(ctx)
-            && let Some(Attribute::Bytes(bytes)) = ctx.op(op).attributes.get("bytes")
-        {
-            segments.entry(bytes.to_vec()).or_insert(next_idx);
+        if data.passive(ctx) {
+            segments.entry(data.bytes(ctx).to_vec()).or_insert(next_idx);
         }
         next_idx += 1;
     }
@@ -226,7 +224,7 @@ fn declare_data_segments(
         };
         let op = wasm_dialect::Data::operands()
             .offset(0)
-            .bytes(Attribute::Bytes(content.as_slice().into()))
+            .bytes(content.as_slice().into())
             .passive(true)
             .build(ctx, location);
         ctx.push_op(module_block, op.op_ref());
@@ -646,11 +644,8 @@ mod tests {
         module
             .ops(ctx)
             .into_iter()
-            .filter(|&op| wasm_dialect::Data::from_op(ctx, op).is_ok())
-            .map(|op| match ctx.op(op).attributes.get("bytes") {
-                Some(Attribute::Bytes(bytes)) => bytes.to_vec(),
-                other => panic!("wasm.data without bytes: {other:?}"),
-            })
+            .filter_map(|op| wasm_dialect::Data::from_op(ctx, op).ok())
+            .map(|data| data.bytes(ctx).to_vec())
             .collect()
     }
 

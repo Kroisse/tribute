@@ -200,16 +200,7 @@ pub(crate) fn extract_data_def(
 ) -> CompilationResult<DataDef> {
     let passive = data_op.passive(ctx);
     let offset = if passive { 0 } else { data_op.offset(ctx) };
-    // bytes is typed as `any` in the dialect, so we access the raw attribute
-    let op_data = ctx.op(data_op.op_ref());
-    let bytes = match op_data.attributes.get("bytes") {
-        Some(Attribute::Bytes(value)) => value.to_vec(),
-        _ => {
-            return Err(CompilationError::invalid_attribute(
-                "missing or invalid 'bytes' attribute on wasm.data",
-            ));
-        }
-    };
+    let bytes = data_op.bytes(ctx).to_vec();
     let offset = i32::try_from(offset)
         .map_err(|_| CompilationError::invalid_module("data segment offset exceeds i32::MAX"))?;
     Ok(DataDef {

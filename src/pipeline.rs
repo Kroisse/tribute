@@ -222,7 +222,7 @@ use trunk_ir_cranelift_backend::passes::{
     adt_to_clif, arith_to_clif, cf_to_clif, func_to_clif, mem_to_clif,
 };
 use trunk_ir_cranelift_backend::{
-    CompilationResult as NativeCompilationResult, RodataEntry, emit_module_to_native,
+    CompilationResult as NativeCompilationResult, emit_module_to_native,
 };
 use trunk_ir_wasm_backend::{
     CompilationError, CompilationResult as WasmCompilationResult, WasmBinary,
@@ -1210,7 +1210,7 @@ fn prepare_module_to_native(
     sanitize: bool,
     optimizations: NativeOptimizationOptions,
     stop_after: Option<NativePipelineStage>,
-) -> NativeCompilationResult<Option<Vec<RodataEntry>>> {
+) -> NativeCompilationResult<()> {
     let _span = tracing::info_span!("prepare_module_to_native").entered();
     let mut analyses = AnalysisCache::new();
 
@@ -1218,9 +1218,9 @@ fn prepare_module_to_native(
     tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, module, sanitize);
 
     // Phase -0.5 - Const analysis + lowering
-    // Analyze string/bytes constants and collect rodata entries.
+    // Declare a clif.data object per string/bytes payload.
     // Lower adt.string_const → adt.variant_new + bytes alloc,
-    // and adt.bytes_const → clif alloc + rodata reference.
+    // and adt.bytes_const → clif alloc + data reference.
     let const_analysis = tribute_passes::native::const_to_native::analyze_consts(ctx, module);
     tribute_passes::native::const_to_native::lower(ctx, module, &const_analysis)
         .map_err(native_conversion_failure)?;
@@ -1329,15 +1329,15 @@ fn prepare_module_to_native(
     }
 
     if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
-        return Ok(None);
+        return Ok(());
     }
 
     if stop_after == Some(NativePipelineStage::AfterBorrowedParameterOptimization) {
-        return Ok(None);
+        return Ok(());
     }
 
     if stop_after == Some(NativePipelineStage::AfterTemporaryBorrowOptimization) {
-        return Ok(None);
+        return Ok(());
     }
 
     // Phase 2.9 - Eliminate local retain/release pairs while they are still
@@ -1347,7 +1347,7 @@ fn prepare_module_to_native(
     }
 
     if stop_after == Some(NativePipelineStage::AfterRcOptimization) {
-        return Ok(None);
+        return Ok(());
     }
 
     // Phase 3 - Legalize unrealized_conversion_cast operations: convert their
@@ -1366,17 +1366,7 @@ fn prepare_module_to_native(
     // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
     tribute_passes::native::rc_lowering::lower_rc(ctx, module);
 
-    // Phase 4 - Validate and emit
-    let _emit_span = tracing::info_span!("emit_module_to_native").entered();
-    let rodata: Vec<RodataEntry> = const_analysis
-        .rodata
-        .iter()
-        .map(|(sym, data)| RodataEntry {
-            symbol: *sym,
-            data: data.clone(),
-        })
-        .collect();
-    Ok(Some(rodata))
+    Ok(())
 }
 
 fn compile_module_to_native(
@@ -1385,9 +1375,9 @@ fn compile_module_to_native(
     sanitize: bool,
     optimizations: NativeOptimizationOptions,
 ) -> NativeCompilationResult<Vec<u8>> {
-    let rodata = prepare_module_to_native(ctx, module, sanitize, optimizations, None)?
-        .expect("complete native preparation must produce rodata");
-    emit_module_to_native(ctx, module, &rodata)
+    prepare_module_to_native(ctx, module, sanitize, optimizations, None)?;
+    let _emit_span = tracing::info_span!("emit_module_to_native").entered();
+    emit_module_to_native(ctx, module)
 }
 
 fn native_conversion_failure(

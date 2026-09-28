@@ -18,6 +18,7 @@ use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionTarget, Module};
 use trunk_ir::symbol_table::qualified_name;
 
+use crate::translate::RESERVED_RUNTIME_SYMBOLS;
 use crate::{CompilationError, CompilationResult};
 
 const NATIVE_BACKEND_READY_BOUNDARY: &str = "native-backend-ready";
@@ -290,6 +291,23 @@ fn validate_clif_region(
                     }
                     continue;
                 }
+            }
+            if let Ok(data) = clif::Data::from_op(ctx, op) {
+                // Data objects link under their root-qualified path.
+                let name = qualified_name(ctx, op).unwrap_or_else(|| data.sym_name(ctx));
+                if name.with_str(|name| RESERVED_RUNTIME_SYMBOLS.contains(&name)) {
+                    errors.push(format!(
+                        "clif.data @{name}: symbol is reserved for the native runtime"
+                    ));
+                }
+                let align = data.align(ctx);
+                if !align.is_power_of_two() {
+                    errors.push(format!(
+                        "clif.data @{}: alignment {align} is not a power of two",
+                        data.sym_name(ctx)
+                    ));
+                }
+                continue;
             }
             if clif::Func::matches(ctx, op) {
                 let function = validate_clif_function(ctx, op, errors);
