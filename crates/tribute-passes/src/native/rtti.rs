@@ -91,6 +91,18 @@ pub const RELEASE_FN_PREFIX: &str = "__tribute_release_";
 /// Name of the runtime deallocation function.
 const DEALLOC_FN: &str = "__tribute_dealloc";
 
+/// Name of the data object mapping each RTTI index to its release function.
+pub const RTTI_TABLE: &str = "__tribute_rtti_table";
+
+/// Name of the function that releases an allocation through its RTTI entry.
+pub const DEEP_RELEASE_FN: &str = "__tribute_deep_release";
+
+/// Width of an RTTI table entry: one native function pointer.
+const RTTI_TABLE_ENTRY_SIZE: u32 = 8;
+
+/// Trap code for a dynamically sized release without an RTTI release entry.
+const UNRESOLVED_DYNAMIC_RELEASE_TRAP: &str = "unresolved_dynamic_release";
+
 /// A native RTTI declaration that contradicts the module it declares.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RttiError(String);
@@ -183,7 +195,8 @@ fn validate_declarations(
 }
 
 /// Generate a release function for every declared RTTI layout and every used
-/// primitive slot.
+/// primitive slot, the RTTI table that maps each index to its release
+/// function, and `__tribute_deep_release`, which dispatches through it.
 pub fn generate_rtti(
     ctx: &mut IrContext,
     module: Module,
@@ -193,16 +206,13 @@ pub fn generate_rtti(
     validate_declarations(ctx, module, &layouts)?;
     let primitive_releases = primitive_release_entries(ctx, module);
 
-    if layouts.is_empty() && primitive_releases.is_empty() {
-        return Ok(());
-    }
-
     // Phase 2: Generate per-type release functions and append to module
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(());
     };
 
     let loc = Location::new(ctx.intern_path("<rtti>".to_string()), Span::new(0, 0));
+    let mut release_indices = Vec::new();
 
     // `anyref` and `intref` have no static nominal allocation layout. Their
     // release action carries a dynamic-size signal, resolved by the header
@@ -211,6 +221,7 @@ pub fn generate_rtti(
     for (rtti_idx, alloc_size) in primitive_releases {
         let func_op = generate_fixed_release_function(ctx, rtti_idx, alloc_size, loc);
         ctx.push_op(module_block, func_op);
+        release_indices.push(rtti_idx);
     }
 
     // Sort by rtti_idx for deterministic output
@@ -219,6 +230,7 @@ pub fn generate_rtti(
     for layout in layouts {
         let ty = layout.r#type(ctx);
         let rtti_idx = layout.index(ctx);
+        release_indices.push(rtti_idx);
         let func_op = match &layout.managed_fields(ctx) {
             ManagedFieldBitmap::Enum(fields) => {
                 generate_release_function_for_enum(ctx, ty, rtti_idx, type_converter, fields, loc)
@@ -230,7 +242,201 @@ pub fn generate_rtti(
         ctx.push_op(module_block, func_op);
     }
 
+    let has_table = !release_indices.is_empty();
+    if has_table {
+        let table = generate_rtti_table(ctx, &release_indices, loc);
+        ctx.push_op(module_block, table);
+    }
+    let deep_release = generate_deep_release_function(ctx, has_table, loc);
+    ctx.push_op(module_block, deep_release);
+
     Ok(())
+}
+
+/// Declare the RTTI table: one pointer-sized entry per index up to the
+/// largest release index, holding that index's release function or null.
+fn generate_rtti_table(ctx: &mut IrContext, release_indices: &[u32], loc: Location) -> OpRef {
+    let max_idx = *release_indices.iter().max().expect("a release index");
+    let entries = max_idx as usize + 1;
+    let relocations = release_indices
+        .iter()
+        .map(|&idx| {
+            trunk_ir::Attribute::List(vec![
+                trunk_ir::Attribute::Int(i128::from(idx * RTTI_TABLE_ENTRY_SIZE)),
+                trunk_ir::Attribute::Symbol(Symbol::from_dynamic(&format!(
+                    "{RELEASE_FN_PREFIX}{idx}"
+                ))),
+            ])
+        })
+        .collect();
+    // Zero bytes rather than zero-initialized data, so the table lives in a
+    // data section: macOS linkers reject relocations in zero-fill sections.
+    clif::Data::operands()
+        .sym_name(Symbol::new(RTTI_TABLE))
+        .bytes(vec![0u8; entries * RTTI_TABLE_ENTRY_SIZE as usize].into())
+        .align(RTTI_TABLE_ENTRY_SIZE)
+        .function_relocs(trunk_ir::Attribute::List(relocations))
+        .build(ctx, loc)
+        .op_ref()
+}
+
+/// Build `__tribute_deep_release(payload_ptr, alloc_size)`.
+///
+/// ```text
+/// entry(payload_ptr, alloc_size):
+///   raw_ptr = payload_ptr - RC_HEADER_SIZE
+///   [with a table]
+///   release_fn = load ptr from rtti_table[load i32 from raw_ptr + 4]
+///   release_fn == null ? goto shallow : goto deep
+/// shallow:
+///   alloc_size == 0 ? trap : __tribute_dealloc(raw_ptr, alloc_size)
+/// deep:
+///   call_indirect release_fn(payload_ptr)
+/// ```
+///
+/// A zero size is a dynamic-size signal that only an RTTI release entry can
+/// resolve, so a shallow release of it traps instead of leaking.
+fn generate_deep_release_function(ctx: &mut IrContext, has_table: bool, loc: Location) -> OpRef {
+    let tys = ClifTypes::intern(ctx);
+    let new_block = |ctx: &mut IrContext, args: Vec<TypeRef>| {
+        ctx.create_block(BlockData {
+            location: loc,
+            args: args
+                .into_iter()
+                .map(|ty| BlockArgData {
+                    ty,
+                    attrs: Default::default(),
+                })
+                .collect(),
+            ops: smallvec![],
+            parent_region: None,
+        })
+    };
+    let entry = new_block(ctx, vec![tys.ptr, tys.i64]);
+    let shallow = new_block(ctx, vec![]);
+    let dealloc = new_block(ctx, vec![]);
+    let unresolved = new_block(ctx, vec![]);
+    let payload_ptr = ctx.block_arg(entry, 0);
+    let alloc_size = ctx.block_arg(entry, 1);
+
+    let push = |ctx: &mut IrContext, block: BlockRef, op: OpRef| ctx.push_op(block, op);
+    let iconst = |ctx: &mut IrContext, block: BlockRef, value: i64, ty: TypeRef| {
+        let op = clif::Iconst::operands()
+            .value(value)
+            .results(ty)
+            .build(ctx, loc);
+        ctx.push_op(block, op.op_ref());
+        op.result(ctx)
+    };
+
+    let header = iconst(
+        ctx,
+        entry,
+        i64::from(tribute_rt::RC_HEADER_SIZE as u32),
+        tys.i64,
+    );
+    let raw_ptr = clif::Isub::operands(payload_ptr, header)
+        .results(tys.ptr)
+        .build(ctx, loc);
+    push(ctx, entry, raw_ptr.op_ref());
+    let raw_ptr = raw_ptr.result(ctx);
+
+    let mut blocks = vec![entry];
+    if has_table {
+        let deep = new_block(ctx, vec![]);
+        let rtti_idx = clif::Load::operands(raw_ptr)
+            .offset(tribute_rt::RTTI_IDX_OFFSET as i32)
+            .results(tys.i32)
+            .build(ctx, loc);
+        push(ctx, entry, rtti_idx.op_ref());
+        let rtti_idx = clif::Uextend::operands(rtti_idx.result(ctx))
+            .results(tys.i64)
+            .build(ctx, loc);
+        push(ctx, entry, rtti_idx.op_ref());
+        let entry_size = iconst(ctx, entry, i64::from(RTTI_TABLE_ENTRY_SIZE), tys.i64);
+        let entry_offset = clif::Imul::operands(rtti_idx.result(ctx), entry_size)
+            .results(tys.i64)
+            .build(ctx, loc);
+        push(ctx, entry, entry_offset.op_ref());
+        let table = clif::SymbolAddr::operands()
+            .sym(Symbol::new(RTTI_TABLE))
+            .results(tys.ptr)
+            .build(ctx, loc);
+        push(ctx, entry, table.op_ref());
+        let entry_addr = clif::Iadd::operands(table.result(ctx), entry_offset.result(ctx))
+            .results(tys.ptr)
+            .build(ctx, loc);
+        push(ctx, entry, entry_addr.op_ref());
+        let release_fn = clif::Load::operands(entry_addr.result(ctx))
+            .offset(0)
+            .results(tys.ptr)
+            .build(ctx, loc);
+        push(ctx, entry, release_fn.op_ref());
+        let null = iconst(ctx, entry, 0, tys.ptr);
+        let is_null = clif::Icmp::operands(release_fn.result(ctx), null)
+            .cond(Symbol::new("eq"))
+            .results(tys.i8)
+            .build(ctx, loc);
+        push(ctx, entry, is_null.op_ref());
+        let branch = clif::Brif::operands(is_null.result(ctx))
+            .successors(shallow, deep)
+            .build(ctx, loc);
+        push(ctx, entry, branch.op_ref());
+
+        let release_sig = clif::func_sig(ctx, [tys.ptr], [tys.nil]).as_type_ref();
+        let call = clif::CallIndirect::operands(release_fn.result(ctx), [payload_ptr])
+            .sig(release_sig)
+            .results([tys.nil])
+            .build(ctx, loc);
+        push(ctx, deep, call.op_ref());
+        let ret = clif::Return::operands([]).build(ctx, loc);
+        push(ctx, deep, ret.op_ref());
+        blocks.push(shallow);
+        blocks.push(deep);
+    } else {
+        let jump = clif::Jump::operands([]).successors(shallow).build(ctx, loc);
+        push(ctx, entry, jump.op_ref());
+        blocks.push(shallow);
+    }
+
+    let zero = iconst(ctx, shallow, 0, tys.i64);
+    let is_dynamic = clif::Icmp::operands(alloc_size, zero)
+        .cond(Symbol::new("eq"))
+        .results(tys.i8)
+        .build(ctx, loc);
+    push(ctx, shallow, is_dynamic.op_ref());
+    let branch = clif::Brif::operands(is_dynamic.result(ctx))
+        .successors(unresolved, dealloc)
+        .build(ctx, loc);
+    push(ctx, shallow, branch.op_ref());
+
+    let call = clif::Call::operands([raw_ptr, alloc_size])
+        .callee(Symbol::new(DEALLOC_FN))
+        .results([tys.nil])
+        .build(ctx, loc);
+    push(ctx, dealloc, call.op_ref());
+    let ret = clif::Return::operands([]).build(ctx, loc);
+    push(ctx, dealloc, ret.op_ref());
+
+    let trap = clif::Trap::operands()
+        .code(Symbol::new(UNRESOLVED_DYNAMIC_RELEASE_TRAP))
+        .build(ctx, loc);
+    push(ctx, unresolved, trap.op_ref());
+    blocks.push(dealloc);
+    blocks.push(unresolved);
+
+    let body = ctx.create_region(RegionData {
+        location: loc,
+        blocks: blocks.into_iter().collect(),
+        parent_op: None,
+    });
+    let func_ty = clif::func_sig(ctx, [tys.ptr, tys.i64], [tys.nil]).as_type_ref();
+    clif::Func::operands()
+        .sym_name(Symbol::new(DEEP_RELEASE_FN))
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, loc)
+        .op_ref()
 }
 
 /// Find primitive boxing operations while their semantic operation identity is

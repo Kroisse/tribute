@@ -2163,10 +2163,17 @@ fn main() {
         (ctx, module)
     }
 
+    /// Indirect calls of the compiled program, excluding the RTTI release
+    /// dispatch that native lowering generates.
     fn clif_indirect_calls(ctx: &IrContext, module: Module) -> Vec<trunk_ir::OpRef> {
         let body = module.body(ctx).expect("module must have a body");
         let mut calls = Vec::new();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
+            if clif::Func::from_op(ctx, op).is_ok_and(|function| {
+                function.sym_name(ctx) == tribute_passes::native::rtti::DEEP_RELEASE_FN
+            }) {
+                return ControlFlow::Continue(WalkAction::Skip);
+            }
             if clif::CallIndirect::matches(ctx, op) || clif::ReturnCallIndirect::matches(ctx, op) {
                 calls.push(op);
             }

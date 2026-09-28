@@ -62,8 +62,7 @@ use trunk_ir::{BlockData, BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
 use tribute_ir::dialect::tribute_rt;
 
-/// Name of the deep release dispatch function.
-const DEEP_RELEASE_FN: &str = "__tribute_deep_release";
+use super::rtti::DEEP_RELEASE_FN;
 
 /// Lower all `tribute_rt.retain` and `tribute_rt.release` operations to
 /// inline `clif.*` operations.
