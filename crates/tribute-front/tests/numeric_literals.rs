@@ -57,7 +57,7 @@ fn valid_numeric_literals_are_accepted(db: &salsa::DatabaseImpl) {
     let e = 1.5e-3
     let f = 42i
     let g = 1e-3f
-    let h = 0xFFi
+    let h = +0xFF
     case a { 1_000n -> b, _ -> 0 }
 }"#,
     );
@@ -116,5 +116,16 @@ fn overflowing_literal_is_rejected(db: &salsa::DatabaseImpl) {
         "1e20",
         "1e20",
         "exceeds the current implementation limit for `Nat`",
+    );
+}
+
+#[salsa_test]
+fn suffix_on_hexadecimal_literal_is_rejected(db: &salsa::DatabaseImpl) {
+    assert_literal_error(
+        db,
+        "fn main() { 0xFFi }",
+        "0xFFi",
+        "i",
+        "write `+0xFF` for an Int",
     );
 }

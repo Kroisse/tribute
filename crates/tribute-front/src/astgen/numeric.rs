@@ -34,6 +34,14 @@ pub(crate) enum NumericErrorKind {
         suffix: char,
         conflict: SuffixConflict,
     },
+    /// Trailing characters after a binary, octal, or hexadecimal literal,
+    /// which takes no suffix.
+    RadixSuffix {
+        radix: u32,
+        suffix: String,
+        /// The signed spelling that makes the literal an Int, offered for `i`.
+        int_form: Option<String>,
+    },
     /// A digit outside the literal's radix.
     InvalidDigit { digit: char, radix: u32 },
     /// A radix prefix or exponent without any digit.
@@ -53,7 +61,6 @@ pub(crate) enum NumericErrorKind {
 pub(crate) enum SuffixConflict {
     Signed,
     Fractional,
-    RadixPrefix,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,9 +86,23 @@ impl fmt::Display for NumericError {
                 let target = match conflict {
                     SuffixConflict::Signed => "a signed literal",
                     SuffixConflict::Fractional => "a literal with a decimal point",
-                    SuffixConflict::RadixPrefix => "a binary, octal, or hexadecimal literal",
                 };
                 write!(f, "suffix `{suffix}` cannot be used on {target}")
+            }
+            NumericErrorKind::RadixSuffix {
+                radix,
+                suffix,
+                int_form,
+            } => {
+                write!(
+                    f,
+                    "{} literals take no suffix, found `{suffix}`",
+                    radix_name(*radix)
+                )?;
+                if let Some(int_form) = int_form {
+                    write!(f, "; write `{int_form}` for an Int")?;
+                }
+                Ok(())
             }
             NumericErrorKind::InvalidDigit { digit, radix } => {
                 write!(
@@ -187,6 +208,23 @@ pub(crate) fn parse_numeric_literal(text: &str) -> Result<NumericValue, NumericE
             NumericErrorKind::MissingDigits(DigitsOf::Radix(radix)),
         );
     }
+    if radix != 10 && i < bytes.len() {
+        let suffix = &text[i..];
+        return error(
+            i..bytes.len(),
+            NumericErrorKind::RadixSuffix {
+                radix,
+                suffix: suffix.to_string(),
+                int_form: (suffix == "i").then(|| {
+                    let magnitude = &text[prefix_start..i];
+                    match &text[..prefix_start] {
+                        "" => format!("+{magnitude}"),
+                        sign => format!("{sign}{magnitude}"),
+                    }
+                }),
+            },
+        );
+    }
 
     // Fraction and exponent (decimal only)
     let mut fraction = None;
@@ -250,7 +288,6 @@ pub(crate) fn parse_numeric_literal(text: &str) -> Result<NumericValue, NumericE
     let conflict = match suffix {
         Some('n') if signed => Some(SuffixConflict::Signed),
         Some('n' | 'i') if fraction.is_some() => Some(SuffixConflict::Fractional),
-        Some('f') if radix != 10 => Some(SuffixConflict::RadixPrefix),
         _ => None,
     };
     if let (Some(suffix), Some(conflict)) = (suffix, conflict) {
@@ -402,7 +439,6 @@ mod tests {
             ("0e999", 0),
             ("42n", 42),
             ("1e3n", 1000),
-            ("0xFFn", 255),
             ("18446744073709551615", u64::MAX),
         ] {
             assert_eq!(value(text), NumericValue::Nat(expected), "{text}");
@@ -418,7 +454,6 @@ mod tests {
             ("-1e3", -1000),
             ("42i", 42),
             ("-42i", -42),
-            ("0xFFi", 255),
             ("1e3i", 1000),
             ("1_000_i", 1000),
             ("+9223372036854775807", i64::MAX),
@@ -452,7 +487,42 @@ mod tests {
         for (text, range, kind) in [
             ("42u8", 2..4, UnknownSuffix("u8".into())),
             ("1_000_x", 6..7, UnknownSuffix("x".into())),
-            ("0xFFg", 4..5, UnknownSuffix("g".into())),
+            (
+                "0xFFi",
+                4..5,
+                RadixSuffix {
+                    radix: 16,
+                    suffix: "i".into(),
+                    int_form: Some("+0xFF".into()),
+                },
+            ),
+            (
+                "-0o17i",
+                5..6,
+                RadixSuffix {
+                    radix: 8,
+                    suffix: "i".into(),
+                    int_form: Some("-0o17".into()),
+                },
+            ),
+            (
+                "0xFFn",
+                4..5,
+                RadixSuffix {
+                    radix: 16,
+                    suffix: "n".into(),
+                    int_form: None,
+                },
+            ),
+            (
+                "0xFFg",
+                4..5,
+                RadixSuffix {
+                    radix: 16,
+                    suffix: "g".into(),
+                    int_form: None,
+                },
+            ),
             (
                 "-1n",
                 2..3,
@@ -472,9 +542,10 @@ mod tests {
             (
                 "0b1f",
                 3..4,
-                SuffixNotAllowed {
-                    suffix: 'f',
-                    conflict: SuffixConflict::RadixPrefix,
+                RadixSuffix {
+                    radix: 2,
+                    suffix: "f".into(),
+                    int_form: None,
                 },
             ),
             (
@@ -530,6 +601,18 @@ mod tests {
             error("1e-3").to_string(),
             "an integer literal cannot have a negative exponent; \
              write `1.0e-3` or `1e-3f` for a Float"
+        );
+    }
+
+    #[test]
+    fn radix_suffix_message_suggests_sign() {
+        assert_eq!(
+            error("0xFFi").to_string(),
+            "hexadecimal literals take no suffix, found `i`; write `+0xFF` for an Int"
+        );
+        assert_eq!(
+            error("0b1f").to_string(),
+            "binary literals take no suffix, found `f`"
         );
     }
 }

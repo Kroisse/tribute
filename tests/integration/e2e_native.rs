@@ -992,8 +992,8 @@ fn test_native_numeric_literal_separators_exponents_and_suffixes() {
         "numeric_literal_forms.trb",
         r#"
 fn main() {
-    print_line(Int::to_string(1_000i + 2e3i + 0xFFi))
-    print_line(Int::to_string(-1e3 + 0b1010_1010i))
+    print_line(Int::to_string(1_000i + 2e3i + +0xFF))
+    print_line(Int::to_string(-1e3 + +0b1010_1010))
 }
 "#,
     );

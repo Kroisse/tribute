@@ -58,11 +58,11 @@ type where in
 
 ```ebnf
 // 숫자 리터럴
-NatLiteral   ::= Magnitude NumSuffix?                  // 42, 0xFF, 1_000, 1e10 → Nat
-IntLiteral   ::= ('+' | '-') Magnitude NumSuffix?      // +1, -0b1010, -1e3 → Int
+NatLiteral   ::= Magnitude                             // 42, 0xFF, 1_000, 1e10 → Nat
+IntLiteral   ::= ('+' | '-') Magnitude                 // +1, -0b1010, -1e3 → Int
 FloatLiteral ::= ('+' | '-')? DecDigits '.' DecDigits Exponent? NumSuffix?
                                                        // 1.0, -3.14, 1.5e-3 → Float
-Magnitude    ::= DecDigits Exponent?                   // 42, 1_000, 1e10
+Magnitude    ::= DecDigits Exponent? NumSuffix?        // 42, 1_000, 1e10, 42i
                | '0b' BinDigits                        // 0b1010 (binary)
                | '0o' OctDigits                        // 0o777 (octal)
                | '0x' HexDigits                        // 0xc0ffee (hexadecimal)
@@ -139,12 +139,13 @@ TypeId     ::= UpperLetter (Letter | Digit | '_')*   // 타입명은 대문자 �
 - 소수점이 없는 리터럴의 음수 지수(`1e-3`)는 정수로 표현할 수 없으므로 오류다.
   Float가 필요하면 `1.0e-3`이나 `1e-3f`로 쓴다.
 - 지수는 10진 리터럴에만 붙는다. 16진 리터럴에서 `e`는 숫자다(`0x1e`는 30).
-- 접미사는 기본 타입을 바꾼다.
+- 접미사는 10진 리터럴에만 붙으며 기본 타입을 바꾼다. 2진·8진·16진 리터럴은
+  진법 접두사 뒤가 전부 숫자이고 접미사를 받지 않는다. 그래서 `0xff`의 끝
+  `f`는 언제나 숫자이고, 새 접미사가 16진 숫자(`a`–`f`)와 부딪히지 않는다.
+  Int가 필요하면 부호를 붙인다(`+0xFF`).
   - `n`(Nat): 부호도 소수점도 없는 리터럴에만 붙는다. `-1n`, `1.5n`은 오류다.
-  - `i`(Int): 정수 리터럴에 붙는다. `42i`, `0xFFi`, `1e3i`는 Int이고 `1.5i`는
-    오류다.
-  - `f`(Float): 10진 리터럴에만 붙는다. `42f`, `1e-3f`는 Float이다. 16진
-    리터럴에서 `f`는 숫자이므로(`0x1f`는 31) 2진·8진·16진 리터럴에는 쓸 수 없다.
+  - `i`(Int): 정수 리터럴에 붙는다. `42i`, `1e3i`는 Int이고 `1.5i`는 오류다.
+  - `f`(Float): `42f`, `1e-3f`는 Float이다.
 - 리터럴 바로 뒤에 붙은 식별자 문자(`[0-9A-Za-z_]`)는 lex 단계에서 모두
   리터럴의 일부다. 정의되지 않은 접미사(`42u8`)나 진법에 맞지 않는
   숫자(`0b102`)는 lexical error다. 따라서 접미사를 새로 추가해도 기존 코드의
@@ -241,13 +242,14 @@ rb"\x00"                    // raw bytes (문자 그대로 \x00)
 42i          // Int
 42f          // Float
 1e-3f        // Float: 0.001
-0xFFi        // Int: 255
++0xFF        // Int: 255 (진법 리터럴은 접미사 대신 부호)
 
 // 오류
 1e-3         // 소수점 없는 음수 지수 → 1.0e-3 또는 1e-3f
 42u8         // 정의되지 않은 접미사
 0b102        // 2진 리터럴에 맞지 않는 숫자
 1.5i         // Float 리터럴에 Int 접미사
+0xFFi        // 진법 리터럴에는 접미사 없음 → +0xFF
 
 // UFCS와 구분
 1.abs        // Nat(1).abs() - UFCS 호출
