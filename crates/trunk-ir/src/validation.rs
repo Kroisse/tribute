@@ -577,7 +577,7 @@ pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> Validatio
         ctx.op(op).attributes.get_symbol("sym_name").is_some()
     });
     let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
-        let found = symbols.definition(name)?;
+        let found = *symbols.definitions_of(name).first()?;
         if symbols.resolve(name).is_none() || !func::Func::matches(ctx, found) {
             return Some(None);
         }

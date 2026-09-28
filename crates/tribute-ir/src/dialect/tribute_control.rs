@@ -1660,7 +1660,7 @@ fn validate_symbol_use(
             let Some(symbol) = ctx.op(op).attributes.get_symbol("func_ref") else {
                 return;
             };
-            let Some(target) = funcs.definition(symbol) else {
+            let Some(target) = funcs.definitions_of(symbol).first().copied() else {
                 push_op_error(
                     ctx,
                     op,
@@ -1698,7 +1698,7 @@ fn validate_symbol_use(
             let Some(symbol) = ctx.op(op).attributes.get_symbol("callee") else {
                 return;
             };
-            let Some(target) = funcs.definition(symbol) else {
+            let Some(target) = funcs.definitions_of(symbol).first().copied() else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
             };
@@ -1731,13 +1731,15 @@ fn validate_symbol_use(
 /// Resolve every function reference in the module tree by root-qualified name.
 fn validate_module_symbols(ctx: &IrContext, module: Module, errors: &mut Vec<ValidationError>) {
     let funcs = SymbolTable::collect(ctx, module, |ctx, op| is_control_op(ctx, op, "func"));
-    for &(symbol, op) in funcs.duplicates() {
-        push_op_error(
-            ctx,
-            op,
-            errors,
-            format!("duplicate function symbol @{symbol}"),
-        );
+    for (symbol, ops) in funcs.duplicates() {
+        for &op in &ops[1..] {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("duplicate function symbol @{symbol}"),
+            );
+        }
     }
     validate_symbol_uses(ctx, module, &funcs, errors);
 }

@@ -7,10 +7,9 @@
 //! the referencing operation's module. A qualified name defined more than once
 //! is an IR error.
 
-use std::collections::HashMap;
-use std::collections::hash_map::Entry;
-
 use itertools::Itertools;
+use rustc_hash::FxHashMap;
+use smallvec::SmallVec;
 
 use crate::context::IrContext;
 use crate::dialect::core;
@@ -25,8 +24,9 @@ const SYM_NAME: &str = "sym_name";
 /// Definitions in a module tree, keyed by root-qualified name.
 #[derive(Debug, Default, Clone)]
 pub struct SymbolTable {
-    definitions: HashMap<Symbol, OpRef>,
-    duplicates: Vec<(Symbol, OpRef)>,
+    /// Every definition of each name, in traversal order. A name with more
+    /// than one definition is duplicated.
+    definitions: FxHashMap<Symbol, SmallVec<[OpRef; 1]>>,
 }
 
 impl SymbolTable {
@@ -63,13 +63,10 @@ impl SymbolTable {
                     if is_definition(ctx, op)
                         && let Some(name) = ctx.op(op).attributes.get_symbol(SYM_NAME)
                     {
-                        let qualified = qualify(path, name);
-                        match self.definitions.entry(qualified) {
-                            Entry::Vacant(entry) => {
-                                entry.insert(op);
-                            }
-                            Entry::Occupied(_) => self.duplicates.push((qualified, op)),
-                        }
+                        self.definitions
+                            .entry(qualify(path, name))
+                            .or_default()
+                            .push(op);
                     }
                     // Only modules contribute path components, as in
                     // `qualified_name`.
@@ -85,34 +82,40 @@ impl SymbolTable {
     ///
     /// Returns `None` for an unknown name or one defined more than once.
     pub fn resolve(&self, reference: Symbol) -> Option<OpRef> {
-        if self.duplicates.iter().any(|&(name, _)| name == reference) {
-            return None;
+        match self.definitions_of(reference) {
+            &[op] => Some(op),
+            _ => None,
         }
-        self.definitions.get(&reference).copied()
     }
 
-    /// The first definition of a qualified name, even if it is duplicated.
+    /// Every definition of a qualified name, in traversal order; empty for an
+    /// unknown name.
     ///
     /// For diagnostics that continue after [`Self::duplicates`] has already
     /// been reported; lowering must use [`Self::resolve`].
-    pub fn definition(&self, reference: Symbol) -> Option<OpRef> {
-        self.definitions.get(&reference).copied()
+    pub fn definitions_of(&self, reference: Symbol) -> &[OpRef] {
+        self.definitions.get(&reference).map_or(&[], |ops| ops)
     }
 
-    /// Qualified names defined more than once, with each later definition.
-    pub fn duplicates(&self) -> &[(Symbol, OpRef)] {
-        &self.duplicates
+    /// Qualified names defined more than once, sorted by name, with every
+    /// definition in traversal order.
+    pub fn duplicates(&self) -> Vec<(Symbol, &[OpRef])> {
+        let mut duplicates: Vec<_> = self.iter().filter(|(_, ops)| ops.len() > 1).collect();
+        duplicates.sort_unstable_by_key(|&(name, _)| name);
+        duplicates
     }
 
-    /// Every collected definition by qualified name. A duplicated name maps to
-    /// its first definition; check [`Self::duplicates`] first.
-    pub fn iter(&self) -> impl Iterator<Item = (Symbol, OpRef)> + '_ {
-        self.definitions.iter().map(|(&name, &op)| (name, op))
+    /// Every collected name with its definitions, in unspecified order.
+    pub fn iter(&self) -> impl Iterator<Item = (Symbol, &[OpRef])> + '_ {
+        self.definitions
+            .iter()
+            .map(|(&name, ops)| (name, ops.as_slice()))
     }
 
     /// Every collected definition, including each duplicate of a name.
     pub fn all_definitions(&self) -> impl Iterator<Item = (Symbol, OpRef)> + '_ {
-        self.iter().chain(self.duplicates.iter().copied())
+        self.iter()
+            .flat_map(|(name, ops)| ops.iter().map(move |&op| (name, op)))
     }
 }
 
@@ -186,6 +189,7 @@ mod tests {
         // A reference is never resolved relative to a nested module.
         assert_eq!(table.resolve(Symbol::new("same")), None);
         assert!(table.duplicates().is_empty());
+        assert_eq!(table.definitions_of(Symbol::new("same")), &[]);
     }
 
     #[test]
@@ -207,8 +211,11 @@ mod tests {
         let table = SymbolTable::collect(&ctx, module, is_func);
         let twice = Symbol::from_dynamic("outer::twice");
         assert_eq!(table.resolve(twice), None);
-        assert_eq!(table.duplicates().len(), 1);
-        assert_eq!(table.duplicates()[0].0, twice);
+        let duplicates = table.duplicates();
+        assert_eq!(duplicates.len(), 1);
+        assert_eq!(duplicates[0].0, twice);
+        assert_eq!(duplicates[0].1.len(), 2);
+        assert_eq!(table.definitions_of(twice), duplicates[0].1);
         assert_eq!(table.all_definitions().count(), 2);
     }
 

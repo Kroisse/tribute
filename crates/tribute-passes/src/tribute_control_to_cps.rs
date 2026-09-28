@@ -460,7 +460,8 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
     let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> =
         SymbolTable::collect(ctx, module, func::Func::matches)
             .iter()
-            .filter_map(|(name, op)| {
+            .filter_map(|(name, ops)| {
+                let &[op] = ops else { return None };
                 let attributes = &ctx.op(op).attributes;
                 let convention = attributes.get_i64(CALLING_CONVENTION_ATTR).ok().flatten();
                 Some((name, (attributes.get_type("type")?, convention)))
@@ -3722,7 +3723,9 @@ fn collect_callable_graph(ctx: &IrContext, module: Module) -> HashMap<Symbol, Ca
         tribute_control::Func::matches(ctx, op)
     })
     .iter()
-    .map(|(symbol, op)| {
+    .map(|(symbol, ops)| {
+        // Pre-CPS validation rejects duplicated qualified names.
+        let op = ops[0];
         let logical_type = ctx
             .op(op)
             .attributes

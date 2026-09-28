@@ -560,8 +560,10 @@ fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<Symbol, TypeR
     let table = SymbolTable::collect(ctx, module, func::Func::matches);
     table
         .iter()
-        .filter(|&(name, _)| table.resolve(name).is_some())
-        .filter_map(|(name, op)| Some((name, func::Func::from_op(ctx, op).ok()?.r#type(ctx))))
+        .filter_map(|(name, ops)| match ops {
+            &[op] => Some((name, func::Func::from_op(ctx, op).ok()?.r#type(ctx))),
+            _ => None,
+        })
         .collect()
 }
 

@@ -51,12 +51,14 @@ pub struct CallGraph {
 pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
     let functions = SymbolTable::collect(ctx, module, func::Func::matches);
     let mut graph = CallGraph::default();
-    for (name, op) in functions.all_definitions() {
-        if functions.resolve(name) == Some(op) {
+    for (name, ops) in functions.iter() {
+        if let &[op] = ops {
             graph.func_ops.insert(name, op);
         }
-        for &region in &ctx.op(op).regions {
-            collect_calls(ctx, region, name, &mut graph);
+        for &op in ops {
+            for &region in &ctx.op(op).regions {
+                collect_calls(ctx, region, name, &mut graph);
+            }
         }
     }
     graph

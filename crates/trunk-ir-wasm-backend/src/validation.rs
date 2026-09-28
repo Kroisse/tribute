@@ -43,7 +43,7 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
     let symbols = SymbolTable::collect(ctx, module, |ctx, op| {
         ctx.op(op).attributes.get_symbol("sym_name").is_some()
     });
-    for &(name, _) in symbols.duplicates() {
+    for (name, _) in symbols.duplicates() {
         errors.push(format!("symbol @{name} is defined more than once"));
     }
     validate_region(ctx, body, 0, &symbols, &mut errors);
@@ -129,7 +129,7 @@ fn resolve_wasm_callee(
     symbols: &SymbolTable,
     name: Symbol,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
-    let found = symbols.definition(name)?;
+    let found = *symbols.definitions_of(name).first()?;
     if symbols.resolve(name).is_none()
         || (!wasm_dialect::Func::matches(ctx, found)
             && !wasm_dialect::ImportFunc::matches(ctx, found))
