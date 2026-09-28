@@ -11,9 +11,11 @@ use std::ops::Range;
 use derive_more::{Display, Error};
 use itertools::Itertools;
 use winnow::LocatingSlice;
-use winnow::combinator::{alt, opt, preceded};
+use winnow::combinator::{alt, dispatch, eof, opt, preceded, repeat, terminated};
+use winnow::error::{ErrMode, ParserError};
 use winnow::prelude::*;
-use winnow::token::{one_of, rest, take_while};
+use winnow::stream::Location;
+use winnow::token::{one_of, rest};
 
 /// The decoded value of a numeric literal.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -113,265 +115,280 @@ fn radix_name(radix: u32) -> &'static str {
 /// Float, a sign makes an Int, and anything else is a Nat. A `n`, `i`, or
 /// `f` suffix overrides that default where the rules allow it.
 pub(crate) fn parse_numeric_literal(text: &str) -> Result<NumericValue, NumericError> {
-    let error = |range: Range<usize>, kind| Err(NumericError { range, kind });
-    let Parts {
-        sign,
-        radix,
-        prefix,
-        digits,
-        fraction,
-        exponent,
-        suffix,
-    } = parts
-        .parse(LocatingSlice::new(text))
-        .expect("numeric literal lexing accepts any input");
-    let (digits, digits_range) = digits;
-    let (suffix_text, suffix_range) = suffix;
-    let signed = sign.is_some();
-    let negative = sign == Some('-');
-
-    if let Some(pos) = digits
-        .bytes()
-        .position(|b| b != b'_' && !(b as char).is_digit(radix))
-    {
-        let at = digits_range.start + pos;
-        return error(
-            at..at + 1,
-            NumericErrorKind::InvalidDigit {
-                digit: digits.as_bytes()[pos] as char,
-                radix,
-            },
-        );
-    }
-    if !digits.bytes().any(|b| b != b'_') {
-        return error(
-            prefix.start..digits_range.end,
-            NumericErrorKind::MissingRadixDigits { radix },
-        );
-    }
-    if radix != 10 && !suffix_text.is_empty() {
-        return error(
-            suffix_range,
-            NumericErrorKind::RadixSuffix {
-                radix,
-                suffix: suffix_text.to_string(),
-                int_form: (suffix_text == "i").then(|| {
-                    let sign = sign.unwrap_or('+');
-                    format!("{sign}{}", &text[prefix.start..digits_range.end])
-                }),
-            },
-        );
-    }
-    if let Some(exponent) = &exponent
-        && !exponent.digits.bytes().any(|b| b != b'_')
-    {
-        return error(
-            exponent.range.clone(),
-            NumericErrorKind::MissingExponentDigits,
-        );
-    }
-
-    let suffix = match suffix_text {
-        "" => None,
-        "n" => Some('n'),
-        "i" => Some('i'),
-        "f" => Some('f'),
-        other => {
-            return error(
-                suffix_range,
-                NumericErrorKind::UnknownSuffix(other.to_string()),
-            );
-        }
-    };
-    let conflict = match suffix {
-        Some('n') if signed => Some(SuffixConflict::Signed),
-        Some('n' | 'i') if fraction.is_some() => Some(SuffixConflict::Fractional),
-        _ => None,
-    };
-    if let (Some(suffix), Some(conflict)) = (suffix, conflict) {
-        return error(
-            suffix_range,
-            NumericErrorKind::SuffixNotAllowed { suffix, conflict },
-        );
-    }
-
-    let is_float = match suffix {
-        Some('f') => true,
-        Some(_) => false,
-        None => fraction.is_some(),
-    };
-    if is_float {
-        let mut normalized = String::with_capacity(text.len());
-        if negative {
-            normalized.push('-');
-        }
-        normalized.extend(digits.chars().filter(|&c| c != '_'));
-        if let Some(fraction) = fraction {
-            normalized.push('.');
-            normalized.extend(fraction.chars().filter(|&c| c != '_'));
-        }
-        if let Some(exponent) = &exponent {
-            normalized.push('e');
-            if exponent.negative {
-                normalized.push('-');
-            }
-            normalized.extend(exponent.digits.chars().filter(|&c| c != '_'));
-        }
-        let value: f64 = normalized
-            .parse()
-            .expect("normalized float literal must parse");
-        return if value.is_finite() {
-            Ok(NumericValue::Float(value))
-        } else {
-            error(0..text.len(), NumericErrorKind::FloatNotFinite)
-        };
-    }
-
-    let ty = match suffix {
-        Some('i') => IntegerType::Int,
-        Some(_) => IntegerType::Nat,
-        None if signed => IntegerType::Int,
-        None => IntegerType::Nat,
-    };
-    if let Some(exponent) = &exponent
-        && exponent.negative
-    {
-        let sign = &text[..prefix.start];
-        let mantissa = &text[prefix.start..exponent.range.start];
-        let exp_text = &text[exponent.range.clone()];
-        return error(
-            exponent.range.clone(),
-            NumericErrorKind::NegativeIntegerExponent {
-                with_point: format!("{sign}{mantissa}.0{exp_text}"),
-                with_suffix: format!("{sign}{mantissa}{exp_text}f"),
-            },
-        );
-    }
-
-    let overflow = || error(0..text.len(), NumericErrorKind::Overflow(ty));
-    let Some(mut magnitude) = digits
-        .bytes()
-        .filter(|&b| b != b'_')
-        .try_fold(0u64, |acc, b| {
-            let digit = (b as char).to_digit(radix)?;
-            acc.checked_mul(radix as u64)?.checked_add(digit as u64)
-        })
-    else {
-        return overflow();
-    };
-    if let Some(exponent) = &exponent
-        && magnitude != 0
-    {
-        let scale = exponent
-            .digits
-            .bytes()
-            .filter(|&b| b != b'_')
-            .try_fold(0u32, |acc, b| {
-                acc.checked_mul(10)?.checked_add((b - b'0') as u32)
-            })
-            .and_then(|exp| 10u64.checked_pow(exp));
-        match scale.and_then(|scale| magnitude.checked_mul(scale)) {
-            Some(scaled) => magnitude = scaled,
-            None => return overflow(),
-        }
-    }
-
-    match ty {
-        IntegerType::Nat => Ok(NumericValue::Nat(magnitude)),
-        IntegerType::Int if negative => {
-            // The magnitude of i64::MIN is one more than i64::MAX.
-            match 0i64.checked_sub_unsigned(magnitude) {
-                Some(value) => Ok(NumericValue::Int(value)),
-                None => overflow(),
-            }
-        }
-        IntegerType::Int => match i64::try_from(magnitude) {
-            Ok(value) => Ok(NumericValue::Int(value)),
-            Err(_) => overflow(),
-        },
+    match numeric_literal.parse_next(&mut LocatingSlice::new(text)) {
+        Ok(value) => Ok(value),
+        Err(ErrMode::Cut(LexError(Some(error)))) => Err(error),
+        Err(_) => unreachable!("numeric literal rules fail with a cut error"),
     }
 }
 
 type Input<'a> = LocatingSlice<&'a str>;
+type PResult<O> = ModalResult<O, LexError>;
 
-/// The lexical parts of a numeric literal token.
-///
-/// Every part is optional or may be empty, so lexing accepts any text and
-/// all validation happens in [`parse_numeric_literal`].
-struct Parts<'a> {
-    sign: Option<char>,
-    radix: u32,
-    /// The radix prefix, or an empty range at the magnitude's start.
-    prefix: Range<usize>,
-    digits: (&'a str, Range<usize>),
-    /// Digits after the decimal point; decimal literals only.
-    fraction: Option<&'a str>,
-    /// Decimal literals only.
-    exponent: Option<Exponent<'a>>,
-    /// Everything after the number, possibly empty.
-    suffix: (&'a str, Range<usize>),
+/// Parser error: a backtrack carries nothing, and a violated literal rule is
+/// a cut error carrying its diagnostic.
+#[derive(Debug)]
+struct LexError(Option<NumericError>);
+
+impl<'a> ParserError<Input<'a>> for LexError {
+    type Inner = Self;
+
+    fn from_input(_input: &Input<'a>) -> Self {
+        Self(None)
+    }
+
+    fn into_inner(self) -> Result<Self::Inner, Self> {
+        Ok(self)
+    }
 }
 
-struct Exponent<'a> {
-    range: Range<usize>,
-    negative: bool,
-    digits: &'a str,
+/// Stop parsing and report `kind` at `range` of the literal.
+fn reject<O>(range: Range<usize>, kind: NumericErrorKind) -> PResult<O> {
+    Err(ErrMode::Cut(LexError(Some(NumericError { range, kind }))))
 }
 
-fn parts<'a>(input: &mut Input<'a>) -> ModalResult<Parts<'a>> {
+fn numeric_literal(input: &mut Input<'_>) -> PResult<NumericValue> {
     let sign = opt(one_of(['+', '-'])).parse_next(input)?;
-    let (radix, prefix) = opt(preceded(
+    dispatch! {opt(radix_prefix).with_taken().with_span();
+        ((Some(radix), prefix), range) => radix_literal(sign, radix, prefix, range.start),
+        ((None, _), _) => decimal_literal(sign),
+    }
+    .parse_next(input)
+}
+
+fn radix_prefix(input: &mut Input<'_>) -> PResult<u32> {
+    preceded(
         '0',
         alt((
             one_of(['x', 'X']).value(16),
             one_of(['o', 'O']).value(8),
             one_of(['b', 'B']).value(2),
         )),
-    ))
-    .with_span()
-    .parse_next(input)?;
-    let radix = radix.unwrap_or(10);
-    // Binary and octal take any decimal digit so that an out-of-radix digit
-    // is reported rather than read as a suffix.
-    let digits = take_while(0.., move |c: char| match radix {
-        16 => c.is_ascii_hexdigit() || c == '_',
-        _ => c.is_ascii_digit() || c == '_',
-    })
-    .with_span()
-    .parse_next(input)?;
-    let (fraction, exponent) = if radix == 10 {
+    )
+    .parse_next(input)
+}
+
+/// The rest of a binary, octal, or hexadecimal literal after its prefix.
+/// Such a literal takes no suffix; a sign makes it an Int.
+fn radix_literal<'a>(
+    sign: Option<char>,
+    radix: u32,
+    prefix: &'a str,
+    start: usize,
+) -> impl Parser<Input<'a>, NumericValue, ErrMode<LexError>> {
+    move |input: &mut Input<'a>| {
+        let (digits, digits_text) = digits(radix).with_taken().parse_next(input)?;
+        let end = input.current_token_start();
+        if digits.count == 0 {
+            return reject(start..end, NumericErrorKind::MissingRadixDigits { radix });
+        }
+        let (suffix, suffix_range) = rest.with_span().parse_next(input)?;
+        if !suffix.is_empty() {
+            let int_form =
+                (suffix == "i").then(|| format!("{}{prefix}{digits_text}", sign.unwrap_or('+')));
+            return reject(
+                suffix_range,
+                NumericErrorKind::RadixSuffix {
+                    radix,
+                    suffix: suffix.to_string(),
+                    int_form,
+                },
+            );
+        }
+        let ty = match sign {
+            Some(_) => IntegerType::Int,
+            None => IntegerType::Nat,
+        };
+        integer_value(ty, sign == Some('-'), digits.value, 0..end)
+    }
+}
+
+/// The rest of a decimal literal after its sign: digits, an optional
+/// fraction and exponent, and an optional suffix.
+fn decimal_literal<'a>(
+    sign: Option<char>,
+) -> impl Parser<Input<'a>, NumericValue, ErrMode<LexError>> {
+    move |input: &mut Input<'a>| {
+        let start = input.current_token_start();
+        let ((integral, fraction, exponent), number) =
+            (digits(10), opt(preceded('.', digits(10))), opt(exponent))
+                .with_taken()
+                .parse_next(input)?;
+        if integral.count == 0 {
+            return reject(
+                start..input.current_token_start(),
+                NumericErrorKind::MissingRadixDigits { radix: 10 },
+            );
+        }
+        let suffix = suffix.parse_next(input)?;
+        let end = input.current_token_start();
+        if let Some((suffix, range)) = &suffix {
+            let conflict = match suffix {
+                'n' if sign.is_some() => Some(SuffixConflict::Signed),
+                'n' | 'i' if fraction.is_some() => Some(SuffixConflict::Fractional),
+                _ => None,
+            };
+            if let Some(conflict) = conflict {
+                return reject(
+                    range.clone(),
+                    NumericErrorKind::SuffixNotAllowed {
+                        suffix: *suffix,
+                        conflict,
+                    },
+                );
+            }
+        }
+
+        let ty = match suffix.map(|(suffix, _)| suffix) {
+            Some('f') => None,
+            Some('i') => Some(IntegerType::Int),
+            Some(_) => Some(IntegerType::Nat),
+            None if fraction.is_some() => None,
+            None if sign.is_some() => Some(IntegerType::Int),
+            None => Some(IntegerType::Nat),
+        };
+        let Some(ty) = ty else {
+            let normalized: String = sign
+                .into_iter()
+                .chain(number.chars().filter(|&c| c != '_'))
+                .collect();
+            let value: f64 = normalized
+                .parse()
+                .expect("a validated decimal literal parses as f64");
+            return if value.is_finite() {
+                Ok(NumericValue::Float(value))
+            } else {
+                reject(0..end, NumericErrorKind::FloatNotFinite)
+            };
+        };
+
+        let mut magnitude = integral.value;
+        if let Some(exponent) = exponent {
+            if exponent.negative {
+                let sign = sign.map(String::from).unwrap_or_default();
+                let (mantissa, exponent_text) = number.split_at(exponent.range.start - start);
+                return reject(
+                    exponent.range,
+                    NumericErrorKind::NegativeIntegerExponent {
+                        with_point: format!("{sign}{mantissa}.0{exponent_text}"),
+                        with_suffix: format!("{sign}{mantissa}{exponent_text}f"),
+                    },
+                );
+            }
+            if magnitude != Some(0) {
+                magnitude = exponent
+                    .digits
+                    .value
+                    .and_then(|exp| u32::try_from(exp).ok())
+                    .and_then(|exp| 10u64.checked_pow(exp))
+                    .zip(magnitude)
+                    .and_then(|(scale, magnitude)| magnitude.checked_mul(scale));
+            }
+        }
+        integer_value(ty, sign == Some('-'), magnitude, 0..end)
+    }
+}
+/// Digits of a radix with `_` separators, folded into their value.
+#[derive(Clone, Copy, Default)]
+struct Digits {
+    /// Number of digits, not counting separators.
+    count: usize,
+    /// The value, or `None` once it exceeds `u64`.
+    value: Option<u64>,
+}
+
+/// Digits of `radix` with `_` separators. Binary and octal also consume the
+/// other decimal digits, reporting them as invalid rather than leaving them
+/// to be read as a suffix.
+fn digits<'a>(radix: u32) -> impl Parser<Input<'a>, Digits, ErrMode<LexError>> {
+    let digit = alt((
+        '_'.value(None),
+        one_of(move |c: char| c.is_digit(radix)).map(move |c: char| c.to_digit(radix)),
+        move |input: &mut Input<'a>| {
+            let (digit, range) = one_of(|c: char| c.is_ascii_digit())
+                .with_span()
+                .parse_next(input)?;
+            reject(range, NumericErrorKind::InvalidDigit { digit, radix })
+        },
+    ));
+    repeat(0.., digit).fold(
+        || Digits {
+            count: 0,
+            value: Some(0),
+        },
+        move |digits, digit: Option<u32>| match digit {
+            Some(digit) => Digits {
+                count: digits.count + 1,
+                value: digits.value.and_then(|value| {
+                    value
+                        .checked_mul(u64::from(radix))?
+                        .checked_add(u64::from(digit))
+                }),
+            },
+            None => digits,
+        },
+    )
+}
+
+struct Exponent {
+    range: Range<usize>,
+    negative: bool,
+    digits: Digits,
+}
+
+/// A decimal exponent: `e` or `E`, an optional sign, and at least one digit.
+fn exponent(input: &mut Input<'_>) -> PResult<Exponent> {
+    let ((negative, digits), range) = preceded(
+        one_of(['e', 'E']),
         (
-            opt(preceded('.', decimal_digits)).parse_next(input)?,
-            opt(exponent).parse_next(input)?,
-        )
-    } else {
-        (None, None)
-    };
-    let suffix = rest.with_span().parse_next(input)?;
-    Ok(Parts {
-        sign,
-        radix,
-        prefix,
+            opt(one_of(['+', '-'])).map(|sign| sign == Some('-')),
+            digits(10),
+        ),
+    )
+    .with_span()
+    .parse_next(input)?;
+    if digits.count == 0 {
+        return reject(range, NumericErrorKind::MissingExponentDigits);
+    }
+    Ok(Exponent {
+        range,
+        negative,
         digits,
-        fraction,
-        exponent,
-        suffix,
     })
 }
 
-fn decimal_digits<'a>(input: &mut Input<'a>) -> ModalResult<&'a str> {
-    take_while(0.., |c: char| c.is_ascii_digit() || c == '_').parse_next(input)
+/// The suffix of a decimal literal: nothing, or `n`, `i`, or `f`.
+fn suffix(input: &mut Input<'_>) -> PResult<Option<(char, Range<usize>)>> {
+    alt((
+        eof.value(None),
+        terminated(one_of(['n', 'i', 'f']), eof)
+            .with_span()
+            .map(Some),
+        |input: &mut Input<'_>| {
+            let (suffix, range) = rest.with_span().parse_next(input)?;
+            reject(range, NumericErrorKind::UnknownSuffix(suffix.to_string()))
+        },
+    ))
+    .parse_next(input)
 }
 
-fn exponent<'a>(input: &mut Input<'a>) -> ModalResult<Exponent<'a>> {
-    (one_of(['e', 'E']), opt(one_of(['+', '-'])), decimal_digits)
-        .with_span()
-        .map(|((_, sign, digits), range)| Exponent {
-            range,
-            negative: sign == Some('-'),
-            digits,
-        })
-        .parse_next(input)
+/// An integer literal's value, or an overflow error spanning `range`.
+fn integer_value(
+    ty: IntegerType,
+    negative: bool,
+    magnitude: Option<u64>,
+    range: Range<usize>,
+) -> PResult<NumericValue> {
+    let value = magnitude.and_then(|magnitude| match ty {
+        IntegerType::Nat => Some(NumericValue::Nat(magnitude)),
+        // The magnitude of i64::MIN is one more than i64::MAX.
+        IntegerType::Int if negative => 0i64.checked_sub_unsigned(magnitude).map(NumericValue::Int),
+        IntegerType::Int => i64::try_from(magnitude).ok().map(NumericValue::Int),
+    });
+    match value {
+        Some(value) => Ok(value),
+        None => reject(range, NumericErrorKind::Overflow(ty)),
+    }
 }
 
 #[cfg(test)]
