@@ -985,6 +985,46 @@ mod pass {
     }
 
     #[test]
+    fn inlines_nested_callee_by_root_qualified_name() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @main() -> core.i32 {
+    %0 = func.call {callee = @"inner::helper"} : core.i32
+    func.return %0
+  }
+  core.module @inner {
+    func.func @helper() -> core.i32 {
+      %0 = arith.const {value = 42} : core.i32
+      func.return %0
+    }
+  }
+  core.module @other {
+    func.func @helper() -> core.i32 {
+      %0 = arith.const {value = 7} : core.i32
+      func.return %0
+    }
+  }
+}"#,
+        );
+        let main = module.ops(&ctx)[0];
+
+        let mut am = crate::analysis::AnalysisCache::new();
+        let result = inline_functions(&mut ctx, module, &mut am);
+        assert_eq!(result.inlined_count, 1);
+        assert_eq!(count_calls_to(&ctx, main, "inner::helper"), 0);
+        let body = ctx.op(main).regions[0];
+        let consts: Vec<_> = ctx
+            .block(ctx.region(body).blocks[0])
+            .ops
+            .iter()
+            .filter_map(|&op| ctx.op(op).attributes.get("value").cloned())
+            .collect();
+        assert_eq!(consts, [Attribute::Int(42)]);
+    }
+
+    #[test]
     fn skips_recursive_function() {
         // f() { return f() }  — self-recursion → must not inline
         let (mut ctx, loc) = test_ctx();

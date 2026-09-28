@@ -8,6 +8,7 @@
 //! is an IR error.
 
 use std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 use itertools::Itertools;
 
@@ -63,8 +64,11 @@ impl SymbolTable {
                         && let Some(name) = ctx.op(op).attributes.get_symbol(SYM_NAME)
                     {
                         let qualified = qualify(path, name);
-                        if self.definitions.insert(qualified, op).is_some() {
-                            self.duplicates.push((qualified, op));
+                        match self.definitions.entry(qualified) {
+                            Entry::Vacant(entry) => {
+                                entry.insert(op);
+                            }
+                            Entry::Occupied(_) => self.duplicates.push((qualified, op)),
                         }
                     }
                     // Only modules contribute path components, as in
@@ -87,7 +91,7 @@ impl SymbolTable {
         self.definitions.get(&reference).copied()
     }
 
-    /// The last definition of a qualified name, even if it is duplicated.
+    /// The first definition of a qualified name, even if it is duplicated.
     ///
     /// For diagnostics that continue after [`Self::duplicates`] has already
     /// been reported; lowering must use [`Self::resolve`].
@@ -101,9 +105,14 @@ impl SymbolTable {
     }
 
     /// Every collected definition by qualified name. A duplicated name maps to
-    /// its last definition; check [`Self::duplicates`] first.
+    /// its first definition; check [`Self::duplicates`] first.
     pub fn iter(&self) -> impl Iterator<Item = (Symbol, OpRef)> + '_ {
         self.definitions.iter().map(|(&name, &op)| (name, op))
+    }
+
+    /// Every collected definition, including each duplicate of a name.
+    pub fn all_definitions(&self) -> impl Iterator<Item = (Symbol, OpRef)> + '_ {
+        self.iter().chain(self.duplicates.iter().copied())
     }
 }
 
@@ -200,6 +209,7 @@ mod tests {
         assert_eq!(table.resolve(twice), None);
         assert_eq!(table.duplicates().len(), 1);
         assert_eq!(table.duplicates()[0].0, twice);
+        assert_eq!(table.all_definitions().count(), 2);
     }
 
     #[test]
