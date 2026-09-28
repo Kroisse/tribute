@@ -128,6 +128,7 @@ impl trunk_ir::ops::Verify for Layout {
 mod tests {
     use super::*;
     use trunk_ir::op_def::OpDef;
+    use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
 
     #[test]
