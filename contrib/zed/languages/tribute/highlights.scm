@@ -10,6 +10,10 @@
   (keyword_ability)
   (keyword_const)
   (keyword_pub)
+  (keyword_extern)
+  (keyword_op)
+  (keyword_do)
+  (keyword_resume)
   (keyword_use)
   (keyword_mod)
   (keyword_if)
@@ -36,26 +40,40 @@
 
 ; Ability items in function types
 (ability_item
-  (type_identifier) @type)
+  name: (ability_path
+    (type_identifier) @type))
 
 ; Function definitions
-(function_definition
+(regular_function
   name: (identifier) @function)
+
+(regular_function
+  name: (operator_name) @function)
+
+(extern_function
+  name: (identifier) @function)
+
+(extern_function
+  name: (operator_name) @function)
 
 ; Ability operations
 (ability_operation
   name: (identifier) @function)
 
-; Function calls
+; Function calls (only the final segment of `a::b::f` is the function name)
 (call_expression
-  function: (identifier) @function.call)
-
-(call_expression
-  function: (path_expression) @function.call)
+  function: (value_path
+    (identifier) @function.call))
 
 ; Method calls (UFCS)
 (method_call_expression
-  method: (method_path) @function.method)
+  method: (value_path
+    (identifier) @function.method))
+
+; Handler arms (`op State::get() { ... }`)
+(op_handler
+  operation: (value_path
+    (identifier) @function))
 
 ; Parameters
 (parameter
@@ -82,7 +100,8 @@
 
 ; Constructor patterns
 (constructor_pattern
-  name: (type_identifier) @constructor)
+  name: (type_path
+    (type_identifier) @constructor))
 
 ; Numbers
 (number_literal) @number
