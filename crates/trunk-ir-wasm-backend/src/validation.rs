@@ -43,6 +43,9 @@ pub fn validate_wasm_ir(ctx: &IrContext, module: Module) -> CompilationResult<()
     let symbols = SymbolTable::collect(ctx, module, |ctx, op| {
         ctx.op(op).attributes.get_symbol("sym_name").is_some()
     });
+    for &(name, _) in symbols.duplicates() {
+        errors.push(format!("symbol @{name} is defined more than once"));
+    }
     validate_region(ctx, body, 0, &symbols, &mut errors);
 
     if errors.is_empty() {
@@ -789,6 +792,27 @@ mod tests {
                 "{error}"
             );
         }
+    }
+
+    #[test]
+    fn duplicate_qualified_definitions_are_reported() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @outer {
+  core.module @inner {
+    wasm.func @twice() { wasm.return }
+    wasm.func @twice() { wasm.return }
+  }
+}"#,
+        );
+        let error = validate_wasm_ir(&ctx, module).expect_err("duplicate definition");
+        assert!(
+            error
+                .to_string()
+                .contains("symbol @inner::twice is defined more than once"),
+            "{error}"
+        );
     }
 
     #[test]

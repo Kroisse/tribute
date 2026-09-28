@@ -17,6 +17,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
+use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::transforms::call_graph::{build_call_graph, recursive_functions};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{BlockRef, OpRef, RegionRef, Symbol, TypeRef, ValueDef, ValueRef};
@@ -411,7 +412,7 @@ pub fn build_native_ownership_plan_with_analyses(
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        let symbol = function.sym_name(ctx);
+        let symbol = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
         if let CallableBody::Declaration = ownership_callable_body(ctx, op)? {
             validate_bodyless_signature(ctx, op, &managed_layouts)?;
             continue;
@@ -514,7 +515,8 @@ fn collect_function_definitions(
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        let symbol = function.sym_name(ctx);
+        // Direct callees name their targets by root-qualified path.
+        let symbol = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
         if definitions.insert(symbol, op).is_some() {
             return Err(OwnershipPlanError::new(format!(
                 "duplicate function identity @{symbol}"

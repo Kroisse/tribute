@@ -58,12 +58,19 @@ impl SymbolTable {
                     for &region in &ctx.op(op).regions {
                         self.collect_region(ctx, region, &nested, is_definition);
                     }
-                } else if is_definition(ctx, op)
-                    && let Some(name) = ctx.op(op).attributes.get_symbol(SYM_NAME)
-                {
-                    let qualified = qualify(path, name);
-                    if self.definitions.insert(qualified, op).is_some() {
-                        self.duplicates.push((qualified, op));
+                } else {
+                    if is_definition(ctx, op)
+                        && let Some(name) = ctx.op(op).attributes.get_symbol(SYM_NAME)
+                    {
+                        let qualified = qualify(path, name);
+                        if self.definitions.insert(qualified, op).is_some() {
+                            self.duplicates.push((qualified, op));
+                        }
+                    }
+                    // Only modules contribute path components, as in
+                    // `qualified_name`.
+                    for &region in &ctx.op(op).regions {
+                        self.collect_region(ctx, region, path, is_definition);
                     }
                 }
             }
@@ -193,5 +200,31 @@ mod tests {
         assert_eq!(table.resolve(twice), None);
         assert_eq!(table.duplicates().len(), 1);
         assert_eq!(table.duplicates()[0].0, twice);
+    }
+
+    #[test]
+    fn definitions_inside_non_module_regions_resolve_like_qualified_name() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  core.module @outer {
+    func.func @host() {
+      func.func @hidden() {
+        func.return
+      }
+      func.return
+    }
+  }
+}"#,
+        );
+        let table = SymbolTable::collect(&ctx, module, is_func);
+        let hidden = table
+            .resolve(Symbol::from_dynamic("outer::hidden"))
+            .expect("a definition nested in a function body is still collected");
+        assert_eq!(
+            qualified_name(&ctx, hidden),
+            Some(Symbol::from_dynamic("outer::hidden"))
+        );
     }
 }

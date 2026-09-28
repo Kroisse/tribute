@@ -2683,7 +2683,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
         if is_control_op(ctx, current, "func") {
-            return ctx.op(current).attributes.get_symbol("sym_name") == Some(callee);
+            return qualified_name(ctx, current) == Some(callee);
         }
         owner = parent_op(ctx, current);
     }
@@ -5391,5 +5391,28 @@ mod tests {
             ctx,
             call.expect("call")
         ));
+    }
+
+    #[test]
+    fn nested_self_calls_are_recognized_by_qualified_name() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @outer {
+  core.module @inner {
+    tribute_control.func @loop(%value: core.i32) -> core.i32 convention(direct) {
+      %again = tribute_control.call %value {callee = @"inner::loop"} : core.i32
+      tribute_control.return %again
+    }
+  }
+}"#,
+        );
+        let mut calls = Vec::new();
+        let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if is_control_op(&ctx, op, "call") {
+                calls.push(op);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        assert_eq!(calls.len(), 1);
+        assert!(direct_call_reenters_enclosing_func(&ctx, calls[0]));
     }
 }
