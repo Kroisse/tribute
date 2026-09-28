@@ -46,14 +46,20 @@ fn runtime() -> Result<()> {
         .join("target/sysroot/lib/tribute")
         .join(target_lexicon::HOST.to_string());
     std::fs::create_dir_all(&dest_dir)?;
-    let dest = dest_dir.join(
-        built
-            .file_name()
-            .ok_or("runtime artifact has no file name")?,
-    );
+    let dest = dest_dir.join(runtime_library_name());
     std::fs::copy(&built, &dest)?;
     eprintln!("installed {}", dest.display());
     Ok(())
+}
+
+/// File name rustc gives the runtime staticlib on the host target; the
+/// compiler's `tribute::link` looks the library up by the same name.
+fn runtime_library_name() -> &'static str {
+    if target_lexicon::HOST.environment == target_lexicon::Environment::Msvc {
+        "tribute_runtime.lib"
+    } else {
+        "libtribute_runtime.a"
+    }
 }
 
 fn workspace_root() -> Result<PathBuf> {
@@ -90,7 +96,7 @@ fn build_runtime_staticlib(root: &Path) -> Result<PathBuf> {
         let filenames = message["filenames"].as_array().into_iter().flatten();
         if let Some(path) = filenames
             .filter_map(serde_json::Value::as_str)
-            .find(|path| path.ends_with(".a"))
+            .find(|path| Path::new(path).file_name() == Some(runtime_library_name().as_ref()))
         {
             staticlib = Some(PathBuf::from(path));
         }

@@ -38,8 +38,15 @@ impl std::error::Error for LinkError {
 /// Environment variable that selects the Tribute sysroot.
 pub const SYSROOT_ENV: &str = "TRIBUTE_SYSROOT";
 
-/// File name of the native runtime staticlib inside a sysroot.
-const RUNTIME_LIB_NAME: &str = "libtribute_runtime.a";
+/// File name of the native runtime staticlib for the host target, following
+/// rustc's staticlib naming (`tribute_runtime.lib` on MSVC).
+fn runtime_library_name() -> &'static str {
+    if target_lexicon::HOST.environment == target_lexicon::Environment::Msvc {
+        "tribute_runtime.lib"
+    } else {
+        "libtribute_runtime.a"
+    }
+}
 
 /// Choose the sysroot for native linking.
 ///
@@ -71,7 +78,7 @@ pub fn runtime_library_path(sysroot: &Path) -> PathBuf {
         .join("lib")
         .join("tribute")
         .join(target_lexicon::HOST.to_string())
-        .join(RUNTIME_LIB_NAME)
+        .join(runtime_library_name())
 }
 
 /// Link native object bytes into an executable.
@@ -186,7 +193,7 @@ mod tests {
         let path = runtime_library_path(Path::new("/opt/tribute"));
         let expected = Path::new("/opt/tribute/lib/tribute")
             .join(target_lexicon::HOST.to_string())
-            .join("libtribute_runtime.a");
+            .join(runtime_library_name());
         assert_eq!(path, expected);
     }
 

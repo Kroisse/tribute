@@ -30,7 +30,9 @@ source-level ABI를 제공하는 것은 아니다.
 
 ### Runtime sysroot
 
-Native executable은 `tribute-runtime` staticlib(`libtribute_runtime.a`)과 링크한다.
+Native executable은 `tribute-runtime` staticlib과 링크한다. 파일 이름은 target의
+rustc staticlib 규칙을 따른다(대부분 `libtribute_runtime.a`, MSVC는
+`tribute_runtime.lib`).
 컴파일러는 이 라이브러리를 sysroot에서 찾는다. Target별 runtime 디렉토리는
 `<sysroot>/lib/tribute/<target-triple>/`이다.
 
