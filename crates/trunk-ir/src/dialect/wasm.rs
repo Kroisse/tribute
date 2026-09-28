@@ -70,7 +70,7 @@ mod wasm {
 
     // Module
     fn func(sym_name: Attr<Symbol>, r#type: Attr<Type>) {
-        #[region(body)]
+        #[region(body?)]
         {}
     }
 
