@@ -12,13 +12,14 @@ use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
-    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
-    TypeConverter,
+    ConversionError, ConversionTarget, IllegalOp, LegalityCheck, Module, PatternApplicator,
+    PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
+const IO_TO_WASM: &str = "io-to-wasm";
 const WRITE_HELPER: &str = "__tribute_wasi_write";
 const WASI_MODULE: &str = "wasi_snapshot_preview1";
 const FD_WRITE: &str = "fd_write";
@@ -63,7 +64,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
         let block = module
             .first_block(ctx)
             .expect("module should have a body block");
-        declare_host_resources(ctx, block, location);
+        declare_host_resources(ctx, block, location)?;
         let helper = build_write_helper(ctx, location);
         ctx.push_op(block, helper);
     }
@@ -71,28 +72,59 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(WritePattern)
         .with_target(ConversionTarget::new().illegal_dialect("tribute_io"))
-        .apply_partial_conversion(ctx, module, "io-to-wasm")?;
+        .apply_partial_conversion(ctx, module, IO_TO_WASM)?;
     Ok(())
 }
 
 /// Declare the `fd_write` import and a memory that holds the reserved cells,
 /// at the start of the module, unless the module already declares them.
-fn declare_host_resources(ctx: &mut IrContext, block: trunk_ir::BlockRef, loc: Location) {
-    let mut has_import = false;
+///
+/// An existing import under the `fd_write` symbol is reused only if it is the
+/// WASI preview1 `fd_write` with the signature the helper calls; any other
+/// import under that symbol is rejected.
+fn declare_host_resources(
+    ctx: &mut IrContext,
+    block: trunk_ir::BlockRef,
+    loc: Location,
+) -> Result<(), ConversionError> {
+    let i32_ty = simple_type(ctx, "core", "i32");
+    let import_ty = wasm_dialect::func_sig(ctx, [i32_ty; 4], [i32_ty]).as_type_ref();
+
+    let mut import = None;
     let mut memory = None;
     for &op in &ctx.block(block).ops {
-        if let Ok(import) = wasm_dialect::ImportFunc::from_op(ctx, op) {
-            has_import |= import.sym_name(ctx) == Symbol::new(FD_WRITE);
+        if let Ok(declared) = wasm_dialect::ImportFunc::from_op(ctx, op) {
+            if declared.sym_name(ctx) == Symbol::new(FD_WRITE) {
+                import = Some(declared);
+            }
         } else if let Ok(declared) = wasm_dialect::Memory::from_op(ctx, op) {
             memory = Some(declared);
         }
     }
 
+    if let Some(import) = import
+        && (import.module(ctx) != Symbol::new(WASI_MODULE)
+            || import.name(ctx) != Symbol::new(FD_WRITE)
+            || import.r#type(ctx) != import_ty)
+    {
+        let data = ctx.op(import.op_ref());
+        let conflict = IllegalOp {
+            op: import.op_ref(),
+            dialect: data.dialect,
+            name: data.name,
+            legality: LegalityCheck::Illegal,
+            reason: None,
+        }
+        .with_reason(format!(
+            "`@{FD_WRITE}` must import `{WASI_MODULE}.{FD_WRITE}` with type \
+             `(i32, i32, i32, i32) -> i32`"
+        ));
+        return Err(ConversionError::new(IO_TO_WASM, vec![conflict]));
+    }
+
     let required_pages = (SCRATCH_OFFSET as u32).div_ceil(PAGE_SIZE as u32).max(1);
     let mut preamble = Vec::new();
-    if !has_import {
-        let i32_ty = simple_type(ctx, "core", "i32");
-        let import_ty = wasm_dialect::func_sig(ctx, [i32_ty; 4], [i32_ty]).as_type_ref();
+    if import.is_none() {
         let import = wasm_dialect::ImportFunc::operands()
             .module(Symbol::new(WASI_MODULE))
             .name(Symbol::new(FD_WRITE))
@@ -131,6 +163,7 @@ fn declare_host_resources(ctx: &mut IrContext, block: trunk_ir::BlockRef, loc: L
             }
         }
     }
+    Ok(())
 }
 
 struct WritePattern;
@@ -676,5 +709,35 @@ mod tests {
         );
         let memory = wasm_dialect::Memory::from_op(&ctx, module.ops(&ctx)[1]).expect("memory");
         assert_eq!(memory.min(&ctx), 1, "the reserved cells need one page");
+    }
+
+    #[test]
+    fn lowering_rejects_a_conflicting_fd_write_import() {
+        for import in [
+            "wasm.import_func {module = @env, name = @fd_write, sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
+            "wasm.import_func {module = @wasi_snapshot_preview1, name = @fd_read, sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
+            "wasm.import_func {module = @wasi_snapshot_preview1, name = @fd_write, sym_name = @fd_write, type = wasm.func_sig<(core.i32) -> core.i32>}",
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  {import}
+  func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {{
+    %write = tribute_io.write %bytes, %newline : core.nil
+    func.return
+  }}
+}}"#
+                ),
+            );
+            let before = print_module(&ctx, module.op());
+
+            let error = lower(&mut ctx, module).expect_err("conflicting import must be rejected");
+
+            assert_eq!(error.boundary(), IO_TO_WASM);
+            assert!(error.to_string().contains("must import"), "{error}");
+            assert_eq!(print_module(&ctx, module.op()), before, "{import}");
+        }
     }
 }
