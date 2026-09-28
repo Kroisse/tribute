@@ -27,15 +27,15 @@
 //! when the phase returns. Reusing a cache with another [`IrContext`]
 //! discards the prior context's results before lookup.
 //!
-//! [`PassManager::run_with_analyses`](crate::pass::PassManager::run_with_analyses)
-//! hands the phase's cache to every [`Pass`](crate::pass::Pass). Consumers
+//! [`PassManager::run`](crate::pass::PassManager::run) hands the phase's
+//! cache to every [`Pass`](crate::pass::Pass). Consumers
 //! outside a pass manager take it as a parameter, often through a
 //! `*_with_analyses` variant of a function that otherwise uses a fresh cache:
 //!
 //! ```ignore
 //! fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCache) {
 //!     eliminate_dead_functions_with_analyses(ctx, m, Default::default(), analyses);
-//!     function_pm.run_with_analyses(ctx, m.into(), analyses)?;
+//!     function_pm.run(ctx, m.into(), analyses)?;
 //! }
 //! ```
 //!

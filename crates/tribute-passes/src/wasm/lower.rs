@@ -10,6 +10,7 @@ use tracing::{error, warn};
 use tribute_core::{CallingConvention, get_calling_convention};
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
+use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
@@ -186,7 +187,7 @@ pub fn lower_to_wasm(ctx: &mut IrContext, module: Module) -> Result<(), WasmLowe
             let mut pm = PassManager::new();
             pm.nest::<wasm_dialect::Func>()
                 .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
-            pm.run(ctx, core_module)?;
+            pm.run(ctx, core_module, &mut AnalysisCache::new())?;
         } else {
             super::evidence_to_wasm::lower_evidence_to_wasm(ctx, module)?;
         }

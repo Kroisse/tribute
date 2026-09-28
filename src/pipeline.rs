@@ -820,7 +820,7 @@ pub fn run_through_cps_lowering(
     let core_module =
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     let mut pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
-    pm.run(&mut ctx, core_module)?;
+    pm.run(&mut ctx, core_module, &mut AnalysisCache::new())?;
     Ok(Some((ctx, m)))
 }
 
@@ -877,7 +877,7 @@ fn run_shared_pipeline(
     // of unchanged IR, and any IR change discards them.
     let mut analyses = AnalysisCache::new();
     let mut structural_pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
-    structural_pm.run_with_analyses(&mut ctx, core_module, &mut analyses)?;
+    structural_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     // CPS effect handling, function-local phase: lower_ability_perform produces
     // explicit effect dispatches; evidence resolution then extends handler scopes.
@@ -886,12 +886,12 @@ fn run_shared_pipeline(
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_ability_perform::LowerAbilityPerform);
     install_debug_verifier(&mut ability_pm);
-    ability_pm.run_with_analyses(&mut ctx, core_module, &mut analyses)?;
+    ability_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     let mut evidence_pm = PassManager::new();
     evidence_pm.add_pass(tribute_passes::resolve_evidence::ResolveEvidenceDispatch);
     install_debug_verifier(&mut evidence_pm);
-    evidence_pm.run_with_analyses(&mut ctx, core_module, &mut analyses)?;
+    evidence_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     // Final function-local ability conversion. This consumes handle_dispatch ops
     // after resolve_evidence expands evidence setup.
@@ -900,7 +900,7 @@ fn run_shared_pipeline(
         .nest::<func_dialect::Func>()
         .add_pass(tribute_passes::lower_handle_dispatch::LowerHandleDispatch);
     install_debug_verifier(&mut ability_boundary_pm);
-    ability_boundary_pm.run_with_analyses(&mut ctx, core_module, &mut analyses)?;
+    ability_boundary_pm.run(&mut ctx, core_module, &mut analyses)?;
 
     Ok(Some((ctx, m)))
 }
@@ -1031,7 +1031,7 @@ fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCac
                 trunk_ir::transforms::DceConfig::default(),
             ));
         install_debug_verifier(&mut pm);
-        if let Err(error) = pm.run_with_analyses(ctx, core_module, analyses) {
+        if let Err(error) = pm.run(ctx, core_module, analyses) {
             tracing::warn!("cleanup function passes failed: {error}");
         }
     } else {
@@ -1081,7 +1081,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
         pm.nest::<func_dialect::Func>()
             .add_pass(tribute_passes::native::evidence::LowerEvidenceToNative);
         install_debug_verifier(&mut pm);
-        pm.run_with_analyses(ctx, core_module, &mut analyses)?;
+        pm.run(ctx, core_module, &mut analyses)?;
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     }
@@ -1125,7 +1125,7 @@ fn enter_target_closure_storage_boundary(
     let mut pm = PassManager::new();
     pm.add_pass(tribute_passes::closure_lower::LowerPreparedClosures);
     install_debug_verifier(&mut pm);
-    pm.run_with_analyses(ctx, core_module, analyses)?;
+    pm.run(ctx, core_module, analyses)?;
     Ok(())
 }
 
@@ -1295,7 +1295,7 @@ fn prepare_module_to_native(
         pm.nest::<func_dialect::Func>()
             .add_pass(trunk_ir::transforms::scf_to_cf_pass());
         install_debug_verifier(&mut pm);
-        pm.run_with_analyses(ctx, core_module, &mut analyses)
+        pm.run(ctx, core_module, &mut analyses)
             .map_err(native_pass_failure)?;
     } else {
         trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module);
@@ -2650,7 +2650,9 @@ fn main() {
         ));
         install_debug_verifier(&mut pm);
 
-        let error = pm.run(&mut ctx, core_module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "break-use-chain");
         assert!(
@@ -2697,7 +2699,9 @@ fn main() {
         ));
         install_debug_verifier(&mut pm);
 
-        let error = pm.run(&mut ctx, core_module).unwrap_err();
+        let error = pm
+            .run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .unwrap_err();
 
         assert_eq!(error.pass_name(), "break-schema");
         let message = error.to_string();
