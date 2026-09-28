@@ -35,31 +35,17 @@ fn main() -> ExitCode {
     }
 }
 
-/// Build the runtime staticlib and install it at
-/// `target/sysroot/lib/tribute/<host-triple>/`, the layout the compiler
-/// searches (see `new-plans/linking.md`).
+/// Build the runtime staticlib and install it into the development sysroot
+/// `target/sysroot`, at the path `tribute_sysroot` gives the compiler.
 fn runtime() -> Result<()> {
     let root = workspace_root()?;
     let built = build_runtime_staticlib(&root)?;
 
-    let dest_dir = root
-        .join("target/sysroot/lib/tribute")
-        .join(target_lexicon::HOST.to_string());
-    std::fs::create_dir_all(&dest_dir)?;
-    let dest = dest_dir.join(runtime_library_name());
+    let dest = tribute_sysroot::runtime_library_path(&root.join("target/sysroot"));
+    std::fs::create_dir_all(dest.parent().ok_or("sysroot runtime path has no parent")?)?;
     std::fs::copy(&built, &dest)?;
     eprintln!("installed {}", dest.display());
     Ok(())
-}
-
-/// File name rustc gives the runtime staticlib on the host target; the
-/// compiler's `tribute::link` looks the library up by the same name.
-fn runtime_library_name() -> &'static str {
-    if target_lexicon::HOST.environment == target_lexicon::Environment::Msvc {
-        "tribute_runtime.lib"
-    } else {
-        "libtribute_runtime.a"
-    }
 }
 
 fn workspace_root() -> Result<PathBuf> {
@@ -96,7 +82,10 @@ fn build_runtime_staticlib(root: &Path) -> Result<PathBuf> {
         let filenames = message["filenames"].as_array().into_iter().flatten();
         if let Some(path) = filenames
             .filter_map(serde_json::Value::as_str)
-            .find(|path| Path::new(path).file_name() == Some(runtime_library_name().as_ref()))
+            .find(|path| {
+                Path::new(path).file_name()
+                    == Some(tribute_sysroot::runtime_library_name().as_ref())
+            })
         {
             staticlib = Some(PathBuf::from(path));
         }

@@ -1,9 +1,12 @@
 //! Native executable linking against the Tribute runtime.
 //!
-//! The runtime staticlib is found in a sysroot chosen at link time; see
-//! `new-plans/linking.md` for the lookup contract.
+//! The runtime staticlib is found in a sysroot chosen at link time; the
+//! layout comes from `tribute_sysroot`, and `new-plans/linking.md` states the
+//! lookup contract.
 
 use std::path::{Path, PathBuf};
+
+pub use tribute_sysroot::{SYSROOT_ENV, runtime_library_path};
 
 /// Errors that can occur during native binary linking.
 #[derive(Debug, derive_more::Display)]
@@ -35,19 +38,6 @@ impl std::error::Error for LinkError {
     }
 }
 
-/// Environment variable that selects the Tribute sysroot.
-pub const SYSROOT_ENV: &str = "TRIBUTE_SYSROOT";
-
-/// File name of the native runtime staticlib for the host target, following
-/// rustc's staticlib naming (`tribute_runtime.lib` on MSVC).
-fn runtime_library_name() -> &'static str {
-    if target_lexicon::HOST.environment == target_lexicon::Environment::Msvc {
-        "tribute_runtime.lib"
-    } else {
-        "libtribute_runtime.a"
-    }
-}
-
 /// Choose the sysroot for native linking.
 ///
 /// An explicit path wins over [`SYSROOT_ENV`]; without either, the sysroot is
@@ -70,15 +60,6 @@ pub fn resolve_sysroot(explicit: Option<&Path>) -> Result<PathBuf, LinkError> {
                 exe.display()
             )))
         })
-}
-
-/// Path of the native runtime staticlib for the host target inside `sysroot`.
-pub fn runtime_library_path(sysroot: &Path) -> PathBuf {
-    sysroot
-        .join("lib")
-        .join("tribute")
-        .join(target_lexicon::HOST.to_string())
-        .join(runtime_library_name())
 }
 
 /// Link native object bytes into an executable.
@@ -186,15 +167,6 @@ mod tests {
     fn test_explicit_sysroot_takes_precedence() {
         let sysroot = Path::new("/opt/tribute");
         assert_eq!(resolve_sysroot(Some(sysroot)).unwrap(), sysroot);
-    }
-
-    #[test]
-    fn test_runtime_library_path_uses_target_layout() {
-        let path = runtime_library_path(Path::new("/opt/tribute"));
-        let expected = Path::new("/opt/tribute/lib/tribute")
-            .join(target_lexicon::HOST.to_string())
-            .join(runtime_library_name());
-        assert_eq!(path, expected);
     }
 
     #[test]

@@ -1528,7 +1528,6 @@ dependencies = [
  "salsa-test-macros",
  "serde",
  "serde_json",
- "target-lexicon",
  "tempfile",
  "tracing",
  "tracing-subscriber",
@@ -1538,6 +1537,7 @@ dependencies = [
  "tribute-front",
  "tribute-ir",
  "tribute-passes",
+ "tribute-sysroot",
  "trunk-ir",
  "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
@@ -1617,6 +1617,13 @@ dependencies = [
  "smallvec",
  "tribute-rc",
  "zmij",
+]
+
+[[package]]
+name = "tribute-sysroot"
+version = "0.1.0"
+dependencies = [
+ "target-lexicon",
 ]
 
 [[package]]
@@ -1860,7 +1867,7 @@ version = "0.1.0"
 dependencies = [
  "clap",
  "serde_json",
- "target-lexicon",
+ "tribute-sysroot",
 ]
 
 [[package]]
