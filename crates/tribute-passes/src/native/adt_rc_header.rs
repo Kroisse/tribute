@@ -498,8 +498,13 @@ mod tests {
 
         // Run RTTI pass first (needed for rtti_map)
         let (tc, _) = crate::native::type_converter::native_type_converter(ctx);
-        let plan = crate::native::ownership_plan::build_native_ownership_plan(ctx, module)
-            .expect("typed ownership plan");
+        let plan = crate::native::ownership_plan::build_native_ownership_plan(
+            ctx,
+            module,
+            crate::native::ownership_plan::NativeOwnershipPlanOptions::production(),
+            &mut Default::default(),
+        )
+        .expect("typed ownership plan");
         // Model the representation-only signature rewrite that occurs after
         // planning in the production pipeline to isolate ADT lowering here.
         let ptr_ty = intern_ty(ctx, "core", "ptr");
