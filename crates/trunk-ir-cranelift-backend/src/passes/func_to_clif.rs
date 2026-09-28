@@ -10,8 +10,7 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
-use std::collections::{HashMap, HashSet};
-use std::ops::ControlFlow;
+use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -27,36 +26,13 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::Attribute;
-use trunk_ir::walk::{WalkAction, walk_region};
-
-/// An exact type-identity rewrite performed by `func_to_clif`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TypeRewrite {
-    pub source: TypeRef,
-    pub target: TypeRef,
-}
-
-/// Stable identities rewritten while lowering function-level representation.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct LoweringResult {
-    rtti_layout_rewrites: Vec<TypeRewrite>,
-}
-
-impl LoweringResult {
-    pub fn rtti_layout_rewrites(&self) -> &[TypeRewrite] {
-        &self.rtti_layout_rewrites
-    }
-}
 
 /// Lower func dialect to clif dialect.
 pub fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,
-) -> Result<LoweringResult, ConversionError> {
-    // Phase 1: Adapt closure structs for native backend. This identity rewrite
-    // must see the semantic layout recorded by the typed ownership plan.
-    let rtti_layout_rewrites = adapt_closure_structs(ctx, module);
+) -> Result<(), ConversionError> {
     let functions = function_signatures(ctx, module);
 
     let applicator = PatternApplicator::new(type_converter)
@@ -71,9 +47,7 @@ pub fn lower(
         .add_pattern(FuncConstantPattern { functions })
         .with_target(func_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "func-to-clif")?;
-    Ok(LoweringResult {
-        rtti_layout_rewrites,
-    })
+    Ok(())
 }
 
 fn convert_attribute_to_clif(
@@ -215,77 +189,8 @@ fn func_to_clif_target() -> ConversionTarget {
         .illegal_dialect("func")
 }
 
-fn adapt_closure_structs(ctx: &mut IrContext, module: Module) -> Vec<TypeRewrite> {
-    let native_ty = native_closure_struct_type(ctx);
-    let mut sources = HashSet::new();
-    if let Some(body) = module.body(ctx) {
-        let _ = walk_region::<()>(ctx, body, &mut |op| {
-            if let Ok(struct_new) = trunk_ir::dialect::adt::StructNew::from_op(ctx, op) {
-                let source = struct_new.r#type(ctx);
-                if source != native_ty && is_closure_struct(ctx, source) {
-                    sources.insert(source);
-                }
-            }
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-    }
-    let mut rtti_layout_rewrites = sources
-        .into_iter()
-        .map(|source| TypeRewrite {
-            source,
-            target: native_ty,
-        })
-        .collect::<Vec<_>>();
-    rtti_layout_rewrites.sort_by_key(|rewrite| rewrite.source);
-
-    let applicator =
-        PatternApplicator::new(TypeConverter::new()).add_pattern(ClosureStructAdaptPattern);
-    applicator.apply_partial(ctx, module);
-    rtti_layout_rewrites
-}
-
-const CLOSURE_STRUCT_NAME_STR: &str = "_closure";
-
-fn is_closure_struct(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    data.attrs
-        .get_symbol("name")
-        .is_some_and(|name| name == Symbol::new(CLOSURE_STRUCT_NAME_STR))
-}
-
-fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::types::TypeDataBuilder;
-    let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
-    let ptr_ty = core::ptr(ctx).as_type_ref();
-    let mut builder = TypeDataBuilder::new("adt", "struct");
-    builder = builder.param(i64_ty).param(ptr_ty);
-    builder = builder.attr(
-        "name",
-        Attribute::Symbol(Symbol::new(CLOSURE_STRUCT_NAME_STR)),
-    );
-    builder = builder.attr(
-        "fields",
-        Attribute::List(vec![
-            Attribute::List(vec![
-                Attribute::Symbol(Symbol::new("func_ptr")),
-                Attribute::Type(i64_ty),
-            ]),
-            Attribute::List(vec![
-                Attribute::Symbol(Symbol::new("env")),
-                Attribute::Type(ptr_ty),
-            ]),
-        ]),
-    );
-    ctx.intern_type(builder.build())
-}
-
 fn intern_ptr_type(ctx: &mut IrContext) -> TypeRef {
     core::ptr(ctx).as_type_ref()
-}
-
-fn intern_i64_type(ctx: &mut IrContext) -> TypeRef {
-    use trunk_ir::types::TypeDataBuilder;
-    ctx.intern_type(TypeDataBuilder::new("core", "i64").build())
 }
 
 /// Pattern: `func.func` -> `clif.func`
@@ -602,75 +507,6 @@ impl RewritePattern for FuncConstantPattern {
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
-    }
-}
-
-/// Pattern: Adapt `_closure` struct ops for native backend
-struct ClosureStructAdaptPattern;
-
-impl RewritePattern for ClosureStructAdaptPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        use trunk_ir::dialect::adt;
-
-        let native_ty = native_closure_struct_type(ctx);
-
-        // Handle adt.struct_new on _closure
-        if let Ok(struct_new) = adt::StructNew::from_op(ctx, op) {
-            let ty = struct_new.r#type(ctx);
-            if !is_closure_struct(ctx, ty) || ty == native_ty {
-                return false;
-            }
-            let new_op = crate::passes::cf_to_clif::rebuild_op_as(
-                ctx,
-                op,
-                Symbol::new("adt"),
-                Symbol::new("struct_new"),
-            );
-            ctx.op_mut(new_op)
-                .attributes
-                .insert(Symbol::new("type"), Attribute::Type(native_ty));
-            // Update result type to native_ty
-            let result_types = ctx.op_result_types(new_op).to_vec();
-            if !result_types.is_empty() {
-                ctx.set_op_result_type(new_op, 0, native_ty);
-            }
-            rewriter.replace_op(new_op);
-            return true;
-        }
-
-        // Handle adt.struct_get on _closure
-        if let Ok(struct_get) = adt::StructGet::from_op(ctx, op) {
-            let ty = struct_get.r#type(ctx);
-            if !is_closure_struct(ctx, ty) || ty == native_ty {
-                return false;
-            }
-            let field_idx = struct_get.field(ctx);
-            let new_op = crate::passes::cf_to_clif::rebuild_op_as(
-                ctx,
-                op,
-                Symbol::new("adt"),
-                Symbol::new("struct_get"),
-            );
-            ctx.op_mut(new_op)
-                .attributes
-                .insert(Symbol::new("type"), Attribute::Type(native_ty));
-            if field_idx == 0 {
-                let i64_ty = intern_i64_type(ctx);
-                ctx.set_op_result_type(new_op, 0, i64_ty);
-            } else if field_idx == 1 {
-                let ptr_ty = intern_ptr_type(ctx);
-                ctx.set_op_result_type(new_op, 0, ptr_ty);
-            }
-            rewriter.replace_op(new_op);
-            return true;
-        }
-
-        false
     }
 }
 
@@ -1250,41 +1086,5 @@ mod tests {
         let after = print_module(&ctx, module.op());
         assert!(after.contains("func.tail_call_indirect"), "{after}");
         assert!(!after.contains("clif.return_call_indirect"), "{after}");
-    }
-
-    #[test]
-    fn test_closure_struct_adaptation() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @test_fn() -> core.i32 {
-    %0 = func.constant {func_ref = @lifted_fn} : core.i32
-    %1 = arith.const {value = 0} : core.ptr
-    %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env]}} : core.ptr
-    %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
-    func.return %5
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
-    }
-
-    #[test]
-    fn test_closure_struct_anyref_adaptation() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @test_fn() -> core.i32 {
-    %0 = func.constant {func_ref = @lifted_fn} : core.i32
-    %1 = arith.const {value = 0} : wasm.anyref
-    %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env]}} : wasm.anyref
-    %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
-    func.return %5
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
     }
 }

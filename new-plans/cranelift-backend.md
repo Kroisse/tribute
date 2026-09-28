@@ -169,6 +169,12 @@ data object를 같은 단계에서 `clif.data`로 선언하며, 같은 내용과
 이미 있으면 재사용한다. Emission은 IR에 선언된 `clif.data`만 object에 정의하고,
 앞 단계의 입력에서 정한 배치를 IR 밖으로 넘겨받지 않는다.
 
+`clif.data`의 선택적 `function_relocs`는 `[offset, @function]` 쌍의 목록이며,
+cranelift-module `DataDescription`의 함수 재배치와 같은 의미를 갖는다. 바이트는
+object의 실제 내용이고, 링커가 각 offset의 포인터 폭 바이트를 해당 함수의 주소로
+덮어쓴다. 재배치마다 덮어쓰는 포인터 폭 구간은 바이트 안에 들어가야 하고 서로 겹치지
+않아야 하며, 대상은 모듈에 선언된 함수여야 한다.
+
 ### Bodyless 선언의 바인딩
 
 Callable의 선언·정의·malformed 분류는 [공통 본문 구조](ir.md#callable-본문-구조)를
@@ -237,6 +243,16 @@ IR을 변경하지 않는다. `adt.typeref`와 compiler-generated managed layout
 type, exact callable contract와 CFG liveness만 사용한다. RTTI deep-release field와
 entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 이후
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
+
+Plan의 RTTI 배치는 plan을 만든 직후 할당 layout마다 하나의
+`tribute_rtti.layout {type, index, managed}` 선언으로 모듈에 기록한다. index는
+plan의 할당 순서대로 사용자 RTTI index 공간에서 정한다. Semantic `_closure` layout을
+native closure layout으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과
+그 layout의 RTTI 선언을 함께 바꾼다. RTTI 생성은 선언이 모든 할당 layout을 정확히
+한 번씩 이름 붙이는지 검사한 뒤, layout별 release 함수, index마다 release 함수
+주소를 담는 RTTI table(`clif.data`와 함수 재배치), table을 통해 해제를 디스패치하는
+`__tribute_deep_release`를 IR에 선언한다. RC header lowering은 선언된 index를
+header에 기록하고 선언을 지운다. Backend는 RTTI 이름 규칙을 알지 않는다.
 
 Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan을 즉시
 소비한다. Evidence runtime에 저장할 managed `_closure`는 이 경계에서만

@@ -291,11 +291,11 @@ fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
     .expect("elided forwarding IR should be available");
     assert_eq!(
         generated_rtti_field_releases(&preserved),
-        "@__tribute_release_32=1"
+        "@__tribute_release_5=1"
     );
     assert_eq!(
         generated_rtti_field_releases(&elided),
-        "@__tribute_release_32=1"
+        "@__tribute_release_5=1"
     );
     let preserved = focused_rc_ops(&preserved);
     let elided = focused_rc_ops(&elided);
@@ -507,15 +507,15 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
 
     assert_eq!(
         generated_rtti_field_releases(&before),
-        "@__tribute_release_32=1"
+        "@__tribute_release_5=1"
     );
     assert_eq!(
         generated_rtti_field_releases(&after),
-        "@__tribute_release_32=1"
+        "@__tribute_release_5=1"
     );
     assert_eq!(
         generated_rtti_field_releases(&preserved_after),
-        "@__tribute_release_32=1"
+        "@__tribute_release_5=1"
     );
 
     let before = focused_rc_ops(&before);
@@ -556,15 +556,15 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
     .expect("preserved temporary-borrow stage IR should be available");
     assert_eq!(
         generated_rtti_field_releases(&before),
-        "@__tribute_release_33=1"
+        "@__tribute_release_6=1"
     );
     assert_eq!(
         generated_rtti_field_releases(&after),
-        "@__tribute_release_33=1"
+        "@__tribute_release_6=1"
     );
     assert_eq!(
         generated_rtti_field_releases(&preserved_after),
-        "@__tribute_release_33=1"
+        "@__tribute_release_6=1"
     );
     let before = focused_rc_ops(&before);
     let after = focused_rc_ops(&after);

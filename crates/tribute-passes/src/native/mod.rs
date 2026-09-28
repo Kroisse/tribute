@@ -12,6 +12,7 @@
 //! - `rc_optimization`: Eliminate redundant local retain/release pairs
 //! - `rc_lowering`: Lower `tribute_rt.retain`/`release` to inline `clif.*` ops
 
+pub mod adapt_closure_layout;
 pub mod adt_rc_header;
 pub mod const_to_native;
 pub mod entrypoint;

@@ -1655,21 +1655,9 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     let before = print_module(&ctx, module.op());
     plan.validate_against(&ctx, module)
         .expect("freshly built plan must validate");
-    let [first, second] = plan.rtti_types() else {
+    let [first, _second] = plan.rtti_types() else {
         panic!("two exact RTTI layouts")
     };
-    assert!(
-        plan.remap_rtti_types(
-            &ctx,
-            module,
-            &[TypeRewrite {
-                source: first.ty,
-                target: second.ty,
-            }],
-        )
-        .is_err(),
-        "two typed layouts may not collapse onto one physical identity"
-    );
 
     let mut stale_module = plan.clone();
     let other = parse_test_module(&mut ctx, "core.module @other {}");
@@ -1743,7 +1731,7 @@ fn plan_revalidation_requires_the_exact_reachable_function_set() {
 }
 
 #[test]
-fn closure_rtti_bitmap_follows_the_exact_func_to_clif_type_rewrite() {
+fn closure_rtti_declaration_follows_the_native_closure_layout() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -1762,15 +1750,19 @@ fn closure_rtti_bitmap_follows_the_exact_func_to_clif_type_rewrite() {
         ManagedFieldBitmap::Struct(fields) if fields == &[false, true]
     ));
 
+    crate::native::rtti::declare_rtti_layouts(&mut ctx, module, plan.rtti_types());
+    crate::native::adapt_closure_layout::lower(&mut ctx, module);
     let (type_converter, _) = native_type_converter(&mut ctx);
-    let lowering = func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
-    assert_eq!(lowering.rtti_layout_rewrites().len(), 1);
-    assert_eq!(lowering.rtti_layout_rewrites()[0].source, semantic);
-    let remapped = plan
-        .remap_rtti_types(&ctx, module, lowering.rtti_layout_rewrites())
-        .expect("exact closure layout rewrite");
-    assert_ne!(remapped[0].ty, semantic);
-    assert_eq!(remapped[0].fields, plan.rtti_types()[0].fields);
+    func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
+
+    let [layout] = crate::native::rtti::declared_rtti_layouts(&ctx, module)[..] else {
+        panic!("one closure RTTI declaration")
+    };
+    assert_ne!(layout.r#type(&ctx), semantic);
+    assert_eq!(layout.managed_fields(&ctx), plan.rtti_types()[0].fields);
+    let (type_converter, _) = native_type_converter(&mut ctx);
+    crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter)
+        .expect("the declaration names the adapted allocation layout");
 }
 
 #[test]
@@ -1789,6 +1781,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
 }"#,
     );
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
+    crate::native::rtti::declare_rtti_layouts(&mut ctx, module, plan.rtti_types());
     let mut allocation = None;
     walk_module(&ctx, module, |op| {
         if adt::StructNew::matches(&ctx, op) {
@@ -1808,56 +1801,17 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
         .collect::<Vec<_>>();
     assert_eq!(candidates.len(), 2);
 
+    let (type_converter, _) = native_type_converter(&mut ctx);
     for &candidate in &candidates {
         ctx.op_mut(allocation)
             .attributes
             .insert(Symbol::new("type"), trunk_ir::Attribute::Type(candidate));
-        assert!(plan.remap_rtti_types(&ctx, module, &[]).is_err());
+        assert!(plan.validate_against(&ctx, module).is_err());
         assert!(
-            plan.remap_rtti_types(
-                &ctx,
-                module,
-                &[TypeRewrite {
-                    source: plan.rtti_types()[0].ty,
-                    target: candidate,
-                }],
-            )
-            .is_ok(),
-            "only an explicit exact identity rewrite may carry the bitmap"
+            crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter).is_err(),
+            "a same-name or same-shape layout must not reuse the exact declaration"
         );
     }
-
-    let exact = plan.rtti_types()[0].ty;
-    assert!(
-        plan.remap_rtti_types(
-            &ctx,
-            module,
-            &[TypeRewrite {
-                source: candidates[0],
-                target: candidates[1],
-            }],
-        )
-        .is_err(),
-        "a rewrite source not present in the typed plan is stale"
-    );
-    assert!(
-        plan.remap_rtti_types(
-            &ctx,
-            module,
-            &[
-                TypeRewrite {
-                    source: exact,
-                    target: candidates[0],
-                },
-                TypeRewrite {
-                    source: exact,
-                    target: candidates[1],
-                },
-            ],
-        )
-        .is_err(),
-        "one typed identity cannot map ambiguously"
-    );
 }
 
 #[test]

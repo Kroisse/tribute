@@ -14,7 +14,20 @@ mod clif {
     }
 
     /// A module-local read-only data object that `symbol_addr` can reference.
-    fn data(sym_name: Attr<Symbol>, bytes: Attr<Bytes>, align: Attr<u32>) {}
+    ///
+    /// `function_relocs`, a list of `[offset, @function]` pairs, asks the
+    /// linker to write each function's address over the pointer-sized bytes
+    /// at its offset, like cranelift-module's `DataDescription::function_relocs`.
+    /// The pointer-width ranges must fit in `bytes` and must not overlap;
+    /// emission checks both against the target pointer width.
+    #[verify]
+    fn data(
+        sym_name: Attr<Symbol>,
+        bytes: Attr<Bytes>,
+        align: Attr<u32>,
+        function_relocs: Option<Attr<_>>,
+    ) {
+    }
 
     fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
 
@@ -345,6 +358,58 @@ impl crate::ops::Verify for CallIndirect {
                 .map(|&ty| crate::printer::print_type(ctx, ty))
                 .format(", "),
         ))
+    }
+}
+
+impl Data {
+    /// The `(offset, function)` relocations of a verified data object, in
+    /// declaration order.
+    pub fn relocations(self, ctx: &crate::IrContext) -> Vec<(u32, crate::Symbol)> {
+        parse_function_relocs(ctx.op(self.op_ref()).attributes.get("function_relocs"))
+            .expect("verified clif.data relocations")
+    }
+}
+
+fn parse_function_relocs(
+    attribute: Option<&Attribute>,
+) -> Result<Vec<(u32, crate::Symbol)>, String> {
+    let Some(attribute) = attribute else {
+        return Ok(Vec::new());
+    };
+    let Attribute::List(entries) = attribute else {
+        return Err("`function_relocs` must be a list of `[offset, @function]` pairs".into());
+    };
+    let mut relocations = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match entry {
+            Attribute::List(pair) => match pair.as_slice() {
+                [Attribute::Int(offset), Attribute::Symbol(function)] => {
+                    let offset = u32::try_from(*offset)
+                        .map_err(|_| format!("relocation offset {offset} is not a u32"))?;
+                    relocations.push((offset, *function));
+                }
+                _ => {
+                    return Err("each relocation must be an `[offset, @function]` pair".into());
+                }
+            },
+            _ => return Err("each relocation must be an `[offset, @function]` pair".into()),
+        }
+    }
+    Ok(relocations)
+}
+
+impl crate::ops::Verify for Data {
+    /// Relocations are well-formed pairs at distinct offsets.
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+        let relocations =
+            parse_function_relocs(ctx.op(self.op_ref()).attributes.get("function_relocs"))?;
+        let mut offsets = std::collections::HashSet::new();
+        for (offset, _) in relocations {
+            if !offsets.insert(offset) {
+                return Err(format!("duplicate relocation offset {offset}"));
+            }
+        }
+        Ok(())
     }
 }
 

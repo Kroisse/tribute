@@ -21,7 +21,6 @@ use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::transforms::call_graph::{CallGraph, recursive_functions};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{BlockRef, OpRef, RegionRef, Symbol, TypeRef, ValueDef, ValueRef};
-use trunk_ir_cranelift_backend::passes::func_to_clif::TypeRewrite;
 
 mod actions;
 mod cfg;
@@ -136,11 +135,7 @@ impl FunctionOwnershipPlan {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ManagedFieldBitmap {
-    Struct(Vec<bool>),
-    Enum(Vec<Vec<bool>>),
-}
+pub use tribute_ir::dialect::tribute_rtti::ManagedFieldBitmap;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RttiTypePlan {
@@ -222,48 +217,21 @@ impl NativeOwnershipPlan {
         Ok(layout)
     }
 
-    /// Carry the typed RTTI bitmap through exact compiler-reported type
-    /// rewrites. No dialect/name/layout matching is permitted here.
-    pub fn remap_rtti_types(
+    /// Check that the planned RTTI layouts are exactly the allocation layouts
+    /// of `module`. No dialect/name/layout matching is permitted here.
+    fn validate_rtti_types(
         &self,
         ctx: &IrContext,
         module: Module,
-        rewrites: &[TypeRewrite],
-    ) -> Result<Vec<RttiTypePlan>, OwnershipPlanError> {
+    ) -> Result<(), OwnershipPlanError> {
         let planned = self
             .rtti_types
             .iter()
             .map(|entry| entry.ty)
             .collect::<HashSet<_>>();
-        let mut rewrite_map = HashMap::new();
-        for rewrite in rewrites {
-            if !planned.contains(&rewrite.source) {
-                return Err(OwnershipPlanError::new(
-                    "RTTI type rewrite has a stale source identity",
-                ));
-            }
-            if rewrite_map.insert(rewrite.source, rewrite.target).is_some() {
-                return Err(OwnershipPlanError::new(
-                    "RTTI type rewrite has a duplicate source identity",
-                ));
-            }
-        }
-
-        let remapped = self
-            .rtti_types
-            .iter()
-            .map(|entry| RttiTypePlan {
-                ty: rewrite_map.get(&entry.ty).copied().unwrap_or(entry.ty),
-                fields: entry.fields.clone(),
-            })
-            .collect::<Vec<_>>();
-        let remapped_set = remapped
-            .iter()
-            .map(|entry| entry.ty)
-            .collect::<HashSet<_>>();
-        if remapped_set.len() != remapped.len() {
+        if planned.len() != self.rtti_types.len() {
             return Err(OwnershipPlanError::new(
-                "RTTI type rewrites have ambiguous target identities",
+                "RTTI plan has duplicate layout identities",
             ));
         }
 
@@ -281,12 +249,12 @@ impl NativeOwnershipPlan {
                 current.insert(ty);
             }
         });
-        if current != remapped_set {
+        if current != planned {
             return Err(OwnershipPlanError::new(
-                "RTTI allocation layout identity changed without an exact rewrite",
+                "RTTI allocation layout identities differ from the plan",
             ));
         }
-        Ok(remapped)
+        Ok(())
     }
 
     /// Revalidate the stable pre-erasure identities before a future consumer
@@ -332,7 +300,7 @@ impl NativeOwnershipPlan {
                 "semantic closure allocation layouts differ from the ownership plan",
             ));
         }
-        self.remap_rtti_types(ctx, module, &[])?;
+        self.validate_rtti_types(ctx, module)?;
         Ok(())
     }
 }

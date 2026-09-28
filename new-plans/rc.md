@@ -527,29 +527,30 @@ non-transferred values before `func.tail_call` or
 
 ## RTTI Table
 
-**Location (future):** Emitted as static data by `trunk-ir-cranelift-backend`
+RTTI table은 RTTI index마다 포인터 폭의 칸 하나를 두고, release 함수가 있는 index의
+칸에 그 함수의 주소를 담는다. 빈 칸은 null이며 얕은 해제를 뜻한다. Native RTTI
+생성은 table을 함수 재배치가 달린 `clif.data`로, table을 통해 해제를 디스패치하는
+`__tribute_deep_release`를 `clif.func`로 IR에 선언한다. 해제할 크기는 table에 두지
+않고 `__tribute_deep_release(ptr, size)`의 인자로 받는다.
 
-**Structure:**
-
-```rust
-struct TypeInfo {
-    release_fn: extern "C" fn(*mut u8),  // Type-specific destructor
-    size: u32,                            // Object size (excluding header)
-    // Future: field_count, field_offsets, name, etc.
-}
-
-// Emitted as static data in each compiled module
-static TRIBUTE_RTTI_TABLE: [TypeInfo; N] = [...];
+```text
+__tribute_rtti_table: [release_fn_or_null; max_index + 1]
 ```
 
 **Index allocation:**
 
-- Compile-time sequential assignment per module
-- Reserved indices:
-  - `0` = boxed i32 (Int)
-  - `1` = boxed f64 (Float)
-  - `2` = boxed i32 (Bool/Nat)
-  - `3+` = user-defined structs/enums
+| Index | 의미 |
+| ---- | ---- |
+| `0` | release 함수 없음, 얕은 해제. Runtime이 할당하는 `Bytes`도 이 번호를 쓴다. |
+| `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`의 고정 크기 release |
+| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 `tribute_rtti.layout` |
+
+RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과
+`__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석하며, runtime과
+공유하는 번호는 `0`뿐이다. 따라서 예약 범위를 늘릴 때 호환 단계가 필요 없고, 사용자
+layout index는 예약 범위 바로 다음부터 시작한다. 따로 컴파일한 단위 사이에서 객체가
+오가게 되면 이 전제가 깨지므로, 그때는 번호 대신 header나 descriptor가 스스로 layout을
+설명하는 방식으로 바꿔야 한다.
 
 `release` uses the stored RTTI index to select the type-specific destructor.
 

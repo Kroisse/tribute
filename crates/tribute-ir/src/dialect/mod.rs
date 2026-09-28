@@ -7,3 +7,4 @@ pub mod list;
 pub mod tribute_control;
 pub mod tribute_io;
 pub mod tribute_rt;
+pub mod tribute_rtti;

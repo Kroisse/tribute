@@ -36,13 +36,14 @@ const ALLOC_FN: &str = "__tribute_alloc";
 
 /// Lower `adt.struct_new` and `adt.variant_new` operations with RC headers.
 ///
-/// The `rtti_map` maps arena type refs to their RTTI indices.
+/// Each header stores the RTTI index its `tribute_rtti.layout` declares. As
+/// the last reader of those declarations, this pass erases them.
 pub fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,
-    rtti_map: &HashMap<TypeRef, u32>,
 ) -> Result<(), ConversionError> {
+    let rtti_map = &crate::native::rtti::declared_rtti_indices(ctx, module);
     // Pre-intern types
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
@@ -68,6 +69,9 @@ pub fn lower(
     applicator
         .with_target(target)
         .apply_partial_conversion(ctx, module, "adt-rc-header")?;
+    for layout in crate::native::rtti::declared_rtti_layouts(ctx, module) {
+        trunk_ir::rewrite::erase_op(ctx, layout.op_ref());
+    }
     Ok(())
 }
 
@@ -155,7 +159,7 @@ impl RewritePattern for StructNewPattern {
         let rtti_idx = self.rtti_map.get(&struct_ty).copied().unwrap_or_else(|| {
             panic!(
                 "adt_rc_header: missing RTTI entry for struct type {:?}; \
-                     ensure generate_rtti runs before this pass; layout = {:?}",
+                     ensure its tribute_rtti.layout is declared; layout = {:?}",
                 struct_ty,
                 ctx.get_type(struct_ty)
             )
@@ -317,7 +321,7 @@ impl RewritePattern for VariantNewPattern {
         let rtti_idx = self.rtti_map.get(&enum_ty).copied().unwrap_or_else(|| {
             panic!(
                 "adt_rc_header: missing RTTI entry for enum type {:?}; \
-                     ensure generate_rtti runs before this pass",
+                     ensure its tribute_rtti.layout is declared",
                 enum_ty
             )
         }) as i64;
@@ -513,13 +517,11 @@ mod tests {
         ctx.op_mut(func_op.op_ref())
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(erased_func_ty));
-        let rtti_plan = plan
-            .remap_rtti_types(ctx, module, &[])
-            .expect("exact RTTI identities");
-        let rtti = crate::native::rtti::generate_rtti(ctx, module, &tc, &rtti_plan);
+        crate::native::rtti::declare_rtti_layouts(ctx, module, plan.rtti_types());
+        crate::native::rtti::generate_rtti(ctx, module, &tc).expect("declared layouts");
 
         // Run adt_rc_header pass
-        lower(ctx, module, tc, &rtti.type_to_idx).unwrap();
+        lower(ctx, module, tc).unwrap();
 
         print_module(ctx, module.op())
     }

@@ -307,6 +307,14 @@ fn validate_clif_region(
                         data.sym_name(ctx)
                     ));
                 }
+                for (offset, function) in data.relocations(ctx) {
+                    if !functions.contains_key(&function) {
+                        errors.push(format!(
+                            "clif.data @{}: relocation at offset {offset} names unknown function @{function}",
+                            data.sym_name(ctx)
+                        ));
+                    }
+                }
                 continue;
             }
             if clif::Func::matches(ctx, op) {
