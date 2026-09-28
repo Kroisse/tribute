@@ -5,6 +5,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use itertools::Itertools;
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
@@ -1099,7 +1100,26 @@ impl<'db> TypeChecker<'db> {
                     .instantiate_constructor(*id)
                     .unwrap_or_else(|| ctx.fresh_type_var()),
             },
-            ResolvedRef::Module { .. } => ctx.error_type(),
+            ResolvedRef::Module { path } => {
+                // Name resolution accepts a module path in value position (an
+                // unresolved `use` leaves one behind), but no value has a
+                // module's type.
+                if let Some(node) = node
+                    && ctx.mark_module_value_reported(node)
+                {
+                    Diagnostic::new(
+                        format!(
+                            "expected a value, found module `{}`",
+                            path.segments(self.db()).iter().format("::")
+                        ),
+                        self.get_span(node),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::TypeChecking,
+                    )
+                    .accumulate(self.db());
+                }
+                ctx.error_type()
+            }
             ResolvedRef::TypeDef { .. } => {
                 // Type definitions cannot be used as values in expression context.
                 // This typically happens when an enum name like `Option` is used

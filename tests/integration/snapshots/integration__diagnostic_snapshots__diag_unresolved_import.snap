@@ -1,0 +1,22 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "path keyword `self` is not supported in `use` paths yet"
+  span:
+    start: 63
+    end: 83
+  severity: Error
+  phase: NameResolution
+- message: "unresolved import `basic::sub`"
+  span:
+    start: 84
+    end: 98
+  severity: Error
+  phase: NameResolution
+- message: "expected a value, found module `self::basic::add`"
+  span:
+    start: 124
+    end: 127
+  severity: Error
+  phase: TypeChecking

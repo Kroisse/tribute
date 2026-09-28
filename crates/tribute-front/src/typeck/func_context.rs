@@ -113,6 +113,9 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// mapped to the ability and operation names for diagnostics.
     non_resumptive_resume_locals: HashMap<LocalId, (Symbol, Symbol)>,
 
+    /// Module references in value position, each reported once.
+    reported_module_values: HashSet<NodeId>,
+
     /// Exact instantiated metadata for ability-operation call expressions.
     perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
 
@@ -214,6 +217,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             handler_operations: HashMap::new(),
             reported_handler_errors: HashSet::new(),
             non_resumptive_resume_locals: HashMap::new(),
+            reported_module_values: HashSet::new(),
             perform_operations: HashMap::new(),
             ability_op_callee_types: HashMap::new(),
             lambda_signatures: HashMap::new(),
@@ -278,6 +282,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn non_resumptive_resume_op(&self, local: LocalId) -> Option<(Symbol, Symbol)> {
         self.non_resumptive_resume_locals.get(&local).copied()
+    }
+
+    pub(crate) fn mark_module_value_reported(&mut self, node: NodeId) -> bool {
+        self.reported_module_values.insert(node)
     }
 
     pub(crate) fn mark_record_shape_checked(&mut self, record: NodeId) -> bool {
