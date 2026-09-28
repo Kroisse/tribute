@@ -123,8 +123,9 @@ fn valid_source_has_no_diagnostics(db: &salsa::DatabaseImpl) {
   logical signatures. CPS and backend tests enter the shared/target route.
 
 Concrete incremental and diagnostic examples are maintained in
-[`tests/salsa_integration.rs`](../tests/salsa_integration.rs), and LSP document
-updates are in [`src/lsp/server.rs`](../src/lsp/server.rs).
+[`tests/integration/salsa_integration.rs`](
+../tests/integration/salsa_integration.rs), and LSP document updates are in
+[`src/lsp/server.rs`](../src/lsp/server.rs).
 
 ## Analysis Cache Boundary
 

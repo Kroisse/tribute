@@ -67,7 +67,7 @@ Lowering 옵션은 stage별 immutable value로 전달한다. 재사용 가능한
 예상 수치를 검증된 성능 결과처럼 문서화하지 않는다.
 
 Production composition과 옵션은 [`src/pipeline.rs`](../src/pipeline.rs), native
-conformance 검증은 [`tests/optimization_conformance.rs`](../tests/optimization_conformance.rs)에
+conformance 검증은 [`tests/integration/optimization_conformance.rs`](../tests/integration/optimization_conformance.rs)에
 있다. 필수 legalization 자체의 동등성은 active pipeline·handler execution·target
 검증으로 확인한다.
 
