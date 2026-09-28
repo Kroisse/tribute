@@ -13,6 +13,7 @@ use std::ops::ControlFlow;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
+use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
@@ -34,10 +35,14 @@ const FORBIDDEN_ATTRIBUTES: &[&str] = &[
 /// Prefix of language-specific attributes, which must be classified.
 const LANGUAGE_ATTRIBUTE_PREFIX: &str = "tribute.";
 
-/// Language-specific metadata the boundary preserves.
-fn is_preserved_attribute(name: &str) -> bool {
-    name.starts_with("tribute.definition.") || name == "tribute.type.string"
-}
+/// Language-specific metadata the boundary preserves: source/debug positions
+/// and type identity metadata. A new key must be classified explicitly.
+const PRESERVED_ATTRIBUTES: &[&str] = &[
+    "tribute.definition.source",
+    "tribute.definition.start",
+    "tribute.definition.end",
+    "tribute.type.string",
+];
 
 /// The target whose boundary exit is verified.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -61,8 +66,10 @@ pub enum ViolationKind {
     NeverCallableResult,
     /// An unrealized cast whose source already has the declared type.
     IdentityCast,
-    /// A typed `func.constant` whose type differs from its target's signature.
+    /// A `func.constant` whose type is not its target's exact signature.
     ReferenceSignatureMismatch,
+    /// A function definition or indirect call without an exact signature.
+    MissingExactSignature,
 }
 
 impl fmt::Display for ViolationKind {
@@ -77,6 +84,7 @@ impl fmt::Display for ViolationKind {
             Self::ReferenceSignatureMismatch => {
                 write!(f, "function reference differs from its target signature")
             }
+            Self::MissingExactSignature => write!(f, "missing exact callable signature"),
         }
     }
 }
@@ -110,7 +118,7 @@ pub fn verify_boundary_exit(ctx: &IrContext, module: Module) -> Vec<BoundaryViol
         ops.push(op);
         ControlFlow::Continue(WalkAction::Advance)
     });
-    let functions = flat_function_signatures(ctx, &ops);
+    let functions = scoped_function_signatures(ctx, &ops);
     for op in ops {
         verifier.check_op(op, &functions);
     }
@@ -120,8 +128,8 @@ pub fn verify_boundary_exit(ctx: &IrContext, module: Module) -> Vec<BoundaryViol
 /// A violation class that later boundary work is known to remove.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum PendingViolation {
-    /// Any operation of this dialect.
-    Dialect(&'static str),
+    /// An operation `dialect.name`.
+    Op(&'static str, &'static str),
     /// A forbidden attribute.
     Attribute(&'static str),
     /// An attribute that has not been classified yet.
@@ -132,9 +140,10 @@ impl PendingViolation {
     /// Whether this pending entry covers `kind`.
     pub fn covers(self, kind: &ViolationKind) -> bool {
         match (self, kind) {
-            (Self::Dialect(expected), ViolationKind::ForbiddenOp { dialect, .. }) => {
-                dialect == expected
-            }
+            (
+                Self::Op(expected_dialect, expected_name),
+                ViolationKind::ForbiddenOp { dialect, name },
+            ) => dialect == expected_dialect && name == expected_name,
             (Self::Attribute(expected), ViolationKind::ForbiddenAttribute(name)) => {
                 name == expected
             }
@@ -149,7 +158,7 @@ impl PendingViolation {
 impl fmt::Display for PendingViolation {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Dialect(dialect) => write!(f, "forbidden op {dialect}.*"),
+            Self::Op(dialect, name) => write!(f, "forbidden op {dialect}.{name}"),
             Self::Attribute(name) => write!(f, "forbidden attribute {name}"),
             Self::Unclassified(name) => write!(f, "unclassified attribute {name}"),
         }
@@ -179,7 +188,9 @@ pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViola
         COMMON[3],
         COMMON[4],
         // Wasm evidence lowering still runs inside Wasm dialect lowering.
-        PendingViolation::Dialect("effect"),
+        PendingViolation::Op("effect", "extend"),
+        PendingViolation::Op("effect", "dispatch_tail"),
+        PendingViolation::Op("effect", "dispatch_cps"),
     ];
     match target {
         TargetKind::Native => NATIVE,
@@ -200,18 +211,37 @@ pub fn unexpected_boundary_violations(
         .collect()
 }
 
-/// Signature of each `func.func` `sym_name`; a duplicated name is ambiguous.
-fn flat_function_signatures(ctx: &IrContext, ops: &[OpRef]) -> HashMap<Symbol, Option<TypeRef>> {
+/// A function symbol within its enclosing module, the scope the boundary
+/// resolves function references in.
+type ScopedSymbol = (Option<OpRef>, Symbol);
+
+/// Signature of each `func.func`; a name defined twice in one module is ambiguous.
+fn scoped_function_signatures(
+    ctx: &IrContext,
+    ops: &[OpRef],
+) -> HashMap<ScopedSymbol, Option<TypeRef>> {
     let mut functions = HashMap::new();
     for &op in ops {
         if let Ok(function) = func::Func::from_op(ctx, op) {
             functions
-                .entry(function.sym_name(ctx))
+                .entry((enclosing_module(ctx, op), function.sym_name(ctx)))
                 .and_modify(|resolved| *resolved = None)
                 .or_insert(Some(function.r#type(ctx)));
         }
     }
     functions
+}
+
+/// The nearest `core.module` strictly enclosing `op`.
+fn enclosing_module(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
+    let mut current = op;
+    loop {
+        let block = ctx.op(current).parent_block?;
+        current = ctx.region(ctx.block(block).parent_region?).parent_op?;
+        if core::Module::matches(ctx, current) {
+            return Some(current);
+        }
+    }
 }
 
 struct Verifier<'a> {
@@ -233,7 +263,7 @@ impl<'a> Verifier<'a> {
         self.violations.push(BoundaryViolation { kind, op, detail });
     }
 
-    fn check_op(&mut self, op: OpRef, functions: &HashMap<Symbol, Option<TypeRef>>) {
+    fn check_op(&mut self, op: OpRef, functions: &HashMap<ScopedSymbol, Option<TypeRef>>) {
         let ctx = self.ctx;
         let data = ctx.op(op);
         let op_name = format!("{}.{}", data.dialect, data.name);
@@ -274,18 +304,33 @@ impl<'a> Verifier<'a> {
         {
             self.report(ViolationKind::IdentityCast, Some(op), op_name.clone());
         }
-        if let Ok(constant) = func::Constant::from_op(ctx, op)
-            && let &[result] = ctx.op_result_types(op)
-            && func::FuncSig::matches(ctx, result)
-        {
+        if let Ok(constant) = func::Constant::from_op(ctx, op) {
             let target = constant.func_ref(ctx);
-            if functions.get(&target).copied().flatten() != Some(result) {
+            let expected = functions
+                .get(&(enclosing_module(ctx, op), target))
+                .copied()
+                .flatten();
+            if expected.is_none() || ctx.op_result_types(op) != [expected.unwrap()] {
                 self.report(
                     ViolationKind::ReferenceSignatureMismatch,
                     Some(op),
                     format!("{op_name} @{target}"),
                 );
             }
+        }
+        let has_exact_signature = if let Ok(function) = func::Func::from_op(ctx, op) {
+            Some(func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some())
+        } else if func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op) {
+            Some(IndirectCallLikeOps::exact_signature(ctx, op).is_some())
+        } else {
+            None
+        };
+        if has_exact_signature == Some(false) {
+            self.report(
+                ViolationKind::MissingExactSignature,
+                Some(op),
+                op_name.clone(),
+            );
         }
     }
 
@@ -297,7 +342,9 @@ impl<'a> Verifier<'a> {
                 op,
                 context.to_owned(),
             );
-        } else if name.starts_with(LANGUAGE_ATTRIBUTE_PREFIX) && !is_preserved_attribute(&name) {
+        } else if name.starts_with(LANGUAGE_ATTRIBUTE_PREFIX)
+            && !PRESERVED_ATTRIBUTES.contains(&name.as_str())
+        {
             self.report(
                 ViolationKind::UnclassifiedAttribute(name),
                 op,
@@ -516,15 +563,72 @@ mod tests {
     }
 
     #[test]
+    fn references_resolve_within_their_enclosing_module() {
+        let violations = kinds(
+            r#"core.module @test {
+  core.module @left {
+    func.func @same(%value: core.i32) {
+      func.return
+    }
+    func.func @take() {
+      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      func.return
+    }
+  }
+  core.module @right {
+    func.func @same(%value: core.i64) -> core.i64 {
+      func.return %value
+    }
+  }
+}"#,
+        );
+        assert_eq!(violations, []);
+    }
+
+    #[test]
+    fn untyped_references_and_indirect_calls_without_signatures_are_reported() {
+        let violations = kinds(
+            r#"core.module @test {
+  func.func @target(%value: core.i32) {
+    func.return
+  }
+  func.func @caller(%callee: core.ptr, %value: core.i32) {
+    %reference = func.constant {func_ref = @target} : core.i32
+    func.call_indirect %callee, %value
+    func.return
+  }
+}"#,
+        );
+        assert!(violations.contains(&ViolationKind::ReferenceSignatureMismatch));
+        assert!(violations.contains(&ViolationKind::MissingExactSignature));
+    }
+
+    #[test]
+    fn unknown_keys_under_preserved_prefixes_must_be_classified() {
+        assert_eq!(
+            kinds(
+                r#"core.module @test {
+  func.func @run() attributes {tribute.definition.convention = 2} {
+    func.return
+  }
+}"#
+            ),
+            [ViolationKind::UnclassifiedAttribute(
+                "tribute.definition.convention".to_owned()
+            )]
+        );
+    }
+
+    #[test]
     fn pending_entries_cover_only_their_own_kind() {
-        let pending = PendingViolation::Dialect("effect");
+        let pending = PendingViolation::Op("effect", "extend");
         assert!(pending.covers(&ViolationKind::ForbiddenOp {
             dialect: "effect".to_owned(),
             name: "extend".to_owned(),
         }));
         assert!(!pending.covers(&ViolationKind::ForbiddenOp {
-            dialect: "ability".to_owned(),
-            name: "perform".to_owned(),
+            dialect: "effect".to_owned(),
+            name: "fresh_prompt_tag".to_owned(),
         }));
         assert!(
             !PendingViolation::Attribute("tribute.calling_convention").covers(

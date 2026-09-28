@@ -4,6 +4,7 @@ expression: observed
 ---
 [
     "forbidden op effect.dispatch_cps",
+    "forbidden op effect.dispatch_tail",
     "forbidden op effect.extend",
     "forbidden attribute tribute.calling_convention",
     "forbidden attribute tribute.closure_environment_index",

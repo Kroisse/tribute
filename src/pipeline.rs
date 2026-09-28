@@ -2118,8 +2118,8 @@ mod tests {
     }
 
     /// Programs whose boundary exit is observed on both targets. They cover
-    /// Direct and CPS callables, closures with captures, handlers with
-    /// resumption, the CPS root bridge, and standard I/O.
+    /// Direct and CPS callables, closures with captures, tail-resumptive and
+    /// general handlers, the CPS root bridge, and standard I/O.
     const BOUNDARY_EXIT_PROGRAMS: &[(&str, &str)] = &[
         (
             "native_calculator.trb",
@@ -2139,6 +2139,24 @@ mod tests {
 fn main() {
     let a = +1
     let _ = apply(fn(n) { n + a }, +41)
+}
+"#,
+        ),
+        (
+            "tail_resumptive_handler.trb",
+            r#"ability Ask {
+    fn ask() -> Nat
+}
+
+fn use_ask() ->{Ask} Nat {
+    Ask::ask()
+}
+
+fn main() {
+    let _ = handle use_ask() {
+        do result { result }
+        fn Ask::ask() { 42 }
+    }
 }
 "#,
         ),
