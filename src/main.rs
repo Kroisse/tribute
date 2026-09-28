@@ -12,9 +12,9 @@ use salsa::Database;
 use std::path::{Path, PathBuf};
 use tracing_subscriber::EnvFilter;
 use tribute::database::parse_with_thread_local;
+use tribute::link::link_native_binary;
 use tribute::pipeline::{
     CompilationConfig, compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
-    link_native_binary,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
