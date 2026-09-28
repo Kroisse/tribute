@@ -79,7 +79,7 @@ impl Display for UnresolvedName {
 /// LocalIds are unique within a function scope and are assigned
 /// during name resolution. They provide stable identity for
 /// variables even if the same name is shadowed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct LocalId(u32);
 
 impl LocalId {
@@ -125,13 +125,13 @@ impl<'db> FuncDefId<'db> {
 }
 
 /// Compiler-owned nominal types whose identity cannot be supplied by source.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinType {
     List,
 }
 
 /// The origin of a nominal type definition.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum TypeOrigin {
     /// A source declaration, identified independently of its spelling.
     Source(NodeId),
@@ -210,13 +210,13 @@ impl<'db> CtorId<'db> {
 }
 
 /// Compiler-owned abilities with semantics that source declarations cannot request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum BuiltinAbility {
     Io,
 }
 
 /// The origin of an ability identity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum AbilityOrigin {
     Source,
     Builtin(BuiltinAbility),

@@ -65,7 +65,7 @@ where
 /// Extern function declaration: `extern "abi" fn name(params) -> ReturnType`
 ///
 /// Unlike `FuncDecl`, this has no body — the implementation is provided externally.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ExternFuncDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -106,7 +106,7 @@ where
 }
 
 /// Type parameter declaration: `a`, `T: Eq`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TypeParamDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -117,7 +117,7 @@ pub struct TypeParamDecl {
 }
 
 /// Parameter declaration in a function.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct ParamDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -130,7 +130,7 @@ pub struct ParamDecl {
 }
 
 /// Struct declaration: `struct Name { fields }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct StructDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -145,7 +145,7 @@ pub struct StructDecl {
 }
 
 /// Field declaration in a struct or enum variant.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FieldDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -158,7 +158,7 @@ pub struct FieldDecl {
 }
 
 /// Enum declaration: `enum Name { Variants }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct EnumDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -173,7 +173,7 @@ pub struct EnumDecl {
 }
 
 /// Variant declaration in an enum.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct VariantDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -184,7 +184,7 @@ pub struct VariantDecl {
 }
 
 /// Ability declaration: `ability Name { operations }`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct AbilityDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -199,7 +199,7 @@ pub struct AbilityDecl {
 }
 
 /// Operation declaration in an ability.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct OpDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
@@ -214,7 +214,7 @@ pub struct OpDecl {
 }
 
 /// The kind of ability operation declaration.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum OpDeclKind {
     /// Tail-resumptive: handler returns a value that is used to resume.
     /// No continuation capture.
@@ -225,7 +225,7 @@ pub enum OpDeclKind {
 }
 
 /// Import declaration: `use path::to::item` or `use path::to::item as alias`
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct UseDecl {
     /// Node ID for span lookup.
     pub id: NodeId,

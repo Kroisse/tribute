@@ -432,7 +432,7 @@ impl TypeParam {
 /// Kind (type of types) for higher-kinded type support.
 ///
 /// Currently simple, can be extended for full higher-kinded polymorphism.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Kind {
     /// The kind of concrete types (e.g., Int, Bool, List(Int)).
     Type,
@@ -489,7 +489,7 @@ pub struct Effect<'db> {
 }
 
 /// Effect row variable for row-polymorphic effects.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct EffectVar {
     pub id: u64,
 }
@@ -765,7 +765,7 @@ pub fn abilities_to_effect_row_with_origins<'db>(
 ///
 /// This represents a type before resolution and checking.
 /// It may contain unresolved names that need to be looked up.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TypeAnnotation {
     /// The node ID for span lookup.
     pub id: NodeId,
@@ -774,7 +774,7 @@ pub struct TypeAnnotation {
 }
 
 /// Kinds of type annotations in source code.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum TypeAnnotationKind {
     /// A simple type name: `Int`, `Bool`, `MyType`
     Named(Symbol),

@@ -125,7 +125,7 @@ where
 }
 
 /// Literal values in patterns.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum LiteralPattern {
     /// Natural number literal: `0`, `42`
     Nat(u64),
