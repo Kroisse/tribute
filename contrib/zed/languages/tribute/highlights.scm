@@ -38,10 +38,15 @@
 (function_type
   (keyword_fn) @type.builtin)
 
-; Ability items in function types
+; Ability items in function types (`Throw`, or the last segment of
+; `abilities::Throw`)
 (ability_item
   name: (ability_path
     (type_identifier) @type))
+
+(ability_item
+  name: (ability_path
+    (path_segment) @type .))
 
 ; Function definitions
 (regular_function
@@ -70,8 +75,12 @@
   method: (value_path
     (identifier) @function.method))
 
-; Handler arms (`op State::get() { ... }`)
+; Handler arms (`op State::get() { ... }`, `fn Console::print(msg) { ... }`)
 (op_handler
+  operation: (value_path
+    (identifier) @function))
+
+(fn_handler
   operation: (value_path
     (identifier) @function))
 
