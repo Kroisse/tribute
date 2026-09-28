@@ -969,7 +969,12 @@ impl<'db> TypeChecker<'db> {
         if let Some(ty) = ctx.get_constructor_reference_type(node_id) {
             return ty;
         }
-        let ty = self.infer_var_with_ctx(ctx, None, resolved);
+        let ty = match resolved {
+            ResolvedRef::Module { path } => {
+                self.report_module_reference(ctx, node_id, *path, "a constructor")
+            }
+            _ => self.infer_var_with_ctx(ctx, None, resolved),
+        };
         ctx.record_constructor_reference_type(node_id, ty);
         ty
     }

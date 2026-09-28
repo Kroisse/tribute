@@ -119,3 +119,19 @@ fn g(e: E) -> Nat {{
         );
     }
 }
+
+/// A module named as a record literal's type is rejected before lowering.
+#[salsa_test]
+fn module_in_record_literal_is_reported(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod M { pub fn f() -> Nat { 1 } }
+
+fn main() {
+    let _ = M { x: 1 }
+}
+"#,
+    );
+    assert_eq!(errors, ["expected a constructor, found module `M`"]);
+}
