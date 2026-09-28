@@ -10,16 +10,17 @@
 //!
 //! | Index | Type | Release |
 //! |-------|------|---------|
-//! | 0 | Nil | shallow |
+//! | 0 | no release function (e.g. runtime-allocated `Bytes`) | shallow |
 //! | 1 | Bool | fixed 12-byte release |
 //! | 2 | Nat | fixed 12-byte release |
 //! | 3 | Int | fixed 12-byte release |
 //! | 4 | Float | fixed 16-byte release |
-//! | 5 | Rune | shallow |
-//! | 6 | Bytes | shallow |
-//! | 7 | Array | generic (future) |
-//! | 8-31 | reserved | — |
-//! | 32+ | user structs | per-type deep release |
+//! | 5+ | declared allocation layouts | per-type deep release |
+//!
+//! Indices are private to one compiled program: the table and
+//! `__tribute_deep_release` interpret them within the module, and only index 0
+//! is shared with the runtime. Growing the reserved range therefore needs no
+//! compatibility step; user indices simply start after it.
 //!
 //! ## Pipeline Position
 //!
@@ -72,15 +73,17 @@ impl ClifTypes {
     }
 }
 
-/// First index for user-defined struct types.
-pub const RTTI_USER_START: u32 = 32;
-
-/// Reserved RTTI indices for built-in types.
+/// Reserved RTTI indices. Index 0, which the runtime also writes, has no
+/// release function.
 pub const RTTI_NIL: u32 = 0;
 pub const RTTI_BOOL: u32 = 1;
 pub const RTTI_NAT: u32 = 2;
 pub const RTTI_INT: u32 = 3;
 pub const RTTI_FLOAT: u32 = 4;
+
+/// First index for declared allocation layouts, right after the last
+/// reserved index.
+pub const RTTI_USER_START: u32 = RTTI_FLOAT + 1;
 
 const PRIMITIVE_I32_ALLOC_SIZE: u64 = 12;
 const PRIMITIVE_F64_ALLOC_SIZE: u64 = 16;
