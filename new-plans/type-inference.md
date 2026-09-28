@@ -537,6 +537,23 @@ lookup instantiates every quantified type variable and row variable freshly;
 repeated occurrences of one quantified variable remain shared within that
 single instantiation. Variables in a monomorphic scheme are not freshened.
 
+### 지역 quantifier의 소유권
+
+한 `let`이 일반화한 type 변수는 그 `let`의 패턴 전체가 소유한다. 검사된 본문
+type과 callable metadata에서 이 변수는 `LocalBoundVar { scope, index }`로
+나타난다. `scope`는 `let` 패턴 루트의 NodeId이고, `index`는 그 `let` 안에서
+변수마다 한 번 부여하는 번호다.
+
+- destructuring이나 `as` 패턴이 여러 이름에 같은 변수를 나누어 주더라도
+  (`let f as g = fn(v) v`) 이름마다 scheme은 따로 가지지만 그 변수의
+  `LocalBoundVar`는 하나다. RHS는 한 번만 검사되므로 그 본문 type이 가리키는
+  소유자도 하나여야 한다.
+- 이름별 scheme의 quantifier 번호(`BoundVar`)는 그 scheme 안에서만 의미가 있고
+  `LocalBoundVar`의 번호와 대응하지 않는다.
+- 이 소유권은 지역 callable 인스턴스가 사용하는 이름별 binding identity와 별개다.
+- 환경에 자유로운 변수는 일반화하지 않으므로, 서로 다른 `let`이 같은 변수를
+  소유하는 기록은 컴파일러 내부 오류다.
+
 ### 지역 callable 인스턴스의 전달
 
 함수 본문의 타입 주석에서 부모 함수의 타입 매개변수를 참조하면, 선언 signature의

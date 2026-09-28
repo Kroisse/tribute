@@ -489,17 +489,26 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         std::mem::take(&mut self.node_types)
     }
 
-    /// Record the quantifier provenance of one generalized local scheme.
+    /// Record the local quantifiers owned by one generalized `let` pattern.
+    ///
+    /// A variable free in the environment is never generalized, so no
+    /// variable can be owned by two `let`s; the first owner is kept if one is.
     pub fn record_local_generalization(
         &mut self,
         scope: NodeId,
         mapping: HashMap<UniVarId<'db>, u32>,
     ) {
-        self.local_generalizations.extend(
-            mapping
-                .into_iter()
-                .map(|(var, index)| (var, (scope, index))),
-        );
+        for (var, index) in mapping {
+            let owner = *self
+                .local_generalizations
+                .entry(var)
+                .or_insert((scope, index));
+            debug_assert_eq!(
+                owner,
+                (scope, index),
+                "local quantifier {var:?} is owned by two let patterns"
+            );
+        }
     }
 
     pub fn take_local_generalizations(&mut self) -> HashMap<UniVarId<'db>, (NodeId, u32)> {

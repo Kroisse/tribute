@@ -254,7 +254,11 @@ impl<'db> TypeChecker<'db> {
                 row_subst,
             );
             if let TypeKind::UniVar { id } = resolved.kind(self.db()) {
-                self.local_generalizations.entry(*id).or_insert(binding);
+                let owner = *self.local_generalizations.entry(*id).or_insert(binding);
+                debug_assert_eq!(
+                    owner, binding,
+                    "solver representative {id:?} aliases local quantifiers of two owners"
+                );
             }
         }
 

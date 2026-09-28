@@ -716,3 +716,67 @@ fn make() ->{} fn(a) ->{} a {
         assert!(func_ref_has_param_and_result(db, instance.callable, bound));
     }
 }
+
+/// Each top-level `let` in a function body, as its root pattern and the
+/// nodes of its right-hand side.
+fn let_rhs_nodes(body: &Expr<TypedRef<'_>>) -> Vec<(NodeId, Vec<NodeId>)> {
+    let ExprKind::Block { stmts, .. } = &*body.kind else {
+        panic!("function body must be a block");
+    };
+    stmts
+        .iter()
+        .filter_map(|stmt| match stmt {
+            tribute_front::ast::Stmt::Let { pattern, value, .. } => {
+                let mut nodes = Vec::new();
+                body_node_ids(value, &mut nodes);
+                Some((pattern.id, nodes))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// A `let` that gives several names one generalized variable owns that
+/// variable once, at its root pattern, whichever name is recorded last.
+/// Several such `let`s in one body each keep their own owner.
+#[salsa_test]
+fn names_sharing_a_generalized_variable_have_one_owner(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn shared() -> #(Nat, Bool, Nat, Bool, Nat) {
+    let f as g = fn(value) value
+    let #(h as k, n) = #(fn(value) value, 1)
+    #(f(1), g(True), h(n), k(False), n)
+}
+"#,
+    );
+
+    let errors = type_errors(db, source);
+    assert!(errors.is_empty(), "unexpected type errors: {errors:#?}");
+
+    let output = tribute_front::query::type_check_output(db, source)
+        .expect("type checking should produce output");
+    let lets = let_rhs_nodes(typed_function_body(
+        output.module(db),
+        Symbol::new("shared"),
+    ));
+    assert_eq!(lets.len(), 2, "shared has two lets");
+    assert_ne!(lets[0].0, lets[1].0, "the lets have distinct root patterns");
+
+    let signatures = output.lambda_signatures(db);
+    assert_eq!(signatures.len(), 2, "each let has one identity lambda");
+    for (lambda, signature) in signatures.iter() {
+        let (root, _) = lets
+            .iter()
+            .find(|(_, nodes)| nodes.contains(lambda))
+            .unwrap_or_else(|| panic!("lambda {lambda:?} must belong to one let"));
+        assert_eq!(
+            local_identity_scope(db, signature.function_type),
+            Some(*root),
+            "the identity lambda's local quantifier must be owned by its let's root pattern: {:?}",
+            signature.function_type
+        );
+    }
+}
