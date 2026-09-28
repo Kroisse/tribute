@@ -103,8 +103,16 @@ itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
 
+# Dev and test builds keep debug assertions, including the per-pass IR
+# verifier, but optimize lightly: unoptimized IR walks dominated test time.
+# opt-level 1 barely changes incremental rebuild time.
 [profile.dev]
 debug = "line-tables-only"
+opt-level = 1
+
+# Dependencies (Cranelift, wasmtime, Salsa, ...) rebuild rarely.
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.test]
 debug = "line-tables-only"
