@@ -294,8 +294,19 @@ mod tests {
                 crate::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default());
             if !recover && cfg!(debug_assertions) {
                 // The erased argument breaks the exact closure slot of the tail
-                // call's signature, so the debug pass verifier rejects it.
+                // call's signature, so the debug verifier rejects the input
+                // before any lowering step runs.
                 let error = lowered.expect_err("erased argument must not fill the closure slot");
+                let crate::wasm::lower::WasmLowerError::Pass(pass_error) = &error else {
+                    panic!("expected a pass-manager error: {error}");
+                };
+                assert!(
+                    matches!(
+                        pass_error.kind(),
+                        trunk_ir::pass::PassErrorKind::InvalidInput(_)
+                    ),
+                    "{error}"
+                );
                 assert!(
                     error.to_string().contains("func.tail_call_indirect"),
                     "{error}"

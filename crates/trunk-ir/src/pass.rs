@@ -160,6 +160,10 @@ pub enum PassErrorKind {
     Execution(PassRunError),
     #[display("broke an IR invariant: {_0}")]
     Verification(VerifyError),
+    /// The IR violated an invariant before this, the manager's first entry,
+    /// ran. No pass is to blame.
+    #[display("received IR that already breaks an invariant: {_0}")]
+    InvalidInput(VerifyError),
 }
 
 /// Error returned by [`PassManager`] with the failing pass name attached.
@@ -184,6 +188,13 @@ impl PassError {
         }
     }
 
+    fn invalid_input(pass_name: &'static str, error: VerifyError) -> Self {
+        Self {
+            pass_name,
+            kind: PassErrorKind::InvalidInput(error),
+        }
+    }
+
     pub fn pass_name(&self) -> &'static str {
         self.pass_name
     }
@@ -203,7 +214,7 @@ impl Error for PassError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match &self.kind {
             PassErrorKind::Execution(error) => Some(error.as_ref()),
-            PassErrorKind::Verification(error) => Some(error),
+            PassErrorKind::Verification(error) | PassErrorKind::InvalidInput(error) => Some(error),
         }
     }
 }
@@ -219,8 +230,9 @@ pub type PassResult<T = ()> = Result<T, PassError>;
 /// an invariant is blamed immediately rather than masked by a later pass; the
 /// [`PassManager`] returns a [`PassError`] with the offending pass's name.
 ///
-/// The verifier runs only after a pass that changed the IR, since a pass that
-/// left the IR unchanged cannot have broken an invariant. It receives the
+/// The verifier checks the input once before the first entry, then runs only
+/// after a pass that changed the IR, since a pass that left the IR unchanged
+/// cannot have broken an invariant. It receives the
 /// run's [`AnalysisCache`]; it does not change the IR, so analyses it computes
 /// remain cached for the passes that follow.
 type VerifierFn = dyn Fn(&IrContext, &mut AnalysisCache, OpRef) -> Result<(), VerifyError>;
@@ -379,6 +391,15 @@ enum Entry<Root: DialectOp> {
     Nested(Box<dyn NestedRunner>),
 }
 
+impl<Root: DialectOp> Entry<Root> {
+    fn name(&self) -> &'static str {
+        match self {
+            Entry::Pass(pass) => pass.name(),
+            Entry::Nested(_) => "nested-pass-manager",
+        }
+    }
+}
+
 /// Orchestrates a sequence of [`Pass`] instances plus nested sub-managers.
 ///
 /// `Root` is the op type each registered pass operates on. The default
@@ -484,6 +505,11 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
     /// Run all registered passes and nested managers on `target`, in
     /// registration order.
     ///
+    /// With a verifier installed, `target` is verified once before the first
+    /// entry, so IR that was already invalid is reported as
+    /// [`PassErrorKind::InvalidInput`] instead of blamed on the first pass
+    /// that changes it.
+    ///
     /// Every pass and the verifier query `analyses`, typically the cache of
     /// the enclosing pipeline phase.
     pub fn run(
@@ -504,6 +530,10 @@ impl<Root: DialectOp + 'static> PassManager<Root> {
             verifier: verifier.as_deref(),
             instrumentation: instrumentation.as_deref(),
         };
+        if let (Some(v), Some(first)) = (hooks.verifier, entries.first()) {
+            v(ctx, analyses, target.op_ref())
+                .map_err(|error| PassError::invalid_input(first.name(), error))?;
+        }
         Self::run_entries(ctx, target, entries, analyses, hooks)
     }
 
@@ -673,6 +703,21 @@ mod tests {
             self.order.borrow_mut().push(self.tag);
             touch(ctx, target.op_ref());
             Ok(())
+        }
+    }
+
+    /// A verifier that accepts the manager's input and fails every later check.
+    fn accept_input_then_fail(
+        message: &'static str,
+    ) -> impl Fn(&IrContext, &mut AnalysisCache, OpRef) -> Result<(), VerifyError> {
+        let checked_input = Cell::new(false);
+        move |_ctx, _analyses, _op| {
+            if !checked_input.replace(true) {
+                return Ok(());
+            }
+            Err(VerifyError {
+                message: message.to_string(),
+            })
         }
     }
 
@@ -1152,7 +1197,8 @@ mod tests {
         assert_eq!(error.to_string(), "pass `failing` failed: boom");
         assert_eq!(*order.borrow(), vec!["before", "failing"]);
         assert_eq!(instrumentation_count.get(), 1);
-        assert_eq!(verifier_count.get(), 1);
+        // The input, then the IR after `before`.
+        assert_eq!(verifier_count.get(), 2);
     }
 
     #[test]
@@ -1331,11 +1377,7 @@ mod tests {
         pm.with_instrumentation(move |_ctx, _name, _op| {
             instrumentation_count_clone.set(instrumentation_count_clone.get() + 1);
         });
-        pm.with_verifier(|_ctx, _analyses, _op| {
-            Err(VerifyError {
-                message: "boom".to_string(),
-            })
-        });
+        pm.with_verifier(accept_input_then_fail("boom"));
         let error = pm
             .run(&mut ctx, module, &mut Default::default())
             .unwrap_err();
@@ -1362,11 +1404,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
             .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
-        pm.with_verifier(|_ctx, _analyses, _op| {
-            Err(VerifyError {
-                message: "nested boom".to_string(),
-            })
-        });
+        pm.with_verifier(accept_input_then_fail("nested boom"));
         let error = pm
             .run(&mut ctx, module, &mut Default::default())
             .unwrap_err();
@@ -1402,7 +1440,37 @@ mod tests {
         });
         pm.run(&mut ctx, module, &mut Default::default()).unwrap();
 
-        assert_eq!(*verified.borrow(), vec![module.op_ref()]);
+        // The input, then the IR after the one pass that changed it.
+        assert_eq!(*verified.borrow(), vec![module.op_ref(), module.op_ref()]);
+    }
+
+    #[test]
+    fn verifier_rejects_invalid_input_before_any_pass() {
+        let (mut ctx, loc) = test_ctx();
+        let module = empty_module(&mut ctx, loc);
+
+        let order: Rc<RefCell<Vec<&'static str>>> = Rc::new(RefCell::new(Vec::new()));
+        let mut pm = PassManager::new();
+        pm.add_pass(recorder::<core::Module>("first", order.clone()));
+        pm.with_verifier(|_ctx, _analyses, _op| {
+            Err(VerifyError {
+                message: "bad input".to_string(),
+            })
+        });
+        let error = pm
+            .run(&mut ctx, module, &mut Default::default())
+            .unwrap_err();
+
+        assert!(matches!(error.kind(), PassErrorKind::InvalidInput(_)));
+        assert_eq!(error.pass_name(), "recorder");
+        assert_eq!(
+            error.to_string(),
+            "pass `recorder` received IR that already breaks an invariant: bad input"
+        );
+        assert!(
+            order.borrow().is_empty(),
+            "no pass may run on invalid input"
+        );
     }
 
     #[test]
