@@ -480,11 +480,13 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
     }
 
     if !module_info.ref_funcs.is_empty() {
-        let func_idxs: Vec<u32> = module_info
+        let mut func_idxs: Vec<u32> = module_info
             .ref_funcs
             .iter()
             .filter_map(|name| module_info.func_indices.get(name).copied())
             .collect();
+        // `ref_funcs` is a hash set; sort so the emitted binary is deterministic.
+        func_idxs.sort_unstable();
         if !func_idxs.is_empty() {
             element_section.declared(Elements::Functions(Cow::Owned(func_idxs)));
         }
@@ -1217,6 +1219,76 @@ mod tests {
             )),
             "missing return_call_indirect in {instructions:?}"
         );
+    }
+
+    #[test]
+    fn declared_function_elements_follow_function_index_order() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.table {reftype = @funcref, min = 8, max = 8}
+  wasm.elem {table = 0, offset = 0} {
+    wasm.ref_func {func_name = @f7} : wasm.funcref
+    wasm.ref_func {func_name = @f6} : wasm.funcref
+    wasm.ref_func {func_name = @f5} : wasm.funcref
+    wasm.ref_func {func_name = @f4} : wasm.funcref
+    wasm.ref_func {func_name = @f3} : wasm.funcref
+    wasm.ref_func {func_name = @f2} : wasm.funcref
+    wasm.ref_func {func_name = @f1} : wasm.funcref
+    wasm.ref_func {func_name = @f0} : wasm.funcref
+  }
+  wasm.func @f0() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f1() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f2() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f3() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f4() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f5() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f6() -> core.nil {
+    wasm.return
+  }
+  wasm.func @f7() -> core.nil {
+    wasm.return
+  }
+}"#,
+        );
+        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
+            .expect("module with function references must emit")
+            .bytes;
+        Validator::new()
+            .validate_all(&bytes)
+            .expect("module with function references must validate");
+
+        let declared = Parser::new(0)
+            .parse_all(&bytes)
+            .filter_map(Result::ok)
+            .filter_map(|payload| match payload {
+                Payload::ElementSection(reader) => Some(reader),
+                _ => None,
+            })
+            .flat_map(|reader| reader.into_iter().map(|element| element.expect("element")))
+            .filter(|element| matches!(element.kind, wasmparser::ElementKind::Declared))
+            .flat_map(|element| match element.items {
+                wasmparser::ElementItems::Functions(functions) => functions
+                    .into_iter()
+                    .collect::<Result<Vec<_>, _>>()
+                    .expect("declared function indices"),
+                _ => panic!("declared elements must be function indices"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(declared, (0..8).collect::<Vec<u32>>());
     }
 
     #[test]

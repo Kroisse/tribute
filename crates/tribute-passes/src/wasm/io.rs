@@ -81,7 +81,8 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
 ///
 /// An existing import under the `fd_write` symbol is reused only if it is the
 /// WASI preview1 `fd_write` with the signature the helper calls; any other
-/// import under that symbol is rejected.
+/// import under that symbol is rejected. An existing memory is reused only if
+/// it is a 32-bit memory, since the helper addresses it with `i32`.
 fn declare_host_resources(
     ctx: &mut IrContext,
     block: trunk_ir::BlockRef,
@@ -107,19 +108,23 @@ fn declare_host_resources(
             || import.name(ctx) != Symbol::new(FD_WRITE)
             || import.r#type(ctx) != import_ty)
     {
-        let data = ctx.op(import.op_ref());
-        let conflict = IllegalOp {
-            op: import.op_ref(),
-            dialect: data.dialect,
-            name: data.name,
-            legality: LegalityCheck::Illegal,
-            reason: None,
-        }
-        .with_reason(format!(
-            "`@{FD_WRITE}` must import `{WASI_MODULE}.{FD_WRITE}` with type \
-             `(i32, i32, i32, i32) -> i32`"
+        return Err(incompatible(
+            ctx,
+            import.op_ref(),
+            format!(
+                "`@{FD_WRITE}` must import `{WASI_MODULE}.{FD_WRITE}` with type \
+                 `(i32, i32, i32, i32) -> i32`"
+            ),
         ));
-        return Err(ConversionError::new(IO_TO_WASM, vec![conflict]));
+    }
+    if let Some(memory) = memory
+        && memory.memory64(ctx)
+    {
+        return Err(incompatible(
+            ctx,
+            memory.op_ref(),
+            "output lowering addresses memory 0 with i32 and requires a 32-bit memory".to_owned(),
+        ));
     }
 
     let required_pages = (SCRATCH_OFFSET as u32).div_ceil(PAGE_SIZE as u32).max(1);
@@ -164,6 +169,20 @@ fn declare_host_resources(
         }
     }
     Ok(())
+}
+
+/// An `io-to-wasm` boundary error for a declaration the lowering cannot reuse.
+fn incompatible(ctx: &IrContext, op: OpRef, reason: String) -> ConversionError {
+    let data = ctx.op(op);
+    let conflict = IllegalOp {
+        op,
+        dialect: data.dialect,
+        name: data.name,
+        legality: LegalityCheck::Illegal,
+        reason: None,
+    }
+    .with_reason(reason);
+    ConversionError::new(IO_TO_WASM, vec![conflict])
 }
 
 struct WritePattern;
@@ -739,5 +758,36 @@ mod tests {
             assert!(error.to_string().contains("must import"), "{error}");
             assert_eq!(print_module(&ctx, module.op()), before, "{import}");
         }
+    }
+
+    #[test]
+    fn lowering_rejects_a_64_bit_memory_and_reuses_a_shared_32_bit_memory() {
+        let module_text = |memory64: bool| {
+            format!(
+                r#"core.module @test {{
+  wasm.memory {{min = 1, max = 2, shared = true, memory64 = {memory64}}}
+  func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {{
+    %write = tribute_io.write %bytes, %newline : core.nil
+    func.return
+  }}
+}}"#
+            )
+        };
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &module_text(true));
+        let before = print_module(&ctx, module.op());
+        let error = lower(&mut ctx, module).expect_err("memory64 must be rejected");
+        assert_eq!(error.boundary(), IO_TO_WASM);
+        assert!(error.to_string().contains("32-bit memory"), "{error}");
+        assert_eq!(print_module(&ctx, module.op()), before);
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &module_text(false));
+        lower(&mut ctx, module).expect("shared 32-bit memory should be reused");
+        assert_eq!(
+            op_names(&ctx, module),
+            ["wasm.import_func", "wasm.memory", "func.func", "func.func"]
+        );
     }
 }
