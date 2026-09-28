@@ -564,42 +564,28 @@ fn check_value_types(
 /// `validate_operation_verifiers`. An undeclared runtime symbol has no known
 /// signature, but never exempts other fully typed contracts from validation.
 pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> ValidationResult {
-    use crate::dialect::{core, func};
+    use crate::dialect::func;
     use crate::ops::DialectOp;
     let mut errors = Vec::new();
     let Some(body) = module.body(ctx) else {
         return ValidationResult { errors };
     };
-    // None is genuinely undeclared. A found but invalid/ambiguous declaration
-    // is Some(None), so compatibility cannot hide malformed known contracts.
-    fn resolve(ctx: &IrContext, mut op: OpRef, name: Symbol) -> Option<Option<func::FuncSig>> {
-        loop {
-            let region = ctx.block(ctx.op(op).parent_block?).parent_region?;
-            let parent = ctx.region(region).parent_op?;
-            if core::Module::matches(ctx, parent) {
-                let mut matches = ctx
-                    .region(region)
-                    .blocks
-                    .iter()
-                    .flat_map(|&b| ctx.block(b).ops.iter().copied())
-                    .filter(|&candidate| {
-                        ctx.op(candidate).attributes.get_symbol("sym_name") == Some(name)
-                    });
-                if let Some(found) = matches.next() {
-                    if matches.next().is_some() || !func::Func::matches(ctx, found) {
-                        return Some(None);
-                    }
-                    return Some(
-                        ctx.op(found)
-                            .attributes
-                            .get_type("type")
-                            .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty)),
-                    );
-                }
-            }
-            op = parent;
+    // References name their targets by root-qualified path. None is genuinely
+    // undeclared. A found but invalid or duplicated declaration is Some(None),
+    // so compatibility cannot hide malformed known contracts.
+    let symbols = crate::symbol_table::SymbolTable::collect(ctx, module);
+    let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
+        let found = *symbols.definitions_of(name).first()?;
+        if symbols.resolve(name).is_none() || !func::Func::matches(ctx, found) {
+            return Some(None);
         }
-    }
+        Some(
+            ctx.op(found)
+                .attributes
+                .get_type("type")
+                .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty)),
+        )
+    };
     walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
         let mut verify = || {
             if func::Return::matches(ctx, op) {
@@ -642,7 +628,7 @@ pub fn validate_function_contracts(ctx: &IrContext, module: Module) -> Validatio
                 let Some(name) = ctx.op(op).attributes.get_symbol("callee") else {
                     return;
                 };
-                let Some(signature) = resolve(ctx, op, name) else {
+                let Some(signature) = resolve(name) else {
                     return;
                 };
                 let Some(signature) = signature else {
@@ -3741,5 +3727,34 @@ mod tests {
             "{:?}",
             verifiers.errors
         );
+    }
+    #[test]
+    fn function_contracts_resolve_callees_by_root_qualified_path() {
+        let errors = |callee: &str| {
+            let mut ctx = IrContext::new();
+            let module = crate::parser::parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  func.func @target(%value: core.i32) -> core.i32 {{
+    func.return %value
+  }}
+  core.module @inner {{
+    func.func @target(%value: core.i64) -> core.i64 {{
+      func.return %value
+    }}
+    func.func @caller(%value: core.i32) -> core.i32 {{
+      %result = func.call %value {{callee = {callee}}} : core.i32
+      func.return %result
+    }}
+  }}
+}}"#
+                ),
+            );
+            validate_function_contracts(&ctx, module).errors
+        };
+        // The bare name names the root definition, not the sibling in `inner`.
+        assert!(errors("@target").is_empty());
+        assert!(!errors(r#"@"inner::target""#).is_empty());
     }
 }

@@ -1849,3 +1849,27 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
         "one typed identity cannot map ambiguously"
     );
 }
+
+#[test]
+fn nested_same_named_functions_are_distinct_qualified_definitions() {
+    let (_, _, plan) = build(
+        r#"core.module @test {
+  core.module @left {
+    func.func @helper(%value: core.i32) -> core.i32 {
+      func.return %value
+    }
+  }
+  core.module @right {
+    func.func @helper(%value: core.i32) -> core.i32 {
+      func.return %value
+    }
+  }
+  func.func @main(%value: core.i32) -> core.i32 {
+    %left = func.call %value {callee = @"left::helper"} : core.i32
+    %right = func.call %left {callee = @"right::helper"} : core.i32
+    func.return %right
+  }
+}"#,
+    );
+    assert_eq!(plan.functions().len(), 3);
+}

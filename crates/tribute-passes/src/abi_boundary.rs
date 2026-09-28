@@ -17,6 +17,7 @@ use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
+use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::Attribute;
 use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -104,7 +105,7 @@ pub fn verify_boundary_exit(ctx: &IrContext, module: Module) -> Vec<BoundaryViol
         ops.push(op);
         ControlFlow::Continue(WalkAction::Advance)
     });
-    let functions = scoped_function_signatures(ctx, &ops);
+    let functions = SymbolTable::collect(ctx, module);
     for op in ops {
         verifier.check_op(op, &functions);
     }
@@ -190,39 +191,6 @@ pub fn unexpected_boundary_violations(
         .collect()
 }
 
-/// A function symbol within its enclosing module, the scope the boundary
-/// resolves function references in.
-type ScopedSymbol = (Option<OpRef>, Symbol);
-
-/// Signature of each `func.func`; a name defined twice in one module is ambiguous.
-fn scoped_function_signatures(
-    ctx: &IrContext,
-    ops: &[OpRef],
-) -> HashMap<ScopedSymbol, Option<TypeRef>> {
-    let mut functions = HashMap::new();
-    for &op in ops {
-        if let Ok(function) = func::Func::from_op(ctx, op) {
-            functions
-                .entry((enclosing_module(ctx, op), function.sym_name(ctx)))
-                .and_modify(|resolved| *resolved = None)
-                .or_insert(Some(function.r#type(ctx)));
-        }
-    }
-    functions
-}
-
-/// The nearest `core.module` strictly enclosing `op`.
-fn enclosing_module(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
-    let mut current = op;
-    loop {
-        let block = ctx.op(current).parent_block?;
-        current = ctx.region(ctx.block(block).parent_region?).parent_op?;
-        if core::Module::matches(ctx, current) {
-            return Some(current);
-        }
-    }
-}
-
 /// A violation found inside a type, relative to the site that uses the type.
 type TypeViolation = (ViolationKind, String);
 
@@ -249,7 +217,7 @@ impl<'a> Verifier<'a> {
         self.violations.push(BoundaryViolation { kind, op, detail });
     }
 
-    fn check_op(&mut self, op: OpRef, functions: &HashMap<ScopedSymbol, Option<TypeRef>>) {
+    fn check_op(&mut self, op: OpRef, functions: &SymbolTable) {
         let ctx = self.ctx;
         let data = ctx.op(op);
         let op_name = format!("{}.{}", data.dialect, data.name);
@@ -293,9 +261,9 @@ impl<'a> Verifier<'a> {
         if let Ok(constant) = func::Constant::from_op(ctx, op) {
             let target = constant.func_ref(ctx);
             let expected = functions
-                .get(&(enclosing_module(ctx, op), target))
-                .copied()
-                .flatten();
+                .resolve(target)
+                .and_then(|function| func::Func::from_op(ctx, function).ok())
+                .map(|function| function.r#type(ctx));
             if expected.is_none() || ctx.op_result_types(op) != [expected.unwrap()] {
                 self.report(
                     ViolationKind::ReferenceSignatureMismatch,
@@ -580,7 +548,7 @@ mod tests {
     }
 
     #[test]
-    fn references_resolve_within_their_enclosing_module() {
+    fn references_resolve_by_root_qualified_path() {
         let violations = kinds(
             r#"core.module @test {
   core.module @left {
@@ -588,7 +556,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant {func_ref = @"left::same"} : func.func_sig<(core.i32) -> ()>
       func.return
     }
   }
@@ -600,6 +568,22 @@ mod tests {
 }"#,
         );
         assert_eq!(violations, []);
+
+        // A bare name does not resolve relative to the referencing module.
+        let violations = kinds(
+            r#"core.module @test {
+  core.module @left {
+    func.func @same(%value: core.i32) {
+      func.return
+    }
+    func.func @take() {
+      %reference = func.constant {func_ref = @same} : func.func_sig<(core.i32) -> ()>
+      func.return
+    }
+  }
+}"#,
+        );
+        assert_eq!(violations, [ViolationKind::ReferenceSignatureMismatch]);
     }
 
     #[test]

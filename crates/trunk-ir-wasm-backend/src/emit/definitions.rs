@@ -12,6 +12,7 @@ use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
+use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::types::Attribute;
 use wasm_encoder::{ExportKind, RefType, ValType};
 
@@ -95,7 +96,8 @@ pub(crate) fn extract_function_def(
     ctx: &IrContext,
     func_op: wasm_dialect::Func,
 ) -> CompilationResult<FunctionDef> {
-    let name = func_op.sym_name(ctx);
+    // References name functions by root-qualified path.
+    let name = qualified_name(ctx, func_op.op_ref()).unwrap_or_else(|| func_op.sym_name(ctx));
     let ty = func_op.r#type(ctx);
 
     let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
@@ -133,7 +135,7 @@ pub(crate) fn extract_import_def(
 ) -> CompilationResult<ImportFuncDef> {
     let module = import_op.module(ctx);
     let name = import_op.name(ctx);
-    let sym = import_op.sym_name(ctx);
+    let sym = qualified_name(ctx, import_op.op_ref()).unwrap_or_else(|| import_op.sym_name(ctx));
     let ty = import_op.r#type(ctx);
 
     if wasm_dialect::FuncSig::from_type_ref(ctx, ty).is_none() {

@@ -24,6 +24,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
+use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::{OperationDataBuilder, Symbol};
 
@@ -325,37 +326,6 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
 }
 
 fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<BoundaryFailure> {
-    fn collect(
-        ctx: &IrContext,
-        op: OpRef,
-        signatures: &mut HashMap<Symbol, (TypeRef, Option<i64>)>,
-    ) {
-        let data = ctx.op(op);
-        if data.dialect == Symbol::new("core") && data.name == Symbol::new("module") {
-            return;
-        }
-        if func::Func::matches(ctx, op)
-            && let (Some(symbol), Some(ty)) = (
-                data.attributes.get_symbol("sym_name"),
-                data.attributes.get_type("type"),
-            )
-        {
-            let convention = data
-                .attributes
-                .get_i64(CALLING_CONVENTION_ATTR)
-                .ok()
-                .flatten();
-            signatures.insert(symbol, (ty, convention));
-        }
-        for region in ctx.op(op).regions.iter().copied() {
-            for block in ctx.region(region).blocks.iter().copied() {
-                for child in ctx.block(block).ops.iter().copied() {
-                    collect(ctx, child, signatures);
-                }
-            }
-        }
-    }
-
     fn visit(
         ctx: &IrContext,
         op: OpRef,
@@ -363,10 +333,6 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let data = ctx.op(op);
-        if data.dialect == Symbol::new("core") && data.name == Symbol::new("module") {
-            verify_module(ctx, op, failures);
-            return;
-        }
         let op_convention = data
             .attributes
             .get_i64(CALLING_CONVENTION_ATTR)
@@ -490,27 +456,23 @@ fn verify_physical_callable_graph(ctx: &IrContext, module: Module) -> Vec<Bounda
         }
     }
 
-    fn verify_module(ctx: &IrContext, module_op: OpRef, failures: &mut Vec<BoundaryFailure>) {
-        let mut signatures = HashMap::new();
-        let regions = ctx.op(module_op).regions.to_vec();
-        for region in regions.iter().copied() {
-            for block in ctx.region(region).blocks.iter().copied() {
-                for op in ctx.block(block).ops.iter().copied() {
-                    collect(ctx, op, &mut signatures);
-                }
+    // Callees resolve by root-qualified name across the whole module tree.
+    let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> = SymbolTable::collect(ctx, module)
+        .iter()
+        .filter_map(|(name, ops)| {
+            let &[op] = ops else { return None };
+            if !func::Func::matches(ctx, op) {
+                return None;
             }
-        }
-        for region in regions {
-            for block in ctx.region(region).blocks.iter().copied() {
-                for op in ctx.block(block).ops.iter().copied() {
-                    visit(ctx, op, &signatures, failures);
-                }
-            }
-        }
-    }
-
+            let attributes = &ctx.op(op).attributes;
+            let convention = attributes.get_i64(CALLING_CONVENTION_ATTR).ok().flatten();
+            Some((name, (attributes.get_type("type")?, convention)))
+        })
+        .collect();
     let mut failures = Vec::new();
-    verify_module(ctx, module.op(), &mut failures);
+    for op in module.ops(ctx) {
+        visit(ctx, op, &signatures, &mut failures);
+    }
     failures
 }
 
@@ -743,8 +705,8 @@ struct HandlerArmInfo {
 struct Converter<'a> {
     ctx: &'a mut IrContext,
     module_block: BlockRef,
-    funcs_by_module: HashMap<OpRef, HashMap<Symbol, CallableInfo>>,
-    current_module: OpRef,
+    /// Callables by root-qualified name across the whole module tree.
+    funcs: HashMap<Symbol, CallableInfo>,
     converted_types: HashMap<TypeRef, TypeRef>,
     frames: HashMap<TypeRef, FrameTypes>,
     frame_layout_aliases: Vec<(Symbol, TypeRef)>,
@@ -785,14 +747,12 @@ impl<'a> Converter<'a> {
     fn new(
         ctx: &'a mut IrContext,
         module_block: BlockRef,
-        funcs_by_module: HashMap<OpRef, HashMap<Symbol, CallableInfo>>,
-        current_module: OpRef,
+        funcs: HashMap<Symbol, CallableInfo>,
     ) -> Self {
         Self {
             ctx,
             module_block,
-            funcs_by_module,
-            current_module,
+            funcs,
             converted_types: HashMap::new(),
             frames: HashMap::new(),
             frame_layout_aliases: Vec::new(),
@@ -801,10 +761,7 @@ impl<'a> Converter<'a> {
     }
 
     fn current_func(&self, symbol: Symbol) -> Option<CallableInfo> {
-        self.funcs_by_module
-            .get(&self.current_module)
-            .and_then(|funcs| funcs.get(&symbol))
-            .cloned()
+        self.funcs.get(&symbol).cloned()
     }
 
     fn malformed_source(
@@ -1428,11 +1385,7 @@ impl<'a> Converter<'a> {
         }
         for region in regions {
             let converted = if dialect == Symbol::new("core") && name == Symbol::new("module") {
-                let previous_module = self.current_module;
-                self.current_module = source;
-                let converted = self.clone_module_region(region);
-                self.current_module = previous_module;
-                converted?
+                self.clone_module_region(region)?
             } else {
                 self.clone_plain_region(region, mapping)?
             };
@@ -3639,9 +3592,11 @@ impl<'a> Converter<'a> {
             .attributes
             .get_type("type")
             .expect("pre-CPS validation checked function type");
+        let qualified =
+            qualified_name(self.ctx, source).expect("pre-CPS validation checked function symbol");
         let info = self
-            .current_func(symbol)
-            .expect("validated function is present in its module callable graph");
+            .current_func(qualified)
+            .expect("validated function is present in the callable graph");
         let physical_type = self.physical_function_type(logical_type);
         if self.ctx.op(source).regions.is_empty() {
             let mut builder =
@@ -3764,72 +3719,34 @@ fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> 
     external
 }
 
-fn collect_callable_graph(
-    ctx: &IrContext,
-    module: Module,
-) -> HashMap<OpRef, HashMap<Symbol, CallableInfo>> {
-    fn collect_scope(
-        ctx: &IrContext,
-        region: RegionRef,
-        funcs: &mut HashMap<Symbol, CallableInfo>,
-        nested_modules: &mut Vec<OpRef>,
-    ) {
-        for block in ctx.region(region).blocks.iter().copied() {
-            for op in ctx.block(block).ops.iter().copied() {
-                let data = ctx.op(op);
-                if data.dialect == Symbol::new("core") && data.name == Symbol::new("module") {
-                    nested_modules.push(op);
-                    continue;
-                }
-                if tribute_control::Func::matches(ctx, op) {
-                    let symbol = data
-                        .attributes
-                        .get_symbol("sym_name")
-                        .expect("pre-CPS validation checked function symbol");
-                    let logical_type = data
-                        .attributes
-                        .get_type("type")
-                        .expect("pre-CPS validation checked function type");
-                    let callable = tribute_control::FuncSig::from_type_ref(ctx, logical_type)
-                        .expect("pre-CPS validation checked callable type");
-                    let convention = tribute_control::func_sig_convention(ctx, logical_type)
-                        .expect("pre-CPS validation checked callable convention");
-                    funcs.insert(
-                        symbol,
-                        CallableInfo {
-                            symbol,
-                            convention: convert_convention(convention),
-                            source_result: callable.result(ctx),
-                            source_params: callable.inputs(ctx).to_vec(),
-                        },
-                    );
-                }
-                for nested in data.regions.iter().copied() {
-                    collect_scope(ctx, nested, funcs, nested_modules);
-                }
-            }
-        }
-    }
-
-    fn visit_module(
-        ctx: &IrContext,
-        module_op: OpRef,
-        funcs_by_module: &mut HashMap<OpRef, HashMap<Symbol, CallableInfo>>,
-    ) {
-        let mut funcs = HashMap::new();
-        let mut nested_modules = Vec::new();
-        for region in ctx.op(module_op).regions.iter().copied() {
-            collect_scope(ctx, region, &mut funcs, &mut nested_modules);
-        }
-        funcs_by_module.insert(module_op, funcs);
-        for nested in nested_modules {
-            visit_module(ctx, nested, funcs_by_module);
-        }
-    }
-
-    let mut funcs_by_module = HashMap::new();
-    visit_module(ctx, module.op(), &mut funcs_by_module);
-    funcs_by_module
+/// Every source callable, keyed by its root-qualified name.
+fn collect_callable_graph(ctx: &IrContext, module: Module) -> HashMap<Symbol, CallableInfo> {
+    SymbolTable::collect(ctx, module)
+        .iter()
+        .filter(|&(_, ops)| tribute_control::Func::matches(ctx, ops[0]))
+        .map(|(symbol, ops)| {
+            // Pre-CPS validation rejects duplicated qualified names.
+            let op = ops[0];
+            let logical_type = ctx
+                .op(op)
+                .attributes
+                .get_type("type")
+                .expect("pre-CPS validation checked function type");
+            let callable = tribute_control::FuncSig::from_type_ref(ctx, logical_type)
+                .expect("pre-CPS validation checked callable type");
+            let convention = tribute_control::func_sig_convention(ctx, logical_type)
+                .expect("pre-CPS validation checked callable convention");
+            (
+                symbol,
+                CallableInfo {
+                    symbol,
+                    convention: convert_convention(convention),
+                    source_result: callable.result(ctx),
+                    source_params: callable.inputs(ctx).to_vec(),
+                },
+            )
+        })
+        .collect()
 }
 
 fn verify_candidate_or_restore_aliases(
@@ -3858,7 +3775,7 @@ pub fn tribute_control_to_cps(
     compiler_intrinsics: &[tribute_control::CompilerIntrinsicDeclaration],
 ) -> Result<(), TributeControlToCpsError> {
     verify_tribute_control_pre_cps(ctx, module, declarations, compiler_intrinsics)?;
-    let funcs_by_module = collect_callable_graph(ctx, module);
+    let funcs = collect_callable_graph(ctx, module);
     let source_region = module.body(ctx).ok_or_else(|| {
         TributeControlToCpsError::one(
             PRE_CPS_BOUNDARY,
@@ -3886,7 +3803,7 @@ pub fn tribute_control_to_cps(
         parent_region: None,
     });
     {
-        let mut converter = Converter::new(ctx, new_block, funcs_by_module, module.op());
+        let mut converter = Converter::new(ctx, new_block, funcs);
         let mut mapping = HashMap::new();
         let source_ops = converter.ctx.block(source_blocks[0]).ops.to_vec();
         for source in source_ops {
@@ -4024,7 +3941,7 @@ mod tests {
             let source =
                 func::func_sig_with_attrs(&mut ctx, [source_callable], results.clone(), attrs)
                     .as_type_ref();
-            let mut converter = Converter::new(&mut ctx, block, HashMap::new(), module.op());
+            let mut converter = Converter::new(&mut ctx, block, HashMap::new());
             let converted = converter.convert_type(source);
             assert_eq!(
                 converter.convert_type(source),
@@ -4391,7 +4308,7 @@ mod tests {
     }
 
     #[test]
-    fn nested_modules_resolve_same_named_callables_in_their_own_scope() {
+    fn nested_modules_resolve_same_named_callables_by_qualified_path() {
         let input = r#"core.module @outer {
   tribute_control.func @same(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
@@ -4405,7 +4322,7 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @inner_call(%value: core.i1) -> core.i1 convention(evidence_direct) {
-      %result = tribute_control.call %value {callee = @same} : core.i1
+      %result = tribute_control.call %value {callee = @"inner::same"} : core.i1
       tribute_control.return %result
     }
   }
@@ -5585,7 +5502,7 @@ mod tests {
             .results(raw_type)
             .build(&mut ctx, location);
         let before = ctx.block(module_block).ops.to_vec();
-        let mut converter = Converter::new(&mut ctx, module_block, HashMap::new(), module.op());
+        let mut converter = Converter::new(&mut ctx, module_block, HashMap::new());
 
         let error = converter
             .emit_cps_tail_call_indirect(

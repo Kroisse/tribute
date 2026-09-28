@@ -358,6 +358,13 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   legalization에서 실제 adapter를 생성해야 한다.
 - Operation and type names are interned `Symbol`s. Qualified paths are stored as
   `::`-separated symbols.
+- 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접 호출과 주소 참조)는
+  항상 root module 기준 qualified path이다. 정의는 자기 module 안의 `sym_name`을
+  가지며, 정의의 qualified name은 root module을 제외한 중첩 `core.module` 이름 경로와
+  `sym_name`을 `::`로 이은 것이다. 이름 없는 `core.module`은 경로에 기여하지 않는다.
+  참조는 참조하는 operation이 속한 module을 기준으로 해석하거나 바깥 module로 찾아
+  올라가지 않는다. Qualified name은 module tree 전체에서 유일해야 하며, 중복 정의는
+  모호한 참조가 아니라 IR 오류다.
 - Nested regions use normal SSA visibility rules: values defined inside a
   nested region are not visible outside it unless yielded or otherwise modeled
   by the operation.
@@ -520,14 +527,14 @@ bodyless declaration은 이 trusted FFI policy를 얻지 않는다. Textual attr
 spelling, 위치 또는 printed IR만으로 generic specialization identity를 복구하거나
 승격하지 않는다.
 
-Frontend는 해석된 canonical declaration과 specialization을 module-local symbol에
+Frontend는 해석된 canonical declaration과 specialization을 qualified symbol에
 대응시킨다. 정의, 직접 호출, 함수 참조와 intrinsic declaration metadata는 같은
 대응을 사용한다. Import alias나 prelude의 짧은 이름을 이 심볼의 선언 경로로
-사용하지 않는다. 소유 symbol table 안에서 심볼은 유일해야 하며, 이 대응은
+사용하지 않는다. Qualified symbol은 module tree 전체에서 유일해야 하며, 이 대응은
 source lookup이나 외부 linkage 계약을 변경하지 않는다.
 
 Frontend 경계 verifier는 metadata 전체와 module의 callable graph를 mutation 전에
-대조한다. Direct call은 module-local symbol을 유일하게 resolve하고 완전한 signature를
+대조한다. Direct call은 qualified symbol을 유일하게 resolve하고 완전한 signature를
 맞춰야 한다. Indirect call은 exact `tribute_control.func_sig` signature와 source-logical
 callable producer를 요구한다. Return은 enclosing callable의 logical result와 일치해야
 한다. Body가 없는 declaration도 body traversal 없이 같은 검사를 받는다.

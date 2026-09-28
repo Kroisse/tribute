@@ -6,6 +6,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::ops::ControlFlow;
 
 use itertools::Itertools;
 use trunk_ir::dialect::{adt, arith, core};
@@ -15,7 +16,9 @@ use trunk_ir::op_schema::OpSchema;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
+use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{IrContext, Symbol};
 
 use super::list;
@@ -1624,46 +1627,6 @@ pub fn validate_local(ctx: &IrContext, module: Module) -> ValidationResult {
     ValidationResult { errors }
 }
 
-fn is_core_module(ctx: &IrContext, op: OpRef) -> bool {
-    let data = ctx.op(op);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("module")
-}
-
-fn walk_symbol_scope_ops(ctx: &IrContext, region: RegionRef, callback: &mut impl FnMut(OpRef)) {
-    for block in ctx.region(region).blocks.iter().copied() {
-        for op in ctx.block(block).ops.iter().copied() {
-            if is_core_module(ctx, op) {
-                continue;
-            }
-            callback(op);
-            for nested in ctx.op(op).regions.iter().copied() {
-                walk_symbol_scope_ops(ctx, nested, callback);
-            }
-        }
-    }
-}
-
-fn collect_funcs(
-    ctx: &IrContext,
-    region: RegionRef,
-    funcs: &mut HashMap<Symbol, OpRef>,
-    errors: &mut Vec<ValidationError>,
-) {
-    walk_symbol_scope_ops(ctx, region, &mut |op| {
-        if is_control_op(ctx, op, "func")
-            && let Some(symbol) = ctx.op(op).attributes.get_symbol("sym_name")
-            && let Some(previous) = funcs.insert(symbol, op)
-        {
-            push_op_error(
-                ctx,
-                op,
-                errors,
-                format!("duplicate function symbol @{symbol}; first defined by {previous}"),
-            );
-        }
-    });
-}
-
 fn same_source_signature(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let Some((left_result, left_params, _)) = func_sig_parts(ctx, left) else {
         return false;
@@ -1676,16 +1639,33 @@ fn same_source_signature(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool
 
 fn validate_symbol_uses(
     ctx: &IrContext,
-    body: RegionRef,
-    funcs: &HashMap<Symbol, OpRef>,
+    module: Module,
+    funcs: &SymbolTable,
     errors: &mut Vec<ValidationError>,
 ) {
-    walk_symbol_scope_ops(ctx, body, &mut |op| {
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        validate_symbol_use(ctx, op, funcs, errors);
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+}
+
+fn validate_symbol_use(
+    ctx: &IrContext,
+    op: OpRef,
+    funcs: &SymbolTable,
+    errors: &mut Vec<ValidationError>,
+) {
+    {
         if is_control_op(ctx, op, "func_ref") {
             let Some(symbol) = ctx.op(op).attributes.get_symbol("func_ref") else {
                 return;
             };
-            let Some(target) = funcs.get(&symbol).copied() else {
+            let Some(target) = funcs
+                .definitions_of(symbol)
+                .first()
+                .copied()
+                .filter(|&target| is_control_op(ctx, target, "func"))
+            else {
                 push_op_error(
                     ctx,
                     op,
@@ -1723,7 +1703,12 @@ fn validate_symbol_uses(
             let Some(symbol) = ctx.op(op).attributes.get_symbol("callee") else {
                 return;
             };
-            let Some(target) = funcs.get(&symbol).copied() else {
+            let Some(target) = funcs
+                .definitions_of(symbol)
+                .first()
+                .copied()
+                .filter(|&target| is_control_op(ctx, target, "func"))
+            else {
                 push_op_error(ctx, op, errors, format!("unresolved callee @{symbol}"));
                 return;
             };
@@ -1750,40 +1735,23 @@ fn validate_symbol_uses(
                 errors,
             );
         }
-    });
+    }
 }
 
-fn validate_module_symbol_scopes(
-    ctx: &IrContext,
-    module_op: OpRef,
-    errors: &mut Vec<ValidationError>,
-) {
-    let regions = ctx.op(module_op).regions.to_vec();
-    let mut funcs = HashMap::new();
-    for region in regions.iter().copied() {
-        collect_funcs(ctx, region, &mut funcs, errors);
-    }
-    for region in regions.iter().copied() {
-        validate_symbol_uses(ctx, region, &funcs, errors);
-    }
-
-    fn visit_nested_modules(ctx: &IrContext, region: RegionRef, errors: &mut Vec<ValidationError>) {
-        for block in ctx.region(region).blocks.iter().copied() {
-            for op in ctx.block(block).ops.iter().copied() {
-                if is_core_module(ctx, op) {
-                    validate_module_symbol_scopes(ctx, op, errors);
-                } else {
-                    for nested in ctx.op(op).regions.iter().copied() {
-                        visit_nested_modules(ctx, nested, errors);
-                    }
-                }
-            }
+/// Resolve every function reference in the module tree by root-qualified name.
+fn validate_module_symbols(ctx: &IrContext, module: Module, errors: &mut Vec<ValidationError>) {
+    let funcs = SymbolTable::collect(ctx, module);
+    for (symbol, ops) in funcs.duplicates() {
+        for &op in &ops[1..] {
+            push_op_error(
+                ctx,
+                op,
+                errors,
+                format!("duplicate function symbol @{symbol}"),
+            );
         }
     }
-
-    for region in regions {
-        visit_nested_modules(ctx, region, errors);
-    }
+    validate_symbol_uses(ctx, module, &funcs, errors);
 }
 
 fn collect_external_references(
@@ -2282,6 +2250,7 @@ fn variant_field_type(
 }
 
 struct CallableProvenance<'a> {
+    functions: &'a SymbolTable,
     registered: &'a HashMap<Symbol, &'a CompilerIntrinsicDeclaration>,
     declarations: &'a HashMap<(TypeRef, Symbol), &'a OperationDeclaration>,
     nominal_layouts: &'a HashMap<Symbol, TypeRef>,
@@ -2380,7 +2349,8 @@ fn callable_has_semantic_provenance(
                         } else {
                             "callee"
                         })
-                        .and_then(|symbol| resolve_visible_function(ctx, producer, symbol))
+                        .and_then(|symbol| provenance.functions.resolve(symbol))
+                        .filter(|&function| is_control_op(ctx, function, "func"))
                         .is_some_and(|function| {
                             verified_callable_declaration(ctx, function, provenance.registered)
                         }))
@@ -2402,28 +2372,6 @@ fn callable_has_semantic_provenance(
     }
 }
 
-fn resolve_visible_function(ctx: &IrContext, use_op: OpRef, symbol: Symbol) -> Option<OpRef> {
-    let mut owner = Some(use_op);
-    let scope = loop {
-        let current = owner?;
-        if is_core_module(ctx, current) {
-            break current;
-        }
-        owner = parent_op(ctx, current);
-    };
-    let body = ctx.op(scope).regions.first().copied()?;
-    let mut resolved = None;
-    let mut duplicate = false;
-    walk_symbol_scope_ops(ctx, body, &mut |op| {
-        if is_control_op(ctx, op, "func")
-            && ctx.op(op).attributes.get_symbol("sym_name") == Some(symbol)
-        {
-            duplicate |= resolved.replace(op).is_some();
-        }
-    });
-    (!duplicate).then_some(resolved).flatten()
-}
-
 fn verified_callable_declaration(
     ctx: &IrContext,
     function: OpRef,
@@ -2434,7 +2382,7 @@ fn verified_callable_declaration(
         return true;
     }
     let (Some(symbol), Some(identity), Some(func_sig_type)) = (
-        data.attributes.get_symbol("sym_name"),
+        qualified_name(ctx, function),
         Func::from_op(ctx, function)
             .ok()
             .and_then(|function| function.compiler_intrinsic_identity(ctx)),
@@ -2456,7 +2404,14 @@ fn validate_callable_origins(
     errors: &mut Vec<ValidationError>,
 ) {
     let registered = compiler_intrinsic_map(ctx, declarations, errors);
+    let functions = ctx
+        .region(body)
+        .parent_op
+        .and_then(|module| Module::new(ctx, module))
+        .map(|module| SymbolTable::collect(ctx, module))
+        .unwrap_or_default();
     let provenance = CallableProvenance {
+        functions: &functions,
         registered: &registered,
         declarations: operation_declarations,
         nominal_layouts,
@@ -2465,10 +2420,9 @@ fn validate_callable_origins(
     walk_region_ops(ctx, body, &mut |op| {
         if is_control_op(ctx, op, "func") {
             let data = ctx.op(op);
-            let (Some(symbol), Some(func_sig_type)) = (
-                data.attributes.get_symbol("sym_name"),
-                data.attributes.get_type("type"),
-            ) else {
+            let (Some(symbol), Some(func_sig_type)) =
+                (qualified_name(ctx, op), data.attributes.get_type("type"))
+            else {
                 return;
             };
             let intrinsic_identity = Func::from_op(ctx, op)
@@ -2741,7 +2695,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
         if is_control_op(ctx, current, "func") {
-            return ctx.op(current).attributes.get_symbol("sym_name") == Some(callee);
+            return qualified_name(ctx, current) == Some(callee);
         }
         owner = parent_op(ctx, current);
     }
@@ -3040,7 +2994,7 @@ pub fn validate_whole_ir(
     let Some(body) = module.body(ctx) else {
         return ValidationResult { errors };
     };
-    validate_module_symbol_scopes(ctx, module.op(), &mut errors);
+    validate_module_symbols(ctx, module, &mut errors);
     validate_lambda_captures(ctx, body, &mut errors);
     let declarations = declaration_map(declarations, &mut errors);
     let reachable_types = collect_reachable_ir_types(ctx, module.op());
@@ -4301,7 +4255,7 @@ mod tests {
     }
 
     #[test]
-    fn whole_ir_resolves_same_named_functions_per_nested_module() {
+    fn whole_ir_resolves_root_qualified_references_across_nested_modules() {
         let (ctx, module) = parse_fixture(
             r#"core.module @outer {
   core.module @integers {
@@ -4310,8 +4264,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i32) -> core.i32 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @id} : !callable
-      %direct = tribute_control.call %value {callee = @id} : core.i32
+      %reference = tribute_control.func_ref {func_ref = @"integers::id"} : !callable
+      %direct = tribute_control.call %value {callee = @"integers::id"} : core.i32
       %indirect = tribute_control.call_indirect %reference, %direct : core.i32
       tribute_control.return %indirect
     }
@@ -4322,8 +4276,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.bool) -> core.bool convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @id} : !callable
-      %direct = tribute_control.call %value {callee = @id} : core.bool
+      %reference = tribute_control.func_ref {func_ref = @"booleans::id"} : !callable
+      %direct = tribute_control.call %value {callee = @"booleans::id"} : core.bool
       %indirect = tribute_control.call_indirect %reference, %direct : core.bool
       tribute_control.return %indirect
     }
@@ -4333,6 +4287,27 @@ mod tests {
 
         let result = validate_whole_ir(&ctx, module, &[], &[]);
         assert!(result.is_ok(), "{:?}", result.errors);
+
+        // A reference is never resolved relative to its own nested module.
+        let (ctx, module) = parse_fixture(
+            r#"core.module @outer {
+  core.module @integers {
+    tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+      tribute_control.return %value
+    }
+    tribute_control.func @use(%value: core.i32) -> core.i32 convention(direct) {
+      %direct = tribute_control.call %value {callee = @id} : core.i32
+      tribute_control.return %direct
+    }
+  }
+}"#,
+        );
+        let result = validate_whole_ir(&ctx, module, &[], &[]);
+        assert!(
+            messages(&result).contains("unresolved callee @id"),
+            "{:?}",
+            result.errors
+        );
     }
 
     #[test]
@@ -5428,5 +5403,28 @@ mod tests {
             ctx,
             call.expect("call")
         ));
+    }
+
+    #[test]
+    fn nested_self_calls_are_recognized_by_qualified_name() {
+        let (ctx, module) = parse_fixture(
+            r#"core.module @outer {
+  core.module @inner {
+    tribute_control.func @loop(%value: core.i32) -> core.i32 convention(direct) {
+      %again = tribute_control.call %value {callee = @"inner::loop"} : core.i32
+      tribute_control.return %again
+    }
+  }
+}"#,
+        );
+        let mut calls = Vec::new();
+        let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if is_control_op(&ctx, op, "call") {
+                calls.push(op);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        assert_eq!(calls.len(), 1);
+        assert!(direct_call_reenters_enclosing_func(&ctx, calls[0]));
     }
 }

@@ -1,29 +1,32 @@
 //! Global Dead Code Elimination (DCE) pass for arena IR.
 //!
 //! Removes function definitions that are not reachable from reachability roots.
-//! Reachability roots include:
-//! - Functions named "main" or "_start"
+//! Functions are keyed by root-qualified name. Reachability roots include:
+//! - The root module's `main` or `_start`
 //! - Functions referenced by `wasm.export_func`
 //! - Functions with `abi` attribute (externally callable)
-//! - Custom entry points from configuration
+//! - Custom entry points from configuration, by qualified name
 //!
-//! Builds a call graph by analyzing `func.call`, `func.tail_call`, and
+//! Follows the [`CallGraph`] edges of `func.call`, `func.tail_call`, and
 //! `func.constant` operations, then removes unreachable functions via BFS.
 
-use std::collections::{HashMap, HashSet, VecDeque};
+use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 
 use crate::context::IrContext;
+use crate::dialect::{core, func, wasm};
+use crate::ops::DialectOp;
 use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::Symbol;
-use crate::types::Attribute;
+use crate::symbol_table::SymbolTable;
+use crate::transforms::call_graph::{CallGraph, build_call_graph};
 use crate::walk::{WalkAction, walk_region};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
 pub struct GlobalDceConfig {
-    /// Additional entry point function names (besides main/_start).
+    /// Additional entry point qualified function names (besides main/_start).
     pub extra_entry_points: Vec<String>,
     /// Whether to recursively process nested modules. Default: true.
     pub recursive: bool,
@@ -57,340 +60,136 @@ pub fn eliminate_dead_functions_with_config(
     module: Module,
     config: GlobalDceConfig,
 ) -> GlobalDceResult {
-    let mut pass = GlobalDcePass::new(config);
-    pass.run(ctx, module)
+    run(ctx, module, &config)
 }
 
-/// Cached symbol constants used during analysis.
-struct Syms {
-    func: Symbol,
-    call: Symbol,
-    tail_call: Symbol,
-    constant: Symbol,
-    export_func: Symbol,
-    module: Symbol,
-    sym_name: Symbol,
-    callee: Symbol,
-    func_ref: Symbol,
-    func_attr: Symbol,
-    name_attr: Symbol,
-    abi: Symbol,
-    main: Symbol,
-    start: Symbol,
-    dialect_func: Symbol,
-    dialect_wasm: Symbol,
-    dialect_core: Symbol,
-}
+/// Eliminate the functions of `module` not reachable from its roots.
+///
+/// Functions are keyed by root-qualified name. Every definition of a
+/// duplicated name shares its reachability. With `recursive: false`, functions
+/// in nested modules are neither removed nor analyzed; they are kept as roots.
+fn run(ctx: &mut IrContext, module: Module, config: &GlobalDceConfig) -> GlobalDceResult {
+    let symbols = SymbolTable::collect(ctx, module);
+    let functions = || {
+        symbols
+            .all_definitions()
+            .filter(|&(_, op)| func::Func::matches(ctx, op))
+    };
+    let is_candidate = |op| config.recursive || !in_nested_module(ctx, module, op);
+    let candidates: Vec<(Symbol, OpRef)> =
+        functions().filter(|&(_, op)| is_candidate(op)).collect();
 
-impl Syms {
-    fn new() -> Self {
-        Self {
-            func: Symbol::new("func"),
-            call: Symbol::new("call"),
-            tail_call: Symbol::new("tail_call"),
-            constant: Symbol::new("constant"),
-            export_func: Symbol::new("export_func"),
-            module: Symbol::new("module"),
-            sym_name: Symbol::new("sym_name"),
-            callee: Symbol::new("callee"),
-            func_ref: Symbol::new("func_ref"),
-            func_attr: Symbol::new("func"),
-            name_attr: Symbol::new("name"),
-            abi: Symbol::new("abi"),
-            main: Symbol::new("main"),
-            start: Symbol::new("_start"),
-            dialect_func: Symbol::new("func"),
-            dialect_wasm: Symbol::new("wasm"),
-            dialect_core: Symbol::new("core"),
+    let mut roots: HashSet<Symbol> = functions()
+        .filter(|&(name, op)| !is_candidate(op) || is_root(ctx, name, op, config))
+        .map(|(name, _)| name)
+        .collect();
+    let _ = walk_region::<()>(ctx, module.body(ctx).expect("module body"), &mut |op| {
+        if wasm::ExportFunc::matches(ctx, op)
+            && let Some(func_ref) = ctx.op(op).attributes.get_symbol("func")
+        {
+            roots.insert(func_ref);
         }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+
+    let graph = build_call_graph(ctx, module);
+    let reachable = compute_reachable(&graph, roots);
+
+    // A function containing a reachable function definition is kept with it.
+    let mut kept = HashSet::new();
+    for (_, op) in functions().filter(|(name, _)| reachable.contains(name)) {
+        let mut current = Some(op);
+        while let Some(op) = current
+            && op != module.op()
+        {
+            kept.insert(op);
+            current = parent_op(ctx, op);
+        }
+    }
+    let dead: Vec<(Symbol, OpRef)> = candidates
+        .into_iter()
+        .filter(|(_, op)| !kept.contains(op))
+        .collect();
+    let dead_ops: HashSet<OpRef> = dead.iter().map(|&(_, op)| op).collect();
+
+    let mut removed = Vec::new();
+    for (name, op) in dead {
+        removed.push(name);
+        // A function inside a dead function goes with its container.
+        if has_ancestor_in(ctx, op, &dead_ops) {
+            continue;
+        }
+        // Erase the unreachable function: `erase_op` clears the operand
+        // use-chains of the func and its body subtree, so dead funcs don't
+        // leave stale uses behind (#710). Func scopes are independent (SSA),
+        // so clearing the body's operand uses cannot affect other reachable
+        // functions.
+        crate::rewrite::erase_op(ctx, op);
+    }
+
+    GlobalDceResult {
+        removed_count: removed.len(),
+        removed_functions: removed,
     }
 }
 
-struct GlobalDcePass {
-    config: GlobalDceConfig,
-    syms: Syms,
-    /// Function definitions: name → OpRef
-    functions: HashMap<Symbol, OpRef>,
-    /// Call graph: caller → set of callees
-    call_graph: HashMap<Symbol, HashSet<Symbol>>,
-    /// Roots for reachability analysis (main, exports, abi functions, etc.)
-    reachability_roots: HashSet<Symbol>,
+/// Whether `name` is a reachability root: the root `main` or `_start`, a
+/// function with an `abi` attribute (externally callable), or a configured
+/// extra entry point.
+fn is_root(ctx: &IrContext, name: Symbol, op: OpRef, config: &GlobalDceConfig) -> bool {
+    name == Symbol::new("main")
+        || name == Symbol::new("_start")
+        || ctx.op(op).attributes.contains_key("abi")
+        || name.with_str(|name| config.extra_entry_points.iter().any(|extra| extra == name))
 }
 
-impl GlobalDcePass {
-    fn new(config: GlobalDceConfig) -> Self {
-        Self {
-            config,
-            syms: Syms::new(),
-            functions: HashMap::new(),
-            call_graph: HashMap::new(),
-            reachability_roots: HashSet::new(),
+/// Whether `op` lies inside a `core.module` nested in `module`.
+fn in_nested_module(ctx: &IrContext, module: Module, op: OpRef) -> bool {
+    let mut current = op;
+    while let Some(parent) = parent_op(ctx, current) {
+        if parent == module.op() {
+            return false;
+        }
+        if core::Module::matches(ctx, parent) {
+            return true;
+        }
+        current = parent;
+    }
+    false
+}
+
+/// Whether an operation enclosing `op` is in `ops`.
+fn has_ancestor_in(ctx: &IrContext, op: OpRef, ops: &HashSet<OpRef>) -> bool {
+    let mut current = parent_op(ctx, op);
+    while let Some(op) = current {
+        if ops.contains(&op) {
+            return true;
+        }
+        current = parent_op(ctx, op);
+    }
+    false
+}
+
+fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
+    let block = ctx.op(op).parent_block?;
+    ctx.region(ctx.block(block).parent_region?).parent_op
+}
+
+/// Functions reachable from `roots` via BFS over call and reference edges.
+fn compute_reachable(graph: &CallGraph, roots: HashSet<Symbol>) -> HashSet<Symbol> {
+    let mut reachable = HashSet::new();
+    let mut worklist: VecDeque<Symbol> = roots.into_iter().collect();
+
+    while let Some(func) = worklist.pop_front() {
+        if !reachable.insert(func) {
+            continue;
+        }
+        if let Some(callees) = graph.edges.get(&func) {
+            worklist.extend(callees.iter().filter(|callee| !reachable.contains(*callee)));
         }
     }
 
-    fn run(&mut self, ctx: &mut IrContext, module: Module) -> GlobalDceResult {
-        // Phase 1: Analyze — collect functions, call graph, reachability roots
-        if let Some(body) = module.body(ctx) {
-            self.analyze_module_region(ctx, body, &[]);
-        }
-
-        // Phase 2: Compute reachable functions from roots
-        let reachable = self.compute_reachable();
-
-        // Phase 3: Remove unreachable functions
-        self.remove_dead_functions(ctx, module, &reachable)
-    }
-
-    /// Analyze a module's body region to collect functions, call edges, and reachability roots.
-    fn analyze_module_region(
-        &mut self,
-        ctx: &IrContext,
-        region: crate::refs::RegionRef,
-        module_path: &[Symbol],
-    ) {
-        let blocks = ctx.region(region).blocks.to_vec();
-        for block in blocks {
-            let ops = ctx.block(block).ops.to_vec();
-            for op in ops {
-                let dialect = ctx.op(op).dialect;
-                let name = ctx.op(op).name;
-
-                // Handle nested core.module
-                if dialect == self.syms.dialect_core && name == self.syms.module {
-                    if self.config.recursive {
-                        let new_path = self.extend_module_path(ctx, op, module_path);
-                        for &region in &ctx.op(op).regions {
-                            self.analyze_module_region(ctx, region, &new_path);
-                        }
-                    }
-                    continue;
-                }
-
-                // Collect func.func definitions
-                if dialect == self.syms.dialect_func
-                    && name == self.syms.func
-                    && let Some(func_name) = self.extract_func_name(ctx, op, module_path)
-                {
-                    self.functions.insert(func_name, op);
-
-                    // Check if entry point by base name (unqualified sym_name)
-                    let base_name = self
-                        .extract_symbol_attr(ctx, op, &self.syms.sym_name)
-                        .unwrap_or(func_name);
-                    if base_name == self.syms.main || base_name == self.syms.start {
-                        self.reachability_roots.insert(func_name);
-                    }
-
-                    // Treat abi functions as entry points so their callees
-                    // are also considered reachable.
-                    if ctx.op(op).attributes.contains_key(self.syms.abi) {
-                        self.reachability_roots.insert(func_name);
-                    }
-
-                    // Check extra entry points (match against both qualified and base name)
-                    for extra in &self.config.extra_entry_points {
-                        let mut matched = false;
-                        func_name.with_str(|s| {
-                            if s == extra {
-                                matched = true;
-                            }
-                        });
-                        if !matched {
-                            base_name.with_str(|s| {
-                                if s == extra {
-                                    matched = true;
-                                }
-                            });
-                        }
-                        if matched {
-                            self.reachability_roots.insert(func_name);
-                        }
-                    }
-
-                    // Analyze function body for call edges
-                    self.analyze_function_body(ctx, op, func_name);
-                }
-
-                // Collect wasm.export_func as entry points
-                if dialect == self.syms.dialect_wasm
-                    && name == self.syms.export_func
-                    && let Some(func_ref) = self.extract_symbol_attr(ctx, op, &self.syms.func_attr)
-                {
-                    self.reachability_roots.insert(func_ref);
-                }
-            }
-        }
-    }
-
-    /// Analyze a function body to find all callees.
-    fn analyze_function_body(&mut self, ctx: &IrContext, func_op: OpRef, caller: Symbol) {
-        let regions = ctx.op(func_op).regions.to_vec();
-        for region in regions {
-            self.collect_calls_from_region(ctx, region, caller);
-        }
-    }
-
-    /// Recursively collect call targets from a region.
-    fn collect_calls_from_region(
-        &mut self,
-        ctx: &IrContext,
-        region: crate::refs::RegionRef,
-        caller: Symbol,
-    ) {
-        let _ = walk_region::<()>(ctx, region, &mut |op| {
-            let dialect = ctx.op(op).dialect;
-            let name = ctx.op(op).name;
-
-            if dialect == self.syms.dialect_func {
-                if (name == self.syms.call || name == self.syms.tail_call)
-                    && let Some(callee) = self.extract_symbol_attr(ctx, op, &self.syms.callee)
-                {
-                    self.call_graph.entry(caller).or_default().insert(callee);
-                } else if name == self.syms.constant
-                    && let Some(func_ref) = self.extract_symbol_attr(ctx, op, &self.syms.func_ref)
-                {
-                    self.call_graph.entry(caller).or_default().insert(func_ref);
-                }
-            }
-
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-    }
-
-    /// Extract a Symbol attribute from an op.
-    fn extract_symbol_attr(&self, ctx: &IrContext, op: OpRef, key: &Symbol) -> Option<Symbol> {
-        match ctx.op(op).attributes.get(key)? {
-            Attribute::Symbol(s) => Some(*s),
-            _ => None,
-        }
-    }
-
-    /// Extract the qualified name of a func.func operation.
-    fn extract_func_name(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        module_path: &[Symbol],
-    ) -> Option<Symbol> {
-        let sym_name = self.extract_symbol_attr(ctx, op, &self.syms.sym_name)?;
-        if module_path.is_empty() {
-            Some(sym_name)
-        } else {
-            let mut path = String::new();
-            for (i, seg) in module_path.iter().enumerate() {
-                if i > 0 {
-                    path.push_str("::");
-                }
-                seg.with_str(|s| path.push_str(s));
-            }
-            path.push_str("::");
-            sym_name.with_str(|s| path.push_str(s));
-            Some(Symbol::from_dynamic(&path))
-        }
-    }
-
-    /// Extend the module path with a nested module's name.
-    fn extend_module_path(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        current_path: &[Symbol],
-    ) -> Vec<Symbol> {
-        let nested_name = self.extract_symbol_attr(ctx, op, &self.syms.name_attr);
-        if let Some(n) = nested_name {
-            let mut p = current_path.to_vec();
-            p.push(n);
-            p
-        } else {
-            current_path.to_vec()
-        }
-    }
-
-    /// Compute reachable functions from reachability roots via BFS.
-    fn compute_reachable(&self) -> HashSet<Symbol> {
-        let mut reachable = HashSet::new();
-        let mut worklist: VecDeque<Symbol> = self.reachability_roots.iter().copied().collect();
-
-        while let Some(func) = worklist.pop_front() {
-            if !reachable.insert(func) {
-                continue;
-            }
-            if let Some(callees) = self.call_graph.get(&func) {
-                for &callee in callees {
-                    if !reachable.contains(&callee) {
-                        worklist.push_back(callee);
-                    }
-                }
-            }
-        }
-
-        reachable
-    }
-
-    /// Remove unreachable functions from the module.
-    fn remove_dead_functions(
-        &self,
-        ctx: &mut IrContext,
-        module: Module,
-        reachable: &HashSet<Symbol>,
-    ) -> GlobalDceResult {
-        let mut removed = Vec::new();
-
-        if let Some(body) = module.body(ctx) {
-            self.filter_region(ctx, body, reachable, &mut removed, &[]);
-        }
-
-        GlobalDceResult {
-            removed_count: removed.len(),
-            removed_functions: removed,
-        }
-    }
-
-    /// Filter a region, removing unreachable func.func operations.
-    fn filter_region(
-        &self,
-        ctx: &mut IrContext,
-        region: crate::refs::RegionRef,
-        reachable: &HashSet<Symbol>,
-        removed: &mut Vec<Symbol>,
-        module_path: &[Symbol],
-    ) {
-        let blocks = ctx.region(region).blocks.to_vec();
-        for block in blocks {
-            let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-            for op in ops {
-                let dialect = ctx.op(op).dialect;
-                let name = ctx.op(op).name;
-
-                // Handle nested core.module
-                if dialect == self.syms.dialect_core && name == self.syms.module {
-                    if self.config.recursive {
-                        let new_path = self.extend_module_path(ctx, op, module_path);
-                        let regions: Vec<_> = ctx.op(op).regions.to_vec();
-                        for region in regions {
-                            self.filter_region(ctx, region, reachable, removed, &new_path);
-                        }
-                    }
-                    continue;
-                }
-
-                // Check if this is a func.func that should be removed
-                if dialect == self.syms.dialect_func
-                    && name == self.syms.func
-                    && let Some(func_name) = self.extract_func_name(ctx, op, module_path)
-                    && !reachable.contains(&func_name)
-                {
-                    removed.push(func_name);
-                    // Erase the unreachable function: `erase_op` clears the
-                    // operand use-chains of the func and its body subtree, so
-                    // dead funcs don't leave stale uses behind (#710). Func
-                    // scopes are independent (SSA), so clearing the body's
-                    // operand uses cannot affect other reachable functions.
-                    crate::rewrite::erase_op(ctx, op);
-                }
-            }
-        }
-    }
+    reachable
 }
 
 #[cfg(test)]
@@ -723,7 +522,8 @@ mod tests {
 
         let top_main = build_simple_func(&mut ctx, loc, "main");
 
-        // Build nested module with its own main and an unused func
+        // Build nested module with its own main and an unused func. Only the
+        // root module's `main` is an entry point.
         let nested_main = build_simple_func(&mut ctx, loc, "main");
         let nested_unused = build_simple_func(&mut ctx, loc, "unused_in_nested");
 
@@ -743,7 +543,6 @@ mod tests {
         let nested_module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr("sym_name", Attribute::Symbol(Symbol::new("nested")))
-                .attr("name", Attribute::Symbol(Symbol::new("nested")))
                 .region(nested_region)
                 .build(&mut ctx);
         let nested_module_op = ctx.create_op(nested_module_data);
@@ -756,7 +555,14 @@ mod tests {
         };
         let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
 
-        assert_eq!(result.removed_count, 1); // nested::unused_in_nested removed
+        assert_eq!(result.removed_count, 2);
+        assert_eq!(
+            HashSet::<Symbol>::from_iter(result.removed_functions),
+            HashSet::from([
+                Symbol::from_dynamic("nested::main"),
+                Symbol::from_dynamic("nested::unused_in_nested"),
+            ])
+        );
     }
 
     #[test]
@@ -782,7 +588,6 @@ mod tests {
         let nested_module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr("sym_name", Attribute::Symbol(Symbol::new("nested")))
-                .attr("name", Attribute::Symbol(Symbol::new("nested")))
                 .region(nested_region)
                 .build(&mut ctx);
         let nested_module_op = ctx.create_op(nested_module_data);
@@ -797,5 +602,119 @@ mod tests {
 
         // With recursive=false, nested module is not analyzed
         assert_eq!(result.removed_count, 0);
+    }
+
+    fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
+        SymbolTable::collect(ctx, module)
+            .all_definitions()
+            .filter(|&(_, op)| func::Func::matches(ctx, op))
+            .map(|(name, _)| name)
+            .collect()
+    }
+
+    #[test]
+    fn reachability_follows_root_qualified_references() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @main() {
+    func.call {callee = @"a::same"}
+    func.return
+  }
+  core.module @a {
+    func.func @same() {
+      func.return
+    }
+  }
+  core.module @b {
+    func.func @same() {
+      func.return
+    }
+  }
+}"#,
+        );
+
+        let result = eliminate_dead_functions(&mut ctx, module);
+
+        assert_eq!(result.removed_functions, [Symbol::from_dynamic("b::same")]);
+        assert_eq!(
+            surviving_functions(&ctx, module),
+            HashSet::from([Symbol::new("main"), Symbol::from_dynamic("a::same")])
+        );
+    }
+
+    #[test]
+    fn non_recursive_keeps_callees_of_nested_functions() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @main() {
+    func.return
+  }
+  func.func @helper() {
+    func.return
+  }
+  func.func @unused() {
+    func.return
+  }
+  core.module @nested {
+    func.func @user() {
+      func.call {callee = @helper}
+      func.return
+    }
+  }
+}"#,
+        );
+
+        let config = GlobalDceConfig {
+            extra_entry_points: vec![],
+            recursive: false,
+        };
+        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+
+        assert_eq!(result.removed_functions, [Symbol::new("unused")]);
+    }
+
+    #[test]
+    fn keeps_functions_containing_reachable_definitions() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @main() {
+    func.call {callee = @inner}
+    func.return
+  }
+  func.func @host() {
+    func.func @inner() {
+      func.return
+    }
+    func.return
+  }
+  func.func @dead_host() {
+    func.func @dead_inner() {
+      func.return
+    }
+    func.return
+  }
+}"#,
+        );
+
+        let result = eliminate_dead_functions(&mut ctx, module);
+
+        assert_eq!(
+            HashSet::<Symbol>::from_iter(result.removed_functions),
+            HashSet::from([Symbol::new("dead_host"), Symbol::new("dead_inner")])
+        );
+        assert_eq!(
+            surviving_functions(&ctx, module),
+            HashSet::from([
+                Symbol::new("main"),
+                Symbol::new("host"),
+                Symbol::new("inner")
+            ])
+        );
     }
 }

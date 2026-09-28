@@ -26,6 +26,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::types::{Attribute, AttributeMap, TypeData, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
@@ -115,12 +116,8 @@ pub fn lower_cps_signatures_to_physical(
                 function_types.push((op, converted));
             }
             if convention.is_some() {
-                let identity = function_for_symbol(
-                    converter.ctx,
-                    op,
-                    function.sym_name(converter.ctx),
-                    &functions,
-                )?;
+                let identity =
+                    function_for_symbol(defined_function_name(converter.ctx, op)?, &functions)?;
                 if let Some(index) = identity.environment_index
                     && converter
                         .ctx
@@ -146,12 +143,9 @@ pub fn lower_cps_signatures_to_physical(
             .enumerate()
         {
             let converted = if let Ok(constant) = func::Constant::from_op(converter.ctx, op) {
-                if let Some(identity) = function_for_symbol_optional(
-                    converter.ctx,
-                    op,
-                    constant.func_ref(converter.ctx),
-                    &functions,
-                )? {
+                if let Some(identity) =
+                    function_for_symbol_optional(constant.func_ref(converter.ctx), &functions)
+                {
                     validate_constant(converter.ctx, constant, identity, never)?;
                     converter.convert_callable(ty, identity.convention)?
                 } else {
@@ -1040,7 +1034,7 @@ fn collect_functions(
     ops: &[OpRef],
     never: TypeRef,
     anyref: TypeRef,
-) -> Result<HashMap<(OpRef, Symbol), FunctionIdentity>, TargetAbiError> {
+) -> Result<HashMap<Symbol, FunctionIdentity>, TargetAbiError> {
     let mut functions = HashMap::new();
     for &op in ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
@@ -1059,7 +1053,7 @@ fn collect_functions(
                 function.sym_name(ctx)
             )));
         }
-        let key = (symbol_scope(ctx, op)?, function.sym_name(ctx));
+        let key = defined_function_name(ctx, op)?;
         let identity = FunctionIdentity {
             signature,
             convention,
@@ -1077,7 +1071,7 @@ fn collect_functions(
 fn validate_transfers(
     ctx: &IrContext,
     ops: &[OpRef],
-    functions: &HashMap<(OpRef, Symbol), FunctionIdentity>,
+    functions: &HashMap<Symbol, FunctionIdentity>,
     never: TypeRef,
 ) -> Result<(), TargetAbiError> {
     for &op in ops {
@@ -1087,7 +1081,7 @@ fn validate_transfers(
                 TargetAbiError::new("target ABI: direct transfer lacks callee metadata")
             })?;
             let Some(convention) = convention else {
-                if function_for_symbol_optional(ctx, op, callee, functions)?
+                if function_for_symbol_optional(callee, functions)
                     .is_some_and(|identity| identity.convention == CallingConvention::Cps)
                 {
                     return Err(TargetAbiError::new(
@@ -1096,7 +1090,7 @@ fn validate_transfers(
                 }
                 continue;
             };
-            let identity = function_for_symbol(ctx, op, callee, functions)?;
+            let identity = function_for_symbol(callee, functions)?;
             if identity.convention != convention {
                 return Err(TargetAbiError::new(
                     "target ABI: direct transfer convention differs from callee",
@@ -1233,23 +1227,26 @@ fn is_cps_never_caller(ctx: &IrContext, op: OpRef, never: TypeRef) -> Result<boo
     ))
 }
 
+/// The tagged function named by a root-qualified reference.
 fn function_for_symbol(
-    ctx: &IrContext,
-    op: OpRef,
     symbol: Symbol,
-    functions: &HashMap<(OpRef, Symbol), FunctionIdentity>,
+    functions: &HashMap<Symbol, FunctionIdentity>,
 ) -> Result<FunctionIdentity, TargetAbiError> {
-    function_for_symbol_optional(ctx, op, symbol, functions)?
+    function_for_symbol_optional(symbol, functions)
         .ok_or_else(|| TargetAbiError::new(format!("target ABI: unknown callable `{symbol}`")))
 }
 
 fn function_for_symbol_optional(
-    ctx: &IrContext,
-    op: OpRef,
     symbol: Symbol,
-    functions: &HashMap<(OpRef, Symbol), FunctionIdentity>,
-) -> Result<Option<FunctionIdentity>, TargetAbiError> {
-    Ok(functions.get(&(symbol_scope(ctx, op)?, symbol)).copied())
+    functions: &HashMap<Symbol, FunctionIdentity>,
+) -> Option<FunctionIdentity> {
+    functions.get(&symbol).copied()
+}
+
+/// The root-qualified name a definition is referenced by.
+fn defined_function_name(ctx: &IrContext, op: OpRef) -> Result<Symbol, TargetAbiError> {
+    qualified_name(ctx, op)
+        .ok_or_else(|| TargetAbiError::new("target ABI: function definition has no symbol"))
 }
 
 fn validate_constant(
@@ -1370,19 +1367,6 @@ fn validate_environment_slot(
         ));
     }
     Ok(())
-}
-
-fn symbol_scope(ctx: &IrContext, op: OpRef) -> Result<OpRef, TargetAbiError> {
-    let mut current = Some(op);
-    while let Some(candidate) = current {
-        if core::Module::matches(ctx, candidate) {
-            return Ok(candidate);
-        }
-        current = parent_op(ctx, candidate);
-    }
-    Err(TargetAbiError::new(
-        "target ABI: operation has no enclosing module",
-    ))
 }
 
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {

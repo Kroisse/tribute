@@ -6,18 +6,20 @@
 //! recursion), which is a prerequisite for inlining (`inline.rs`) and other
 //! interprocedural transforms.
 //!
-//! Recurses into nested `core.module` operations, qualifying function names
-//! with their module path (e.g. `nested::helper`).
+//! Functions and references use root-qualified names (e.g. `nested::helper`),
+//! as resolved by [`SymbolTable`].
 
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError};
 use crate::context::IrContext;
+use crate::dialect::func;
+use crate::ops::DialectOp;
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
 use crate::symbol::Symbol;
-use crate::types::Attribute;
+use crate::symbol_table::SymbolTable;
 use crate::walk::{WalkAction, walk_region};
 
 /// A function call graph over a module.
@@ -42,21 +44,64 @@ pub struct CallGraph {
 }
 
 /// Build a call graph for `module`, recursing into nested `core.module` ops.
+///
+/// Functions are named by their root-qualified path. A duplicated qualified
+/// name has no entry in `func_ops`, but calls in each of its bodies are still
+/// recorded.
 pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
-    let mut builder = Builder::new();
-    if let Some(body) = module.body(ctx) {
-        builder.analyze_region(ctx, body, &[]);
-    }
-    builder.into_call_graph()
+    call_graph_over(ctx, &SymbolTable::collect(ctx, module))
 }
 
-/// `CallGraph` as an [`Analysis`]: expects `target` to be a `core.module` op
-/// and delegates to [`build_call_graph`].
+fn call_graph_over(ctx: &IrContext, symbols: &SymbolTable) -> CallGraph {
+    let mut graph = CallGraph::default();
+    for (name, ops) in symbols.iter() {
+        if let &[op] = ops
+            && func::Func::matches(ctx, op)
+        {
+            graph.func_ops.insert(name, op);
+        }
+        for &op in ops.iter().filter(|&&op| func::Func::matches(ctx, op)) {
+            for &region in &ctx.op(op).regions {
+                collect_calls(ctx, region, name, &mut graph);
+            }
+        }
+    }
+    graph
+}
+
+/// Record the calls and references in `region` as edges from `caller`.
+/// Nested function definitions record their own edges.
+fn collect_calls(ctx: &IrContext, region: RegionRef, caller: Symbol, graph: &mut CallGraph) {
+    let _ = walk_region::<()>(ctx, region, &mut |op| {
+        if func::Func::matches(ctx, op) {
+            return ControlFlow::Continue(WalkAction::Skip);
+        }
+        let attributes = &ctx.op(op).attributes;
+        if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
+            if let Some(callee) = attributes.get_symbol("callee") {
+                record_call(graph, caller, callee);
+            }
+        } else if func::Constant::matches(ctx, op)
+            && let Some(func_ref) = attributes.get_symbol("func_ref")
+        {
+            graph.edges.entry(caller).or_default().insert(func_ref);
+            graph.has_constant_ref.insert(func_ref);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+}
+
+fn record_call(graph: &mut CallGraph, caller: Symbol, callee: Symbol) {
+    graph.edges.entry(caller).or_default().insert(callee);
+    *graph.call_site_count.entry(callee).or_insert(0) += 1;
+}
+
+/// `CallGraph` as an [`Analysis`] over the [`SymbolTable`] of `target`, which
+/// must be a `core.module` op.
 impl Analysis for CallGraph {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-        let module = Module::new(ctx.ir(), target)
-            .expect("CallGraph analysis target must be a `core.module` op");
-        Ok(build_call_graph(ctx.ir(), module))
+        let symbols = ctx.get::<SymbolTable>(target)?;
+        Ok(call_graph_over(ctx.ir(), &symbols))
     }
 }
 
@@ -97,126 +142,6 @@ pub fn recursive_functions(graph: &CallGraph) -> HashSet<Symbol> {
         }
     }
     result
-}
-
-// =========================================================================
-// Builder
-// =========================================================================
-
-struct Builder {
-    syms: Syms,
-    graph: CallGraph,
-}
-
-impl Builder {
-    fn new() -> Self {
-        Self {
-            syms: Syms::new(),
-            graph: CallGraph::default(),
-        }
-    }
-
-    fn into_call_graph(self) -> CallGraph {
-        self.graph
-    }
-
-    fn analyze_region(&mut self, ctx: &IrContext, region: RegionRef, module_path: &[Symbol]) {
-        let blocks = ctx.region(region).blocks.to_vec();
-        for block in blocks {
-            let ops = ctx.block(block).ops.to_vec();
-            for op in ops {
-                let dialect = ctx.op(op).dialect;
-                let name = ctx.op(op).name;
-
-                // Recurse into nested core.module
-                if dialect == self.syms.dialect_core && name == self.syms.module {
-                    let new_path = self.extend_module_path(ctx, op, module_path);
-                    for &region in &ctx.op(op).regions {
-                        self.analyze_region(ctx, region, &new_path);
-                    }
-                    continue;
-                }
-
-                // Record func.func definitions and walk their bodies
-                if dialect == self.syms.dialect_func
-                    && name == self.syms.func
-                    && let Some(func_name) = self.extract_func_name(ctx, op, module_path)
-                {
-                    self.graph.func_ops.insert(func_name, op);
-                    // Iterate over a snapshot: collect_calls_from_region may mutate
-                    // self.graph, but ctx remains immutably borrowed.
-                    let regions: Vec<RegionRef> = ctx.op(op).regions.iter().copied().collect();
-                    for region in regions {
-                        self.collect_calls_from_region(ctx, region, func_name);
-                    }
-                }
-            }
-        }
-    }
-
-    fn collect_calls_from_region(&mut self, ctx: &IrContext, region: RegionRef, caller: Symbol) {
-        let _ = walk_region::<()>(ctx, region, &mut |op| {
-            let dialect = ctx.op(op).dialect;
-            let name = ctx.op(op).name;
-
-            if dialect == self.syms.dialect_func {
-                if (name == self.syms.call || name == self.syms.tail_call)
-                    && let Some(callee) = self.extract_symbol_attr(ctx, op, &self.syms.callee)
-                {
-                    self.graph.edges.entry(caller).or_default().insert(callee);
-                    *self.graph.call_site_count.entry(callee).or_insert(0) += 1;
-                } else if name == self.syms.constant
-                    && let Some(func_ref) = self.extract_symbol_attr(ctx, op, &self.syms.func_ref)
-                {
-                    self.graph.edges.entry(caller).or_default().insert(func_ref);
-                    self.graph.has_constant_ref.insert(func_ref);
-                }
-            }
-
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-    }
-
-    fn extract_symbol_attr(&self, ctx: &IrContext, op: OpRef, key: &Symbol) -> Option<Symbol> {
-        match ctx.op(op).attributes.get(key)? {
-            Attribute::Symbol(s) => Some(*s),
-            _ => None,
-        }
-    }
-
-    fn extract_func_name(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        module_path: &[Symbol],
-    ) -> Option<Symbol> {
-        let sym_name = self.extract_symbol_attr(ctx, op, &self.syms.sym_name)?;
-        if module_path.is_empty() {
-            return Some(sym_name);
-        }
-        use itertools::Itertools;
-        let qualified = module_path
-            .iter()
-            .chain(std::iter::once(&sym_name))
-            .join("::");
-        Some(Symbol::from_dynamic(&qualified))
-    }
-
-    fn extend_module_path(
-        &self,
-        ctx: &IrContext,
-        op: OpRef,
-        current_path: &[Symbol],
-    ) -> Vec<Symbol> {
-        let nested_name = self.extract_symbol_attr(ctx, op, &self.syms.sym_name);
-        if let Some(n) = nested_name {
-            let mut p = current_path.to_vec();
-            p.push(n);
-            p
-        } else {
-            current_path.to_vec()
-        }
-    }
 }
 
 // =========================================================================
@@ -275,40 +200,6 @@ fn strongconnect(v: Symbol, state: &mut TarjanState, graph: &CallGraph) {
             if w == v {
                 break;
             }
-        }
-    }
-}
-
-// =========================================================================
-// Cached symbols
-// =========================================================================
-
-struct Syms {
-    func: Symbol,
-    call: Symbol,
-    tail_call: Symbol,
-    constant: Symbol,
-    module: Symbol,
-    sym_name: Symbol,
-    callee: Symbol,
-    func_ref: Symbol,
-    dialect_func: Symbol,
-    dialect_core: Symbol,
-}
-
-impl Syms {
-    fn new() -> Self {
-        Self {
-            func: Symbol::new("func"),
-            call: Symbol::new("call"),
-            tail_call: Symbol::new("tail_call"),
-            constant: Symbol::new("constant"),
-            module: Symbol::new("module"),
-            sym_name: Symbol::new("sym_name"),
-            callee: Symbol::new("callee"),
-            func_ref: Symbol::new("func_ref"),
-            dialect_func: Symbol::new("func"),
-            dialect_core: Symbol::new("core"),
         }
     }
 }
@@ -651,5 +542,63 @@ mod tests {
         assert_eq!(ids.len(), 2);
         // Two non-recursive functions → two distinct SCCs
         assert_ne!(ids[&Symbol::new("a")], ids[&Symbol::new("b")]);
+    }
+
+    #[test]
+    fn edges_use_root_qualified_callees_across_nested_modules() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @main() {
+    func.call {callee = @"outer::same"}
+    func.return
+  }
+  core.module @outer {
+    func.func @same() {
+      func.call {callee = @"outer::inner::same"}
+      func.return
+    }
+    core.module @inner {
+      func.func @same() {
+        func.call {callee = @"outer::inner::same"}
+        func.return
+      }
+    }
+  }
+}"#,
+        );
+        let g = build_call_graph(&ctx, module);
+        let outer = Symbol::from_dynamic("outer::same");
+        let inner = Symbol::from_dynamic("outer::inner::same");
+        assert!(g.edges[&Symbol::new("main")].contains(&outer));
+        assert!(g.edges[&outer].contains(&inner));
+        assert_eq!(g.call_site_count[&inner], 2);
+        // Only the innermost function calls itself.
+        assert_eq!(recursive_functions(&g), HashSet::from([inner]));
+    }
+
+    #[test]
+    fn duplicated_qualified_names_have_no_definition() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @twice() {
+    func.call {callee = @leaf}
+    func.return
+  }
+  func.func @twice() {
+    func.return
+  }
+  func.func @leaf() {
+    func.return
+  }
+}"#,
+        );
+        let g = build_call_graph(&ctx, module);
+        assert!(!g.func_ops.contains_key(&Symbol::new("twice")));
+        // Calls in each duplicate body are still recorded.
+        assert_eq!(g.call_site_count[&Symbol::new("leaf")], 1);
     }
 }

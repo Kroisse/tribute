@@ -22,6 +22,7 @@ use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
+use trunk_ir::symbol_table::qualified_name;
 
 use crate::function::{FunctionTranslator, is_nil_type, translate_signature, translate_type};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
@@ -409,7 +410,10 @@ fn emit_module_impl(
     for &func_op in &all_func_ops {
         let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
-        let name_sym = func_wrapped.sym_name(ctx);
+        // References name functions by root-qualified path; a foreign
+        // declaration still links under its own external symbol.
+        let local_name = func_wrapped.sym_name(ctx);
+        let name_sym = qualified_name(ctx, func_op).unwrap_or(local_name);
         let func_type_ref = func_wrapped.r#type(ctx);
 
         let shape = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -425,10 +429,10 @@ fn emit_module_impl(
             CompilationError::type_error(format!("clif.func @{name_sym}: {error}"))
         })?;
 
-        let linker_name = if linkage == Linkage::Local {
-            name_sym.with_str(mangle_native_name)
-        } else {
-            name_sym.to_string()
+        let linker_name = match linkage {
+            Linkage::Local => name_sym.with_str(mangle_native_name),
+            Linkage::Import => local_name.to_string(),
+            _ => name_sym.to_string(),
         };
 
         let func_id = obj_module
@@ -471,7 +475,7 @@ fn emit_module_impl(
     for &func_op in &all_func_ops {
         let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
-        let name_sym = func_wrapped.sym_name(ctx);
+        let name_sym = qualified_name(ctx, func_op).unwrap_or_else(|| func_wrapped.sym_name(ctx));
         let CallableBody::Definition {
             region: func_body, ..
         } = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -854,6 +858,49 @@ mod tests {
             );
             assert_eq!(trunk_ir::printer::print_module(&ctx, module.op()), before);
         }
+    }
+
+    #[test]
+    fn nested_same_named_functions_emit_under_distinct_qualified_names() {
+        use object::{Object, ObjectSymbol};
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+            core.module @left {
+                clif.func {sym_name = @helper, type = clif.func_sig<() -> core.i32>} {
+                    %value = clif.iconst {value = 1} : core.i32
+                    clif.return %value
+                }
+                clif.func {sym_name = @main, type = clif.func_sig<() -> ()>} {
+                    clif.return
+                }
+            }
+            core.module @right {
+                clif.func {sym_name = @helper, type = clif.func_sig<() -> core.i32>} {
+                    %value = clif.iconst {value = 2} : core.i32
+                    clif.return %value
+                }
+            }
+            clif.func {sym_name = @main, type = clif.func_sig<() -> ()>} {
+                %left = clif.call {callee = @"left::helper"} : core.i32
+                %right = clif.call {callee = @"right::helper"} : core.i32
+                clif.call {callee = @"left::main"}
+                clif.return
+            }
+        }"#,
+        );
+        validate_clif_ir(&ctx, module).expect("qualified names are distinct symbols");
+        let bytes = emit_module_to_native(&ctx, module, &[]).expect("native object");
+        let object = object::File::parse(bytes.as_slice()).expect("parse native object");
+        // Only the root `main` is exported; a nested `main` is an ordinary function.
+        let exported_mains: Vec<_> = object
+            .symbols()
+            .filter(|symbol| symbol.is_global() && !symbol.is_undefined())
+            .filter_map(|symbol| symbol.name().ok().map(str::to_owned))
+            .filter(|name| name.ends_with("main"))
+            .collect();
+        assert_eq!(exported_mains.len(), 1, "{exported_mains:?}");
     }
 
     #[test]
