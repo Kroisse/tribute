@@ -134,15 +134,29 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
 
         let contents = data.bytes(ctx).to_vec();
-        let mut data_desc = DataDescription::new();
-        for (offset, function) in data.relocations(ctx) {
-            let end = u64::from(offset) + u64::from(ptr_ty.bytes());
+        let mut relocations = data.relocations(ctx);
+        relocations.sort_by_key(|&(offset, _)| offset);
+        // Each relocation overwrites one pointer-width range, which must fit in
+        // the bytes and not intersect another relocation's range.
+        let mut previous_end = 0;
+        for &(offset, _) in &relocations {
+            let offset = u64::from(offset);
+            let end = offset + u64::from(ptr_ty.bytes());
             if end > contents.len() as u64 {
                 return Err(CompilationError::ir_validation(format!(
                     "clif.data @{symbol}: relocation at offset {offset} exceeds its {} bytes",
                     contents.len()
                 )));
             }
+            if offset < previous_end {
+                return Err(CompilationError::ir_validation(format!(
+                    "clif.data @{symbol}: relocation at offset {offset} overlaps the previous one"
+                )));
+            }
+            previous_end = end;
+        }
+        let mut data_desc = DataDescription::new();
+        for (offset, function) in relocations {
             let func_ref = obj_module.declare_func_in_data(func_ids[&function], &mut data_desc);
             data_desc.write_function_addr(offset, func_ref);
         }
@@ -842,7 +856,11 @@ mod tests {
     fn native_emission_rejects_invalid_data_relocations() {
         for (relocs, expected) in [
             ("[[0, @missing]]", "unknown function @missing"),
-            ("[[4, @helper]]", "exceeds its 8 bytes"),
+            ("[[12, @helper]]", "exceeds its 16 bytes"),
+            (
+                "[[0, @helper], [4, @helper]]",
+                "offset 4 overlaps the previous one",
+            ),
             (
                 "[[0, @helper], [0, @helper]]",
                 "duplicate relocation offset 0",
@@ -857,7 +875,7 @@ mod tests {
   clif.func @helper() -> core.nil {{
     clif.return
   }}
-  clif.data {{sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8, function_relocs = {relocs}}}
+  clif.data {{sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8, function_relocs = {relocs}}}
 }}"#
                 ),
             );

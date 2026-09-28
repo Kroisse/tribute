@@ -172,8 +172,8 @@ data object를 같은 단계에서 `clif.data`로 선언하며, 같은 내용과
 `clif.data`의 선택적 `function_relocs`는 `[offset, @function]` 쌍의 목록이며,
 cranelift-module `DataDescription`의 함수 재배치와 같은 의미를 갖는다. 바이트는
 object의 실제 내용이고, 링커가 각 offset의 포인터 폭 바이트를 해당 함수의 주소로
-덮어쓴다. 각 offset은 서로 달라야 하고 포인터 폭이 바이트 안에 들어가야 하며, 대상은
-모듈에 선언된 함수여야 한다.
+덮어쓴다. 재배치마다 덮어쓰는 포인터 폭 구간은 바이트 안에 들어가야 하고 서로 겹치지
+않아야 하며, 대상은 모듈에 선언된 함수여야 한다.
 
 ### Bodyless 선언의 바인딩
 

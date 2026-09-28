@@ -18,6 +18,8 @@ mod clif {
     /// `function_relocs`, a list of `[offset, @function]` pairs, asks the
     /// linker to write each function's address over the pointer-sized bytes
     /// at its offset, like cranelift-module's `DataDescription::function_relocs`.
+    /// The pointer-width ranges must fit in `bytes` and must not overlap;
+    /// emission checks both against the target pointer width.
     #[verify]
     fn data(
         sym_name: Attr<Symbol>,
