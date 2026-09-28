@@ -3,7 +3,7 @@
 //! This module provides functions for validating and emitting native object files
 //! from TrunkIR modules that have already been lowered to the clif dialect.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{self as cl_ir, InstBuilder, UserFuncName};
@@ -50,7 +50,7 @@ struct RttiEmitInfo {
     /// DataId for the RTTI function pointer table (None if no release functions exist).
     rtti_table_data_id: Option<cranelift_module::DataId>,
     /// Mapping from rtti_idx to the corresponding release function's FuncId.
-    release_functions: HashMap<u32, FuncId>,
+    release_functions: FxHashMap<u32, FuncId>,
     /// Maximum rtti_idx seen (determines table size). 0 if no release functions.
     max_rtti_idx: u32,
 }
@@ -67,13 +67,13 @@ const UNRESOLVED_DYNAMIC_RELEASE_TRAP_CODE: u8 = 2;
 /// then declares `__tribute_deep_release` and the RTTI table.
 fn collect_and_declare_rtti(
     obj_module: &mut ObjectModule,
-    func_ids: &mut HashMap<Symbol, FuncId>,
+    func_ids: &mut FxHashMap<Symbol, FuncId>,
     call_conv: cranelift_codegen::isa::CallConv,
 ) -> CompilationResult<RttiEmitInfo> {
     let ptr_ty = obj_module.target_config().pointer_type();
 
     // Scan func_ids for __tribute_release_<N> functions
-    let mut release_functions: HashMap<u32, FuncId> = HashMap::new();
+    let mut release_functions: FxHashMap<u32, FuncId> = FxHashMap::default();
     let mut max_rtti_idx: u32 = 0;
 
     for (sym, &func_id) in func_ids.iter() {
@@ -121,7 +121,7 @@ fn collect_and_declare_rtti(
 /// Define the RTTI function pointer table and the `__tribute_deep_release` dispatch function.
 fn define_rtti_infrastructure(
     obj_module: &mut ObjectModule,
-    func_ids: &HashMap<Symbol, FuncId>,
+    func_ids: &FxHashMap<Symbol, FuncId>,
     rtti_info: &RttiEmitInfo,
     call_conv: cranelift_codegen::isa::CallConv,
 ) -> CompilationResult<()> {
@@ -388,7 +388,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     let ptr_ty = obj_module.target_config().pointer_type();
 
     // 3. First pass — declare all functions
-    let mut func_ids: HashMap<Symbol, cranelift_module::FuncId> = HashMap::new();
+    let mut func_ids: FxHashMap<Symbol, cranelift_module::FuncId> = FxHashMap::default();
     let all_func_ops = collect_clif_funcs(ctx, module);
 
     for &func_op in &all_func_ops {
@@ -432,7 +432,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     let rtti_info = collect_and_declare_rtti(&mut obj_module, &mut func_ids, call_conv)?;
 
     // 3d. Declare and define the module's read-only data objects
-    let mut data_ids: HashMap<Symbol, cranelift_module::DataId> = HashMap::new();
+    let mut data_ids: FxHashMap<Symbol, cranelift_module::DataId> = FxHashMap::default();
     for data in collect_clif_data(ctx, module) {
         let symbol = data.sym_name(ctx);
         let data_id = obj_module
@@ -478,14 +478,14 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
             cl_ir::Function::with_name_signature(UserFuncName::user(0, func_id.as_u32()), sig);
 
         // Declare all known functions as FuncRefs
-        let mut func_refs: HashMap<Symbol, cl_ir::FuncRef> = HashMap::new();
+        let mut func_refs: FxHashMap<Symbol, cl_ir::FuncRef> = FxHashMap::default();
         for (&sym, &fid) in &func_ids {
             let fref = obj_module.declare_func_in_func(fid, &mut cl_func);
             func_refs.insert(sym, fref);
         }
 
         // Declare all data sections as GlobalValues
-        let mut data_refs: HashMap<Symbol, cl_ir::GlobalValue> = HashMap::new();
+        let mut data_refs: FxHashMap<Symbol, cl_ir::GlobalValue> = FxHashMap::default();
         for (&sym, &did) in &data_ids {
             let gv = obj_module.declare_data_in_func(did, &mut cl_func);
             data_refs.insert(sym, gv);
@@ -692,7 +692,7 @@ fn collect_clif_funcs_from_region(ctx: &IrContext, region: RegionRef, funcs: &mu
 /// with custom allocator implementations.
 fn declare_runtime_functions(
     obj_module: &mut ObjectModule,
-    func_ids: &mut HashMap<Symbol, cranelift_module::FuncId>,
+    func_ids: &mut FxHashMap<Symbol, cranelift_module::FuncId>,
     call_conv: isa::CallConv,
 ) -> CompilationResult<()> {
     let ptr_ty = obj_module.target_config().pointer_type();

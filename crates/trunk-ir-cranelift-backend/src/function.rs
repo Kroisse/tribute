@@ -3,7 +3,7 @@
 //! Translates `clif.*` dialect operations within a single function body
 //! to Cranelift IR instructions using `FunctionBuilder`.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{self as cl_ir, InstBuilder, TrapCode};
@@ -164,13 +164,13 @@ pub(crate) struct FunctionTranslator<'a> {
     ctx: &'a IrContext,
     pub(crate) builder: FunctionBuilder<'a>,
     /// Maps TrunkIR arena values to Cranelift IR values.
-    pub(crate) values: HashMap<ValueRef, cl_ir::Value>,
+    pub(crate) values: FxHashMap<ValueRef, cl_ir::Value>,
     /// Maps function symbols to Cranelift FuncRefs.
-    func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
+    func_refs: &'a FxHashMap<Symbol, cl_ir::FuncRef>,
     /// Maps data symbols to Cranelift GlobalValues.
-    data_refs: &'a HashMap<Symbol, cl_ir::GlobalValue>,
+    data_refs: &'a FxHashMap<Symbol, cl_ir::GlobalValue>,
     /// Maps TrunkIR block refs to Cranelift blocks.
-    pub(crate) block_map: HashMap<BlockRef, cl_ir::Block>,
+    pub(crate) block_map: FxHashMap<BlockRef, cl_ir::Block>,
     /// The platform's ordinary calling convention for non-CPS indirect calls.
     default_call_conv: CallConv,
     /// The platform pointer type (e.g. I64 on 64-bit).
@@ -181,18 +181,18 @@ impl<'a> FunctionTranslator<'a> {
     pub(crate) fn new(
         ctx: &'a IrContext,
         builder: FunctionBuilder<'a>,
-        func_refs: &'a HashMap<Symbol, cl_ir::FuncRef>,
-        data_refs: &'a HashMap<Symbol, cl_ir::GlobalValue>,
+        func_refs: &'a FxHashMap<Symbol, cl_ir::FuncRef>,
+        data_refs: &'a FxHashMap<Symbol, cl_ir::GlobalValue>,
         default_call_conv: CallConv,
         ptr_ty: cl_types::Type,
     ) -> Self {
         Self {
             ctx,
             builder,
-            values: HashMap::new(),
+            values: FxHashMap::default(),
             func_refs,
             data_refs,
-            block_map: HashMap::new(),
+            block_map: FxHashMap::default(),
             default_call_conv,
             ptr_ty,
         }
