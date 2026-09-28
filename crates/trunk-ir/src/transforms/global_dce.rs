@@ -95,17 +95,36 @@ fn run(ctx: &mut IrContext, module: Module, config: &GlobalDceConfig) -> GlobalD
     let graph = build_call_graph(ctx, module);
     let reachable = compute_reachable(&graph, roots);
 
-    let mut removed = Vec::new();
-    for (name, op) in candidates {
-        if !reachable.contains(&name) {
-            removed.push(name);
-            // Erase the unreachable function: `erase_op` clears the operand
-            // use-chains of the func and its body subtree, so dead funcs don't
-            // leave stale uses behind (#710). Func scopes are independent
-            // (SSA), so clearing the body's operand uses cannot affect other
-            // reachable functions.
-            crate::rewrite::erase_op(ctx, op);
+    // A function containing a reachable function definition is kept with it.
+    let mut kept = HashSet::new();
+    for (_, op) in functions().filter(|(name, _)| reachable.contains(name)) {
+        let mut current = Some(op);
+        while let Some(op) = current
+            && op != module.op()
+        {
+            kept.insert(op);
+            current = parent_op(ctx, op);
         }
+    }
+    let dead: Vec<(Symbol, OpRef)> = candidates
+        .into_iter()
+        .filter(|(_, op)| !kept.contains(op))
+        .collect();
+    let dead_ops: HashSet<OpRef> = dead.iter().map(|&(_, op)| op).collect();
+
+    let mut removed = Vec::new();
+    for (name, op) in dead {
+        removed.push(name);
+        // A function inside a dead function goes with its container.
+        if has_ancestor_in(ctx, op, &dead_ops) {
+            continue;
+        }
+        // Erase the unreachable function: `erase_op` clears the operand
+        // use-chains of the func and its body subtree, so dead funcs don't
+        // leave stale uses behind (#710). Func scopes are independent (SSA),
+        // so clearing the body's operand uses cannot affect other reachable
+        // functions.
+        crate::rewrite::erase_op(ctx, op);
     }
 
     GlobalDceResult {
@@ -135,6 +154,18 @@ fn in_nested_module(ctx: &IrContext, module: Module, op: OpRef) -> bool {
             return true;
         }
         current = parent;
+    }
+    false
+}
+
+/// Whether an operation enclosing `op` is in `ops`.
+fn has_ancestor_in(ctx: &IrContext, op: OpRef, ops: &HashSet<OpRef>) -> bool {
+    let mut current = parent_op(ctx, op);
+    while let Some(op) = current {
+        if ops.contains(&op) {
+            return true;
+        }
+        current = parent_op(ctx, op);
     }
     false
 }
@@ -644,5 +675,46 @@ mod tests {
         let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
 
         assert_eq!(result.removed_functions, [Symbol::new("unused")]);
+    }
+
+    #[test]
+    fn keeps_functions_containing_reachable_definitions() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  func.func @main() {
+    func.call {callee = @inner}
+    func.return
+  }
+  func.func @host() {
+    func.func @inner() {
+      func.return
+    }
+    func.return
+  }
+  func.func @dead_host() {
+    func.func @dead_inner() {
+      func.return
+    }
+    func.return
+  }
+}"#,
+        );
+
+        let result = eliminate_dead_functions(&mut ctx, module);
+
+        assert_eq!(
+            HashSet::<Symbol>::from_iter(result.removed_functions),
+            HashSet::from([Symbol::new("dead_host"), Symbol::new("dead_inner")])
+        );
+        assert_eq!(
+            surviving_functions(&ctx, module),
+            HashSet::from([
+                Symbol::new("main"),
+                Symbol::new("host"),
+                Symbol::new("inner")
+            ])
+        );
     }
 }
