@@ -5,7 +5,6 @@
 //! single arena session.
 
 use std::fmt;
-use std::rc::Rc;
 
 use tracing::{error, warn};
 use tribute_core::{CallingConvention, get_calling_convention};
@@ -23,11 +22,9 @@ use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Location, TypeDataBuilder};
 use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
-use super::const_to_wasm::ConstAnalysis;
-use super::io::IoAnalysis;
 use super::type_converter::wasm_type_converter;
 use trunk_ir_wasm_backend::gc_types::EVIDENCE_IDX;
 
@@ -92,7 +89,9 @@ pub fn wasm_emission_ready_target() -> ConversionTarget {
 /// The structured-control boundary check runs first, before any mutation.
 /// The lowering steps then run as passes of one [`PassManager`], so a debug
 /// build verifies IR invariants after every step that changed the IR, and
-/// every step shares `analyses`.
+/// every step shares `analyses`. Each step reads only its input IR: a step
+/// that relies on a module-level resource, such as a data segment, an import,
+/// or linear memory, declares it in the IR.
 pub fn lower_to_wasm(
     ctx: &mut IrContext,
     module: Module,
@@ -101,29 +100,17 @@ pub fn lower_to_wasm(
     trunk_ir_wasm_backend::passes::scf_to_wasm::validate_lowerable_structured_control(
         ctx, module, analyses,
     )?;
-    // Snapshots of the source IR that later steps consume after mutation, such
-    // as data segment offsets. They read only constant and I/O operations,
-    // which closure storage conversion leaves untouched.
-    let const_analysis = Rc::new(super::const_to_wasm::analyze_consts(ctx, module));
-    let io_analysis = Rc::new(IoAnalysis::analyze(
-        ctx,
-        module,
-        const_analysis.total_size(),
-    ));
 
     let core_module =
         core::Module::from_op(ctx, module.op()).expect("Wasm lowering requires a core.module");
-    wasm_lowering_passes(const_analysis, io_analysis).run(ctx, core_module, analyses)?;
+    wasm_lowering_passes().run(ctx, core_module, analyses)?;
 
     verify_wasm_backend_ready(ctx, module)?;
     Ok(())
 }
 
 /// The Wasm lowering steps, in order.
-fn wasm_lowering_passes(
-    const_analysis: Rc<ConstAnalysis>,
-    io_analysis: Rc<IoAnalysis>,
-) -> PassManager {
+fn wasm_lowering_passes() -> PassManager {
     let mut pm = PassManager::new();
     pm.add_pass(pass_fn(
         "convert-closure-storage",
@@ -132,12 +119,9 @@ fn wasm_lowering_passes(
             Ok(())
         },
     ))
-    .add_pass(pass_fn("io-to-wasm", {
-        let io_analysis = io_analysis.clone();
-        move |ctx, m: core::Module, _| {
-            super::io::lower(ctx, m.into(), &io_analysis)?;
-            Ok(())
-        }
+    .add_pass(pass_fn("io-to-wasm", |ctx, m: core::Module, _| {
+        super::io::lower(ctx, m.into())?;
+        Ok(())
     }))
     // Pattern-based lowering (trunk-ir-wasm-backend).
     .add_pass(pass_fn("arith-to-wasm", |ctx, m: core::Module, _| {
@@ -185,13 +169,11 @@ fn wasm_lowering_passes(
     }))
     // Lower constants before adt_to_wasm so string constants can become the
     // ordinary prelude String::Leaf variant.
-    .add_pass(pass_fn("const-to-wasm", {
-        let const_analysis = const_analysis.clone();
-        move |ctx, m: core::Module, _| {
-            super::const_to_wasm::validate_for_wasm(ctx, m.into(), &const_analysis)?;
-            super::const_to_wasm::lower(ctx, m.into(), &const_analysis);
-            Ok(())
-        }
+    .add_pass(pass_fn("const-to-wasm", |ctx, m: core::Module, _| {
+        let const_analysis = super::const_to_wasm::analyze_consts(ctx, m.into());
+        super::const_to_wasm::validate_for_wasm(ctx, m.into(), &const_analysis)?;
+        super::const_to_wasm::lower(ctx, m.into(), &const_analysis);
+        Ok(())
     }))
     // Convert all adt operations, including String::Leaf from const lowering.
     .add_pass(pass_fn("adt-to-wasm", |ctx, m: core::Module, _| {
@@ -215,8 +197,8 @@ fn wasm_lowering_passes(
         Ok(())
     }))
     // Module-level operations via WasmLowerer (in-place).
-    .add_pass(pass_fn("wasm-lowerer", move |ctx, m: core::Module, _| {
-        WasmLowerer::new(&const_analysis, &io_analysis).lower_module(ctx, m.into());
+    .add_pass(pass_fn("wasm-lowerer", |ctx, m: core::Module, _| {
+        WasmLowerer::new().lower_module(ctx, m.into());
         Ok(())
     }));
     pm.with_debug_verifier()
@@ -390,7 +372,6 @@ impl MainExports {
 struct ArenaMemoryPlan {
     has_memory: bool,
     has_exported_memory: bool,
-    needs_memory: bool,
 }
 
 impl ArenaMemoryPlan {
@@ -398,12 +379,7 @@ impl ArenaMemoryPlan {
         Self {
             has_memory: false,
             has_exported_memory: false,
-            needs_memory: false,
         }
-    }
-
-    fn required_pages(&self, end_offset: u32) -> u32 {
-        std::cmp::max(1, end_offset.div_ceil(0x10000))
     }
 }
 
@@ -416,20 +392,18 @@ impl ArenaMemoryPlan {
 /// In the arena version, the lowerer does NOT walk/rebuild the entire IR tree.
 /// Instead it:
 /// 1. Scans module ops to collect metadata (main function info, memory presence)
-/// 2. Inserts preamble ops (imports, memory, globals) at the front of the module
-/// 3. Appends data segment ops and module-level extras (exports, _start function)
-struct WasmLowerer<'a> {
-    const_analysis: &'a ConstAnalysis,
-    io_analysis: &'a IoAnalysis,
+/// 2. Appends module-level extras (exports, _start function)
+///
+/// Imports, memory, and data segments are declared by the steps that need
+/// them; the lowerer only exports what the module already declares.
+struct WasmLowerer {
     memory_plan: ArenaMemoryPlan,
     main_exports: MainExports,
 }
 
-impl<'a> WasmLowerer<'a> {
-    fn new(const_analysis: &'a ConstAnalysis, io_analysis: &'a IoAnalysis) -> Self {
+impl WasmLowerer {
+    fn new() -> Self {
         Self {
-            const_analysis,
-            io_analysis,
             memory_plan: ArenaMemoryPlan::new(),
             main_exports: MainExports::new(),
         }
@@ -448,12 +422,7 @@ impl<'a> WasmLowerer<'a> {
         // Phase 1: Scan existing ops to collect metadata
         self.scan_module_ops(ctx, body);
 
-        // Phase 2: Build and insert preamble ops at the front
-        let first_existing_op = ctx.block(module_block).ops.first().copied();
-        self.insert_preamble_ops(ctx, module_block, first_existing_op, location);
-
-        // Phase 3: Append data segment and extra ops at the end
-        self.append_data_ops(ctx, module_block, location);
+        // Phase 2: Append extra ops at the end
         self.append_extra_ops(ctx, module_block, location);
     }
 
@@ -516,71 +485,6 @@ impl<'a> WasmLowerer<'a> {
         }
     }
 
-    /// Insert preamble ops (imports, memory, globals) before existing module ops.
-    fn insert_preamble_ops(
-        &mut self,
-        ctx: &mut IrContext,
-        module_block: BlockRef,
-        insert_before: Option<OpRef>,
-        location: Location,
-    ) {
-        let mut preamble_ops: Vec<OpRef> = Vec::new();
-
-        if self.io_analysis.needs_fd_write {
-            let i32_ty = intern_type(ctx, "core", "i32");
-            let import_ty = intern_func_type(ctx, vec![i32_ty, i32_ty, i32_ty, i32_ty], i32_ty);
-            let op = wasm_dialect::ImportFunc::operands()
-                .module(Symbol::new("wasi_snapshot_preview1"))
-                .name(Symbol::new("fd_write"))
-                .sym_name(Symbol::new("fd_write"))
-                .r#type(import_ty)
-                .build(ctx, location);
-            preamble_ops.push(op.op_ref());
-        }
-
-        // Check if memory is needed
-        let const_size = self.const_analysis.total_size();
-        let io_size = self.io_analysis.total_size;
-        if const_size > 0 || io_size > 0 {
-            self.memory_plan.needs_memory = true;
-        }
-
-        if self.memory_plan.needs_memory && !self.memory_plan.has_memory {
-            let total_data_size = const_size + io_size;
-            let required_pages = self.memory_plan.required_pages(total_data_size);
-            let op = wasm_dialect::Memory::operands()
-                .min(required_pages)
-                .max(0)
-                .shared(false)
-                .memory64(false)
-                .build(ctx, location);
-            preamble_ops.push(op.op_ref());
-            self.memory_plan.has_memory = true;
-        }
-
-        // Insert all preamble ops before the first existing op
-        for op in preamble_ops {
-            if let Some(before) = insert_before {
-                ctx.insert_op_before(module_block, before, op);
-            } else {
-                ctx.push_op(module_block, op);
-            }
-        }
-    }
-
-    /// Append data segment ops at the end of the module block.
-    fn append_data_ops(&self, ctx: &mut IrContext, module_block: BlockRef, location: Location) {
-        // String and Bytes constants share passive data segments.
-        for (content, _data_idx, _len) in self.const_analysis.allocations.iter() {
-            let op = wasm_dialect::Data::operands()
-                .offset(0)
-                .bytes(Attribute::Bytes(content.as_slice().into()))
-                .passive(true)
-                .build(ctx, location);
-            ctx.push_op(module_block, op.op_ref());
-        }
-    }
-
     /// Append module-level extra ops (exports, _start function).
     fn append_extra_ops(
         &mut self,
@@ -588,10 +492,7 @@ impl<'a> WasmLowerer<'a> {
         module_block: BlockRef,
         location: Location,
     ) {
-        if self.memory_plan.needs_memory
-            && self.memory_plan.has_memory
-            && !self.memory_plan.has_exported_memory
-        {
+        if self.memory_plan.has_memory && !self.memory_plan.has_exported_memory {
             let op = wasm_dialect::ExportMemory::operands()
                 .name("memory".into())
                 .index(0)
@@ -805,18 +706,7 @@ mod tests {
             "core.module @m { wasm.func {sym_name = @main, type = wasm.func_sig<(wasm.arrayref) -> ()>, tribute.calling_convention = 1} {} }",
         );
         let main = module.ops(&ctx)[0];
-        let const_analysis = ConstAnalysis {
-            allocations: vec![],
-            string_enum_ty: None,
-        };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: false,
-            iovec_offset: 0,
-            nwritten_offset: 0,
-            scratch_offset: 0,
-            total_size: 0,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
+        let mut lowerer = WasmLowerer::new();
         lowerer.scan_wasm_func(&ctx, main);
         let evidence = intern_type(&mut ctx, "wasm", "arrayref");
         assert_eq!(lowerer.main_exports.main_param_types, [evidence]);
@@ -848,18 +738,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
-        let const_analysis = ConstAnalysis {
-            allocations: vec![],
-            string_enum_ty: None,
-        };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: false,
-            iovec_offset: 0,
-            nwritten_offset: 0,
-            scratch_offset: 0,
-            total_size: 0,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
+        let mut lowerer = WasmLowerer::new();
         lowerer.main_exports.saw_main = true;
         lowerer.main_exports.main_param_types = vec![evidence_ty];
         lowerer.main_exports.main_convention = CallingConvention::EvidenceDirect;
@@ -897,49 +776,28 @@ mod tests {
             ops: smallvec![],
             parent_region: None,
         });
-        let const_analysis = ConstAnalysis {
-            allocations: vec![],
-            string_enum_ty: None,
-        };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: false,
-            iovec_offset: 0,
-            nwritten_offset: 0,
-            scratch_offset: 0,
-            total_size: 0,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
+        let mut lowerer = WasmLowerer::new();
         lowerer.main_exports.main_convention = CallingConvention::Cps;
 
         lowerer.build_main_args(&mut ctx, body_block, location, i32_ty);
     }
 
     #[test]
-    fn module_lowerer_emits_io_and_passive_data_requirements() {
+    fn module_lowerer_exports_declared_memory() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
+  wasm.memory {min = 1, max = 0, shared = false, memory64 = false}
   func.func @run() -> core.i32 {
     %value = arith.const {value = 1} : core.i32
     func.return %value
   }
 }"#,
         );
-        let const_analysis = ConstAnalysis {
-            allocations: vec![(b"text".to_vec(), 0, 4), (vec![1, 2], 1, 2)],
-            string_enum_ty: None,
-        };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: true,
-            iovec_offset: 4,
-            nwritten_offset: 12,
-            scratch_offset: 16,
-            total_size: 20,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
+        let mut lowerer = WasmLowerer::new();
         let module_block = module.first_block(&ctx).expect("module body block");
-        let placeholder = ctx.block(module_block).ops[0];
+        let placeholder = ctx.block(module_block).ops[1];
 
         lowerer.lower_module(&mut ctx, module);
         trunk_ir::rewrite::erase_op(&mut ctx, placeholder);
@@ -1024,10 +882,8 @@ mod tests {
         ctx.push_op(module_block, memory_func.op_ref());
 
         let output = print_module(&ctx, module.op());
-        assert!(output.contains("wasm.import_func"), "{output}");
-        assert!(output.contains("wasm.memory"), "{output}");
-        assert!(output.contains("wasm.export_memory"), "{output}");
-        assert_eq!(output.matches("wasm.data").count(), 2, "{output}");
+        assert_eq!(output.matches("wasm.memory").count(), 1, "{output}");
+        assert_eq!(output.matches("wasm.export_memory").count(), 1, "{output}");
 
         let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
             .expect("lowered module requirements should emit");
@@ -1086,18 +942,7 @@ mod tests {
             .build(&mut ctx, location);
         ctx.push_op(module_block, main.op_ref());
 
-        let const_analysis = ConstAnalysis {
-            allocations: vec![],
-            string_enum_ty: None,
-        };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: false,
-            iovec_offset: 0,
-            nwritten_offset: 0,
-            scratch_offset: 0,
-            total_size: 0,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
+        let mut lowerer = WasmLowerer::new();
         lowerer.scan_module_ops(&ctx, module.body(&ctx).expect("module body"));
 
         assert!(lowerer.memory_plan.has_memory);
@@ -1116,18 +961,7 @@ mod tests {
     fn module_lowerer_does_not_add_unused_globals_to_an_empty_module() {
         let mut ctx = IrContext::new();
         let module = empty_module_with_block(&mut ctx);
-        let const_analysis = ConstAnalysis {
-            allocations: vec![],
-            string_enum_ty: None,
-        };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: false,
-            iovec_offset: 0,
-            nwritten_offset: 0,
-            scratch_offset: 0,
-            total_size: 0,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
+        let mut lowerer = WasmLowerer::new();
 
         lowerer.lower_module(&mut ctx, module);
 
@@ -1157,18 +991,7 @@ mod tests {
         let module = parse_test_module(&mut ctx, "core.module @test {}");
         check_all_wasm_dialect(&ctx, module);
         debug_func_params(&ctx, module, "test");
-        let const_analysis = ConstAnalysis {
-            allocations: vec![],
-            string_enum_ty: None,
-        };
-        let io_analysis = IoAnalysis {
-            needs_fd_write: false,
-            iovec_offset: 0,
-            nwritten_offset: 0,
-            scratch_offset: 0,
-            total_size: 0,
-        };
-        let mut lowerer = WasmLowerer::new(&const_analysis, &io_analysis);
+        let mut lowerer = WasmLowerer::new();
 
         lowerer.lower_module(&mut ctx, module);
 
@@ -1366,6 +1189,34 @@ mod tests {
         assert!(!output.contains("effect.dispatch_tail"), "{output}");
         assert!(output.contains("__tribute_evidence_lookup"), "{output}");
         assert!(output.contains("wasm.call_indirect"), "{output}");
+    }
+
+    #[test]
+    fn lower_to_wasm_declares_each_module_resource_once() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @run(%newline: core.i1) -> core.nil {
+    %first = adt.bytes_const {value = b"first"} : core.bytes
+    %second = adt.bytes_const {value = b"second"} : core.bytes
+    %again = adt.bytes_const {value = b"first"} : core.bytes
+    %write = tribute_io.write %first, %newline : core.nil
+    %rewrite = tribute_io.write %again, %newline : core.nil
+    func.return
+  }
+}"#,
+        );
+
+        lower_to_wasm(&mut ctx, module, &mut Default::default())
+            .expect("module with output and constants should lower to wasm");
+
+        let output = print_module(&ctx, module.op());
+        assert_eq!(output.matches("wasm.import_func").count(), 1, "{output}");
+        assert_eq!(output.matches("wasm.memory {").count(), 1, "{output}");
+        assert_eq!(output.matches("wasm.export_memory").count(), 1, "{output}");
+        assert_eq!(output.matches("wasm.data").count(), 2, "{output}");
+        assert!(!output.contains("tribute_io.write"), "{output}");
     }
 
     #[test]

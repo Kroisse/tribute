@@ -232,13 +232,23 @@ result matching을 정의한다. Tribute는 다음 경로를 구현한다:
 `wasm.return_call_indirect`는 result local을 만들지 않는다. 일반 source-data
 indirect call만 `wasm.call_indirect`를 유지한다.
 
+### 모듈 수준 자원의 선언
+
+Operation을 낮추는 단계는 그 결과가 의존하는 모듈 수준 자원을 같은 단계에서 IR에
+선언한다. 자원은 passive data segment, host import, linear memory이며, 같은 자원이 이미
+선언되어 있으면 재사용한다. 뒤의 단계와 모듈 조립은 IR에 선언된 자원만 읽는다. 앞
+단계의 입력에서 정한 배치 결정을 IR 밖으로 넘겨받지 않는다. Data index는 모듈 안
+`wasm.data` operation의 순서이다. 모듈 조립은 선언된 memory를 export하고 entrypoint
+export를 추가할 뿐, 자원을 새로 계획하지 않는다.
+
 ### Dynamic basic output
 
 WASI preview1 `fd_write` cannot read a WasmGC `Bytes` array directly because its
 iovec points into linear memory. The initial `tribute_io.write` lowering copies
 the dynamic `Bytes` slice into an instance-local linear scratch buffer, appends
 the optional newline there, and invokes `fd_write` with compiler-owned iovec and
-`nwritten` cells. The lowering grows memory when required and retries partial or
+`nwritten` cells. The lowering declares the `fd_write` import and the linear
+memory that holds these cells, grows memory when required, and retries partial or
 interrupted writes. See [io.md](io.md#wasm-runtime-boundary) for lifetime and
 failure rules.
 

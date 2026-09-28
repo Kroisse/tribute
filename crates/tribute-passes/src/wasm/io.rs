@@ -1,69 +1,49 @@
 //! Lower target-independent output to WASI preview1.
+//!
+//! The lowering declares the module-level resources its write helper relies
+//! on, the `fd_write` import and a linear memory holding the helper's cells,
+//! so module assembly reads them from the IR.
 
 use tribute_ir::dialect::tribute_io;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::{core, func};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
 const WRITE_HELPER: &str = "__tribute_wasi_write";
+const WASI_MODULE: &str = "wasi_snapshot_preview1";
+const FD_WRITE: &str = "fd_write";
 // WASI preview1 `errno::intr`.
 const WASI_ERRNO_INTR: i32 = 27;
 const PAGE_SIZE: i32 = 65_536;
+
+// Linear-memory cells reserved at the start of memory 0: one iovec, the
+// `nwritten` result, then the scratch buffer that grows on demand.
+const IOVEC_OFFSET: i32 = 0;
+const NWRITTEN_OFFSET: i32 = IOVEC_OFFSET + 8;
+const SCRATCH_OFFSET: i32 = NWRITTEN_OFFSET + 4;
 
 const BYTES_DATA_FIELD: u32 = 0;
 const BYTES_OFFSET_FIELD: u32 = 1;
 const BYTES_LEN_FIELD: u32 = 2;
 
-/// Linear-memory cells reserved for dynamic output.
-pub struct IoAnalysis {
-    pub needs_fd_write: bool,
-    pub iovec_offset: u32,
-    pub nwritten_offset: u32,
-    pub scratch_offset: u32,
-    pub total_size: u32,
-}
-
-impl IoAnalysis {
-    pub fn analyze(ctx: &IrContext, module: Module, base_offset: u32) -> Self {
-        let needs_fd_write = module.body(ctx).is_some_and(|body| {
-            let mut found = false;
-            walk_ops(ctx, body, &mut |ctx, op| {
-                found |= tribute_io::Write::from_op(ctx, op).is_ok();
-            });
-            found
+fn has_write(ctx: &IrContext, module: Module) -> bool {
+    module.body(ctx).is_some_and(|body| {
+        let mut found = false;
+        walk_ops(ctx, body, &mut |ctx, op| {
+            found |= tribute_io::Write::from_op(ctx, op).is_ok();
         });
-
-        if !needs_fd_write {
-            return Self {
-                needs_fd_write: false,
-                iovec_offset: base_offset,
-                nwritten_offset: base_offset,
-                scratch_offset: base_offset,
-                total_size: 0,
-            };
-        }
-
-        let iovec_offset = base_offset.div_ceil(4) * 4;
-        let nwritten_offset = iovec_offset + 8;
-        let scratch_offset = nwritten_offset + 4;
-        Self {
-            needs_fd_write: true,
-            iovec_offset,
-            nwritten_offset,
-            scratch_offset,
-            total_size: scratch_offset - base_offset,
-        }
-    }
+        found
+    })
 }
 
 fn walk_ops(ctx: &IrContext, region: RegionRef, callback: &mut impl FnMut(&IrContext, OpRef)) {
@@ -77,16 +57,14 @@ fn walk_ops(ctx: &IrContext, region: RegionRef, callback: &mut impl FnMut(&IrCon
     }
 }
 
-pub fn lower(
-    ctx: &mut IrContext,
-    module: Module,
-    analysis: &IoAnalysis,
-) -> Result<(), ConversionError> {
-    if analysis.needs_fd_write {
-        let helper = build_write_helper(ctx, ctx.op(module.op()).location, analysis);
+pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+    if has_write(ctx, module) {
+        let location = ctx.op(module.op()).location;
         let block = module
             .first_block(ctx)
             .expect("module should have a body block");
+        declare_host_resources(ctx, block, location);
+        let helper = build_write_helper(ctx, location);
         ctx.push_op(block, helper);
     }
 
@@ -95,6 +73,64 @@ pub fn lower(
         .with_target(ConversionTarget::new().illegal_dialect("tribute_io"))
         .apply_partial_conversion(ctx, module, "io-to-wasm")?;
     Ok(())
+}
+
+/// Declare the `fd_write` import and a memory that holds the reserved cells,
+/// at the start of the module, unless the module already declares them.
+fn declare_host_resources(ctx: &mut IrContext, block: trunk_ir::BlockRef, loc: Location) {
+    let mut has_import = false;
+    let mut memory = None;
+    for &op in &ctx.block(block).ops {
+        if let Ok(import) = wasm_dialect::ImportFunc::from_op(ctx, op) {
+            has_import |= import.sym_name(ctx) == Symbol::new(FD_WRITE);
+        } else if let Ok(declared) = wasm_dialect::Memory::from_op(ctx, op) {
+            memory = Some(declared);
+        }
+    }
+
+    let required_pages = (SCRATCH_OFFSET as u32).div_ceil(PAGE_SIZE as u32).max(1);
+    let mut preamble = Vec::new();
+    if !has_import {
+        let i32_ty = simple_type(ctx, "core", "i32");
+        let import_ty = wasm_dialect::func_sig(ctx, [i32_ty; 4], [i32_ty]).as_type_ref();
+        let import = wasm_dialect::ImportFunc::operands()
+            .module(Symbol::new(WASI_MODULE))
+            .name(Symbol::new(FD_WRITE))
+            .sym_name(Symbol::new(FD_WRITE))
+            .r#type(import_ty)
+            .build(ctx, loc);
+        preamble.push(import.op_ref());
+    }
+    match memory {
+        Some(memory) if memory.min(ctx) < required_pages => {
+            ctx.op_mut(memory.op_ref())
+                .attributes
+                .insert(Symbol::new("min"), Attribute::from(required_pages));
+        }
+        Some(_) => {}
+        None => {
+            let memory = wasm_dialect::Memory::operands()
+                .min(required_pages)
+                .max(0)
+                .shared(false)
+                .memory64(false)
+                .build(ctx, loc);
+            preamble.push(memory.op_ref());
+        }
+    }
+
+    match ctx.block(block).ops.first().copied() {
+        Some(first) => {
+            for op in preamble {
+                ctx.insert_op_before(block, first, op);
+            }
+        }
+        None => {
+            for op in preamble {
+                ctx.push_op(block, op);
+            }
+        }
+    }
 }
 
 struct WritePattern;
@@ -118,7 +154,7 @@ impl RewritePattern for WritePattern {
     }
 }
 
-fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis) -> OpRef {
+fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     let i32_ty = simple_type(ctx, "core", "i32");
     let bytes_ty = core::bytes(ctx).as_type_ref();
     let nil_ty = core::nil(ctx).as_type_ref();
@@ -157,7 +193,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
     ctx.push_op(body, total.op_ref());
     trap_if_less(ctx, body, loc, total.result(ctx), len.result(ctx), i32_ty);
 
-    let scratch = i32_const(ctx, body, loc, i32_ty, analysis.scratch_offset as i32);
+    let scratch = i32_const(ctx, body, loc, i32_ty, SCRATCH_OFFSET);
     let end = wasm_dialect::I32Add::operands(scratch, total.result(ctx)).build(ctx, loc);
     ctx.push_op(body, end.op_ref());
     trap_if_less(ctx, body, loc, end.result(ctx), total.result(ctx), i32_ty);
@@ -197,7 +233,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location, analysis: &IoAnalysis)
         .build(ctx, loc);
     ctx.push_op(body, append_newline.op_ref());
 
-    let writes = write_loop(ctx, loc, zero, total.result(ctx), analysis, i32_ty, nil_ty);
+    let writes = write_loop(ctx, loc, zero, total.result(ctx), i32_ty, nil_ty);
     ctx.push_op(body, writes);
     let ret = func::Return::operands([]).build(ctx, loc);
     ctx.push_op(body, ret.op_ref());
@@ -342,7 +378,6 @@ fn write_loop(
     loc: Location,
     init: ValueRef,
     total: ValueRef,
-    analysis: &IoAnalysis,
     i32_ty: TypeRef,
     nil_ty: TypeRef,
 ) -> OpRef {
@@ -362,14 +397,14 @@ fn write_loop(
         .build(ctx, loc);
     ctx.push_op(loop_block, break_if_done.op_ref());
 
-    let scratch = i32_const(ctx, loop_block, loc, i32_ty, analysis.scratch_offset as i32);
+    let scratch = i32_const(ctx, loop_block, loc, i32_ty, SCRATCH_OFFSET);
     let ptr = wasm_dialect::I32Add::operands(scratch, written).build(ctx, loc);
     ctx.push_op(loop_block, ptr.op_ref());
     let remaining = wasm_dialect::I32Sub::operands(total, written)
         .results(i32_ty)
         .build(ctx, loc);
     ctx.push_op(loop_block, remaining.op_ref());
-    let iovec = i32_const(ctx, loop_block, loc, i32_ty, analysis.iovec_offset as i32);
+    let iovec = i32_const(ctx, loop_block, loc, i32_ty, IOVEC_OFFSET);
     let store_ptr = wasm_dialect::I32Store::operands(iovec, ptr.result(ctx))
         .offset(0)
         .align(2)
@@ -385,15 +420,9 @@ fn write_loop(
 
     let stdout = i32_const(ctx, loop_block, loc, i32_ty, 1);
     let one_iovec = i32_const(ctx, loop_block, loc, i32_ty, 1);
-    let nwritten = i32_const(
-        ctx,
-        loop_block,
-        loc,
-        i32_ty,
-        analysis.nwritten_offset as i32,
-    );
+    let nwritten = i32_const(ctx, loop_block, loc, i32_ty, NWRITTEN_OFFSET);
     let call = wasm_dialect::Call::operands([stdout, iovec, one_iovec, nwritten])
-        .callee(Symbol::new("fd_write"))
+        .callee(Symbol::new(FD_WRITE))
         .results([i32_ty])
         .build(ctx, loc);
     ctx.push_op(loop_block, call.op_ref());
@@ -560,5 +589,92 @@ fn block_arg(ty: TypeRef) -> BlockArgData {
     BlockArgData {
         ty,
         attrs: Default::default(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    fn op_names(ctx: &IrContext, module: Module) -> Vec<String> {
+        module
+            .ops(ctx)
+            .into_iter()
+            .map(|op| format!("{}.{}", ctx.op(op).dialect, ctx.op(op).name))
+            .collect()
+    }
+
+    #[test]
+    fn lowering_without_writes_leaves_the_module_unchanged() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main() -> core.nil {
+    func.return
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        lower(&mut ctx, module).expect("module without writes should lower");
+
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn lowering_declares_the_import_and_memory_the_helper_uses() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {
+    %write = tribute_io.write %bytes, %newline : core.nil
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module).expect("write should lower");
+
+        assert_eq!(
+            op_names(&ctx, module),
+            ["wasm.import_func", "wasm.memory", "func.func", "func.func"]
+        );
+        let ops = module.ops(&ctx);
+        let import = wasm_dialect::ImportFunc::from_op(&ctx, ops[0]).expect("import");
+        assert_eq!(import.module(&ctx), Symbol::new(WASI_MODULE));
+        assert_eq!(import.sym_name(&ctx), Symbol::new(FD_WRITE));
+        let memory = wasm_dialect::Memory::from_op(&ctx, ops[1]).expect("memory");
+        assert_eq!(memory.min(&ctx), 1);
+        let helper = func::Func::from_op(&ctx, ops[3]).expect("write helper");
+        assert_eq!(helper.sym_name(&ctx), Symbol::new(WRITE_HELPER));
+    }
+
+    #[test]
+    fn lowering_reuses_declared_import_and_memory() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.import_func {module = @wasi_snapshot_preview1, name = @fd_write, sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}
+  wasm.memory {min = 0, max = 0, shared = false, memory64 = false}
+  func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {
+    %write = tribute_io.write %bytes, %newline : core.nil
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module).expect("write should lower");
+
+        assert_eq!(
+            op_names(&ctx, module),
+            ["wasm.import_func", "wasm.memory", "func.func", "func.func"]
+        );
+        let memory = wasm_dialect::Memory::from_op(&ctx, module.ops(&ctx)[1]).expect("memory");
+        assert_eq!(memory.min(&ctx), 1, "the reserved cells need one page");
     }
 }

@@ -1,13 +1,17 @@
 //! Lower adt.string_const and adt.bytes_const to wasm data segments.
 //!
 //! This pass uses a two-phase approach:
-//! 1. Analysis: Collect all string/bytes constants and allocate data segment offsets
-//! 2. Transform: Replace const operations with wasm ops
+//! 1. Analysis: Collect the distinct string/bytes payloads of the input IR
+//! 2. Transform: Declare a passive `wasm.data` segment for each payload and
+//!    replace const operations with wasm ops that reference it
 //!
-//! The analysis produces a plain struct (no Salsa tracking).
+//! A data index is the position of its segment among the module's `wasm.data`
+//! operations, so later steps read the segments from the IR itself.
 
-use std::collections::HashMap;
+use std::collections::hash_map::Entry;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
+use std::rc::Rc;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -45,51 +49,33 @@ impl std::error::Error for ConstValidationError {}
 
 /// Result of constant analysis.
 pub struct ConstAnalysis {
-    /// Shared passive data allocations: (content, data_idx, length).
-    pub allocations: Vec<(Vec<u8>, u32, u32)>,
+    /// Distinct string/bytes payloads, in first-occurrence order.
+    pub contents: Vec<Vec<u8>>,
     /// Canonical prelude String enum type, when string constants are present.
     pub(crate) string_enum_ty: Option<trunk_ir::TypeRef>,
 }
 
-impl ConstAnalysis {
-    /// Passive data segments do not reserve linear memory.
-    pub fn total_size(&self) -> u32 {
-        0
-    }
-
-    /// Look up the passive data segment for the given content.
-    pub fn data_info_for(&self, content: &[u8]) -> Option<(u32, u32)> {
-        self.allocations
-            .iter()
-            .find(|(data, _, _)| data.as_slice() == content)
-            .map(|(_, data_idx, len)| (*data_idx, *len))
-    }
-}
-
-/// Context for collecting const allocations during analysis.
+/// Context for collecting const payloads during analysis.
 struct ConstCollector {
-    allocations: Vec<(Vec<u8>, u32, u32)>,
-    seen: HashMap<Vec<u8>, usize>,
+    contents: Vec<Vec<u8>>,
+    seen: HashSet<Vec<u8>>,
     has_string_consts: bool,
 }
 
 impl ConstCollector {
     fn new() -> Self {
         Self {
-            allocations: Vec::new(),
-            seen: HashMap::new(),
+            contents: Vec::new(),
+            seen: HashSet::new(),
             has_string_consts: false,
         }
     }
 
     fn collect_content(&mut self, bytes: Vec<u8>) {
-        if self.seen.contains_key(&bytes) {
-            return;
+        if !self.seen.contains(&bytes) {
+            self.seen.insert(bytes.clone());
+            self.contents.push(bytes);
         }
-        let data_idx = self.allocations.len() as u32;
-        let len = bytes.len() as u32;
-        self.seen.insert(bytes.clone(), self.allocations.len());
-        self.allocations.push((bytes, data_idx, len));
     }
 
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
@@ -126,7 +112,7 @@ fn walk_ops_in_region(
     }
 }
 
-/// Analyze a module to collect all string/bytes constants and allocate offsets.
+/// Analyze a module to collect the distinct string/bytes constant payloads.
 pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
     let mut collector = ConstCollector::new();
 
@@ -138,7 +124,7 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> ConstAnalysis {
     }
 
     ConstAnalysis {
-        allocations: collector.allocations,
+        contents: collector.contents,
         string_enum_ty: collector
             .has_string_consts
             .then(|| tribute_ir::metadata::WellKnownTypes::from_module(ctx, module.op()).string)
@@ -185,40 +171,88 @@ pub fn validate_for_wasm(
     result
 }
 
-/// Lower const operations using pre-computed analysis.
+/// Lower const operations using an analysis of the same input IR.
+///
+/// Declares a passive `wasm.data` segment for every payload in `analysis`
+/// that the module does not already carry, then lowers the constants to
+/// reference those segments.
 pub fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
-    let allocations = analysis.allocations.clone();
+    let segments = Rc::new(declare_data_segments(ctx, module, &analysis.contents));
 
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(StringConstPattern::new(
-            allocations.clone(),
+            segments.clone(),
             analysis.string_enum_ty,
         ))
-        .add_pattern(BytesConstPattern::new(allocations));
+        .add_pattern(BytesConstPattern::new(segments));
     applicator.apply_partial(ctx, module);
 }
 
-/// Allocation data: (content, data index, length).
-type Allocations = Vec<(Vec<u8>, u32, u32)>;
+/// Passive data segment index by payload.
+type DataSegments = HashMap<Vec<u8>, u32>;
 
-/// Look up data index and length for given content.
-fn lookup_offset(allocations: &Allocations, content: &[u8]) -> Option<(u32, u32)> {
-    allocations
-        .iter()
-        .find(|(data, _, _)| data.as_slice() == content)
-        .map(|(_, data_idx, len)| (*data_idx, *len))
+/// Map each payload to a passive `wasm.data` segment of the module.
+///
+/// Reuses an existing passive segment with the same bytes and appends a new
+/// one at the end of the module for every other payload. A segment's data
+/// index is its position among the module's `wasm.data` operations.
+fn declare_data_segments(
+    ctx: &mut IrContext,
+    module: Module,
+    contents: &[Vec<u8>],
+) -> DataSegments {
+    let mut segments = DataSegments::new();
+    let Some(module_block) = module.first_block(ctx) else {
+        return segments;
+    };
+
+    let mut next_idx = 0;
+    for &op in ctx.block(module_block).ops.iter() {
+        let Ok(data) = wasm_dialect::Data::from_op(ctx, op) else {
+            continue;
+        };
+        if data.passive(ctx)
+            && let Some(Attribute::Bytes(bytes)) = ctx.op(op).attributes.get("bytes")
+        {
+            segments.entry(bytes.to_vec()).or_insert(next_idx);
+        }
+        next_idx += 1;
+    }
+
+    let location = ctx.op(module.op()).location;
+    for content in contents {
+        let Entry::Vacant(entry) = segments.entry(content.clone()) else {
+            continue;
+        };
+        let op = wasm_dialect::Data::operands()
+            .offset(0)
+            .bytes(Attribute::Bytes(content.as_slice().into()))
+            .passive(true)
+            .build(ctx, location);
+        ctx.push_op(module_block, op.op_ref());
+        entry.insert(next_idx);
+        next_idx += 1;
+    }
+    segments
+}
+
+/// Look up the data index and length of the segment holding `content`.
+fn lookup_segment(segments: &DataSegments, content: &[u8]) -> Option<(u32, u32)> {
+    segments
+        .get(content)
+        .map(|&data_idx| (data_idx, content.len() as u32))
 }
 
 /// Pattern for `adt.string_const` -> `String::Leaf(wasm.bytes_from_data)`.
 struct StringConstPattern {
-    allocations: Allocations,
+    segments: Rc<DataSegments>,
     string_enum_ty: Option<trunk_ir::TypeRef>,
 }
 
 impl StringConstPattern {
-    fn new(allocations: Allocations, string_enum_ty: Option<trunk_ir::TypeRef>) -> Self {
+    fn new(segments: Rc<DataSegments>, string_enum_ty: Option<trunk_ir::TypeRef>) -> Self {
         Self {
-            allocations,
+            segments,
             string_enum_ty,
         }
     }
@@ -238,7 +272,7 @@ impl RewritePattern for StringConstPattern {
         let value_str = string_const.value(ctx);
         let content = value_str.into_bytes();
 
-        let Some((data_idx, len)) = lookup_offset(&self.allocations, &content) else {
+        let Some((data_idx, len)) = lookup_segment(&self.segments, &content) else {
             return false;
         };
         let Some(string_enum_ty) = self.string_enum_ty else {
@@ -271,25 +305,14 @@ impl RewritePattern for StringConstPattern {
     }
 }
 
-/// Bytes allocation data: (content, data_idx, length).
-type BytesAllocations = Vec<(Vec<u8>, u32, u32)>;
-
-/// Look up data_idx and length for given bytes content.
-fn lookup_bytes_info(allocations: &BytesAllocations, content: &[u8]) -> Option<(u32, u32)> {
-    allocations
-        .iter()
-        .find(|(data, _, _)| data.as_slice() == content)
-        .map(|(_, data_idx, len)| (*data_idx, *len))
-}
-
 /// Pattern for `adt.bytes_const` -> `wasm.bytes_from_data`
 struct BytesConstPattern {
-    allocations: BytesAllocations,
+    segments: Rc<DataSegments>,
 }
 
 impl BytesConstPattern {
-    fn new(allocations: BytesAllocations) -> Self {
-        Self { allocations }
+    fn new(segments: Rc<DataSegments>) -> Self {
+        Self { segments }
     }
 }
 
@@ -307,7 +330,7 @@ impl RewritePattern for BytesConstPattern {
         let b = bytes_const.value(ctx);
         let content: Vec<u8> = b.to_vec();
 
-        let Some((data_idx, len)) = lookup_bytes_info(&self.allocations, &content) else {
+        let Some((data_idx, len)) = lookup_segment(&self.segments, &content) else {
             return false;
         };
 
@@ -387,9 +410,7 @@ mod tests {
 
         let analysis = analyze_consts(&ctx, module);
 
-        assert_eq!(analysis.allocations, vec![(b"hello".to_vec(), 0, 5)]);
-        assert_eq!(analysis.data_info_for(b"hello"), Some((0, 5)));
-        assert_eq!(analysis.data_info_for(b"missing"), None);
+        assert_eq!(analysis.contents, vec![b"hello".to_vec()]);
     }
 
     #[test]
@@ -408,8 +429,7 @@ mod tests {
 
         let analysis = analyze_consts(&ctx, module);
 
-        assert_eq!(analysis.allocations, vec![(b"shared".to_vec(), 0, 6)]);
-        assert_eq!(analysis.data_info_for(b"shared"), Some((0, 6)));
+        assert_eq!(analysis.contents, vec![b"shared".to_vec()]);
     }
 
     #[test]
@@ -521,7 +541,7 @@ mod tests {
             &mut missing_data_ctx,
             missing_data_module,
             &ConstAnalysis {
-                allocations: Vec::new(),
+                contents: Vec::new(),
                 string_enum_ty: Some(placeholder_ty),
             },
         );
@@ -536,7 +556,7 @@ mod tests {
             &mut missing_type_ctx,
             missing_type_module,
             &ConstAnalysis {
-                allocations: vec![(b"hello".to_vec(), 0, 5)],
+                contents: vec![b"hello".to_vec()],
                 string_enum_ty: None,
             },
         );
@@ -546,12 +566,107 @@ mod tests {
         );
 
         assert_eq!(
-            StringConstPattern::new(Vec::new(), None).name(),
+            StringConstPattern::new(Rc::default(), None).name(),
             "StringConstPattern"
         );
         assert_eq!(
-            BytesConstPattern::new(Vec::new()).name(),
+            BytesConstPattern::new(Rc::default()).name(),
             "BytesConstPattern"
         );
+    }
+    #[test]
+    fn lowering_declares_one_passive_segment_per_payload() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @main() -> core.nil {
+    %first = adt.bytes_const {value = b"first"} : core.bytes
+    %second = adt.bytes_const {value = b"second"} : core.bytes
+    %again = adt.bytes_const {value = b"first"} : core.bytes
+    wasm.return
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis);
+
+        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        assert_eq!(
+            data_segments(&ctx, module),
+            [b"first".to_vec(), b"second".to_vec()]
+        );
+        assert_eq!(
+            bytes_from_data(&ctx, module),
+            [(0, 5), (1, 6), (0, 5)],
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn lowering_reuses_existing_passive_segments() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.data {offset = 0, bytes = b"active", passive = false}
+  wasm.data {offset = 0, bytes = b"kept", passive = true}
+  wasm.func @main() -> core.nil {
+    %new = adt.bytes_const {value = b"new"} : core.bytes
+    %kept = adt.bytes_const {value = b"kept"} : core.bytes
+    %active = adt.bytes_const {value = b"active"} : core.bytes
+    wasm.return
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis);
+
+        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        assert_eq!(
+            data_segments(&ctx, module),
+            [
+                b"active".to_vec(),
+                b"kept".to_vec(),
+                b"new".to_vec(),
+                b"active".to_vec()
+            ],
+            "{output}"
+        );
+        assert_eq!(
+            bytes_from_data(&ctx, module),
+            [(2, 3), (1, 4), (3, 6)],
+            "{output}"
+        );
+    }
+
+    fn data_segments(ctx: &IrContext, module: Module) -> Vec<Vec<u8>> {
+        module
+            .ops(ctx)
+            .into_iter()
+            .filter(|&op| wasm_dialect::Data::from_op(ctx, op).is_ok())
+            .map(|op| match ctx.op(op).attributes.get("bytes") {
+                Some(Attribute::Bytes(bytes)) => bytes.to_vec(),
+                other => panic!("wasm.data without bytes: {other:?}"),
+            })
+            .collect()
+    }
+
+    fn bytes_from_data(ctx: &IrContext, module: Module) -> Vec<(u32, u32)> {
+        let func = module
+            .ops(ctx)
+            .into_iter()
+            .find(|&op| wasm_dialect::Func::from_op(ctx, op).is_ok())
+            .expect("wasm.func");
+        let body = ctx.op(func).regions[0];
+        let block = ctx.region(body).blocks[0];
+        ctx.block(block)
+            .ops
+            .iter()
+            .filter_map(|&op| wasm_dialect::BytesFromData::from_op(ctx, op).ok())
+            .map(|bytes| (bytes.data_idx(ctx), bytes.len(ctx)))
+            .collect()
     }
 }
