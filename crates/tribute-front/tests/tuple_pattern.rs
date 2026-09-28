@@ -155,3 +155,35 @@ fn test() -> Nat {
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
 }
+
+/// A constructor pattern inside a tuple projects the tuple field at the
+/// layout's field type, not at the constructor's callable type.
+#[salsa_test]
+fn test_tuple_pattern_constructor_element(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+enum Item { Number(Nat), Empty }
+
+fn first(p: #(Item, Nat)) -> Nat {
+    case p {
+        #(Number(x), y) -> x + y
+        _ -> 0
+    }
+}
+"#,
+    );
+
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    for line in ir_text
+        .lines()
+        .filter(|line| line.contains("adt.struct_get"))
+    {
+        assert!(
+            !line.contains("func"),
+            "tuple field projection must not use a callable type: {line}"
+        );
+    }
+    assert_snapshot!(ir_text);
+}

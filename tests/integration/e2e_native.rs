@@ -757,6 +757,40 @@ fn main() {
     );
 }
 
+/// Regression test for #980: a constructor pattern inside a tuple, directly
+/// and nested in a list, projects the tuple field at its layout type.
+#[test]
+fn test_native_tuple_constructor_pattern() {
+    assert_native_output(
+        "tuple_constructor_pattern.trb",
+        r#"
+enum Item { Number(Nat), Empty }
+
+fn first(p: #(Item, Nat)) -> Nat {
+    case p {
+        #(Number(x), y) -> x + y
+        _ -> 0
+    }
+}
+
+fn sum(items: List(#(Item, Nat))) -> Nat {
+    case items {
+        [] -> 0
+        [#(Number(x), y), ..rest] -> x + y + sum(rest)
+        [_, ..rest] -> 100 + sum(rest)
+    }
+}
+
+fn main() {
+    __tribute_print_nat(first(#(Number(1), 2)))
+    __tribute_print_nat(first(#(Empty, 5)))
+    __tribute_print_nat(sum([#(Number(10), 1), #(Empty, 2), #(Number(3), 4)]))
+}
+"#,
+        "3\n0\n118",
+    );
+}
+
 /// Regression test for #548: Bool case expression always took the first branch.
 #[test]
 fn test_native_bool_case() {
