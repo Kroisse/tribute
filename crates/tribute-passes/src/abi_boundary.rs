@@ -9,6 +9,7 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
+use std::rc::Rc;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -244,9 +245,15 @@ fn enclosing_module(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
     }
 }
 
+/// A violation found inside a type, relative to the site that uses the type.
+type TypeViolation = (ViolationKind, String);
+
 struct Verifier<'a> {
     ctx: &'a IrContext,
-    visited_types: HashSet<TypeRef>,
+    /// Violations inside each type, computed once and replayed at every use.
+    type_violations: HashMap<TypeRef, Rc<[TypeViolation]>>,
+    /// Types being computed, to stop recursion through cyclic references.
+    computing: HashSet<TypeRef>,
     violations: Vec<BoundaryViolation>,
 }
 
@@ -254,7 +261,8 @@ impl<'a> Verifier<'a> {
     fn new(ctx: &'a IrContext) -> Self {
         Self {
             ctx,
-            visited_types: HashSet::new(),
+            type_violations: HashMap::new(),
+            computing: HashSet::new(),
             violations: Vec::new(),
         }
     }
@@ -335,21 +343,8 @@ impl<'a> Verifier<'a> {
     }
 
     fn check_attribute_name(&mut self, name: Symbol, op: Option<OpRef>, context: &str) {
-        let name = name.to_string();
-        if FORBIDDEN_ATTRIBUTES.contains(&name.as_str()) {
-            self.report(
-                ViolationKind::ForbiddenAttribute(name),
-                op,
-                context.to_owned(),
-            );
-        } else if name.starts_with(LANGUAGE_ATTRIBUTE_PREFIX)
-            && !PRESERVED_ATTRIBUTES.contains(&name.as_str())
-        {
-            self.report(
-                ViolationKind::UnclassifiedAttribute(name),
-                op,
-                context.to_owned(),
-            );
+        if let Some(kind) = classify_attribute_name(name) {
+            self.report(kind, op, context.to_owned());
         }
     }
 
@@ -365,21 +360,32 @@ impl<'a> Verifier<'a> {
         }
     }
 
+    /// Report every violation inside `ty` at this use site.
     fn check_type(&mut self, ty: TypeRef, op: Option<OpRef>, context: &str) {
-        if !self.visited_types.insert(ty) {
-            return;
+        for (kind, location) in self.type_violations(ty).iter() {
+            self.report(kind.clone(), op, format!("{context}{location}"));
+        }
+    }
+
+    /// Violations inside `ty`, with locations relative to the type.
+    fn type_violations(&mut self, ty: TypeRef) -> Rc<[TypeViolation]> {
+        if let Some(cached) = self.type_violations.get(&ty) {
+            return cached.clone();
+        }
+        if !self.computing.insert(ty) {
+            return Rc::from([]);
         }
         let ctx = self.ctx;
         let data = ctx.get_type(ty);
+        let mut found = Vec::new();
         if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
-            self.report(
+            found.push((
                 ViolationKind::ForbiddenType {
                     dialect: data.dialect.to_string(),
                     name: data.name.to_string(),
                 },
-                op,
-                context.to_owned(),
-            );
+                String::new(),
+            ));
         }
         if let Some(signature) = func::FuncSig::from_type_ref(ctx, ty)
             && signature
@@ -387,16 +393,49 @@ impl<'a> Verifier<'a> {
                 .iter()
                 .any(|&result| core::Never::matches(ctx, result))
         {
-            self.report(ViolationKind::NeverCallableResult, op, context.to_owned());
+            found.push((ViolationKind::NeverCallableResult, String::new()));
         }
         for (name, value) in data.attrs.iter() {
-            let context = format!("{context} type attribute {name}");
-            self.check_attribute_name(*name, op, &context);
-            self.check_attribute(value, op, &context);
+            let location = format!(" type attribute {name}");
+            if let Some(kind) = classify_attribute_name(*name) {
+                found.push((kind, location.clone()));
+            }
+            for nested in attribute_types(value) {
+                for (kind, inner) in self.type_violations(nested).iter() {
+                    found.push((kind.clone(), format!("{location}{inner}")));
+                }
+            }
         }
         for &parameter in data.params.iter() {
-            self.check_type(parameter, op, context);
+            found.extend(self.type_violations(parameter).iter().cloned());
         }
+        self.computing.remove(&ty);
+        let found: Rc<[TypeViolation]> = found.into();
+        self.type_violations.insert(ty, found.clone());
+        found
+    }
+}
+
+/// The violation a language-specific attribute name represents, if any.
+fn classify_attribute_name(name: Symbol) -> Option<ViolationKind> {
+    let name = name.to_string();
+    if FORBIDDEN_ATTRIBUTES.contains(&name.as_str()) {
+        Some(ViolationKind::ForbiddenAttribute(name))
+    } else if name.starts_with(LANGUAGE_ATTRIBUTE_PREFIX)
+        && !PRESERVED_ATTRIBUTES.contains(&name.as_str())
+    {
+        Some(ViolationKind::UnclassifiedAttribute(name))
+    } else {
+        None
+    }
+}
+
+/// Types directly contained in an attribute value, including nested lists.
+fn attribute_types(attribute: &Attribute) -> Vec<TypeRef> {
+    match attribute {
+        Attribute::Type(ty) => vec![*ty],
+        Attribute::List(values) => values.iter().flat_map(attribute_types).collect(),
+        _ => Vec::new(),
     }
 }
 
@@ -617,6 +656,29 @@ mod tests {
                 "tribute.definition.convention".to_owned()
             )]
         );
+    }
+
+    #[test]
+    fn a_shared_type_is_reported_at_every_use() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @first() -> core.never {
+    func.unreachable
+  }
+  func.func @second() -> core.never {
+    func.unreachable
+  }
+}"#,
+        );
+        let sites: Vec<_> = verify_boundary_exit(&ctx, module)
+            .into_iter()
+            .filter(|violation| violation.kind == ViolationKind::NeverCallableResult)
+            .map(|violation| violation.op)
+            .collect();
+        assert_eq!(sites.len(), 2, "{sites:?}");
+        assert_ne!(sites[0], sites[1]);
     }
 
     #[test]
