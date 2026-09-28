@@ -82,6 +82,10 @@ tests and CI.
 ## Building and Running
 
 ```bash
+# Build the native runtime into the development sysroot (target/sysroot).
+# Rerun after changing crates/tribute-runtime.
+cargo xtask runtime
+
 # Build the entire workspace
 cargo build
 
@@ -106,6 +110,12 @@ defaults to `--target native` and accepts these targets:
 
 Use `-o` or `--output` to choose the artifact path. Without it, native removes
 the `.trb` extension and Wasm replaces it with `.wasm`.
+
+Native linking uses the runtime library from a sysroot. The compiler takes
+`--sysroot`, then the `TRIBUTE_SYSROOT` environment variable, then the parent
+of its own executable's directory. Inside this repository, `.cargo/config.toml`
+points `TRIBUTE_SYSROOT` at the `target/sysroot` that `cargo xtask runtime`
+populates. See [the linking design](new-plans/linking.md#runtime-sysroot).
 
 ## Language Examples
 

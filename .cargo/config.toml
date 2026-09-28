@@ -1,0 +1,7 @@
+[alias]
+xtask = "run --package xtask --"
+
+[env]
+# Development sysroot that `cargo xtask runtime` populates. The compiler reads
+# it when linking native executables; an existing value takes precedence.
+TRIBUTE_SYSROOT = { value = "target/sysroot", relative = true }

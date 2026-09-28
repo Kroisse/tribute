@@ -1537,6 +1537,7 @@ dependencies = [
  "tribute-front",
  "tribute-ir",
  "tribute-passes",
+ "tribute-sysroot",
  "trunk-ir",
  "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
@@ -1616,6 +1617,13 @@ dependencies = [
  "smallvec",
  "tribute-rc",
  "zmij",
+]
+
+[[package]]
+name = "tribute-sysroot"
+version = "0.1.0"
+dependencies = [
+ "target-lexicon",
 ]
 
 [[package]]
@@ -1852,6 +1860,15 @@ name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1ebf944e87a7c253233ad6766e082e3cd714b5d03812acc24c318f549614536e"
+
+[[package]]
+name = "xtask"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "serde_json",
+ "tribute-sysroot",
+]
 
 [[package]]
 name = "yansi"

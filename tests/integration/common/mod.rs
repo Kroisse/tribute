@@ -6,9 +6,10 @@ use std::process::{Command, Output, Stdio};
 use ropey::Rope;
 use salsa::Database;
 use tribute::TributeDatabaseImpl;
+use tribute::link::link_native_binary;
 use tribute::pipeline::{
     BorrowedParameterPolicy, CompilationConfig, NativeOptimizationOptions, OptimizationOptions,
-    PairedRcEliminationPolicy, TemporaryBorrowPolicy, compile_to_native_binary, link_native_binary,
+    PairedRcEliminationPolicy, TemporaryBorrowPolicy, compile_to_native_binary,
 };
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
@@ -259,7 +260,7 @@ impl NativeTestBinary {
     fn from_object_bytes(object_bytes: &[u8]) -> Self {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let exec_path = temp_dir.path().join("tribute_test_bin");
-        link_native_binary(object_bytes, &exec_path).unwrap_or_else(|e| {
+        link_native_binary(object_bytes, &exec_path, None).unwrap_or_else(|e| {
             panic!("Linking failed: {e}");
         });
         #[cfg(unix)]

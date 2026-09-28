@@ -71,6 +71,9 @@ jobs:
         with:
           tool: nextest,wasmtime
 
+      - name: Build runtime sysroot
+        run: cargo xtask runtime
+
       - name: Build workspace
         run: cargo build --workspace
 
@@ -102,6 +105,9 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           cache: ${{ matrix.cache }}
+
+      - name: Build runtime sysroot
+        run: cargo xtask runtime
 
       - name: Compile canonical native example
         run: |
@@ -230,6 +236,9 @@ jobs:
         uses: taiki-e/install-action@v2
         with:
           tool: cargo-llvm-cov,nextest,wasmtime
+
+      - name: Build runtime sysroot
+        run: cargo xtask runtime
 
       - name: Generate coverage report
         env:
