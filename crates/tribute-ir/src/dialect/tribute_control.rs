@@ -2420,10 +2420,9 @@ fn validate_callable_origins(
     walk_region_ops(ctx, body, &mut |op| {
         if is_control_op(ctx, op, "func") {
             let data = ctx.op(op);
-            let (Some(symbol), Some(func_sig_type)) = (
-                data.attributes.get_symbol("sym_name"),
-                data.attributes.get_type("type"),
-            ) else {
+            let (Some(symbol), Some(func_sig_type)) =
+                (qualified_name(ctx, op), data.attributes.get_type("type"))
+            else {
                 return;
             };
             let intrinsic_identity = Func::from_op(ctx, op)

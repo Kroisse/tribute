@@ -33,14 +33,15 @@ pub struct SymbolTable {
 }
 
 impl SymbolTable {
-    /// Collect every definition in `module` and its nested modules.
+    /// Collect every definition in `module` and its nested modules. For a
+    /// nested `module`, names still start from the root module.
     ///
     /// Within an [`AnalysisCache`](crate::analysis::AnalysisCache), query the
     /// table as an analysis instead.
     pub fn collect(ctx: &IrContext, module: Module) -> Self {
         let mut table = Self::default();
         if let Some(body) = module.body(ctx) {
-            table.collect_region(ctx, body, &[]);
+            table.collect_region(ctx, body, &module_path(ctx, module.op()));
         }
         table
     }
@@ -126,17 +127,25 @@ impl Analysis for SymbolTable {
 /// `sym_name`.
 pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
     let name = ctx.op(op).attributes.get_symbol(SYM_NAME)?;
+    let path = parent_op(ctx, op).map_or_else(Vec::new, |parent| module_path(ctx, parent));
+    Some(qualify(&path, name))
+}
+
+/// The root-qualified path of the modules enclosing `op`, including `op`
+/// itself if it is a module.
+fn module_path(ctx: &IrContext, op: OpRef) -> Vec<Symbol> {
     let mut path = Vec::new();
-    let mut current = op;
-    while let Some(parent) = parent_op(ctx, current) {
+    let mut current = Some(op);
+    while let Some(op) = current {
+        let parent = parent_op(ctx, op);
         // The root module has no parent and contributes nothing.
-        if core::Module::matches(ctx, parent) && parent_op(ctx, parent).is_some() {
-            path.extend(ctx.op(parent).attributes.get_symbol(SYM_NAME));
+        if core::Module::matches(ctx, op) && parent.is_some() {
+            path.extend(ctx.op(op).attributes.get_symbol(SYM_NAME));
         }
         current = parent;
     }
     path.reverse();
-    Some(qualify(&path, name))
+    path
 }
 
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
@@ -188,6 +197,24 @@ mod tests {
         assert_eq!(table.resolve(Symbol::new("same")), None);
         assert!(table.duplicates().is_empty());
         assert_eq!(table.definitions_of(Symbol::new("same")), &[]);
+    }
+
+    #[test]
+    fn nested_module_targets_keep_root_qualified_names() {
+        let mut ctx = IrContext::new();
+        let root = parse_test_module(&mut ctx, NESTED);
+        let outer = root
+            .ops(&ctx)
+            .into_iter()
+            .find_map(|op| Module::new(&ctx, op))
+            .expect("outer module");
+        let table = SymbolTable::collect(&ctx, outer);
+
+        for (name, op) in table.all_definitions() {
+            assert_eq!(qualified_name(&ctx, op), Some(name));
+        }
+        assert!(table.resolve(Symbol::from_dynamic("outer::same")).is_some());
+        assert!(table.resolve(Symbol::new("same")).is_none());
     }
 
     #[test]
