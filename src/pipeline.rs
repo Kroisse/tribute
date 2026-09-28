@@ -1247,14 +1247,12 @@ fn prepare_module_to_native(
         trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module, &mut analyses);
     }
 
-    // Phase 1 - Lower func dialect to clif dialect
-    let ownership_plan;
-    let func_lowering;
+    // Phase 1 - Plan ownership and RTTI, then lower func dialect to clif dialect
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         let plan_options = native_ownership_plan_options(stop_after, optimizations);
-        ownership_plan = tribute_passes::native::ownership_plan::build_native_ownership_plan(
+        let ownership_plan = tribute_passes::native::ownership_plan::build_native_ownership_plan(
             ctx,
             module,
             plan_options,
@@ -1267,8 +1265,15 @@ fn prepare_module_to_native(
             .map_err(|error| {
                 trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
             })?;
-        func_lowering =
-            func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
+        // Record the planned RTTI layouts in the IR, then adapt semantic
+        // closure allocations and their declaration to the native layout.
+        tribute_passes::native::rtti::declare_rtti_layouts(
+            ctx,
+            module,
+            ownership_plan.rtti_types(),
+        );
+        tribute_passes::native::adapt_closure_layout::lower(ctx, module);
+        func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
     // Phase 1.5 - Lower cf dialect to clif dialect
@@ -1282,20 +1287,11 @@ fn prepare_module_to_native(
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        let rtti_plan = ownership_plan
-            .remap_rtti_types(ctx, module, func_lowering.rtti_layout_rewrites())
-            .map_err(|error| {
-                trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
-            })?;
-        let rtti_map =
-            tribute_passes::native::rtti::generate_rtti(ctx, module, &type_converter, &rtti_plan);
-        tribute_passes::native::adt_rc_header::lower(
-            ctx,
-            module,
-            type_converter,
-            &rtti_map.type_to_idx,
-        )
-        .map_err(native_conversion_failure)?;
+        tribute_passes::native::rtti::generate_rtti(ctx, module, &type_converter).map_err(
+            |error| trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string()),
+        )?;
+        tribute_passes::native::adt_rc_header::lower(ctx, module, type_converter)
+            .map_err(native_conversion_failure)?;
     }
 
     // Phase 2 - Lower ADT struct access operations to clif dialect

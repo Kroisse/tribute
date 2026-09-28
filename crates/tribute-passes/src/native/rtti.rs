@@ -1,9 +1,10 @@
 //! RTTI (Runtime Type Information) pass for the native backend.
 //!
-//! This pass consumes the validated typed ownership plan, assigns each planned
-//! allocation type a unique `rtti_idx`, and generates per-type release
-//! functions that recursively release typed managed-reference fields before
-//! deallocating the aggregate itself.
+//! Native ownership planning declares each planned allocation type with its
+//! `rtti_idx` and managed fields as a `tribute_rtti.layout` operation
+//! ([`declare_rtti_layouts`]). This pass reads those declarations and
+//! generates per-type release functions that recursively release typed
+//! managed-reference fields before deallocating the aggregate itself.
 //!
 //! ## RTTI Index Layout
 //!
@@ -22,10 +23,11 @@
 //!
 //! ## Pipeline Position
 //!
-//! Runs before `adt_to_clif` (Phase 1.9) so that `adt_to_clif` can use the
-//! `RttiMap` to store correct `rtti_idx` values in allocation headers.
+//! Runs before `adt_rc_header` (Phase 1.95), which stores the declared
+//! `rtti_idx` values in allocation headers and then erases the declarations.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::ops::ControlFlow;
 
 use trunk_ir::Symbol;
 use trunk_ir::TypeDataBuilder;
@@ -33,7 +35,7 @@ use trunk_ir::adt_layout::{
     compute_enum_layout, compute_struct_layout, get_enum_variants, get_struct_fields,
 };
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::clif;
+use trunk_ir::dialect::{adt, clif};
 use trunk_ir::location::Span;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::{Module, TypeConverter};
@@ -41,9 +43,10 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
 use trunk_ir::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
-use tribute_ir::dialect::tribute_rt;
+use tribute_ir::dialect::{tribute_rt, tribute_rtti};
 
 use super::ownership_plan::{ManagedFieldBitmap, RttiTypePlan};
+use trunk_ir::walk::{WalkAction, walk_region};
 
 /// Commonly used CLIF primitive types, pre-interned for convenience.
 struct ClifTypes {
@@ -88,60 +91,115 @@ pub const RELEASE_FN_PREFIX: &str = "__tribute_release_";
 /// Name of the runtime deallocation function.
 const DEALLOC_FN: &str = "__tribute_dealloc";
 
-/// Mapping from TypeRef to RTTI indices.
-#[derive(Debug, Clone, Default)]
-pub struct RttiMap {
-    pub type_to_idx: HashMap<TypeRef, u32>,
-    next_idx: u32,
-}
+/// A native RTTI declaration that contradicts the module it declares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RttiError(String);
 
-impl RttiMap {
-    pub fn new() -> Self {
-        Self {
-            type_to_idx: HashMap::new(),
-            next_idx: RTTI_USER_START,
-        }
-    }
-
-    pub fn get_or_insert(&mut self, ty: TypeRef) -> u32 {
-        if let Some(&idx) = self.type_to_idx.get(&ty) {
-            return idx;
-        }
-        let idx = self.next_idx;
-        self.next_idx += 1;
-        self.type_to_idx.insert(ty, idx);
-        idx
-    }
-
-    pub fn get(&self, ty: &TypeRef) -> Option<u32> {
-        self.type_to_idx.get(ty).copied()
+impl std::fmt::Display for RttiError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "native RTTI layout declarations: {}", self.0)
     }
 }
 
-/// Consume the typed RTTI plan, assign indices, and generate release functions.
+impl std::error::Error for RttiError {}
+
+/// Declare the planned RTTI layouts as `tribute_rtti.layout` operations.
+///
+/// Each layout receives the index `RTTI_USER_START` plus its position in the
+/// plan, which keeps the plan's allocation order.
+pub fn declare_rtti_layouts(ctx: &mut IrContext, module: Module, rtti_types: &[RttiTypePlan]) {
+    let Some(module_block) = module.first_block(ctx) else {
+        return;
+    };
+    let location = ctx.op(module.op()).location;
+    for (position, entry) in rtti_types.iter().enumerate() {
+        let index = RTTI_USER_START + u32::try_from(position).expect("RTTI index fits u32");
+        let layout = tribute_rtti::Layout::declare(ctx, location, entry.ty, index, &entry.fields);
+        ctx.push_op(module_block, layout.op_ref());
+    }
+}
+
+/// The `tribute_rtti.layout` declarations of a module, in module order.
+pub fn declared_rtti_layouts(ctx: &IrContext, module: Module) -> Vec<tribute_rtti::Layout> {
+    module
+        .ops(ctx)
+        .into_iter()
+        .filter_map(|op| tribute_rtti::Layout::from_op(ctx, op).ok())
+        .collect()
+}
+
+/// The declared RTTI index of each allocation layout.
+pub fn declared_rtti_indices(ctx: &IrContext, module: Module) -> HashMap<TypeRef, u32> {
+    declared_rtti_layouts(ctx, module)
+        .into_iter()
+        .map(|layout| (layout.r#type(ctx), layout.index(ctx)))
+        .collect()
+}
+
+/// Check that the declarations name each allocation layout of the module
+/// exactly once, under distinct user indices.
+fn validate_declarations(
+    ctx: &IrContext,
+    module: Module,
+    layouts: &[tribute_rtti::Layout],
+) -> Result<(), RttiError> {
+    let mut declared = HashSet::new();
+    let mut indices = HashSet::new();
+    for layout in layouts {
+        if !declared.insert(layout.r#type(ctx)) {
+            return Err(RttiError("a layout is declared more than once".into()));
+        }
+        let index = layout.index(ctx);
+        if index < RTTI_USER_START || !indices.insert(index) {
+            return Err(RttiError(format!(
+                "index {index} is reserved or declared more than once"
+            )));
+        }
+    }
+
+    let mut allocated = HashSet::new();
+    if let Some(body) = module.body(ctx) {
+        let _ = walk_region::<()>(ctx, body, &mut |op| {
+            let ty = adt::StructNew::from_op(ctx, op)
+                .ok()
+                .map(|new| new.r#type(ctx))
+                .or_else(|| {
+                    adt::VariantNew::from_op(ctx, op)
+                        .ok()
+                        .map(|new| new.r#type(ctx))
+                });
+            if let Some(ty) = ty {
+                allocated.insert(ty);
+            }
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+    }
+    if allocated != declared {
+        return Err(RttiError(
+            "allocation layout identities differ from the declared layouts".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Generate a release function for every declared RTTI layout and every used
+/// primitive slot.
 pub fn generate_rtti(
     ctx: &mut IrContext,
     module: Module,
     type_converter: &TypeConverter,
-    rtti_types: &[RttiTypePlan],
-) -> RttiMap {
-    let mut rtti_map = RttiMap::new();
+) -> Result<(), RttiError> {
+    let mut layouts = declared_rtti_layouts(ctx, module);
+    validate_declarations(ctx, module, &layouts)?;
     let primitive_releases = primitive_release_entries(ctx, module);
 
-    // The allocation order and managed-field classification were validated
-    // while semantic types were intact. RTTI must not rediscover either from
-    // converted pointer shape.
-    for entry in rtti_types {
-        rtti_map.get_or_insert(entry.ty);
-    }
-
-    if rtti_map.type_to_idx.is_empty() && primitive_releases.is_empty() {
-        return rtti_map;
+    if layouts.is_empty() && primitive_releases.is_empty() {
+        return Ok(());
     }
 
     // Phase 2: Generate per-type release functions and append to module
     let Some(module_block) = module.first_block(ctx) else {
-        return rtti_map;
+        return Ok(());
     };
 
     let loc = Location::new(ctx.intern_path("<rtti>".to_string()), Span::new(0, 0));
@@ -156,19 +214,12 @@ pub fn generate_rtti(
     }
 
     // Sort by rtti_idx for deterministic output
-    let mut entries: Vec<_> = rtti_map
-        .type_to_idx
-        .iter()
-        .map(|(&ty, &idx)| (ty, idx))
-        .collect();
-    entries.sort_by_key(|(_, idx)| *idx);
+    layouts.sort_by_key(|layout| layout.index(ctx));
 
-    for (ty, rtti_idx) in entries {
-        let field_plan = rtti_types
-            .iter()
-            .find(|entry| entry.ty == ty)
-            .expect("RTTI map was built from ownership plan");
-        let func_op = match &field_plan.fields {
+    for layout in layouts {
+        let ty = layout.r#type(ctx);
+        let rtti_idx = layout.index(ctx);
+        let func_op = match &layout.managed_fields(ctx) {
             ManagedFieldBitmap::Enum(fields) => {
                 generate_release_function_for_enum(ctx, ty, rtti_idx, type_converter, fields, loc)
             }
@@ -179,7 +230,7 @@ pub fn generate_rtti(
         ctx.push_op(module_block, func_op);
     }
 
-    rtti_map
+    Ok(())
 }
 
 /// Find primitive boxing operations while their semantic operation identity is
@@ -278,9 +329,9 @@ fn generate_release_function_for_struct(
     loc: Location,
 ) -> OpRef {
     let fields = get_struct_fields(ctx, struct_ty)
-        .expect("struct type registered in RttiMap must have fields");
+        .expect("struct type declared as an RTTI layout must have fields");
     let layout = compute_struct_layout(ctx, struct_ty, type_converter)
-        .expect("struct type registered in RttiMap must have a valid layout");
+        .expect("struct type declared as an RTTI layout must have a valid layout");
 
     let tys = ClifTypes::intern(ctx);
     let ptr_ty = tys.ptr;
@@ -527,7 +578,7 @@ fn generate_release_function_for_enum(
     loc: Location,
 ) -> OpRef {
     let layout = compute_enum_layout(ctx, enum_ty, type_converter)
-        .expect("enum type registered in RttiMap must have a valid layout");
+        .expect("enum type declared as an RTTI layout must have a valid layout");
     let variants = get_enum_variants(ctx, enum_ty).unwrap_or_default();
 
     let tys = ClifTypes::intern(ctx);
@@ -801,7 +852,7 @@ mod tests {
     use trunk_ir::rewrite::Module;
     use trunk_ir::types::Attribute;
 
-    fn rtti_plan(ctx: &IrContext, module: Module) -> Vec<RttiTypePlan> {
+    fn declare_planned_layouts(ctx: &mut IrContext, module: Module) {
         let plan = crate::native::ownership_plan::build_native_ownership_plan(
             ctx,
             module,
@@ -809,8 +860,7 @@ mod tests {
             &mut Default::default(),
         )
         .expect("typed ownership plan");
-        plan.remap_rtti_types(ctx, module, &[])
-            .expect("exact RTTI identities")
+        declare_rtti_layouts(ctx, module, plan.rtti_types());
     }
 
     fn test_ctx() -> (IrContext, Location) {
@@ -905,16 +955,36 @@ mod tests {
     }
 
     #[test]
-    fn test_rtti_map_assignment() {
-        let mut ctx = IrContext::new();
-        let ty1 = intern_ty(&mut ctx, "test", "t1");
-        let ty2 = intern_ty(&mut ctx, "test", "t2");
+    fn declarations_receive_user_indices_in_plan_order() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty)]);
+        let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty]);
 
-        let mut rtti = RttiMap::new();
-        assert_eq!(rtti.get_or_insert(ty1), 32);
-        assert_eq!(rtti.get_or_insert(ty2), 33);
-        // Idempotent
-        assert_eq!(rtti.get_or_insert(ty1), 32);
+        declare_planned_layouts(&mut ctx, module);
+
+        assert_eq!(
+            declared_rtti_indices(&ctx, module),
+            HashMap::from([(point_ty, RTTI_USER_START)])
+        );
+    }
+
+    #[test]
+    fn generation_rejects_an_undeclared_allocation_layout() {
+        let (mut ctx, loc) = test_ctx();
+        let i32_ty = intern_ty(&mut ctx, "core", "i32");
+        let point_ty = make_struct_type(&mut ctx, &[("x", i32_ty)]);
+        let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty]);
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
+
+        let error = generate_rtti(&mut ctx, module, &tc).expect_err("undeclared layout");
+
+        assert!(
+            error
+                .to_string()
+                .contains("differ from the declared layouts"),
+            "{error}"
+        );
     }
 
     #[test]
@@ -932,9 +1002,9 @@ mod tests {
 }"#;
         let module = trunk_ir::parser::parse_test_module(&mut ctx, ir);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let plan = rtti_plan(&ctx, module);
-        let rtti = generate_rtti(&mut ctx, module, &tc, &plan);
-        assert!(rtti.type_to_idx.is_empty());
+        declare_planned_layouts(&mut ctx, module);
+        generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
+        assert!(declared_rtti_indices(&ctx, module).is_empty());
     }
 
     #[test]
@@ -949,9 +1019,9 @@ mod tests {
 }"#;
         let module = trunk_ir::parser::parse_test_module(&mut ctx, ir);
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let plan = rtti_plan(&ctx, module);
-        let rtti = generate_rtti(&mut ctx, module, &tc, &plan);
-        assert!(rtti.type_to_idx.is_empty());
+        declare_planned_layouts(&mut ctx, module);
+        generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
+        assert!(declared_rtti_indices(&ctx, module).is_empty());
 
         let output = print_module(&ctx, module.op());
         let int_release = output
@@ -978,8 +1048,8 @@ mod tests {
         let module = build_struct_new_module(&mut ctx, loc, point_ty, &[i32_ty, i32_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let plan = rtti_plan(&ctx, module);
-        let _rtti = generate_rtti(&mut ctx, module, &tc, &plan);
+        declare_planned_layouts(&mut ctx, module);
+        generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         let output = print_module(&ctx, module.op());
         insta::assert_snapshot!(output);
@@ -996,8 +1066,8 @@ mod tests {
         let module = build_struct_new_module(&mut ctx, loc, node_ty, &[i32_ty, managed_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let plan = rtti_plan(&ctx, module);
-        let _rtti = generate_rtti(&mut ctx, module, &tc, &plan);
+        declare_planned_layouts(&mut ctx, module);
+        generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         let output = print_module(&ctx, module.op());
         insta::assert_snapshot!(output);
@@ -1094,17 +1164,18 @@ mod tests {
         let module = Module::new(&ctx, module_op).expect("valid");
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let plan = rtti_plan(&ctx, module);
-        let rtti = generate_rtti(&mut ctx, module, &tc, &plan);
+        declare_planned_layouts(&mut ctx, module);
+        generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         // Both struct types should be registered
-        assert!(rtti.type_to_idx.contains_key(&point_ty));
-        assert!(rtti.type_to_idx.contains_key(&node_ty));
+        let indices = declared_rtti_indices(&ctx, module);
+        assert!(indices.contains_key(&point_ty));
+        assert!(indices.contains_key(&node_ty));
 
         // Should generate both release functions
         let output = print_module(&ctx, module.op());
-        let point_idx = rtti.type_to_idx[&point_ty];
-        let node_idx = rtti.type_to_idx[&node_ty];
+        let point_idx = indices[&point_ty];
+        let node_idx = indices[&node_ty];
         assert!(output.contains(&format!("__tribute_release_{point_idx}")));
         assert!(output.contains(&format!("__tribute_release_{node_idx}")));
     }
@@ -1120,8 +1191,8 @@ mod tests {
         let module = build_struct_new_module(&mut ctx, loc, closure_ty, &[ptr_ty, managed_ty]);
 
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
-        let plan = rtti_plan(&ctx, module);
-        let _rtti = generate_rtti(&mut ctx, module, &tc, &plan);
+        declare_planned_layouts(&mut ctx, module);
+        generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         let output = print_module(&ctx, module.op());
         // The release function should only release the env field (not func_ptr)
