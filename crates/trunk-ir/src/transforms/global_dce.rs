@@ -51,22 +51,17 @@ pub struct GlobalDceResult {
 }
 
 /// Eliminate unreachable functions from a module using default configuration.
-pub fn eliminate_dead_functions(ctx: &mut IrContext, module: Module) -> GlobalDceResult {
-    eliminate_dead_functions_with_config(ctx, module, GlobalDceConfig::default())
-}
-
-/// Eliminate unreachable functions with custom configuration.
-pub fn eliminate_dead_functions_with_config(
+pub fn eliminate_dead_functions(
     ctx: &mut IrContext,
     module: Module,
-    config: GlobalDceConfig,
+    analyses: &mut AnalysisCache,
 ) -> GlobalDceResult {
-    eliminate_dead_functions_with_analyses(ctx, module, config, &mut AnalysisCache::new())
+    eliminate_dead_functions_with_config(ctx, module, GlobalDceConfig::default(), analyses)
 }
 
-/// Like [`eliminate_dead_functions_with_config`], reusing the
+/// Eliminate unreachable functions with custom configuration, using the
 /// [`SymbolTable`] and [`CallGraph`] cached in `analyses`.
-pub fn eliminate_dead_functions_with_analyses(
+pub fn eliminate_dead_functions_with_config(
     ctx: &mut IrContext,
     module: Module,
     config: GlobalDceConfig,
@@ -331,7 +326,7 @@ mod tests {
         let unused = build_simple_func(&mut ctx, loc, "unused");
         let module = build_module(&mut ctx, loc, vec![main, unused]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(result.removed_count, 1);
         assert_eq!(count_funcs(&ctx, module), 1);
@@ -344,7 +339,7 @@ mod tests {
         let main = build_func_with_call(&mut ctx, loc, "main", "helper");
         let module = build_module(&mut ctx, loc, vec![helper, main]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(result.removed_count, 0);
         assert_eq!(count_funcs(&ctx, module), 2);
@@ -359,7 +354,7 @@ mod tests {
         let unreachable = build_simple_func(&mut ctx, loc, "unreachable");
         let module = build_module(&mut ctx, loc, vec![leaf, middle, main, unreachable]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(result.removed_count, 1);
         assert_eq!(count_funcs(&ctx, module), 3);
@@ -400,7 +395,7 @@ mod tests {
 
         let module = build_module(&mut ctx, loc, vec![callback, main]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(result.removed_count, 0);
     }
@@ -411,7 +406,7 @@ mod tests {
         let start = build_simple_func(&mut ctx, loc, "_start");
         let module = build_module(&mut ctx, loc, vec![start]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(result.removed_count, 0);
     }
@@ -426,7 +421,12 @@ mod tests {
             extra_entry_points: vec!["custom_init".to_string()],
             recursive: true,
         };
-        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+        let result = eliminate_dead_functions_with_config(
+            &mut ctx,
+            module,
+            config,
+            &mut AnalysisCache::new(),
+        );
 
         assert_eq!(result.removed_count, 0);
     }
@@ -447,7 +447,7 @@ mod tests {
 
         let module = build_module(&mut ctx, loc, vec![exported, export_op, unused]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(result.removed_count, 1); // Only unused_func removed
     }
@@ -480,7 +480,7 @@ mod tests {
 
         let module = build_module(&mut ctx, loc, vec![main, extern_op]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(result.removed_count, 0);
         assert_eq!(count_funcs(&ctx, module), 2);
@@ -526,7 +526,7 @@ mod tests {
 
         let module = build_module(&mut ctx, loc, vec![main, helper, extern_op]);
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         // extern_fn is preserved (abi) and helper is reachable from extern_fn
         assert_eq!(result.removed_count, 0);
@@ -570,7 +570,12 @@ mod tests {
             extra_entry_points: vec![],
             recursive: true,
         };
-        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+        let result = eliminate_dead_functions_with_config(
+            &mut ctx,
+            module,
+            config,
+            &mut AnalysisCache::new(),
+        );
 
         assert_eq!(result.removed_count, 2);
         assert_eq!(
@@ -615,7 +620,12 @@ mod tests {
             extra_entry_points: vec![],
             recursive: false,
         };
-        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+        let result = eliminate_dead_functions_with_config(
+            &mut ctx,
+            module,
+            config,
+            &mut AnalysisCache::new(),
+        );
 
         // With recursive=false, nested module is not analyzed
         assert_eq!(result.removed_count, 0);
@@ -652,7 +662,7 @@ mod tests {
 }"#,
         );
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(result.removed_functions, [Symbol::from_dynamic("b::same")]);
         assert_eq!(
@@ -689,7 +699,12 @@ mod tests {
             extra_entry_points: vec![],
             recursive: false,
         };
-        let result = eliminate_dead_functions_with_config(&mut ctx, module, config);
+        let result = eliminate_dead_functions_with_config(
+            &mut ctx,
+            module,
+            config,
+            &mut AnalysisCache::new(),
+        );
 
         assert_eq!(result.removed_functions, [Symbol::new("unused")]);
     }
@@ -719,7 +734,7 @@ mod tests {
 }"#,
         );
 
-        let result = eliminate_dead_functions(&mut ctx, module);
+        let result = eliminate_dead_functions(&mut ctx, module, &mut AnalysisCache::new());
 
         assert_eq!(
             HashSet::<Symbol>::from_iter(result.removed_functions),

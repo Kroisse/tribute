@@ -1017,12 +1017,7 @@ fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
 /// Run inlining + DCE + cast materialization (shared cleanup after all lowering).
 ///
 fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCache) {
-    trunk_ir::transforms::global_dce::eliminate_dead_functions_with_analyses(
-        ctx,
-        m,
-        Default::default(),
-        analyses,
-    );
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, analyses);
     if let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) {
         let mut pm = PassManager::new();
         pm.nest::<func_dialect::Func>()
@@ -3350,6 +3345,7 @@ fn main() {}
                     logical.module,
                     &logical.operation_declarations,
                     &logical.compiler_intrinsics,
+                    &mut AnalysisCache::new(),
                 )
                 .unwrap();
             }
@@ -3474,6 +3470,7 @@ fn main() {}
                     logical.module,
                     &logical.operation_declarations,
                     &logical.compiler_intrinsics,
+                    &mut AnalysisCache::new(),
                 )
                 .expect("CPS converts published layout fields");
             }
@@ -3570,6 +3567,7 @@ fn main() {}
             logical.module,
             &logical.operation_declarations,
             &logical.compiler_intrinsics,
+            &mut AnalysisCache::new(),
         );
         assert!(validation.is_ok(), "{validation}");
     }

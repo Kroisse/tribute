@@ -28,13 +28,12 @@
 //! discards the prior context's results before lookup.
 //!
 //! [`PassManager::run`](crate::pass::PassManager::run) hands the phase's
-//! cache to every [`Pass`](crate::pass::Pass). Consumers
-//! outside a pass manager take it as a parameter, often through a
-//! `*_with_analyses` variant of a function that otherwise uses a fresh cache:
+//! cache to every [`Pass`](crate::pass::Pass). Consumers outside a pass
+//! manager take it as a parameter:
 //!
 //! ```ignore
 //! fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCache) {
-//!     eliminate_dead_functions_with_analyses(ctx, m, Default::default(), analyses);
+//!     eliminate_dead_functions(ctx, m, analyses);
 //!     function_pm.run(ctx, m.into(), analyses)?;
 //! }
 //! ```

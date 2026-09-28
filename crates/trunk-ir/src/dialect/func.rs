@@ -1063,7 +1063,7 @@ mod result_list_tests {
     fn verify(input: &str) -> String {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input);
-        validate_all(&ctx, module).to_string()
+        validate_all(&ctx, module, &mut crate::analysis::AnalysisCache::new()).to_string()
     }
 
     #[test]
@@ -1150,7 +1150,11 @@ mod owner_identity_tests {
           }
         }",
         );
-        let result = crate::validation::validate_all(&ctx, module);
+        let result = crate::validation::validate_all(
+            &ctx,
+            module,
+            &mut crate::analysis::AnalysisCache::new(),
+        );
         assert!(result.is_ok(), "{result}");
     }
 
@@ -1165,7 +1169,11 @@ mod owner_identity_tests {
                 "core.module @m {{ {declaration} func.func @run() {{ func.call {{callee = @runtime}} func.call {{callee = @f}} func.return }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
-            let result = crate::validation::validate_all(&ctx, module);
+            let result = crate::validation::validate_all(
+                &ctx,
+                module,
+                &mut crate::analysis::AnalysisCache::new(),
+            );
             assert!(
                 result
                     .to_string()
@@ -1204,7 +1212,11 @@ mod normal_validation_regressions {
                 "core.module @m {{ func.func @sink() func.func @run(%k: func.func_sig<() -> ()>) {{ func.call {{callee = @runtime}} {body} }} }}"
             );
             let module = crate::parser::parse_test_module(&mut ctx, &input);
-            let result = crate::validation::validate_all(&ctx, module);
+            let result = crate::validation::validate_all(
+                &ctx,
+                module,
+                &mut crate::analysis::AnalysisCache::new(),
+            );
             assert!(
                 result.to_string().contains(expected),
                 "{expected}: {result}"

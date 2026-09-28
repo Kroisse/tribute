@@ -3043,23 +3043,8 @@ fn whole_ir(
 ///
 /// The caller supplies resolved source operation declarations because those
 /// declarations are frontend semantic metadata rather than TrunkIR operations.
+/// The [`SymbolTable`] is queried through `analyses`.
 pub fn validate(
-    ctx: &IrContext,
-    module: Module,
-    declarations: &[OperationDeclaration],
-    compiler_intrinsics: &[CompilerIntrinsicDeclaration],
-) -> ValidationResult {
-    validate_with_analyses(
-        ctx,
-        module,
-        declarations,
-        compiler_intrinsics,
-        &mut AnalysisCache::new(),
-    )
-}
-
-/// Like [`validate`], reusing the [`SymbolTable`] cached in `analyses`.
-pub fn validate_with_analyses(
     ctx: &IrContext,
     module: Module,
     declarations: &[OperationDeclaration],
@@ -3720,7 +3705,13 @@ mod tests {
     #[test]
     fn generic_control_operations_round_trip_and_validate() {
         let fixture = valid_fixture();
-        let result = validate(&fixture.ctx, fixture.module, &fixture.declarations, &[]);
+        let result = validate(
+            &fixture.ctx,
+            fixture.module,
+            &fixture.declarations,
+            &[],
+            &mut AnalysisCache::new(),
+        );
         assert!(result.is_ok(), "{result}");
 
         let printed = assert_round_trip(&fixture.ctx, fixture.module);
@@ -4470,7 +4461,7 @@ mod tests {
                 .get_type("operation_result_type")
                 .unwrap(),
         )];
-        let result = validate(&ctx, module, &declarations, &[]);
+        let result = validate(&ctx, module, &declarations, &[], &mut AnalysisCache::new());
         let messages = messages(&result);
         assert!(messages.contains("duplicate handler clause"));
         assert!(messages.contains("kind does not match the resolved declaration"));
@@ -4930,17 +4921,32 @@ mod tests {
             Symbol::new("Nat::+"),
             func_sig_type,
         );
-        assert!(validate(&ctx, module, &[], std::slice::from_ref(&exact)).is_ok());
+        assert!(
+            validate(
+                &ctx,
+                module,
+                &[],
+                std::slice::from_ref(&exact),
+                &mut AnalysisCache::new()
+            )
+            .is_ok()
+        );
 
         let wrong_signature = CompilerIntrinsicDeclaration::new(
             exact.symbol,
             exact.identity,
             ctx.get_type(func_sig_type).params[0],
         );
-        let result = validate(&ctx, module, &[], &[wrong_signature]);
+        let result = validate(
+            &ctx,
+            module,
+            &[],
+            &[wrong_signature],
+            &mut AnalysisCache::new(),
+        );
         assert!(messages(&result).contains("complete signature"), "{result}");
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(
             messages(&result).contains("unregistered declaration"),
             "{result}"
@@ -4963,7 +4969,7 @@ mod tests {
             func_sig_type,
         );
 
-        let result = validate(&ctx, module, &[], &[declaration]);
+        let result = validate(&ctx, module, &[], &[declaration], &mut AnalysisCache::new());
         assert!(
             messages(&result).contains("must use Direct calling convention"),
             "{result}"
@@ -4995,7 +5001,7 @@ mod tests {
             func_sig_type,
         );
 
-        let result = validate(&ctx, module, &[], &[declaration]);
+        let result = validate(&ctx, module, &[], &[declaration], &mut AnalysisCache::new());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5027,7 +5033,13 @@ mod tests {
         let nat = declaration(Symbol::new("Nat::+"));
         let int = declaration(Symbol::new("Int::+"));
 
-        let result = validate(&ctx, module, &[], &[nat.clone(), int, nat]);
+        let result = validate(
+            &ctx,
+            module,
+            &[],
+            &[nat.clone(), int, nat],
+            &mut AnalysisCache::new(),
+        );
         let diagnostics = messages(&result);
         assert!(
             diagnostics.contains("not deterministically ordered"),
@@ -5066,7 +5078,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         let diagnostics = messages(&result);
         assert!(
             diagnostics.contains("requires nominal name metadata"),
@@ -5100,7 +5112,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5120,7 +5132,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("bodyless external"), "{result}");
         assert!(diagnostics.contains("core.ptr cast chain"), "{result}");
@@ -5138,7 +5150,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5151,7 +5163,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5170,7 +5182,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(
             messages(&result).contains("compatible managed nominal reference types"),
             "{result}"
@@ -5189,7 +5201,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"
@@ -5215,7 +5227,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"
@@ -5246,7 +5258,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5290,7 +5302,7 @@ mod tests {
             operation_result,
         );
 
-        let result = validate(&ctx, module, &[declaration], &[]);
+        let result = validate(&ctx, module, &[declaration], &[], &mut AnalysisCache::new());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5314,7 +5326,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5338,7 +5350,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert_eq!(
             messages(&result).matches("callable provenance").count(),
             2,
@@ -5363,7 +5375,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         let diagnostics = messages(&result);
         assert!(diagnostics.contains("nominal layout @Tuple is declared more than once"));
         assert!(diagnostics.contains("callable provenance"), "{result}");
@@ -5381,7 +5393,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(result.is_ok(), "{result}");
     }
 
@@ -5399,7 +5411,7 @@ mod tests {
 }"#,
         );
 
-        let result = validate(&ctx, module, &[], &[]);
+        let result = validate(&ctx, module, &[], &[], &mut AnalysisCache::new());
         assert!(
             messages(&result).contains("callable provenance"),
             "{result}"

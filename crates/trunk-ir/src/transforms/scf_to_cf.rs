@@ -1350,7 +1350,7 @@ mod tests {
             .collect();
         assert_eq!(returns, vec![vec![args[1]], vec![args[2]]]);
         assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
-        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+        assert!(crate::validation::validate_all(&ctx, module, &mut AnalysisCache::new()).is_ok());
     }
 
     #[test]
@@ -1392,7 +1392,7 @@ mod tests {
             .collect();
         assert_eq!(returns, vec![vec![args[2]], vec![args[3]], vec![args[4]]]);
         assert_eq!(count_blocks(&ctx, function.body(&ctx)), 5);
-        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+        assert!(crate::validation::validate_all(&ctx, module, &mut AnalysisCache::new()).is_ok());
     }
 
     #[test]
@@ -1425,7 +1425,7 @@ mod tests {
         assert_eq!(returns.len(), 1);
         assert!(ctx.op_operands(returns[0]).is_empty());
         assert_eq!(count_blocks(&ctx, function.body(&ctx)), 3);
-        assert!(crate::validation::validate_all(&ctx, module).is_ok());
+        assert!(crate::validation::validate_all(&ctx, module, &mut AnalysisCache::new()).is_ok());
     }
 
     #[test]

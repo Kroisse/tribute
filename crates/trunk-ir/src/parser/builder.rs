@@ -1363,7 +1363,8 @@ core.module @test {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let result = validation::validate_all(&ctx, module);
+        let result =
+            validation::validate_all(&ctx, module, &mut crate::analysis::AnalysisCache::new());
         assert!(result.is_ok(), "Full validation should pass: {}", result);
     }
 

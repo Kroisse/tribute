@@ -266,7 +266,11 @@ mod tests {
         assert_eq!(output.matches("adt.ref_null").count(), 2, "{output}");
         assert!(!output.contains("arith.const {value = 0}"), "{output}");
 
-        let validation = trunk_ir::validation::validate_all(&ctx, module);
+        let validation = trunk_ir::validation::validate_all(
+            &ctx,
+            module,
+            &mut trunk_ir::analysis::AnalysisCache::new(),
+        );
         assert!(validation.is_ok(), "{:?}", validation.errors);
     }
 
@@ -318,7 +322,11 @@ mod tests {
         assert!(output.contains("[@element, core.i32]"), "{output}");
         assert!(output.contains("[@element, tribute_rt.anyref]"), "{output}");
 
-        let validation = trunk_ir::validation::validate_all(&ctx, module);
+        let validation = trunk_ir::validation::validate_all(
+            &ctx,
+            module,
+            &mut trunk_ir::analysis::AnalysisCache::new(),
+        );
         assert!(validation.is_ok(), "{:?}", validation.errors);
     }
 }
