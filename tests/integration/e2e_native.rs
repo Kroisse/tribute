@@ -470,6 +470,43 @@ fn main() {
     );
 }
 
+/// A case over an enum spelled through a `use` import or by its short name
+/// inside its module lowers without a fallthrough.
+#[test]
+fn test_native_case_over_enum_spelled_by_another_name() {
+    assert_native_output(
+        "enum_spelled_by_another_name.trb",
+        r#"
+mod shapes {
+    pub enum Shape { Dot(Nat), Other }
+
+    pub fn inner(shape: Shape) -> Nat {
+        case shape {
+            Dot(n) -> n
+            Other -> 0
+        }
+    }
+}
+
+use shapes::Shape
+
+fn outer(shape: Shape) -> Nat {
+    case shape {
+        shapes::Dot(n) -> n + 10
+        shapes::Other -> 1
+    }
+}
+
+fn main() {
+    __tribute_print_nat(shapes::inner(shapes::Dot(7)))
+    __tribute_print_nat(outer(shapes::Dot(7)))
+    __tribute_print_nat(outer(shapes::Other))
+}
+"#,
+        "7\n17\n1",
+    );
+}
+
 #[test]
 fn test_native_short_lists_skip_nested_pattern_observation() {
     assert_native_output(
