@@ -1001,7 +1001,17 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
     trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
 
     enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
+
+    let core_module = core_dialect::Module::from_op(ctx, m.op())
+        .expect("Wasm evidence lowering requires a core.module");
+    tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m);
+    let mut pm = PassManager::new();
+    pm.nest::<func_dialect::Func>()
+        .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm);
+    pm.with_debug_verifier();
+    pm.run(ctx, core_module, &mut analyses)?;
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
+    debug_validate_value_integrity(ctx, m, "after evidence_to_wasm");
 
     run_cleanup_passes(ctx, m, &mut analyses);
     debug_observe_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Wasm);
@@ -1830,11 +1840,10 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-                func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 { func.unreachable }
+                func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 attributes {abi = "C"}
             }"#,
         );
-        tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module)
-            .unwrap();
+        tribute_passes::wasm::evidence_to_wasm::bind_wasm_evidence_runtime(&mut ctx, module);
         tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
         let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
         wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
@@ -1855,8 +1864,7 @@ mod tests {
             effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.nil}
         "#,
         );
-        enter_target_closure_storage_boundary(&mut ctx, module, &mut Default::default()).unwrap();
-        tribute_passes::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
+        run_wasm_target_pipeline(&mut ctx, module).unwrap();
         let binary = compile_to_wasm(&mut ctx, module).unwrap_or_else(|error| {
             panic!(
                 "{error}\n{}",

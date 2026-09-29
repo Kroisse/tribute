@@ -178,18 +178,16 @@ fn wasm_lowering_passes() -> PassManager {
         trunk_ir_wasm_backend::passes::adt_to_wasm::lower(ctx, m.into(), tc);
         Ok(())
     }))
-    // Materialize required evidence helpers, then lower effect operations
-    // per function.
+    // Bind the evidence runtime helpers that boundary evidence lowering
+    // declared to their Wasm implementations.
     .add_pass(pass_fn(
-        "prepare-evidence-runtime",
+        "bind-evidence-runtime",
         |ctx, m: core::Module, _| {
-            super::evidence_to_wasm::prepare_wasm_evidence_runtime(ctx, m.into())?;
+            super::evidence_to_wasm::bind_wasm_evidence_runtime(ctx, m.into());
             Ok(())
         },
-    ));
-    pm.nest::<wasm_dialect::Func>()
-        .add_pass(super::evidence_to_wasm::LowerEvidenceToWasm);
-    pm.add_pass(pass_fn("intrinsic-to-wasm", |ctx, m: core::Module, _| {
+    ))
+    .add_pass(pass_fn("intrinsic-to-wasm", |ctx, m: core::Module, _| {
         super::intrinsic_to_wasm::lower(ctx, m.into());
         Ok(())
     }))
@@ -1039,19 +1037,28 @@ mod tests {
     }
 
     #[test]
-    fn lower_to_wasm_removes_effect_dispatch_tail() {
+    fn lower_to_wasm_binds_evidence_runtime_declarations() {
         let output = lower_text(
             r#"core.module @test {
-  func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
-    func.return %result
+  !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+  func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @prompt(%ev: !Evidence) -> core.i32 {
+    %id = arith.const {value = 7} : core.i32
+    %prompt = func.call %ev, %id {callee = @__tribute_evidence_lookup} : core.i32
+    func.return %prompt
   }
 }"#,
         );
 
-        assert!(!output.contains("effect.dispatch_tail"), "{output}");
-        assert!(output.contains("__tribute_evidence_lookup"), "{output}");
-        assert!(output.contains("wasm.call_indirect"), "{output}");
+        assert!(
+            output.contains("sym_name = @__tribute_evidence_find_marker,"),
+            "{output}"
+        );
+        assert!(
+            output.contains("sym_name = @__tribute_evidence_lookup,"),
+            "{output}"
+        );
+        assert!(!output.contains("abi = \"C\""), "{output}");
     }
 
     #[test]

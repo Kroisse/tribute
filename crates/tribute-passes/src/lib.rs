@@ -11,6 +11,7 @@
 // === TrunkIR passes ===
 pub mod abi_boundary;
 pub mod closure_lower;
+mod effect_dispatch;
 pub mod intrinsic_to_arith;
 pub mod io_lowering;
 pub mod list_intrinsics;

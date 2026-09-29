@@ -3,9 +3,6 @@ source: src/pipeline.rs
 expression: observed
 ---
 [
-    "forbidden op effect.dispatch_cps",
-    "forbidden op effect.dispatch_tail",
-    "forbidden op effect.extend",
     "forbidden attribute tribute.calling_convention",
     "unclassified attribute tribute.compiler_intrinsic",
 ]
