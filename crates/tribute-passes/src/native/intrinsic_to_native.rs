@@ -1,18 +1,20 @@
-//! Lower bytes intrinsic calls to native IR operations.
+//! Lower the bytes compiler intrinsic inside the native representation/ABI
+//! boundary.
 //!
-//! This native-specific pass converts `func.call @__bytes_get_or_panic(bytes, index)`
-//! to a sequence of `mem.load` operations that directly access the TributeBytes
-//! memory layout: `{ ptr: *const u8, len: u64 }`.
+//! Calls to a declaration whose verified compiler intrinsic identity is
+//! `__bytes_get_or_panic` become shared `mem`/`arith` operations on the
+//! native TributeBytes layout: `{ ptr: *const u8, len: u64 }`. The pass is the
+//! last reader of that identity and removes the declaration.
 //!
 //! The WASM backend has its own lowering in `intrinsic_to_wasm.rs`.
 
 use std::collections::HashSet;
 use std::rc::Rc;
 
+use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::func;
-use trunk_ir::dialect::mem;
+use trunk_ir::dialect::{arith, func, mem};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
@@ -21,64 +23,78 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::types::TypeDataBuilder;
 
-/// Lower bytes intrinsic calls to native mem operations.
-///
-/// Also removes `func.func` declarations for bytes intrinsics.
+/// Canonical identity of the bytes element read intrinsic.
+const BYTES_GET_OR_PANIC: &str = "__bytes_get_or_panic";
+
+/// Lower calls to the bytes intrinsic to native `mem` operations and remove
+/// its declaration.
 pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
-    let intrinsic_names: Rc<HashSet<Symbol>> =
-        Rc::new([Symbol::new("__bytes_get_or_panic")].into());
+    // Select declarations through their verified identity, never by name or
+    // `abi` string.
+    let eligible: Rc<HashSet<Symbol>> = Rc::new(
+        module
+            .ops(ctx)
+            .into_iter()
+            .filter_map(|op| {
+                let function = func::Func::from_op(ctx, op).ok()?;
+                (ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
+                    == Some(Symbol::new(BYTES_GET_OR_PANIC)))
+                .then(|| function.sym_name(ctx))
+            })
+            .collect(),
+    );
+    if eligible.is_empty() {
+        return Ok(());
+    }
 
-    let mut applicator = PatternApplicator::new(TypeConverter::new());
-    applicator =
-        applicator
-            .add_pattern(BytesGetOrPanicPattern)
-            .add_pattern(BytesIntrinsicFuncDeclPattern {
-                intrinsic_names: Rc::clone(&intrinsic_names),
-            });
-
-    let call_intrinsic_names = Rc::clone(&intrinsic_names);
-    let func_intrinsic_names = Rc::clone(&intrinsic_names);
+    let call_eligible = Rc::clone(&eligible);
+    let decl_eligible = Rc::clone(&eligible);
     let target = ConversionTarget::new()
         .dynamic_op("func", "call", move |ctx, op| {
-            if let Ok(call_op) = func::Call::from_op(ctx, op)
-                && call_intrinsic_names.contains(&call_op.callee(ctx))
+            if func::Call::from_op(ctx, op)
+                .is_ok_and(|call| call_eligible.contains(&call.callee(ctx)))
             {
-                return LegalityDecision::Illegal;
+                LegalityDecision::Illegal
+            } else {
+                LegalityDecision::Defer
             }
-
-            LegalityDecision::Defer
         })
         .dynamic_op("func", "func", move |ctx, op| {
-            if let Ok(func_op) = func::Func::from_op(ctx, op) {
-                let attrs = &ctx.op(op).attributes;
-                let is_intrinsic = attrs.get_str("abi") == Some("intrinsic");
-                if is_intrinsic && func_intrinsic_names.contains(&func_op.sym_name(ctx)) {
-                    return LegalityDecision::Illegal;
-                }
+            if func::Func::from_op(ctx, op)
+                .is_ok_and(|function| decl_eligible.contains(&function.sym_name(ctx)))
+            {
+                LegalityDecision::Illegal
+            } else {
+                LegalityDecision::Defer
             }
-
-            LegalityDecision::Defer
         });
 
-    applicator
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(BytesGetOrPanicPattern {
+            eligible: Rc::clone(&eligible),
+        })
+        .add_pattern(BytesIntrinsicDeclPattern { eligible })
         .with_target(target)
         .apply_partial_conversion(ctx, module, "intrinsic-to-native")?;
     Ok(())
 }
 
-/// Pattern that lowers `func.call @__bytes_get_or_panic(bytes, index)` to
-/// mem.load operations on the TributeBytes layout.
+/// Pattern that lowers a bytes element read to loads on the TributeBytes
+/// layout.
 ///
 /// TributeBytes native layout (payload pointer points here):
 ///   offset 0: ptr (*const u8) - 8 bytes
 ///   offset 8: len (u64)       - 8 bytes
 ///
 /// Emits:
-///   %data_ptr = mem.load %bytes, offset=0 : core.ptr
-///   %addr = arith.addi %data_ptr, %index : core.ptr
-///   %byte = mem.load %addr, offset=0 : core.i8
-///   %result = arith.extend %byte : result_ty (Nat/i32)
-struct BytesGetOrPanicPattern;
+///   %data_ptr = mem.load %bytes {offset = 0} : core.ptr
+///   %offset   = arith.extend %index : core.i64
+///   %addr     = mem.ptr_add %data_ptr, %offset : core.ptr
+///   %byte     = mem.load %addr {offset = 0} : core.i8
+///   %result   = arith.extend %byte : result_ty
+struct BytesGetOrPanicPattern {
+    eligible: Rc<HashSet<Symbol>>,
+}
 
 impl RewritePattern for BytesGetOrPanicPattern {
     fn match_and_rewrite(
@@ -90,85 +106,123 @@ impl RewritePattern for BytesGetOrPanicPattern {
         let Ok(call_op) = func::Call::from_op(ctx, op) else {
             return false;
         };
-        if call_op.callee(ctx) != "__bytes_get_or_panic" {
+        if !self.eligible.contains(&call_op.callee(ctx)) {
             return false;
         }
+        let operands = ctx.op_operands(op).to_vec();
+        let ([bytes, index], [result_ty]) = (operands.as_slice(), ctx.op_result_types(op)) else {
+            return false;
+        };
+        let (bytes, index, result_ty) = (*bytes, *index, *result_ty);
 
         let loc = ctx.op(op).location;
-        let result_ty = ctx.op_result_types(op)[0];
-        let operands = ctx.op_operands(op).to_vec();
-        let bytes = operands[0];
-        let index = operands[1];
-
         let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
+        let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
         let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
 
-        // Load data pointer from TributeBytes (offset 0)
         let data_ptr = mem::Load::operands(bytes)
             .offset(0)
             .results(ptr_ty)
             .build(ctx, loc);
         rewriter.insert_op(data_ptr.op_ref());
 
-        // Extend index (Nat = i32) to pointer width (i64)
-        let index_ext = trunk_ir::dialect::arith::Extend::operands(index)
+        // Widen the index (Nat) to a pointer-width byte offset.
+        let offset = arith::Extend::operands(index)
+            .results(i64_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(offset.op_ref());
+
+        let addr = mem::PtrAdd::operands(data_ptr.result(ctx), offset.result(ctx))
             .results(ptr_ty)
             .build(ctx, loc);
-        rewriter.insert_op(index_ext.op_ref());
-
-        // Compute address: data_ptr + index. `arith.addi` is integer-only,
-        // so pointer arithmetic uses `clif.iadd` like the other native passes.
-        let addr =
-            trunk_ir::dialect::clif::Iadd::operands(data_ptr.result(ctx), index_ext.result(ctx))
-                .results(ptr_ty)
-                .build(ctx, loc);
         rewriter.insert_op(addr.op_ref());
 
-        // Load byte (i8) from computed address
-        let byte_val = mem::Load::operands(addr.result(ctx))
+        let byte = mem::Load::operands(addr.result(ctx))
             .offset(0)
             .results(i8_ty)
             .build(ctx, loc);
-        rewriter.insert_op(byte_val.op_ref());
+        rewriter.insert_op(byte.op_ref());
 
-        // Zero-extend i8 → result type (Nat = i32)
-        let extended = trunk_ir::dialect::arith::Extend::operands(byte_val.result(ctx))
+        // Zero-extend the byte to the result type (Nat).
+        let extended = arith::Extend::operands(byte.result(ctx))
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(extended.op_ref());
-
         true
     }
 }
 
-/// Pattern that removes `func.func` declarations for bytes intrinsics.
-struct BytesIntrinsicFuncDeclPattern {
-    intrinsic_names: Rc<HashSet<Symbol>>,
+/// Pattern that removes the bytes intrinsic declaration, consuming its
+/// identity.
+struct BytesIntrinsicDeclPattern {
+    eligible: Rc<HashSet<Symbol>>,
 }
 
-impl RewritePattern for BytesIntrinsicFuncDeclPattern {
+impl RewritePattern for BytesIntrinsicDeclPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(func_op) = func::Func::from_op(ctx, op) else {
-            return false;
-        };
-
-        let attrs = &ctx.op(op).attributes;
-        let is_intrinsic = attrs.get_str("abi") == Some("intrinsic");
-        if !is_intrinsic {
+        if !func::Func::from_op(ctx, op)
+            .is_ok_and(|function| self.eligible.contains(&function.sym_name(ctx)))
+        {
             return false;
         }
-
-        let sym_name = func_op.sym_name(ctx);
-        if !self.intrinsic_names.contains(&sym_name) {
-            return false;
-        }
-
         rewriter.erase_op(vec![]);
         true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    fn lower_text(ir: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, ir);
+        lower(&mut ctx, module).expect("bytes intrinsic lowering");
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn verified_identity_selects_calls_and_consumes_the_declaration() {
+        let printed = lower_text(
+            r#"core.module @test {
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
+    %byte = func.call %bytes, %index {callee = @read} : core.i32
+    func.return %byte
+  }
+}"#,
+        );
+
+        assert!(!printed.contains("func.call"), "{printed}");
+        assert!(!printed.contains("@read"), "{printed}");
+        assert!(!printed.contains("tribute.compiler_intrinsic"), "{printed}");
+        assert!(printed.contains("mem.ptr_add"), "{printed}");
+        assert_eq!(printed.matches("mem.load").count(), 2, "{printed}");
+        assert!(!printed.contains("clif."), "{printed}");
+    }
+
+    #[test]
+    fn name_and_abi_alone_do_not_select_the_intrinsic() {
+        let input = r#"core.module @test {
+  func.func @__bytes_get_or_panic(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic"}
+  func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
+    %byte = func.call %bytes, %index {callee = @__bytes_get_or_panic} : core.i32
+    func.return %byte
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let before = print_module(&ctx, module.op());
+
+        lower(&mut ctx, module).expect("nothing to lower");
+
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }
