@@ -3619,6 +3619,39 @@ mod Nested {
     }
 
     #[salsa_test]
+    fn arithmetic_intrinsic_lowering_consumes_its_identities(db: &salsa::DatabaseImpl) {
+        use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
+        use trunk_ir::dialect::func;
+
+        let source = source_from_str(
+            "native_calculator.trb",
+            include_str!("../lang-examples/native_calculator.trb"),
+        );
+        let (ctx, module) = run_shared_pipeline(db, source)
+            .expect("shared pipeline must succeed")
+            .expect("fixture must lower");
+        let identity = |name: &'static str| {
+            module.ops(&ctx).into_iter().find_map(|op| {
+                let function = func::Func::from_op(&ctx, op).ok()?;
+                (function.sym_name(&ctx) == trunk_ir::Symbol::new(name)).then(|| {
+                    assert_eq!(ctx.op(op).attributes.get_str("abi"), Some("intrinsic"));
+                    ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
+                })
+            })
+        };
+        assert_eq!(
+            identity("Int::+"),
+            Some(None),
+            "arithmetic lowering is the last reader of its identities"
+        );
+        assert_eq!(
+            identity("__bytes_get_or_panic"),
+            Some(Some(trunk_ir::Symbol::new("__bytes_get_or_panic"))),
+            "bytes lowering has no shared consumer yet"
+        );
+    }
+
+    #[salsa_test]
     fn well_known_string_metadata_uses_prelude_declaration_identity(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
             "lookalike.trb",

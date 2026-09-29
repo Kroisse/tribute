@@ -53,9 +53,20 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         .add_pattern(pattern.with_eligible(Rc::clone(&eligible)))
         .add_pattern(ArithIntrinsicFuncDeclPattern {
             intrinsic_map,
-            eligible,
+            eligible: Rc::clone(&eligible),
         });
     applicator.apply_partial(ctx, module);
+
+    // Every call was rewritten against the authenticated identity, so this
+    // pass is its last reader. Remaining declarations keep only their
+    // `abi = "intrinsic"` binding.
+    for op in module.ops(ctx) {
+        if func::Func::from_op(ctx, op)
+            .is_ok_and(|function| eligible.contains(&function.sym_name(ctx)))
+        {
+            ctx.op_mut(op).attributes.remove(COMPILER_INTRINSIC_ATTR);
+        }
+    }
 }
 
 /// PassManager-friendly wrapper for [`lower_intrinsic_to_arith`].
@@ -466,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn bodyless_intrinsic_decl_is_unchanged() {
+    fn bodyless_intrinsic_decl_keeps_binding_and_consumes_identity() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -478,11 +489,14 @@ mod tests {
         "#,
         );
 
-        let before = print_module(&ctx, module.op());
         lower_intrinsic_to_arith(&mut ctx, module);
         let after = print_module(&ctx, module.op());
 
-        assert_eq!(after, before, "bodyless declaration must remain unchanged");
+        assert!(
+            after.contains(r#"func.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 attributes {abi = "intrinsic"}"#)
+                && !after.contains(COMPILER_INTRINSIC_ATTR),
+            "bodyless declaration must keep its binding without the identity:\n{after}"
+        );
     }
 
     #[test]
