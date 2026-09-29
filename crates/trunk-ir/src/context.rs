@@ -177,6 +177,13 @@ impl IrContext {
 
     /// Intern a type, advancing the revision only for a new entry.
     pub fn intern_type(&mut self, data: TypeData) -> TypeRef {
+        debug_assert!(
+            data.validate_param_attrs().is_ok(),
+            "{}.{}: {}",
+            data.dialect,
+            data.name,
+            data.validate_param_attrs().unwrap_err()
+        );
         if let Some(ty) = self.types.lookup(&data) {
             return ty;
         }

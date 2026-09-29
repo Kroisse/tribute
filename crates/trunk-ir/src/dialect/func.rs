@@ -229,6 +229,20 @@ impl FuncSig {
         &ctx.get_type(self.0).params[num_inputs..num_inputs + num_results]
     }
 
+    /// The attributes of each input, in order; empty for an input without any.
+    pub fn input_attrs<'a>(&self, ctx: &'a IrContext) -> impl Iterator<Item = &'a AttributeMap> {
+        let (num_inputs, _) = self.counts(ctx);
+        let data = ctx.get_type(self.0);
+        (0..num_inputs).map(move |index| data.param_attrs(index))
+    }
+
+    /// The attributes of each result, in order; empty for a result without any.
+    pub fn result_attrs<'a>(&self, ctx: &'a IrContext) -> impl Iterator<Item = &'a AttributeMap> {
+        let (num_inputs, num_results) = self.counts(ctx);
+        let data = ctx.get_type(self.0);
+        (num_inputs..num_inputs + num_results).map(move |index| data.param_attrs(index))
+    }
+
     pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
         self.results(ctx).first().copied()
     }
@@ -310,12 +324,35 @@ pub fn func_sig(
     func_sig_with_attrs(ctx, inputs, results, AttributeMap::new())
 }
 
+/// Construct a canonical `func.func_sig` whose inputs and results carry their
+/// own attributes, stored as the type's per-parameter attributes.
+pub fn func_sig_with_param_attrs(
+    ctx: &mut IrContext,
+    inputs: impl IntoIterator<Item = (TypeRef, AttributeMap)>,
+    results: impl IntoIterator<Item = (TypeRef, AttributeMap)>,
+    mut attrs: AttributeMap,
+) -> FuncSig {
+    let (inputs, input_attrs): (Vec<_>, Vec<_>) = inputs.into_iter().unzip();
+    let (results, result_attrs): (Vec<_>, Vec<_>) = results.into_iter().unzip();
+    match crate::types::param_attrs_attribute(input_attrs.into_iter().chain(result_attrs)) {
+        Some(value) => {
+            attrs.insert(Symbol::new(crate::types::PARAM_ATTRS_ATTR), value);
+        }
+        None => {
+            attrs.remove(crate::types::PARAM_ATTRS_ATTR);
+        }
+    }
+    func_sig_with_attrs(ctx, inputs, results, attrs)
+}
+
 /// Construct a canonical `func.func_sig` while preserving non-reserved attributes.
+///
+/// Per-parameter attributes in `attrs` must have one entry per input and result.
 pub fn func_sig_with_attrs(
     ctx: &mut IrContext,
     inputs: impl IntoIterator<Item = TypeRef>,
     results: impl IntoIterator<Item = TypeRef>,
-    attrs: AttributeMap,
+    mut attrs: AttributeMap,
 ) -> FuncSig {
     assert!(
         !attrs.contains_key(NUM_INPUTS_ATTR) && !attrs.contains_key(NUM_RESULTS_ATTR),
@@ -330,6 +367,10 @@ pub fn func_sig_with_attrs(
     );
     let num_inputs = u32::try_from(inputs.len()).expect("func.func_sig input count exceeds u32");
     let num_results = u32::try_from(results.len()).expect("func.func_sig result count exceeds u32");
+    crate::types::normalize_param_attrs(&mut attrs);
+    if let Err(error) = crate::types::validate_param_attrs(&attrs, inputs.len() + results.len()) {
+        panic!("func.func_sig: {error}");
+    }
 
     let mut builder = TypeDataBuilder::new(DIALECT_NAME(), FUNC_SIG())
         .params(inputs)

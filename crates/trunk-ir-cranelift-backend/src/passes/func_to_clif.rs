@@ -640,6 +640,32 @@ mod tests {
     }
 
     #[test]
+    fn parameter_attributes_are_preserved_and_their_types_converted() {
+        let mut ctx = IrContext::new();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+        let mut type_converter = TypeConverter::new();
+        type_converter.add_conversion(move |_, ty| (ty == i32_ty).then_some(i64_ty));
+        let dict = |ty| -> AttributeMap {
+            [(Symbol::new("witness"), Attribute::Type(ty))]
+                .into_iter()
+                .collect()
+        };
+        let source = func::func_sig_with_param_attrs(
+            &mut ctx,
+            [(i32_ty, dict(i32_ty)), (i32_ty, AttributeMap::new())],
+            [(i32_ty, AttributeMap::new())],
+            AttributeMap::new(),
+        )
+        .as_type_ref();
+        let converted = super::convert_to_clif_func_type(&mut ctx, source, &type_converter)
+            .expect("target callable contract");
+        let data = ctx.get_type(converted);
+        assert_eq!(data.param_attrs(0), &dict(i64_ty));
+        assert!(data.param_attrs(1).is_empty() && data.param_attrs(2).is_empty());
+    }
+
+    #[test]
     fn test_call_indirect_to_clif() {
         let result = run_pass(
             r#"core.module @test {

@@ -163,6 +163,22 @@ let converted = attribute.map_types(|ty| converter.convert_type_or_identity(ctx,
 attribute.visit_types(&mut |ty| seen.push(ty));
 ```
 
+Per-parameter attributes (`param_attrs`, see
+[the type model](../../new-plans/ir.md#타입-매개변수-속성)) are built with the
+parameter they describe and read back by position:
+
+```rust
+let sig = func::func_sig_with_param_attrs(
+    ctx,
+    [(env_ty, AttributeMap::new()), (value_ty, attrs)],
+    [],
+    AttributeMap::new(),
+);
+let first = sig.input_attrs(ctx).next();
+let data = ctx.get_type(ty);
+let attrs = data.param_attrs(1);
+```
+
 Operations are created with their builders:
 
 ```rust

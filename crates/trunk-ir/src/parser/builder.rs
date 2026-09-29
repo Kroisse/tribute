@@ -89,10 +89,7 @@ impl<'a> ArenaIrBuilder<'a> {
                     .iter()
                     .map(|p| self.build_type(p))
                     .collect::<Result<_, _>>()?;
-                let attrs: AttributeMap = attrs
-                    .iter()
-                    .map(|(k, v)| Ok((Symbol::from_dynamic(k), self.build_attribute(v)?)))
-                    .collect::<Result<_, ParseError>>()?;
+                let attrs = self.build_type_attrs(dialect, name, attrs, params.len())?;
 
                 let mut builder = TypeDataBuilder::new(dialect, name);
                 for p in params {
@@ -111,6 +108,27 @@ impl<'a> ArenaIrBuilder<'a> {
                 attrs,
             } => self.build_function_type(dialect, name, inputs, results, attrs),
         }
+    }
+
+    /// Build a type's attributes, canonicalizing and checking its
+    /// per-parameter attributes against `params` type parameters.
+    fn build_type_attrs(
+        &mut self,
+        dialect: Symbol,
+        name: Symbol,
+        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
+        params: usize,
+    ) -> Result<AttributeMap, ParseError> {
+        let mut attrs = attrs
+            .iter()
+            .map(|(key, value)| Ok((Symbol::from_dynamic(key), self.build_attribute(value)?)))
+            .collect::<Result<AttributeMap, ParseError>>()?;
+        crate::types::normalize_param_attrs(&mut attrs);
+        crate::types::validate_param_attrs(&attrs, params).map_err(|error| ParseError {
+            message: format!("{dialect}.{name}: {error}"),
+            offset: 0,
+        })?;
+        Ok(attrs)
     }
 
     fn build_function_type(
@@ -158,10 +176,12 @@ impl<'a> ArenaIrBuilder<'a> {
             .iter()
             .map(|ty| self.build_type(ty))
             .collect::<Result<Vec<_>, _>>()?;
-        let attrs = attrs
-            .iter()
-            .map(|(name, value)| Ok((Symbol::from_dynamic(name), self.build_attribute(value)?)))
-            .collect::<Result<AttributeMap, ParseError>>()?;
+        let attrs = self.build_type_attrs(
+            Symbol::new("wasm"),
+            Symbol::new("func_sig"),
+            attrs,
+            inputs.len() + results.len(),
+        )?;
         Ok(
             crate::dialect::wasm::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -194,10 +214,12 @@ impl<'a> ArenaIrBuilder<'a> {
             .iter()
             .map(|ty| self.build_type(ty))
             .collect::<Result<Vec<_>, _>>()?;
-        let attrs = attrs
-            .iter()
-            .map(|(name, value)| Ok((Symbol::from_dynamic(name), self.build_attribute(value)?)))
-            .collect::<Result<AttributeMap, ParseError>>()?;
+        let attrs = self.build_type_attrs(
+            Symbol::new("clif"),
+            Symbol::new("func_sig"),
+            attrs,
+            inputs.len() + results.len(),
+        )?;
         Ok(
             crate::dialect::clif::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -240,10 +262,12 @@ impl<'a> ArenaIrBuilder<'a> {
             .iter()
             .map(|ty| self.build_type(ty))
             .collect::<Result<Vec<_>, _>>()?;
-        let attrs = attrs
-            .iter()
-            .map(|(name, value)| Ok((Symbol::from_dynamic(name), self.build_attribute(value)?)))
-            .collect::<Result<AttributeMap, ParseError>>()?;
+        let attrs = self.build_type_attrs(
+            Symbol::new("func"),
+            Symbol::new("func_sig"),
+            attrs,
+            inputs.len() + results.len(),
+        )?;
         Ok(
             crate::dialect::func::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -279,10 +303,12 @@ impl<'a> ArenaIrBuilder<'a> {
             .iter()
             .map(|ty| self.build_type(ty))
             .collect::<Result<Vec<_>, _>>()?;
-        let attrs = attrs
-            .iter()
-            .map(|(key, value)| Ok((Symbol::from_dynamic(key), self.build_attribute(value)?)))
-            .collect::<Result<AttributeMap, ParseError>>()?;
+        let attrs = self.build_type_attrs(
+            Symbol::from_dynamic(dialect),
+            Symbol::from_dynamic(name),
+            attrs,
+            inputs.len() + results.len(),
+        )?;
         let num_inputs = u32::try_from(inputs.len()).map_err(|_| ParseError {
             message: format!("{dialect}.{name} input count exceeds u32"),
             offset: 0,
@@ -965,6 +991,75 @@ core.module @test {
             "{printed}"
         );
         assert_roundtrip(&ctx, root);
+    }
+
+    #[test]
+    fn test_roundtrip_parameter_attributes() {
+        let input = r#"core.module @test {
+  !pair = core.tuple(core.i32, core.ptr) {param_attrs = [{}, {k = @v}]}
+  !sig = func.func_sig<(core.i32, core.ptr) -> core.i32> {param_attrs = [{a = core.i32}, {}, {}]}
+  !plain = core.tuple(core.i32, core.ptr) {param_attrs = [{}, {}]}
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("parameter attributes should parse");
+        let printed = print_module(&ctx, module);
+        assert!(
+            printed.contains("core.tuple(core.i32, core.ptr) {param_attrs = [{}, {k = @v}]}"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                "func.func_sig<(core.i32, core.ptr) -> core.i32> {param_attrs = [{a = core.i32}, {}, {}]}"
+            ),
+            "{printed}"
+        );
+        let aliases: std::collections::HashMap<_, _> = ctx
+            .type_aliases()
+            .iter()
+            .map(|&(name, ty)| (name.to_string(), ty))
+            .collect();
+        let sig = func::FuncSig::from_type_ref(&ctx, aliases["sig"]).unwrap();
+        assert_eq!(
+            sig.input_attrs(&ctx)
+                .filter(|attrs| !attrs.is_empty())
+                .count(),
+            1
+        );
+        assert!(sig.result_attrs(&ctx).all(|attrs| attrs.is_empty()));
+        assert!(
+            !ctx.get_type(aliases["plain"])
+                .attrs
+                .contains_key(crate::types::PARAM_ATTRS_ATTR),
+            "all-empty parameter attributes are canonicalized away"
+        );
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
+    fn test_malformed_parameter_attributes_are_parse_errors() {
+        for (spelling, expected) in [
+            (
+                "core.tuple(core.i32) {param_attrs = 1}",
+                "list of dictionaries",
+            ),
+            (
+                "core.tuple(core.i32) {param_attrs = [{k = 1}, {}]}",
+                "2 entries for 1",
+            ),
+            (
+                "core.tuple(core.i32, core.i32) {param_attrs = [{k = 1}, 2]}",
+                "entry 1",
+            ),
+            (
+                "func.func_sig<(core.i32) -> ()> {param_attrs = [1]}",
+                "entry 0",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            let error = parse_module(&mut ctx, &input).expect_err(spelling);
+            assert!(error.message.contains(expected), "{spelling}: {error}");
+        }
     }
 
     #[test]

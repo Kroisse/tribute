@@ -539,6 +539,39 @@ impl<'a> IntoIterator for &'a mut AttributeMap {
 // TypeData
 // ============================================================================
 
+/// Reserved type attribute holding one dictionary of attributes per type
+/// parameter, in `params` order.
+///
+/// The value is a list of `Attribute::Dict` whose length equals `params.len()`.
+/// The key is absent when every dictionary would be empty, so a type without
+/// per-parameter attributes keeps a single identity.
+pub const PARAM_ATTRS_ATTR: &str = "param_attrs";
+
+static EMPTY_ATTRIBUTE_MAP: AttributeMap = AttributeMap(BTreeMap::new());
+
+/// A malformed [`PARAM_ATTRS_ATTR`] value.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+pub enum ParamAttrsError {
+    #[display("`{PARAM_ATTRS_ATTR}` must be a list of dictionaries")]
+    NotList,
+    #[display("`{PARAM_ATTRS_ATTR}` entry {_0} must be a dictionary")]
+    NotDict(#[error(not(source))] usize),
+    #[display("`{PARAM_ATTRS_ATTR}` has {attrs} entries for {params} type parameters")]
+    LengthMismatch { params: usize, attrs: usize },
+    #[display("`{PARAM_ATTRS_ATTR}` with only empty dictionaries must be omitted")]
+    AllEmpty,
+}
+
+/// The canonical [`PARAM_ATTRS_ATTR`] value for `entries`, or `None` when every
+/// entry is empty and the key must be omitted.
+pub fn param_attrs_attribute(entries: impl IntoIterator<Item = AttributeMap>) -> Option<Attribute> {
+    let entries: Vec<_> = entries.into_iter().collect();
+    entries
+        .iter()
+        .any(|entry| !entry.is_empty())
+        .then(|| Attribute::List(entries.into_iter().map(Attribute::Dict).collect()))
+}
+
 /// Data for a single interned type.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct TypeData {
@@ -548,6 +581,75 @@ pub struct TypeData {
     pub attrs: AttributeMap,
 }
 
+impl TypeData {
+    /// The attributes of type parameter `index`; empty when it has none.
+    ///
+    /// Assumes a well-formed [`PARAM_ATTRS_ATTR`]; see
+    /// [`TypeData::validate_param_attrs`].
+    pub fn param_attrs(&self, index: usize) -> &AttributeMap {
+        self.attrs
+            .get(PARAM_ATTRS_ATTR)
+            .and_then(Attribute::as_list)
+            .and_then(|entries| entries.get(index))
+            .and_then(Attribute::as_dict)
+            .unwrap_or(&EMPTY_ATTRIBUTE_MAP)
+    }
+
+    /// Each type parameter with its attributes.
+    pub fn params_with_attrs(&self) -> impl Iterator<Item = (TypeRef, &AttributeMap)> {
+        self.params
+            .iter()
+            .enumerate()
+            .map(|(index, &ty)| (ty, self.param_attrs(index)))
+    }
+
+    /// Check that [`PARAM_ATTRS_ATTR`], if present, is canonical: one
+    /// dictionary per type parameter, not all of them empty.
+    pub fn validate_param_attrs(&self) -> Result<(), ParamAttrsError> {
+        validate_param_attrs(&self.attrs, self.params.len())
+    }
+}
+
+/// Check that [`PARAM_ATTRS_ATTR`] in `attrs`, if present, is canonical for a
+/// type with `params` type parameters.
+pub fn validate_param_attrs(attrs: &AttributeMap, params: usize) -> Result<(), ParamAttrsError> {
+    let Some(value) = attrs.get(PARAM_ATTRS_ATTR) else {
+        return Ok(());
+    };
+    let entries = value.as_list().ok_or(ParamAttrsError::NotList)?;
+    if entries.len() != params {
+        return Err(ParamAttrsError::LengthMismatch {
+            params,
+            attrs: entries.len(),
+        });
+    }
+    let mut all_empty = true;
+    for (index, entry) in entries.iter().enumerate() {
+        let dict = entry.as_dict().ok_or(ParamAttrsError::NotDict(index))?;
+        all_empty &= dict.is_empty();
+    }
+    if all_empty {
+        return Err(ParamAttrsError::AllEmpty);
+    }
+    Ok(())
+}
+
+/// Remove a [`PARAM_ATTRS_ATTR`] whose dictionaries are all empty, the one
+/// non-canonical spelling of "no parameter attributes".
+pub fn normalize_param_attrs(attrs: &mut AttributeMap) {
+    let all_empty = attrs
+        .get(PARAM_ATTRS_ATTR)
+        .and_then(Attribute::as_list)
+        .is_some_and(|entries| {
+            entries
+                .iter()
+                .all(|entry| entry.as_dict().is_some_and(AttributeMap::is_empty))
+        });
+    if all_empty {
+        attrs.remove(PARAM_ATTRS_ATTR);
+    }
+}
+
 /// Builder for constructing `TypeData` with a fluent API.
 ///
 /// Defaults to empty params and empty attrs, matching the most common usage.
@@ -555,6 +657,7 @@ pub struct TypeDataBuilder {
     dialect: Symbol,
     name: Symbol,
     params: SmallVec<[TypeRef; 4]>,
+    param_attrs: Vec<AttributeMap>,
     attrs: AttributeMap,
 }
 
@@ -564,17 +667,26 @@ impl TypeDataBuilder {
             dialect: dialect.into(),
             name: name.into(),
             params: SmallVec::new(),
+            param_attrs: Vec::new(),
             attrs: AttributeMap::new(),
         }
     }
 
-    pub fn param(mut self, ty: TypeRef) -> Self {
-        self.params.push(ty);
-        self
+    pub fn param(self, ty: TypeRef) -> Self {
+        self.param_with_attrs(ty, AttributeMap::new())
     }
 
     pub fn params(mut self, tys: impl IntoIterator<Item = TypeRef>) -> Self {
-        self.params.extend(tys);
+        for ty in tys {
+            self = self.param(ty);
+        }
+        self
+    }
+
+    /// Add a type parameter carrying its own attributes.
+    pub fn param_with_attrs(mut self, ty: TypeRef, attrs: AttributeMap) -> Self {
+        self.params.push(ty);
+        self.param_attrs.push(attrs);
         self
     }
 
@@ -583,7 +695,16 @@ impl TypeDataBuilder {
         self
     }
 
-    pub fn build(self) -> TypeData {
+    /// Build the type data. Parameter attributes given with
+    /// [`param_with_attrs`](Self::param_with_attrs) are stored in canonical
+    /// [`PARAM_ATTRS_ATTR`] form and replace one set through
+    /// [`attr`](Self::attr); an explicit all-empty value is dropped.
+    pub fn build(mut self) -> TypeData {
+        if let Some(value) = param_attrs_attribute(self.param_attrs) {
+            self.attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
+        } else {
+            normalize_param_attrs(&mut self.attrs);
+        }
         TypeData {
             dialect: self.dialect,
             name: self.name,
@@ -714,6 +835,104 @@ mod tests {
     use super::*;
     use crate::IrContext;
     use crate::Symbol;
+
+    #[test]
+    fn parameter_attributes_are_canonical_and_part_of_identity() {
+        let mut ctx = IrContext::new();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+            .into_iter()
+            .collect();
+
+        let plain = ctx.intern_type(
+            TypeDataBuilder::new("core", "tuple")
+                .params([i32_ty, i32_ty])
+                .build(),
+        );
+        let empty = ctx.intern_type(
+            TypeDataBuilder::new("core", "tuple")
+                .param_with_attrs(i32_ty, AttributeMap::new())
+                .param(i32_ty)
+                .build(),
+        );
+        let explicit_empty = ctx.intern_type(
+            TypeDataBuilder::new("core", "tuple")
+                .params([i32_ty, i32_ty])
+                .attr(
+                    PARAM_ATTRS_ATTR,
+                    Attribute::List(vec![
+                        Attribute::Dict(AttributeMap::new()),
+                        Attribute::Dict(AttributeMap::new()),
+                    ]),
+                )
+                .build(),
+        );
+        assert_eq!(plain, empty);
+        assert_eq!(plain, explicit_empty);
+        assert!(!ctx.get_type(plain).attrs.contains_key(PARAM_ATTRS_ATTR));
+
+        let with_attrs = ctx.intern_type(
+            TypeDataBuilder::new("core", "tuple")
+                .param(i32_ty)
+                .param_with_attrs(i32_ty, marked.clone())
+                .build(),
+        );
+        assert_ne!(plain, with_attrs);
+        let data = ctx.get_type(with_attrs);
+        assert!(data.param_attrs(0).is_empty());
+        assert_eq!(data.param_attrs(1), &marked);
+        assert_eq!(
+            data.params_with_attrs().collect::<Vec<_>>(),
+            vec![(i32_ty, &AttributeMap::new()), (i32_ty, &marked)]
+        );
+        assert_eq!(data.validate_param_attrs(), Ok(()));
+    }
+
+    #[test]
+    fn malformed_parameter_attributes_are_reported() {
+        let dict = |entries: Vec<(&str, Attribute)>| {
+            Attribute::Dict(
+                entries
+                    .into_iter()
+                    .map(|(key, value)| (Symbol::from_dynamic(key), value))
+                    .collect(),
+            )
+        };
+        let attrs = |value| -> AttributeMap {
+            [(Symbol::new(PARAM_ATTRS_ATTR), value)]
+                .into_iter()
+                .collect()
+        };
+        assert_eq!(
+            validate_param_attrs(&attrs(Attribute::Unit), 1),
+            Err(ParamAttrsError::NotList)
+        );
+        assert_eq!(
+            validate_param_attrs(
+                &attrs(Attribute::List(vec![dict(vec![("k", Attribute::Unit)])])),
+                2
+            ),
+            Err(ParamAttrsError::LengthMismatch {
+                params: 2,
+                attrs: 1
+            })
+        );
+        assert_eq!(
+            validate_param_attrs(
+                &attrs(Attribute::List(vec![
+                    dict(vec![("k", Attribute::Unit)]),
+                    Attribute::Unit
+                ])),
+                2
+            ),
+            Err(ParamAttrsError::NotDict(1))
+        );
+        assert_eq!(
+            validate_param_attrs(&attrs(Attribute::List(vec![dict(vec![])])), 1),
+            Err(ParamAttrsError::AllEmpty)
+        );
+        assert_eq!(validate_param_attrs(&AttributeMap::new(), 3), Ok(()));
+    }
 
     #[test]
     fn nested_types_are_visited_and_mapped_through_lists_and_dicts() {

@@ -405,6 +405,14 @@ fn report_schema_violations(
 
 fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     for (ty, data) in ctx.types().iter() {
+        if let Err(error) = data.validate_param_attrs() {
+            errors.push(ValidationError::Operation {
+                message: format!(
+                    "type verifier failed for {}.{} ({ty}): {error}",
+                    data.dialect, data.name
+                ),
+            });
+        }
         if data.dialect == crate::dialect::core::DIALECT_NAME() && data.name == Symbol::new("func")
         {
             errors.push(ValidationError::Operation {

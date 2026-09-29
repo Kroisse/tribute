@@ -779,7 +779,18 @@ mod tests {
             Symbol::new("metadata"),
             Attribute::List(vec![Attribute::Type(nested)]),
         );
-        let outer = func::func_sig_with_attrs(&mut ctx, inputs, results, attrs).as_type_ref();
+        let input_attrs: trunk_ir::AttributeMap = [(Symbol::new("marker"), Attribute::Unit)]
+            .into_iter()
+            .collect();
+        let outer = func::func_sig_with_param_attrs(
+            &mut ctx,
+            inputs.into_iter().map(|ty| (ty, input_attrs.clone())),
+            results
+                .into_iter()
+                .map(|ty| (ty, trunk_ir::AttributeMap::new())),
+            attrs,
+        )
+        .as_type_ref();
         ctx.op_mut(function)
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(outer));
@@ -807,7 +818,7 @@ mod tests {
         assert_eq!(
             signature.non_reserved_attrs(&ctx).count(),
             0,
-            "shared signature metadata has no Wasm meaning"
+            "shared signature metadata, including parameter attributes, has no Wasm meaning"
         );
         crate::validate_wasm_ir(&ctx, module).expect("nested callable identity must validate");
         crate::emit_module_to_wasm(&mut ctx, module)
