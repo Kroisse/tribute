@@ -4,6 +4,7 @@ use crate::IrContext;
 
 // === Operation registrations ===
 crate::register_isolated_op!(Module);
+crate::register_pure_op!(NilValue);
 
 #[trunk_ir::dialect]
 mod core {
@@ -13,6 +14,9 @@ mod core {
     }
 
     fn unrealized_conversion_cast(value: Value<_>) -> Value<_> {}
+
+    /// The only value of `core.nil`.
+    fn nil_value() -> Value<Nil> {}
 
     struct Nil;
     struct Never;
@@ -130,6 +134,27 @@ impl FloatLike {
     }
 }
 
+/// Numeric types: integers and floats.
+pub struct NumericLike;
+
+impl crate::type_constraint::TypeConstraint for NumericLike {
+    const DESC: &'static crate::type_constraint::ConstraintDesc =
+        &crate::type_constraint::ConstraintDesc {
+            name: "NumericLike",
+            exact: false,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+            fixed: None,
+        };
+}
+
+impl NumericLike {
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        IntegerLike::matches(ctx, ty) || FloatLike::matches(ctx, ty)
+    }
+}
+
 /// Machine scalar types: integers, floats, and `core.ptr`.
 ///
 /// These are the values a single machine load or store moves; aggregates and
@@ -150,7 +175,7 @@ impl crate::type_constraint::TypeConstraint for ScalarLike {
 
 impl ScalarLike {
     pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
-        IntegerLike::matches(ctx, ty) || FloatLike::matches(ctx, ty) || {
+        NumericLike::matches(ctx, ty) || {
             let data = ctx.get_type(ty);
             data.dialect == Symbol::new("core")
                 && data.name == Symbol::new("ptr")

@@ -515,8 +515,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @test_fn() -> core.never {
-    %k = arith.const {value = 0} : tribute_rt.anyref
+  func.func @test_fn(%k: tribute_rt.anyref) -> core.never {
     ability.perform %k {ability_ref = core.ability_ref() {name = @State}, op_name = @get}
   }
 }"#,

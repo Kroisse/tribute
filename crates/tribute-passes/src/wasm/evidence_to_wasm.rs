@@ -1380,7 +1380,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main() -> core.nil {
-    %nil = arith.const {value = unit} : core.nil
+    %nil = core.nil_value : core.nil
     func.return %nil
   }
 }"#,

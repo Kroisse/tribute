@@ -29,7 +29,7 @@ core.module @test {
           }
           tribute_control.handler {ability_ref = core.ability_ref(core.i32) {name = @State}, kind = @op, op_name = @set, operation_result_type = core.nil} {
             ^bb5(%7: core.i32, %8: tribute_control.resume_token(core.nil, core.i32)):
-              %9 = arith.const {value = unit} : core.nil
+              %9 = core.nil_value : core.nil
               %10 = tribute_control.resume %8, %9 : core.i32
               tribute_control.yield %10
           }

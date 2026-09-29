@@ -568,10 +568,8 @@ fn build_cps_root_call(
         .build(ctx, location);
     set_root_convention(ctx, dispatch_function.op_ref(), CallingConvention::Cps);
 
-    let initial = arith::Const::operands()
-        .value(Attribute::Unit)
-        .results(source_result)
-        .build(ctx, location);
+    // Root entry validation admits only a nil source result.
+    let initial = core::NilValue::operands().build(ctx, location);
     ctx.push_op(entry, initial.op_ref());
     let cell_new = adt::StructNew::operands([initial.result(ctx)])
         .r#type(cell_ty)
@@ -1795,7 +1793,7 @@ mod tests {
             func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
             func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = 1} { func.return }
             func.func @unit() -> core.nil attributes {tribute.calling_convention = 0} {
-                %nil = arith.const {value = unit} : core.nil
+                %nil = core.nil_value : core.nil
                 func.return %nil
             }
             func.func @caller(%ev: !Evidence) attributes {tribute.calling_convention = 1} {
@@ -2183,7 +2181,7 @@ mod tests {
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
   !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
-    %nil = arith.const {value = unit} : core.nil
+    %nil = core.nil_value : core.nil
     func.return %nil
   }
   func.func @caller(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
@@ -2214,7 +2212,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
-    %nil = arith.const {value = unit} : core.nil
+    %nil = core.nil_value : core.nil
     func.return %nil
   }
   func.func @caller() -> core.nil attributes {tribute.calling_convention = 0} {
@@ -2445,7 +2443,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
-  func.func @run(%value: core.bool) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @run(%value: core.i1) -> core.never attributes {tribute.calling_convention = 2} {
     func.tail_call %value {callee = @callee, tribute.calling_convention = 2}
   }
 }"#,
@@ -2721,7 +2719,7 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.never attributes {tribute.calling_convention = 2}
   func.func @holder() -> core.i32 {
-    %function = func.constant {func_ref = @external} : func.func_sig<(core.bool) -> core.never>
+    %function = func.constant {func_ref = @external} : func.func_sig<(core.i1) -> core.never>
     func.unreachable
   }
 }"#,

@@ -2,6 +2,7 @@
 //!
 //! This pass converts arithmetic operations to their wasm equivalents:
 //! - `arith.const` -> `wasm.{i32,i64,f32,f64}_const`
+//! - `core.nil_value` -> `wasm.nop`
 //! - `arith.{add,sub,mul,div,rem}` -> `wasm.{type}_{op}`
 //! - `arith.cmp_*` -> `wasm.{type}_{cmp}`
 //! - `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
@@ -16,7 +17,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -30,12 +31,38 @@ use trunk_ir::types::Attribute;
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(ArithConstPattern)
+        .add_pattern(NilValuePattern)
         .add_pattern(ArithBinOpPattern)
         .add_pattern(ArithCmpPattern)
         .add_pattern(ArithNegPattern)
         .add_pattern(ArithBitwisePattern)
         .add_pattern(ArithConversionPattern);
     applicator.apply_partial(ctx, module);
+}
+
+/// Pattern for `core.nil_value` -> `wasm.nop`
+///
+/// Nil has no Wasm representation; its value is a placeholder.
+struct NilValuePattern;
+
+impl RewritePattern for NilValuePattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !core::NilValue::matches(ctx, op) {
+            return false;
+        }
+        let result_ty = ctx.op_result_types(op)[0];
+        let loc = ctx.op(op).location;
+        let nop = wasm_dialect::Nop::operands()
+            .results(result_ty)
+            .build(ctx, loc);
+        rewriter.replace_op(nop.op_ref());
+        true
+    }
 }
 
 /// Pattern for `arith.const` -> `wasm.{type}_const`
@@ -57,18 +84,9 @@ impl RewritePattern for ArithConstPattern {
             return false;
         };
 
-        // Handle nil type constants specially
         let Some(type_name) = type_suffix(ctx, result_ty) else {
             return false;
         };
-        if type_name == "nil" {
-            let loc = ctx.op(op).location;
-            let nop = wasm_dialect::Nop::operands()
-                .results(result_ty)
-                .build(ctx, loc);
-            rewriter.replace_op(nop.op_ref());
-            return true;
-        }
 
         let loc = ctx.op(op).location;
         let value = _const_op.value(ctx);
@@ -772,7 +790,6 @@ pub(crate) fn type_suffix(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> 
     match IntegerLike::width(ctx, ty) {
         Some(64) => Some("i64"),
         Some(width) if width <= 32 => Some("i32"),
-        _ if core::Nil::matches(ctx, ty) => Some("nil"),
         _ => None,
     }
 }

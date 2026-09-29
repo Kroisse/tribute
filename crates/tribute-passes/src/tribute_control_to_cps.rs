@@ -2606,10 +2606,7 @@ impl<'a> Converter<'a> {
         let input = if type_is(self.ctx, input_type, "core", "nil") {
             // Nil has no physical payload: its exact resumption receives the
             // canonical unit instead of an erased runtime value.
-            let unit = arith::Const::operands()
-                .value(Attribute::Unit)
-                .results(input_type)
-                .build(self.ctx, location);
+            let unit = core::NilValue::operands().build(self.ctx, location);
             self.ctx.push_op(block, unit.op_ref());
             unit.result(self.ctx)
         } else if type_is(self.ctx, input_type, "adt", "typeref") {

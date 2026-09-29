@@ -356,6 +356,8 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   이 cast는 callable adapter를 생성하지 않는다. Named callable의 convention 강화는
   declaration provenance가 있는 `tribute_control.func_ref`로 표현하고 shared
   legalization에서 실제 adapter를 생성해야 한다.
+- `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
+  nil을 만들지 않는다.
 - Operation and type names are interned `Symbol`s. Qualified paths are stored as
   `::`-separated symbols.
 - 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접 호출과 주소 참조)는
@@ -1009,6 +1011,8 @@ tail-call lowering.
 
 `arith.*` represents constants, integer and floating arithmetic, comparisons,
 bit operations, and numeric conversions.
+`arith.const`는 정수와 부동소수 값만 만든다. 정수 결과는 `Int` 속성을 받고,
+`core.i1`은 `Bool` 속성도 받는다. 부동소수 결과는 `FloatBits` 속성을 받는다.
 정수 타입 `core.i{N}`은 부호가 없다(signless). 부호는 타입이 아니라 각 operation이
 정한다. 부호에 따라 결과가 달라지는 operation은 모두 부호 있는 쪽과 없는 쪽을 명시한
 쌍으로 둔다: `divsi`/`divui`, `remsi`/`remui`, `shr`/`shru`, `cmpi` predicate,
