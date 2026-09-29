@@ -162,14 +162,14 @@ signature를 still-unconverted operation과 맞대지 않는다.
 
 The frontend accepts `main` only when its declared result is `Nil`. A frontend
 error is terminal, so the Wasm backend never receives a valid program whose
-`main` returns an `Int`, `Nat`, or another user value. The generated `_start`
-function therefore calls the entry function for its side effects. Entry bridge
-composition inside the [representation/ABI boundary](ir.md#representationabi-경계)
-supplies that function: a pure `main` is used directly, and a `main ->{Io} Nil`
-is wrapped so that the wrapper creates target-provided initial evidence and
-calls it through the `EvidenceDirect` ABI. `_start` therefore calls a
-parameterless platform-convention function and never reads a semantic calling
-convention. Other residual effects are rejected by the frontend.
+`main` returns an `Int`, `Nat`, or another user value. Entry bridge composition
+inside the [representation/ABI boundary](ir.md#representationabi-경계) turns
+every root `main` into a worker and synthesizes a parameterless, unreferenced
+wrapper `main` that supplies the worker's convention-specific inputs, such as
+target-provided initial evidence. Wasm lowering exports that wrapper directly
+as the WASI command entry `_start`; it builds no separate start function, never
+reads a semantic calling convention, and exports no `main`. Other residual
+effects are rejected by the frontend.
 Printing program results belongs in explicit standard I/O calls such as
 `std::io::print_line`, which shared lowering maps to the target-independent I/O
 boundary described in [io.md](io.md), not in backend entrypoint lowering.

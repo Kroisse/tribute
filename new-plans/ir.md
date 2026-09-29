@@ -1132,10 +1132,14 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 경계가 부여한
   명시적 layout 식별자로 구별한다. Struct 이름, field 모양, `arrayref` 같은 erased
   heap 형상을 provenance로 쓰지 않는다.
-- **진입점:** Target 진입점(native `main`, Wasm `_start`)이 호출하는 함수는 hidden
-  매개변수가 없는 platform 규약 physical 함수다. 초기 evidence 생성처럼 source
-  calling convention에 따라 달라지는 부분은 bridge 합성이 소비한다. Target 진입점
-  생성은 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더한다.
+- **진입점:** 출구의 root `main`은 bridge 합성이 만든 wrapper다. Hidden 매개변수가
+  없고 결과는 `Nil`이며 platform 규약을 따른다. Body는 root worker 호출 하나로 끝나고,
+  모듈 안에서 이 `main`을 참조하는 곳은 없다. 원래 source `main`은 모든 calling
+  convention에서 root worker가 되고, 모듈 안의 참조도 worker로 옮겨 간다. 초기
+  evidence와 CPS root frame처럼 source calling convention에 따라 달라지는 부분은
+  bridge 합성이 소비한다. Target은 이 wrapper를 그 자리에서 target 진입점으로 바꾼다.
+  이때 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더하고,
+  별도 진입 함수를 만들거나 `main`의 이름을 바꾸지 않는다.
 - **Runtime helper 바인딩:** 출구에서 참조가 남은 bodyless 선언은 명시적 바인딩
   의도를 가진다. Target이 충족할 수 없다고 알려진 helper(예: 해당 target에 없는
   runtime allocator)에 대한 참조는 emission이 아니라 경계 출구 검증에서 거부한다.

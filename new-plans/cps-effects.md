@@ -378,7 +378,7 @@ Root `main`은 하나뿐인 target-independent CPS delimiter다. Source residual
 계약은 기존 pure-or-`Io` entry를 유지하며 residual general effect는 backend 전에
 거부한다. Nested module의 `main`은 일반 worker다.
 
-Target-independent 경계는 Direct/EvidenceDirect export wrapper가 source result
+Target-independent 경계는 root wrapper가 source result
 type의 completion cell과 이를 capture한 terminal `Done<R>` 및 terminal
 `Dispatch<R>`를 담은 정확한 `ContinuationFrame<R>`를 소유한다는 추상 조합
 계약만 정한다. Worker ABI의 두 번째 operand는 이 nominal frame이며 bare
@@ -397,12 +397,19 @@ producer는 `[core.never]`를 유지하고 물리화는 정확한 Cps 결과만 
 이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는
 control carrier가 아니다.
 
-Target 진입점은 hidden 매개변수가 없는 platform 규약 `main`만 호출한다
-([진입점 계약](ir.md#representationabi-경계)). 그래서 root bridge 합성은 결과로
-나온 root `main`이 EvidenceDirect이면(EvidenceDirect export wrapper 또는
-EvidenceDirect source `main`) 그 함수를 worker로 바꾼다. 그리고 target의 초기
-evidence를 만들어 그 worker를 호출하는 무인자 `main`을 합성한다. Native
-entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는다.
+Root bridge 합성은 source `main`의 calling convention과 관계없이 그 함수를 하나의
+root worker로 바꾸고, hidden 매개변수가 없는 Direct wrapper `main`을 합성한다
+([진입점 계약](ir.md#representationabi-경계)). Wrapper는 worker 규약이 요구하는
+입력을 스스로 만든다.
+
+| Worker 규약 | Wrapper가 만드는 입력 | Wrapper의 결과 |
+| --- | --- | --- |
+| `Direct` | 없음 | worker 결과 |
+| `EvidenceDirect` | target의 초기 evidence | worker 결과 |
+| `Cps` | 초기 evidence와 completion cell을 capture한 `ContinuationFrame<R>` | call이 돌아온 뒤 읽은 cell 값 |
+
+그래서 root마다 worker는 정확히 하나이고, wrapper는 export 규약을 보존하지 않는다.
+Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는다.
 
 ### `handle`: evidence extension + handler closures
 
