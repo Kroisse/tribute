@@ -50,16 +50,13 @@ fn arith_to_clif_target() -> ConversionTarget {
 
 /// Classify a type into the clif lowering category.
 ///
-/// `core` integers and `core.ptr` (a pointer-sized integer in clif) lower as
-/// integers. `core` integer types carry no signedness, so signed conversions
-/// are used unless an operation says otherwise. Other types have no category,
-/// and patterns leave their operations unconverted.
+/// `core` integer types carry no signedness, so signed conversions are used
+/// unless an operation says otherwise. `arith` does not handle pointers, so
+/// `core.ptr` has no category. Types without a category leave their
+/// operations unconverted.
 fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
     if IntegerLike::matches(ctx, ty) {
         return Some("int");
-    }
-    if core::Ptr::matches(ctx, ty) {
-        return Some("ptr");
     }
     match FloatLike::width(ctx, ty) {
         Some(32) => Some("f32"),
@@ -98,11 +95,7 @@ impl RewritePattern for ArithConstPattern {
         let loc = ctx.op(op).location;
         let value = const_op.value(ctx);
 
-        // Integers never become pointers; the only pointer constant is null.
-        if category == "ptr" && !matches!(value, Attribute::Int(0)) {
-            return false;
-        }
-        if category == "nil" || category == "ptr" {
+        if category == "nil" {
             let new_op = clif::Iconst::operands()
                 .value(0)
                 .results(result_ty)
@@ -565,22 +558,6 @@ mod tests {
     }
 
     #[test]
-    fn pointers_lower_as_integers() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f() {
-    %null = arith.const {value = 0} : core.ptr
-    func.return
-  }
-}"#,
-        );
-        assert!(
-            result.contains("clif.iconst {value = 0} : core.ptr"),
-            "{result}"
-        );
-    }
-
-    #[test]
     fn boolean_conversions_other_than_zero_extension_are_rejected() {
         for body in [
             "%s = arith.extsi %b : core.i32",
@@ -604,13 +581,13 @@ mod tests {
     }
 
     #[test]
-    fn only_null_is_a_pointer_constant() {
+    fn arithmetic_constants_are_never_pointers() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
   func.func @f() {
-    %address = arith.const {value = 4096} : core.ptr
+    %null = arith.const {value = 0} : core.ptr
     func.return
   }
 }"#,

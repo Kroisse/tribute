@@ -2,6 +2,7 @@
 
 // === Pure operation registrations ===
 crate::register_pure_op!(Data);
+crate::register_pure_op!(Null);
 crate::register_pure_op!(PtrAdd);
 // mem.load is intentionally NOT pure: loads depend on mutable memory and may trap.
 
@@ -11,6 +12,10 @@ use crate::dialect::core::{IntegerLike, Ptr, ScalarLike};
 mod mem {
     /// The address of immutable data holding `bytes`.
     fn data(bytes: Attr<Bytes>) -> Value<Ptr> {}
+
+    /// The null pointer, the only pointer constant. It has no provenance and
+    /// must not be dereferenced.
+    fn null() -> Value<Ptr> {}
 
     /// Load a scalar from `ptr` plus an immediate byte `offset`.
     fn load(offset: Attr<u32>, ptr: Value<Ptr>) -> Value<impl ScalarLike> {}
@@ -57,6 +62,8 @@ mod tests {
         assert!(!schema_ok("mem.store %n, %f {offset = 0}"));
         assert!(schema_ok("%a = mem.data {bytes = b\"hi\"} : core.ptr"));
         assert!(!schema_ok("%a = mem.data {bytes = b\"hi\"} : core.i64"));
+        assert!(schema_ok("%a = mem.null : core.ptr"));
+        assert!(!schema_ok("%a = mem.null : core.i64"));
     }
 
     #[test]

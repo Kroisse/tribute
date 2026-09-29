@@ -109,13 +109,9 @@ mod tests {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
-        let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a boxed value
-        let c = trunk_ir::dialect::arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(ptr_ty)
-            .build(&mut ctx, loc);
+        let c = trunk_ir::dialect::mem::Null::operands().build(&mut ctx, loc);
         let boxed_val = c.result(&ctx);
 
         // Create tribute_rt.unbox_int
@@ -146,10 +142,7 @@ mod tests {
         let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a ptr value
-        let c = trunk_ir::dialect::arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(ptr_ty)
-            .build(&mut ctx, loc);
+        let c = trunk_ir::dialect::mem::Null::operands().build(&mut ctx, loc);
         let ptr_val = c.result(&ctx);
 
         // Create tribute_rt.retain
@@ -177,13 +170,9 @@ mod tests {
     fn test_release_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let ptr_ty = make_ptr_type(&mut ctx);
 
         // Create a ptr value
-        let c = trunk_ir::dialect::arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(ptr_ty)
-            .build(&mut ctx, loc);
+        let c = trunk_ir::dialect::mem::Null::operands().build(&mut ctx, loc);
         let ptr_val = c.result(&ctx);
 
         // Create tribute_rt.release (no result, has alloc_size attr)

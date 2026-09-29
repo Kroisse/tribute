@@ -25,6 +25,7 @@ pub fn lower(
         .add_pattern(MemLoadPattern)
         .add_pattern(MemStorePattern)
         .add_pattern(MemPtrAddPattern)
+        .add_pattern(MemNullPattern)
         .with_target(mem_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "mem-to-clif")?;
     Ok(())
@@ -120,6 +121,33 @@ impl RewritePattern for MemPtrAddPattern {
     }
 }
 
+struct MemNullPattern;
+
+impl RewritePattern for MemNullPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !mem::Null::matches(ctx, op) {
+            return false;
+        }
+        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        // Pointers are pointer-width integers in Cranelift; null is zero.
+        let new_op = clif::Iconst::operands()
+            .value(0)
+            .results(result_ty)
+            .build(ctx, loc)
+            .op_ref();
+        rewriter.replace_op(new_op);
+        true
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -147,5 +175,27 @@ mod tests {
         assert!(!printed.contains("mem."), "{printed}");
         assert_eq!(printed.matches("clif.load").count(), 2, "{printed}");
         assert!(printed.contains("clif.iadd"), "{printed}");
+    }
+
+    #[test]
+    fn null_lowers_to_a_zero_pointer_constant() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @null() -> core.ptr {
+    %null = mem.null : core.ptr
+    func.return %null
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new()).expect("mem.null lowers to clif");
+
+        let printed = print_module(&ctx, module.op());
+        assert!(
+            printed.contains("clif.iconst {value = 0} : core.ptr"),
+            "{printed}"
+        );
     }
 }
