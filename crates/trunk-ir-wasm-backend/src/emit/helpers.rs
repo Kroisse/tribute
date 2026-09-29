@@ -64,20 +64,33 @@ pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
     is_type(ctx, ty, "core", "nil")
 }
 
-/// Check if a type is a closure struct type (adt.struct with name "_closure").
-pub(crate) fn is_closure_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_named_adt_struct(ctx, ty, "_closure")
+/// Whether a type carries the runtime layout identifier `layout`.
+pub(crate) fn has_layout(ctx: &IrContext, ty: TypeRef, layout: &'static str) -> bool {
+    ctx.get_type(ty)
+        .attrs
+        .get_symbol(trunk_ir::types::LAYOUT_ATTR)
+        == Some(Symbol::new(layout))
 }
 
-/// Check if a type is an adt.struct with the given name.
-fn is_named_adt_struct(ctx: &IrContext, ty: TypeRef, expected_name: &'static str) -> bool {
-    let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
-        return false;
-    }
-    data.attrs
-        .get_symbol("name")
-        .is_some_and(|name| name == expected_name)
+/// Check if a type is the builtin closure struct, identified by its runtime
+/// layout attribute.
+pub(crate) fn is_closure_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
+    is_type(ctx, ty, "adt", "struct") && has_layout(ctx, ty, crate::gc_types::CLOSURE_LAYOUT)
+}
+
+/// The canonical key standing for every type of one builtin runtime layout.
+pub(crate) fn intern_layout_key(ctx: &mut IrContext, layout: &'static str) -> TypeRef {
+    let mut attrs = AttributeMap::new();
+    attrs.insert(
+        Symbol::new(trunk_ir::types::LAYOUT_ATTR),
+        Attribute::Symbol(Symbol::new(layout)),
+    );
+    ctx.intern_type(trunk_ir::types::TypeData {
+        dialect: Symbol::new("adt"),
+        name: Symbol::new("struct"),
+        params: Default::default(),
+        attrs,
+    })
 }
 
 // ============================================================================
@@ -459,6 +472,28 @@ pub(crate) fn attr_u32(attrs: &AttributeMap, key: Symbol) -> CompilationResult<u
 mod tests {
     use super::*;
     use trunk_ir::types::TypeDataBuilder;
+
+    #[test]
+    fn builtin_closure_is_identified_by_layout_not_name() {
+        let mut ctx = IrContext::new();
+        let named = ctx.intern_type(
+            TypeDataBuilder::new("adt", "struct")
+                .attr("name", Attribute::Symbol(Symbol::new("_closure")))
+                .build(),
+        );
+        let layout = ctx.intern_type(
+            TypeDataBuilder::new("adt", "struct")
+                .attr("name", Attribute::Symbol(Symbol::new("Other")))
+                .attr(
+                    trunk_ir::types::LAYOUT_ATTR,
+                    Attribute::Symbol(Symbol::new(crate::gc_types::CLOSURE_LAYOUT)),
+                )
+                .build(),
+        );
+
+        assert!(!is_closure_struct_type(&ctx, named));
+        assert!(is_closure_struct_type(&ctx, layout));
+    }
 
     #[test]
     fn core_array_uses_nullable_abstract_array_value_type() {

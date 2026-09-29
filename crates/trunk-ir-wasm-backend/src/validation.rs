@@ -548,7 +548,7 @@ mod tests {
             r#"core.module @test {
   !String = adt.enum() {name = @String}
   !Leaf = adt.enum() {base_enum = !String, is_variant = true, variant_tag = @Leaf}
-  !Closure = adt.struct() {fields = [], name = @_closure}
+  !Closure = adt.struct() {fields = [], layout = @closure, name = @_closure}
   !Marker = adt.struct() {fields = [], name = @_Marker}
   !Evidence = core.array(!Marker)
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }

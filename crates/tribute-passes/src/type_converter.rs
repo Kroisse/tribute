@@ -272,7 +272,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-                !Closure = adt.struct() {{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}}
+                !Closure = adt.struct() {{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}}
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
                     func.tail_call_indirect %index, {arg} {{signature = func.func_sig<(!Closure) -> ()>, tribute.calling_convention = 2}}

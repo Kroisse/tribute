@@ -251,7 +251,7 @@ entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 
 
 Plan의 RTTI 배치는 plan을 만든 직후 할당 layout마다 하나의
 `tribute_rtti.layout {type, index, managed}` 선언으로 모듈에 기록한다. index는
-plan의 할당 순서대로 사용자 RTTI index 공간에서 정한다. Semantic `_closure` layout을
+plan의 할당 순서대로 사용자 RTTI index 공간에서 정한다. Closure layout(`layout = @closure`)을
 native closure layout으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과
 그 layout의 RTTI 선언을 함께 바꾼다. RTTI 생성은 선언이 모든 할당 layout을 정확히
 한 번씩 이름 붙이는지 검사한 뒤, layout별 release 함수, index마다 release 함수

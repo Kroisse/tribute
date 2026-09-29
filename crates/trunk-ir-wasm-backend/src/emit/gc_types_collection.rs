@@ -197,11 +197,11 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     }
     let data = ctx.get_type(ty);
 
-    // `_closure` is the target-private builtin closure layout. Logical closure
-    // references and its materialized struct declaration must share this one
-    // physical field representation.
+    // The closure layout is the target-private builtin closure struct.
+    // Logical closure references and its materialized struct declaration
+    // must share this one physical field representation.
     if helpers::is_closure_struct_type(ctx, ty) {
-        return intern_named_adt_struct(ctx, "_closure");
+        return helpers::intern_layout_key(ctx, crate::gc_types::CLOSURE_LAYOUT);
     }
 
     // Recursive ADT references and concrete variants share the physical WasmGC

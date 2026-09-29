@@ -1204,7 +1204,7 @@ mod tests {
     use trunk_ir::printer::print_module;
 
     const TYPES: &str = r#"  !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
-  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}"#;
+  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}"#;
 
     fn module_text(body: &str) -> String {
         format!("core.module @test {{\n{TYPES}\n{body}\n}}")

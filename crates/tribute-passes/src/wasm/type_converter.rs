@@ -91,14 +91,20 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
     let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
 
-    make_adt_struct_type(
+    let closure = make_adt_struct_type(
         ctx,
         Symbol::new("_closure"),
         vec![
             (Symbol::new("table_idx"), i32_ty),
             (Symbol::new("env"), anyref_ty),
         ],
-    )
+    );
+    let mut data = ctx.get_type(closure).clone();
+    data.attrs.insert(
+        Symbol::new(tribute_core::runtime_layout::LAYOUT_ATTR),
+        Attribute::Symbol(Symbol::new(tribute_core::runtime_layout::CLOSURE)),
+    );
+    ctx.intern_type(data)
 }
 
 /// Get the canonical Evidence ADT type for WASM representation (arena version).
@@ -601,6 +607,21 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn closure_layout_identifier_matches_the_wasm_builtin_closure() {
+        assert_eq!(
+            tribute_core::runtime_layout::CLOSURE,
+            trunk_ir_wasm_backend::gc_types::CLOSURE_LAYOUT
+        );
+        let mut ctx = IrContext::new();
+        let closure = closure_adt_type(&mut ctx);
+        assert!(tribute_core::runtime_layout::has_runtime_layout(
+            &ctx,
+            closure,
+            tribute_core::runtime_layout::CLOSURE
+        ));
+    }
     use trunk_ir::ops::DialectOp;
 
     #[test]
@@ -612,7 +633,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, wasm.anyref]]}
+  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, wasm.anyref]], layout = @closure}
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}
