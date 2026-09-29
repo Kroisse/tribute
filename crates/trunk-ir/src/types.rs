@@ -1,9 +1,11 @@
 //! Type interning and path interning for arena-based IR.
 
-use std::collections::HashMap;
+use std::borrow::Borrow;
 use std::fmt;
+use std::hash::{BuildHasher, Hash, RandomState};
 
-use cranelift_entity::PrimaryMap;
+use cranelift_entity::{EntityRef, PrimaryMap};
+use hashbrown::{HashTable, hash_table};
 use smallvec::SmallVec;
 
 use super::refs::{PathRef, TypeRef};
@@ -807,58 +809,131 @@ impl TypeDataBuilder {
 }
 
 // ============================================================================
+// Intern tables
+// ============================================================================
+
+/// Values stored once in `values`, deduplicated through an index of their keys.
+struct InternTable<K: EntityRef, V> {
+    values: PrimaryMap<K, V>,
+    index: HashTable<K>,
+    hasher: RandomState,
+}
+
+/// The result of probing an [`InternTable`] once.
+pub(crate) enum InternEntry<'a, K: EntityRef, V> {
+    Occupied(K),
+    Vacant(VacantIntern<'a, K, V>),
+}
+
+/// A missing value whose slot has been found; inserting it needs no rehash.
+pub(crate) struct VacantIntern<'a, K: EntityRef, V> {
+    values: &'a mut PrimaryMap<K, V>,
+    entry: hash_table::VacantEntry<'a, K>,
+}
+
+impl<K: EntityRef, V> VacantIntern<'_, K, V> {
+    /// Store `value`, which must equal the probed key.
+    pub(crate) fn insert(self, value: V) -> K {
+        let key = self.values.push(value);
+        self.entry.insert(key);
+        key
+    }
+}
+
+impl<K: EntityRef, V: Hash + Eq> InternTable<K, V> {
+    fn new() -> Self {
+        Self {
+            values: PrimaryMap::new(),
+            index: HashTable::new(),
+            hasher: RandomState::new(),
+        }
+    }
+
+    fn lookup<Q: Hash + Eq + ?Sized>(&self, value: &Q) -> Option<K>
+    where
+        V: Borrow<Q>,
+    {
+        let hash = self.hasher.hash_one(value);
+        self.index
+            .find(hash, |&key| self.values[key].borrow() == value)
+            .copied()
+    }
+
+    fn entry<Q: Hash + Eq + ?Sized>(&mut self, value: &Q) -> InternEntry<'_, K, V>
+    where
+        V: Borrow<Q>,
+    {
+        let hash = self.hasher.hash_one(value);
+        let Self {
+            values,
+            index,
+            hasher,
+        } = self;
+        match index.entry(
+            hash,
+            |&key| values[key].borrow() == value,
+            |&key| hasher.hash_one(&values[key]),
+        ) {
+            hash_table::Entry::Occupied(entry) => InternEntry::Occupied(*entry.get()),
+            hash_table::Entry::Vacant(entry) => InternEntry::Vacant(VacantIntern { values, entry }),
+        }
+    }
+
+    fn intern(&mut self, value: V) -> K {
+        match self.entry(&value) {
+            InternEntry::Occupied(key) => key,
+            InternEntry::Vacant(entry) => entry.insert(value),
+        }
+    }
+}
+
+// ============================================================================
 // TypeInterner
 // ============================================================================
 
 /// Deduplicating type interner. Same `TypeData` always yields the same `TypeRef`.
-pub struct TypeInterner {
-    types: PrimaryMap<TypeRef, TypeData>,
-    dedup: HashMap<TypeData, TypeRef>,
-}
+pub struct TypeInterner(InternTable<TypeRef, TypeData>);
 
 impl TypeInterner {
     pub fn new() -> Self {
-        Self {
-            types: PrimaryMap::new(),
-            dedup: HashMap::default(),
-        }
+        Self(InternTable::new())
     }
 
     /// Intern a type, returning an existing ref if the data matches.
     pub fn intern(&mut self, data: TypeData) -> TypeRef {
-        if let Some(&existing) = self.dedup.get(&data) {
-            return existing;
-        }
-        let r = self.types.push(data.clone());
-        self.dedup.insert(data, r);
-        r
+        self.0.intern(data)
+    }
+
+    /// Probe once for `data`, leaving a vacant slot to fill on a miss.
+    pub(crate) fn entry(&mut self, data: &TypeData) -> InternEntry<'_, TypeRef, TypeData> {
+        self.0.entry(data)
     }
 
     /// Look up type data by reference.
     pub fn get(&self, r: TypeRef) -> &TypeData {
-        &self.types[r]
+        &self.0.values[r]
     }
 
     /// Check if this type matches the given dialect and name.
     pub fn is_dialect(&self, r: TypeRef, dialect: Symbol, name: Symbol) -> bool {
-        let data = &self.types[r];
+        let data = self.get(r);
         data.dialect == dialect && data.name == name
     }
 
     /// Iterate over all interned types, yielding `(TypeRef, &TypeData)` pairs.
     pub fn iter(&self) -> impl Iterator<Item = (TypeRef, &TypeData)> {
-        self.types.iter()
+        self.0.values.iter()
     }
 
     /// Find a TypeRef by looking up through the dedup map.
     /// Returns `None` if no type with the given data exists.
     pub fn lookup(&self, data: &TypeData) -> Option<TypeRef> {
-        self.dedup.get(data).copied()
+        self.0.lookup(data)
     }
 
     /// Estimate the complexity of a type for alias generation heuristics.
     pub fn complexity(&self, ty: TypeRef) -> usize {
-        let data = &self.types[ty];
+        let data = self.get(ty);
         let mut size = data.dialect.with_str(|s| s.len()) + 1 + data.name.with_str(|s| s.len());
         for &param in &data.params {
             size += self.complexity(param) + 2; // ", " separator
@@ -882,37 +957,31 @@ impl Default for TypeInterner {
 // ============================================================================
 
 /// Deduplicating path (URI string) interner.
-pub struct PathInterner {
-    paths: PrimaryMap<PathRef, String>,
-    dedup: HashMap<String, PathRef>,
-}
+pub struct PathInterner(InternTable<PathRef, String>);
 
 impl PathInterner {
     pub fn new() -> Self {
-        Self {
-            paths: PrimaryMap::new(),
-            dedup: HashMap::default(),
-        }
+        Self(InternTable::new())
     }
 
     /// Intern a path string, returning an existing ref if the string matches.
     pub fn intern(&mut self, path: String) -> PathRef {
-        if let Some(&existing) = self.dedup.get(&path) {
-            return existing;
-        }
-        let r = self.paths.push(path.clone());
-        self.dedup.insert(path, r);
-        r
+        self.0.intern(path)
+    }
+
+    /// Probe once for `path`, leaving a vacant slot to fill on a miss.
+    pub(crate) fn entry(&mut self, path: &str) -> InternEntry<'_, PathRef, String> {
+        self.0.entry(path)
     }
 
     /// Find an existing path without changing the interner.
     pub fn lookup(&self, path: &str) -> Option<PathRef> {
-        self.dedup.get(path).copied()
+        self.0.lookup(path)
     }
 
     /// Look up path string by reference.
     pub fn get(&self, r: PathRef) -> &str {
-        &self.paths[r]
+        &self.0.values[r]
     }
 }
 
@@ -1226,6 +1295,34 @@ mod tests {
         let data = ctx.get_type(r1);
         assert_eq!(data.params.len(), 2);
         assert_eq!(data.params[0], i32_ref);
+    }
+
+    #[test]
+    fn type_interner_keeps_identities_across_index_growth() {
+        let mut interner = TypeInterner::new();
+        let data = |index: usize| {
+            TypeDataBuilder::new("test", "numbered")
+                .attr("index", Attribute::Int(index as i128))
+                .build()
+        };
+        let refs: Vec<_> = (0..1000)
+            .map(|index| interner.intern(data(index)))
+            .collect();
+        for (index, &r) in refs.iter().enumerate() {
+            assert_eq!(interner.lookup(&data(index)), Some(r));
+            assert_eq!(interner.intern(data(index)), r);
+            assert_eq!(interner.get(r), &data(index));
+        }
+        assert_eq!(interner.iter().count(), refs.len());
+        assert_eq!(interner.lookup(&data(1000)), None);
+    }
+
+    #[test]
+    fn path_interner_looks_up_borrowed_strings() {
+        let mut interner = PathInterner::new();
+        let r = interner.intern("file:///a.trb".to_owned());
+        assert_eq!(interner.lookup("file:///a.trb"), Some(r));
+        assert_eq!(interner.lookup("file:///b.trb"), None);
     }
 
     #[test]

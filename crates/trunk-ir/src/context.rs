@@ -123,6 +123,12 @@ pub struct IrContext {
     diagnostics: RefCell<Vec<Diagnostic>>,
 }
 
+/// Advance an IR revision; a field-level helper so interning can advance it
+/// while an interner entry is still borrowed.
+fn advance_revision(revision: &mut u64) {
+    *revision = revision.checked_add(1).expect("IR revision exhausted");
+}
+
 impl IrContext {
     /// Create a new empty IR context.
     pub fn new() -> Self {
@@ -157,7 +163,7 @@ impl IrContext {
     }
 
     fn bump_revision(&mut self) {
-        self.revision = self.revision.checked_add(1).expect("IR revision exhausted");
+        advance_revision(&mut self.revision);
     }
 
     /// Read interned types without granting mutable access to the IR.
@@ -184,20 +190,24 @@ impl IrContext {
             data.name,
             data.validate_param_attrs().unwrap_err()
         );
-        if let Some(ty) = self.types.lookup(&data) {
-            return ty;
+        match self.types.entry(&data) {
+            InternEntry::Occupied(ty) => ty,
+            InternEntry::Vacant(entry) => {
+                advance_revision(&mut self.revision);
+                entry.insert(data)
+            }
         }
-        self.bump_revision();
-        self.types.intern(data)
     }
 
     /// Intern a path, advancing the revision only for a new entry.
     pub fn intern_path(&mut self, path: String) -> PathRef {
-        if let Some(existing) = self.paths.lookup(&path) {
-            return existing;
+        match self.paths.entry(&path) {
+            InternEntry::Occupied(existing) => existing,
+            InternEntry::Vacant(entry) => {
+                advance_revision(&mut self.revision);
+                entry.insert(path)
+            }
         }
-        self.bump_revision();
-        self.paths.intern(path)
     }
 
     // ========================================================================
