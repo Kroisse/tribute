@@ -18,7 +18,7 @@ use tribute::{Rope, SourceCst, TributeDatabaseImpl};
 use tribute_passes::abi_boundary::TargetKind;
 use trunk_ir::{IrContext, Module};
 
-use super::programs::Program;
+use crate::programs::Program;
 
 pub const TARGETS: [TargetKind; 2] = [TargetKind::Native, TargetKind::Wasm];
 

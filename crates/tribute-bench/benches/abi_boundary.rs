@@ -1,8 +1,8 @@
 //! Compile-time and runtime benchmarks around the representation/ABI boundary.
 //!
 //! ```text
-//! cargo bench --bench abi_boundary -- --save-baseline <name>
-//! cargo bench --bench abi_boundary -- --baseline <name>
+//! cargo bench -p tribute-bench --bench abi_boundary -- --save-baseline <name>
+//! cargo bench -p tribute-bench --bench abi_boundary -- --baseline <name>
 //! ```
 //!
 //! Compile stages are timed separately: frontend, shared middle-end, target
@@ -10,7 +10,7 @@
 //! stage's input is prepared outside the timed region. Native runtime is
 //! timed on a linked executable, which needs the development sysroot
 //! (`cargo xtask runtime`). Allocations and code sizes need no statistics and
-//! are reported by `cargo run --release --example abi_boundary_report`.
+//! are reported by the `abi_boundary_report` binary of this crate.
 
 use std::process::Command;
 use std::time::Duration;
@@ -18,13 +18,8 @@ use std::time::Duration;
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use tribute_passes::abi_boundary::TargetKind;
 
-#[path = "support/programs.rs"]
-mod programs;
-#[path = "support/stages.rs"]
-mod stages;
-
-use programs::{PROGRAMS, Program};
-use stages::{TARGETS, target_name};
+use tribute_bench::programs::{PROGRAMS, Program};
+use tribute_bench::stages::{self, TARGETS, target_name};
 
 fn compile_stages(c: &mut Criterion) {
     for program in PROGRAMS {

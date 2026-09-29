@@ -100,16 +100,11 @@ trunk-ir-cranelift-backend.workspace = true
 trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
-criterion.workspace = true
 wasmparser.workspace = true
 insta.workspace = true
 itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
-
-[[bench]]
-name = "abi_boundary"
-harness = false
 
 # Dev and test builds keep debug assertions, including the per-pass IR
 # verifier, but optimize lightly: unoptimized IR walks dominated test time.

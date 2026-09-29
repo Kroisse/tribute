@@ -17,17 +17,17 @@ pub struct Program {
 pub const PROGRAMS: &[Program] = &[
     Program {
         name: "native_calculator",
-        source: include_str!("../../lang-examples/native_calculator.trb"),
-        stdin: include_bytes!("../../tests/fixtures/native_calculator_scripted.stdin"),
+        source: include_str!("../../../lang-examples/native_calculator.trb"),
+        stdin: include_bytes!("../../../tests/fixtures/native_calculator_scripted.stdin"),
     },
     Program {
         name: "native_effects",
-        source: include_str!("../../lang-examples/native_effects.trb"),
+        source: include_str!("../../../lang-examples/native_effects.trb"),
         stdin: b"",
     },
     Program {
         name: "wasm_dynamic_output",
-        source: include_str!("../../lang-examples/wasm_dynamic_output.trb"),
+        source: include_str!("../../../lang-examples/wasm_dynamic_output.trb"),
         stdin: b"",
     },
     Program {

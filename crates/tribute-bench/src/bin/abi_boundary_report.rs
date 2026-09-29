@@ -2,13 +2,13 @@
 //! boundary benchmark programs.
 //!
 //! ```text
-//! cargo run --release --example abi_boundary_report > report.json
+//! cargo run --release -p tribute-bench --bin abi_boundary_report > report.json
 //! ```
 //!
 //! Code sizes are deterministic. Allocation counts vary slightly between runs
 //! (typically well under 1%), so one run per program suffices for comparing
-//! commits. Compile and run times are measured by `cargo bench --bench
-//! abi_boundary`. Native execution needs the development sysroot (`cargo
+//! commits. Compile and run times are measured by the `abi_boundary`
+//! benchmark. Native execution needs the development sysroot (`cargo
 //! xtask runtime`, found through the `TRIBUTE_SYSROOT` that Cargo sets);
 //! Wasm execution needs `wasmtime` on `PATH`. Each is reported as skipped
 //! when unavailable.
@@ -20,15 +20,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{Value, json};
 use tribute_passes::abi_boundary::TargetKind;
 
-#[path = "../benches/support/programs.rs"]
-mod programs;
-// The benchmark uses the stage helpers this report does not.
-#[allow(dead_code)]
-#[path = "../benches/support/stages.rs"]
-mod stages;
-
-use programs::{PROGRAMS, Program};
-use stages::{TARGETS, target_name};
+use tribute_bench::programs::{PROGRAMS, Program};
+use tribute_bench::stages::{self, TARGETS, target_name};
 
 /// Counts allocations and allocated bytes; a reallocation counts as one
 /// allocation of its new size.

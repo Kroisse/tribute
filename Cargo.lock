@@ -1656,7 +1656,6 @@ version = "0.1.0"
 dependencies = [
  "ariadne",
  "clap",
- "criterion",
  "crossbeam-channel",
  "derive_more",
  "fluent-uri",
@@ -1683,6 +1682,20 @@ dependencies = [
  "trunk-ir",
  "trunk-ir-cranelift-backend",
  "trunk-ir-wasm-backend",
+ "wasmparser",
+]
+
+[[package]]
+name = "tribute-bench"
+version = "0.1.0"
+dependencies = [
+ "criterion",
+ "salsa",
+ "serde_json",
+ "tempfile",
+ "tribute",
+ "tribute-passes",
+ "trunk-ir",
  "wasmparser",
 ]
 
