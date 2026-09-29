@@ -1478,6 +1478,25 @@ fn lower_record<'db>(
     spread: Option<Expr<TypedRef<'db>>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
+    if let ResolvedRef::Constructor { variant, .. } = type_name.resolved {
+        let layout = super::resolve_enum_type_attr_for_constructor(
+            builder.ctx,
+            builder.ir,
+            &type_name.resolved,
+            type_name.ty,
+        );
+        if trunk_ir::adt_layout::get_enum_variants(builder.ir, layout).is_some() {
+            return lower_variant_record(
+                builder,
+                location,
+                id,
+                layout,
+                variant,
+                fields,
+                declarations,
+            );
+        }
+    }
     let ctor = super::extract_ctor_id(&type_name.resolved);
     let struct_name = super::extract_type_name(builder.db(), &type_name.resolved);
     let field_order = builder
@@ -1533,6 +1552,48 @@ fn lower_record<'db>(
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, record.op_ref());
     Some(record.result(builder.ir))
+}
+
+/// Lower a record literal that constructs a named-field enum variant. Fields
+/// are evaluated in source order and assembled in declaration order; type
+/// checking rejects spreads, so every field is written.
+fn lower_variant_record<'db>(
+    builder: &mut IrBuilder<'_, 'db>,
+    location: Location,
+    id: crate::ast::NodeId,
+    layout: TypeRef,
+    variant: Symbol,
+    fields: Vec<(Symbol, Expr<TypedRef<'db>>)>,
+    declarations: &mut Declarations<'db>,
+) -> Option<ValueRef> {
+    let field_order = builder
+        .ctx
+        .variant_field_names(layout, variant)
+        .unwrap_or_else(|| panic!("prescan did not register field names of variant {variant}"));
+    let mut values = HashMap::new();
+    for (name, field) in fields {
+        if !field_order.contains(&name) || values.contains_key(&name) {
+            panic!("typechecked variant record has an invalid field layout");
+        }
+        values.insert(name, lower_expr(builder, field, declarations)?);
+    }
+    let ordered = field_order
+        .iter()
+        .map(|name| {
+            *values
+                .get(name)
+                .unwrap_or_else(|| panic!("typechecked variant record is missing field {name}"))
+        })
+        .collect();
+    let ordered = super::expr::cast_variant_args(builder, location, ordered, layout, variant);
+    let result_ty = expr_type_for_id(builder, id);
+    let value = adt::VariantNew::operands(ordered)
+        .r#type(layout)
+        .tag(variant)
+        .results(result_ty)
+        .build(builder.ir, location);
+    builder.ir.push_op(builder.block, value.op_ref());
+    Some(value.result(builder.ir))
 }
 
 fn expr_type_for_id(builder: &mut IrBuilder<'_, '_>, id: crate::ast::NodeId) -> TypeRef {

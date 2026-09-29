@@ -1004,9 +1004,15 @@ impl<'db> TypeChecker<'db> {
             spread.is_some(),
         );
 
-        for (field_name, field_expr) in fields {
-            if let Some(expected_field_ty) =
-                self.lookup_struct_field_type(ctx, struct_ty, *field_name)
+        let written: Vec<Symbol> = fields.iter().map(|(name, _)| *name).collect();
+        let (_, _, variant_field_tys) =
+            self.constructor_field_shape(ctx, record_id, type_name, &written);
+        for ((field_name, field_expr), variant_field_ty) in fields.iter().zip(variant_field_tys) {
+            // Struct fields are read from the struct declaration; a named
+            // variant's fields are its constructor instance's parameters.
+            if let Some(expected_field_ty) = self
+                .lookup_struct_field_type(ctx, struct_ty, *field_name)
+                .or(variant_field_ty)
             {
                 let field_ty = self.infer_expr_with_expected(ctx, field_expr, expected_field_ty);
                 ctx.constrain_coerce(field_ty, expected_field_ty, field_expr.id);
@@ -1032,11 +1038,15 @@ impl<'db> TypeChecker<'db> {
         fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
         has_spread: bool,
     ) {
-        let (struct_id, _) = self.extract_struct_info(struct_ty);
-        let (Some(struct_id), ResolvedRef::Constructor { id, .. }) = (struct_id, type_name) else {
+        let ResolvedRef::Constructor { id, .. } = type_name else {
             return;
         };
-        let Some(declared_fields) = self.env.lookup_struct_fields(struct_id) else {
+        let (struct_id, _) = self.extract_struct_info(struct_ty);
+        let Some(declared_fields) = struct_id.and_then(|id| self.env.lookup_struct_fields(id))
+        else {
+            self.validate_variant_record_shape_with_ctx(
+                ctx, record_id, *id, struct_ty, fields, has_spread,
+            );
             return;
         };
         if !ctx.mark_record_shape_checked(record_id) {
@@ -1048,6 +1058,53 @@ impl<'db> TypeChecker<'db> {
             record_id,
             format_args!("struct `{}`", id.qualified(self.db())),
             &declared,
+            fields.iter().map(|(name, _)| *name),
+            has_spread,
+        );
+    }
+
+    /// Validate a record literal that constructs an enum variant: the variant
+    /// must have named fields, every field must be written, and a spread is
+    /// not allowed because an enum value's variant is not known statically.
+    fn validate_variant_record_shape_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        record_id: NodeId,
+        id: crate::ast::CtorId<'db>,
+        result: Type<'db>,
+        fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
+        has_spread: bool,
+    ) {
+        let is_variant = matches!(
+            result.kind(self.db()),
+            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(*name).is_some()
+        );
+        if !is_variant || !ctx.mark_record_shape_checked(record_id) {
+            return;
+        }
+        let qualified = id.qualified(self.db());
+        let Some(declared) = self.env.lookup_constructor_field_names(id) else {
+            self.report_type_error(
+                record_id,
+                format!(
+                    "`{qualified}` has positional fields; construct it with `{}(...)`",
+                    id.name(self.db())
+                ),
+            );
+            return;
+        };
+        if has_spread {
+            self.report_type_error(
+                record_id,
+                format!(
+                    "record spread is not allowed for variant `{qualified}`; write every field"
+                ),
+            );
+        }
+        self.report_field_shape(
+            record_id,
+            format_args!("variant `{qualified}`"),
+            declared,
             fields.iter().map(|(name, _)| *name),
             has_spread,
         );
@@ -1139,10 +1196,10 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// The constructor instance of a brace-form constructor pattern, the type
-    /// it constructs, and the field type of each written field (`None` for a
-    /// name the constructor does not declare).
-    fn record_pattern_shape(
+    /// The constructor instance of a brace-form constructor pattern or record
+    /// literal, the type it constructs, and the field type of each written
+    /// field (`None` for a name the constructor does not declare).
+    fn constructor_field_shape(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         pattern_id: NodeId,
@@ -2424,7 +2481,7 @@ impl<'db> TypeChecker<'db> {
             } => {
                 let written: Vec<Symbol> = fields.iter().map(|field| field.name).collect();
                 let (_, result, field_tys) =
-                    self.record_pattern_shape(ctx, pattern.id, type_name, &written);
+                    self.constructor_field_shape(ctx, pattern.id, type_name, &written);
                 self.validate_record_pattern_with_ctx(
                     ctx, pattern.id, type_name, result, &written, *rest,
                 );
@@ -2648,7 +2705,7 @@ impl<'db> TypeChecker<'db> {
         let written: Vec<Symbol> = fields.iter().map(|field| field.name).collect();
         if let Some(type_name) = type_name {
             return self
-                .record_pattern_shape(ctx, pattern_id, type_name, &written)
+                .constructor_field_shape(ctx, pattern_id, type_name, &written)
                 .2;
         }
         let (struct_id, type_args) = self.extract_struct_info(ty);

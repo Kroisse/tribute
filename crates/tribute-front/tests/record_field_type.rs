@@ -999,3 +999,64 @@ struct Point { x: Int, y: Int }
     // Should compile without ICE, emitting adt.struct_new
     run_ast_pipeline(db, source);
 }
+
+/// Record literals construct named-field enum variants: fields are matched by
+/// name and typed by the variant's constructor instance.
+#[salsa_test]
+fn named_variant_records_are_checked_by_field_name(db: &salsa::DatabaseImpl) {
+    let valid = r#"
+enum Shape {
+    Dot(Nat),
+    Rect { width: Nat, tall: Bool },
+}
+
+enum Wrap(a) {
+    Box { value: a, tagged: Bool },
+    Empty,
+}
+
+fn rect() -> Shape { Rect { tall: True, width: 7 } }
+fn wrap() -> Wrap(Nat) { Box { tagged: False, value: 1 } }
+"#;
+    let errors: Vec<_> = diagnostics(db, valid)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.inner.message)
+        .collect();
+    assert!(errors.is_empty(), "{errors:?}");
+
+    let invalid = r#"
+enum Shape {
+    Dot(Nat),
+    Rect { width: Nat, tall: Bool },
+}
+
+fn unknown() -> Shape { Rect { width: 1, tall: True, depth: 2 } }
+fn missing() -> Shape { Rect { width: 1 } }
+fn mistyped() -> Shape { Rect { width: True, tall: True } }
+fn spread(shape: Shape) -> Shape { Rect { ..shape, width: 1 } }
+fn positional() -> Shape { Dot { value: 1 } }
+"#;
+    let errors: Vec<_> = diagnostics(db, invalid)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.inner.severity == DiagnosticSeverity::Error)
+        .map(|diagnostic| diagnostic.inner.message)
+        .collect();
+    for expected in [
+        "unknown field `depth` for variant `Rect`",
+        "missing field: tall",
+        "record spread is not allowed for variant `Rect`; write every field",
+        "`Dot` has positional fields; construct it with `Dot(...)`",
+    ] {
+        assert!(
+            errors.iter().any(|error| error == expected),
+            "missing {expected:?} in {errors:?}"
+        );
+    }
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.contains("expected `Nat`, found `Bool`")),
+        "a variant record field must be typed by its declaration: {errors:?}"
+    );
+}

@@ -108,12 +108,8 @@ pub(super) fn emit_logical_pattern_check<'db>(
                     }
                     Some(combine_conditions(builder, location, conditions))
                 }
-                ConstructorLayout::Variant {
-                    ty,
-                    tag,
-                    fields: field_tys,
-                } => emit_logical_variant_pattern_check(
-                    builder, location, scrutinee, ty, tag, &field_tys, &fields,
+                ConstructorLayout::Variant(layout) => emit_logical_variant_pattern_check(
+                    builder, location, scrutinee, &layout, &fields,
                 ),
             }
         }
@@ -149,11 +145,15 @@ enum ConstructorLayout {
     /// A struct: its fields are read directly.
     Struct { ty: TypeRef, fields: Vec<TypeRef> },
     /// An enum variant: the tag is tested before its fields are read.
-    Variant {
-        ty: TypeRef,
-        tag: Symbol,
-        fields: Vec<TypeRef>,
-    },
+    Variant(VariantLayout),
+}
+
+/// The enum layout of one variant: the enum type, the variant's tag, and its
+/// field types.
+struct VariantLayout {
+    ty: TypeRef,
+    tag: Symbol,
+    fields: Vec<TypeRef>,
 }
 
 /// The layout of a constructor pattern and its sub-patterns paired with the
@@ -193,19 +193,18 @@ fn logical_constructor_pattern<'p, 'db>(
                 _ => Vec::new(),
             };
             (
-                ConstructorLayout::Variant {
+                ConstructorLayout::Variant(VariantLayout {
                     ty,
                     tag: variant,
                     fields,
-                },
+                }),
                 names,
             )
         }
     };
     let field_count = match &layout {
-        ConstructorLayout::Struct { fields, .. } | ConstructorLayout::Variant { fields, .. } => {
-            fields.len()
-        }
+        ConstructorLayout::Struct { fields, .. }
+        | ConstructorLayout::Variant(VariantLayout { fields, .. }) => fields.len(),
     };
     let indexed: Vec<_> = match &*pattern.kind {
         PatternKind::Variant { fields, .. } => fields.iter().enumerate().collect(),
@@ -232,16 +231,18 @@ fn logical_constructor_pattern<'p, 'db>(
     (layout, indexed)
 }
 
-#[allow(clippy::too_many_arguments)]
 fn emit_logical_variant_pattern_check<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     scrutinee: ValueRef,
-    enum_ty: TypeRef,
-    variant: Symbol,
-    variant_fields: &[TypeRef],
+    layout: &VariantLayout,
     fields: &[(usize, &Pattern<TypedRef<'db>>)],
 ) -> Option<ValueRef> {
+    let &VariantLayout {
+        ty: enum_ty,
+        tag: variant,
+        fields: ref variant_fields,
+    } = layout;
     let bool_ty = builder.ctx.bool_type(builder.ir);
     let tag = adt::VariantIs::operands(scrutinee)
         .r#type(enum_ty)
@@ -647,11 +648,11 @@ pub(super) fn bind_logical_pattern_fields<'db>(
                         );
                     }
                 }
-                ConstructorLayout::Variant {
+                ConstructorLayout::Variant(VariantLayout {
                     ty,
                     tag,
                     fields: field_tys,
-                } => {
+                }) => {
                     let cast = adt::VariantCast::operands(scrutinee)
                         .r#type(ty)
                         .tag(tag)
