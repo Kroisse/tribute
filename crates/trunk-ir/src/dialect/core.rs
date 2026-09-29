@@ -130,6 +130,36 @@ impl FloatLike {
     }
 }
 
+/// Machine scalar types: integers, floats, and `core.ptr`.
+///
+/// These are the values a single machine load or store moves; aggregates and
+/// managed references are not scalars.
+pub struct ScalarLike;
+
+impl crate::type_constraint::TypeConstraint for ScalarLike {
+    const DESC: &'static crate::type_constraint::ConstraintDesc =
+        &crate::type_constraint::ConstraintDesc {
+            name: "ScalarLike",
+            exact: false,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+            fixed: None,
+        };
+}
+
+impl ScalarLike {
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        IntegerLike::matches(ctx, ty) || FloatLike::matches(ctx, ty) || {
+            let data = ctx.get_type(ty);
+            data.dialect == Symbol::new("core")
+                && data.name == Symbol::new("ptr")
+                && data.params.is_empty()
+                && data.attrs.is_empty()
+        }
+    }
+}
+
 /// Exact bounds for individual `core` scalar types, e.g. `Value<core::I32>`.
 macro_rules! scalar_types {
     ($($(#[$meta:meta])* $wrapper:ident = $name:literal via $category:ident($width:literal);)*) => {$(

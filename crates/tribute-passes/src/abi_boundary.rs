@@ -146,15 +146,19 @@ impl PendingViolation {
 
 /// Violations still present at the exit of `target`'s boundary.
 pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViolation] {
-    const COMMON: [PendingViolation; 2] = [
+    const NATIVE: &[PendingViolation] = &[
         // Read past the exit by native ownership planning.
         PendingViolation::Attribute("tribute.calling_convention"),
-        // Left on bytes intrinsic declarations, which target lowering past
+    ];
+    const WASM: &[PendingViolation] = &[
+        NATIVE[0],
+        // Left on the bytes intrinsic declaration, which Wasm lowering past
         // the exit still recognizes by name.
         PendingViolation::Unclassified("tribute.compiler_intrinsic"),
     ];
     match target {
-        TargetKind::Native | TargetKind::Wasm => &COMMON,
+        TargetKind::Native => NATIVE,
+        TargetKind::Wasm => WASM,
     }
 }
 

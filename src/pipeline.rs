@@ -96,6 +96,14 @@ impl From<PassError> for DumpIrError {
     }
 }
 
+impl From<tribute_passes::native::intrinsic_to_native::BytesIntrinsicError> for DumpIrError {
+    fn from(error: tribute_passes::native::intrinsic_to_native::BytesIntrinsicError) -> Self {
+        Self {
+            message: error.to_string(),
+        }
+    }
+}
+
 impl From<tribute_passes::target_abi::TargetAbiError> for DumpIrError {
     fn from(error: tribute_passes::target_abi::TargetAbiError) -> Self {
         Self {
@@ -1041,6 +1049,9 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     } else {
         tribute_passes::native::evidence::lower_evidence_to_native(ctx, m);
     }
+    // Complete the supported bytes intrinsic bridge inside the boundary; the
+    // lowering consumes its verified compiler intrinsic identity.
+    tribute_passes::native::intrinsic_to_native::lower(ctx, m)?;
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
     debug_validate_value_integrity(ctx, m, "after evidence_to_native");
 
@@ -1233,10 +1244,6 @@ fn prepare_module_to_native(
     // and adt.bytes_const → clif alloc + data reference.
     let const_analysis = tribute_passes::native::const_to_native::analyze_consts(ctx, module);
     tribute_passes::native::const_to_native::lower(ctx, module, &const_analysis)
-        .map_err(native_conversion_failure)?;
-
-    // Phase -0.3 - Lower bytes intrinsic calls to mem.load operations
-    tribute_passes::native::intrinsic_to_native::lower(ctx, module)
         .map_err(native_conversion_failure)?;
 
     // Phase -0.2 - Lower target-independent I/O to the native runtime ABI.
@@ -3677,7 +3684,7 @@ mod Nested {
         assert_eq!(
             identity("__bytes_get_or_panic"),
             Some(Some(trunk_ir::Symbol::new("__bytes_get_or_panic"))),
-            "bytes lowering has no shared consumer yet"
+            "bytes lowering consumes its identity inside the target boundary"
         );
     }
 

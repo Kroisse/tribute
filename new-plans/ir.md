@@ -1011,7 +1011,18 @@ tail-call lowering.
 bit operations, and numeric conversions.
 
 `mem.*` represents low-level data, load, and store operations for runtime or FFI
-support.
+support. 주소는 모두 `core.ptr`다. `mem.data`는 `core.ptr`를 만들고, `mem.load`와
+`mem.store`는 `core.ptr` 주소에서 machine scalar(정수, 부동소수, `core.ptr`) 하나를
+읽고 쓴다. Managed reference나 aggregate는 scalar가 아니다. Managed reference의
+payload를 제자리에서 읽는 lowering은 그 reference를 `core.ptr`로 보는 cast를 명시하고,
+runtime이 넘겨준 pointer를 managed reference로 받는 lowering은 `core.ptr`로 읽은 뒤
+cast를 명시한다.
+주소 계산은 `mem.ptr_add(base: core.ptr, offset: 정수) -> core.ptr` 하나로 표현한다.
+`offset`은 byte 단위다. Schema는 정수 범주만 강제하며, `offset`을 target의 pointer
+폭에 맞추는 것은 생산자의 책임이다. 원소 크기 배율은 적용하지 않으므로, 필요하면 `arith`
+곱셈으로 명시한다. 결과는 `base`의 provenance를 유지한다. `mem.load`와 `mem.store`는
+즉시값 `offset`만 받고 동적 offset을 받지 않는다. 동적 주소는 `mem.ptr_add`로
+만든다. 구조적 index로 주소를 유도하는 GEP식 연산은 두지 않는다.
 
 ## Low-Level Dialects
 

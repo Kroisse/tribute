@@ -1963,6 +1963,22 @@ fn main() {
 }
 
 #[test]
+fn test_native_bytes_get_or_panic_reads_high_bytes_unsigned() {
+    assert_native_output(
+        "bytes_get_or_panic_high.trb",
+        r#"
+fn main() {
+    let bs = b"\xff\x80\x7f"
+    __tribute_print_nat(bs.get_or_panic(0))
+    __tribute_print_nat(bs.get_or_panic(1))
+    __tribute_print_nat(bs.get_or_panic(2))
+}
+"#,
+        "255\n128\n127",
+    );
+}
+
+#[test]
 fn test_native_bytes_get_safe() {
     assert_native_output(
         "bytes_get_safe.trb",
