@@ -665,8 +665,7 @@ pub fn normalize_param_attrs(
 pub struct TypeDataBuilder {
     dialect: Symbol,
     name: Symbol,
-    params: SmallVec<[TypeRef; 4]>,
-    param_attrs: Vec<AttributeMap>,
+    params: SmallVec<[(TypeRef, AttributeMap); 4]>,
     attrs: AttributeMap,
 }
 
@@ -676,7 +675,6 @@ impl TypeDataBuilder {
             dialect: dialect.into(),
             name: name.into(),
             params: SmallVec::new(),
-            param_attrs: Vec::new(),
             attrs: AttributeMap::new(),
         }
     }
@@ -694,8 +692,7 @@ impl TypeDataBuilder {
 
     /// Add a type parameter carrying its own attributes.
     pub fn param_with_attrs(mut self, ty: TypeRef, attrs: AttributeMap) -> Self {
-        self.params.push(ty);
-        self.param_attrs.push(attrs);
+        self.params.push((ty, attrs));
         self
     }
 
@@ -711,15 +708,17 @@ impl TypeDataBuilder {
     /// malformed explicit value is kept and rejected when the type is interned
     /// or validated.
     pub fn build(mut self) -> TypeData {
-        if let Some(value) = param_attrs_attribute(self.param_attrs) {
+        let (params, param_attrs): (SmallVec<[TypeRef; 4]>, Vec<_>) =
+            self.params.into_iter().unzip();
+        if let Some(value) = param_attrs_attribute(param_attrs) {
             self.attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
         } else {
-            let _ = normalize_param_attrs(&mut self.attrs, self.params.len());
+            let _ = normalize_param_attrs(&mut self.attrs, params.len());
         }
         TypeData {
             dialect: self.dialect,
             name: self.name,
-            params: self.params,
+            params,
             attrs: self.attrs,
         }
     }
