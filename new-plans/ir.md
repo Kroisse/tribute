@@ -1265,7 +1265,8 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
 - Target이 layout의 field 표현을 바꾸는 경우(예: native closure layout 적응)에도
-  같은 `layout` 값을 유지한다.
+  같은 `layout` 값을 유지한다. Target type 변환은 식별자를 가진 타입을 식별자가
+  없는 erased reference(예: Wasm `arrayref`)로 바꾸지 않는다.
 - Representation/ABI 경계 이후의 pass는 compiler 소유 layout을 이 속성으로만
   판별한다. Struct 이름, field 모양, element 타입, erased reference 타입으로
   판별하지 않는다. TrunkIR은 값의 의미를 해석하지 않으며, 의미는 이 속성을 정의하는
