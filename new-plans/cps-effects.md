@@ -397,6 +397,13 @@ producer는 `[core.never]`를 유지하고 물리화는 정확한 Cps 결과만 
 이 adapter는 answer-type polymorphism, trampoline, in-band sentinel 또는
 control carrier가 아니다.
 
+Target 진입점은 hidden 매개변수가 없는 platform 규약 `main`만 호출한다
+([진입점 계약](ir.md#representationabi-경계)). 그래서 root bridge 합성은 결과로
+나온 root `main`이 EvidenceDirect이면(EvidenceDirect export wrapper 또는
+EvidenceDirect source `main`) 그 함수를 worker로 바꾼다. 그리고 target의 초기
+evidence를 만들어 그 worker를 호출하는 무인자 `main`을 합성한다. Native
+entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는다.
+
 ### `handle`: evidence extension + handler closures
 
 `handle` lowering은 두 종류의 dispatch closure를 만든다. Environment를 포함한

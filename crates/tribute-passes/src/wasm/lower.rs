@@ -7,7 +7,6 @@
 use std::fmt;
 
 use tracing::{error, warn};
-use tribute_core::{CallingConvention, get_calling_convention};
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
@@ -17,7 +16,7 @@ use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{PassError, PassManager, pass_fn};
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
 };
@@ -26,7 +25,6 @@ use trunk_ir::types::{Location, TypeDataBuilder};
 use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
 use super::type_converter::wasm_type_converter;
-use trunk_ir_wasm_backend::gc_types::EVIDENCE_IDX;
 
 const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
 
@@ -350,7 +348,6 @@ fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) 
 struct MainExports {
     saw_main: bool,
     main_param_types: Vec<TypeRef>,
-    main_convention: CallingConvention,
     main_exported: bool,
 }
 
@@ -359,7 +356,6 @@ impl MainExports {
         Self {
             saw_main: false,
             main_param_types: Vec::new(),
-            main_convention: CallingConvention::Direct,
             main_exported: false,
         }
     }
@@ -476,7 +472,6 @@ impl WasmLowerer {
         }
 
         self.main_exports.saw_main = true;
-        self.main_exports.main_convention = get_calling_convention(ctx, op).unwrap_or_default();
 
         if let Some(fn_ty) = data.attributes.get_type("type")
             && let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty)
@@ -524,7 +519,6 @@ impl WasmLowerer {
 
     /// Build the `_start` function that calls main and handles the result.
     fn build_start_function(&self, ctx: &mut IrContext, location: Location) -> OpRef {
-        let i32_ty = intern_type(ctx, "core", "i32");
         let nil_ty = intern_type(ctx, "core", "nil");
 
         // Build the body block
@@ -535,7 +529,7 @@ impl WasmLowerer {
             parent_region: None,
         });
 
-        self.build_start_simple_body(ctx, body_block, location, i32_ty, nil_ty);
+        self.build_start_body(ctx, body_block, location);
 
         let body_region = ctx.create_region(RegionData {
             location,
@@ -552,17 +546,14 @@ impl WasmLowerer {
         func_op.op_ref()
     }
 
-    /// Build `_start` for a pure `main`, whose source-level result is always Nil.
-    fn build_start_simple_body(
-        &self,
-        ctx: &mut IrContext,
-        body_block: BlockRef,
-        location: Location,
-        i32_ty: TypeRef,
-        _nil_ty: TypeRef,
-    ) {
-        let main_args = self.build_main_args(ctx, body_block, location, i32_ty);
-        let call = wasm_dialect::Call::operands(main_args)
+    /// Build the `_start` body. The entry bridge exposes `main` without hidden
+    /// parameters, and its source-level result is always Nil.
+    fn build_start_body(&self, ctx: &mut IrContext, body_block: BlockRef, location: Location) {
+        assert!(
+            self.main_exports.main_param_types.is_empty(),
+            "Wasm entrypoint: root `main` must have no hidden parameters after the entry bridge"
+        );
+        let call = wasm_dialect::Call::operands(vec![])
             .callee(Symbol::new("main"))
             .results(vec![])
             .build(ctx, location);
@@ -570,47 +561,6 @@ impl WasmLowerer {
 
         let ret = wasm_dialect::Return::operands(vec![]).build(ctx, location);
         ctx.push_op(body_block, ret.op_ref());
-    }
-
-    fn build_main_args(
-        &self,
-        ctx: &mut IrContext,
-        body_block: BlockRef,
-        location: Location,
-        i32_ty: TypeRef,
-    ) -> Vec<ValueRef> {
-        match self.main_exports.main_convention {
-            CallingConvention::Direct => {
-                assert!(
-                    self.main_exports.main_param_types.is_empty(),
-                    "Wasm entrypoint: Direct `main` must not have hidden parameters"
-                );
-                Vec::new()
-            }
-            CallingConvention::EvidenceDirect => {
-                assert_eq!(
-                    self.main_exports.main_param_types.len(),
-                    1,
-                    "Wasm entrypoint: EvidenceDirect `main` must have one evidence parameter"
-                );
-                let zero = wasm_dialect::I32Const::operands()
-                    .value(0)
-                    .results(i32_ty)
-                    .build(ctx, location);
-                ctx.push_op(body_block, zero.op_ref());
-                let empty = wasm_dialect::ArrayNewDefault::operands(zero.result(ctx))
-                    .type_idx(EVIDENCE_IDX)
-                    .results(self.main_exports.main_param_types[0])
-                    .build(ctx, location);
-                ctx.push_op(body_block, empty.op_ref());
-                vec![empty.result(ctx)]
-            }
-            CallingConvention::Cps => {
-                panic!(
-                    "Wasm entrypoint: Cps `main` is invalid; frontend must reject residual control effects"
-                )
-            }
-        }
     }
 }
 
@@ -703,28 +653,13 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @m { wasm.func {sym_name = @main, type = wasm.func_sig<(wasm.arrayref) -> ()>, tribute.calling_convention = 1} {} }",
+            "core.module @m { wasm.func {sym_name = @main, type = wasm.func_sig<(wasm.arrayref) -> ()>} {} }",
         );
         let main = module.ops(&ctx)[0];
         let mut lowerer = WasmLowerer::new();
         lowerer.scan_wasm_func(&ctx, main);
         let evidence = intern_type(&mut ctx, "wasm", "arrayref");
         assert_eq!(lowerer.main_exports.main_param_types, [evidence]);
-        assert_eq!(
-            lowerer.main_exports.main_convention,
-            CallingConvention::EvidenceDirect
-        );
-        let location = ctx.op(main).location;
-        let block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let i32_ty = intern_type(&mut ctx, "core", "i32");
-        let args = lowerer.build_main_args(&mut ctx, block, location, i32_ty);
-        assert_eq!(args.len(), 1);
-        assert_eq!(ctx.value_ty(args[0]), evidence);
         let before = print_module(&ctx, module.op());
         let error = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
             .err()
@@ -734,25 +669,18 @@ mod tests {
     }
 
     #[test]
-    fn wasm_start_passes_empty_evidence_to_evidence_direct_main() {
+    fn wasm_start_calls_parameterless_main() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
         let mut lowerer = WasmLowerer::new();
         lowerer.main_exports.saw_main = true;
-        lowerer.main_exports.main_param_types = vec![evidence_ty];
-        lowerer.main_exports.main_convention = CallingConvention::EvidenceDirect;
 
         let start = lowerer.build_start_function(&mut ctx, location);
         let start = wasm_dialect::Func::from_op(&ctx, start).expect("wasm _start function");
         let entry = ctx.region(start.body(&ctx)).blocks[0];
-        let ops = ctx.block(entry).ops.to_vec();
-        let empty = ops
-            .iter()
-            .copied()
-            .find(|op| ctx.op(*op).name == Symbol::new("array_new_default"))
-            .expect("_start should allocate empty evidence");
-        let call_main = ops
+        let call_main = ctx
+            .block(entry)
+            .ops
             .iter()
             .copied()
             .find(|op| {
@@ -761,25 +689,20 @@ mod tests {
             })
             .expect("_start should call main");
 
-        assert_eq!(ctx.op_operands(call_main), &[ctx.op_result(empty, 0)]);
+        assert!(ctx.op_operands(call_main).is_empty());
     }
 
     #[test]
-    #[should_panic(expected = "Cps `main` is invalid")]
-    fn wasm_start_rejects_cps_main() {
+    #[should_panic(expected = "must have no hidden parameters")]
+    fn wasm_start_rejects_main_with_hidden_parameters() {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
-        let i32_ty = intern_type(&mut ctx, "core", "i32");
-        let body_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
+        let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
         let mut lowerer = WasmLowerer::new();
-        lowerer.main_exports.main_convention = CallingConvention::Cps;
+        lowerer.main_exports.saw_main = true;
+        lowerer.main_exports.main_param_types = vec![evidence_ty];
 
-        lowerer.build_main_args(&mut ctx, body_block, location, i32_ty);
+        lowerer.build_start_function(&mut ctx, location);
     }
 
     #[test]
