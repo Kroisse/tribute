@@ -186,7 +186,12 @@ fn logical_constructor_pattern<'p, 'db>(
                 .into_iter()
                 .find_map(|(tag, fields)| (tag == variant).then_some(fields))
                 .expect("resolved logical enum variant must exist");
-            let names = ctx.variant_field_names(ty, variant).unwrap_or_default();
+            let names = match &*pattern.kind {
+                PatternKind::Record { .. } => ctx
+                    .variant_field_names(ty, variant)
+                    .expect("named-field variant must have registered field names"),
+                _ => Vec::new(),
+            };
             (
                 ConstructorLayout::Variant {
                     ty,

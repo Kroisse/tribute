@@ -386,6 +386,46 @@ fn main() {
     );
 }
 
+/// Generic named-field variants use the monomorphized enum layout, and a
+/// brace-form pattern nests inside a positional one.
+#[test]
+fn test_native_generic_named_variant_pattern() {
+    assert_native_output(
+        "generic_named_variant_pattern.trb",
+        r#"
+struct Point { x: Nat, y: Nat }
+
+enum Wrap(a) {
+    Box { value: a, tagged: Bool },
+    Empty,
+}
+
+fn get(w: Wrap(Nat)) -> Nat {
+    case w {
+        Box { tagged: True, value } -> value + 10
+        Box { value, .. } -> value
+        Empty -> 0
+    }
+}
+
+fn nested(o: Option(Point)) -> Nat {
+    case o {
+        Some(Point { y, .. }) -> y
+        None -> 0
+    }
+}
+
+fn main() {
+    __tribute_print_nat(get(Box(1, True)))
+    __tribute_print_nat(get(Box(2, False)))
+    __tribute_print_nat(get(Empty))
+    __tribute_print_nat(nested(Some(Point { x: 3, y: 4 })))
+}
+"#,
+        "11\n2\n0\n4",
+    );
+}
+
 #[test]
 fn test_native_short_lists_skip_nested_pattern_observation() {
     assert_native_output(
