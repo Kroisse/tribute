@@ -49,28 +49,30 @@ impl<'db> TypeChecker<'db> {
         }
 
         let mut lowering = PatternLowering::new(self);
-        let patterns: Vec<Pat> = arms
+        let mut any_unanalyzable = false;
+        // Each arm's pattern, and whether it counts toward coverage. An arm
+        // whose pattern cannot be modeled is kept, with wildcards standing
+        // for the unmodeled parts, but covers nothing, like a guarded arm.
+        let rows: Vec<(Pat, bool)> = arms
             .iter()
-            .map(|arm| lowering.lower(&arm.pattern))
+            .map(|arm| {
+                lowering.unanalyzable = false;
+                let pattern = lowering.lower(&arm.pattern);
+                any_unanalyzable |= lowering.unanalyzable;
+                (pattern, arm.guard.is_none() && !lowering.unanalyzable)
+            })
             .collect();
         let PatternLowering {
             families,
             family_names,
             saw_error,
-            unanalyzable,
             ..
         } = lowering;
         if saw_error {
             return false;
         }
-        if unanalyzable {
-            if report {
-                self.report_unverified(span_node_id);
-            }
-            return false;
-        }
         if let Some(scrutinee) = self.nominal_name(scrutinee_ty)
-            && patterns.iter().any(|pattern| {
+            && rows.iter().any(|(pattern, _)| {
                 matches!(pattern, Pat::Ctor(Ctor::Variant { family, .. }, _)
                     if family_names[family.0] != scrutinee)
             })
@@ -79,7 +81,7 @@ impl<'db> TypeChecker<'db> {
         }
 
         let mut analyzer = Analyzer::new(&families);
-        let outcome = check_arms(&mut analyzer, arms, &patterns);
+        let outcome = check_arms(&mut analyzer, &rows);
         let (unreachable, missing) = match outcome {
             Ok(outcome) => outcome,
             Err(GiveUp::Conflict) => return false,
@@ -90,6 +92,13 @@ impl<'db> TypeChecker<'db> {
                 return false;
             }
         };
+        if !missing.is_empty() && any_unanalyzable {
+            // An arm left out of coverage may match the missing values.
+            if report {
+                self.report_unverified(span_node_id);
+            }
+            return false;
+        }
         if report {
             for index in unreachable {
                 self.report_case(
@@ -152,20 +161,21 @@ impl<'db> TypeChecker<'db> {
     }
 }
 
-/// Indices of unreachable arms, and witnesses no unguarded arm matches.
-fn check_arms<'db>(
+/// Indices of unreachable arms, and witnesses no covering arm matches.
+///
+/// Each arm is its pattern and whether it counts toward coverage.
+fn check_arms(
     analyzer: &mut Analyzer<'_>,
-    arms: &[Arm<TypedRef<'db>>],
-    patterns: &[Pat],
+    arms: &[(Pat, bool)],
 ) -> Result<(Vec<usize>, Vec<Witness>), GiveUp> {
     let mut covering: Vec<Vec<Pat>> = Vec::new();
     let mut unreachable = Vec::new();
-    for (index, (arm, pattern)) in arms.iter().zip(patterns).enumerate() {
+    for (index, (pattern, covers)) in arms.iter().enumerate() {
         let row = vec![pattern.clone()];
         if !analyzer.is_useful(&covering, &row)? {
             unreachable.push(index);
         }
-        if arm.guard.is_none() {
+        if *covers {
             covering.push(row);
         }
     }
@@ -187,7 +197,8 @@ struct PatternLowering<'a, 'db> {
     /// A pattern did not resolve to a constructor. The case is treated as
     /// non-exhaustive without a diagnostic here; resolution usually reports it.
     saw_error: bool,
-    /// A pattern cannot be modeled by the matrix.
+    /// The pattern being lowered cannot be modeled by the matrix; the
+    /// unmodeled parts are lowered as wildcards.
     unanalyzable: bool,
 }
 
@@ -334,5 +345,25 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
             TypeKind::Func { params, result, .. } => (params.len(), *result),
             _ => (0, body),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn bool_(value: bool) -> Pat {
+        Pat::Ctor(Ctor::Bool(value), Vec::new())
+    }
+
+    fn missing_count(arms: &[(Pat, bool)]) -> usize {
+        check_arms(&mut Analyzer::new(&[]), arms).unwrap().1.len()
+    }
+
+    #[test]
+    fn arms_outside_coverage_do_not_block_a_catch_all() {
+        // An unanalyzable arm is lowered with wildcards but covers nothing.
+        assert_eq!(missing_count(&[(Pat::Wild, false), (Pat::Wild, true)]), 0);
+        assert_eq!(missing_count(&[(Pat::Wild, false), (bool_(true), true)]), 1);
     }
 }
