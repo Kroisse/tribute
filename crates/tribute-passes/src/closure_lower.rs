@@ -24,6 +24,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use tribute_core::calling_convention::get_physical_closure_environment_index;
+use tribute_core::runtime_layout;
 use tribute_core::{CallingConvention, get_calling_convention, get_physical_closure_convention};
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
@@ -63,17 +64,21 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
                     ]),
                 ]),
             )
+            .attr(
+                runtime_layout::LAYOUT_ATTR,
+                Attribute::Symbol(Symbol::new(runtime_layout::CLOSURE)),
+            )
             .build(),
     )
 }
 
-/// Check if a TypeRef is an adt.struct with name "_closure".
+/// Whether `ty` is a compiler-owned closure storage layout, identified by its
+/// runtime layout attribute.
 pub(crate) fn is_closure_struct_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
-        return false;
-    }
-    data.attrs.get_symbol("name") == Some(Symbol::new("_closure"))
+    data.dialect == Symbol::new("adt")
+        && data.name == Symbol::new("struct")
+        && runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::CLOSURE)
 }
 
 // ============================================================================
@@ -786,6 +791,52 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::walk::{WalkAction, walk_op};
+
+    #[test]
+    fn closure_layout_is_identified_by_its_layout_attribute_only() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Named = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+  !Layout = adt.struct() {name = @Other, fields = [[@code, core.i32]], layout = @closure}
+}"#,
+        );
+        let alias = |ctx: &IrContext, name: &str| {
+            ctx.type_aliases()
+                .iter()
+                .find_map(|(alias, ty)| (*alias == name).then_some(*ty))
+                .unwrap()
+        };
+        let named = alias(&ctx, "Named");
+        let layout = alias(&ctx, "Layout");
+
+        assert!(!is_closure_struct_type_ref(&ctx, named));
+        assert!(is_closure_struct_type_ref(&ctx, layout));
+        let canonical = closure_struct_type_ref(&mut ctx);
+        assert!(is_closure_struct_type_ref(&ctx, canonical));
+        assert_ne!(canonical, named);
+    }
+
+    #[test]
+    fn closure_layout_identifier_round_trips_through_textual_ir() {
+        let mut ctx = IrContext::new();
+        let canonical = closure_struct_type_ref(&mut ctx);
+        let printed = format!(
+            "core.module @test {{\n  !C = {}\n}}",
+            trunk_ir::printer::print_type(&ctx, canonical)
+        );
+        assert!(printed.contains("layout = @closure"), "{printed}");
+
+        let mut reparsed = IrContext::new();
+        parse_test_module(&mut reparsed, &printed);
+        let reparsed_ty = reparsed
+            .type_aliases()
+            .iter()
+            .find_map(|(alias, ty)| (*alias == "C").then_some(*ty))
+            .unwrap();
+        assert_eq!(reparsed_ty, closure_struct_type_ref(&mut reparsed));
+    }
 
     fn evidence_type_str() -> &'static str {
         "core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})"

@@ -56,7 +56,7 @@ pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
         Some(BYTES_ARRAY_IDX)
     } else if named_adt(ctx, ty, "_BoxedF64") {
         Some(BOXED_F64_IDX)
-    } else if named_adt(ctx, ty, "_closure") {
+    } else if crate::emit::helpers::is_closure_struct_type(ctx, ty) {
         Some(CLOSURE_STRUCT_IDX)
     } else if named_adt(ctx, ty, "_Marker") {
         Some(MARKER_IDX)

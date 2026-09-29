@@ -3,6 +3,7 @@ pub mod callable_abi;
 pub mod calling_convention;
 pub mod diagnostic;
 pub mod fmt;
+pub mod runtime_layout;
 pub mod target;
 
 pub use callable_abi::CallableAbi;

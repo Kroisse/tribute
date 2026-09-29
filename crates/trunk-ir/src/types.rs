@@ -628,6 +628,12 @@ impl<'a> IntoIterator for &'a mut AttributeMap {
 /// per-parameter attributes keeps a single identity.
 pub const PARAM_ATTRS_ATTR: &str = "param_attrs";
 
+/// Reserved type attribute naming a compiler-owned runtime storage layout.
+///
+/// The value is a symbol whose meaning the defining language layer and the
+/// implementing target own; TrunkIR does not interpret it.
+pub const LAYOUT_ATTR: &str = "layout";
+
 static EMPTY_ATTRIBUTE_MAP: AttributeMap = AttributeMap::new();
 
 /// A malformed [`PARAM_ATTRS_ATTR`] value.

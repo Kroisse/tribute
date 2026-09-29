@@ -531,7 +531,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
-  !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]]}
+  !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]], layout = @closure}
   !Frame = adt.struct() {name = @Frame, fields = []}
   !Env = adt.struct() {name = @Env, fields = [[@closure, !Closure], [@evidence, !Evidence], [@frame, !Frame]]}
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {

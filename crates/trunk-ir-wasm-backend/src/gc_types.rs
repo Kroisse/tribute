@@ -44,6 +44,10 @@ pub const MARKER_IDX: u32 = 4;
 /// Evidence is a sorted array of markers for ability handler lookup.
 pub const EVIDENCE_IDX: u32 = 5;
 
+/// Runtime layout identifier (the `layout` type attribute) of the builtin
+/// closure struct at [`CLOSURE_STRUCT_IDX`].
+pub const CLOSURE_LAYOUT: &str = "closure";
+
 /// First type index available for user-defined types.
 pub const FIRST_USER_TYPE_IDX: u32 = 6;
 
