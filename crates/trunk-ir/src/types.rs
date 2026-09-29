@@ -965,8 +965,14 @@ impl PathInterner {
     }
 
     /// Intern a path string, returning an existing ref if the string matches.
-    pub fn intern(&mut self, path: String) -> PathRef {
-        self.0.intern(path)
+    ///
+    /// A path already interned is found without allocating; a new path is
+    /// copied into the interner once.
+    pub fn intern(&mut self, path: &str) -> PathRef {
+        match self.0.entry(path) {
+            InternEntry::Occupied(existing) => existing,
+            InternEntry::Vacant(entry) => entry.insert(path.to_owned()),
+        }
     }
 
     /// Probe once for `path`, leaving a vacant slot to fill on a miss.
@@ -1320,7 +1326,7 @@ mod tests {
     #[test]
     fn path_interner_looks_up_borrowed_strings() {
         let mut interner = PathInterner::new();
-        let r = interner.intern("file:///a.trb".to_owned());
+        let r = interner.intern("file:///a.trb");
         assert_eq!(interner.lookup("file:///a.trb"), Some(r));
         assert_eq!(interner.lookup("file:///b.trb"), None);
     }
@@ -1328,16 +1334,16 @@ mod tests {
     #[test]
     fn path_interner_dedup() {
         let mut interner = PathInterner::new();
-        let r1 = interner.intern("file:///test.trb".to_owned());
-        let r2 = interner.intern("file:///test.trb".to_owned());
+        let r1 = interner.intern("file:///test.trb");
+        let r2 = interner.intern("file:///test.trb");
         assert_eq!(r1, r2, "same path must yield same PathRef");
     }
 
     #[test]
     fn path_interner_distinct() {
         let mut interner = PathInterner::new();
-        let r1 = interner.intern("file:///a.trb".to_owned());
-        let r2 = interner.intern("file:///b.trb".to_owned());
+        let r1 = interner.intern("file:///a.trb");
+        let r2 = interner.intern("file:///b.trb");
         assert_ne!(r1, r2);
         assert_eq!(interner.get(r1), "file:///a.trb");
         assert_eq!(interner.get(r2), "file:///b.trb");

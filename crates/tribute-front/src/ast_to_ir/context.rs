@@ -803,7 +803,7 @@ mod tests {
     fn test_convert_logical_bound_var_to_any() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.intern_path("test.trb".to_owned());
+        let path = ir.intern_path("test.trb");
         let ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -827,7 +827,7 @@ mod tests {
     fn test_convert_logical_types_preserves_recursive_control_shapes() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.intern_path("test.trb".to_owned());
+        let path = ir.intern_path("test.trb");
         let mut ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -1151,7 +1151,7 @@ mod tests {
     fn test_convert_logical_primitives() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.intern_path("test.trb".to_owned());
+        let path = ir.intern_path("test.trb");
         let ctx = IrLoweringCtx::new(
             &db,
             path,
@@ -1195,7 +1195,7 @@ mod tests {
     fn test_lookup_function_type() {
         let db = test_db();
         let mut ir = IrContext::new();
-        let path = ir.intern_path("test.trb".to_owned());
+        let path = ir.intern_path("test.trb");
         let name = Symbol::new("foo");
         let body = AstType::new(&db, TypeKind::Int);
         let scheme = TypeScheme::new(&db, vec![], vec![], body);

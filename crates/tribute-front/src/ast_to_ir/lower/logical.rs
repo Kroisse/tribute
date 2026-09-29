@@ -2409,7 +2409,7 @@ mod tests {
     #[salsa::tracked(returns(copy))]
     fn operation_arguments_use_resolved_parameter_types_inner(db: &dyn salsa::Database) -> bool {
         let mut ir = IrContext::new();
-        let path = ir.intern_path("logical.trb".to_owned());
+        let path = ir.intern_path("logical.trb");
         let mut ctx = IrLoweringCtx::new(
             db,
             path,

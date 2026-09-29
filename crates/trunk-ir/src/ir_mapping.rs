@@ -90,7 +90,7 @@ mod tests {
     #[test]
     fn lookup_or_default_returns_original_when_unmapped() {
         let mut ctx = IrContext::new();
-        let path = ctx.intern_path("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb");
         let loc = Location::new(path, Span::new(0, 0));
 
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
@@ -114,7 +114,7 @@ mod tests {
     #[test]
     fn mapping_returns_mapped_value() {
         let mut ctx = IrContext::new();
-        let path = ctx.intern_path("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb");
         let loc = Location::new(path, Span::new(0, 0));
 
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());

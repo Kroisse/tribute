@@ -67,7 +67,7 @@ mod tests {
     #[test]
     fn runtime_externs_have_a_signature_and_binding_but_no_body() {
         let mut ctx = IrContext::new();
-        let path = ctx.intern_path("test.ir".to_owned());
+        let path = ctx.intern_path("test.ir");
         let loc = Location::new(path, Span::new(0, 0));
         let ptr = core::ptr(&mut ctx).as_type_ref();
         let i32 = ctx.intern_type(

@@ -214,7 +214,7 @@ pub fn generate_rtti(
         return Ok(());
     };
 
-    let loc = Location::new(ctx.intern_path("<rtti>".to_string()), Span::new(0, 0));
+    let loc = Location::new(ctx.intern_path("<rtti>"), Span::new(0, 0));
     let mut release_indices = Vec::new();
 
     // `anyref` and `intref` have no static nominal allocation layout. Their
@@ -1081,7 +1081,7 @@ mod tests {
 
     fn test_ctx() -> (IrContext, Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.intern_path("file:///test.trb".to_owned());
+        let path = ctx.intern_path("file:///test.trb");
         let loc = Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }
