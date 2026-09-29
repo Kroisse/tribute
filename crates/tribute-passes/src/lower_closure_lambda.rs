@@ -215,19 +215,11 @@ fn lower_single_lambda(
         },
     );
 
-    let mut params: Vec<_> = callable
-        .inputs_with_attrs(ctx)
-        .map(|(ty, attrs)| (ty, attrs.clone()))
-        .collect();
-    params.insert(environment_index, (anyref_ty, AttributeMap::new()));
-    let results: Vec<_> = callable
-        .results_with_attrs(ctx)
-        .map(|(ty, attrs)| (ty, attrs.clone()))
-        .collect();
-    let mut type_attrs = ctx.get_type(function_ty).attrs.clone();
-    type_attrs.remove(func::NUM_INPUTS_ATTR);
-    type_attrs.remove(func::NUM_RESULTS_ATTR);
-    let func_ty = func::func_sig_with_param_attrs(ctx, params, results, type_attrs).as_type_ref();
+    let func_ty = callable
+        .rebuild(ctx, |inputs, _| {
+            inputs.insert(environment_index, (anyref_ty, AttributeMap::new()));
+        })
+        .as_type_ref();
 
     let func_op = func::Func::operands()
         .sym_name(lifted_name)

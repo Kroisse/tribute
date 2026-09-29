@@ -1029,20 +1029,11 @@ fn dispatch_entry_function_type(
     let callable = func::FuncSig::from_type_ref(ctx, callable_ty).ok_or_else(|| {
         TargetAbiError::new("target root bridge: frame Dispatch callable is not func.func_sig")
     })?;
-    let mut params: Vec<_> = callable
-        .inputs_with_attrs(ctx)
-        .map(|(ty, attrs)| (ty, attrs.clone()))
-        .collect();
-    params.insert(1, (anyref, AttributeMap::new()));
-    let results: Vec<_> = callable
-        .results_with_attrs(ctx)
-        .map(|(ty, attrs)| (ty, attrs.clone()))
-        .collect();
-    let type_attrs = callable
-        .non_reserved_attrs(ctx)
-        .map(|(key, value)| (*key, value.clone()))
-        .collect();
-    Ok(func::func_sig_with_param_attrs(ctx, params, results, type_attrs).as_type_ref())
+    Ok(callable
+        .rebuild(ctx, |inputs, _| {
+            inputs.insert(1, (anyref, AttributeMap::new()));
+        })
+        .as_type_ref())
 }
 
 fn is_parameterless_dialect_type(
@@ -1384,27 +1375,21 @@ fn validate_constant(
             "target ABI: Cps function reference must have logical core.never result",
         ));
     }
-    let mut params: Vec<_> = target
-        .inputs_with_attrs(ctx)
-        .map(|(ty, attrs)| (ty, attrs.clone()))
-        .collect();
-    if let Some(index) = identity.environment_index {
-        if index >= params.len() {
-            return Err(TargetAbiError::new(
-                "target ABI: closure environment index is outside target signature",
-            ));
-        }
-        params.remove(index);
+    if identity
+        .environment_index
+        .is_some_and(|index| index >= target.inputs(ctx).len())
+    {
+        return Err(TargetAbiError::new(
+            "target ABI: closure environment index is outside target signature",
+        ));
     }
-    let results: Vec<_> = target
-        .results_with_attrs(ctx)
-        .map(|(ty, attrs)| (ty, attrs.clone()))
-        .collect();
-    let type_attrs = target
-        .non_reserved_attrs(ctx)
-        .map(|(key, value)| (*key, value.clone()))
-        .collect();
-    let expected = func::func_sig_with_param_attrs(ctx, params, results, type_attrs).as_type_ref();
+    let expected = target
+        .rebuild(ctx, |inputs, _| {
+            if let Some(index) = identity.environment_index {
+                inputs.remove(index);
+            }
+        })
+        .as_type_ref();
     if ctx.op_result_types(constant.op_ref()) != [expected] {
         return Err(TargetAbiError::new(
             "target ABI: function reference differs from target signature",

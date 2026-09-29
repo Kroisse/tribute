@@ -2088,24 +2088,15 @@ impl<'a> Converter<'a> {
             .func_type(self.ctx);
         let callable = func::FuncSig::from_type_ref(self.ctx, function)
             .expect("func_ref result lowers to a func.func_sig callable");
-        let mut inputs: Vec<_> = callable
-            .inputs_with_attrs(self.ctx)
-            .map(|(ty, attrs)| (ty, attrs.clone()))
-            .collect();
         let env_ty = self.anyref_type();
-        inputs.insert(
-            usize::from(result_convention.needs_evidence()),
-            (env_ty, AttributeMap::new()),
-        );
-        let physical_params: Vec<_> = inputs.iter().map(|(ty, _)| *ty).collect();
-        let results: Vec<_> = callable
-            .results_with_attrs(self.ctx)
-            .map(|(ty, attrs)| (ty, attrs.clone()))
-            .collect();
-        let mut attrs = self.ctx.get_type(function).attrs.clone();
-        func::FuncSig::remove_reserved_attrs(&mut attrs);
-        let adapter_ty =
-            func::func_sig_with_param_attrs(self.ctx, inputs, results, attrs).as_type_ref();
+        let adapter = callable.rebuild(self.ctx, |inputs, _| {
+            inputs.insert(
+                usize::from(result_convention.needs_evidence()),
+                (env_ty, AttributeMap::new()),
+            );
+        });
+        let physical_params = adapter.inputs(self.ctx).to_vec();
+        let adapter_ty = adapter.as_type_ref();
         let block = self.make_block(location, &physical_params);
         let args = self.ctx.block_args(block).to_vec();
         let evidence_offset = usize::from(result_convention.needs_evidence());

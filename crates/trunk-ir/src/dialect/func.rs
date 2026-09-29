@@ -264,6 +264,23 @@ impl FuncSig {
             .zip(self.result_attrs(ctx))
     }
 
+    /// Rebuild this signature after `edit` inserts, removes, or replaces
+    /// parameter/attribute pairs, so each attribute stays with its parameter.
+    /// Non-reserved attributes are kept.
+    pub fn rebuild(
+        self,
+        ctx: &mut IrContext,
+        edit: impl FnOnce(&mut Vec<(TypeRef, AttributeMap)>, &mut Vec<(TypeRef, AttributeMap)>),
+    ) -> FuncSig {
+        let owned = |(ty, attrs): (TypeRef, &AttributeMap)| (ty, attrs.clone());
+        let mut inputs: Vec<_> = self.inputs_with_attrs(ctx).map(owned).collect();
+        let mut results: Vec<_> = self.results_with_attrs(ctx).map(owned).collect();
+        let mut attrs = ctx.get_type(self.0).attrs.clone();
+        Self::remove_reserved_attrs(&mut attrs);
+        edit(&mut inputs, &mut results);
+        func_sig_with_param_attrs(ctx, inputs, results, attrs)
+    }
+
     pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
         self.results(ctx).first().copied()
     }
@@ -923,18 +940,9 @@ mod tests {
             AttributeMap::new(),
         );
 
-        let mut inputs: Vec<_> = source
-            .inputs_with_attrs(&ctx)
-            .map(|(ty, attrs)| (ty, attrs.clone()))
-            .collect();
-        inputs.insert(0, (ptr_ty, AttributeMap::new()));
-        let mut attrs = ctx.get_type(source.as_type_ref()).attrs.clone();
-        FuncSig::remove_reserved_attrs(&mut attrs);
-        let results: Vec<_> = source
-            .results_with_attrs(&ctx)
-            .map(|(ty, attrs)| (ty, attrs.clone()))
-            .collect();
-        let rebuilt = func_sig_with_param_attrs(&mut ctx, inputs, results, attrs);
+        let rebuilt = source.rebuild(&mut ctx, |inputs, _| {
+            inputs.insert(0, (ptr_ty, AttributeMap::new()));
+        });
 
         assert_eq!(rebuilt.inputs(&ctx), [ptr_ty, i32_ty]);
         assert!(
