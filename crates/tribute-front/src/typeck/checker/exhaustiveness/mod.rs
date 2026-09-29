@@ -184,7 +184,8 @@ struct PatternLowering<'a, 'db> {
     families: Vec<Family>,
     family_names: Vec<Symbol>,
     family_ids: HashMap<Symbol, FamilyId>,
-    /// A pattern failed to resolve; its error is already reported.
+    /// A pattern did not resolve to a constructor. The case is treated as
+    /// non-exhaustive without a diagnostic here; resolution usually reports it.
     saw_error: bool,
     /// A pattern cannot be modeled by the matrix.
     unanalyzable: bool,
