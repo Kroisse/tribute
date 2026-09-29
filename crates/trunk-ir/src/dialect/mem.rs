@@ -20,7 +20,7 @@ mod mem {
 
     /// Add a pointer-width integer byte `offset` to `base`, keeping `base`'s
     /// provenance. No element-size scaling is applied.
-    fn ptr_add<T: IntegerLike>(base: Value<Ptr>, offset: Value<T>) -> Value<Ptr> {}
+    fn ptr_add(base: Value<Ptr>, offset: Value<impl IntegerLike>) -> Value<Ptr> {}
 }
 
 #[cfg(test)]
