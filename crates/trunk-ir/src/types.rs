@@ -634,20 +634,29 @@ pub fn validate_param_attrs(attrs: &AttributeMap, params: usize) -> Result<(), P
     Ok(())
 }
 
-/// Remove a [`PARAM_ATTRS_ATTR`] whose dictionaries are all empty, the one
-/// non-canonical spelling of "no parameter attributes".
-pub fn normalize_param_attrs(attrs: &mut AttributeMap) {
+/// Bring [`PARAM_ATTRS_ATTR`] in `attrs` to canonical form for a type with
+/// `params` type parameters, then validate it.
+///
+/// A correctly sized list of empty dictionaries, the one non-canonical
+/// spelling of "no parameter attributes", is removed; any other malformed
+/// value is kept and reported.
+pub fn normalize_param_attrs(
+    attrs: &mut AttributeMap,
+    params: usize,
+) -> Result<(), ParamAttrsError> {
     let all_empty = attrs
         .get(PARAM_ATTRS_ATTR)
         .and_then(Attribute::as_list)
         .is_some_and(|entries| {
-            entries
-                .iter()
-                .all(|entry| entry.as_dict().is_some_and(AttributeMap::is_empty))
+            entries.len() == params
+                && entries
+                    .iter()
+                    .all(|entry| entry.as_dict().is_some_and(AttributeMap::is_empty))
         });
     if all_empty {
         attrs.remove(PARAM_ATTRS_ATTR);
     }
+    validate_param_attrs(attrs, params)
 }
 
 /// Builder for constructing `TypeData` with a fluent API.
@@ -698,12 +707,14 @@ impl TypeDataBuilder {
     /// Build the type data. Parameter attributes given with
     /// [`param_with_attrs`](Self::param_with_attrs) are stored in canonical
     /// [`PARAM_ATTRS_ATTR`] form and replace one set through
-    /// [`attr`](Self::attr); an explicit all-empty value is dropped.
+    /// [`attr`](Self::attr); an explicit all-empty value is dropped. A
+    /// malformed explicit value is kept and rejected when the type is interned
+    /// or validated.
     pub fn build(mut self) -> TypeData {
         if let Some(value) = param_attrs_attribute(self.param_attrs) {
             self.attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
         } else {
-            normalize_param_attrs(&mut self.attrs);
+            let _ = normalize_param_attrs(&mut self.attrs, self.params.len());
         }
         TypeData {
             dialect: self.dialect,
@@ -932,6 +943,19 @@ mod tests {
             Err(ParamAttrsError::AllEmpty)
         );
         assert_eq!(validate_param_attrs(&AttributeMap::new(), 3), Ok(()));
+
+        let mut wrong_length = attrs(Attribute::List(vec![dict(vec![])]));
+        assert_eq!(
+            normalize_param_attrs(&mut wrong_length, 2),
+            Err(ParamAttrsError::LengthMismatch {
+                params: 2,
+                attrs: 1
+            })
+        );
+        assert!(wrong_length.contains_key(PARAM_ATTRS_ATTR));
+        let mut all_empty = attrs(Attribute::List(vec![dict(vec![]), dict(vec![])]));
+        assert_eq!(normalize_param_attrs(&mut all_empty, 2), Ok(()));
+        assert!(all_empty.is_empty());
     }
 
     #[test]

@@ -367,8 +367,9 @@ pub fn func_sig_with_attrs(
     );
     let num_inputs = u32::try_from(inputs.len()).expect("func.func_sig input count exceeds u32");
     let num_results = u32::try_from(results.len()).expect("func.func_sig result count exceeds u32");
-    crate::types::normalize_param_attrs(&mut attrs);
-    if let Err(error) = crate::types::validate_param_attrs(&attrs, inputs.len() + results.len()) {
+    if let Err(error) =
+        crate::types::normalize_param_attrs(&mut attrs, inputs.len() + results.len())
+    {
         panic!("func.func_sig: {error}");
     }
 

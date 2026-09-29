@@ -175,8 +175,8 @@ let sig = func::func_sig_with_param_attrs(
     AttributeMap::new(),
 );
 let first = sig.input_attrs(ctx).next();
-let data = ctx.get_type(ty);
-let attrs = data.param_attrs(1);
+let data = ctx.get_type(sig.as_type_ref());
+let value_attrs = data.param_attrs(1);
 ```
 
 Operations are created with their builders:

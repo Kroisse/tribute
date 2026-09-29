@@ -123,8 +123,7 @@ impl<'a> ArenaIrBuilder<'a> {
             .iter()
             .map(|(key, value)| Ok((Symbol::from_dynamic(key), self.build_attribute(value)?)))
             .collect::<Result<AttributeMap, ParseError>>()?;
-        crate::types::normalize_param_attrs(&mut attrs);
-        crate::types::validate_param_attrs(&attrs, params).map_err(|error| ParseError {
+        crate::types::normalize_param_attrs(&mut attrs, params).map_err(|error| ParseError {
             message: format!("{dialect}.{name}: {error}"),
             offset: 0,
         })?;
@@ -1045,6 +1044,10 @@ core.module @test {
             (
                 "core.tuple(core.i32) {param_attrs = [{k = 1}, {}]}",
                 "2 entries for 1",
+            ),
+            (
+                "core.tuple(core.i32, core.i32) {param_attrs = [{}]}",
+                "1 entries for 2",
             ),
             (
                 "core.tuple(core.i32, core.i32) {param_attrs = [{k = 1}, 2]}",
