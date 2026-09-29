@@ -18,15 +18,16 @@ pub struct BuiltinSymbolEntry {
 /// Compiler-owned symbol references in a source file.
 #[salsa::tracked(returns(deref))]
 pub fn builtin_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<BuiltinSymbolEntry> {
-    let Some(module) = ast_query::tdnr_module(db, source) else {
+    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
         return Vec::new();
     };
+    let module = output.module(db);
     let Some(span_map) = ast_query::span_map(db, source) else {
         return Vec::new();
     };
 
     let mut entries = Vec::new();
-    collect_module(db, &module, &span_map, &mut entries);
+    collect_module(db, module, &span_map, &mut entries);
     entries.sort_by_key(|entry| (entry.span.start, entry.span.end));
     entries
 }

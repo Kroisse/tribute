@@ -205,6 +205,10 @@ pub fn function_schemes<'db>(
 }
 
 /// TDNR on a typed module for remaining MethodCall transformations.
+///
+/// Like the other queries in this module, this analyzes the source alone,
+/// without the prelude or other external declarations. The root crate's
+/// pipeline supplies them for compilation and editor features.
 #[salsa::tracked(returns(clone))]
 pub fn tdnr_module<'db>(
     db: &'db dyn salsa::Database,
