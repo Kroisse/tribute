@@ -32,8 +32,7 @@ use trunk_ir::walk::{WalkAction, walk_op};
 
 const ROOT_EXPORT_CONVENTION_ATTR: &str = "tribute.root_export_convention";
 const ROOT_SOURCE_RESULT_ATTR: &str = "tribute.root_source_result";
-const CPS_MAIN_SYMBOL: &str = "__tribute_cps_main";
-const EVIDENCE_MAIN_SYMBOL: &str = "__tribute_evidence_main";
+const ROOT_MAIN_SYMBOL: &str = "__tribute_root_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_root_done_k";
 const ROOT_DISPATCH_SYMBOL: &str = "__tribute_root_dispatch";
 const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_root_completion_cell";
@@ -259,7 +258,6 @@ pub fn lower_cps_signatures_to_physical(
 
 struct RootEntryContract {
     worker_op: OpRef,
-    export_convention: CallingConvention,
     source_result: TypeRef,
     evidence_ty: TypeRef,
     frame: RootFrameContract,
@@ -352,15 +350,13 @@ fn validate_root_entry(
         ));
     }
 
-    let cps_main = Symbol::new(CPS_MAIN_SYMBOL);
     let root_done_k = Symbol::new(ROOT_DONE_K_SYMBOL);
     let root_dispatch = Symbol::new(ROOT_DISPATCH_SYMBOL);
     for &op in &top_level_ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        if matches!(function.sym_name(ctx), name if name == cps_main || name == root_done_k || name == root_dispatch)
-        {
+        if matches!(function.sym_name(ctx), name if name == root_done_k || name == root_dispatch) {
             return Err(TargetAbiError::new(
                 "target root bridge: reserved root symbol collision",
             ));
@@ -369,7 +365,6 @@ fn validate_root_entry(
 
     Ok(Some(RootEntryContract {
         worker_op,
-        export_convention,
         source_result,
         evidence_ty,
         frame,
@@ -378,44 +373,138 @@ fn validate_root_entry(
 
 /// Compose the root entry bridge after physicalization.
 ///
-/// The target entry point then calls a root `main` that has no hidden
-/// parameters and uses the platform convention; target entry generation never
-/// reads the source calling convention.
+/// The source root `main` becomes the root worker whatever its calling
+/// convention, and a synthesized parameterless Direct `main` supplies the
+/// worker's convention-specific inputs. Nothing in the module references the
+/// wrapper, so target entry generation adapts it in place and never reads the
+/// source calling convention.
 pub fn compose_root_entry_bridge(
     ctx: &mut IrContext,
     module: Module,
 ) -> Result<(), TargetAbiError> {
-    compose_cps_root_bridge(ctx, module)?;
-    compose_evidence_entry_bridge(ctx, module)
-}
-
-/// Construct the target-independent export delimiter after physicalization.
-/// The worker and exact frame members have empty results; the wrapper retains
-/// the source ABI and performs one ordinary call. Roots without a CPS bridge contract need no adapter.
-fn compose_cps_root_bridge(ctx: &mut IrContext, module: Module) -> Result<(), TargetAbiError> {
-    let Some(RootEntryContract {
-        worker_op,
-        export_convention,
-        source_result,
-        evidence_ty,
-        frame,
-    }) = validate_root_entry(ctx, module, ContractPhase::Physical)?
-    else {
+    let cps_root = validate_root_entry(ctx, module, ContractPhase::Physical)?;
+    let Some(module_block) = module.first_block(ctx) else {
         return Ok(());
     };
-    let module_block = module.first_block(ctx).expect("validated root module");
     let top_level_ops = ctx.block(module_block).ops.to_vec();
-    let cps_main = Symbol::new(CPS_MAIN_SYMBOL);
-    let root_done_k = Symbol::new(ROOT_DONE_K_SYMBOL);
-    let root_dispatch = Symbol::new(ROOT_DISPATCH_SYMBOL);
+    let main = Symbol::new("main");
+    let root_main = Symbol::new(ROOT_MAIN_SYMBOL);
+    let mut roots = top_level_ops.iter().copied().filter(|&op| {
+        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == main)
+    });
+    let Some(worker_op) = roots.next() else {
+        return Ok(());
+    };
+    if top_level_ops.iter().any(|&op| {
+        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == root_main)
+    }) {
+        return Err(TargetAbiError::new(
+            "target root bridge: reserved root symbol collision",
+        ));
+    }
+    if ctx.op(worker_op).regions.is_empty() {
+        return Err(TargetAbiError::new(
+            "target root bridge: root `main` must be a definition",
+        ));
+    }
+    let worker = func::Func::from_op(ctx, worker_op).expect("filtered root function");
+    let signature = func::FuncSig::from_type_ref(ctx, worker.r#type(ctx))
+        .ok_or_else(|| TargetAbiError::new("target root bridge: main is not func.func_sig"))?;
+    let inputs = signature.inputs(ctx).to_vec();
+    let results = signature.results(ctx).to_vec();
+    let nil_ty = core::nil(ctx).as_type_ref();
+    let evidence_ty = ability::evidence_adt_type_ref(ctx);
+    let convention = get_calling_convention(ctx, worker_op);
+    match (convention, &cps_root) {
+        (Some(CallingConvention::Cps), Some(_)) => {}
+        (Some(CallingConvention::EvidenceDirect), None) if inputs == [evidence_ty] => {}
+        (None | Some(CallingConvention::Direct), None) if inputs.is_empty() => {}
+        _ => {
+            return Err(TargetAbiError::new(
+                "target root bridge: root `main` has no exact entry ABI for its calling convention",
+            ));
+        }
+    }
+    if cps_root.is_none() && results != [nil_ty] {
+        return Err(TargetAbiError::new(
+            "target root bridge: root `main` must return core.nil",
+        ));
+    }
+
     let location = ctx.op(worker_op).location;
     ctx.op_mut(worker_op)
         .attributes
-        .insert(Symbol::new("sym_name"), Attribute::Symbol(cps_main));
-    remove_root_contract(ctx, worker_op);
+        .insert(Symbol::new("sym_name"), Attribute::Symbol(root_main));
     for &op in &top_level_ops {
-        rewrite_symbol_refs(ctx, op, Symbol::new("main"), cps_main);
+        rewrite_symbol_refs(ctx, op, main, root_main);
     }
+
+    let entry = ctx.create_block(BlockData {
+        location,
+        args: vec![],
+        ops: smallvec![],
+        parent_region: None,
+    });
+    let returned = match cps_root {
+        Some(contract) => build_cps_root_call(ctx, module_block, entry, contract, root_main)?,
+        None => {
+            let args = if convention == Some(CallingConvention::EvidenceDirect) {
+                vec![build_initial_evidence(ctx, entry, location, evidence_ty)]
+            } else {
+                vec![]
+            };
+            let call = func::Call::operands(args)
+                .callee(root_main)
+                .results([nil_ty])
+                .build(ctx, location);
+            if let Some(convention) = convention {
+                set_root_convention(ctx, call.op_ref(), convention);
+            }
+            ctx.push_op(entry, call.op_ref());
+            ctx.op_results(call.op_ref())[0]
+        }
+    };
+    let ret = func::Return::operands([returned]).build(ctx, location);
+    ctx.push_op(entry, ret.op_ref());
+    let body = ctx.create_region(RegionData {
+        location,
+        blocks: smallvec![entry],
+        parent_op: None,
+    });
+    let wrapper_ty = func::func_sig(ctx, [], [nil_ty]).as_type_ref();
+    let wrapper = func::Func::operands()
+        .sym_name(main)
+        .r#type(wrapper_ty)
+        .regions(body)
+        .build(ctx, location);
+    set_root_convention(ctx, wrapper.op_ref(), CallingConvention::Direct);
+    ctx.push_op(module_block, wrapper.op_ref());
+    Ok(())
+}
+
+/// Call a Cps root worker through the target-independent export delimiter.
+///
+/// The worker and exact frame members have empty results after
+/// physicalization. The caller owns a completion cell, passes the worker a
+/// frame capturing it, and reads the source result once the ordinary call
+/// returns.
+fn build_cps_root_call(
+    ctx: &mut IrContext,
+    module_block: BlockRef,
+    entry: BlockRef,
+    contract: RootEntryContract,
+    worker: Symbol,
+) -> Result<ValueRef, TargetAbiError> {
+    let RootEntryContract {
+        worker_op,
+        source_result,
+        evidence_ty,
+        frame,
+    } = contract;
+    let root_done_k = Symbol::new(ROOT_DONE_K_SYMBOL);
+    let root_dispatch = Symbol::new(ROOT_DISPATCH_SYMBOL);
+    let location = ctx.op(worker_op).location;
+    remove_root_contract(ctx, worker_op);
 
     let cell_ty = root_completion_cell_type(ctx, source_result);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
@@ -493,201 +582,76 @@ fn compose_cps_root_bridge(ctx: &mut IrContext, module: Module) -> Result<(), Ta
         .build(ctx, location);
     set_root_convention(ctx, dispatch_function.op_ref(), CallingConvention::Cps);
 
-    let wrapper_params = if export_convention == CallingConvention::EvidenceDirect {
-        vec![evidence_ty]
-    } else {
-        vec![]
-    };
-    let wrapper_entry = ctx.create_block(BlockData {
-        location,
-        args: wrapper_params
-            .iter()
-            .copied()
-            .map(|ty| BlockArgData {
-                ty,
-                attrs: bind_name("__evidence"),
-            })
-            .collect(),
-        ops: smallvec![],
-        parent_region: None,
-    });
     let initial = arith::Const::operands()
         .value(Attribute::Unit)
         .results(source_result)
         .build(ctx, location);
-    ctx.push_op(wrapper_entry, initial.op_ref());
+    ctx.push_op(entry, initial.op_ref());
     let cell_new = adt::StructNew::operands([initial.result(ctx)])
         .r#type(cell_ty)
         .results(cell_ty)
         .build(ctx, location);
-    ctx.push_op(wrapper_entry, cell_new.op_ref());
+    ctx.push_op(entry, cell_new.op_ref());
     let erased_cell = core::UnrealizedConversionCast::operands(cell_new.result(ctx))
         .results(anyref_ty)
         .build(ctx, location);
-    ctx.push_op(wrapper_entry, erased_cell.op_ref());
+    ctx.push_op(entry, erased_cell.op_ref());
     let done_constant = func::Constant::operands()
         .func_ref(root_done_k)
         .results(done_function_ty)
         .build(ctx, location);
-    ctx.push_op(wrapper_entry, done_constant.op_ref());
+    ctx.push_op(entry, done_constant.op_ref());
     let closure_struct_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let done_closure =
         adt::StructNew::operands([done_constant.result(ctx), erased_cell.result(ctx)])
             .r#type(closure_struct_ty)
             .results(closure_struct_ty)
             .build(ctx, location);
-    ctx.push_op(wrapper_entry, done_closure.op_ref());
+    ctx.push_op(entry, done_closure.op_ref());
     let typed_done = core::UnrealizedConversionCast::operands(done_closure.result(ctx))
         .results(frame.done)
         .build(ctx, location);
-    ctx.push_op(wrapper_entry, typed_done.op_ref());
+    ctx.push_op(entry, typed_done.op_ref());
 
     let dispatch_constant = func::Constant::operands()
         .func_ref(root_dispatch)
         .results(dispatch_function_ty)
         .build(ctx, location);
-    ctx.push_op(wrapper_entry, dispatch_constant.op_ref());
+    ctx.push_op(entry, dispatch_constant.op_ref());
     let dispatch_closure =
         adt::StructNew::operands([dispatch_constant.result(ctx), erased_cell.result(ctx)])
             .r#type(closure_struct_ty)
             .results(closure_struct_ty)
             .build(ctx, location);
-    ctx.push_op(wrapper_entry, dispatch_closure.op_ref());
+    ctx.push_op(entry, dispatch_closure.op_ref());
     let typed_dispatch = core::UnrealizedConversionCast::operands(dispatch_closure.result(ctx))
         .results(frame.dispatch)
         .build(ctx, location);
-    ctx.push_op(wrapper_entry, typed_dispatch.op_ref());
+    ctx.push_op(entry, typed_dispatch.op_ref());
     let frame_value =
         adt::StructNew::operands([typed_done.result(ctx), typed_dispatch.result(ctx)])
             .r#type(frame.layout)
             .results(frame.reference)
             .build(ctx, location);
-    ctx.push_op(wrapper_entry, frame_value.op_ref());
+    ctx.push_op(entry, frame_value.op_ref());
 
-    let evidence = if export_convention == CallingConvention::EvidenceDirect {
-        ctx.block_args(wrapper_entry)[0]
-    } else {
-        build_initial_evidence(ctx, wrapper_entry, location, evidence_ty)
-    };
+    let evidence = build_initial_evidence(ctx, entry, location, evidence_ty);
     let worker_call = func::Call::operands([evidence, frame_value.result(ctx)])
-        .callee(cps_main)
+        .callee(worker)
         .results([])
         .build(ctx, location);
     set_root_convention(ctx, worker_call.op_ref(), CallingConvention::Cps);
-    ctx.push_op(wrapper_entry, worker_call.op_ref());
+    ctx.push_op(entry, worker_call.op_ref());
     let completed = adt::StructGet::operands(cell_new.result(ctx))
         .r#type(cell_ty)
         .field(0)
         .results(source_result)
         .build(ctx, location);
-    ctx.push_op(wrapper_entry, completed.op_ref());
-    let wrapper_return = func::Return::operands([completed.result(ctx)]).build(ctx, location);
-    ctx.push_op(wrapper_entry, wrapper_return.op_ref());
-    let wrapper_region = ctx.create_region(RegionData {
-        location,
-        blocks: smallvec![wrapper_entry],
-        parent_op: None,
-    });
-    let wrapper_ty =
-        func::func_sig(ctx, wrapper_params.iter().copied(), [source_result]).as_type_ref();
-    let wrapper = func::Func::operands()
-        .sym_name(Symbol::new("main"))
-        .r#type(wrapper_ty)
-        .regions(wrapper_region)
-        .build(ctx, location);
-    set_root_convention(ctx, wrapper.op_ref(), export_convention);
+    ctx.push_op(entry, completed.op_ref());
 
     ctx.push_op(module_block, done_function.op_ref());
     ctx.push_op(module_block, dispatch_function.op_ref());
-    ctx.push_op(module_block, wrapper.op_ref());
-    Ok(())
-}
-
-/// Expose an EvidenceDirect root `main` as a parameterless function.
-///
-/// The source `main` becomes a worker, and a synthesized `main` calls it with
-/// the target's initial evidence. The source convention is consumed here, so
-/// target entry generation calls `main` without hidden arguments.
-fn compose_evidence_entry_bridge(
-    ctx: &mut IrContext,
-    module: Module,
-) -> Result<(), TargetAbiError> {
-    let Some(module_block) = module.first_block(ctx) else {
-        return Ok(());
-    };
-    let top_level_ops = ctx.block(module_block).ops.to_vec();
-    let main = Symbol::new("main");
-    let evidence_main = Symbol::new(EVIDENCE_MAIN_SYMBOL);
-    let mut roots = top_level_ops.iter().copied().filter(|&op| {
-        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == main)
-    });
-    let (Some(worker_op), None) = (roots.next(), roots.next()) else {
-        return Ok(());
-    };
-    if get_calling_convention(ctx, worker_op) != Some(CallingConvention::EvidenceDirect) {
-        return Ok(());
-    }
-    if top_level_ops.iter().any(|&op| {
-        func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == evidence_main)
-    }) {
-        return Err(TargetAbiError::new(
-            "target entry bridge: reserved evidence entry symbol collision",
-        ));
-    }
-    let worker = func::Func::from_op(ctx, worker_op).expect("filtered root function");
-    let signature = func::FuncSig::from_type_ref(ctx, worker.r#type(ctx))
-        .ok_or_else(|| TargetAbiError::new("target entry bridge: main is not func.func_sig"))?;
-    let evidence_ty = ability::evidence_adt_type_ref(ctx);
-    if signature.inputs(ctx) != [evidence_ty] {
-        return Err(TargetAbiError::new(
-            "target entry bridge: EvidenceDirect main must take exactly the evidence parameter",
-        ));
-    }
-    if ctx.op(worker_op).regions.is_empty() {
-        return Err(TargetAbiError::new(
-            "target entry bridge: EvidenceDirect main must be a definition",
-        ));
-    }
-    let results = signature.results(ctx).to_vec();
-
-    let location = ctx.op(worker_op).location;
-    ctx.op_mut(worker_op)
-        .attributes
-        .insert(Symbol::new("sym_name"), Attribute::Symbol(evidence_main));
-    for &op in &top_level_ops {
-        rewrite_symbol_refs(ctx, op, main, evidence_main);
-    }
-
-    let entry = ctx.create_block(BlockData {
-        location,
-        args: vec![],
-        ops: smallvec![],
-        parent_region: None,
-    });
-    let evidence = build_initial_evidence(ctx, entry, location, evidence_ty);
-    let call = func::Call::operands([evidence])
-        .callee(evidence_main)
-        .results(results.iter().copied())
-        .build(ctx, location);
-    set_root_convention(ctx, call.op_ref(), CallingConvention::EvidenceDirect);
-    ctx.push_op(entry, call.op_ref());
-    let returned = ctx.op_results(call.op_ref()).to_vec();
-    let ret = func::Return::operands(returned).build(ctx, location);
-    ctx.push_op(entry, ret.op_ref());
-    let body = ctx.create_region(RegionData {
-        location,
-        blocks: smallvec![entry],
-        parent_op: None,
-    });
-    let wrapper_ty = func::func_sig(ctx, [], results).as_type_ref();
-    let wrapper = func::Func::operands()
-        .sym_name(main)
-        .r#type(wrapper_ty)
-        .regions(body)
-        .build(ctx, location);
-    set_root_convention(ctx, wrapper.op_ref(), CallingConvention::Direct);
-    ctx.push_op(module_block, wrapper.op_ref());
-    Ok(())
+    Ok(completed.result(ctx))
 }
 
 /// Build the target's initial evidence: an empty evidence array.
@@ -1685,7 +1649,7 @@ mod tests {
 
     fn is_worker_call(ctx: &IrContext, op: OpRef) -> bool {
         func::Call::from_op(ctx, op)
-            .is_ok_and(|call| call.callee(ctx) == Symbol::new(CPS_MAIN_SYMBOL))
+            .is_ok_and(|call| call.callee(ctx) == Symbol::new(ROOT_MAIN_SYMBOL))
     }
 
     fn dispatch_fixture(answer_name: &str, frame_name: &str) -> (IrContext, Module, OpRef) {
@@ -2043,7 +2007,7 @@ mod tests {
     fn promoted_direct_root_uses_typed_completion_and_ordinary_call() {
         let (ctx, module) = compose_promoted_root(CallingConvention::Direct);
         let wrapper = function(&ctx, module, "main");
-        let worker = function(&ctx, module, CPS_MAIN_SYMBOL);
+        let worker = function(&ctx, module, ROOT_MAIN_SYMBOL);
         let done_k = function(&ctx, module, ROOT_DONE_K_SYMBOL);
         let dispatch = function(&ctx, module, ROOT_DISPATCH_SYMBOL);
 
@@ -2089,7 +2053,7 @@ mod tests {
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
             ctx.op(call).attributes.get_symbol("callee"),
-            Some(Symbol::new(CPS_MAIN_SYMBOL))
+            Some(Symbol::new(ROOT_MAIN_SYMBOL))
         );
         let worker_callable = func::FuncSig::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();
         let [worker_evidence, worker_frame] = worker_callable.inputs(&ctx) else {
@@ -2173,27 +2137,41 @@ mod tests {
     }
 
     #[test]
-    fn promoted_evidence_root_forwards_its_exact_evidence_argument() {
+    fn promoted_evidence_root_has_a_single_parameterless_entry() {
         let (ctx, module) = compose_promoted_root(CallingConvention::EvidenceDirect);
-        let wrapper = function(&ctx, module, EVIDENCE_MAIN_SYMBOL);
+        let wrapper = function(&ctx, module, "main");
+        let signature = func::FuncSig::from_type_ref(&ctx, wrapper.r#type(&ctx)).unwrap();
+        assert!(signature.inputs(&ctx).is_empty());
         assert_eq!(
             get_calling_convention(&ctx, wrapper.op_ref()),
-            Some(CallingConvention::EvidenceDirect)
+            Some(CallingConvention::Direct)
         );
-        let entry = ctx.region(wrapper.body(&ctx)).blocks[0];
-        let evidence = ctx.block_args(entry)[0];
-        let call = collect_ops(&ctx, wrapper.op_ref())
+        let ops = collect_ops(&ctx, wrapper.op_ref());
+        let evidence = ops
+            .iter()
+            .copied()
+            .find_map(|op| adt::ArrayNew::from_op(&ctx, op).ok())
+            .expect("wrapper must build initial evidence");
+        let call = ops
             .into_iter()
             .find(|op| is_worker_call(&ctx, *op))
             .expect("wrapper must call CPS worker");
-        assert_eq!(ctx.op_operands(call)[0], evidence);
-        assert!(
-            !collect_ops(&ctx, wrapper.op_ref())
-                .iter()
-                .any(|op| adt::ArrayNew::from_op(&ctx, *op).is_ok()),
-            "EvidenceDirect wrapper must forward its exact evidence instead of synthesizing one"
+        assert_eq!(ctx.op_operands(call)[0], evidence.result(&ctx));
+        let functions: Vec<_> = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| func::Func::from_op(&ctx, op).ok())
+            .map(|function| function.sym_name(&ctx).to_string())
+            .collect();
+        assert_eq!(
+            functions,
+            [
+                ROOT_MAIN_SYMBOL,
+                ROOT_DONE_K_SYMBOL,
+                ROOT_DISPATCH_SYMBOL,
+                "main"
+            ]
         );
-        assert_parameterless_evidence_entry(&ctx, module);
     }
 
     /// The root `main` takes no hidden parameters and passes fresh initial
@@ -2216,8 +2194,8 @@ mod tests {
             .iter()
             .copied()
             .find_map(|op| func::Call::from_op(ctx, op).ok())
-            .expect("entry bridge must call the evidence worker");
-        assert_eq!(call.callee(ctx), Symbol::new(EVIDENCE_MAIN_SYMBOL));
+            .expect("entry bridge must call the root worker");
+        assert_eq!(call.callee(ctx), Symbol::new(ROOT_MAIN_SYMBOL));
         assert_eq!(ctx.op_operands(call.op_ref()), [empty.result(ctx)]);
         assert_eq!(
             get_calling_convention(ctx, call.op_ref()),
@@ -2249,11 +2227,11 @@ mod tests {
             .into_iter()
             .find_map(|op| func::Call::from_op(&ctx, op).ok())
             .unwrap();
-        assert_eq!(call.callee(&ctx), Symbol::new(EVIDENCE_MAIN_SYMBOL));
+        assert_eq!(call.callee(&ctx), Symbol::new(ROOT_MAIN_SYMBOL));
     }
 
     #[test]
-    fn direct_main_needs_no_entry_bridge() {
+    fn direct_main_is_wrapped_without_inputs() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -2262,22 +2240,63 @@ mod tests {
     %nil = arith.const {value = unit} : core.nil
     func.return %nil
   }
+  func.func @caller() -> core.nil attributes {tribute.calling_convention = 0} {
+    %result = func.call {callee = @main, tribute.calling_convention = 0} : core.nil
+    func.return %result
+  }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
         compose_root_entry_bridge(&mut ctx, module).unwrap();
-        assert_eq!(print_module(&ctx, module.op()), before);
+
+        let wrapper = function(&ctx, module, "main");
+        let ops = collect_ops(&ctx, wrapper.op_ref());
+        let calls: Vec<_> = ops
+            .iter()
+            .copied()
+            .filter_map(|op| func::Call::from_op(&ctx, op).ok())
+            .collect();
+        let [call] = calls.as_slice() else {
+            panic!("Direct wrapper must make exactly one call");
+        };
+        assert_eq!(call.callee(&ctx), Symbol::new(ROOT_MAIN_SYMBOL));
+        assert!(ctx.op_operands(call.op_ref()).is_empty());
+        assert!(
+            !ops.iter()
+                .any(|op| adt::ArrayNew::from_op(&ctx, *op).is_ok())
+        );
+        let caller = function(&ctx, module, "caller");
+        let caller_call = collect_ops(&ctx, caller.op_ref())
+            .into_iter()
+            .find_map(|op| func::Call::from_op(&ctx, op).ok())
+            .unwrap();
+        assert_eq!(caller_call.callee(&ctx), Symbol::new(ROOT_MAIN_SYMBOL));
     }
 
     #[test]
-    fn evidence_entry_bridge_rejects_reserved_symbol_collision() {
+    fn root_bridge_rejects_non_nil_main() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            &EVIDENCE_DIRECT_MAIN.replace("@caller", "@__tribute_evidence_main"),
+            r#"core.module @test {
+  func.func @main() -> core.i32 attributes {tribute.calling_convention = 0} {
+    %zero = arith.const {value = 0} : core.i32
+    func.return %zero
+  }
+}"#,
         );
         let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
-        assert!(error.to_string().contains("reserved evidence entry symbol"));
+        assert!(error.to_string().contains("must return core.nil"));
+    }
+
+    #[test]
+    fn root_bridge_rejects_reserved_symbol_collision() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &EVIDENCE_DIRECT_MAIN.replace("@caller", "@__tribute_root_main"),
+        );
+        let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
+        assert!(error.to_string().contains("reserved root symbol collision"));
     }
 
     #[test]

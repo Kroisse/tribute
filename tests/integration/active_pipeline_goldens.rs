@@ -75,11 +75,11 @@ fn assert_shared_cps_contract(ir_text: &str) {
 fn assert_native_cps_root_contract(ir_text: &str) {
     for required in [
         CPS_CONTINUATION_FRAME_NAME_PREFIX,
-        "func.func @__tribute_cps_main",
+        "func.func @__tribute_root_main",
         "func.func @__tribute_root_done_k",
         "func.func @__tribute_root_dispatch",
         "func.tail_call_indirect",
-        "callee = @__tribute_cps_main",
+        "callee = @__tribute_root_main",
     ] {
         assert!(
             ir_text.contains(required),
@@ -170,7 +170,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                 | "step"
                 | "run_state_with_console"
                 | "run_all"
-                | "__tribute_cps_main"
+                | "__tribute_root_main"
                 | "__tribute_root_done_k"
                 | "__tribute_root_dispatch"
         ) {

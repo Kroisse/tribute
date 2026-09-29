@@ -1784,7 +1784,7 @@ mod tests {
         run_native_target_pipeline(&mut ctx, module)
             .expect("logical CPS root crosses native boundary");
         for name in [
-            "__tribute_cps_main",
+            "__tribute_root_main",
             "__tribute_root_done_k",
             "__tribute_root_dispatch",
         ] {
