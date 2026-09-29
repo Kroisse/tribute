@@ -81,8 +81,9 @@ fn call_indirect<S: FuncSig>(
   `#[region(name?)] {}` for an optional last region such as the body of an
   external function, and `#[successor(name)] {}`.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
-  `core` scalar categories (`IntegerLike`, `BoolLike`, `FloatLike`), exact
-  `core` scalars (`I1`–`I64`, `F32`, `F64`), macro-defined type wrappers
+  `core` scalar categories (`IntegerLike`, `BoolLike`, `FloatLike`,
+  `NumericLike`, `ScalarLike`), exact `core` scalars (`I1`–`I64`, `F32`,
+  `F64`), macro-defined type wrappers
   (projections are their declared parameters), and the `func`/`clif`/`wasm`
   `FuncSig` wrappers (`Inputs`/`Results`). Unknown, ambiguous, or wrong-kind
   projections and conflicting exact bounds fail to compile.
