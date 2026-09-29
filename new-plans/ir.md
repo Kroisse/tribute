@@ -1128,7 +1128,8 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   (`borrowed`/`retained`/`consumed`,
   [rc.md](rc.md#proper-tail-ownership-transfer)) 중 callable 계약이 요구하는
   것은 exact physical signature의 일부로 표현한다. 그래서 직접 정의와
-  exact indirect signature 모두에서 같은 계약을 읽을 수 있다.
+  exact indirect signature 모두에서 같은 계약을 읽을 수 있다. 인코딩은 signature의
+  [타입 매개변수 속성](#타입-매개변수-속성)이다.
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 경계가 부여한
   명시적 layout 식별자로 구별한다. Struct 이름, field 모양, `arrayref` 같은 erased
   heap 형상을 provenance로 쓰지 않는다.
@@ -1212,6 +1213,28 @@ List와 dictionary는 임의로 중첩된다. 속성 값 안의 type은 type wal
 하며, 일부 variant만 따라가고 나머지를 그대로 통과시키지 않는다. 공용 순회는
 `Attribute::visit_types`, `Attribute::map_types`, `Attribute::try_map_types`가 소유한다.
 
+### 타입 매개변수 속성
+
+`TypeData.params`는 타입 인스턴스를 결정하는 매개변수 값이다(MLIR의 type
+parameter와 같은 용법). 함수 signature에서는 input과 result 타입이 매개변수다.
+매개변수 하나에 붙는 속성은 예약 type 속성 `param_attrs`에 둔다.
+
+- 값은 `params`와 같은 순서, 같은 길이의 dictionary list다. 속성이 없는 매개변수는
+  `{}`를 가진다.
+- 모든 dictionary가 비어 있으면 key를 생략한다. 이것이 유일한 canonical 형태이므로
+  매개변수 속성이 없는 타입은 하나의 identity를 가진다. 속성이 다른 두 타입은 서로
+  다른 identity를 가진다.
+- Textual form은 일반 type 속성과 같다:
+  `core.tuple(core.i32, core.ptr) {param_attrs = [{}, {k = @v}]}`.
+  Reader는 모두 빈 값을 생략된 것으로 정규화하고, list가 아니거나 dictionary가
+  아닌 원소, 길이 불일치를 오류로 보고한다. Type verifier도 모든 interned type에
+  같은 규칙을 적용한다.
+- TrunkIR은 key의 의미를 해석하지 않는다. 의미는 key를 정의하는 dialect나 언어
+  계층이 소유한다.
+- 매개변수를 끼우거나 빼며 타입을 다시 만드는 pass는 이 list도 같은 위치에서
+  고친다. 새로 끼운 매개변수는 `{}`를 가진다. 같은 개수를 유지하는 변환은 위치를
+  그대로 두고, 속성 안의 type만 변환한다.
+
 ### `func.func_sig` function type
 
 `func.func_sig` stores inputs and results as separate logical lists. It keeps a
@@ -1284,7 +1307,8 @@ for one result. Absent arrow means zero IR results, never implicit Unit.
 Generic operation syntax preserves its explicit `type` attribute; custom
 assembly retains an explicit type when needed to preserve type attributes and
 validates its agreement with the decomposed signature. Shared conversion maps
-every input/result and nested type attribute, preserving cardinality, and
+every input/result and nested type attribute, including types inside
+[parameter attributes](#타입-매개변수-속성), preserving cardinality, and
 checks entry argument arity before changing the signature or entry arguments.
 Normal `validate_all` combines local operation checks with contextual shared
 function-contract checks. Local checks enforce zero/one ordinary-call results,
@@ -1310,7 +1334,7 @@ or an outer function, and does not select a physical CPS ABI.
 경계이지 ABI나 호출 규약의 증거가 아니다. 예약되지 않은 타입 속성도 타입
 동일성에 포함되며 파싱·출력·별칭·재귀 변환에서 보존된다. 다만 공통
 `func.func_sig`를 `wasm.func_sig`로 변환할 때는 입력과 결과 타입만 옮기고
-예약되지 않은 속성은 모두 버린다. Wasm 함수 타입은 구조적이라 바이너리에는
+예약되지 않은 속성은 [타입 매개변수 속성](#타입-매개변수-속성)을 포함해 모두 버린다. Wasm 함수 타입은 구조적이라 바이너리에는
 매개변수와 결과 타입만 남으므로, 공통 signature metadata는 Wasm에서 의미가 없고
 동일한 Wasm 타입을 갈라놓을 뿐이다.
 
@@ -1334,7 +1358,8 @@ Proper tail transfer는 `wasm.return_call`과
 두 속성과 예약되지 않은 타입 속성은 모두 타입 동일성에 참여한다. count는 저장
 경계일 뿐 ABI 또는 calling convention의 증거가 아니다. parser, printer, alias는
 예약되지 않은 속성을 보존하며, 호출 계약 내부의 재귀 타입 변환도 중첩 메타데이터를
-그 소유 타입에 보존한다.
+그 소유 타입에 보존한다. `func.func_sig`에서 변환할 때 타입 매개변수 속성은 위치를
+유지한 채 옮기고, Cranelift signature 번역은 이를 읽지 않는다.
 
 네이티브 함수와 선언, 직접·간접 호출, 반환, proper tail transfer 및 Cranelift 코드
 생성은 이 타입을 사용한다. 간접 호출의 `sig`는 정확한 `clif.func_sig`이어야 하며,
