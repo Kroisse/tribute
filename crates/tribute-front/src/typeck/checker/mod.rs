@@ -24,11 +24,12 @@
 
 mod collect;
 mod diagnostics;
+mod exhaustiveness;
 mod expr;
 mod finalize;
 mod func_check;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::{Span, Symbol};
 
@@ -117,6 +118,8 @@ pub struct TypeChecker<'db> {
     /// being finalized. They remain separate from exported function schemes.
     local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
     exhaustive_cases: Vec<NodeId>,
+    /// Case scrutinees whose exhaustiveness diagnostics were already reported.
+    exhaustiveness_reported: HashSet<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
     signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
@@ -160,6 +163,7 @@ impl<'db> TypeChecker<'db> {
             lambda_signatures: HashMap::new(),
             local_generalizations: HashMap::new(),
             exhaustive_cases: Vec::new(),
+            exhaustiveness_reported: HashSet::new(),
             effect_annotation_origins: HashMap::new(),
             signature_row_names: HashMap::new(),
             signature_type_names: HashMap::new(),

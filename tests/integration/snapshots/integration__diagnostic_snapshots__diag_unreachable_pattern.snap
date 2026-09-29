@@ -2,9 +2,9 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "non-exhaustive case expression: missing patterns: _"
+- message: unreachable pattern
   span:
-    start: 35
-    end: 36
-  severity: Error
+    start: 93
+    end: 94
+  severity: Warning
   phase: TypeChecking

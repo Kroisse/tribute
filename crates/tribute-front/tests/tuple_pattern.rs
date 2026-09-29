@@ -42,6 +42,7 @@ fn test(a: Bool, b: Bool, c: Bool) -> Int {
     case #(a, #(b, c)) {
         #(True, #(True, True)) -> 1
         #(True, #(_, False)) -> 2
+        #(True, #(False, True)) -> 4
         #(False, _) -> 3
     }
 }

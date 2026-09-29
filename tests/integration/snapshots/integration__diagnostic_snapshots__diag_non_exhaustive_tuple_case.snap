@@ -2,9 +2,9 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "non-exhaustive case expression: missing patterns: _"
+- message: "non-exhaustive case expression: missing patterns: #(False, False)"
   span:
-    start: 35
-    end: 36
+    start: 45
+    end: 52
   severity: Error
   phase: TypeChecking
