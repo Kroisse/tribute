@@ -1,0 +1,10 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "unknown field `z` for struct `Point`"
+  span:
+    start: 70
+    end: 88
+  severity: Error
+  phase: TypeChecking

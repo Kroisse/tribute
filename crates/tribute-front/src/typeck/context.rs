@@ -148,6 +148,11 @@ pub struct ModuleTypeEnv<'db> {
     /// Used for exhaustiveness checking in case expressions.
     enum_variants: HashMap<Symbol, Vec<Symbol>>,
 
+    /// Field names of constructors whose fields are all named, in
+    /// declaration order: structs, named-field variants, and constructors
+    /// without fields. Positional-only variants are absent.
+    constructor_field_names: HashMap<CtorId<'db>, Vec<Symbol>>,
+
     /// Ability definitions: AbilityId → AbilityInfo
     /// Used for handler arm type checking.
     ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
@@ -206,6 +211,7 @@ impl<'db> ModuleTypeEnv<'db> {
             type_defs,
             struct_fields: HashMap::new(),
             enum_variants: HashMap::new(),
+            constructor_field_names: HashMap::new(),
             ability_defs,
             ability_conventions,
             method_index: HashMap::new(),
@@ -278,6 +284,11 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Register enum variant information.
     pub fn register_enum_variants(&mut self, enum_name: Symbol, variants: Vec<Symbol>) {
         self.enum_variants.insert(enum_name, variants);
+    }
+
+    /// Register the field names of a constructor whose fields are all named.
+    pub fn register_constructor_field_names(&mut self, id: CtorId<'db>, names: Vec<Symbol>) {
+        self.constructor_field_names.insert(id, names);
     }
 
     /// Register an ability definition.
@@ -365,6 +376,12 @@ impl<'db> ModuleTypeEnv<'db> {
         self.enum_variants.get(&enum_name).map(|v| v.as_slice())
     }
 
+    /// Field names of a constructor in declaration order, or `None` if its
+    /// fields are positional.
+    pub fn lookup_constructor_field_names(&self, id: CtorId<'db>) -> Option<&[Symbol]> {
+        self.constructor_field_names.get(&id).map(Vec::as_slice)
+    }
+
     /// Look up an ability definition by ID.
     pub fn lookup_ability(&self, id: AbilityId<'db>) -> Option<&AbilityInfo<'db>> {
         self.ability_defs.get(&id)
@@ -416,6 +433,9 @@ impl<'db> ModuleTypeEnv<'db> {
         }
         for (name, variants) in exports.enum_variants(self.db) {
             self.enum_variants.insert(*name, variants.clone());
+        }
+        for (id, names) in exports.constructor_field_names(self.db) {
+            self.constructor_field_names.insert(*id, names.clone());
         }
         for (name, entries) in exports.method_index(self.db) {
             self.method_index
@@ -527,6 +547,22 @@ impl<'db> ModuleTypeEnv<'db> {
             .map(|(k, v)| (*k, v.clone()))
             .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
+        result
+    }
+
+    /// Export constructor field names for PreludeExports.
+    ///
+    /// Results are sorted by constructor name for deterministic output.
+    pub fn export_constructor_field_names(&self) -> Vec<(CtorId<'db>, Vec<Symbol>)> {
+        let mut result: Vec<_> = self
+            .constructor_field_names
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        result.sort_by(|(a, _), (b, _)| {
+            a.qualified(self.db)
+                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
+        });
         result
     }
 

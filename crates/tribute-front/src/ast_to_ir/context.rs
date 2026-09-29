@@ -91,6 +91,10 @@ pub struct IrLoweringCtx<'db> {
     /// Struct field order: CtorId → [field_names in definition order].
     /// Used for lowering Record expressions to adt.struct_new.
     struct_fields: HashMap<CtorId<'db>, Vec<Symbol>>,
+    /// Field names of named-field enum variants: (enum layout, tag) →
+    /// [field names in declaration order]. Used to match brace-form
+    /// constructor patterns by name.
+    variant_field_names: HashMap<(TypeRef, Symbol), Vec<Symbol>>,
     /// Type map: type name → arena TypeRef for adt.struct / adt.enum.
     /// Used for named structs, tuples, and (future) enum variants.
     type_map: im::HashMap<Symbol, TypeRef>,
@@ -136,6 +140,7 @@ impl<'db> IrLoweringCtx<'db> {
             module_path,
             module_block: None,
             struct_fields: HashMap::new(),
+            variant_field_names: HashMap::new(),
             type_map: im::HashMap::new(),
             logical_nominal_declarations: HashSet::new(),
             compiler_intrinsics: HashMap::new(),
@@ -388,6 +393,21 @@ impl<'db> IrLoweringCtx<'db> {
     /// Register struct field order for lowering Record expressions.
     pub fn register_struct_fields(&mut self, ctor_id: CtorId<'db>, field_names: Vec<Symbol>) {
         self.struct_fields.insert(ctor_id, field_names);
+    }
+
+    /// Register the field names of a named-field enum variant.
+    pub fn register_variant_field_names(
+        &mut self,
+        layout: TypeRef,
+        tag: Symbol,
+        field_names: Vec<Symbol>,
+    ) {
+        self.variant_field_names.insert((layout, tag), field_names);
+    }
+
+    /// Field names of a named-field enum variant in declaration order.
+    pub fn variant_field_names(&self, layout: TypeRef, tag: Symbol) -> Option<Vec<Symbol>> {
+        self.variant_field_names.get(&(layout, tag)).cloned()
     }
 
     /// Get struct field order (for lowering Record → adt.struct_new).

@@ -295,6 +295,97 @@ fn main() {
     );
 }
 
+/// Brace-form struct patterns match fields by name, in any order and with
+/// `..`, in `case` and in `let`; positional struct patterns read the same
+/// fields.
+#[test]
+fn test_native_struct_patterns() {
+    assert_native_output(
+        "struct_patterns.trb",
+        r#"
+struct Point { x: Nat, y: Bool }
+
+fn pick(p: Point) -> Nat {
+    case p {
+        Point { y: True, .. } -> 100
+        Point { y: False, x } -> x
+    }
+}
+
+fn first(p: Point) -> Nat {
+    let Point { y: _, x } = p
+    x
+}
+
+fn positional(p: Point) -> Nat {
+    case p {
+        Point(x, True) -> x + 1
+        Point(x, False) -> x
+    }
+}
+
+fn main() {
+    __tribute_print_nat(pick(Point { x: 1, y: True }))
+    __tribute_print_nat(pick(Point { x: 2, y: False }))
+    __tribute_print_nat(first(Point { x: 3, y: True }))
+    __tribute_print_nat(positional(Point { x: 4, y: True }))
+}
+"#,
+        "100\n2\n3\n5",
+    );
+}
+
+/// Named-field variants are matched by name, and a nested literal field
+/// selects the arm.
+#[test]
+fn test_native_named_variant_patterns() {
+    assert_native_output(
+        "named_variant_patterns.trb",
+        r#"
+enum Shape {
+    Circle(Nat),
+    Rect { width: Nat, tall: Bool },
+}
+
+fn size(shape: Shape) -> Nat {
+    case shape {
+        Circle(radius) -> radius
+        Rect { tall: True, width } -> width + 10
+        Rect { width, tall: False } -> width
+    }
+}
+
+fn main() {
+    __tribute_print_nat(size(Circle(1)))
+    __tribute_print_nat(size(Rect(2, True)))
+    __tribute_print_nat(size(Rect(3, False)))
+}
+"#,
+        "1\n12\n3",
+    );
+}
+
+/// Generic struct patterns use the monomorphized layout.
+#[test]
+fn test_native_generic_struct_pattern() {
+    assert_native_output(
+        "generic_struct_pattern.trb",
+        r#"
+struct Pair(a, b) { left: a, right: b }
+
+fn right(pair: Pair(Nat, Nat)) -> Nat {
+    let Pair { right, .. } = pair
+    right
+}
+
+fn main() {
+    __tribute_print_nat(right(Pair { left: 1, right: 2 }))
+}
+"#,
+        "2",
+    );
+}
+
 #[test]
 fn test_native_short_lists_skip_nested_pattern_observation() {
     assert_native_output(

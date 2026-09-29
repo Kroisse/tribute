@@ -62,9 +62,6 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
         // === Constructor/Variant pattern ===
         "constructor_pattern" => lower_constructor_pattern(ctx, node),
 
-        // === Record pattern ===
-        "record_pattern" => lower_record_pattern(ctx, node),
-
         // === Tuple pattern ===
         "tuple_pattern" => lower_tuple_pattern(ctx, node),
 
@@ -123,12 +120,20 @@ fn lower_constructor_pattern(
         return PatternKind::Variant { ctor, fields };
     }
 
-    // Handle struct-style fields: Point { x, y }, Ok { value: v }
-    if let Some(fields) = fields_node {
-        let patterns = lower_constructor_fields(ctx, fields);
-        return PatternKind::Variant {
-            ctor,
-            fields: patterns,
+    // Handle struct-style fields: Point { x, y }, Ok { value: v, .. }.
+    // Fields are matched by name, so the names and `..` are kept.
+    let has_braces = {
+        let mut cursor = node.walk();
+        node.children(&mut cursor).any(|child| child.kind() == "{")
+    };
+    if has_braces {
+        let (fields, rest) = fields_node
+            .map(|fields| lower_constructor_fields(ctx, fields))
+            .unwrap_or_default();
+        return PatternKind::Record {
+            type_name: Some(ctor),
+            fields,
+            rest,
         };
     }
 
@@ -139,104 +144,47 @@ fn lower_constructor_pattern(
     }
 }
 
-/// Lower struct-style pattern fields (pattern_fields) to a list of patterns.
+/// Lower struct-style pattern fields (pattern_fields), returning the named
+/// fields and whether a trailing `..` ignores the rest.
 fn lower_constructor_fields(
     ctx: &mut AstLoweringCtx<'_>,
     node: Node,
-) -> Vec<Pattern<UnresolvedName>> {
-    let mut patterns = Vec::new();
+) -> (Vec<FieldPattern<UnresolvedName>>, bool) {
+    let mut fields = Vec::new();
+    let mut rest = false;
     let mut cursor = node.walk();
 
     for child in node.named_children(&mut cursor) {
         match child.kind() {
             "pattern_field" => {
-                // pattern_field: name: pattern or just name (shorthand)
+                let Some(name_node) = child.child_by_field_name("name") else {
+                    continue;
+                };
+                let name = ctx.node_symbol(&name_node);
                 if let Some(pattern_node) = child.child_by_field_name("pattern") {
-                    patterns.push(lower_pattern(ctx, pattern_node));
-                } else if let Some(name_node) = child.child_by_field_name("name") {
-                    // Shorthand: { x } means bind x
-                    let id = ctx.fresh_id_with_span(&name_node);
-                    let name = ctx.node_symbol(&name_node);
-                    patterns.push(Pattern::new(
-                        id,
-                        PatternKind::Bind {
-                            name,
-                            local_id: None,
-                        },
-                    ));
-                }
-            }
-            "spread" => {
-                // Trailing .. to ignore rest - we could track this but for now ignore
-            }
-            _ => {}
-        }
-    }
-
-    patterns
-}
-
-fn lower_record_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> PatternKind<UnresolvedName> {
-    let type_node = node.child_by_field_name("type");
-    let fields_node = node.child_by_field_name("fields");
-
-    let type_name = if let Some(n) = type_node {
-        let name = ctx.node_symbol(&n);
-        let id = ctx.fresh_id_with_span(&n);
-        Some(UnresolvedName::new(name, id))
-    } else {
-        None
-    };
-
-    let mut fields = Vec::new();
-    let mut rest = false;
-
-    if let Some(fields_node) = fields_node {
-        let mut cursor = fields_node.walk();
-        for child in fields_node.named_children(&mut cursor) {
-            match child.kind() {
-                "field_pattern" => {
-                    if let Some(field) = lower_field_pattern(ctx, child) {
-                        fields.push(field);
-                    }
-                }
-                "shorthand_field_pattern" => {
-                    // { name } is shorthand for { name: name }
                     let id = ctx.fresh_id_with_span(&child);
-                    let name = ctx.node_symbol(&child);
+                    let pattern = lower_pattern(ctx, pattern_node);
+                    fields.push(FieldPattern {
+                        id,
+                        name,
+                        pattern: Some(pattern),
+                    });
+                } else {
+                    // Shorthand: { x } binds x; resolution creates the binding.
+                    let id = ctx.fresh_id_with_span(&name_node);
                     fields.push(FieldPattern {
                         id,
                         name,
                         pattern: None,
                     });
                 }
-                "rest_pattern" => {
-                    rest = true;
-                }
-                _ => {}
             }
+            "spread" => rest = true,
+            _ => {}
         }
     }
 
-    PatternKind::Record {
-        type_name,
-        fields,
-        rest,
-    }
-}
-
-fn lower_field_pattern(
-    ctx: &mut AstLoweringCtx<'_>,
-    node: Node,
-) -> Option<FieldPattern<UnresolvedName>> {
-    let name_node = node.child_by_field_name("name")?;
-    let pattern_node = node.child_by_field_name("pattern");
-
-    let id = ctx.fresh_id_with_span(&node);
-    let name = ctx.node_symbol(&name_node);
-    let pattern = pattern_node.map(|n| lower_pattern(ctx, n));
-
-    Some(FieldPattern { id, name, pattern })
+    (fields, rest)
 }
 
 fn lower_tuple_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> PatternKind<UnresolvedName> {
@@ -616,11 +564,39 @@ mod tests {
             }
         "#;
         let pattern = get_case_pattern(source, 0);
-        let PatternKind::Variant { ctor, fields } = pattern else {
-            panic!("Expected variant pattern, got {:?}", pattern);
+        let PatternKind::Record {
+            type_name: Some(ctor),
+            fields,
+            rest,
+        } = pattern
+        else {
+            panic!("Expected record pattern, got {:?}", pattern);
         };
         assert_eq!(ctor.name().to_string(), "Point");
-        assert_eq!(fields.len(), 2);
+        let names: Vec<_> = fields.iter().map(|field| field.name.to_string()).collect();
+        assert_eq!(names, ["x", "y"]);
+        assert!(fields.iter().all(|field| field.pattern.is_some()));
+        assert!(!rest);
+    }
+
+    #[test]
+    fn test_constructor_pattern_struct_style_shorthand_and_rest() {
+        let source = r#"
+            fn main() {
+                case x {
+                    Point { y, .. } -> y
+                    _ -> 0
+                }
+            }
+        "#;
+        let pattern = get_case_pattern(source, 0);
+        let PatternKind::Record { fields, rest, .. } = pattern else {
+            panic!("Expected record pattern, got {:?}", pattern);
+        };
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields[0].name.to_string(), "y");
+        assert!(fields[0].pattern.is_none());
+        assert!(rest);
     }
 
     // === Tuple Pattern ===

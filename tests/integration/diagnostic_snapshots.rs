@@ -247,6 +247,44 @@ fn flag(value: Bool) -> Nat {
 }
 
 #[salsa_test]
+fn diag_unknown_pattern_field(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+struct Point { x: Nat, y: Nat }
+
+fn first(p: Point) -> Nat {
+    let Point { x, z, .. } = p
+    x
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_constructor_pattern_arity(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn get(o: Option(Nat)) -> Nat {
+    case o {
+        Some(a, b) -> a
+        None -> 0
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_unresolved_method_after_tdnr(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

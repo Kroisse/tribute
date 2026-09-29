@@ -377,6 +377,7 @@ impl<'db> TypeChecker<'db> {
         let type_defs = self.env.export_type_defs();
         let struct_fields = self.env.export_struct_fields();
         let enum_variants = self.env.export_enum_variants();
+        let constructor_field_names = self.env.export_constructor_field_names();
         let method_index = self.env.export_method_index();
         let ability_conventions = self.env.export_ability_conventions();
         let ability_definitions = self.env.export_ability_defs_for_prelude();
@@ -391,6 +392,7 @@ impl<'db> TypeChecker<'db> {
             type_defs,
             struct_fields,
             enum_variants,
+            constructor_field_names,
             method_index,
             ability_conventions,
             ability_definitions,
