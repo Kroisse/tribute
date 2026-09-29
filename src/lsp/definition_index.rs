@@ -820,10 +820,10 @@ pub fn definition_index<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<AstDefinitionIndex<'db>> {
-    let module = ast_query::tdnr_module(db, source)?;
+    let module = tribute::parse_and_lower_ast(db, source)?.module(db);
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstDefinitionIndex::build(db, &module, &span_map))
+    Some(AstDefinitionIndex::build(db, module, &span_map))
 }
 
 // =============================================================================

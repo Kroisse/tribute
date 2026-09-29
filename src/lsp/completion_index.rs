@@ -73,9 +73,10 @@ pub fn complete_keywords(prefix: &str) -> Vec<AstCompletionItem> {
 /// Build completion items from a typed module.
 #[salsa::tracked(returns(deref))]
 pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstCompletionItem> {
-    let Some(module) = ast_query::tdnr_module(db, source) else {
+    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
         return Vec::new();
     };
+    let module = output.module(db);
 
     let mut items = Vec::new();
 
@@ -335,9 +336,10 @@ fn print_type_annotation(ty: &TypeAnnotation) -> String {
 
 /// Build function signatures from a typed module.
 pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<FunctionSignature> {
-    let Some(module) = ast_query::tdnr_module(db, source) else {
+    let Some(output) = tribute::parse_and_lower_ast(db, source) else {
         return Vec::new();
     };
+    let module = output.module(db);
     let Some(span_map) = ast_query::span_map(db, source) else {
         return Vec::new();
     };

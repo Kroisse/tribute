@@ -475,10 +475,10 @@ pub fn type_index<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<AstTypeIndex<'db>> {
-    let module = ast_query::tdnr_module(db, source)?;
+    let module = tribute::parse_and_lower_ast(db, source)?.module(db);
     let span_map = ast_query::span_map(db, source)?;
 
-    Some(AstTypeIndex::build(db, &module, &span_map))
+    Some(AstTypeIndex::build(db, module, &span_map))
 }
 
 #[cfg(test)]
@@ -552,6 +552,20 @@ mod tests {
 
         // The index should have at least one entry (the integer literal)
         assert!(!index.entries(&db).is_empty());
+    }
+
+    /// Semantic indexes see prelude names: a value built with a prelude
+    /// constructor has its prelude type, and a qualified prelude variant
+    /// pattern resolves.
+    #[test]
+    fn test_type_index_uses_prelude() {
+        let db = salsa::DatabaseImpl::default();
+        let text = "fn f(error: Int::ParseError) -> Nat {\n    let value = case error {\n        Int::ParseError::InvalidSyntax -> Some(1)\n        Int::ParseError::OutOfRange -> None\n    }\n    let other = value\n    0\n}\n";
+        let source = make_source(&db, text);
+        let index = type_index(&db, source).expect("type index");
+        let offset = text.rfind("value").unwrap();
+        let entry = index.type_at(&db, offset).expect("type of `value`");
+        assert_eq!(print_ast_type(&db, entry.ty), "Option(Nat)");
     }
 
     #[test]
