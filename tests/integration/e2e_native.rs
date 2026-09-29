@@ -426,6 +426,50 @@ fn main() {
     );
 }
 
+/// Record literals construct named-field variants with fields written in any
+/// order, including generic variants, and patterns read them back by name.
+#[test]
+fn test_native_named_variant_records() {
+    assert_native_output(
+        "named_variant_records.trb",
+        r#"
+enum Shape {
+    Dot(Nat),
+    Rect { width: Nat, tall: Bool },
+}
+
+enum Wrap(a) {
+    Box { value: a, tagged: Bool },
+    Empty,
+}
+
+fn size(shape: Shape) -> Nat {
+    case shape {
+        Dot(n) -> n
+        Rect { tall: True, width } -> width + 10
+        Rect { width, tall: False } -> width
+    }
+}
+
+fn get(w: Wrap(Nat)) -> Nat {
+    case w {
+        Box { tagged: True, value } -> value + 100
+        Box { value, .. } -> value
+        Empty -> 0
+    }
+}
+
+fn main() {
+    __tribute_print_nat(size(Rect { tall: True, width: 7 }))
+    __tribute_print_nat(size(Rect { width: 3, tall: False }))
+    __tribute_print_nat(get(Box { tagged: True, value: 1 }))
+    __tribute_print_nat(get(Box { value: 2, tagged: False }))
+}
+"#,
+        "17\n3\n101\n2",
+    );
+}
+
 #[test]
 fn test_native_short_lists_skip_nested_pattern_observation() {
     assert_native_output(
