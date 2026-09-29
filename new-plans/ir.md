@@ -1012,8 +1012,9 @@ bit operations, and numeric conversions.
 
 `mem.*` represents low-level data, load, and store operations for runtime or FFI
 support.
-주소 계산은 `mem.ptr_add(base, offset) -> ptr` 하나로 표현한다. `offset`은 pointer
-폭의 정수이며 byte 단위다. 원소 크기 배율은 적용하지 않으므로, 필요하면 `arith`
+주소 계산은 `mem.ptr_add(base: core.ptr, offset: 정수) -> core.ptr` 하나로 표현한다.
+`offset`은 byte 단위다. Schema는 정수 범주만 강제하며, `offset`을 target의 pointer
+폭에 맞추는 것은 생산자의 책임이다. 원소 크기 배율은 적용하지 않으므로, 필요하면 `arith`
 곱셈으로 명시한다. 결과는 `base`의 provenance를 유지한다. `mem.load`와 `mem.store`는
 즉시값 `offset`만 받고 동적 offset을 받지 않는다. 동적 주소는 `mem.ptr_add`로
 만든다. 구조적 index로 주소를 유도하는 GEP식 연산은 두지 않는다.

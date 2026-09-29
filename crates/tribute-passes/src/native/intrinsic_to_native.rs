@@ -132,9 +132,7 @@ impl RewritePattern for BytesGetOrPanicPattern {
             .build(ctx, loc);
         rewriter.insert_op(offset.op_ref());
 
-        let addr = mem::PtrAdd::operands(data_ptr.result(ctx), offset.result(ctx))
-            .results(ptr_ty)
-            .build(ctx, loc);
+        let addr = mem::PtrAdd::operands(data_ptr.result(ctx), offset.result(ctx)).build(ctx, loc);
         rewriter.insert_op(addr.op_ref());
 
         let byte = mem::Load::operands(addr.result(ctx))
