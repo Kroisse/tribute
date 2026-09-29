@@ -62,6 +62,14 @@ struct FunctionIdentity {
     environment_index: Option<usize>,
 }
 
+/// Whether a contract check sees logical CPS callables or their physicalized
+/// form, which lacks the provenance physicalization consumed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContractPhase {
+    Logical,
+    Physical,
+}
+
 #[derive(Clone, Copy)]
 struct RootFrameContract {
     reference: TypeRef,
@@ -84,7 +92,7 @@ pub fn lower_cps_signatures_to_physical(
     let functions = collect_functions(ctx, &ops, never, anyref)?;
     validate_transfers(ctx, &ops, &functions, never)?;
     validate_dispatch_contracts(ctx, module)?;
-    validate_root_entry(ctx, module, &[never])?;
+    validate_root_entry(ctx, module, ContractPhase::Logical)?;
 
     let aliases = ctx.type_aliases().to_vec();
     let mut converter = PhysicalTypeConverter::new(ctx, never);
@@ -259,8 +267,13 @@ struct RootEntryContract {
 fn validate_root_entry(
     ctx: &mut IrContext,
     module: Module,
-    expected_results: &[TypeRef],
+    phase: ContractPhase,
 ) -> Result<Option<RootEntryContract>, TargetAbiError> {
+    let expected_results = match phase {
+        ContractPhase::Logical => vec![core::never(ctx).as_type_ref()],
+        ContractPhase::Physical => vec![],
+    };
+    let expected_results = expected_results.as_slice();
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(None);
     };
@@ -330,6 +343,7 @@ fn validate_root_entry(
         source_result,
         evidence_ty,
         expected_results,
+        phase,
     )?;
     if ctx.op(worker_op).regions.is_empty() {
         return Err(TargetAbiError::new(
@@ -374,7 +388,7 @@ pub fn compose_root_entry_bridge(
         source_result,
         evidence_ty,
         frame,
-    }) = validate_root_entry(ctx, module, &[])?
+    }) = validate_root_entry(ctx, module, ContractPhase::Physical)?
     else {
         return Ok(());
     };
@@ -654,8 +668,14 @@ pub(crate) fn dispatch_answer_type(
             "CPS resume must have logical never or physical empty results",
         ));
     }
-    let contract =
-        validate_root_continuation_frame(ctx, frame, answer, ctx.value_ty(evidence), results)?;
+    let contract = validate_root_continuation_frame(
+        ctx,
+        frame,
+        answer,
+        ctx.value_ty(evidence),
+        results,
+        ContractPhase::Logical,
+    )?;
     if contract.dispatch != dispatch {
         return Err(TargetAbiError::new(
             "CPS dispatch differs from exact nominal frame Dispatch",
@@ -712,6 +732,7 @@ fn validate_root_continuation_frame(
     source_result: TypeRef,
     evidence: TypeRef,
     physical_results: &[TypeRef],
+    phase: ContractPhase,
 ) -> Result<RootFrameContract, TargetAbiError> {
     let reference_data = ctx.get_type(frame);
     if reference_data.dialect != Symbol::new("adt") || reference_data.name != Symbol::new("typeref")
@@ -722,7 +743,7 @@ fn validate_root_continuation_frame(
     }
     // Physicalization consumes the frame answer provenance after checking it
     // here; the physical frame's Done input then carries the source result.
-    let expected_provenance = (!physical_results.is_empty()).then_some(source_result);
+    let expected_provenance = (phase == ContractPhase::Logical).then_some(source_result);
     if cps_continuation_frame_result_type(ctx, frame) != expected_provenance {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame result provenance differs from root source result",
