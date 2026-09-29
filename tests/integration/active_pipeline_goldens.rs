@@ -10,6 +10,7 @@ use tribute::pipeline::{
     NativePipelineStage, OptimizationOptions, compile_with_diagnostics, dump_ir,
     dump_native_ir_at_stage,
 };
+use tribute_core::calling_convention::CPS_CONTINUATION_FRAME_NAME_PREFIX;
 use tribute_front::SourceCst;
 use trunk_ir::printer::print_module;
 
@@ -50,7 +51,7 @@ fn native_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str) -> Strin
 
 fn assert_shared_cps_contract(ir_text: &str) {
     for required in [
-        "__tribute_continuation_frame_",
+        CPS_CONTINUATION_FRAME_NAME_PREFIX,
         "func.func @main",
         "func.tail_call_indirect",
     ] {
@@ -73,7 +74,7 @@ fn assert_shared_cps_contract(ir_text: &str) {
 
 fn assert_native_cps_root_contract(ir_text: &str) {
     for required in [
-        "__tribute_continuation_frame_",
+        CPS_CONTINUATION_FRAME_NAME_PREFIX,
         "func.func @__tribute_cps_main",
         "func.func @__tribute_root_done_k",
         "func.func @__tribute_root_dispatch",
@@ -97,8 +98,6 @@ fn assert_native_cps_root_contract(ir_text: &str) {
     }
 }
 
-const CONTINUATION_FRAME_PREFIX: &str = "__tribute_continuation_frame_";
-
 // Snapshot semantic signature shapes and transfer counts, without SSA IDs,
 // generated symbol numbering, or unrelated allocation/layout operations.
 fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
@@ -119,11 +118,9 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         }
         // Physicalization consumes the frame answer type, and the generated
         // frame name only numbers it.
-        if data
-            .attrs
-            .get_symbol("name")
-            .is_some_and(|name| name.with_str(|name| name.starts_with(CONTINUATION_FRAME_PREFIX)))
-        {
+        if data.attrs.get_symbol("name").is_some_and(|name| {
+            name.with_str(|name| name.starts_with(CPS_CONTINUATION_FRAME_NAME_PREFIX))
+        }) {
             return "Frame".to_owned();
         }
         let mut shape = format!("{}.{}", data.dialect, data.name);

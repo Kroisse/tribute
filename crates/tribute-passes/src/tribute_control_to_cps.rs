@@ -876,7 +876,10 @@ impl<'a> Converter<'a> {
         if let Some(frame) = self.frames.get(&answer).copied() {
             return frame;
         }
-        let name = Symbol::from_dynamic(&format!("__tribute_continuation_frame_{answer:?}"));
+        let name = Symbol::from_dynamic(&format!(
+            "{}{answer:?}",
+            tribute_core::calling_convention::CPS_CONTINUATION_FRAME_NAME_PREFIX
+        ));
         let reference = cps_continuation_frame_ref_type(self.ctx, name, answer);
         let done = self.done_k_type(answer);
         let evidence = self.evidence_type();
