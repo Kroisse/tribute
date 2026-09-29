@@ -164,22 +164,20 @@ fn verify_width(
 }
 
 macro_rules! width_verifier {
-    ($($op:ident => $width:path, $widens:literal;)*) => {$(
+    ($op:ident, $width:path, $widens:literal) => {
         impl crate::ops::Verify for $op {
             fn verify(self, ctx: &IrContext) -> Result<(), String> {
                 verify_width(ctx, self.op_ref(), $width, $widens)
             }
         }
-    )*};
+    };
 }
 
-width_verifier! {
-    Extsi => IntegerLike::width, true;
-    Extui => IntegerLike::width, true;
-    Trunci => IntegerLike::width, false;
-    Extf => FloatLike::width, true;
-    Truncf => FloatLike::width, false;
-}
+width_verifier!(Extsi, IntegerLike::width, true);
+width_verifier!(Extui, IntegerLike::width, true);
+width_verifier!(Trunci, IntegerLike::width, false);
+width_verifier!(Extf, FloatLike::width, true);
+width_verifier!(Truncf, FloatLike::width, false);
 
 // Folds this dialect contributes to `transforms::canonicalize`. Each
 // `#[trunk_ir::canonicalize_fold(...)]` attribute below registers the
