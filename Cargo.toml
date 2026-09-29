@@ -15,6 +15,7 @@ cranelift-entity = "0.135.2"
 cranelift-frontend = "0.135.2"
 cranelift-module = "0.135.2"
 cranelift-object = "0.135.2"
+criterion = { version = "0.8", default-features = false, features = ["cargo_bench_support"] }
 crossbeam-channel = "0.5.16"
 derive_more = { version = "2.0", features = ["display", "error", "from"] }
 fluent-uri = "0.1.4"
@@ -99,11 +100,16 @@ trunk-ir-cranelift-backend.workspace = true
 trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 wasmparser.workspace = true
 insta.workspace = true
 itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
+
+[[bench]]
+name = "abi_boundary"
+harness = false
 
 # Dev and test builds keep debug assertions, including the per-pass IR
 # verifier, but optimize lightly: unoptimized IR walks dominated test time.
