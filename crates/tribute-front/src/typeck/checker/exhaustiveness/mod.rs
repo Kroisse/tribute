@@ -18,8 +18,8 @@ use trunk_ir::Symbol;
 use self::matrix::{Analyzer, Ctor, Family, FamilyId, GiveUp, Pat, VariantInfo, Witness};
 use super::TypeChecker;
 use crate::ast::{
-    Arm, CtorId, LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, Type, TypeKind,
-    TypedRef,
+    Arm, CtorId, LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, Type, TypeDefId,
+    TypeKind, TypedRef,
 };
 
 /// Missing patterns listed in a diagnostic before it is cut short.
@@ -64,17 +64,17 @@ impl<'db> TypeChecker<'db> {
             .collect();
         let PatternLowering {
             families,
-            family_names,
+            family_types,
             saw_error,
             ..
         } = lowering;
         if saw_error {
             return false;
         }
-        if let Some(scrutinee) = self.nominal_name(scrutinee_ty)
+        if let Some(scrutinee) = self.nominal_type(scrutinee_ty)
             && rows.iter().any(|(pattern, _)| {
                 matches!(pattern, Pat::Ctor(Ctor::Variant { family, .. }, _)
-                    if family_names[family.0] != scrutinee)
+                    if family_types[family.0] != scrutinee)
             })
         {
             return false;
@@ -130,12 +130,12 @@ impl<'db> TypeChecker<'db> {
         missing.is_empty()
     }
 
-    /// The nominal type name of a scrutinee, if it has one.
-    fn nominal_name(&self, ty: Type<'db>) -> Option<Symbol> {
+    /// The nominal type of a scrutinee, if it has one.
+    fn nominal_type(&self, ty: Type<'db>) -> Option<TypeDefId<'db>> {
         match ty.kind(self.db()) {
-            TypeKind::Named { name, .. } => Some(*name),
+            TypeKind::Named { id, .. } => Some(*id),
             TypeKind::App { ctor, .. } => match ctor.kind(self.db()) {
-                TypeKind::Named { name, .. } => Some(*name),
+                TypeKind::Named { id, .. } => Some(*id),
                 _ => None,
             },
             _ => None,
@@ -192,7 +192,9 @@ fn check_arms(
 struct PatternLowering<'a, 'db> {
     checker: &'a TypeChecker<'db>,
     families: Vec<Family>,
-    family_names: Vec<Symbol>,
+    /// The nominal type each family constructs, compared by declaration
+    /// identity because a type may be spelled by several names.
+    family_types: Vec<TypeDefId<'db>>,
     family_ids: HashMap<Symbol, FamilyId>,
     /// A pattern did not resolve to a constructor. The case is treated as
     /// non-exhaustive without a diagnostic here; resolution usually reports it.
@@ -207,7 +209,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         Self {
             checker,
             families: Vec::new(),
-            family_names: Vec::new(),
+            family_types: Vec::new(),
             family_ids: HashMap::new(),
             saw_error: false,
             unanalyzable: false,
@@ -310,17 +312,20 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
     fn constructor(&mut self, id: CtorId<'db>, variant: Symbol) -> Option<(Ctor, usize)> {
         let db = self.checker.db();
         let (arity, result) = self.constructor_shape(id)?;
-        let TypeKind::Named { name, .. } = result.kind(db) else {
+        let TypeKind::Named {
+            id: type_id, name, ..
+        } = result.kind(db)
+        else {
             return None;
         };
-        let name = *name;
+        let (type_id, name) = (*type_id, *name);
         let family = match self.family_ids.get(&name) {
             Some(family) => *family,
             None => {
                 let family = self.family(name, id)?;
                 let family_id = FamilyId(self.families.len());
                 self.families.push(family);
-                self.family_names.push(name);
+                self.family_types.push(type_id);
                 self.family_ids.insert(name, family_id);
                 family_id
             }

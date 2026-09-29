@@ -554,6 +554,81 @@ fn pick(o: Maybe(Bool)) -> Nat {
     assert_eq!(exhaustive, 1);
 }
 
+/// A scrutinee type spelled through a `use` import or by its short name
+/// inside its module is the same enum its constructors build.
+#[salsa_test]
+fn enum_spelled_by_another_name_is_checked(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+mod shapes {
+    pub enum Shape { Dot(Nat), Other }
+
+    pub fn inner(shape: Shape) -> Nat {
+        case shape {
+            Dot(n) -> n
+            Other -> 0
+        }
+    }
+}
+
+use shapes::Shape
+
+fn outer(shape: Shape) -> Nat {
+    case shape {
+        shapes::Dot(n) -> n
+        shapes::Other -> 0
+    }
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(exhaustive, 2);
+
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+mod shapes {
+    pub enum Shape { Dot(Nat), Other }
+}
+
+use shapes::Shape
+
+fn outer(shape: Shape) -> Nat {
+    case shape {
+        shapes::Dot(n) -> n
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["non-exhaustive case expression: missing patterns: Other"]
+    );
+    assert_eq!(exhaustive, 0);
+}
+
+/// A variant of another enum does not count toward the scrutinee's coverage.
+#[salsa_test]
+fn variant_of_another_enum_is_not_coverage(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+enum Shape { Dot(Nat), Other }
+enum Color { Red, Blue }
+
+fn size(shape: Shape) -> Nat {
+    case shape {
+        Red -> 0
+        Blue -> 1
+    }
+}
+"#,
+    );
+    assert!(!errors.is_empty(), "the arms must not typecheck");
+    assert_eq!(exhaustive, 0);
+}
+
 #[salsa_test]
 fn guarded_arms_do_not_cover(db: &salsa::DatabaseImpl) {
     let (errors, exhaustive) = errors_and_exhaustive(
