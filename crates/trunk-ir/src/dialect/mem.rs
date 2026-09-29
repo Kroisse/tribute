@@ -9,11 +9,14 @@ use crate::dialect::core::{IntegerLike, Ptr};
 
 #[trunk_ir::dialect]
 mod mem {
-    fn data(bytes: Attr<_>) -> Value<_> {}
+    /// The address of immutable data holding `bytes`.
+    fn data(bytes: Attr<Bytes>) -> Value<Ptr> {}
 
-    fn load(offset: Attr<u32>, ptr: Value<_>) -> Value<_> {}
+    /// Load a value of any type from `ptr` plus an immediate byte `offset`.
+    fn load(offset: Attr<u32>, ptr: Value<Ptr>) -> Value<_> {}
 
-    fn store(offset: Attr<u32>, ptr: Value<_>, value: Value<_>) {}
+    /// Store `value` of any type at `ptr` plus an immediate byte `offset`.
+    fn store(offset: Attr<u32>, ptr: Value<Ptr>, value: Value<_>) {}
 
     /// Add a pointer-width integer byte `offset` to `base`, keeping `base`'s
     /// provenance. No element-size scaling is applied.
@@ -44,5 +47,15 @@ mod tests {
         assert!(!schema_ok("%a = mem.ptr_add %i, %i : core.ptr"));
         assert!(!schema_ok("%a = mem.ptr_add %p, %f : core.ptr"));
         assert!(!schema_ok("%a = mem.ptr_add %p, %i : core.i64"));
+    }
+
+    #[test]
+    fn memory_access_addresses_must_be_pointers() {
+        assert!(schema_ok("%a = mem.load %p {offset = 8} : core.i64"));
+        assert!(!schema_ok("%a = mem.load %i {offset = 0} : core.i64"));
+        assert!(schema_ok("mem.store %p, %f {offset = 0}"));
+        assert!(!schema_ok("mem.store %n, %f {offset = 0}"));
+        assert!(schema_ok("%a = mem.data {bytes = b\"hi\"} : core.ptr"));
+        assert!(!schema_ok("%a = mem.data {bytes = b\"hi\"} : core.i64"));
     }
 }

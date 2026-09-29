@@ -14,7 +14,7 @@ use std::rc::Rc;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{arith, func, mem};
+use trunk_ir::dialect::{arith, core, func, mem};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
@@ -120,7 +120,15 @@ impl RewritePattern for BytesGetOrPanicPattern {
         let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
         let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
 
-        let data_ptr = mem::Load::operands(bytes)
+        // The Bytes payload is read in place: view the borrowed reference as
+        // its native payload pointer; native type conversion maps both to
+        // `core.ptr`, so the cast folds away.
+        let payload = core::UnrealizedConversionCast::operands(bytes)
+            .results(ptr_ty)
+            .build(ctx, loc);
+        rewriter.insert_op(payload.op_ref());
+
+        let data_ptr = mem::Load::operands(payload.result(ctx))
             .offset(0)
             .results(ptr_ty)
             .build(ctx, loc);

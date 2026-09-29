@@ -1011,7 +1011,9 @@ tail-call lowering.
 bit operations, and numeric conversions.
 
 `mem.*` represents low-level data, load, and store operations for runtime or FFI
-support.
+support. 주소는 모두 `core.ptr`다. `mem.data`는 `core.ptr`를 만들고, `mem.load`와
+`mem.store`는 `core.ptr` 주소에서 임의 타입의 값을 읽고 쓴다. Managed reference의
+payload를 제자리에서 읽는 lowering은 그 reference를 `core.ptr`로 보는 cast를 명시한다.
 주소 계산은 `mem.ptr_add(base: core.ptr, offset: 정수) -> core.ptr` 하나로 표현한다.
 `offset`은 byte 단위다. Schema는 정수 범주만 강제하며, `offset`을 target의 pointer
 폭에 맞추는 것은 생산자의 책임이다. 원소 크기 배율은 적용하지 않으므로, 필요하면 `arith`
