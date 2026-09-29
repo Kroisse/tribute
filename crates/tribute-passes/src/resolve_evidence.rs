@@ -389,8 +389,8 @@ mod tests {
     fn final_dispatch_fixture(operation: &str) -> String {
         format!(
             r#"core.module @test {{
-  !marker = adt.struct() {{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}}
-  !evidence = core.array(!marker)
+  !marker = adt.struct() {{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}
+  !evidence = core.array(!marker) {{layout = @evidence}}
   func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %handler: core.ptr, %tr2: core.ptr, %handler2: core.ptr) -> core.never {{
     {operation}
   }}
@@ -639,8 +639,8 @@ mod tests {
     #[test]
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
-  !marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker}
-  !evidence = core.array(!marker)
+  !marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}
+  !evidence = core.array(!marker) {layout = @evidence}
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {

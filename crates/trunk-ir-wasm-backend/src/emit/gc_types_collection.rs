@@ -19,7 +19,7 @@ use wasm_encoder::{FieldType, StorageType, ValType};
 use crate::gc_types::{self, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, MARKER_IDX};
 use crate::{CompilationError, CompilationResult};
 
-use super::helpers::{self, intern_named_adt_struct};
+use super::helpers;
 
 /// Result type for GC type collection.
 pub(crate) type GcTypesResult = (Vec<GcTypeDef>, HashMap<TypeRef, u32>);
@@ -106,7 +106,7 @@ fn register_type(
 }
 
 /// Check retained Marker declarations against the predefined evidence layout.
-/// The nominal builtin lookup selects the layout; it does not validate fields.
+/// The runtime layout identifier selects the layout; it does not validate fields.
 fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()> {
     use trunk_ir::Attribute;
     let data = ctx.get_type(ty);
@@ -354,16 +354,6 @@ fn intern_wasm_structref(ctx: &mut IrContext) -> TypeRef {
     })
 }
 
-/// Create a wasm.arrayref TypeRef.
-fn intern_wasm_arrayref(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeData {
-        dialect: Symbol::new("wasm"),
-        name: Symbol::new("arrayref"),
-        params: Default::default(),
-        attrs: Default::default(),
-    })
-}
-
 // ============================================================================
 // Main collection function
 // ============================================================================
@@ -383,26 +373,9 @@ pub(crate) fn collect_gc_types(
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
 
-    // Abstract wasm.arrayref maps to EVIDENCE_IDX because type_converter lowers
-    // all core::Array types to wasm::Arrayref (which erases element type info).
-    // Currently the only array in the system is the evidence array, so this is safe.
-    // TODO: if user-defined arrays are added, this will need per-element-type indices.
-    let arrayref_ty = intern_wasm_arrayref(ctx);
-    type_idx_by_type.insert(arrayref_ty, EVIDENCE_IDX);
-    // Marker ADT type needs to be registered so wasm.struct_new for Marker reuses MARKER_IDX
-    // instead of creating a separate user type index.
-    let marker_ty = intern_named_adt_struct(ctx, "_Marker");
-    type_idx_by_type.insert(marker_ty, MARKER_IDX);
-    // Evidence ADT type (core.array(Marker)) — use a core.array type with marker param
-    let evidence_ty = {
-        ctx.intern_type(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new("array"),
-            params: trunk_ir::smallvec::smallvec![marker_ty],
-            attrs: Default::default(),
-        })
-    };
-    type_idx_by_type.insert(evidence_ty, EVIDENCE_IDX);
+    // Builtin closure, marker, and evidence layouts are selected by their
+    // runtime layout identifier (`helpers::builtin_layout_type_idx`), never
+    // by an erased `arrayref` or a struct name.
     // Collect all ops to visit in order (we need to borrow ctx immutably)
     let ops_to_visit = {
         let mut ops = Vec::new();
@@ -805,7 +778,7 @@ mod tests {
                 let mut ctx = IrContext::new();
                 let producer = if evidence {
                     format!(
-                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : core.array(!Marker)"
+                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : core.array(!Marker) {{layout = @evidence}}"
                     )
                 } else {
                     format!(
@@ -814,7 +787,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = adt.struct() {{name = @_Marker, fields = [[@ability_id, {field_type}], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}}
+                        !Marker = adt.struct() {{name = @_Marker, fields = [[@ability_id, {field_type}], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker}}
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable
@@ -856,10 +829,10 @@ mod tests {
             let entry = ctx.region(function.body(&ctx)).blocks[0];
             let ty = ctx.value_ty(ctx.block_args(entry)[0]);
             let (_, map) = collect_gc_types(&mut ctx, module).unwrap();
-            // Abstract arrayref retains its existing Evidence mapping; none of
-            // these references may acquire the Marker index from struct_get.
-            let expected = (reference == "wasm.arrayref").then_some(&EVIDENCE_IDX);
-            assert_eq!(map.get(&ty), expected);
+            // No abstract or unrelated reference acquires a builtin index: not
+            // the Marker index from struct_get, and not the Evidence index from
+            // an erased arrayref.
+            assert_eq!(map.get(&ty), None);
         }
     }
 

@@ -350,8 +350,11 @@ user-defined type은 그 뒤에 배치된다:
 | 6+ | user-defined structs, arrays, variants, closures |
 
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
-verifier는 `_closure` 3, `_Marker` 4, `Evidence` 5, user-defined type 6+를 정확히
+verifier는 closure 3, marker 4, evidence 5, user-defined type 6+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
+Index 3-5는 타입의 [runtime layout 식별자](ir.md#runtime-layout-식별자)
+(`@closure`, `@evidence_marker`, `@evidence`)로만 정해진다. Struct 이름이나 원소
+타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 `_closure` environment와 Marker의 dispatch closure field는 일반 reference
 erasure이므로 계속 `anyref`를 사용할 수 있다.
 
@@ -369,8 +372,8 @@ GC 연산의 concrete `type_idx`는 해당 연산이 접근하는 레이아웃�
 전역 등록하지 않는다. `structref`·`anyref` 인자와 필드는 다른 함수의
 projection, 생성 또는 참조 연산의 등장 순서와 무관하게 추상 타입을 유지한다.
 Concrete nominal 타입의 등록과 연산별 narrowing cast는 그대로 유지한다.
-현재 Evidence 배열 ABI에서 명시적으로 부여하는 `arrayref` 매핑은 별도 계약이며,
-일반 GC 연산에서 이를 새로 유추하거나 덮어쓰지 않는다.
+Evidence 배열은 type 변환 뒤에도 `layout = @evidence`를 가진 타입으로 emission까지
+남고, 그 식별자로 index 5를 받는다. Erased `arrayref`는 evidence로 간주하지 않는다.
 
 ### GC struct 필드의 scalar 표현
 
@@ -389,7 +392,7 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 
 | 값 타입 | 슬롯 | 판정 |
 | --- | --- | --- |
-| builtin 레이아웃 인덱스를 갖는 struct (`core.bytes`, `_closure`, `_Marker` 등) | `structref`, `anyref` | 허용 |
+| builtin 레이아웃 인덱스를 갖는 struct (`core.bytes`, closure, marker 등) | `structref`, `anyref` | 허용 |
 | `adt.typeref` | `structref`, `anyref` | 허용 |
 | `base_enum`을 가진 concrete variant instance | `structref`, `anyref` | 허용 |
 | builtin 배열 레이아웃 (Bytes backing array, Evidence array) | `arrayref`, `anyref` | 허용 |

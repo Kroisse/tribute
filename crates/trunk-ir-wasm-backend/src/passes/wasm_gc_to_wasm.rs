@@ -11,10 +11,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
-use crate::gc_types::{
-    BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX, EVIDENCE_IDX,
-    FIRST_USER_TYPE_IDX, MARKER_IDX,
-};
+use crate::gc_types::{BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, FIRST_USER_TYPE_IDX};
 
 fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
     let data = ctx.get_type(ty);
@@ -40,14 +37,6 @@ fn is_bytes_array(ctx: &IrContext, ty: TypeRef) -> bool {
         }
 }
 
-fn is_evidence_array(ctx: &IrContext, ty: TypeRef) -> bool {
-    let array = ctx.get_type(ty);
-    array.dialect == Symbol::new("core")
-        && array.name == Symbol::new("array")
-        && array.params.len() == 1
-        && named_adt(ctx, array.params[0], "_Marker")
-}
-
 pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
     let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes") {
@@ -56,14 +45,8 @@ pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
         Some(BYTES_ARRAY_IDX)
     } else if named_adt(ctx, ty, "_BoxedF64") {
         Some(BOXED_F64_IDX)
-    } else if crate::emit::helpers::is_closure_struct_type(ctx, ty) {
-        Some(CLOSURE_STRUCT_IDX)
-    } else if named_adt(ctx, ty, "_Marker") {
-        Some(MARKER_IDX)
-    } else if is_evidence_array(ctx, ty) {
-        Some(EVIDENCE_IDX)
     } else {
-        None
+        crate::emit::helpers::builtin_layout_type_idx(ctx, ty)
     }
 }
 

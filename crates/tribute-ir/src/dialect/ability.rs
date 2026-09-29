@@ -233,10 +233,10 @@ inventory::submit! { CallableExitOps::register::<HandleDispatch>() }
 
 // === ADT Type Functions ===
 
+use tribute_core::runtime_layout;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
-use trunk_ir::dialect::core;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
@@ -385,40 +385,64 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
             .attr("name", Attribute::Symbol(Symbol::new("_Marker")))
             .attr("fields", fields_attr)
+            .attr(
+                runtime_layout::LAYOUT_ATTR,
+                Attribute::Symbol(Symbol::new(runtime_layout::EVIDENCE_MARKER)),
+            )
             .build(),
     )
 }
 
-/// Get the canonical Evidence ADT type — `core.array(Marker)`.
+/// Get the canonical Evidence ADT type — `core.array(Marker)` carrying the
+/// evidence runtime layout identifier.
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
-    core::array(ctx, marker_ty).as_type_ref()
+    ctx.intern_type(
+        TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
+            .param(marker_ty)
+            .attr(
+                runtime_layout::LAYOUT_ATTR,
+                Attribute::Symbol(Symbol::new(runtime_layout::EVIDENCE)),
+            )
+            .build(),
+    )
 }
 
-/// Check if a type is the marker ADT type (`adt.struct("_Marker", ...)`).
+/// Whether a type is the evidence marker layout, identified by its runtime
+/// layout attribute.
 pub fn is_marker_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
-        return false;
-    }
-    data.attrs.get_symbol("name") == Some(Symbol::new("_Marker"))
+    runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::EVIDENCE_MARKER)
 }
 
-/// Check if a type is the evidence ADT type (`core.array(Marker)`).
+/// Whether a type is the evidence array layout, identified by its runtime
+/// layout attribute.
 pub fn is_evidence_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("core") || data.name != Symbol::new("array") {
-        return false;
-    }
-    if data.params.len() != 1 {
-        return false;
-    }
-    is_marker_type_ref(ctx, data.params[0])
+    runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::EVIDENCE)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::dialect::core;
+
+    #[test]
+    fn evidence_layouts_are_identified_by_layout_not_name() {
+        let mut ctx = IrContext::new();
+        let named_marker = ctx.intern_type(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
+                .attr("name", Attribute::Symbol(Symbol::new("_Marker")))
+                .build(),
+        );
+        let plain_array = core::array(&mut ctx, named_marker).as_type_ref();
+        assert!(!is_marker_type_ref(&ctx, named_marker));
+        assert!(!is_evidence_type_ref(&ctx, plain_array));
+
+        let marker = marker_adt_type_ref(&mut ctx);
+        let evidence = evidence_adt_type_ref(&mut ctx);
+        assert!(is_marker_type_ref(&ctx, marker));
+        assert!(is_evidence_type_ref(&ctx, evidence));
+        assert_eq!(ctx.get_type(evidence).params.as_slice(), [marker]);
+    }
     use trunk_ir::op_interface::CallableExitOps;
     use trunk_ir::ops::DialectOp;
 

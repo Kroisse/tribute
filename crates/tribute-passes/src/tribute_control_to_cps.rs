@@ -4819,7 +4819,7 @@ mod tests {
         );
 
         let malformed_delimiter = r#"core.module @test {
-  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
   func.func @broken() -> core.never attributes {tribute.calling_convention = 2} {
     ability.handle_dispatch {ability_refs = []} {
       ^body(%inner: !evidence):
@@ -4971,7 +4971,7 @@ mod tests {
     #[test]
     fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
         let dispatcher_input = r#"core.module @test {
-  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
   !tr = closure.closure(func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>)
   !general = closure.closure(func.func_sig<(!evidence, tribute_rt.anyref, core.i32, tribute_rt.anyref) -> core.never>)
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
@@ -4992,7 +4992,7 @@ mod tests {
         );
 
         let wrong_abi_input = r#"core.module @test {
-  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = 1} {
       func.unreachable
@@ -5017,7 +5017,7 @@ mod tests {
         assert!(text.contains("general dispatcher has the wrong"), "{text}");
 
         let wrong_metadata_input = r#"core.module @test {
-  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], name = @_Marker})
+  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 0} {
       func.unreachable
