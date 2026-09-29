@@ -22,7 +22,7 @@ core.module @test {
               tribute_control.yield %5
           }
       }
-      %6 = arith.const {value = unit} : core.nil
+      %6 = core.nil_value : core.nil
       tribute_control.return %6
   }
 }

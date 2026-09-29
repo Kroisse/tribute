@@ -35,7 +35,7 @@ core.module @test {
           tribute_control.handler {ability_ref = !t2, kind = @op, op_name = @set, operation_result_type = core.nil} {
             ^bb6(%9: tribute_rt.anyref, %10: tribute_control.resume_token(core.nil, tribute_rt.anyref)):
               %11 = tribute_control.lambda() -> tribute_rt.anyref convention(cps) captures [%10] {
-                  %12 = arith.const {value = unit} : core.nil
+                  %12 = core.nil_value : core.nil
                   %13 = tribute_control.resume %10, %12 : tribute_rt.anyref
                   tribute_control.return %13
               }

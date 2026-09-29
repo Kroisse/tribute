@@ -11,9 +11,9 @@ use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{arith, core};
+use trunk_ir::dialect::core;
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
-use trunk_ir::types::{Attribute, Location};
+use trunk_ir::types::Location;
 
 use super::context::IrLoweringCtx;
 
@@ -85,11 +85,7 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 
     /// Emit a nil value (Tribute's unit type).
     pub fn emit_nil(&mut self, location: Location) -> ValueRef {
-        let ty = self.ctx.nil_type(self.ir);
-        let op = arith::Const::operands()
-            .value(Attribute::Unit)
-            .results(ty)
-            .build(self.ir, location);
+        let op = core::NilValue::operands().build(self.ir, location);
         self.ir.push_op(self.block, op.op_ref());
         op.result(self.ir)
     }

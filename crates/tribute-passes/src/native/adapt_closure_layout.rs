@@ -211,9 +211,8 @@ mod tests {
     fn test_closure_struct_anyref_adaptation() {
         let result = adapt_then_lower_func(
             r#"core.module @test {
-  func.func @test_fn() -> core.i32 {
+  func.func @test_fn(%1: wasm.anyref) -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
-    %1 = arith.const {value = 0} : wasm.anyref
     %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env], layout = @closure}
     %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : core.i32
     %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : wasm.anyref

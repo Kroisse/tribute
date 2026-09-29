@@ -2990,7 +2990,7 @@ mod tests {
         scf.yield
       }
     }
-    %unit = arith.const {value = 0} : core.nil
+    %unit = core.nil_value : core.nil
     func.return %unit
   }
 }"#;

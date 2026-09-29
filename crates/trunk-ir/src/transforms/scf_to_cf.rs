@@ -1483,7 +1483,7 @@ mod tests {
     scf.switch %choice {
       scf.case {value = 0} {
         func.return
-        arith.const {value = 0} : core.nil
+        core.nil_value : core.nil
       }
       scf.default { func.unreachable }
     }
@@ -1544,7 +1544,7 @@ mod tests {
             r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
-      scf.case {value = 0} { arith.const {value = 0} : core.nil }
+      scf.case {value = 0} { core.nil_value : core.nil }
       scf.default { test_exit_dialect.malformed_exit }
     }
   }
@@ -1681,7 +1681,7 @@ mod tests {
         scf.yield
       }
     }
-    %unit = arith.const {value = 0} : core.nil
+    %unit = core.nil_value : core.nil
     func.return %unit
   }
 }"#;
@@ -1732,7 +1732,7 @@ mod tests {
         scf.yield
       }
     }
-    %unit = arith.const {value = 0} : core.nil
+    %unit = core.nil_value : core.nil
     func.return %unit
   }
 }"#;

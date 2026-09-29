@@ -2,6 +2,7 @@
 //!
 //! This pass converts arithmetic operations to their Cranelift equivalents:
 //! - `arith.const` -> `clif.iconst` / `clif.f32const` / `clif.f64const`
+//! - `core.nil_value` -> `clif.iconst 0`
 //! - `arith.{add,sub,mul,div,rem}` -> `clif.{iadd,isub,imul,sdiv,srem}` / `clif.{fadd,fsub,fmul,fdiv}`
 //! - `arith.cmp_*` -> `clif.icmp` / `clif.fcmp` with `cond` attribute
 //! - `arith.neg` -> `clif.ineg` / `clif.fneg` (native support, no expansion needed)
@@ -15,7 +16,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
@@ -32,6 +33,7 @@ pub fn lower(
     let applicator = PatternApplicator::new(type_converter)
         .with_auto_type_conversion(true)
         .add_pattern(ArithConstPattern)
+        .add_pattern(NilValuePattern)
         .add_pattern(ArithBinOpPattern)
         .add_pattern(ArithCmpPattern)
         .add_pattern(ArithNegPattern)
@@ -46,6 +48,7 @@ fn arith_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
         .legal_dialect("clif")
         .illegal_dialect("arith")
+        .illegal_op("core", "nil_value")
 }
 
 /// Classify a type into the clif lowering category.
@@ -61,8 +64,34 @@ fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
     match FloatLike::width(ctx, ty) {
         Some(32) => Some("f32"),
         Some(_) => Some("f64"),
-        None if core::Nil::matches(ctx, ty) => Some("nil"),
         None => None,
+    }
+}
+
+/// `core.nil_value` materializes as a zero placeholder. Nil results are
+/// projected away at calls and returns.
+struct NilValuePattern;
+
+impl RewritePattern for NilValuePattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !core::NilValue::matches(ctx, op) {
+            return false;
+        }
+        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let new_op = clif::Iconst::operands()
+            .value(0)
+            .results(result_ty)
+            .build(ctx, loc);
+        rewriter.replace_op(new_op.op_ref());
+        true
     }
 }
 
@@ -94,15 +123,6 @@ impl RewritePattern for ArithConstPattern {
         };
         let loc = ctx.op(op).location;
         let value = const_op.value(ctx);
-
-        if category == "nil" {
-            let new_op = clif::Iconst::operands()
-                .value(0)
-                .results(result_ty)
-                .build(ctx, loc);
-            rewriter.replace_op(new_op.op_ref());
-            return true;
-        }
 
         let new_op_ref = match category {
             "f32" => {

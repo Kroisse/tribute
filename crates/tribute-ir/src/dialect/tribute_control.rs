@@ -3951,7 +3951,7 @@ mod tests {
   !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   !token = tribute_control.resume_token(core.i32, core.i32)
   %integer = arith.const {value = 1} : core.i32
-  %boolean = arith.const {value = true} : core.bool
+  %boolean = arith.const {value = true} : core.i1
 
   tribute_control.func @bad_func() -> core.i32 convention(direct) {
     tribute_control.return %integer
@@ -3960,19 +3960,19 @@ mod tests {
     tribute_control.return %integer
   }
   %bad_ref = tribute_control.func_ref {func_ref = @bad_func, unexpected = 1} : !direct
-  %bad_call0, %bad_call1 = tribute_control.call {unexpected = 1} : core.i32, core.bool {
+  %bad_call0, %bad_call1 = tribute_control.call {unexpected = 1} : core.i32, core.i1 {
   }
   %non_callable = tribute_control.call_indirect %integer, %boolean : core.i32
   %callable = tribute_control.func_ref {func_ref = @bad_func} : !direct
-  %mismatched = tribute_control.call_indirect %callable, %boolean : core.bool
+  %mismatched = tribute_control.call_indirect %callable, %boolean : core.i1
   %bad_perform = tribute_control.perform %integer {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @bogus} : core.i32
   tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, op_name = @get, kind = @bogus, operation_result_type = core.i32} {
     ^clause(%argument: core.i32):
       tribute_control.yield %argument
   }
-  %bad_resume = tribute_control.resume %integer, %boolean : core.bool
+  %bad_resume = tribute_control.resume %integer, %boolean : core.i1
   %token = test.token : !token
-  %mismatched_resume = tribute_control.resume %token, %boolean : core.bool
+  %mismatched_resume = tribute_control.resume %token, %boolean : core.i1
   tribute_control.unknown
 }"#,
         );
@@ -4086,8 +4086,8 @@ mod tests {
             &result,
             mismatched_indirect,
             &[
-                "operands `args`: expected S::Inputs = (core.i32), found (core.bool)",
-                "result #0 `result`: expected S::Result = core.i32, found core.bool",
+                "operands `args`: expected S::Inputs = (core.i32), found (core.i1)",
+                "result #0 `result`: expected S::Result = core.i32, found core.i1",
             ],
         );
         assert_op_diagnostics(
@@ -4111,8 +4111,8 @@ mod tests {
             &result,
             mismatched_resume,
             &[
-                "operand #1 `value`: expected T::Input = core.i32, found core.bool",
-                "result #0 `result`: expected T::Answer = core.i32, found core.bool",
+                "operand #1 `value`: expected T::Input = core.i32, found core.i1",
+                "result #0 `result`: expected T::Answer = core.i32, found core.i1",
             ],
         );
         assert_op_diagnostics(
@@ -4161,13 +4161,13 @@ mod tests {
       %body_value = arith.const {value = 0} : core.i32
       tribute_control.yield %body_value
   } {
-    ^completion(%value: core.bool, %extra: core.i32):
+    ^completion(%value: core.i1, %extra: core.i32):
       tribute_control.yield %value
   } {
     %not_a_handler = arith.const {value = 0} : core.i32
     tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
-      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.bool, core.bool)):
-        %wrong = arith.const {value = false} : core.bool
+      ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i1, core.i1)):
+        %wrong = arith.const {value = false} : core.i1
         tribute_control.yield %wrong
     }
   }
@@ -4197,7 +4197,7 @@ mod tests {
     ^completion(%value: core.i32):
       tribute_control.yield %value
   } {
-    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @fn, op_name = @get, operation_result_type = core.bool} {
+    tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @fn, op_name = @get, operation_result_type = core.i1} {
       ^clause(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
         tribute_control.yield %argument
     }
@@ -4305,14 +4305,14 @@ mod tests {
     }
   }
   core.module @booleans {
-    !callable = tribute_control.func_sig<(core.bool) -> core.bool> {tribute.calling_convention = 0}
-    tribute_control.func @id(%value: core.bool) -> core.bool convention(direct) {
+    !callable = tribute_control.func_sig<(core.i1) -> core.i1> {tribute.calling_convention = 0}
+    tribute_control.func @id(%value: core.i1) -> core.i1 convention(direct) {
       tribute_control.return %value
     }
-    tribute_control.func @use(%value: core.bool) -> core.bool convention(direct) {
+    tribute_control.func @use(%value: core.i1) -> core.i1 convention(direct) {
       %reference = tribute_control.func_ref {func_ref = @"booleans::id"} : !callable
-      %direct = tribute_control.call %value {callee = @"booleans::id"} : core.bool
-      %indirect = tribute_control.call_indirect %reference, %direct : core.bool
+      %direct = tribute_control.call %value {callee = @"booleans::id"} : core.i1
+      %indirect = tribute_control.call_indirect %reference, %direct : core.i1
       tribute_control.return %indirect
     }
   }
@@ -4350,7 +4350,7 @@ mod tests {
             r#"core.module @test {
   !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
   !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
-  !different = tribute_control.func_sig<() -> core.bool> {tribute.calling_convention = 0}
+  !different = tribute_control.func_sig<() -> core.i1> {tribute.calling_convention = 0}
   !token = tribute_control.resume_token(core.i32, core.i32)
 
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct)
@@ -4362,11 +4362,11 @@ mod tests {
   %wrong_signature = tribute_control.func_ref {func_ref = @id} : !different
   %missing_ref = tribute_control.func_ref {func_ref = @missing} : !direct
   %missing_call = tribute_control.call {callee = @missing} : core.i32
-  %false = arith.const {value = false} : core.bool
-  %bad_call = tribute_control.call %false {callee = @id} : core.bool
+  %false = arith.const {value = false} : core.i1
+  %bad_call = tribute_control.call %false {callee = @id} : core.i1
   %unknown_perform = tribute_control.perform {ability_ref = core.ability_ref() {name = @State}, op_name = @missing, operation_kind = @op} : core.i32
-  %bad_perform = tribute_control.perform %false {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @fn} : core.bool
-  %duplicate_capture = tribute_control.lambda() -> core.bool convention(direct) captures [%false, %false] {
+  %bad_perform = tribute_control.perform %false {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @fn} : core.i1
+  %duplicate_capture = tribute_control.lambda() -> core.i1 convention(direct) captures [%false, %false] {
     tribute_control.return %false
   }
   %token_result = test.token_result : !token
@@ -5080,7 +5080,7 @@ mod tests {
   tribute_control.func @missing(%value: !Missing) -> !Missing convention(direct) {
     tribute_control.return %value
   }
-  tribute_control.func @wrong_return(%integer: core.i32, %flag: core.bool) -> core.i32 convention(direct) {
+  tribute_control.func @wrong_return(%integer: core.i32, %flag: core.i1) -> core.i32 convention(direct) {
     tribute_control.return %flag
   }
 }"#,

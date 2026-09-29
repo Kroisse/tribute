@@ -50,7 +50,8 @@ crate::register_pure_op!(Truncf);
 
 #[trunk_ir::dialect]
 mod arith {
-    fn r#const(value: Attr<_>) -> Value<_> {}
+    #[verify]
+    fn r#const(value: Attr<_>) -> Value<impl NumericLike> {}
 
     // Integer arithmetic
     fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
@@ -113,7 +114,7 @@ mod arith {
 // =========================================================================
 
 use crate::context::IrContext;
-use crate::dialect::core::{FloatLike, I1, IntegerLike};
+use crate::dialect::core::{FloatLike, I1, IntegerLike, NumericLike};
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, TypeRef, ValueDef, ValueRef};
 use crate::transforms::canonicalize::FoldResult;
@@ -122,6 +123,27 @@ use itertools::Itertools;
 
 /// `arith.cmpf` predicates that every backend lowers.
 const SUPPORTED_CMPF_PREDICATES: [&str; 6] = ["oeq", "une", "olt", "ole", "ogt", "oge"];
+
+impl crate::ops::Verify for Const {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        let ty = ctx.value_ty(self.result(ctx));
+        let accepted = match self.value(ctx) {
+            Attribute::Int(_) => IntegerLike::matches(ctx, ty),
+            Attribute::Bool(_) => I1::matches(ctx, ty),
+            Attribute::FloatBits(_) => FloatLike::matches(ctx, ty),
+            _ => false,
+        };
+        if accepted {
+            Ok(())
+        } else {
+            Err(format!(
+                "value {:?} does not fit result type {}",
+                self.value(ctx),
+                crate::printer::print_type(ctx, ty)
+            ))
+        }
+    }
+}
 
 impl crate::ops::Verify for Cmpf {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
@@ -1293,6 +1315,33 @@ mod schema_tests {
         assert_eq!(result.errors.len(), 5, "{messages}");
         assert!(messages.contains("must be wider"), "{messages}");
         assert!(messages.contains("must be narrower"), "{messages}");
+    }
+
+    #[test]
+    fn constants_are_numeric_and_match_their_value_kind() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() {
+    %ok_int = arith.const {value = 7} : core.i32
+    %ok_bool = arith.const {value = true} : core.i1
+    %ok_float = arith.const {value = 1.5} : core.f64
+    %nil = core.nil_value : core.nil
+    %bad_nil = arith.const {value = unit} : core.nil
+    %bad_ptr = arith.const {value = 0} : core.ptr
+    %bad_bool = arith.const {value = true} : core.i32
+    %bad_float = arith.const {value = 1.5} : core.i32
+    %bad_int = arith.const {value = 1} : core.f32
+    func.return
+  }
+}"#,
+        );
+        let result = crate::validation::validate_operation_verifiers(&ctx, module);
+        let messages = result.to_string();
+        assert_eq!(result.errors.len(), 5, "{messages}");
+        assert!(messages.contains("expected NumericLike"), "{messages}");
+        assert!(messages.contains("does not fit result type"), "{messages}");
     }
 
     #[test]

@@ -8,7 +8,7 @@ core.module @test {
       tribute_control.return %0
   }
   tribute_control.func @main() -> core.nil convention(direct) {
-      %0 = arith.const {value = unit} : core.nil
+      %0 = core.nil_value : core.nil
       tribute_control.return %0
   }
 }

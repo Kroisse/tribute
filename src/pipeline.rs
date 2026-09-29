@@ -1793,7 +1793,7 @@ mod tests {
         let (mut ctx, module) = source_logical_cps_root_module(
             r#"
             %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
-            %nil = arith.const {value = unit} : core.nil
+            %nil = core.nil_value : core.nil
             func.tail_call_indirect %done, %nil {signature = func.func_sig<(core.nil) -> core.never>, tribute.calling_convention = 2}
         "#,
         );
