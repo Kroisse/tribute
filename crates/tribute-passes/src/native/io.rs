@@ -157,12 +157,21 @@ impl RewritePattern for NativeReadLinePattern {
             .offset(CODE_OFFSET)
             .results(i32_ty)
             .build(ctx, loc);
-        let bytes = mem::Load::operands(descriptor_value)
+        // The descriptor's Bytes fields are runtime pointers that the
+        // descriptor transfers to the caller; load them as pointers and view
+        // them as the Bytes references they are.
+        let bytes_ptr = mem::Load::operands(descriptor_value)
             .offset(BYTES_OFFSET)
+            .results(ptr_ty)
+            .build(ctx, loc);
+        let bytes = core::UnrealizedConversionCast::operands(bytes_ptr.result(ctx))
             .results(bytes_ty)
             .build(ctx, loc);
-        let message = mem::Load::operands(descriptor_value)
+        let message_ptr = mem::Load::operands(descriptor_value)
             .offset(MESSAGE_OFFSET)
+            .results(ptr_ty)
+            .build(ctx, loc);
+        let message = core::UnrealizedConversionCast::operands(message_ptr.result(ctx))
             .results(bytes_ty)
             .build(ctx, loc);
         let dealloc = func::Call::operands([descriptor_value])
@@ -215,7 +224,9 @@ impl RewritePattern for NativeReadLinePattern {
             descriptor.op_ref(),
             tag.op_ref(),
             code.op_ref(),
+            bytes_ptr.op_ref(),
             bytes.op_ref(),
+            message_ptr.op_ref(),
             message.op_ref(),
             dealloc.op_ref(),
             line_tag.op_ref(),
