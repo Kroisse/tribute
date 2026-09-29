@@ -1,0 +1,24 @@
+[package]
+name = "tribute-bench"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Compile-time, runtime, and code size measurements for the Tribute compiler"
+publish = false
+
+[dependencies]
+salsa.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tribute = { path = "../.." }
+tribute-passes.workspace = true
+trunk-ir.workspace = true
+wasmparser.workspace = true
+
+[dev-dependencies]
+criterion.workspace = true
+
+[[bench]]
+name = "abi_boundary"
+harness = false

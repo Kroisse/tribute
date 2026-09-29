@@ -702,8 +702,9 @@ fn merge_and_lower_to_ir_with<'db, M>(
 }
 
 /// Arena IR together with the exact semantic metadata required by the shared
-/// CPS conversion. Public frontend callers intentionally receive only IR.
-struct FrontendCompilation {
+/// CPS conversion. The metadata stays private; [`run_shared_middle_end`] is
+/// its only consumer.
+pub struct FrontendCompilation {
     context: IrContext,
     module: Module,
     operation_declarations: Vec<tribute_ir::dialect::tribute_control::OperationDeclaration>,
@@ -722,7 +723,10 @@ pub fn compile_frontend(
     Some((compilation.context, compilation.module))
 }
 
-fn compile_frontend_for_shared_route(
+/// Run the frontend for the shared middle-end.
+///
+/// Returns `None` if parsing fails or the frontend reports an error.
+pub fn compile_frontend_for_shared_route(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<FrontendCompilation> {
@@ -867,15 +871,22 @@ fn run_shared_pipeline(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    let Some(FrontendCompilation {
+    let Some(frontend) = compile_frontend_for_shared_route(db, source) else {
+        return Ok(None);
+    };
+    run_shared_middle_end(frontend).map(Some)
+}
+
+/// Run the shared middle-end on a frontend result.
+///
+/// The result is ready for [`run_target_to_boundary_exit`].
+pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrContext, Module)> {
+    let FrontendCompilation {
         context,
         module: m,
         operation_declarations,
         compiler_intrinsics,
-    }) = compile_frontend_for_shared_route(db, source)
-    else {
-        return Ok(None);
-    };
+    } = frontend;
     let mut ctx = context;
 
     // Middle-end passes, sequenced through the PassManager (#268).
@@ -911,7 +922,7 @@ fn run_shared_pipeline(
     ability_boundary_pm.with_debug_verifier();
     ability_boundary_pm.run(&mut ctx, core_module, &mut analyses)?;
 
-    Ok(Some((ctx, m)))
+    Ok((ctx, m))
 }
 
 /// Dump native IR at a named RC optimization boundary.
@@ -1058,6 +1069,48 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     run_cleanup_passes(ctx, m, &mut analyses);
     debug_observe_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Native);
     Ok(())
+}
+
+/// Run `target`'s pipeline from the shared middle-end output to the
+/// representation/ABI boundary exit.
+pub fn run_target_to_boundary_exit(
+    ctx: &mut IrContext,
+    m: Module,
+    target: tribute_passes::abi_boundary::TargetKind,
+) -> Result<(), DumpIrError> {
+    match target {
+        tribute_passes::abi_boundary::TargetKind::Native => run_native_target_pipeline(ctx, m),
+        tribute_passes::abi_boundary::TargetKind::Wasm => run_wasm_target_pipeline(ctx, m),
+    }
+}
+
+/// Error returned by target lowering and emission after the boundary exit.
+#[derive(Debug, Clone, derive_more::Display, derive_more::Error)]
+pub enum EmitError {
+    #[display("native compilation failed: {_0}")]
+    Native(trunk_ir_cranelift_backend::CompilationError),
+    #[display("WebAssembly compilation failed: {_0}")]
+    Wasm(CompilationError),
+}
+
+/// Lower and emit a module at `target`'s boundary exit.
+///
+/// Native output is an unlinked object file built with production
+/// optimizations and no sanitizer; Wasm output is a module binary.
+pub fn emit_from_boundary_exit(
+    ctx: &mut IrContext,
+    m: Module,
+    target: tribute_passes::abi_boundary::TargetKind,
+) -> Result<Vec<u8>, EmitError> {
+    match target {
+        tribute_passes::abi_boundary::TargetKind::Native => {
+            compile_module_to_native(ctx, m, false, NativeOptimizationOptions::production())
+                .map_err(EmitError::Native)
+        }
+        tribute_passes::abi_boundary::TargetKind::Wasm => compile_to_wasm(ctx, m)
+            .map(|binary| binary.bytes)
+            .map_err(EmitError::Wasm),
+    }
 }
 
 /// Debug-only check of the representation/ABI boundary exit.
