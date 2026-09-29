@@ -1154,8 +1154,8 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   `closure.closure` type
 - Callable 결과로서의 `core.never`. 논리 CPS 결과는 물리 결과 목록 `[]`로 바뀐다.
 - 의미적 호출 규약과 제어 metadata: `tribute.calling_convention`,
-  `tribute.root_export_convention`, `tribute.root_source_result`,
-  `tribute.cps_continuation_frame_result`, `tribute.closure_environment_index`
+  `tribute.root_source_result`, `tribute.cps_continuation_frame_result`,
+  `tribute.closure_environment_index`
 - 물리 계약으로 옮기지 않은 채 남은 handler/resume/prompt 정체성과 effect row
 
 출구 이후에도 보존하는 것:

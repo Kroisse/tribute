@@ -776,10 +776,6 @@ fn main() {
         "root main worker must be promoted to Cps:\n{main_header}"
     );
     assert!(
-        main_header.contains("tribute.root_export_convention = 0"),
-        "pure root export must stay Direct:\n{main_header}"
-    );
-    assert!(
         main_header.contains("tribute.root_source_result = core.nil"),
         "root source result must stay core.nil:\n{main_header}"
     );
@@ -807,10 +803,10 @@ fn main() {
     );
 }
 
-/// An `Io` root retains EvidenceDirect export metadata while its worker is
-/// promoted for an open-callback call.
+/// An `Io` root promoted for an open-callback call is marked only by its
+/// source result.
 #[salsa_test]
-fn test_open_callback_evidence_root_main_stays_evidence_direct(db: &salsa::DatabaseImpl) {
+fn test_open_callback_evidence_root_main_is_marked_by_its_source_result(db: &salsa::DatabaseImpl) {
     // This helper lowers before monomorphization. The original generic fixture
     // is covered through the production pipeline in tests/integration/open_callback_evidence_root.rs.
     let source = SourceCst::from_source_str(
@@ -835,8 +831,8 @@ fn main() ->{std::io::Io} Nil {
         .expect("missing lowered root main");
     assert!(
         main_header.contains("convention(cps)")
-            && main_header.contains("tribute.root_export_convention = 1"),
-        "Io root export must remain EvidenceDirect while its worker is Cps:\n{main_header}"
+            && main_header.contains("tribute.root_source_result = core.nil"),
+        "the promoted Io root is marked by its source result alone:\n{main_header}"
     );
 }
 

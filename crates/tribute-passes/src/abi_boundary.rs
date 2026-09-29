@@ -27,7 +27,6 @@ const FORBIDDEN_DIALECTS: &[&str] = &["tribute_control", "ability", "effect", "c
 /// Semantic control metadata that must not cross the boundary.
 const FORBIDDEN_ATTRIBUTES: &[&str] = &[
     "tribute.calling_convention",
-    "tribute.root_export_convention",
     "tribute.root_source_result",
     "tribute.cps_continuation_frame_result",
     "tribute.closure_environment_index",
