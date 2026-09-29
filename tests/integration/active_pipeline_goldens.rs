@@ -78,7 +78,7 @@ fn assert_native_cps_root_contract(ir_text: &str) {
         "func.func @__tribute_root_done_k",
         "func.func @__tribute_root_dispatch",
         "func.tail_call_indirect",
-        "tribute.root_cps_call = true",
+        "callee = @__tribute_cps_main",
     ] {
         assert!(
             ir_text.contains(required),
@@ -97,6 +97,8 @@ fn assert_native_cps_root_contract(ir_text: &str) {
     }
 }
 
+const CONTINUATION_FRAME_PREFIX: &str = "__tribute_continuation_frame_";
+
 // Snapshot semantic signature shapes and transfer counts, without SSA IDs,
 // generated symbol numbering, or unrelated allocation/layout operations.
 fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
@@ -114,6 +116,15 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         let data = ctx.get_type(ty);
         if let Some(result) = data.attrs.get_type(CPS_CONTINUATION_FRAME_RESULT_ATTR) {
             return format!("Frame<{}>", type_shape(ctx, result));
+        }
+        // Physicalization consumes the frame answer type, and the generated
+        // frame name only numbers it.
+        if data
+            .attrs
+            .get_symbol("name")
+            .is_some_and(|name| name.with_str(|name| name.starts_with(CONTINUATION_FRAME_PREFIX)))
+        {
+            return "Frame".to_owned();
         }
         let mut shape = format!("{}.{}", data.dialect, data.name);
         if let Some(name) = data.attrs.get_symbol("name") {

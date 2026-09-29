@@ -334,11 +334,9 @@ fn assert_source_allocation_field_releases(ir: &str) {
             .is_some_and(|name| name == "_closure")
         {
             "closure"
-        } else if ty
-            .attrs
-            .get_type(tribute_core::calling_convention::CPS_CONTINUATION_FRAME_RESULT_ATTR)
-            .is_some_and(|result| ctx.get_type(result).name == "i32")
-        {
+        } else if ty.attrs.get_symbol("name").is_some_and(|name| {
+            name.with_str(|name| name.starts_with("__tribute_continuation_frame_"))
+        }) {
             "frame"
         } else {
             continue;
@@ -413,7 +411,7 @@ fn assert_source_allocation_field_releases(ir: &str) {
     );
     assert!(
         checked.iter().any(|(kind, _)| *kind == "frame"),
-        "fixture must allocate Int continuation frames"
+        "fixture must allocate continuation frames"
     );
 }
 

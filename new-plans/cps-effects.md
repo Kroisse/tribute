@@ -135,7 +135,7 @@ Environment-bearing `func.func`는 zero-based physical slot을
 function-level provenance가 필수이며, definition은 entry block의 `__env` marker와
 같은 slot이어야 한다. Slot은 outer convention-proven closure type이 기록한 exact
 physical order와 exact `tribute_rt.anyref` type에 일치해야 하며 type이나 arity로
-추측하지 않는다.
+추측하지 않는다. 이 function-level provenance의 마지막 독자는 물리화 검증이다.
 
 생성한 physical definition, lambda, adapter, direct/indirect call에는 logical
 type의 convention을 기존 `tribute.calling_convention` attribute로 복사한다.
@@ -268,6 +268,12 @@ closure signature, function constant, exact indirect signature, SSA 결과와 bl
 argument, 중첩 타입 attribute를 함께 변환한다. 일반 `never`·`nil` 치환은 하지 않는다.
 Closure tail lowering은 caller·callee·exact indirect signature의 전체 결과 목록을
 비교하여 논리 `[never]`와 물리 `[]`를 각각 지원한다.
+물리화는 검증에 쓴 provenance 중 이후 단계가 읽지 않는 것을 적용 단계에서 소비한다.
+Continuation frame 타입의 `tribute.cps_continuation_frame_result`를 지우고,
+`func.func`의 `tribute.closure_environment_index`도 지운다. 물리 frame에서 `R`은
+`Done<R>`의 입력 타입이 나타내고, environment는 physical signature의 순서 있는
+입력이다. Root bridge 합성은 이렇게 물리화된 frame을 검증하며 frame answer
+provenance가 남아 있으면 거부한다. 물리화 이후에 합성되는 함수는 이 속성들을 기록하지 않는다.
 
 [Representation/ABI 경계](ir.md#representationabi-경계)의 출구 검증은 `Cps`
 worker, continuation, `done_k`, handler-dispatch의 result vector가 비어 있고 모든
