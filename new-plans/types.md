@@ -440,6 +440,38 @@ case result {
 }
 ```
 
+### 망라성과 도달 불가 arm
+
+모든 `case`는 망라적이어야 한다. scrutinee가 가질 수 있는 값 중 어떤 arm에도
+매칭되지 않는 값이 있으면 오류이며, 진단은 누락된 값을 나타내는 예시 패턴을 최대
+세 개 보여준다.
+
+```rust
+case opt {
+    None -> 0
+    Some(True) -> 1
+}
+// error: non-exhaustive case expression: missing patterns: Some(False)
+```
+
+검사는 타입 검사가 소유하며, 패턴 행렬의 usefulness로 판정한다. 중첩 패턴도 모두
+분석하므로 `Some(True)`는 `Some(_)`를 덮지 않는다. 튜플 scrutinee는 각 요소를 한
+열로 보고 함께 분석한다.
+
+- 유한한 구성자 집합으로 다루는 것: 튜플, enum variant, struct(구성자 하나),
+  `Bool`(`True`, `False`), `()`, 리스트 길이(`[]`, `[a, b]`, `[a, ..rest]`).
+  enum은 모든 variant가 나타나야 완전하다.
+- 숫자와 문자열 리터럴은 도메인이 무한하므로, 이를 덮으려면 `_`나 바인딩 패턴이
+  필요하다.
+- guard가 있는 arm은 망라성에 기여하지 않는다.
+- 앞선 guard 없는 arm들이 이미 모두 덮는 arm은 도달할 수 없으며,
+  `unreachable pattern` 경고를 받는다.
+- 분석할 수 없는 패턴이 있으면 망라성을 증명할 수 없다는 경고를 내고, 그 `case`는
+  망라적이지 않은 것으로 취급한다.
+
+lowering은 망라적이라고 판정된 `case`의 마지막 guard 없는 arm을 패턴 검사 없이
+실행하므로, 이 판정은 중첩 패턴까지 정확해야 한다.
+
 ---
 
 ## Named vs Positional Fields
