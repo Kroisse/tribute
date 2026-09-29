@@ -1,65 +1,45 @@
 //! Native entrypoint generation pass.
 //!
-//! Generates a C ABI `main` entrypoint that wraps the user's `main` function.
-//! The user's `main` is renamed to `_tribute_main`, and a new `main` is created
-//! that calls it and returns exit code 0.
+//! Root bridge composition inside the representation/ABI boundary leaves a
+//! parameterless wrapper `main` that nothing in the module references. This
+//! pass adapts that wrapper in place into the C ABI `main`: it initializes the
+//! runtime first and returns exit code 0.
 
 use trunk_ir::Symbol;
-use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef};
+use trunk_ir::refs::{BlockRef, OpRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 
-/// Generate a native C ABI entrypoint wrapper for the user's `main` function.
-/// (Arena IR version — mutates `ctx` in-place.)
+/// Adapt the root wrapper `main` into the native C ABI entrypoint.
 ///
 /// This pass:
-/// 1. Renames `func.func @main` to `func.func @_tribute_main`
-/// 2. Rewrites all `callee = @main` / `func_ref = @main` to `@_tribute_main`
-/// 3. Ensures `__tribute_init` (and optionally `__asan_init`) declarations exist
-/// 4. Creates a new `func.func @main() -> i32` that calls `_tribute_main()`
-///    and returns 0
+/// 1. Ensures `__tribute_init` (and optionally `__asan_init`) declarations exist
+/// 2. Calls them at the start of `main`
+/// 3. Retypes `main` to `() -> i32` and makes each `func.return` return 0
 pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: bool) {
-    let first_block = match module.first_block(ctx) {
-        Some(b) => b,
-        None => return,
+    let Some(first_block) = module.first_block(ctx) else {
+        return;
     };
 
     let loc = ctx.op(module.op()).location;
     let main_sym = Symbol::new("main");
-    let tribute_main_sym = Symbol::new("_tribute_main");
-
-    // Scan module-level ops to find main function and check for existing declarations
-    let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
-    let mut found_main = false;
-    let mut has_tribute_main = false;
-    let mut main_return_ty: Option<TypeRef> = None;
-    let mut main_param_types: Vec<TypeRef> = Vec::new();
-    let mut has_tribute_init = false;
-    let mut has_asan_init = false;
-
     let init_sym = Symbol::new("__tribute_init");
     let asan_init_sym = Symbol::new("__asan_init");
 
+    let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+    let mut main_op = None;
+    let mut has_tribute_init = false;
+    let mut has_asan_init = false;
     for &op in &ops {
         if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx);
             if name == main_sym {
-                found_main = true;
-                // Extract return type from func type
-                let func_ty = func_op.r#type(ctx);
-                if let Some(function) = func::FuncSig::from_type_ref(ctx, func_ty) {
-                    main_return_ty = function.single_result(ctx);
-                    main_param_types = function.inputs(ctx).to_vec();
-                }
-            }
-            if name == tribute_main_sym {
-                has_tribute_main = true;
+                main_op = Some(func_op);
             }
             if name == init_sym {
                 has_tribute_init = true;
@@ -70,570 +50,194 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
         }
     }
 
-    if !found_main {
+    let Some(main) = main_op else {
         tracing::warn!("No main function found; skipping entrypoint generation");
         return;
-    }
+    };
 
-    if has_tribute_main {
-        panic!(
-            "entrypoint: `_tribute_main` already exists in module; \
-             cannot rename `main` to `_tribute_main` due to symbol collision. \
-             Ensure no user-defined function is named `_tribute_main`."
-        );
-    }
+    // Root bridge composition consumes the source convention and exposes a
+    // `main` without hidden parameters.
+    let signature = func::FuncSig::from_type_ref(ctx, main.r#type(ctx))
+        .expect("entrypoint: `main` must have a func.func_sig type");
+    assert!(
+        signature.inputs(ctx).is_empty(),
+        "entrypoint: root `main` must have no hidden parameters after the entry bridge"
+    );
+    let body = ctx
+        .op(main.op_ref())
+        .regions
+        .first()
+        .copied()
+        .expect("entrypoint: root `main` must be a definition");
+    let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
+    let entry = *blocks
+        .first()
+        .expect("entrypoint: root `main` must have an entry block");
 
-    // Intern needed types
     let nil_ty = core::nil(ctx).as_type_ref();
+    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
-    let tribute_main_return_ty = main_return_ty.unwrap_or_else(|| {
-        panic!(
-            "entrypoint: `func.func @main` has no return type in its signature; \
-             expected a valid `func.func_sig` type with at least a return type parameter"
-        )
-    });
-
-    // Step 1: Rename main -> _tribute_main (in-place attribute mutation)
-    for &op in &ops {
-        if let Ok(func_op) = func::Func::from_op(ctx, op)
-            && func_op.sym_name(ctx) == main_sym
-        {
-            ctx.op_mut(op)
-                .attributes
-                .insert(Symbol::new("sym_name"), Attribute::Symbol(tribute_main_sym));
-        }
-    }
-
-    // Step 2: Rewrite all @main references to @_tribute_main in all ops
-    for &op in &ops {
-        rewrite_symbol_refs(ctx, op, main_sym, tribute_main_sym);
-    }
-
-    // Step 3: Ensure __tribute_init is declared
     if !has_tribute_init {
         let init_op = super::build_extern_func(ctx, loc, "__tribute_init", &[], nil_ty);
         ctx.insert_op_before(first_block, ctx.block(first_block).ops[0], init_op);
     }
-
-    // Declare __asan_init when AddressSanitizer is enabled
     if sanitize && !has_asan_init {
         let asan_op = super::build_extern_func(ctx, loc, "__asan_init", &[], nil_ty);
         ctx.insert_op_before(first_block, ctx.block(first_block).ops[0], asan_op);
     }
 
-    // Step 4: Build and append C ABI entrypoint wrapper
-    let entrypoint_op = build_entrypoint(
-        ctx,
-        loc,
-        TributeMainAbi {
-            return_type: tribute_main_return_ty,
-            parameter_types: &main_param_types,
-        },
-        sanitize,
-    );
-    ctx.push_op(first_block, entrypoint_op);
-}
-
-/// Recursively rewrite symbol references from `old_sym` to `new_sym` in an
-/// operation and all its nested regions.
-///
-/// Rewrites `callee` attributes (on func.call / func.tail_call) and
-/// `func_ref` attributes (on func.constant).
-fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old_sym: Symbol, new_sym: Symbol) {
-    // Rewrite callee attribute
-    let callee_key = Symbol::new("callee");
-    let func_ref_key = Symbol::new("func_ref");
-
-    if let Some(sym) = ctx.op(op).attributes.get_symbol(callee_key)
-        && sym == old_sym
-    {
-        ctx.op_mut(op)
-            .attributes
-            .insert(callee_key, Attribute::Symbol(new_sym));
-    }
-
-    // Rewrite func_ref attribute
-    if let Some(sym) = ctx.op(op).attributes.get_symbol(func_ref_key)
-        && sym == old_sym
-    {
-        ctx.op_mut(op)
-            .attributes
-            .insert(func_ref_key, Attribute::Symbol(new_sym));
-    }
-
-    // Recurse into regions
-    let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
-    for region in regions {
-        rewrite_symbol_refs_in_region(ctx, region, old_sym, new_sym);
-    }
-}
-
-fn rewrite_symbol_refs_in_region(
-    ctx: &mut IrContext,
-    region: RegionRef,
-    old_sym: Symbol,
-    new_sym: Symbol,
-) {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
-    for block in blocks {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
-        for op in ops {
-            rewrite_symbol_refs(ctx, op, old_sym, new_sym);
-        }
-    }
-}
-
-/// Build the C ABI entrypoint function:
-///
-/// ```text
-/// func.func @main() -> i32 {
-///     call @__asan_init()       // if sanitize
-///     call @__tribute_init()
-///     call @_tribute_main()
-///     %zero = arith.const 0 : i32
-///     return %zero
-/// }
-/// ```
-struct TributeMainAbi<'a> {
-    return_type: TypeRef,
-    parameter_types: &'a [TypeRef],
-}
-
-fn build_entrypoint(
-    ctx: &mut IrContext,
-    loc: Location,
-    tribute_main: TributeMainAbi<'_>,
-    sanitize: bool,
-) -> OpRef {
-    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-    let nil_ty = core::nil(ctx).as_type_ref();
-
-    // Build func type: () -> i32
-    let func_ty = func::func_sig(ctx, [], [i32_ty]).as_type_ref();
-
-    // Create entry block
-    let entry_block = ctx.create_block(BlockData {
-        location: loc,
-        args: vec![],
-        ops: smallvec![],
-        parent_region: None,
-    });
-
-    // Initialize ASan before anything else
+    // Initialize ASan before anything else, then the runtime TLS before any
+    // ability use.
+    let mut init_calls = Vec::new();
     if sanitize {
-        let asan_call = func::Call::operands([])
-            .callee(Symbol::new("__asan_init"))
+        init_calls.push(asan_init_sym);
+    }
+    init_calls.push(init_sym);
+    for callee in init_calls.into_iter().rev() {
+        let call = func::Call::operands([])
+            .callee(callee)
             .results([nil_ty])
             .build(ctx, loc);
-        ctx.push_op(entry_block, asan_call.op_ref());
+        prepend_op(ctx, entry, call.op_ref());
     }
 
-    // Initialize runtime TLS before any ability use
-    let init_call = func::Call::operands([])
-        .callee(Symbol::new("__tribute_init"))
-        .results([nil_ty])
-        .build(ctx, loc);
-    ctx.push_op(entry_block, init_call.op_ref());
+    // The source-level result is Nil; the process exit code is always 0.
+    for block in blocks {
+        let returns: Vec<OpRef> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .copied()
+            .filter(|&op| func::Return::matches(ctx, op))
+            .collect();
+        for ret in returns {
+            let location = ctx.op(ret).location;
+            replace_with_exit_code(ctx, block, ret, i32_ty, location);
+        }
+    }
 
-    // Entry bridge composition inside the representation/ABI boundary
-    // consumes the source convention and exposes `main` without hidden
-    // parameters.
-    assert!(
-        tribute_main.parameter_types.is_empty(),
-        "entrypoint: root `main` must have no hidden parameters after the entry bridge"
-    );
+    let func_ty = func::func_sig(ctx, [], [i32_ty]).as_type_ref();
+    ctx.op_mut(main.op_ref())
+        .attributes
+        .insert(Symbol::new("type"), Attribute::Type(func_ty));
+}
 
-    // Call _tribute_main — its source-level result is ignored.
-    let main_call = func::Call::operands([])
-        .callee(Symbol::new("_tribute_main"))
-        .results([tribute_main.return_type])
-        .build(ctx, loc);
-    ctx.push_op(entry_block, main_call.op_ref());
+fn prepend_op(ctx: &mut IrContext, block: BlockRef, op: OpRef) {
+    match ctx.block(block).ops.first().copied() {
+        Some(first) => ctx.insert_op_before(block, first, op),
+        None => ctx.push_op(block, op),
+    }
+}
 
-    // Return exit code 0
+fn replace_with_exit_code(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    ret: OpRef,
+    i32_ty: trunk_ir::refs::TypeRef,
+    location: Location,
+) {
     let zero = arith::Const::operands()
         .value(Attribute::Int(0))
         .results(i32_ty)
-        .build(ctx, loc);
-    ctx.push_op(entry_block, zero.op_ref());
-
-    let ret = func::Return::operands([zero.result(ctx)]).build(ctx, loc);
-    ctx.push_op(entry_block, ret.op_ref());
-
-    // Create body region
-    let body = ctx.create_region(RegionData {
-        location: loc,
-        blocks: smallvec![entry_block],
-        parent_op: None,
-    });
-
-    // Create func.func @main() -> i32
-    // NOTE: No "abi" attribute here — `abi` marks extern (imported) functions.
-    // The Cranelift backend treats functions named "main" as Export linkage,
-    // but functions with `abi` attribute are treated as Import and skipped.
-    let main_func = func::Func::operands()
-        .sym_name(Symbol::new("main"))
-        .r#type(func_ty)
-        .regions(body)
-        .build(ctx, loc);
-    main_func.op_ref()
+        .build(ctx, location);
+    ctx.insert_op_before(block, ret, zero.op_ref());
+    let exit = func::Return::operands([zero.result(ctx)]).build(ctx, location);
+    ctx.insert_op_before(block, ret, exit.op_ref());
+    ctx.remove_op_from_block(block, ret);
+    ctx.remove_op(ret);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::Span;
-    use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-    use trunk_ir::dialect::arith;
-    use trunk_ir::dialect::func;
-    use trunk_ir::ops::DialectOp;
-    use trunk_ir::rewrite::Module;
-    use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
 
-    fn test_ctx() -> (IrContext, Location) {
+    fn adapt(input: &str, sanitize: bool) -> String {
         let mut ctx = IrContext::new();
-        let path = ctx.intern_path("file:///test.trb".to_owned());
-        let loc = Location::new(path, Span::new(0, 0));
-        (ctx, loc)
+        let module = parse_test_module(&mut ctx, input);
+        generate_native_entrypoint(&mut ctx, module, sanitize);
+        print_module(&ctx, module.op())
     }
 
-    fn i32_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
-    }
-
-    fn nil_type(ctx: &mut IrContext) -> trunk_ir::refs::TypeRef {
-        core::nil(ctx).as_type_ref()
-    }
-
-    /// Build an arena module with a single main function returning i32.
-    fn make_main_module(ctx: &mut IrContext, loc: Location) -> Module {
-        let i32_ty = i32_type(ctx);
-        let func_ty = func::func_sig(ctx, [], [i32_ty]).as_type_ref();
-
-        // Build main function: const 42, return
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let c42 = arith::Const::operands()
-            .value(Attribute::Int(42))
-            .results(i32_ty)
-            .build(ctx, loc);
-        ctx.push_op(entry, c42.op_ref());
-        let ret = func::Return::operands([c42.result(ctx)]).build(ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let main_fn = func::Func::operands()
-            .sym_name(Symbol::new("main"))
-            .r#type(func_ty)
-            .regions(body)
-            .build(ctx, loc);
-
-        // Build module
-        let module_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        ctx.push_op(module_block, main_fn.op_ref());
-
-        let module_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![module_block],
-            parent_op: None,
-        });
-
-        let module_data = trunk_ir::context::OperationDataBuilder::new(
-            loc,
-            Symbol::new("core"),
-            Symbol::new("module"),
-        )
-        .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
-        .region(module_region)
-        .build(ctx);
-        let module_op = ctx.create_op(module_data);
-
-        Module::new(ctx, module_op).expect("valid arena module")
-    }
-
-    fn make_evidence_main_module(ctx: &mut IrContext, loc: Location) -> Module {
-        let nil_ty = nil_type(ctx);
-        let evidence_ty = tribute_ir::dialect::ability::evidence_adt_type_ref(ctx);
-        let func_ty = func::func_sig(ctx, [evidence_ty], [nil_ty]).as_type_ref();
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![BlockArgData {
-                ty: evidence_ty,
-                attrs: Default::default(),
-            }],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let ret = func::Return::operands([]).build(ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let main_fn = func::Func::operands()
-            .sym_name(Symbol::new("main"))
-            .r#type(func_ty)
-            .regions(body)
-            .build(ctx, loc);
-
-        let module_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        ctx.push_op(module_block, main_fn.op_ref());
-        let module_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![module_block],
-            parent_op: None,
-        });
-        let module_data = trunk_ir::context::OperationDataBuilder::new(
-            loc,
-            Symbol::new("core"),
-            Symbol::new("module"),
-        )
-        .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
-        .region(module_region)
-        .build(ctx);
-        let module_op = ctx.create_op(module_data);
-        Module::new(ctx, module_op).expect("valid arena module")
-    }
+    const WRAPPER_MAIN: &str = r#"core.module @test {
+  func.func @__tribute_main() -> core.nil {
+    %nil = arith.const {value = unit} : core.nil
+    func.return %nil
+  }
+  func.func @main() -> core.nil {
+    %result = func.call {callee = @__tribute_main} : core.nil
+    func.return %result
+  }
+}"#;
 
     #[test]
-    fn entrypoint_renames_main() {
-        let (mut ctx, loc) = test_ctx();
-        let module = make_main_module(&mut ctx, loc);
+    fn wrapper_main_becomes_the_c_entrypoint_in_place() {
+        let printed = adapt(WRAPPER_MAIN, false);
 
-        generate_native_entrypoint(&mut ctx, module, false);
-
-        let ops = module.ops(&ctx);
-        let mut names: Vec<String> = Vec::new();
-        for &op in &ops {
-            if let Ok(f) = func::Func::from_op(&ctx, op) {
-                names.push(f.sym_name(&ctx).to_string());
-            }
-        }
-
-        assert!(
-            names.contains(&"__tribute_init".to_string()),
-            "Expected __tribute_init, got: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"_tribute_main".to_string()),
-            "Expected _tribute_main, got: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"main".to_string()),
-            "Expected main wrapper, got: {:?}",
-            names
-        );
         assert_eq!(
-            names.len(),
-            3,
-            "Expected exactly 3 functions, got: {:?}",
-            names
+            printed,
+            r#"core.module @test {
+  func.func @__tribute_init() -> core.nil attributes {abi = "C"}
+  func.func @__tribute_main() -> core.nil {
+      %0 = arith.const {value = unit} : core.nil
+      func.return %0
+  }
+  func.func @main() -> core.i32 {
+      %0 = func.call {callee = @__tribute_init} : core.nil
+      %1 = func.call {callee = @__tribute_main} : core.nil
+      %2 = arith.const {value = 0} : core.i32
+      func.return %2
+  }
+}
+"#
         );
     }
 
     #[test]
-    fn entrypoint_no_main() {
-        let (mut ctx, loc) = test_ctx();
-        let i32_ty = i32_type(&mut ctx);
-        let func_ty = func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
+    fn sanitizer_initialization_runs_first() {
+        let printed = adapt(WRAPPER_MAIN, true);
 
-        // Build helper function (not main)
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let c1 = arith::Const::operands()
-            .value(Attribute::Int(1))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, c1.op_ref());
-        let c1_val = c1.result(&ctx);
-        let ret = func::Return::operands([c1_val]).build(&mut ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let helper_fn = func::Func::operands()
-            .sym_name(Symbol::new("helper"))
-            .r#type(func_ty)
-            .regions(body)
-            .build(&mut ctx, loc);
-
-        // Build module
-        let module_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        ctx.push_op(module_block, helper_fn.op_ref());
-
-        let module_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![module_block],
-            parent_op: None,
-        });
-
-        let module_data = trunk_ir::context::OperationDataBuilder::new(
-            loc,
-            Symbol::new("core"),
-            Symbol::new("module"),
-        )
-        .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
-        .region(module_region)
-        .build(&mut ctx);
-        let module_op = ctx.create_op(module_data);
-        let module = Module::new(&ctx, module_op).expect("valid");
-
-        generate_native_entrypoint(&mut ctx, module, false);
-
-        // Should be unchanged — only helper
-        let ops = module.ops(&ctx);
-        assert_eq!(ops.len(), 1);
-        let f = func::Func::from_op(&ctx, ops[0]).unwrap();
-        assert_eq!(f.sym_name(&ctx).to_string(), "helper");
+        let asan = printed
+            .find("func.call {callee = @__asan_init}")
+            .expect("asan init call");
+        let init = printed
+            .find("func.call {callee = @__tribute_init}")
+            .expect("runtime init call");
+        let worker = printed
+            .find("func.call {callee = @__tribute_main}")
+            .expect("worker call");
+        assert!(asan < init && init < worker, "{printed}");
+        assert!(printed.contains("func.func @__asan_init()"), "{printed}");
     }
 
     #[test]
-    fn entrypoint_wrapper_returns_i32() {
-        let (mut ctx, loc) = test_ctx();
+    fn module_without_main_is_unchanged() {
+        let input = r#"core.module @test {
+  func.func @helper() -> core.i32 {
+    %one = arith.const {value = 1} : core.i32
+    func.return %one
+  }
+}"#;
+        let printed = adapt(input, false);
 
-        // Build module with main returning nil
-        let nil_ty = nil_type(&mut ctx);
-        let func_ty = func::func_sig(&mut ctx, [], [nil_ty]).as_type_ref();
-
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let ret = func::Return::operands([]).build(&mut ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let main_fn = func::Func::operands()
-            .sym_name(Symbol::new("main"))
-            .r#type(func_ty)
-            .regions(body)
-            .build(&mut ctx, loc);
-
-        let module_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        ctx.push_op(module_block, main_fn.op_ref());
-
-        let module_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![module_block],
-            parent_op: None,
-        });
-
-        let module_data = trunk_ir::context::OperationDataBuilder::new(
-            loc,
-            Symbol::new("core"),
-            Symbol::new("module"),
-        )
-        .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
-        .region(module_region)
-        .build(&mut ctx);
-        let module_op = ctx.create_op(module_data);
-        let module = Module::new(&ctx, module_op).expect("valid");
-
-        generate_native_entrypoint(&mut ctx, module, false);
-
-        let i32_ty = i32_type(&mut ctx);
-
-        // Find the new main wrapper and check its return type
-        for &op in &module.ops(&ctx) {
-            if let Ok(f) = func::Func::from_op(&ctx, op)
-                && f.sym_name(&ctx) == Symbol::new("main")
-            {
-                let func_ty_ref = f.r#type(&ctx);
-                let function = func::FuncSig::from_type_ref(&ctx, func_ty_ref).unwrap();
-                assert_eq!(function.single_result(&ctx), Some(i32_ty));
-                return;
-            }
-        }
-        panic!("main wrapper not found after entrypoint generation");
+        assert!(!printed.contains("__tribute_init"), "{printed}");
+        assert!(
+            printed.contains("func.func @helper() -> core.i32"),
+            "{printed}"
+        );
     }
 
     #[test]
     #[should_panic(expected = "must have no hidden parameters")]
     fn main_with_hidden_parameters_is_rejected() {
-        let (mut ctx, loc) = test_ctx();
-        let module = make_evidence_main_module(&mut ctx, loc);
-
-        generate_native_entrypoint(&mut ctx, module, false);
-    }
-
-    #[test]
-    fn entrypoint_with_sanitize() {
-        let (mut ctx, loc) = test_ctx();
-        let module = make_main_module(&mut ctx, loc);
-
-        generate_native_entrypoint(&mut ctx, module, true);
-
-        let ops = module.ops(&ctx);
-        let mut names: Vec<String> = Vec::new();
-        for &op in &ops {
-            if let Ok(f) = func::Func::from_op(&ctx, op) {
-                names.push(f.sym_name(&ctx).to_string());
-            }
-        }
-
-        assert!(
-            names.contains(&"__asan_init".to_string()),
-            "Expected __asan_init with sanitize=true, got: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"__tribute_init".to_string()),
-            "Expected __tribute_init, got: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"_tribute_main".to_string()),
-            "Expected _tribute_main, got: {:?}",
-            names
-        );
-        assert!(
-            names.contains(&"main".to_string()),
-            "Expected main wrapper, got: {:?}",
-            names
+        adapt(
+            r#"core.module @test {
+  func.func @main(%evidence: core.i32) -> core.nil {
+    func.return
+  }
+}"#,
+            false,
         );
     }
 }

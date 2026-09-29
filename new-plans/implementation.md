@@ -403,9 +403,11 @@ conversion은 root worker가 Cps일 때 completion cell과 terminal
 `Done<R>`/`Dispatch<R>`를 담는 exact nominal `ContinuationFrame<R>`의 조합 계약을
 만든다.
 
-Target signature lowering이 worker의 `[core.never]`를 `[]`로 바꾼 뒤에만
-Direct/EvidenceDirect export wrapper를 합성한다. Wrapper는 completion cell을
-소유하고 이를 capture한 frame으로 worker를 결과 없는 ordinary call로 호출한다.
+Root bridge 합성은 모든 root worker 앞에 매개변수 없는 Direct wrapper를 합성한다.
+Direct worker에는 입력을 넘기지 않고, EvidenceDirect worker에는 초기 evidence만
+넘긴다. Cps worker일 때는 target signature lowering이 worker의 `[core.never]`를
+`[]`로 바꾼 뒤에 합성한다. 이때 wrapper는 completion cell을 소유하고, 초기 evidence와
+cell을 capture한 frame으로 worker를 결과 없는 ordinary call로 호출한다.
 `Done<R>`가 cell을 쓴 뒤 proper-tail chain이 끝나면 wrapper는 cell의 source result를
 읽는다. Frame contract는 명시적 result/layout provenance로 검사하며 closure 이름,
 arity 또는 erased storage에서 추론하지 않는다. Nested-module `main`은 일반 함수다.

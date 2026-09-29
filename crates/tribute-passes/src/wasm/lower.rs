@@ -10,7 +10,7 @@ use tracing::{error, warn};
 use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -20,8 +20,7 @@ use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
 };
-use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Location, TypeDataBuilder};
+use trunk_ir::types::Location;
 use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
 use super::type_converter::wasm_type_converter;
@@ -332,14 +331,6 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
 // Type helpers
 // =============================================================================
 
-fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
-}
-
-fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
-    wasm_dialect::func_sig(ctx, params, [result]).as_type_ref()
-}
-
 // =============================================================================
 // MainExports (arena version)
 // =============================================================================
@@ -348,7 +339,6 @@ fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) 
 struct MainExports {
     saw_main: bool,
     main_param_types: Vec<TypeRef>,
-    main_exported: bool,
 }
 
 impl MainExports {
@@ -356,7 +346,6 @@ impl MainExports {
         Self {
             saw_main: false,
             main_param_types: Vec::new(),
-            main_exported: false,
         }
     }
 }
@@ -388,7 +377,7 @@ impl ArenaMemoryPlan {
 /// In the arena version, the lowerer does NOT walk/rebuild the entire IR tree.
 /// Instead it:
 /// 1. Scans module ops to collect metadata (main function info, memory presence)
-/// 2. Appends module-level extras (exports, _start function)
+/// 2. Appends module-level extras (memory and `_start` exports)
 ///
 /// Imports, memory, and data segments are declared by the steps that need
 /// them; the lowerer only exports what the module already declares.
@@ -435,10 +424,6 @@ impl WasmLowerer {
                         self.memory_plan.has_memory = true;
                     } else if data.name == Symbol::new("export_memory") {
                         self.memory_plan.has_exported_memory = true;
-                    } else if data.name == Symbol::new("export_func") {
-                        if data.attributes.get_str("name") == Some("main") {
-                            self.main_exports.main_exported = true;
-                        }
                     } else if data.name == Symbol::new("func") {
                         self.scan_wasm_func(ctx, op);
                     }
@@ -480,7 +465,7 @@ impl WasmLowerer {
         }
     }
 
-    /// Append module-level extra ops (exports, _start function).
+    /// Append module-level extra ops (memory and `_start` exports).
     fn append_extra_ops(
         &mut self,
         ctx: &mut IrContext,
@@ -496,77 +481,36 @@ impl WasmLowerer {
             self.memory_plan.has_exported_memory = true;
         }
 
-        if self.main_exports.saw_main && !self.main_exports.main_exported {
-            let op = wasm_dialect::ExportFunc::operands()
-                .name("main".into())
-                .func(Symbol::new("main"))
-                .build(ctx, location);
-            ctx.push_op(module_block, op.op_ref());
-            self.main_exports.main_exported = true;
-        }
-
+        // The root bridge leaves a parameterless wrapper `main` that nothing
+        // references, so it is the WASI command entry itself.
         if self.main_exports.saw_main {
-            let start_func = self.build_start_function(ctx, location);
-            ctx.push_op(module_block, start_func);
-
+            assert!(
+                self.main_exports.main_param_types.is_empty(),
+                "Wasm entrypoint: root `main` must have no hidden parameters after the entry bridge"
+            );
             let export_op = wasm_dialect::ExportFunc::operands()
                 .name("_start".into())
-                .func(Symbol::new("_start"))
+                .func(Symbol::new("main"))
                 .build(ctx, location);
             ctx.push_op(module_block, export_op.op_ref());
         }
-    }
-
-    /// Build the `_start` function that calls main and handles the result.
-    fn build_start_function(&self, ctx: &mut IrContext, location: Location) -> OpRef {
-        let nil_ty = intern_type(ctx, "core", "nil");
-
-        // Build the body block
-        let body_block = ctx.create_block(BlockData {
-            location,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-
-        self.build_start_body(ctx, body_block, location);
-
-        let body_region = ctx.create_region(RegionData {
-            location,
-            blocks: smallvec![body_block],
-            parent_op: None,
-        });
-
-        let func_ty = intern_func_type(ctx, vec![], nil_ty);
-        let func_op = wasm_dialect::Func::operands()
-            .sym_name(Symbol::new("_start"))
-            .r#type(func_ty)
-            .regions(body_region)
-            .build(ctx, location);
-        func_op.op_ref()
-    }
-
-    /// Build the `_start` body. The entry bridge exposes `main` without hidden
-    /// parameters, and its source-level result is always Nil.
-    fn build_start_body(&self, ctx: &mut IrContext, body_block: BlockRef, location: Location) {
-        assert!(
-            self.main_exports.main_param_types.is_empty(),
-            "Wasm entrypoint: root `main` must have no hidden parameters after the entry bridge"
-        );
-        let call = wasm_dialect::Call::operands(vec![])
-            .callee(Symbol::new("main"))
-            .results(vec![])
-            .build(ctx, location);
-        ctx.push_op(body_block, call.op_ref());
-
-        let ret = wasm_dialect::Return::operands(vec![]).build(ctx, location);
-        ctx.push_op(body_block, ret.op_ref());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::context::{BlockData, RegionData};
+    use trunk_ir::smallvec::smallvec;
+    use trunk_ir::types::TypeDataBuilder;
+
+    fn intern_type(ctx: &mut IrContext, dialect: &'static str, name: &'static str) -> TypeRef {
+        ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
+    }
+
+    fn intern_func_type(ctx: &mut IrContext, params: Vec<TypeRef>, result: TypeRef) -> TypeRef {
+        wasm_dialect::func_sig(ctx, params, [result]).as_type_ref()
+    }
     use trunk_ir::Span;
     use trunk_ir::dialect::wasm_gc;
     use trunk_ir::parser::parse_test_module;
@@ -669,40 +613,45 @@ mod tests {
     }
 
     #[test]
-    fn wasm_start_calls_parameterless_main() {
+    fn wasm_start_exports_parameterless_main() {
         let mut ctx = IrContext::new();
+        let module = empty_module_with_block(&mut ctx);
         let location = Location::new(PathRef::from_u32(0), Span::default());
+        let module_block = module.first_block(&ctx).expect("module body block");
         let mut lowerer = WasmLowerer::new();
         lowerer.main_exports.saw_main = true;
 
-        let start = lowerer.build_start_function(&mut ctx, location);
-        let start = wasm_dialect::Func::from_op(&ctx, start).expect("wasm _start function");
-        let entry = ctx.region(start.body(&ctx)).blocks[0];
-        let call_main = ctx
-            .block(entry)
-            .ops
-            .iter()
-            .copied()
-            .find(|op| {
-                ctx.op(*op).name == Symbol::new("call")
-                    && ctx.op(*op).attributes.get_symbol("callee") == Some(Symbol::new("main"))
-            })
-            .expect("_start should call main");
+        lowerer.append_extra_ops(&mut ctx, module_block, location);
 
-        assert!(ctx.op_operands(call_main).is_empty());
+        let exports: Vec<_> = module
+            .ops(&ctx)
+            .into_iter()
+            .filter_map(|op| wasm_dialect::ExportFunc::from_op(&ctx, op).ok())
+            .map(|export| (export.name(&ctx), export.func(&ctx)))
+            .collect();
+        assert_eq!(exports, [("_start".to_owned(), Symbol::new("main"))]);
+        assert!(
+            module
+                .ops(&ctx)
+                .into_iter()
+                .all(|op| wasm_dialect::Func::from_op(&ctx, op).is_err()),
+            "no separate start function"
+        );
     }
 
     #[test]
     #[should_panic(expected = "must have no hidden parameters")]
     fn wasm_start_rejects_main_with_hidden_parameters() {
         let mut ctx = IrContext::new();
+        let module = empty_module_with_block(&mut ctx);
         let location = Location::new(PathRef::from_u32(0), Span::default());
+        let module_block = module.first_block(&ctx).expect("module body block");
         let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
         let mut lowerer = WasmLowerer::new();
         lowerer.main_exports.saw_main = true;
         lowerer.main_exports.main_param_types = vec![evidence_ty];
 
-        lowerer.build_start_function(&mut ctx, location);
+        lowerer.append_extra_ops(&mut ctx, module_block, location);
     }
 
     #[test]
@@ -814,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn module_lowerer_recognizes_existing_exports_memory_and_main_signature() {
+    fn module_lowerer_recognizes_existing_memory_and_main_signature() {
         let mut ctx = IrContext::new();
         let module = empty_module_with_block(&mut ctx);
         let location = Location::new(PathRef::from_u32(0), Span::default());
@@ -832,15 +781,7 @@ mod tests {
             .name("memory".into())
             .index(0)
             .build(&mut ctx, location);
-        let export_main = wasm_dialect::ExportFunc::operands()
-            .name("main".into())
-            .func(Symbol::new("main"))
-            .build(&mut ctx, location);
-        for op in [
-            memory.op_ref(),
-            export_memory.op_ref(),
-            export_main.op_ref(),
-        ] {
+        for op in [memory.op_ref(), export_memory.op_ref()] {
             ctx.push_op(module_block, op);
         }
 
@@ -871,7 +812,6 @@ mod tests {
         assert!(lowerer.memory_plan.has_memory);
         assert!(lowerer.memory_plan.has_exported_memory);
         assert!(lowerer.main_exports.saw_main);
-        assert!(lowerer.main_exports.main_exported);
         assert_eq!(lowerer.main_exports.main_param_types, vec![i32_ty]);
 
         ctx.op_mut(main.op_ref()).attributes.remove("sym_name");
