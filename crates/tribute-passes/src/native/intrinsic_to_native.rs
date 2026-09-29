@@ -102,6 +102,17 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), BytesIntrinsicEr
             ctx.op(op).name,
         )));
     }
+    // Validate every call's shape before rewriting any of them.
+    if let Some(&call) = calls
+        .iter()
+        .find(|&&call| ctx.op_operands(call).len() != 2 || ctx.op_results(call).len() != 1)
+    {
+        return Err(BytesIntrinsicError::new(format!(
+            "a call to the intrinsic has {} operand(s) and {} result(s), expected 2 and 1",
+            ctx.op_operands(call).len(),
+            ctx.op_results(call).len(),
+        )));
+    }
 
     for call in calls {
         lower_call(ctx, call);
@@ -145,7 +156,7 @@ fn references_any(ctx: &IrContext, op: OpRef, names: &[Symbol]) -> bool {
 ///   %result   = arith.extend %byte : core.i32
 fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let [bytes, index] = ctx.op_operands(call) else {
-        unreachable!("calls to the verified declaration match its signature")
+        unreachable!("call arity is validated before lowering")
     };
     let (bytes, index) = (*bytes, *index);
     let result_ty = ctx.op_result_types(call)[0];
@@ -261,6 +272,28 @@ mod tests {
         let error = lower(&mut ctx, module).expect_err("a first-class use cannot be lowered");
 
         assert!(error.to_string().contains("func.constant"), "{error}");
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn malformed_call_is_rejected_before_mutation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
+    %ok = func.call %bytes, %index {callee = @read} : core.i32
+    %bad = func.call %bytes {callee = @read} : core.i32
+    func.return %ok
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        let error = lower(&mut ctx, module).expect_err("a call must have two operands");
+
+        assert!(error.to_string().contains("expected 2 and 1"), "{error}");
         assert_eq!(print_module(&ctx, module.op()), before);
     }
 
