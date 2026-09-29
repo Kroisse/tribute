@@ -195,7 +195,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
-    %1 = arith.const {value = 0} : core.ptr
+    %1 = mem.null : core.ptr
     %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env], layout = @closure}
     %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : core.i32
     %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : core.ptr

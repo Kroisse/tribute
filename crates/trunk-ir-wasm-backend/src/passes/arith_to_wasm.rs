@@ -6,7 +6,8 @@
 //! - `arith.cmp_*` -> `wasm.{type}_{cmp}`
 //! - `arith.neg` -> `wasm.{f32,f64}_neg` or 0 - x for integers
 //! - `arith.{and,or,xor,shl,shr,shru}` -> `wasm.i{32,64}_{op}`
-//! - `arith.{cast,trunc,extend,convert}` -> appropriate wasm conversion ops
+//! - `arith.{extsi,extui,trunci,sitofp,uitofp,fptosi,fptoui,extf,truncf}` ->
+//!   the wasm conversion with the same signedness
 
 use tracing::warn;
 
@@ -674,141 +675,85 @@ impl RewritePattern for ArithConversionPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let data = ctx.op(op);
-        if data.dialect != Symbol::new("arith") {
+        let Some(kind) = conversion_kind(ctx, op) else {
             return false;
-        }
-
-        let name = data.name;
-        let is_conv = name == Symbol::new("cast")
-            || name == Symbol::new("trunc")
-            || name == Symbol::new("extend")
-            || name == Symbol::new("convert");
-
-        if !is_conv {
+        };
+        let Some(&operand) = ctx.op_operands(op).first() else {
             return false;
-        }
-
-        // Get source type from operand
-        let operands = ctx.op_operands(op).to_vec();
-        let Some(&operand) = operands.first() else {
+        };
+        let Some(&dst_ty) = ctx.op_result_types(op).first() else {
             return false;
         };
         let src_ty = ctx.value_ty(operand);
-        let Some(src_suffix) = type_suffix(ctx, src_ty) else {
+        // Narrow integers share the i32 representation with undefined upper
+        // bits, so only exact 32- and 64-bit integers convert here; other
+        // widths stay unconverted and fail the conversion boundary.
+        let exact = |ctx: &IrContext, ty| {
+            IntegerLike::width(ctx, ty).is_none_or(|width| matches!(width, 32 | 64))
+        };
+        if !exact(ctx, src_ty) || !exact(ctx, dst_ty) {
+            return false;
+        }
+        let (Some(src), Some(dst)) = (type_suffix(ctx, src_ty), type_suffix(ctx, dst_ty)) else {
             return false;
         };
-
-        // Get destination type from result
-        let result_types = ctx.op_result_types(op);
-        let Some(&dst_ty) = result_types.first() else {
-            return false;
-        };
-        let Some(dst_suffix) = type_suffix(ctx, dst_ty) else {
-            return false;
-        };
-
         let loc = ctx.op(op).location;
 
-        let new_op = if name == Symbol::new("cast") {
-            match (src_suffix, dst_suffix) {
-                ("i64", "i32") => wasm_dialect::I32WrapI64::operands(operand)
+        macro_rules! build {
+            ($op:ident) => {
+                wasm_dialect::$op::operands(operand)
                     .results(dst_ty)
                     .build(ctx, loc)
-                    .op_ref(),
-                ("i32", "i64") => wasm_dialect::I64ExtendI32S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("trunc") {
-            match (src_suffix, dst_suffix) {
-                ("f32", "i32") => wasm_dialect::I32TruncF32S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f64", "i32") => wasm_dialect::I32TruncF64S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f32", "i64") => wasm_dialect::I64TruncF32S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f64", "i64") => wasm_dialect::I64TruncF64S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("i64", "i32") => wasm_dialect::I32WrapI64::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("extend") {
-            match (src_suffix, dst_suffix) {
-                ("i32", "i64") => wasm_dialect::I64ExtendI32S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f32", "f64") => wasm_dialect::F64PromoteF32::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("convert") {
-            match (src_suffix, dst_suffix) {
-                ("i32", "f32") => wasm_dialect::F32ConvertI32S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("i32", "f64") => wasm_dialect::F64ConvertI32S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("i64", "f32") => wasm_dialect::F32ConvertI64S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("i64", "f64") => wasm_dialect::F64ConvertI64S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f32", "i32") => wasm_dialect::I32TruncF32S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f64", "i32") => wasm_dialect::I32TruncF64S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f32", "i64") => wasm_dialect::I64TruncF32S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f64", "i64") => wasm_dialect::I64TruncF64S::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f32", "f64") => wasm_dialect::F64PromoteF32::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f64", "f32") => wasm_dialect::F32DemoteF64::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                _ => return false,
-            }
-        } else {
-            return false;
+                    .op_ref()
+            };
+        }
+        let new_op = match (kind, src, dst) {
+            ("extsi", "i32", "i64") => build!(I64ExtendI32S),
+            ("extui", "i32", "i64") => build!(I64ExtendI32U),
+            ("trunci", "i64", "i32") => build!(I32WrapI64),
+            ("sitofp", "i32", "f32") => build!(F32ConvertI32S),
+            ("sitofp", "i32", "f64") => build!(F64ConvertI32S),
+            ("sitofp", "i64", "f32") => build!(F32ConvertI64S),
+            ("sitofp", "i64", "f64") => build!(F64ConvertI64S),
+            ("uitofp", "i32", "f32") => build!(F32ConvertI32U),
+            ("uitofp", "i32", "f64") => build!(F64ConvertI32U),
+            ("uitofp", "i64", "f32") => build!(F32ConvertI64U),
+            ("uitofp", "i64", "f64") => build!(F64ConvertI64U),
+            ("fptosi", "f32", "i32") => build!(I32TruncF32S),
+            ("fptosi", "f64", "i32") => build!(I32TruncF64S),
+            ("fptosi", "f32", "i64") => build!(I64TruncF32S),
+            ("fptosi", "f64", "i64") => build!(I64TruncF64S),
+            ("fptoui", "f32", "i32") => build!(I32TruncF32U),
+            ("fptoui", "f64", "i32") => build!(I32TruncF64U),
+            ("fptoui", "f32", "i64") => build!(I64TruncF32U),
+            ("fptoui", "f64", "i64") => build!(I64TruncF64U),
+            ("extf", "f32", "f64") => build!(F64PromoteF32),
+            ("truncf", "f64", "f32") => build!(F32DemoteF64),
+            _ => return false,
         };
-
         rewriter.replace_op(new_op);
         true
     }
+}
+
+/// The name of an `arith` conversion operation, if `op` is one.
+fn conversion_kind(ctx: &IrContext, op: OpRef) -> Option<&'static str> {
+    [
+        (
+            arith::Extsi::matches as fn(&IrContext, OpRef) -> bool,
+            "extsi",
+        ),
+        (arith::Extui::matches, "extui"),
+        (arith::Trunci::matches, "trunci"),
+        (arith::Sitofp::matches, "sitofp"),
+        (arith::Uitofp::matches, "uitofp"),
+        (arith::Fptosi::matches, "fptosi"),
+        (arith::Fptoui::matches, "fptoui"),
+        (arith::Extf::matches, "extf"),
+        (arith::Truncf::matches, "truncf"),
+    ]
+    .into_iter()
+    .find_map(|(matches, name)| matches(ctx, op).then_some(name))
 }
 
 // ============================================================================
@@ -900,6 +845,67 @@ core.module @test {
             "i8 addition should remain:\n{output}"
         );
         assert_eq!(output.matches("wasm.i32_add").count(), 1, "{output}");
+    }
+
+    #[test]
+    fn conversions_keep_their_signedness() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @convert(%n: core.i32, %w: core.i64, %x: core.f32, %y: core.f64) {
+    %s = arith.extsi %n : core.i64
+    %u = arith.extui %n : core.i64
+    %t = arith.trunci %w : core.i32
+    %sf = arith.sitofp %n : core.f64
+    %uf = arith.uitofp %w : core.f32
+    %si = arith.fptosi %y : core.i32
+    %ui = arith.fptoui %x : core.i64
+    %e = arith.extf %x : core.f64
+    %r = arith.truncf %y : core.f32
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        for op in [
+            "wasm.i64_extend_i32_s",
+            "wasm.i64_extend_i32_u",
+            "wasm.i32_wrap_i64",
+            "wasm.f64_convert_i32_s",
+            "wasm.f32_convert_i64_u",
+            "wasm.i32_trunc_f64_s",
+            "wasm.i64_trunc_f32_u",
+            "wasm.f64_promote_f32",
+            "wasm.f32_demote_f64",
+        ] {
+            assert!(output.contains(op), "missing {op}:\n{output}");
+        }
+        assert!(!output.contains("arith."), "{output}");
+    }
+
+    #[test]
+    fn narrow_integer_conversions_are_left_unconverted() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @convert(%b: core.i8, %w: core.i64) {
+    %s = arith.extsi %b : core.i64
+    %t = arith.trunci %w : core.i8
+    %f = arith.sitofp %b : core.f64
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert_eq!(output.matches("arith.").count(), 3, "{output}");
     }
 
     #[test]

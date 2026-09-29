@@ -38,11 +38,15 @@ crate::register_pure_op!(Shl);
 crate::register_pure_op!(Shr);
 crate::register_pure_op!(Shru);
 
-// Conversions (unchanged)
-crate::register_pure_op!(Cast);
-crate::register_pure_op!(Trunc);
-crate::register_pure_op!(Extend);
-crate::register_pure_op!(Convert);
+// Conversions
+crate::register_pure_op!(Extsi);
+crate::register_pure_op!(Extui);
+crate::register_pure_op!(Trunci);
+crate::register_pure_op!(Sitofp);
+crate::register_pure_op!(Uitofp);
+crate::register_pure_op!(Extf);
+crate::register_pure_op!(Truncf);
+// fptosi/fptoui trap on out-of-range values and NaN, so they are not pure.
 
 #[trunk_ir::dialect]
 mod arith {
@@ -79,11 +83,24 @@ mod arith {
     fn shr<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
     fn shru<T: IntegerLike>(value: Value<T>, amount: Value<T>) -> Value<T> {}
 
-    // Conversions
-    fn cast(operand: Value<_>) -> Value<_> {}
-    fn trunc(operand: Value<_>) -> Value<_> {}
-    fn extend(operand: Value<_>) -> Value<_> {}
-    fn convert(operand: Value<_>) -> Value<_> {}
+    // Conversions. Integers are signless; each sign-dependent conversion is
+    // an explicit signed/unsigned pair.
+    #[verify]
+    fn extsi(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
+    #[verify]
+    fn extui(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
+    #[verify]
+    fn trunci(operand: Value<impl IntegerLike>) -> Value<impl IntegerLike> {}
+    fn sitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
+    fn uitofp(operand: Value<impl IntegerLike>) -> Value<impl FloatLike> {}
+    /// Traps on out-of-range values and NaN.
+    fn fptosi(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
+    /// Traps on out-of-range values and NaN.
+    fn fptoui(operand: Value<impl FloatLike>) -> Value<impl IntegerLike> {}
+    #[verify]
+    fn extf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
+    #[verify]
+    fn truncf(operand: Value<impl FloatLike>) -> Value<impl FloatLike> {}
 }
 
 // =========================================================================
@@ -118,6 +135,49 @@ impl crate::ops::Verify for Cmpf {
         ))
     }
 }
+
+/// Check that a conversion changes width in the declared direction.
+fn verify_width(
+    ctx: &IrContext,
+    op: OpRef,
+    width: fn(&IrContext, TypeRef) -> Option<u32>,
+    widens: bool,
+) -> Result<(), String> {
+    let (Some(&operand), Some(&result)) = (ctx.op_operands(op).first(), ctx.op_results(op).first())
+    else {
+        return Err("conversion requires one operand and one result".into());
+    };
+    let (Some(from), Some(to)) = (
+        width(ctx, ctx.value_ty(operand)),
+        width(ctx, ctx.value_ty(result)),
+    ) else {
+        return Err("conversion operand and result must have a width".into());
+    };
+    if (widens && to > from) || (!widens && to < from) {
+        Ok(())
+    } else {
+        let direction = if widens { "wider" } else { "narrower" };
+        Err(format!(
+            "result width {to} must be {direction} than operand width {from}"
+        ))
+    }
+}
+
+macro_rules! width_verifier {
+    ($op:ident, $width:path, $widens:literal) => {
+        impl crate::ops::Verify for $op {
+            fn verify(self, ctx: &IrContext) -> Result<(), String> {
+                verify_width(ctx, self.op_ref(), $width, $widens)
+            }
+        }
+    };
+}
+
+width_verifier!(Extsi, IntegerLike::width, true);
+width_verifier!(Extui, IntegerLike::width, true);
+width_verifier!(Trunci, IntegerLike::width, false);
+width_verifier!(Extf, FloatLike::width, true);
+width_verifier!(Truncf, FloatLike::width, false);
 
 // Folds this dialect contributes to `transforms::canonicalize`. Each
 // `#[trunk_ir::canonicalize_fold(...)]` attribute below registers the
@@ -1204,6 +1264,36 @@ mod canonicalize_tests {
 #[cfg(test)]
 mod schema_tests {
     use crate::parser::parse_test_module;
+
+    #[test]
+    fn conversions_check_categories_and_width_direction() {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%n: core.i32, %w: core.i64, %x: core.f32, %y: core.f64, %p: core.ptr) {
+    %ok_extsi = arith.extsi %n : core.i64
+    %ok_extui = arith.extui %n : core.i64
+    %ok_trunci = arith.trunci %w : core.i32
+    %ok_sitofp = arith.sitofp %n : core.f64
+    %ok_fptoui = arith.fptoui %y : core.i64
+    %ok_extf = arith.extf %x : core.f64
+    %ok_truncf = arith.truncf %y : core.f32
+    %bad_extsi = arith.extsi %w : core.i32
+    %bad_trunci = arith.trunci %n : core.i64
+    %bad_extf = arith.extf %y : core.f32
+    %bad_ptr = arith.extui %p : core.i64
+    %bad_float = arith.sitofp %x : core.f64
+    func.return
+  }
+}"#,
+        );
+        let result = crate::validation::validate_operation_verifiers(&ctx, module);
+        let messages = result.to_string();
+        assert_eq!(result.errors.len(), 5, "{messages}");
+        assert!(messages.contains("must be wider"), "{messages}");
+        assert!(messages.contains("must be narrower"), "{messages}");
+    }
 
     #[test]
     fn arithmetic_operations_require_one_operand_and_result_type() {

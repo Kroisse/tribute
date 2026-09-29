@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 
 use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::dialect::{adt, arith, core};
+use trunk_ir::dialect::{adt, core};
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
 use trunk_ir::op_schema::OpSchema;
@@ -2039,8 +2039,7 @@ fn raw_pointer_cast_origin(
         return false;
     };
     let transparent_cast = core::UnrealizedConversionCast::from_op(ctx, producer).is_ok()
-        || adt::RefCast::from_op(ctx, producer).is_ok()
-        || arith::Cast::from_op(ctx, producer).is_ok();
+        || adt::RefCast::from_op(ctx, producer).is_ok();
     transparent_cast
         && ctx
             .op_operands(producer)
@@ -5134,7 +5133,7 @@ mod tests {
   tribute_control.func @user_read_line() -> !ReadLineResultRef convention(direct)
     attributes {abi = "intrinsic"}
   tribute_control.func @masquerade(%raw: core.ptr) -> !ReadLineResultRef convention(direct) {
-    %middle = arith.cast %raw : core.i64
+    %middle = core.unrealized_conversion_cast %raw : core.i64
     %managed = core.unrealized_conversion_cast %middle : !ReadLineResultRef
     tribute_control.return %managed
   }

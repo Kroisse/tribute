@@ -133,14 +133,14 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @selected() -> core.never {
-    %ev = arith.const {value = 0} : core.ptr
+    %ev = mem.null : core.ptr
     %prompt = arith.const {value = 1} : core.i32
     ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       func.tail_call {callee = @finish}
     }
   }
   func.func @untouched() -> core.never {
-    %ev = arith.const {value = 0} : core.ptr
+    %ev = mem.null : core.ptr
     %prompt = arith.const {value = 2} : core.i32
     ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       func.tail_call {callee = @finish}

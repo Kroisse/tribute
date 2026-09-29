@@ -6,7 +6,9 @@
 //! - `arith.cmp_*` -> `clif.icmp` / `clif.fcmp` with `cond` attribute
 //! - `arith.neg` -> `clif.ineg` / `clif.fneg` (native support, no expansion needed)
 //! - `arith.{and,or,xor,shl,shr,shru}` -> `clif.{band,bor,bxor,ishl,sshr,ushr}`
-//! - `arith.{cast,trunc,extend,convert}` -> `clif.{ireduce,sextend,fpromote,fdemote,fcvt_*}`
+//! - `arith.{extsi,extui,trunci}` -> `clif.{sextend,uextend,ireduce}`
+//! - `arith.{sitofp,uitofp,fptosi,fptoui}` -> `clif.fcvt_{from,to}_{sint,uint}`
+//! - `arith.{extf,truncf}` -> `clif.{fpromote,fdemote}`
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -48,12 +50,12 @@ fn arith_to_clif_target() -> ConversionTarget {
 
 /// Classify a type into the clif lowering category.
 ///
-/// `core` integers and `core.ptr` (a pointer-sized integer in clif) lower as
-/// integers. `core` integer types carry no signedness, so signed conversions
-/// are used unless an operation says otherwise. Other types have no category,
-/// and patterns leave their operations unconverted.
+/// `core` integer types carry no signedness, so signed conversions are used
+/// unless an operation says otherwise. `arith` does not handle pointers, so
+/// `core.ptr` has no category. Types without a category leave their
+/// operations unconverted.
 fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
-    if IntegerLike::matches(ctx, ty) || core::Ptr::matches(ctx, ty) {
+    if IntegerLike::matches(ctx, ty) {
         return Some("int");
     }
     match FloatLike::width(ctx, ty) {
@@ -61,18 +63,6 @@ fn type_category(ctx: &IrContext, ty: TypeRef) -> Option<&'static str> {
         Some(_) => Some("f64"),
         None if core::Nil::matches(ctx, ty) => Some("nil"),
         None => None,
-    }
-}
-
-/// Bit width clif uses for an integer-category type.
-///
-/// `core.i1` is materialized as `i8`. `core.ptr` is 64 bits wide on the
-/// supported native targets (x86_64 and aarch64).
-fn clif_int_width(ctx: &IrContext, ty: TypeRef) -> u32 {
-    match IntegerLike::width(ctx, ty) {
-        Some(1) => 8,
-        Some(width) => width,
-        None => 64,
     }
 }
 
@@ -464,104 +454,75 @@ impl RewritePattern for ArithConversionPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let data = ctx.op(op);
-        if data.dialect != Symbol::new("arith") {
-            return false;
-        }
-
-        let name = data.name;
-        let is_conv = name == Symbol::new("cast")
-            || name == Symbol::new("trunc")
-            || name == Symbol::new("extend")
-            || name == Symbol::new("convert");
-        if !is_conv {
-            return false;
-        }
-
-        let operands = ctx.op_operands(op).to_vec();
-        let Some(&operand) = operands.first() else {
+        let Some(&operand) = ctx.op_operands(op).first() else {
             return false;
         };
-
-        let src_ty = ctx.value_ty(operand);
-        let Some(src_cat) = type_category(ctx, src_ty) else {
+        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
-
-        let Some(dst_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
-        let Some(dst_cat) = type_category(ctx, dst_ty) else {
-            return false;
-        };
-
         let loc = ctx.op(op).location;
-
-        let new_op = if name == Symbol::new("cast") {
-            match (src_cat, dst_cat) {
-                ("int", "int") => {
-                    if clif_int_width(ctx, dst_ty) > clif_int_width(ctx, src_ty) {
-                        clif::Sextend::operands(operand)
-                            .results(dst_ty)
-                            .build(ctx, loc)
-                            .op_ref()
-                    } else {
-                        clif::Ireduce::operands(operand)
-                            .results(dst_ty)
-                            .build(ctx, loc)
-                            .op_ref()
-                    }
-                }
-                _ => return false,
-            }
-        } else if name == Symbol::new("trunc") {
-            match (src_cat, dst_cat) {
-                ("f32" | "f64", "int") => clif::FcvtToSint::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("int", "int") => clif::Ireduce::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("extend") {
-            match (src_cat, dst_cat) {
-                ("int", "int") => clif::Sextend::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f32", "f64") => clif::Fpromote::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                _ => return false,
-            }
-        } else if name == Symbol::new("convert") {
-            match (src_cat, dst_cat) {
-                ("int", "f32" | "f64") => clif::FcvtFromSint::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f32" | "f64", "int") => clif::FcvtToSint::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f32", "f64") => clif::Fpromote::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                ("f64", "f32") => clif::Fdemote::operands(operand)
-                    .results(dst_ty)
-                    .build(ctx, loc)
-                    .op_ref(),
-                _ => return false,
-            }
+        // Cranelift holds `core.i1` as an `i8` 0 or 1, so only zero extension
+        // of a boolean past 8 bits is a plain instruction. Other boolean
+        // conversions stay unconverted and fail the conversion boundary.
+        let width = |ctx: &IrContext, ty| IntegerLike::width(ctx, ty);
+        let bool_source = width(ctx, ctx.value_ty(operand)) == Some(1);
+        if (bool_source
+            && !(arith::Extui::matches(ctx, op)
+                && width(ctx, result_ty).is_some_and(|width| width > 8)))
+            || width(ctx, result_ty) == Some(1)
+        {
+            return false;
+        }
+        // Operand and result types are constrained by each operation's
+        // declaration, so the op alone selects the Cranelift instruction.
+        let new_op = if arith::Extsi::matches(ctx, op) {
+            clif::Sextend::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if arith::Extui::matches(ctx, op) {
+            clif::Uextend::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if arith::Trunci::matches(ctx, op) {
+            clif::Ireduce::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if arith::Sitofp::matches(ctx, op) {
+            clif::FcvtFromSint::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if arith::Uitofp::matches(ctx, op) {
+            clif::FcvtFromUint::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if arith::Fptosi::matches(ctx, op) {
+            clif::FcvtToSint::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if arith::Fptoui::matches(ctx, op) {
+            clif::FcvtToUint::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if arith::Extf::matches(ctx, op) {
+            clif::Fpromote::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else if arith::Truncf::matches(ctx, op) {
+            clif::Fdemote::operands(operand)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
         } else {
             return false;
         };
-
         rewriter.replace_op(new_op);
         true
     }
@@ -597,8 +558,33 @@ mod tests {
     }
 
     #[test]
-    fn pointers_lower_as_integers() {
-        let result = run_pass(
+    fn boolean_conversions_other_than_zero_extension_are_rejected() {
+        for body in [
+            "%s = arith.extsi %b : core.i32",
+            "%t = arith.trunci %n : core.i1",
+            "%f = arith.uitofp %b : core.f64",
+            "%u = arith.extui %b : core.i8",
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{\n  func.func @f(%b: core.i1, %n: core.i8) {{\n    {body}\n    func.return\n  }}\n}}"
+                ),
+            );
+            let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+            assert!(
+                format!("{error:?}").contains("IllegalOp"),
+                "{body}: {error:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn arithmetic_constants_are_never_pointers() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
             r#"core.module @test {
   func.func @f() {
     %null = arith.const {value = 0} : core.ptr
@@ -606,25 +592,8 @@ mod tests {
   }
 }"#,
         );
-        assert!(
-            result.contains("clif.iconst {value = 0} : core.ptr"),
-            "{result}"
-        );
-    }
-
-    #[test]
-    fn pointer_casts_use_the_native_pointer_width() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%index: core.i32, %address: core.ptr) {
-    %widened = arith.cast %index : core.ptr
-    %narrowed = arith.cast %address : core.i32
-    func.return
-  }
-}"#,
-        );
-        assert!(result.contains("clif.sextend %0 : core.ptr"), "{result}");
-        assert!(result.contains("clif.ireduce %1 : core.i32"), "{result}");
+        let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+        assert!(format!("{error:?}").contains("IllegalOp"), "{error:?}");
     }
 
     #[test]
@@ -644,30 +613,36 @@ mod tests {
     }
 
     #[test]
-    fn conversions_follow_core_scalar_categories() {
+    fn each_conversion_selects_its_signedness() {
         let result = run_pass(
             r#"core.module @test {
   func.func @convert(%b: core.i1, %w: core.i64, %n: core.i32, %x: core.f32, %y: core.f64) {
-    %widened = arith.cast %b : core.i32
-    %narrowed = arith.cast %w : core.i32
-    %extended = arith.extend %n : core.i64
-    %to_float = arith.convert %n : core.f64
-    %to_int = arith.convert %y : core.i32
-    %promoted = arith.extend %x : core.f64
+    %s = arith.extsi %n : core.i64
+    %u = arith.extui %b : core.i32
+    %t = arith.trunci %w : core.i32
+    %sf = arith.sitofp %n : core.f64
+    %uf = arith.uitofp %n : core.f32
+    %si = arith.fptosi %y : core.i32
+    %ui = arith.fptoui %x : core.i64
+    %e = arith.extf %x : core.f64
+    %r = arith.truncf %y : core.f32
     func.return
   }
 }"#,
         );
         for (op, count) in [
-            ("clif.sextend", 2),
+            ("clif.sextend", 1),
+            ("clif.uextend", 1),
             ("clif.ireduce", 1),
             ("clif.fcvt_from_sint", 1),
+            ("clif.fcvt_from_uint", 1),
             ("clif.fcvt_to_sint", 1),
+            ("clif.fcvt_to_uint", 1),
             ("clif.fpromote", 1),
+            ("clif.fdemote", 1),
         ] {
             assert_eq!(result.matches(op).count(), count, "{op}:\n{result}");
         }
         assert!(!result.contains("arith."), "{result}");
-        assert!(!result.contains("uextend"), "{result}");
     }
 }
