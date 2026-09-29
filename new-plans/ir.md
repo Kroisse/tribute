@@ -1130,9 +1130,9 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   것은 exact physical signature의 일부로 표현한다. 그래서 직접 정의와
   exact indirect signature 모두에서 같은 계약을 읽을 수 있다. 인코딩은 signature의
   [타입 매개변수 속성](#타입-매개변수-속성)이다.
-- **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 경계가 부여한
-  명시적 layout 식별자로 구별한다. Struct 이름, field 모양, `arrayref` 같은 erased
-  heap 형상을 provenance로 쓰지 않는다.
+- **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 명시적
+  [runtime layout 식별자](#runtime-layout-식별자)로 구별한다. Struct 이름, field
+  모양, `arrayref` 같은 erased heap 형상을 provenance로 쓰지 않는다.
 - **진입점:** 출구의 root `main`은 bridge 합성이 만든 wrapper다. Hidden 매개변수가
   없고 결과는 `Nil`이며 platform 규약을 따른다. Body는 root worker 호출 하나로 끝나고,
   모듈 안에서 이 `main`을 참조하는 곳은 없다. 원래 source `main`은 모든 calling
@@ -1244,6 +1244,32 @@ parameter와 같은 용법). 함수 signature에서는 input과 result 타입이
 - 한 callable에서 파생한 signature들, 예를 들어 closure 환경을 끼운 정의, 함수
   참조 adapter, 호출 지점이 기대하는 물리 signature는 모두 같은 규칙으로 유도한다.
   그래야 정확한 타입 동일성 비교가 어긋나지 않는다.
+
+### Runtime layout 식별자
+
+Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으로 식별한다.
+값은 layout 종류를 나타내는 symbol이다.
+
+| `layout` | 붙는 타입 | 뜻 |
+| --- | --- | --- |
+| `@closure` | canonical closure `adt.struct` | 함수 참조와 environment로 이루어진 closure 저장 |
+| `@evidence_marker` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure |
+| `@evidence` | evidence `core.array` | ability id 순으로 정렬된 marker 배열 |
+
+- 속성은 저장 layout만 나타낸다. 의미 분류를 physical 이름으로 복제하지 않으며,
+  같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
+- 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
+  타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
+  `adt.struct() {name = @_closure, fields = [...], layout = @closure}`.
+- 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
+  소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
+  모양을 가져도 compiler layout으로 취급되지 않는다.
+- Target이 layout의 field 표현을 바꾸는 경우(예: native closure layout 적응)에도
+  같은 `layout` 값을 유지한다.
+- Representation/ABI 경계 이후의 pass는 compiler 소유 layout을 이 속성으로만
+  판별한다. Struct 이름, field 모양, element 타입, erased reference 타입으로
+  판별하지 않는다. TrunkIR은 값의 의미를 해석하지 않으며, 의미는 이 속성을 정의하는
+  언어 계층과 그 layout을 구현하는 target이 소유한다.
 
 ### `func.func_sig` function type
 
