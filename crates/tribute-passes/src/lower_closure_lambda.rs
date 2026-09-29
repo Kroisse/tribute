@@ -575,8 +575,18 @@ mod tests {
             parent_op: None,
         });
 
-        // closure type: closure.closure<func.func_sig<i32, i32>>
-        let func_ty = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        // closure type: closure.closure<func.func_sig<i32, i32>>, whose input
+        // carries a parameter attribute.
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+            .into_iter()
+            .collect();
+        let func_ty = func::func_sig_with_param_attrs(
+            &mut ctx,
+            [(i32_ty, marked.clone())],
+            [(i32_ty, AttributeMap::new())],
+            AttributeMap::new(),
+        )
+        .as_type_ref();
         let closure_ty =
             tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
 
@@ -643,6 +653,11 @@ mod tests {
         let lifted_type = func::FuncSig::from_type_ref(&ctx, lifted_ty).unwrap();
         assert_eq!(lifted_type.inputs(&ctx).len(), 2); // environment + x
         assert!(lifted_type.single_result(&ctx).is_some());
+        // The inserted environment has no attributes; `x` keeps its own.
+        assert_eq!(
+            lifted_type.inputs_with_attrs(&ctx),
+            [(anyref_ty, AttributeMap::new()), (i32_ty, marked)]
+        );
     }
 
     #[test]

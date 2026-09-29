@@ -179,6 +179,17 @@ let data = ctx.get_type(sig.as_type_ref());
 let value_attrs = data.param_attrs(1);
 ```
 
+A rebuild that inserts, removes, or replaces parameters starts from the
+parameter/attribute pairs, so each attribute stays with its parameter. Copying
+the attributes into `func_sig_with_attrs` would keep the old positions:
+
+```rust
+let mut inputs = sig.inputs_with_attrs(ctx);
+inputs.insert(index, (env_ty, AttributeMap::new()));
+let results = sig.results_with_attrs(ctx);
+let rebuilt = func::func_sig_with_param_attrs(ctx, inputs, results, other_attrs);
+```
+
 Operations are created with their builders:
 
 ```rust
