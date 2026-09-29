@@ -16,6 +16,12 @@ use crate::typeck::context::{AbilityInfo, AbilityOpInfo, MethodEntry};
 
 use super::TypeChecker;
 
+/// Declared field names in order, if every field is named. A constructor
+/// without fields has an empty list.
+fn field_names(fields: &[crate::ast::FieldDecl]) -> Option<Vec<Symbol>> {
+    fields.iter().map(|field| field.name).collect()
+}
+
 #[derive(Default)]
 struct SignatureVariables<'db> {
     types: HashMap<Symbol, u32>,
@@ -358,6 +364,9 @@ impl<'db> TypeChecker<'db> {
         let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
         let ctor_id = CtorId::new(self.db(), qualified_name);
         self.env.register_constructor(ctor_id, ctor_scheme);
+        if let Some(names) = field_names(&s.fields) {
+            self.env.register_constructor_field_names(ctor_id, names);
+        }
 
         // Register struct field information for accessor resolution
         let fields: Vec<(Symbol, Type<'db>)> = s
@@ -436,6 +445,9 @@ impl<'db> TypeChecker<'db> {
                 crate::qualified_symbol(&mut self.current_prefix().to_owned(), variant.name),
             );
             self.env.register_constructor(ctor_id, ctor_scheme);
+            if let Some(names) = field_names(&variant.fields) {
+                self.env.register_constructor_field_names(ctor_id, names);
+            }
         }
     }
 

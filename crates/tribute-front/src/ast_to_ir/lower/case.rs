@@ -73,21 +73,7 @@ pub(super) fn emit_logical_pattern_check<'db>(
                     element,
                 )?);
             }
-            let Some((first, rest)) = conditions.split_first() else {
-                let op = arith::Const::operands()
-                    .value(Attribute::Bool(true))
-                    .results(bool_ty)
-                    .build(builder.ir, location);
-                builder.ir.push_op(builder.block, op.op_ref());
-                return Some(op.result(builder.ir));
-            };
-            let mut result = *first;
-            for condition in rest {
-                let and = arith::And::operands(result, *condition).build(builder.ir, location);
-                builder.ir.push_op(builder.block, and.op_ref());
-                result = and.result(builder.ir);
-            }
-            Some(result)
+            Some(combine_conditions(builder, location, conditions))
         }
         PatternKind::List(elements) => {
             emit_logical_list_pattern_check(builder, location, scrutinee, pattern, elements, true)
@@ -98,34 +84,165 @@ pub(super) fn emit_logical_pattern_check<'db>(
         PatternKind::As { pattern, .. } => {
             emit_logical_pattern_check(builder, location, scrutinee, pattern)
         }
-        PatternKind::Variant { ctor, fields } => {
-            emit_logical_variant_pattern_check(builder, location, scrutinee, ctor, fields)
+        PatternKind::Variant { .. } | PatternKind::Record { .. } => {
+            let (layout, fields) = logical_constructor_pattern(builder.ctx, builder.ir, pattern);
+            match layout {
+                ConstructorLayout::Struct {
+                    ty,
+                    fields: field_tys,
+                } => {
+                    let mut conditions = Vec::with_capacity(fields.len());
+                    for (index, field) in fields {
+                        let get = adt::StructGet::operands(scrutinee)
+                            .r#type(ty)
+                            .field(index as u32)
+                            .results(field_tys[index])
+                            .build(builder.ir, location);
+                        builder.ir.push_op(builder.block, get.op_ref());
+                        conditions.push(emit_logical_pattern_check(
+                            builder,
+                            location,
+                            get.result(builder.ir),
+                            field,
+                        )?);
+                    }
+                    Some(combine_conditions(builder, location, conditions))
+                }
+                ConstructorLayout::Variant {
+                    ty,
+                    tag,
+                    fields: field_tys,
+                } => emit_logical_variant_pattern_check(
+                    builder, location, scrutinee, ty, tag, &field_tys, &fields,
+                ),
+            }
         }
-        _ => panic!("unsupported logical pattern at source-logical boundary"),
     }
 }
 
-fn logical_variant_layout<'db>(
-    ctx: &IrLoweringCtx<'db>,
-    ir: &mut IrContext,
-    ctor: &TypedRef<'db>,
-) -> (Symbol, TypeRef) {
-    let ResolvedRef::Constructor { variant, .. } = ctor.resolved else {
-        panic!("non-constructor in logical variant pattern");
+/// Conjunction of pattern conditions; `true` when there are none.
+fn combine_conditions(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    conditions: Vec<ValueRef>,
+) -> ValueRef {
+    let Some((first, rest)) = conditions.split_first() else {
+        let bool_ty = builder.ctx.bool_type(builder.ir);
+        let op = arith::Const::operands()
+            .value(Attribute::Bool(true))
+            .results(bool_ty)
+            .build(builder.ir, location);
+        builder.ir.push_op(builder.block, op.op_ref());
+        return op.result(builder.ir);
     };
-    let layout = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
-    (variant, layout)
+    let mut result = *first;
+    for condition in rest {
+        let and = arith::And::operands(result, *condition).build(builder.ir, location);
+        builder.ir.push_op(builder.block, and.op_ref());
+        result = and.result(builder.ir);
+    }
+    result
 }
 
+/// The logical layout a constructor pattern destructures.
+enum ConstructorLayout {
+    /// A struct: its fields are read directly.
+    Struct { ty: TypeRef, fields: Vec<TypeRef> },
+    /// An enum variant: the tag is tested before its fields are read.
+    Variant {
+        ty: TypeRef,
+        tag: Symbol,
+        fields: Vec<TypeRef>,
+    },
+}
+
+/// The layout of a constructor pattern and its sub-patterns paired with the
+/// field index each one matches. Brace-form fields are matched by name.
+fn logical_constructor_pattern<'p, 'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    pattern: &'p Pattern<TypedRef<'db>>,
+) -> (ConstructorLayout, Vec<(usize, &'p Pattern<TypedRef<'db>>)>) {
+    let ctor = match &*pattern.kind {
+        PatternKind::Variant { ctor, .. }
+        | PatternKind::Record {
+            type_name: Some(ctor),
+            ..
+        } => ctor,
+        _ => panic!("unsupported logical constructor pattern at source-logical boundary"),
+    };
+    let ResolvedRef::Constructor { variant, .. } = ctor.resolved else {
+        panic!("non-constructor in logical constructor pattern");
+    };
+    let ty = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
+    let (layout, names) = match get_struct_fields(ir, ty) {
+        Some(fields) => {
+            let (names, fields) = fields.into_iter().unzip();
+            (ConstructorLayout::Struct { ty, fields }, names)
+        }
+        None => {
+            let fields = get_enum_variants(ir, ty)
+                .expect("logical constructor layout must be a struct or an enum")
+                .into_iter()
+                .find_map(|(tag, fields)| (tag == variant).then_some(fields))
+                .expect("resolved logical enum variant must exist");
+            let names = match &*pattern.kind {
+                PatternKind::Record { .. } => ctx
+                    .variant_field_names(ty, variant)
+                    .expect("named-field variant must have registered field names"),
+                _ => Vec::new(),
+            };
+            (
+                ConstructorLayout::Variant {
+                    ty,
+                    tag: variant,
+                    fields,
+                },
+                names,
+            )
+        }
+    };
+    let field_count = match &layout {
+        ConstructorLayout::Struct { fields, .. } | ConstructorLayout::Variant { fields, .. } => {
+            fields.len()
+        }
+    };
+    let indexed: Vec<_> = match &*pattern.kind {
+        PatternKind::Variant { fields, .. } => fields.iter().enumerate().collect(),
+        PatternKind::Record { fields, .. } => fields
+            .iter()
+            .map(|field| {
+                let index = names
+                    .iter()
+                    .position(|name| *name == field.name)
+                    .expect("type checking must reject unknown record pattern fields");
+                let pattern = field
+                    .pattern
+                    .as_ref()
+                    .expect("name resolution must expand record pattern shorthand");
+                (index, pattern)
+            })
+            .collect(),
+        _ => unreachable!(),
+    };
+    assert!(
+        indexed.iter().all(|(index, _)| *index < field_count),
+        "type checking must reject out-of-range logical constructor fields"
+    );
+    (layout, indexed)
+}
+
+#[allow(clippy::too_many_arguments)]
 fn emit_logical_variant_pattern_check<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
     scrutinee: ValueRef,
-    ctor: &TypedRef<'db>,
-    fields: &[Pattern<TypedRef<'db>>],
+    enum_ty: TypeRef,
+    variant: Symbol,
+    variant_fields: &[TypeRef],
+    fields: &[(usize, &Pattern<TypedRef<'db>>)],
 ) -> Option<ValueRef> {
     let bool_ty = builder.ctx.bool_type(builder.ir);
-    let (variant, enum_ty) = logical_variant_layout(builder.ctx, builder.ir, ctor);
     let tag = adt::VariantIs::operands(scrutinee)
         .r#type(enum_ty)
         .tag(variant)
@@ -149,16 +266,9 @@ fn emit_logical_variant_pattern_check<'db>(
             .results(enum_ty)
             .build(nested.ir, location);
         nested.ir.push_op(nested.block, cast.op_ref());
-        let variant_fields = get_enum_variants(nested.ir, enum_ty)
-            .expect("logical enum layout must contain variants")
-            .into_iter()
-            .find_map(|(tag, fields)| (tag == variant).then_some(fields))
-            .expect("resolved logical enum variant must exist");
         let mut conditions = Vec::with_capacity(fields.len());
-        for (index, field) in fields.iter().enumerate() {
-            let field_ty = *variant_fields
-                .get(index)
-                .expect("type checking must reject out-of-range logical variant fields");
+        for &(index, field) in fields {
+            let field_ty = variant_fields[index];
             let get = adt::VariantGet::operands(cast.result(nested.ir))
                 .r#type(enum_ty)
                 .tag(variant)
@@ -513,34 +623,61 @@ pub(super) fn bind_logical_pattern_fields<'db>(
             }
             bind_logical_pattern_fields(ctx, ir, block, location, scrutinee, pattern);
         }
-        PatternKind::Variant { ctor, fields } => {
-            let (variant, enum_ty) = logical_variant_layout(ctx, ir, ctor);
-            let cast = adt::VariantCast::operands(scrutinee)
-                .r#type(enum_ty)
-                .tag(variant)
-                .results(enum_ty)
-                .build(ir, location);
-            ir.push_op(block, cast.op_ref());
-            let variant_fields = get_enum_variants(ir, enum_ty)
-                .expect("logical enum layout must contain variants")
-                .into_iter()
-                .find_map(|(tag, fields)| (tag == variant).then_some(fields))
-                .expect("resolved logical enum variant must exist");
-            for (index, field) in fields.iter().enumerate() {
-                let field_ty = *variant_fields
-                    .get(index)
-                    .expect("type checking must reject out-of-range logical variant fields");
-                let get = adt::VariantGet::operands(cast.result(ir))
-                    .r#type(enum_ty)
-                    .tag(variant)
-                    .field(index as u32)
-                    .results(field_ty)
-                    .build(ir, location);
-                ir.push_op(block, get.op_ref());
-                bind_logical_pattern_fields(ctx, ir, block, location, get.result(ir), field);
+        PatternKind::Variant { .. } | PatternKind::Record { .. } => {
+            let (layout, fields) = logical_constructor_pattern(ctx, ir, pattern);
+            match layout {
+                ConstructorLayout::Struct {
+                    ty,
+                    fields: field_tys,
+                } => {
+                    for (index, field) in fields {
+                        let get = adt::StructGet::operands(scrutinee)
+                            .r#type(ty)
+                            .field(index as u32)
+                            .results(field_tys[index])
+                            .build(ir, location);
+                        ir.push_op(block, get.op_ref());
+                        bind_logical_pattern_fields(
+                            ctx,
+                            ir,
+                            block,
+                            location,
+                            get.result(ir),
+                            field,
+                        );
+                    }
+                }
+                ConstructorLayout::Variant {
+                    ty,
+                    tag,
+                    fields: field_tys,
+                } => {
+                    let cast = adt::VariantCast::operands(scrutinee)
+                        .r#type(ty)
+                        .tag(tag)
+                        .results(ty)
+                        .build(ir, location);
+                    ir.push_op(block, cast.op_ref());
+                    for (index, field) in fields {
+                        let get = adt::VariantGet::operands(cast.result(ir))
+                            .r#type(ty)
+                            .tag(tag)
+                            .field(index as u32)
+                            .results(field_tys[index])
+                            .build(ir, location);
+                        ir.push_op(block, get.op_ref());
+                        bind_logical_pattern_fields(
+                            ctx,
+                            ir,
+                            block,
+                            location,
+                            get.result(ir),
+                            field,
+                        );
+                    }
+                }
             }
         }
-        _ => panic!("unsupported logical pattern binding at source-logical boundary"),
     }
 }
 

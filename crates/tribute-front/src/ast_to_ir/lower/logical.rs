@@ -541,6 +541,11 @@ fn prescan_logical_nominal_layouts<'db>(
                 };
                 ctx.register_type(name, layout);
                 ir.register_type_alias(name, layout);
+                for variant in &enumeration.variants {
+                    if let Some(names) = variant.fields.iter().map(|field| field.name).collect() {
+                        ctx.register_variant_field_names(layout, variant.name, names);
+                    }
+                }
                 if well_known_types.is_string(definition) {
                     well_known_types.record_string(layout);
                 }

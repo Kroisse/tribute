@@ -1043,35 +1043,174 @@ impl<'db> TypeChecker<'db> {
             return;
         }
 
-        let span = self.get_span(record_id);
-        let report = |message: String| {
-            Diagnostic::new(
-                message,
-                span,
-                DiagnosticSeverity::Error,
-                CompilationPhase::TypeChecking,
-            )
-            .accumulate(self.db());
-        };
+        let declared: Vec<Symbol> = declared_fields.iter().map(|(name, _)| *name).collect();
+        self.report_field_shape(
+            record_id,
+            format_args!("struct `{}`", id.qualified(self.db())),
+            &declared,
+            fields.iter().map(|(name, _)| *name),
+            has_spread,
+        );
+    }
+
+    /// Report written field names that do not fit the declared ones: unknown
+    /// and duplicate fields in source order, then the first missing field in
+    /// declaration order unless the rest are omitted explicitly.
+    fn report_field_shape(
+        &self,
+        node: NodeId,
+        owner: std::fmt::Arguments<'_>,
+        declared: &[Symbol],
+        written: impl IntoIterator<Item = Symbol>,
+        omits_rest: bool,
+    ) {
         let mut seen = HashSet::new();
-        for (name, _) in fields {
-            if !declared_fields.iter().any(|(declared, _)| declared == name) {
-                report(format!(
-                    "unknown field `{}` for struct `{}`",
-                    name,
-                    id.qualified(self.db())
-                ));
-            } else if !seen.insert(*name) {
-                report(format!("duplicate field `{}`", name));
+        for name in written {
+            if !declared.contains(&name) {
+                self.report_type_error(node, format!("unknown field `{name}` for {owner}"));
+            } else if !seen.insert(name) {
+                self.report_type_error(node, format!("duplicate field `{name}`"));
             }
         }
-        if !has_spread
-            && let Some((missing, _)) = declared_fields
-                .iter()
-                .find(|(name, _)| !seen.contains(name))
-        {
-            report(format!("missing field: {}", missing));
+        if !omits_rest && let Some(missing) = declared.iter().find(|name| !seen.contains(name)) {
+            self.report_type_error(node, format!("missing field: {missing}"));
         }
+    }
+
+    fn report_type_error(&self, node: NodeId, message: String) {
+        Diagnostic::new(
+            message,
+            self.get_span(node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+        .accumulate(self.db());
+    }
+
+    /// Check that a positional constructor pattern names a constructor and
+    /// has one sub-pattern per field. Reported once per pattern.
+    fn validate_variant_pattern_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern_id: NodeId,
+        ctor: &ResolvedRef<'db>,
+        ctor_ty: Type<'db>,
+        written: usize,
+    ) {
+        match ctor {
+            ResolvedRef::Constructor { .. }
+                if matches!(ctor_ty.kind(self.db()), TypeKind::Error) => {}
+            ResolvedRef::Constructor { id, .. } => {
+                let declared = match ctor_ty.kind(self.db()) {
+                    TypeKind::Func { params, .. } => params.len(),
+                    _ => 0,
+                };
+                if written != declared && ctx.mark_record_shape_checked(pattern_id) {
+                    let plural = if declared == 1 { "" } else { "s" };
+                    self.report_type_error(
+                        pattern_id,
+                        format!(
+                            "constructor `{}` expects {declared} field{plural}, but the pattern has {written}",
+                            id.qualified(self.db())
+                        ),
+                    );
+                }
+            }
+            _ => self.report_non_constructor_pattern(ctx, pattern_id, ctor),
+        }
+    }
+
+    /// Report a name that resolved to something other than a constructor in
+    /// constructor position. Unresolved names and modules are reported where
+    /// they are resolved.
+    fn report_non_constructor_pattern(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern_id: NodeId,
+        resolved: &ResolvedRef<'db>,
+    ) {
+        let name = match resolved {
+            ResolvedRef::TypeDef { id } => id.qualified(self.db()),
+            ResolvedRef::Local { id, name } if !id.is_unresolved() => *name,
+            _ => return,
+        };
+        if ctx.mark_record_shape_checked(pattern_id) {
+            self.report_type_error(pattern_id, format!("`{name}` is not a constructor"));
+        }
+    }
+
+    /// The constructor instance of a brace-form constructor pattern, the type
+    /// it constructs, and the field type of each written field (`None` for a
+    /// name the constructor does not declare).
+    fn record_pattern_shape(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern_id: NodeId,
+        type_name: &ResolvedRef<'db>,
+        written: &[Symbol],
+    ) -> (Type<'db>, Type<'db>, Vec<Option<Type<'db>>>) {
+        let ctor_ty = self.instantiate_value_constructor_with_ctx(ctx, pattern_id, type_name);
+        let (params, result) = match ctor_ty.kind(self.db()) {
+            TypeKind::Func { params, result, .. } => (params.as_slice(), *result),
+            _ => (&[][..], ctor_ty),
+        };
+        let declared = match type_name {
+            ResolvedRef::Constructor { id, .. } => self.env.lookup_constructor_field_names(*id),
+            _ => None,
+        };
+        let field_tys = written
+            .iter()
+            .map(|name| {
+                let index = declared?.iter().position(|declared| declared == name)?;
+                params.get(index).copied()
+            })
+            .collect();
+        (ctor_ty, result, field_tys)
+    }
+
+    /// Check a brace-form constructor pattern's field names against the
+    /// constructor's declaration. Reported once per pattern.
+    fn validate_record_pattern_with_ctx(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern_id: NodeId,
+        type_name: &ResolvedRef<'db>,
+        result: Type<'db>,
+        written: &[Symbol],
+        omits_rest: bool,
+    ) {
+        let ResolvedRef::Constructor { id, .. } = type_name else {
+            self.report_non_constructor_pattern(ctx, pattern_id, type_name);
+            return;
+        };
+        if matches!(result.kind(self.db()), TypeKind::Error)
+            || !ctx.mark_record_shape_checked(pattern_id)
+        {
+            return;
+        }
+        let qualified = id.qualified(self.db());
+        let Some(declared) = self.env.lookup_constructor_field_names(*id) else {
+            self.report_type_error(
+                pattern_id,
+                format!(
+                    "`{qualified}` has positional fields; match it with `{}(...)`",
+                    id.name(self.db())
+                ),
+            );
+            return;
+        };
+        let is_variant = matches!(
+            result.kind(self.db()),
+            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(*name).is_some()
+        );
+        let kind = if is_variant { "variant" } else { "struct" };
+        self.report_field_shape(
+            pattern_id,
+            format_args!("{kind} `{qualified}`"),
+            declared,
+            written.iter().copied(),
+            omits_rest,
+        );
     }
 
     /// Infer the type of a variable reference.
@@ -2136,14 +2275,18 @@ impl<'db> TypeChecker<'db> {
                     );
                 }
             }
-            PatternKind::Record { fields, .. } => {
-                let resolved_ty = resolve(ty);
-                let (struct_id, type_args) = self.extract_struct_info(resolved_ty);
-                for field in fields {
-                    let field_ty = struct_id
-                        .and_then(|id| {
-                            self.lookup_field_type_from_struct(ctx, id, field.name, &type_args)
-                        })
+            PatternKind::Record {
+                type_name, fields, ..
+            } => {
+                let field_tys = self.record_pattern_field_types(
+                    ctx,
+                    pattern.id,
+                    type_name.as_ref(),
+                    fields,
+                    resolve(ty),
+                );
+                for (field, field_ty) in fields.iter().zip(field_tys) {
+                    let field_ty = field_ty
                         .map(resolve)
                         .unwrap_or_else(|| ctx.fresh_type_var());
                     if let Some(pattern) = &field.pattern {
@@ -2232,6 +2375,13 @@ impl<'db> TypeChecker<'db> {
                     _ => self.infer_var_with_ctx(ctx, None, ctor),
                 };
                 ctx.record_node_type(pattern.id, ctor_ty);
+                self.validate_variant_pattern_with_ctx(
+                    ctx,
+                    pattern.id,
+                    ctor,
+                    ctor_ty,
+                    fields.len(),
+                );
 
                 match ctor_ty.kind(self.db()) {
                     TypeKind::Func { params, result, .. } => {
@@ -2267,13 +2417,30 @@ impl<'db> TypeChecker<'db> {
                 }
                 ctx.canonical_list_type(elem_ty)
             }
-            PatternKind::Record { type_name, .. } => {
-                if let Some(type_ref) = type_name {
-                    self.infer_var_with_ctx(ctx, None, type_ref)
-                } else {
-                    ctx.fresh_type_var()
+            PatternKind::Record {
+                type_name: Some(type_name),
+                fields,
+                rest,
+            } => {
+                let written: Vec<Symbol> = fields.iter().map(|field| field.name).collect();
+                let (_, result, field_tys) =
+                    self.record_pattern_shape(ctx, pattern.id, type_name, &written);
+                self.validate_record_pattern_with_ctx(
+                    ctx, pattern.id, type_name, result, &written, *rest,
+                );
+                for (field, field_ty) in fields.iter().zip(field_tys) {
+                    if let Some(sub) = &field.pattern {
+                        let sub_ty = self.infer_pattern_type_with_ctx(ctx, sub);
+                        if let Some(field_ty) = field_ty {
+                            ctx.constrain_eq(sub_ty, field_ty);
+                        }
+                    }
                 }
+                result
             }
+            PatternKind::Record {
+                type_name: None, ..
+            } => ctx.fresh_type_var(),
             PatternKind::As { pattern, .. } => self.infer_pattern_type_with_ctx(ctx, pattern),
             PatternKind::Error => ctx.error_type(),
         };
@@ -2330,15 +2497,18 @@ impl<'db> TypeChecker<'db> {
                     self.bind_pattern_vars_with_ctx(ctx, field, field_ty);
                 }
             }
-            PatternKind::Record { fields, .. } => {
-                let (struct_id, type_args) = self.extract_struct_info(ty);
-
-                for field in fields {
-                    let field_ty = struct_id
-                        .and_then(|id| {
-                            self.lookup_field_type_from_struct(ctx, id, field.name, &type_args)
-                        })
-                        .unwrap_or_else(|| ctx.fresh_type_var());
+            PatternKind::Record {
+                type_name, fields, ..
+            } => {
+                let field_tys = self.record_pattern_field_types(
+                    ctx,
+                    pattern.id,
+                    type_name.as_ref(),
+                    fields,
+                    ty,
+                );
+                for (field, field_ty) in fields.iter().zip(field_tys) {
+                    let field_ty = field_ty.unwrap_or_else(|| ctx.fresh_type_var());
 
                     if let Some(pat) = &field.pattern {
                         self.bind_pattern_vars_with_ctx(ctx, pat, field_ty);
@@ -2412,14 +2582,18 @@ impl<'db> TypeChecker<'db> {
                 type_name,
                 fields,
                 rest,
-            } => PatternKind::Record {
-                type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, None, t)),
-                fields: fields
-                    .into_iter()
-                    .map(|f| self.convert_field_pattern_with_ctx(ctx, f))
-                    .collect(),
-                rest,
-            },
+            } => {
+                let type_name = type_name
+                    .map(|resolved| self.record_pattern_type_name(ctx, pattern.id, resolved));
+                PatternKind::Record {
+                    type_name,
+                    fields: fields
+                        .into_iter()
+                        .map(|f| self.convert_field_pattern_with_ctx(ctx, f))
+                        .collect(),
+                    rest,
+                }
+            }
             PatternKind::Tuple(patterns) => PatternKind::Tuple(
                 patterns
                     .into_iter()
@@ -2459,6 +2633,46 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Convert a field pattern.
+    /// The field type of each field of a record pattern, in source order.
+    /// A brace-form constructor pattern takes them from its constructor
+    /// instance; a pattern without a constructor name looks them up on the
+    /// struct type `ty`.
+    fn record_pattern_field_types<V: salsa::SalsaValue>(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern_id: NodeId,
+        type_name: Option<&ResolvedRef<'db>>,
+        fields: &[FieldPattern<V>],
+        ty: Type<'db>,
+    ) -> Vec<Option<Type<'db>>> {
+        let written: Vec<Symbol> = fields.iter().map(|field| field.name).collect();
+        if let Some(type_name) = type_name {
+            return self
+                .record_pattern_shape(ctx, pattern_id, type_name, &written)
+                .2;
+        }
+        let (struct_id, type_args) = self.extract_struct_info(ty);
+        written
+            .iter()
+            .map(|name| {
+                struct_id
+                    .and_then(|id| self.lookup_field_type_from_struct(ctx, id, *name, &type_args))
+            })
+            .collect()
+    }
+
+    /// The typed constructor reference of a brace-form constructor pattern,
+    /// carrying the same constructor instance its fields were checked with.
+    fn record_pattern_type_name(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        pattern_id: NodeId,
+        resolved: ResolvedRef<'db>,
+    ) -> TypedRef<'db> {
+        let ty = self.instantiate_value_constructor_with_ctx(ctx, pattern_id, &resolved);
+        TypedRef { resolved, ty }
+    }
+
     fn convert_field_pattern_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
@@ -2556,23 +2770,34 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 rest,
             } => {
-                let (struct_id, type_args) = self.extract_struct_info(expected);
+                let field_tys = self.record_pattern_field_types(
+                    ctx,
+                    pattern.id,
+                    type_name.as_ref(),
+                    &fields,
+                    expected,
+                );
+                let type_name = type_name.map(|resolved| {
+                    let typed = self.record_pattern_type_name(ctx, pattern.id, resolved);
+                    let result = match typed.ty.kind(self.db()) {
+                        TypeKind::Func { result, .. } => *result,
+                        _ => typed.ty,
+                    };
+                    ctx.constrain_eq(result, expected);
+                    typed
+                });
 
                 let converted_fields = fields
                     .into_iter()
-                    .map(|f| {
-                        let field_expected = struct_id
-                            .and_then(|id| {
-                                self.lookup_field_type_from_struct(ctx, id, f.name, &type_args)
-                            })
-                            .unwrap_or_else(|| ctx.fresh_type_var());
-
+                    .zip(field_tys)
+                    .map(|(f, field_ty)| {
+                        let field_expected = field_ty.unwrap_or_else(|| ctx.fresh_type_var());
                         self.convert_field_pattern_with_expected_ctx(ctx, f, field_expected)
                     })
                     .collect();
 
                 PatternKind::Record {
-                    type_name: type_name.map(|t| self.convert_ref_with_ctx(ctx, None, t)),
+                    type_name,
                     fields: converted_fields,
                     rest,
                 }

@@ -313,6 +313,10 @@ pub struct PreludeExports<'db> {
     #[returns(ref)]
     pub enum_variants: Vec<(Symbol, Vec<Symbol>)>,
 
+    /// Field names of constructors whose fields are all named.
+    #[returns(ref)]
+    pub constructor_field_names: Vec<(CtorId<'db>, Vec<Symbol>)>,
+
     /// Method index for UFCS resolution: method_name → candidates.
     #[returns(ref)]
     pub method_index: Vec<(Symbol, Vec<MethodEntry<'db>>)>,

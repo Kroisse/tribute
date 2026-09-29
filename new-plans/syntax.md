@@ -1020,16 +1020,19 @@ AsPattern ::= Pattern 'as' Identifier        // 전체를 바인딩
 LiteralPattern ::= Number | StringLit | Rune | 'True' | 'False' | 'Nil'
 WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
-VariantPattern ::= TypePath ('(' PatternList ')' | '{' RecordPatternFields '}')?
-RecordPattern ::= TypePath '{' RecordPatternFields '}'
+VariantPattern ::= TypePath ('(' PatternList? ')' | '{' RecordPatternFields? '}')?
+RecordPattern ::= VariantPattern                // 중괄호 형식; 필드를 이름으로 매칭
 ListPattern ::= '[' PatternList? ']'
               | '[' PatternList ',' '..' Identifier? ']'    // [head, ..tail] or [head, ..]
 TuplePattern ::= '#(' PatternList? ')'
 
 PatternList ::= Pattern (',' Pattern)* ','?
-RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* ','? '..'?
+RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* (',' '..')? ','?
 RecordPatternField ::= Identifier (':' Pattern)?
 ```
+
+중괄호 필드의 이름 매칭, `..`, 필드 수 규칙은
+[types.md의 패턴 필드 검증](types.md#패턴-필드-검증)을 따른다.
 
 **Note:** Handler arm (`do`, `fn`, `op`)은 `handle`
 표현식 내에서만 사용된다. 일반 `case` 표현식에서는 사용할 수 없다.

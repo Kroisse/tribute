@@ -244,11 +244,40 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                     self.unanalyzable = true;
                     return Pat::Wild;
                 };
-                // Fields are positional, as in lowering: missing ones match
-                // anything and extra ones are dropped.
+                // Type checking rejects a wrong field count; pad or drop
+                // fields so that such a case is still analyzed.
                 let mut fields: Vec<Pat> = fields.iter().map(|field| self.lower(field)).collect();
                 fields.resize(arity, Pat::Wild);
                 Pat::Ctor(ctor, fields)
+            }
+            PatternKind::Record {
+                type_name: Some(type_name),
+                fields,
+                ..
+            } => {
+                let ResolvedRef::Constructor { id, variant } = type_name.resolved else {
+                    self.saw_error = true;
+                    return Pat::Wild;
+                };
+                let Some((ctor, arity)) = self.constructor(id, variant) else {
+                    self.unanalyzable = true;
+                    return Pat::Wild;
+                };
+                // Place each field at its declared position; omitted fields
+                // match anything. Type checking reports names that do not fit.
+                let mut positional = vec![Pat::Wild; arity];
+                let declared = self.checker.env.lookup_constructor_field_names(id);
+                for field in fields {
+                    let index = declared
+                        .and_then(|declared| declared.iter().position(|name| *name == field.name))
+                        .filter(|index| *index < arity);
+                    let (Some(index), Some(pattern)) = (index, &field.pattern) else {
+                        self.saw_error = true;
+                        return Pat::Wild;
+                    };
+                    positional[index] = self.lower(pattern);
+                }
+                Pat::Ctor(ctor, positional)
             }
             PatternKind::Record {
                 type_name: None,
@@ -265,8 +294,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
             {
                 Pat::Wild
             }
-            // Record fields are matched by name, which the matrix cannot
-            // model, and a named record may be one variant of an enum.
+            // A record without a constructor name has no known shape.
             PatternKind::Record { .. } => {
                 self.unanalyzable = true;
                 Pat::Wild
