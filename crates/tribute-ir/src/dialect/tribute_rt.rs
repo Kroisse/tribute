@@ -251,7 +251,7 @@ mod tests {
     fn test_box_bool_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "bool").build());
+        let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
         let ptr_ty = make_ptr_type(&mut ctx);
 
         let c = trunk_ir::dialect::arith::Const::operands()

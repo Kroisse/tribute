@@ -1417,14 +1417,14 @@ mod tests {
                 r#"core.module @test {{
   !_closure = adt.struct(core.i32, tribute_rt.anyref) {{name = @_closure}}
   !expected = closure.closure(func.func_sig<({evidence}, core.i32, core.i32) -> core.never>) {{tribute.calling_convention = 2}}
-  !actual = closure.closure(func.func_sig<({evidence}, core.i32, core.bool) -> core.never>) {{tribute.calling_convention = 2}}
+  !actual = closure.closure(func.func_sig<({evidence}, core.i32, core.i1) -> core.never>) {{tribute.calling_convention = 2}}
   !outer = closure.closure(func.func_sig<({evidence}, core.i32, !expected) -> core.never>) {{tribute.calling_convention = 2}}
 
-  func.func @actual_fn(%evidence: {evidence}, %done: core.i32, %value: core.bool) -> core.never attributes {{tribute.calling_convention = 2}} {{
+  func.func @actual_fn(%evidence: {evidence}, %done: core.i32, %value: core.i1) -> core.never attributes {{tribute.calling_convention = 2}} {{
     func.unreachable
   }}
   func.func @run(%callee: !outer, %evidence: {evidence}, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
-    %function = func.constant {{func_ref = @actual_fn}} : func.func_sig<({evidence}, core.i32, core.bool) -> core.never>
+    %function = func.constant {{func_ref = @actual_fn}} : func.func_sig<({evidence}, core.i32, core.i1) -> core.never>
     %environment = adt.ref_null {{type = tribute_rt.anyref}} : tribute_rt.anyref
     %pack = adt.struct_new %function, %environment {{type = !_closure}} : !_closure
     %argument = core.unrealized_conversion_cast %pack : !actual

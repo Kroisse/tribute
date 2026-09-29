@@ -2443,7 +2443,7 @@ mod tests {
             (
                 r#"core.module @test {
   func.func @callee(%value: core.i32) -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
-  func.func @run(%value: core.bool) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @run(%value: core.i1) -> core.never attributes {tribute.calling_convention = 2} {
     func.tail_call %value {callee = @callee, tribute.calling_convention = 2}
   }
 }"#,
@@ -2719,7 +2719,7 @@ mod tests {
             r#"core.module @test {
   func.func @external(%value: core.i32) -> core.never attributes {tribute.calling_convention = 2}
   func.func @holder() -> core.i32 {
-    %function = func.constant {func_ref = @external} : func.func_sig<(core.bool) -> core.never>
+    %function = func.constant {func_ref = @external} : func.func_sig<(core.i1) -> core.never>
     func.unreachable
   }
 }"#,

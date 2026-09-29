@@ -2462,7 +2462,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure(func.func_sig<(core.i32) -> core.i32>), %value: core.bool) -> core.never {
+  func.func @main(%k: closure.closure(func.func_sig<(core.i32) -> core.i32>), %value: core.i1) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#;
@@ -2472,7 +2472,7 @@ mod tests {
         let text = result.to_string();
         assert!(text.contains("caller/callee result lists differ"), "{text}");
         assert!(
-            text.contains("operands `args`: expected S::Inputs = (core.i32), found (core.bool)"),
+            text.contains("operands `args`: expected S::Inputs = (core.i32), found (core.i1)"),
             "{text}"
         );
     }
