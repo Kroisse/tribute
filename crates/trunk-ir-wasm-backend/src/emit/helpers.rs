@@ -34,18 +34,6 @@ pub(crate) fn is_type(
     data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
 }
 
-/// Intern an `adt.struct` type with the given name attribute.
-pub(crate) fn intern_named_adt_struct(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-    let mut attrs = AttributeMap::new();
-    attrs.insert(Symbol::new("name"), Attribute::Symbol(Symbol::new(name)));
-    ctx.intern_type(trunk_ir::types::TypeData {
-        dialect: Symbol::new("adt"),
-        name: Symbol::new("struct"),
-        params: Default::default(),
-        attrs,
-    })
-}
-
 // ============================================================================
 // Value type helpers
 // ============================================================================
@@ -70,6 +58,15 @@ pub(crate) fn has_layout(ctx: &IrContext, ty: TypeRef, layout: &'static str) -> 
         .attrs
         .get_symbol(trunk_ir::types::LAYOUT_ATTR)
         == Some(Symbol::new(layout))
+}
+
+/// The builtin GC type index a type's runtime layout identifier selects.
+pub(crate) fn builtin_layout_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
+    let layout = ctx
+        .get_type(ty)
+        .attrs
+        .get_symbol(trunk_ir::types::LAYOUT_ATTR)?;
+    crate::gc_types::builtin_layout_idx(layout)
 }
 
 /// Check if a type is the builtin closure struct, identified by its runtime
@@ -249,6 +246,11 @@ pub(crate) fn type_to_valtype(
         }))
     } else if is_type(ctx, ty, "core", "ptr") {
         Ok(ValType::I32)
+    } else if let Some(type_idx) = builtin_layout_type_idx(ctx, ty) {
+        Ok(ValType::Ref(RefType {
+            nullable: true,
+            heap_type: HeapType::Concrete(type_idx),
+        }))
     } else if let Some(&type_idx) = type_idx_by_type.get(&ty) {
         Ok(ValType::Ref(RefType {
             nullable: true,

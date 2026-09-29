@@ -107,13 +107,13 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(data)
 }
 
-/// Get the canonical Evidence ADT type for WASM representation (arena version).
+/// Get the Evidence type of the WASM representation.
 ///
-/// At the WASM level, evidence is represented as `wasm.arrayref`.
-/// This is distinct from `ability::evidence_adt_type_ref()` which returns
-/// `core.array(Marker)` for high-level IR representation.
+/// Evidence keeps its runtime layout identifier through Wasm lowering: it is
+/// the canonical `core.array(Marker)` evidence layout, which emission maps to
+/// the builtin evidence array, and never an erased `wasm.arrayref`.
 pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
-    intern_type(ctx, Symbol::new("wasm"), Symbol::new("arrayref"))
+    tribute_ir::dialect::ability::evidence_adt_type_ref(ctx)
 }
 
 // =============================================================================
@@ -585,6 +585,16 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
                 Symbol::new("tribute_rt"),
                 Symbol::new("anyref"),
             );
+        if from_is_any && is_evidence_type_ref(ctx, to_ty) {
+            let cast_op = wasm_gc_dialect::RefCast::operands(value)
+                .target_type(to_ty)
+                .results(to_ty)
+                .build(ctx, location);
+            return Some(MaterializeResult {
+                value: cast_op.result(ctx),
+                ops: vec![cast_op.op_ref()],
+            });
+        }
         if from_is_any && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("arrayref")) {
             let cast_op = wasm_dialect::RefCast::operands(value)
                 .target_type(arrayref_ty)
@@ -609,10 +619,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn closure_layout_identifier_matches_the_wasm_builtin_closure() {
+    fn runtime_layout_identifiers_match_the_wasm_builtin_layouts() {
         assert_eq!(
             tribute_core::runtime_layout::CLOSURE,
             trunk_ir_wasm_backend::gc_types::CLOSURE_LAYOUT
+        );
+        assert_eq!(
+            tribute_core::runtime_layout::EVIDENCE_MARKER,
+            trunk_ir_wasm_backend::gc_types::MARKER_LAYOUT
+        );
+        assert_eq!(
+            tribute_core::runtime_layout::EVIDENCE,
+            trunk_ir_wasm_backend::gc_types::EVIDENCE_LAYOUT
         );
         let mut ctx = IrContext::new();
         let closure = closure_adt_type(&mut ctx);

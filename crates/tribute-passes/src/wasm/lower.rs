@@ -530,7 +530,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+  !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
   !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]], layout = @closure}
   !Frame = adt.struct() {name = @Frame, fields = []}
   !Env = adt.struct() {name = @Env, fields = [[@closure, !Closure], [@evidence, !Evidence], [@frame, !Frame]]}
@@ -561,10 +561,11 @@ mod tests {
             .iter()
             .find_map(|&op| wasm_gc::StructGet::from_op(&ctx, op).ok())
             .expect("environment read should lower to wasm_gc.struct_get");
-        let arrayref = intern_type(&mut ctx, "wasm", "arrayref");
+        // Evidence keeps its layout identifier instead of erasing to arrayref.
+        let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
 
-        assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[1]), arrayref);
-        assert_eq!(struct_get.result_ty(&ctx), arrayref);
+        assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[1]), evidence);
+        assert_eq!(struct_get.result_ty(&ctx), evidence);
         assert_eq!(
             ctx.get_type(struct_get.r#type(&ctx))
                 .attrs
@@ -1040,7 +1041,7 @@ mod tests {
     fn lower_to_wasm_binds_evidence_runtime_declarations() {
         let output = lower_text(
             r#"core.module @test {
-  !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+  !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @prompt(%ev: !Evidence) -> core.i32 {
     %id = arith.const {value = 7} : core.i32

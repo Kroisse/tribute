@@ -10,6 +10,7 @@ description = "Tribute language-specific IR dialects"
 inventory.workspace = true
 itertools.workspace = true
 rustc-hash.workspace = true
+tribute-core.workspace = true
 tribute-rc.workspace = true
 trunk-ir.workspace = true
 winnow.workspace = true

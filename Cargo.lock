@@ -1584,6 +1584,7 @@ dependencies = [
  "inventory",
  "itertools",
  "rustc-hash",
+ "tribute-core",
  "tribute-rc",
  "trunk-ir",
  "winnow",

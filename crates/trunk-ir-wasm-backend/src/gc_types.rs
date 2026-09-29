@@ -48,6 +48,25 @@ pub const EVIDENCE_IDX: u32 = 5;
 /// closure struct at [`CLOSURE_STRUCT_IDX`].
 pub const CLOSURE_LAYOUT: &str = "closure";
 
+/// Runtime layout identifier of the builtin evidence marker at [`MARKER_IDX`].
+pub const MARKER_LAYOUT: &str = "evidence_marker";
+
+/// Runtime layout identifier of the builtin evidence array at [`EVIDENCE_IDX`].
+pub const EVIDENCE_LAYOUT: &str = "evidence";
+
+/// The builtin GC type index of a type carrying a runtime layout identifier.
+pub fn builtin_layout_idx(layout: trunk_ir::Symbol) -> Option<u32> {
+    if layout == CLOSURE_LAYOUT {
+        Some(CLOSURE_STRUCT_IDX)
+    } else if layout == MARKER_LAYOUT {
+        Some(MARKER_IDX)
+    } else if layout == EVIDENCE_LAYOUT {
+        Some(EVIDENCE_IDX)
+    } else {
+        None
+    }
+}
+
 /// First type index available for user-defined types.
 pub const FIRST_USER_TYPE_IDX: u32 = 6;
 

@@ -169,7 +169,9 @@ fn result_list_matches(ctx: &IrContext, produced: &[TypeRef], received: &[TypeRe
 
 /// `core.array` is emitted as the same abstract array reference as
 /// `wasm.arrayref`; accepting that physical equivalence here does not permit
-/// a reference downcast such as `wasm.anyref -> wasm.structref`.
+/// a reference downcast such as `wasm.anyref -> wasm.structref`. An array with
+/// a runtime layout identifier is a concrete builtin reference, so an erased
+/// `arrayref` does not satisfy it.
 fn is_wasm_physical_result_assignable(
     ctx: &IrContext,
     produced: TypeRef,
@@ -180,7 +182,8 @@ fn is_wasm_physical_result_assignable(
     (produced_data.dialect == Symbol::new("wasm")
         && produced_data.name == Symbol::new("arrayref")
         && received_data.dialect == Symbol::new("core")
-        && received_data.name == Symbol::new("array"))
+        && received_data.name == Symbol::new("array")
+        && crate::emit::helpers::builtin_layout_type_idx(ctx, received).is_none())
         || (produced_data.dialect == Symbol::new("core")
             && produced_data.name == Symbol::new("i32")
             && received_data.dialect == Symbol::new("core")
@@ -541,6 +544,32 @@ mod tests {
     }
 
     #[test]
+    fn erased_arrayref_result_satisfies_plain_but_not_layout_arrays() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Marker = adt.struct() {fields = [], layout = @evidence_marker, name = @_Marker}
+  !Evidence = core.array(!Marker) {layout = @evidence}
+  !Plain = core.array(!Marker)
+}"#,
+        );
+        let alias = |ctx: &IrContext, name: &str| {
+            ctx.type_alias_by_name(trunk_ir::Symbol::from_dynamic(name))
+                .unwrap()
+        };
+        let evidence = alias(&ctx, "Evidence");
+        let plain = alias(&ctx, "Plain");
+        let arrayref =
+            ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("wasm", "arrayref").build());
+
+        assert!(is_wasm_physical_result_assignable(&ctx, arrayref, plain));
+        assert!(!is_wasm_physical_result_assignable(
+            &ctx, arrayref, evidence
+        ));
+    }
+
+    #[test]
     fn accepts_registered_concrete_gc_references_in_abstract_argument_slots() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -549,8 +578,8 @@ mod tests {
   !String = adt.enum() {name = @String}
   !Leaf = adt.enum() {base_enum = !String, is_variant = true, variant_tag = @Leaf}
   !Closure = adt.struct() {fields = [], layout = @closure, name = @_closure}
-  !Marker = adt.struct() {fields = [], name = @_Marker}
-  !Evidence = core.array(!Marker)
+  !Marker = adt.struct() {fields = [], layout = @evidence_marker, name = @_Marker}
+  !Evidence = core.array(!Marker) {layout = @evidence}
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
   wasm.func @caller(%leaf: !Leaf, %bytes: core.bytes, %typeref: adt.typeref, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
@@ -575,8 +604,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = adt.struct() {fields = [], name = @_Marker}
-  !Evidence = core.array(!Marker)
+  !Marker = adt.struct() {fields = [], layout = @evidence_marker, name = @_Marker}
+  !Evidence = core.array(!Marker) {layout = @evidence}
   !Array = core.array(core.i32)
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
   wasm.func @caller(%bytes: core.bytes, %evidence: !Evidence, %array: !Array, %erased: adt.struct) -> core.nil {
