@@ -295,11 +295,39 @@ impl<'a> Verifier<'a> {
     }
 
     fn check_attribute(&mut self, attribute: &Attribute, op: Option<OpRef>, context: &str) {
+        let mut found = Vec::new();
+        self.attribute_violations(attribute, "", &mut found);
+        for (kind, location) in found {
+            self.report(kind, op, format!("{context}{location}"));
+        }
+    }
+
+    /// Violations inside an attribute value: attribute names nested in
+    /// dictionaries and every nested type, with locations relative to `location`.
+    fn attribute_violations(
+        &mut self,
+        attribute: &Attribute,
+        location: &str,
+        found: &mut Vec<TypeViolation>,
+    ) {
         match attribute {
-            Attribute::Type(ty) => self.check_type(*ty, op, context),
+            Attribute::Type(ty) => {
+                for (kind, inner) in self.type_violations(*ty).iter() {
+                    found.push((kind.clone(), format!("{location}{inner}")));
+                }
+            }
             Attribute::List(values) => {
                 for value in values {
-                    self.check_attribute(value, op, context);
+                    self.attribute_violations(value, location, found);
+                }
+            }
+            Attribute::Dict(entries) => {
+                for (name, value) in entries.iter() {
+                    let location = format!("{location} key {name}");
+                    if let Some(kind) = classify_attribute_name(*name) {
+                        found.push((kind, location.clone()));
+                    }
+                    self.attribute_violations(value, &location, found);
                 }
             }
             _ => {}
@@ -346,11 +374,7 @@ impl<'a> Verifier<'a> {
             if let Some(kind) = classify_attribute_name(*name) {
                 found.push((kind, location.clone()));
             }
-            for nested in attribute_types(value) {
-                for (kind, inner) in self.type_violations(nested).iter() {
-                    found.push((kind.clone(), format!("{location}{inner}")));
-                }
-            }
+            self.attribute_violations(value, &location, &mut found);
         }
         for &parameter in data.params.iter() {
             found.extend(self.type_violations(parameter).iter().cloned());
@@ -373,15 +397,6 @@ fn classify_attribute_name(name: Symbol) -> Option<ViolationKind> {
         Some(ViolationKind::UnclassifiedAttribute(name))
     } else {
         None
-    }
-}
-
-/// Types directly contained in an attribute value, including nested lists.
-fn attribute_types(attribute: &Attribute) -> Vec<TypeRef> {
-    match attribute {
-        Attribute::Type(ty) => vec![*ty],
-        Attribute::List(values) => values.iter().flat_map(attribute_types).collect(),
-        _ => Vec::new(),
     }
 }
 
@@ -476,6 +491,35 @@ mod tests {
             kinds(
                 r#"core.module @test {
   func.func @run() attributes {evidence = [func.func_sig<(adt.typeref() {name = @Frame, tribute.closure_environment_index = 0}) -> ()>]} {
+    func.return
+  }
+}"#
+            ),
+            [attribute("tribute.closure_environment_index")]
+        );
+        // Dictionary keys and types nested in dictionary values.
+        assert_eq!(
+            kinds(
+                r#"core.module @test {
+  func.func @run() attributes {meta = [{tribute.calling_convention = 2}]} {
+    func.return
+  }
+}"#
+            ),
+            [attribute("tribute.calling_convention")]
+        );
+        assert_eq!(
+            kinds(
+                r#"core.module @test {
+  !frame = adt.typeref() {meta = {entry = {tribute.root_source_result = core.nil}}, name = @Frame}
+}"#
+            ),
+            [attribute("tribute.root_source_result")]
+        );
+        assert_eq!(
+            kinds(
+                r#"core.module @test {
+  func.func @run() attributes {meta = {ty = adt.typeref() {name = @Frame, tribute.closure_environment_index = 0}}} {
     func.return
   }
 }"#

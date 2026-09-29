@@ -327,6 +327,19 @@ impl<'a> ArenaIrBuilder<'a> {
                     .collect::<Result<_, _>>()?;
                 Attribute::List(list)
             }
+            RawAttribute::Dict(entries) => {
+                let mut dict = crate::types::AttributeMap::new();
+                for (key, value) in entries {
+                    let value = self.build_attribute(value)?;
+                    if dict.insert(Symbol::from_dynamic(key), value).is_some() {
+                        return Err(ParseError {
+                            message: format!("duplicate dictionary attribute key '{key}'"),
+                            offset: 0,
+                        });
+                    }
+                }
+                Attribute::Dict(dict)
+            }
             RawAttribute::Unit => Attribute::Unit,
             RawAttribute::Location(path, start, end) => {
                 let path_ref = self.ctx.intern_path(path.clone());
@@ -910,6 +923,42 @@ core.module @test {
         let printed = print_module(&ctx, root);
         assert!(printed.contains("test.marker = 2"));
         assert_roundtrip(&ctx, root);
+    }
+
+    #[test]
+    fn test_roundtrip_dict_attributes() {
+        let input = r#"
+core.module @test {
+  %0 = test.make {meta = {b = [{}, {k = @v}], a = core.i32}, nested = test.value() {b = {}}} : test.value() {param = {x = 1}}
+}
+"#;
+        let mut ctx = IrContext::new();
+        let root = parse_module(&mut ctx, input).expect("dictionary attributes should parse");
+        let printed = print_module(&ctx, root);
+        assert!(
+            printed.contains(
+                "{meta = {a = core.i32, b = [{}, {k = @v}]}, nested = test.value() {b = {}}}"
+            ),
+            "dictionary keys print in sorted order:\n{printed}"
+        );
+        assert!(
+            printed.contains("test.value() {param = {x = 1}}"),
+            "{printed}"
+        );
+        assert_roundtrip(&ctx, root);
+    }
+
+    #[test]
+    fn test_dict_attribute_rejects_duplicate_keys() {
+        let input = "core.module @test { %0 = test.make {meta = {a = 1, a = 2}} : core.i32 }";
+        let mut ctx = IrContext::new();
+        let error = parse_module(&mut ctx, input).expect_err("duplicate key must be rejected");
+        assert!(
+            error
+                .message
+                .contains("duplicate dictionary attribute key 'a'"),
+            "{error}"
+        );
     }
 
     #[test]

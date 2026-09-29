@@ -93,6 +93,7 @@ pub enum RawAttribute<'a> {
     Symbol(String),
     Type(RawType<'a>),
     List(Vec<RawAttribute<'a>>),
+    Dict(Vec<(&'a str, RawAttribute<'a>)>),
     Unit,
     Location(String, usize, usize),
     Bytes(Vec<u8>),
@@ -365,13 +366,17 @@ pub fn raw_attr_value<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> 
         string_lit.map(RawAttribute::String),
         // Symbol reference
         symbol_ref.map(RawAttribute::Symbol),
-        // List
-        delimited(
-            ('[', ws),
-            separated(0.., (ws, raw_attr_value, ws).map(|(_, a, _)| a), ','),
-            (ws, ']'),
-        )
-        .map(RawAttribute::List),
+        alt((
+            // List
+            delimited(
+                ('[', ws),
+                separated(0.., (ws, raw_attr_value, ws).map(|(_, a, _)| a), ','),
+                (ws, ']'),
+            )
+            .map(RawAttribute::List),
+            // Dictionary; in value position `{` cannot begin a region body
+            raw_attr_dict.map(RawAttribute::Dict),
+        )),
         alt((
             // Float (requires dot: 3.14, -1.0)
             float_with_dot.map(RawAttribute::Float),

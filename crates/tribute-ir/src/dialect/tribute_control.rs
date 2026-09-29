@@ -1867,13 +1867,11 @@ fn attribute_contains_adt_typeref(
     attribute: &Attribute,
     visiting: &mut HashSet<TypeRef>,
 ) -> bool {
-    match attribute {
-        Attribute::Type(ty) => contains_adt_typeref(ctx, *ty, visiting),
-        Attribute::List(values) => values
-            .iter()
-            .any(|value| attribute_contains_adt_typeref(ctx, value, visiting)),
-        _ => false,
-    }
+    let mut contains = false;
+    attribute.visit_types(&mut |ty| {
+        contains = contains || contains_adt_typeref(ctx, ty, visiting);
+    });
+    contains
 }
 
 fn nominal_identity(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
@@ -1959,15 +1957,7 @@ fn is_core_ptr(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 fn collect_attribute_types(ctx: &IrContext, attribute: &Attribute, types: &mut HashSet<TypeRef>) {
-    match attribute {
-        Attribute::Type(ty) => collect_reachable_type(ctx, *ty, types),
-        Attribute::List(values) => {
-            for value in values {
-                collect_attribute_types(ctx, value, types);
-            }
-        }
-        _ => {}
-    }
+    attribute.visit_types(&mut |ty| collect_reachable_type(ctx, ty, types));
 }
 
 fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<TypeRef>) {

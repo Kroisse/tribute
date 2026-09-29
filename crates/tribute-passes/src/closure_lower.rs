@@ -749,16 +749,7 @@ impl<'a> ClosureTypePhysicalizer<'a> {
     }
 
     fn convert_attribute(&mut self, attribute: Attribute) -> Attribute {
-        match attribute {
-            Attribute::Type(ty) => Attribute::Type(self.convert_type(ty)),
-            Attribute::List(values) => Attribute::List(
-                values
-                    .into_iter()
-                    .map(|value| self.convert_attribute(value))
-                    .collect(),
-            ),
-            value => value,
-        }
+        attribute.map_types(|ty| self.convert_type(ty))
     }
 }
 

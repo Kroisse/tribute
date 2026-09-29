@@ -69,16 +69,7 @@ fn convert_attribute_types(
     converter: &TypeConverter,
     attribute: &Attribute,
 ) -> Attribute {
-    match attribute {
-        Attribute::Type(ty) => Attribute::Type(converter.convert_type_or_identity(ctx, *ty)),
-        Attribute::List(values) => Attribute::List(
-            values
-                .iter()
-                .map(|value| convert_attribute_types(ctx, converter, value))
-                .collect(),
-        ),
-        other => other.clone(),
-    }
+    attribute.map_types(|ty| converter.convert_type_or_identity(ctx, ty))
 }
 
 /// Convert the parameter and result types of a `func.func_sig` type.
@@ -585,6 +576,17 @@ mod result_list_tests {
                     Symbol::new("nested"),
                     Attribute::List(vec![Attribute::List(vec![Attribute::Type(nil)])]),
                 );
+                attrs.insert(
+                    Symbol::new("dict"),
+                    Attribute::Dict(
+                        [(
+                            Symbol::new("ty"),
+                            Attribute::List(vec![Attribute::Type(nil)]),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ),
+                );
                 attrs.insert(Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep")));
                 let signature = func::func_sig_with_attrs(
                     &mut ctx,
@@ -604,6 +606,17 @@ mod result_list_tests {
                     Some(&Attribute::List(vec![Attribute::List(vec![
                         Attribute::Type(ptr)
                     ])]))
+                );
+                assert_eq!(
+                    ctx.get_type(converted).attrs.get("dict"),
+                    Some(&Attribute::Dict(
+                        [(
+                            Symbol::new("ty"),
+                            Attribute::List(vec![Attribute::Type(ptr)])
+                        )]
+                        .into_iter()
+                        .collect()
+                    ))
                 );
                 assert_eq!(
                     ctx.get_type(converted).attrs.get_symbol("tag"),

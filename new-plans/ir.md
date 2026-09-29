@@ -1165,7 +1165,8 @@ arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의�
 물리 속성으로 복제하는 것도 허용하지 않는다.
 
 출구 검증기는 operation, callable type, alias, 중첩 type 속성, block 인자와 그
-속성을 재귀적으로 검사한다. 금지 목록뿐 아니라 보존 목록에도 없는 언어 전용
+속성을 재귀적으로 검사한다. 속성 값 안의 dictionary key도 깊이와 관계없이 같은
+규칙으로 분류한다. 금지 목록뿐 아니라 보존 목록에도 없는 언어 전용
 `tribute.*` 속성은 분류되지 않은 metadata로 보고한다. 새 언어 전용 속성은 금지 또는
 보존 중 하나로 분류된 뒤에만 출구를 넘을 수 있다. 입력과 결과 타입이 같은
 unrealized cast, 대상 함수의 signature와 다른 타입의 `func.constant`도 위반으로
@@ -1194,6 +1195,22 @@ and `Text` lower through ADT and runtime/library conventions. `List` is an
 opaque nominal builtin whose shared construction and sequence-view observations
 use `list.*`; target-specific passes choose and eliminate its private
 representation.
+
+### Attribute 값
+
+Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
+정수, 부동소수점, 문자열, bytes, symbol, type, location, list, dictionary.
+
+Dictionary(`Attribute::Dict`)는 symbol key에서 속성 값으로의 map이다. Key는 정렬된
+순서로 보관·출력되며, identity와 hash는 삽입 순서가 아니라 key-value 내용으로
+정해진다. Textual form은 값 위치의 `{key = value, ...}`이고, 빈 dictionary는 `{}`다.
+값 위치에서는 `{`가 region body를 시작하지 않으므로 type 속성 dictionary나 operation
+body와 모호하지 않다. Reader는 한 dictionary 안의 중복 key를 거부한다.
+
+List와 dictionary는 임의로 중첩된다. 속성 값 안의 type은 type walk의 일부다. 속성에
+담긴 type을 변환하거나 검사하는 pass는 list와 dictionary 안까지 모든 type에 도달해야
+하며, 일부 variant만 따라가고 나머지를 그대로 통과시키지 않는다. 공용 순회는
+`Attribute::visit_types`, `Attribute::map_types`, `Attribute::try_map_types`가 소유한다.
 
 ### `func.func_sig` function type
 
