@@ -763,7 +763,7 @@ mod tests {
     }
 
     #[test]
-    fn module_lowerer_recognizes_existing_exports_memory_and_main_signature() {
+    fn module_lowerer_recognizes_existing_memory_and_main_signature() {
         let mut ctx = IrContext::new();
         let module = empty_module_with_block(&mut ctx);
         let location = Location::new(PathRef::from_u32(0), Span::default());
