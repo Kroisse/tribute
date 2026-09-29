@@ -469,11 +469,14 @@ impl RewritePattern for ArithConversionPattern {
         };
         let loc = ctx.op(op).location;
         // Cranelift holds `core.i1` as an `i8` 0 or 1, so only zero extension
-        // of a boolean is a plain instruction. Other boolean conversions stay
-        // unconverted and fail the conversion boundary.
-        let is_bool = |ctx: &IrContext, ty| IntegerLike::width(ctx, ty) == Some(1);
-        if (is_bool(ctx, ctx.value_ty(operand)) && !arith::Extui::matches(ctx, op))
-            || is_bool(ctx, result_ty)
+        // of a boolean past 8 bits is a plain instruction. Other boolean
+        // conversions stay unconverted and fail the conversion boundary.
+        let width = |ctx: &IrContext, ty| IntegerLike::width(ctx, ty);
+        let bool_source = width(ctx, ctx.value_ty(operand)) == Some(1);
+        if (bool_source
+            && !(arith::Extui::matches(ctx, op)
+                && width(ctx, result_ty).is_some_and(|width| width > 8)))
+            || width(ctx, result_ty) == Some(1)
         {
             return false;
         }
@@ -583,6 +586,7 @@ mod tests {
             "%s = arith.extsi %b : core.i32",
             "%t = arith.trunci %n : core.i1",
             "%f = arith.uitofp %b : core.f64",
+            "%u = arith.extui %b : core.i8",
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
