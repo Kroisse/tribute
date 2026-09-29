@@ -241,6 +241,25 @@ impl FuncSig {
         &ctx.get_type(self.0).params[inputs..]
     }
 
+    /// Each input paired with its own attributes.
+    pub fn inputs_with_attrs(self, ctx: &IrContext) -> Vec<(TypeRef, AttributeMap)> {
+        let data = ctx.get_type(self.0);
+        self.inputs(ctx)
+            .iter()
+            .enumerate()
+            .map(|(index, &ty)| (ty, data.param_attrs(index).clone()))
+            .collect()
+    }
+
+    /// The result paired with its own attributes.
+    pub fn result_with_attrs(self, ctx: &IrContext) -> (TypeRef, AttributeMap) {
+        let index = self.inputs(ctx).len();
+        (
+            self.result(ctx),
+            ctx.get_type(self.0).param_attrs(index).clone(),
+        )
+    }
+
     pub fn convention(self, ctx: &IrContext) -> CallingConvention {
         CallingConvention::try_from(
             ctx.get_type(self.0)

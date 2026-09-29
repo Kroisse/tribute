@@ -243,6 +243,26 @@ impl FuncSig {
         (num_inputs..num_inputs + num_results).map(move |index| data.param_attrs(index))
     }
 
+    /// Each input paired with its own attributes, for rebuilding a signature
+    /// with [`func_sig_with_param_attrs`].
+    pub fn inputs_with_attrs(&self, ctx: &IrContext) -> Vec<(TypeRef, AttributeMap)> {
+        self.inputs(ctx)
+            .iter()
+            .copied()
+            .zip(self.input_attrs(ctx).cloned())
+            .collect()
+    }
+
+    /// Each result paired with its own attributes, for rebuilding a signature
+    /// with [`func_sig_with_param_attrs`].
+    pub fn results_with_attrs(&self, ctx: &IrContext) -> Vec<(TypeRef, AttributeMap)> {
+        self.results(ctx)
+            .iter()
+            .copied()
+            .zip(self.result_attrs(ctx).cloned())
+            .collect()
+    }
+
     pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
         self.results(ctx).first().copied()
     }
@@ -326,6 +346,10 @@ pub fn func_sig(
 
 /// Construct a canonical `func.func_sig` whose inputs and results carry their
 /// own attributes, stored as the type's per-parameter attributes.
+///
+/// A per-parameter attribute value already in `attrs` is replaced, so a caller
+/// that adds, removes, or replaces parameters may pass the source signature's
+/// remaining attributes unchanged.
 pub fn func_sig_with_param_attrs(
     ctx: &mut IrContext,
     inputs: impl IntoIterator<Item = (TypeRef, AttributeMap)>,
@@ -881,6 +905,39 @@ mod tests {
                 .any(|(key, _)| *key == Symbol::new("note"))
         );
         assert_eq!(tail.with_call_conv(&mut ctx, CallConv::Platform), platform);
+    }
+
+    #[test]
+    fn inserting_a_parameter_moves_parameter_attributes_with_their_parameters() {
+        let mut ctx = crate::IrContext::new();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+            .into_iter()
+            .collect();
+        let source = func_sig_with_param_attrs(
+            &mut ctx,
+            [(i32_ty, marked.clone())],
+            [(i32_ty, AttributeMap::new())],
+            AttributeMap::new(),
+        );
+
+        let mut inputs = source.inputs_with_attrs(&ctx);
+        inputs.insert(0, (ptr_ty, AttributeMap::new()));
+        let mut attrs = ctx.get_type(source.as_type_ref()).attrs.clone();
+        FuncSig::remove_reserved_attrs(&mut attrs);
+        let results = source.results_with_attrs(&ctx);
+        let rebuilt = func_sig_with_param_attrs(&mut ctx, inputs, results, attrs);
+
+        assert_eq!(rebuilt.inputs(&ctx), [ptr_ty, i32_ty]);
+        assert_eq!(
+            rebuilt.inputs_with_attrs(&ctx),
+            [(ptr_ty, AttributeMap::new()), (i32_ty, marked)]
+        );
+        assert_eq!(
+            rebuilt.results_with_attrs(&ctx),
+            [(i32_ty, AttributeMap::new())]
+        );
     }
 
     #[test]

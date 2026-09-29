@@ -40,7 +40,7 @@ use trunk_ir::rewrite::{
     ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
@@ -378,15 +378,15 @@ fn exact_physical_call_contract(
     if environment_index > args.len() {
         return None;
     }
-    let mut params = callable.inputs(ctx).to_vec();
-    params.insert(environment_index, environment);
+    let mut params = callable.inputs_with_attrs(ctx);
+    params.insert(environment_index, (environment, AttributeMap::new()));
+    let results = callable.results_with_attrs(ctx);
     let mut type_attrs = ctx.get_type(function).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);
     Some(PhysicalCallContract {
         environment_index,
-        signature: func::func_sig_with_attrs(ctx, params, results.iter().copied(), type_attrs)
-            .as_type_ref(),
+        signature: func::func_sig_with_param_attrs(ctx, params, results, type_attrs).as_type_ref(),
         argument_casts: casts,
     })
 }

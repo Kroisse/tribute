@@ -1029,14 +1029,14 @@ fn dispatch_entry_function_type(
     let callable = func::FuncSig::from_type_ref(ctx, callable_ty).ok_or_else(|| {
         TargetAbiError::new("target root bridge: frame Dispatch callable is not func.func_sig")
     })?;
-    let mut params = callable.inputs(ctx).to_vec();
-    params.insert(1, anyref);
-    let results = callable.results(ctx).to_vec();
+    let mut params = callable.inputs_with_attrs(ctx);
+    params.insert(1, (anyref, AttributeMap::new()));
+    let results = callable.results_with_attrs(ctx);
     let type_attrs = callable
         .non_reserved_attrs(ctx)
         .map(|(key, value)| (*key, value.clone()))
         .collect();
-    Ok(func::func_sig_with_attrs(ctx, params, results, type_attrs).as_type_ref())
+    Ok(func::func_sig_with_param_attrs(ctx, params, results, type_attrs).as_type_ref())
 }
 
 fn is_parameterless_dialect_type(
@@ -1378,7 +1378,7 @@ fn validate_constant(
             "target ABI: Cps function reference must have logical core.never result",
         ));
     }
-    let mut params = target.inputs(ctx).to_vec();
+    let mut params = target.inputs_with_attrs(ctx);
     if let Some(index) = identity.environment_index {
         if index >= params.len() {
             return Err(TargetAbiError::new(
@@ -1387,12 +1387,12 @@ fn validate_constant(
         }
         params.remove(index);
     }
-    let results = target.results(ctx).to_vec();
+    let results = target.results_with_attrs(ctx);
     let type_attrs = target
         .non_reserved_attrs(ctx)
         .map(|(key, value)| (*key, value.clone()))
         .collect();
-    let expected = func::func_sig_with_attrs(ctx, params, results, type_attrs).as_type_ref();
+    let expected = func::func_sig_with_param_attrs(ctx, params, results, type_attrs).as_type_ref();
     if ctx.op_result_types(constant.op_ref()) != [expected] {
         return Err(TargetAbiError::new(
             "target ABI: function reference differs from target signature",
@@ -1527,20 +1527,13 @@ impl<'a> PhysicalTypeConverter<'a> {
                 "target ABI: Cps callable must have logical core.never result",
             ));
         }
-        let source_inputs = callable.inputs(self.ctx).to_vec();
-        let inputs = source_inputs
-            .into_iter()
-            .map(|input| self.convert_embedded(input))
-            .collect::<Result<Vec<_>, _>>()?;
+        let inputs = self.convert_params(callable.inputs_with_attrs(self.ctx))?;
+        // A physical Cps callable has no result, so the logical result's
+        // parameter attributes are dropped with it.
         let results = if convention == CallingConvention::Cps {
             vec![]
         } else {
-            callable
-                .results(self.ctx)
-                .to_vec()
-                .into_iter()
-                .map(|result| self.convert_embedded(result))
-                .collect::<Result<Vec<_>, _>>()?
+            self.convert_params(callable.results_with_attrs(self.ctx))?
         };
         let mut attrs = self.convert_func_attributes(callable)?;
         if attrs.contains_key(func::CALL_CONV_ATTR) {
@@ -1551,7 +1544,8 @@ impl<'a> PhysicalTypeConverter<'a> {
         if convention == CallingConvention::Cps {
             func::CallConv::Tail.set_in(&mut attrs);
         }
-        let converted = func::func_sig_with_attrs(self.ctx, inputs, results, attrs).as_type_ref();
+        let converted =
+            func::func_sig_with_param_attrs(self.ctx, inputs, results, attrs).as_type_ref();
         self.callable.insert((ty, convention), converted);
         Ok(converted)
     }
@@ -1646,6 +1640,22 @@ impl<'a> PhysicalTypeConverter<'a> {
 
     fn convert_attribute(&mut self, attribute: Attribute) -> Result<Attribute, TargetAbiError> {
         attribute.try_map_types(&mut |ty| self.convert_embedded(ty))
+    }
+
+    fn convert_params(
+        &mut self,
+        params: Vec<(TypeRef, AttributeMap)>,
+    ) -> Result<Vec<(TypeRef, AttributeMap)>, TargetAbiError> {
+        params
+            .into_iter()
+            .map(|(ty, attrs)| {
+                let attrs = attrs
+                    .into_iter()
+                    .map(|(name, value)| Ok((name, self.convert_attribute(value)?)))
+                    .collect::<Result<_, TargetAbiError>>()?;
+                Ok((self.convert_embedded(ty)?, attrs))
+            })
+            .collect()
     }
 
     fn intern_if_changed(&mut self, original: TypeRef, data: TypeData) -> TypeRef {

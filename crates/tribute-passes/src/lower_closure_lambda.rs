@@ -178,9 +178,9 @@ fn lower_single_lambda(
     let Some(callable) = func::FuncSig::from_type_ref(ctx, function_ty) else {
         return false;
     };
-    let Some(func_result_ty) = callable.single_result(ctx) else {
+    if callable.single_result(ctx).is_none() {
         return false;
-    };
+    }
     if callable.inputs(ctx) != orig_param_types.as_slice() {
         return false;
     }
@@ -215,18 +215,13 @@ fn lower_single_lambda(
         },
     );
 
-    let mut all_param_tys = orig_param_types.clone();
-    all_param_tys.insert(environment_index, anyref_ty);
+    let mut params = callable.inputs_with_attrs(ctx);
+    params.insert(environment_index, (anyref_ty, AttributeMap::new()));
+    let results = callable.results_with_attrs(ctx);
     let mut type_attrs = ctx.get_type(function_ty).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);
-    let func_ty = func::func_sig_with_attrs(
-        ctx,
-        all_param_tys.iter().copied(),
-        [func_result_ty],
-        type_attrs,
-    )
-    .as_type_ref();
+    let func_ty = func::func_sig_with_param_attrs(ctx, params, results, type_attrs).as_type_ref();
 
     let func_op = func::Func::operands()
         .sym_name(lifted_name)
