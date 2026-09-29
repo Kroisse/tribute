@@ -30,7 +30,6 @@ use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeData, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
-const ROOT_EXPORT_CONVENTION_ATTR: &str = "tribute.root_export_convention";
 const ROOT_SOURCE_RESULT_ATTR: &str = "tribute.root_source_result";
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
 const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
@@ -294,25 +293,12 @@ fn validate_root_entry(
         return Ok(None);
     };
 
-    let export_convention = root_export_convention(ctx, worker_op)?;
-    let source_result = root_source_result(ctx, worker_op)?;
-    if export_convention.is_some() != source_result.is_some() {
-        return Err(TargetAbiError::new(
-            "target root bridge: preserved export convention and source result must be paired",
-        ));
-    }
-    let Some(export_convention) = export_convention else {
+    let Some(source_result) = root_source_result(ctx, worker_op)? else {
         return Ok(None);
     };
-    let source_result = source_result.expect("paired root metadata checked above");
-    if matches!(export_convention, CallingConvention::Cps) {
-        return Err(TargetAbiError::new(
-            "target root bridge: root export convention must be Direct or EvidenceDirect",
-        ));
-    }
     if get_calling_convention(ctx, worker_op) != Some(CallingConvention::Cps) {
         return Err(TargetAbiError::new(
-            "target root bridge: preserved export metadata requires a Cps root worker",
+            "target root bridge: root source result metadata requires a Cps root worker",
         ));
     }
 
@@ -1011,26 +997,6 @@ fn is_parameterless_dialect_type(
         && ctx.get_type(ty).attrs.is_empty()
 }
 
-fn root_export_convention(
-    ctx: &IrContext,
-    op: OpRef,
-) -> Result<Option<CallingConvention>, TargetAbiError> {
-    let Some(attribute) = ctx.op(op).attributes.get(ROOT_EXPORT_CONVENTION_ATTR) else {
-        return Ok(None);
-    };
-    let Attribute::Int(code) = attribute else {
-        return Err(TargetAbiError::new(
-            "target root bridge: root export convention metadata is malformed",
-        ));
-    };
-    let code = u8::try_from(*code).map_err(|_| {
-        TargetAbiError::new("target root bridge: root export convention metadata is malformed")
-    })?;
-    CallingConvention::try_from(code).map(Some).map_err(|_| {
-        TargetAbiError::new("target root bridge: root export convention metadata is malformed")
-    })
-}
-
 fn root_source_result(ctx: &IrContext, op: OpRef) -> Result<Option<TypeRef>, TargetAbiError> {
     let Some(attribute) = ctx.op(op).attributes.get(ROOT_SOURCE_RESULT_ATTR) else {
         return Ok(None);
@@ -1060,9 +1026,6 @@ fn bind_name(name: &str) -> AttributeMap {
 }
 
 fn remove_root_contract(ctx: &mut IrContext, op: OpRef) {
-    ctx.op_mut(op)
-        .attributes
-        .remove(ROOT_EXPORT_CONVENTION_ATTR);
     ctx.op_mut(op).attributes.remove(ROOT_SOURCE_RESULT_ATTR);
 }
 
@@ -1971,7 +1934,7 @@ mod tests {
         assert_eq!(print_module(&ctx, module.op()), before);
     }
 
-    fn compose_promoted_root(export: CallingConvention) -> (IrContext, Module) {
+    fn compose_promoted_root() -> (IrContext, Module) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -2012,10 +1975,6 @@ mod tests {
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
-        ctx.op_mut(main.op_ref()).attributes.insert(
-            Symbol::new(ROOT_EXPORT_CONVENTION_ATTR),
-            Attribute::Int(export as i128),
-        );
         ctx.op_mut(main.op_ref())
             .attributes
             .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
@@ -2026,8 +1985,8 @@ mod tests {
     }
 
     #[test]
-    fn promoted_direct_root_uses_typed_completion_and_ordinary_call() {
-        let (ctx, module) = compose_promoted_root(CallingConvention::Direct);
+    fn promoted_root_uses_typed_completion_and_ordinary_call() {
+        let (ctx, module) = compose_promoted_root();
         let wrapper = function(&ctx, module, "main");
         let worker = function(&ctx, module, ROOT_MAIN_SYMBOL);
         let done_k = function(&ctx, module, ROOT_DONE_K_SYMBOL);
@@ -2059,11 +2018,7 @@ mod tests {
         assert!(
             !ctx.op(worker.op_ref())
                 .attributes
-                .contains_key(ROOT_EXPORT_CONVENTION_ATTR)
-                && !ctx
-                    .op(worker.op_ref())
-                    .attributes
-                    .contains_key(ROOT_SOURCE_RESULT_ATTR)
+                .contains_key(ROOT_SOURCE_RESULT_ATTR)
         );
 
         let wrapper_ops = collect_ops(&ctx, wrapper.op_ref());
@@ -2159,8 +2114,8 @@ mod tests {
     }
 
     #[test]
-    fn promoted_evidence_root_has_a_single_parameterless_entry() {
-        let (ctx, module) = compose_promoted_root(CallingConvention::EvidenceDirect);
+    fn promoted_root_has_a_single_parameterless_entry() {
+        let (ctx, module) = compose_promoted_root();
         let wrapper = function(&ctx, module, "main");
         let signature = func::FuncSig::from_type_ref(&ctx, wrapper.r#type(&ctx)).unwrap();
         assert!(signature.inputs(&ctx).is_empty());
@@ -2323,7 +2278,7 @@ mod tests {
 
     #[test]
     fn root_bridge_creates_no_lambda_for_target_phase() {
-        let (ctx, module) = compose_promoted_root(CallingConvention::Direct);
+        let (ctx, module) = compose_promoted_root();
         let printed = print_module(&ctx, module.op());
 
         assert!(!printed.contains("closure.lambda"), "{printed}");
@@ -2377,10 +2332,6 @@ mod tests {
             let entry = ctx.region(main.body(&ctx)).blocks[0];
             ctx.set_block_arg_type(entry, 0, evidence);
             ctx.set_block_arg_type(entry, 1, frame);
-            ctx.op_mut(main.op_ref()).attributes.insert(
-                Symbol::new(ROOT_EXPORT_CONVENTION_ATTR),
-                Attribute::Int(CallingConvention::Direct as i128),
-            );
             ctx.op_mut(main.op_ref())
                 .attributes
                 .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
@@ -2439,10 +2390,6 @@ mod tests {
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
-        ctx.op_mut(main.op_ref()).attributes.insert(
-            Symbol::new(ROOT_EXPORT_CONVENTION_ATTR),
-            Attribute::Int(CallingConvention::Direct as i128),
-        );
         ctx.op_mut(main.op_ref())
             .attributes
             .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));

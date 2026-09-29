@@ -378,6 +378,11 @@ Root `main`은 하나뿐인 target-independent CPS delimiter다. Source residual
 계약은 기존 pure-or-`Io` entry를 유지하며 residual general effect는 backend 전에
 거부한다. Nested module의 `main`은 일반 worker다.
 
+Frontend가 root `main`을 Cps로 승격하면 그 정의에 source result type을
+`tribute.root_source_result`로 기록한다. 이 속성이 root CPS 계약의 유일한 표식이며
+root bridge 합성이 소비한다. Root wrapper는 항상 매개변수 없는 Direct 함수이므로
+원래의 export 규약은 기록하지 않는다.
+
 Target-independent 경계는 root wrapper가 source result
 type의 completion cell과 이를 capture한 terminal `Done<R>` 및 terminal
 `Dispatch<R>`를 담은 정확한 `ContinuationFrame<R>`를 소유한다는 추상 조합

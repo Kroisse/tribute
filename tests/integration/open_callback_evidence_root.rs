@@ -9,7 +9,6 @@ use salsa_test_macros::salsa_test;
 use tribute::pipeline::{compile_frontend, compile_to_wasm_binary};
 use tribute_front::SourceCst;
 use tribute_ir::dialect::tribute_control;
-use trunk_ir::Attribute;
 use trunk_ir::ops::DialectOp;
 
 // Keep the original generic frontend regression on the production path, which
@@ -42,12 +41,11 @@ fn generic_callback_preserves_evidence_root_and_executes_wasm(db: &salsa::Databa
         Some(tribute_control::CallingConvention::Cps),
         "the open callback requires a CPS worker"
     );
-    assert_eq!(
+    assert!(
         ctx.op(main.op_ref())
             .attributes
-            .get("tribute.root_export_convention"),
-        Some(&Attribute::Int(1)),
-        "the Io root must retain its EvidenceDirect export"
+            .contains_key("tribute.root_source_result"),
+        "the promoted Io root must carry its root source result"
     );
 
     let binary = compile_to_wasm_binary(db, source).expect("generic root should compile to Wasm");

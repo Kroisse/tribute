@@ -811,7 +811,7 @@ fn lower_function<'db>(
     declarations: &mut Declarations<'db>,
 ) {
     let location = ctx.location(function.id);
-    let root_export_convention = crate::is_root_main(function.name, ctx.module_path().len() == 1)
+    let root_convention = crate::is_root_main(function.name, ctx.module_path().len() == 1)
         .then(|| {
             let name = ctx.qualify_name(function.name);
             let scheme = ctx
@@ -885,14 +885,12 @@ fn lower_function<'db>(
     let function = tribute_control::func_declaration(ir, location, name, callable);
     ir.op_mut(function.op_ref()).regions.push(body);
     ir.region_mut(body).parent_op = Some(function.op_ref());
-    if let Some(convention) = root_export_convention
+    // A root `main` promoted to Cps records its source result; that alone
+    // marks the root CPS contract for root bridge composition.
+    if let Some(convention) = root_convention
         && convention != signature.convention
     {
         assert_ne!(convention, CallingConvention::Cps);
-        ir.op_mut(function.op_ref()).attributes.insert(
-            Symbol::new("tribute.root_export_convention"),
-            Attribute::Int(convention as i128),
-        );
         ir.op_mut(function.op_ref()).attributes.insert(
             Symbol::new("tribute.root_source_result"),
             Attribute::Type(signature.return_type),
