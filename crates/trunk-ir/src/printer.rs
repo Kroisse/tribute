@@ -226,7 +226,8 @@ impl<'a> PrintState<'a> {
                     if i > 0 {
                         f.write_str(", ")?;
                     }
-                    write!(f, "{key} = ")?;
+                    write_attribute_key(f, *key)?;
+                    f.write_str(" = ")?;
                     self.write_attribute(f, value)?;
                 }
                 f.write_char('}')
@@ -479,6 +480,19 @@ fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
     } else {
         write!(f, "!{name}")
     }
+}
+
+/// Write a dictionary key bare when the reader accepts it, otherwise quoted.
+fn write_attribute_key(f: &mut dyn Write, key: crate::symbol::Symbol) -> fmt::Result {
+    key.with_str(|s| {
+        if crate::parser::raw::is_bare_attribute_key(s) {
+            f.write_str(s)
+        } else {
+            f.write_char('"')?;
+            write_escaped_string(f, s)?;
+            f.write_char('"')
+        }
+    })
 }
 
 fn write_symbol(f: &mut dyn Write, sym: crate::symbol::Symbol) -> fmt::Result {

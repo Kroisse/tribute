@@ -558,16 +558,19 @@ fn func_sig_raw_type<'a>(
         inputs: params.iter().map(|(_, ty)| ty.clone()).collect(),
         results: vec![result],
         attrs: vec![(
-            CALLING_CONVENTION_ATTR,
+            CALLING_CONVENTION_ATTR.into(),
             RawAttribute::Int(convention as i128),
         )],
     }
 }
 
 fn has_duplicate_convention_attr(
-    attrs: &[(&str, trunk_ir::parser::raw::RawAttribute<'_>)],
+    attrs: &[(
+        std::borrow::Cow<'_, str>,
+        trunk_ir::parser::raw::RawAttribute<'_>,
+    )],
 ) -> bool {
-    attrs.iter().any(|(key, _)| *key == CALLING_CONVENTION_ATTR)
+    attrs.iter().any(|(key, _)| key == CALLING_CONVENTION_ATTR)
 }
 
 fn parse_func<'a>(
@@ -617,7 +620,7 @@ fn parse_func<'a>(
 
     let signature = func_sig_raw_type(result, &params, convention);
     let mut attributes = attributes;
-    attributes.push(("type", RawAttribute::Type(signature)));
+    attributes.push(("type".into(), RawAttribute::Type(signature)));
 
     Ok(RawOperation {
         results,

@@ -119,7 +119,7 @@ impl<'a> ArenaIrBuilder<'a> {
         name: &str,
         inputs: &[RawType<'_>],
         results: &[RawType<'_>],
-        attrs: &[(&str, RawAttribute<'_>)],
+        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
     ) -> Result<TypeRef, ParseError> {
         if dialect == "func" && name == "func_sig" {
             return self.build_shared_function_type(inputs, results, attrs);
@@ -137,11 +137,11 @@ impl<'a> ArenaIrBuilder<'a> {
         &mut self,
         inputs: &[RawType<'_>],
         results: &[RawType<'_>],
-        attrs: &[(&str, RawAttribute<'_>)],
+        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
     ) -> Result<TypeRef, ParseError> {
         if let Some((name, _)) = attrs.iter().find(|(name, _)| {
             matches!(
-                *name,
+                name.as_ref(),
                 crate::dialect::wasm::NUM_INPUTS_ATTR | crate::dialect::wasm::NUM_RESULTS_ATTR
             )
         }) {
@@ -173,11 +173,11 @@ impl<'a> ArenaIrBuilder<'a> {
         &mut self,
         inputs: &[RawType<'_>],
         results: &[RawType<'_>],
-        attrs: &[(&str, RawAttribute<'_>)],
+        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
     ) -> Result<TypeRef, ParseError> {
         if let Some((name, _)) = attrs.iter().find(|(name, _)| {
             matches!(
-                *name,
+                name.as_ref(),
                 crate::dialect::clif::NUM_INPUTS_ATTR | crate::dialect::clif::NUM_RESULTS_ATTR
             )
         }) {
@@ -209,7 +209,7 @@ impl<'a> ArenaIrBuilder<'a> {
         &mut self,
         inputs: &[RawType<'_>],
         results: &[RawType<'_>],
-        attrs: &[(&str, RawAttribute<'_>)],
+        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
     ) -> Result<TypeRef, ParseError> {
         if results.len() > 1 {
             return Err(ParseError {
@@ -222,7 +222,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
         if let Some((name, _)) = attrs.iter().find(|(name, _)| {
             matches!(
-                *name,
+                name.as_ref(),
                 crate::dialect::func::NUM_INPUTS_ATTR | crate::dialect::func::NUM_RESULTS_ATTR
             )
         }) {
@@ -258,11 +258,11 @@ impl<'a> ArenaIrBuilder<'a> {
         name: &str,
         inputs: &[RawType<'_>],
         results: &[RawType<'_>],
-        attrs: &[(&str, RawAttribute<'_>)],
+        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
     ) -> Result<TypeRef, ParseError> {
         if let Some((reserved, _)) = attrs.iter().find(|(key, _)| {
             matches!(
-                *key,
+                key.as_ref(),
                 crate::dialect::func::NUM_INPUTS_ATTR | crate::dialect::func::NUM_RESULTS_ATTR
             )
         }) {
@@ -943,6 +943,25 @@ core.module @test {
         );
         assert!(
             printed.contains("test.value() {param = {x = 1}}"),
+            "{printed}"
+        );
+        assert_roundtrip(&ctx, root);
+    }
+
+    #[test]
+    fn test_roundtrip_dict_keys_that_need_quoting() {
+        let input = r#"
+core.module @test {
+  %0 = test.make {meta = {"1st" = 1, "a b" = 2, "q\"uote" = 3, "x::y" = 4, plain.key = 5}} : core.i32
+}
+"#;
+        let mut ctx = IrContext::new();
+        let root = parse_module(&mut ctx, input).expect("quoted dictionary keys should parse");
+        let printed = print_module(&ctx, root);
+        assert!(
+            printed.contains(
+                r#"{meta = {"1st" = 1, "a b" = 2, plain.key = 5, "q\"uote" = 3, "x::y" = 4}}"#
+            ),
             "{printed}"
         );
         assert_roundtrip(&ctx, root);
