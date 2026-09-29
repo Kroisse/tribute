@@ -3328,6 +3328,11 @@ impl<'a> Converter<'a> {
                     self.emit_exit(block, location, value, flow)?;
                     return Ok(());
                 }
+                "unreachable" => {
+                    let unreachable = func::Unreachable::operands().build(self.ctx, location);
+                    self.ctx.push_op(block, unreachable.op_ref());
+                    return Ok(());
+                }
                 "lambda" => {
                     let lambda = self.lower_lambda(source, mapping)?;
                     self.ctx.push_op(block, lambda);
@@ -4103,6 +4108,34 @@ mod tests {
         assert_eq!(pass.name(), "tribute-control-to-cps");
         pass.run(&mut ctx, target, &mut Default::default()).unwrap();
         verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
+    }
+
+    #[test]
+    fn unreachable_legalizes_to_func_unreachable() {
+        let input = r#"core.module @test {
+  tribute_control.func @direct(%flag: core.i1, %value: core.i32) -> core.i32 convention(direct) {
+    %result = scf.if %flag : core.i32 {
+      scf.yield %value
+    } {
+      tribute_control.unreachable
+    }
+    tribute_control.return %result
+  }
+  tribute_control.func @cps(%flag: core.i1, %value: core.i32) -> core.i32 convention(cps) {
+    %result = scf.if %flag : core.i32 {
+      scf.yield %value
+    } {
+      tribute_control.unreachable
+    }
+    tribute_control.return %result
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+        verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
+        let printed = print_module(&ctx, module.op());
+        assert_eq!(printed.matches("func.unreachable").count(), 2, "{printed}");
+        assert!(!printed.contains("tribute_control"), "{printed}");
     }
 
     #[test]

@@ -24,8 +24,8 @@ use super::analysis::AnalysisCache;
 use super::context::IrContext;
 use super::op_def::OpDef;
 use super::op_interface::{
-    BranchOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps, RegionSuccessor,
-    RegionValueTransfer,
+    BranchOps, CallableExitOps, RegionBranchOps, RegionBranchPoint, RegionBranchTerminatorOps,
+    RegionSuccessor, RegionValueTransfer,
 };
 use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
@@ -1114,7 +1114,11 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
                 }
                 _ => false,
             };
-            if never_result && is_proper_tail_terminator(ctx, yield_op) {
+            // A callable exit leaves the region without producing its value,
+            // so it may end a region of any result type.
+            if (never_result && is_proper_tail_terminator(ctx, yield_op))
+                || CallableExitOps::exits_callable(ctx, yield_op).is_ok()
+            {
                 continue;
             }
             errors.push(operation_verifier_error(
@@ -2555,9 +2559,9 @@ mod tests {
         let input = r#"core.module @test {
   func.func @main(%cond: core.i1) {
     scf.if %cond {
-      func.unreachable
+      %value = arith.const {value = 1} : core.i32
     } {
-      func.unreachable
+      %value = arith.const {value = 2} : core.i32
     }
     func.return
   }
@@ -2574,6 +2578,30 @@ mod tests {
             text.contains("else_region must terminate with scf.yield"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn callable_exit_ends_scf_region_of_any_result() {
+        let input = r#"core.module @test {
+  func.func @main(%cond: core.i1) -> core.i32 {
+    scf.if %cond {
+      func.unreachable
+    } {
+      scf.yield
+    }
+    %value = scf.if %cond : core.i32 {
+      %one = arith.const {value = 1} : core.i32
+      scf.yield %one
+    } {
+      func.unreachable
+    }
+    func.return %value
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
     }
 
     #[test]

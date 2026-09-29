@@ -7,6 +7,8 @@
 //! are kept there; this file contains native-specific tests for features
 //! like tuples, enums, pattern matching, and recursion.
 
+use itertools::Itertools;
+
 use crate::common;
 
 #[cfg(unix)]
@@ -468,6 +470,57 @@ fn main() {
 "#,
         "17\n3\n101\n2",
     );
+}
+
+/// A case over twenty Bool columns, each arm matching one `True`, that the
+/// exhaustiveness check gives up on. With `all_false`, a last arm covers the
+/// rest and the fallthrough is dead; without it, the fallthrough is reachable.
+fn unverified_case_source(all_false: bool) -> String {
+    const COLUMNS: usize = 20;
+    let arms = (0..COLUMNS).map(|arm| {
+        let columns = (0..COLUMNS).map(|column| if column == arm { "True" } else { "_" });
+        format!("        #({}) -> {arm}\n", columns.format(", "))
+    });
+    let last = if all_false {
+        format!(
+            "        #({}) -> 99\n",
+            ["False"; COLUMNS].iter().format(", ")
+        )
+    } else {
+        String::new()
+    };
+    format!(
+        "fn pick({params}) -> Nat {{\n    case #({names}) {{\n{arms}{last}    }}\n}}\n",
+        params = (0..COLUMNS).format_with(", ", |i, f| f(&format_args!("b{i}: Bool"))),
+        names = (0..COLUMNS).format_with(", ", |i, f| f(&format_args!("b{i}"))),
+        arms = arms.format(""),
+    )
+}
+
+/// An unverified case compiles, and its dead fallthrough does not run.
+#[test]
+fn test_native_unverified_case_compiles() {
+    let source = format!(
+        "{}\nfn main() {{\n    __tribute_print_nat(pick({}, True))\n    __tribute_print_nat(pick({}))\n}}\n",
+        unverified_case_source(true),
+        ["False"; 19].iter().format(", "),
+        ["False"; 20].iter().format(", "),
+    );
+    assert_native_output("unverified_case.trb", &source, "19\n99");
+}
+
+/// An unverified case whose arms leave a value unmatched traps on it.
+#[test]
+fn test_native_unmatched_unverified_case_traps() {
+    let source = format!(
+        "{}\n{}\nfn main() {{\n    __tribute_print_nat(1)\n    __tribute_print_nat(pick({}))\n}}\n",
+        common::PRINT_EXTERNS,
+        unverified_case_source(false),
+        ["False"; 20].iter().format(", "),
+    );
+    let output = compile_and_run_native("unmatched_unverified_case.trb", &source);
+    assert!(!output.status.success(), "{:?}", output.status);
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
 }
 
 /// A case over an enum spelled through a `use` import or by its short name

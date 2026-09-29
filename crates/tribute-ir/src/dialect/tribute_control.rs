@@ -126,7 +126,14 @@ mod tribute_control {
     fn resume<T: ResumeToken>(resume_token: Value<T>, value: Value<T::Input>) -> Value<T::Answer> {}
 
     fn r#yield(value: Value<_>) {}
+
+    fn unreachable() {}
 }
+
+/// Dead control flow ends the callable instead of reaching its region's exit.
+impl trunk_ir::op_interface::CallableExitModel for Unreachable {}
+
+inventory::submit! { trunk_ir::op_interface::CallableExitOps::register::<Unreachable>() }
 
 /// Why a name-matching source signature does not satisfy its storage contract.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

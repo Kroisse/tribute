@@ -220,6 +220,12 @@ transfers, and unreachable control flow. The typed model and its dynamic query
 are fallible. An unregistered operation, malformed registered operation, or
 query error is never evidence that a region is terminal.
 
+An `scf.if` region normally ends with `scf.yield`. A region may instead end
+with a verified `CallableExit`, whatever the `scf.if` results are, because
+control leaves the callable without reaching the parent. Other proper tail
+transfers may end a region only of an `scf.if` whose single result is
+`core.never`.
+
 Structured-to-CFG lowering may use `CallableExit` only after preserving its
 own structural rules: the region must have one block, the exit must be that
 block's final operation, and a nested structured operation must expose every
@@ -422,13 +428,20 @@ resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 comp
 | `tribute_control.handler` | handle 안의 `fn` 또는 general `op` handler arm을 기술 |
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
+| `tribute_control.unreachable` | 실행될 수 없는 source 제어 흐름을 값 없이 종료 |
 
-`func.tail_call`, `func.tail_call_indirect`, `func.constant`, `func.unreachable`의
-logical 복제는 없다. Tail 형상은 legalization 결과이고 named function value는
-`func_ref`가 표현한다. Legalization은 알려진 target에 `func.tail_call`, closure,
+`func.tail_call`, `func.tail_call_indirect`, `func.constant`의 logical 복제는
+없다. Tail 형상은 legalization 결과이고 named function value는 `func_ref`가
+표현한다. Legalization은 알려진 target에 `func.tail_call`, closure,
 continuation과 `done_k` target에 새 `func.tail_call_indirect`를 만들 수 있다.
-`func.constant`는 후속 physical closure lowering이 만들며 `func.unreachable`은
-reject adapter 같은 compiler helper 안에서만 legalization 뒤에 사용한다.
+`func.constant`는 후속 physical closure lowering이 만든다.
+
+Source 제어 흐름의 도달 불가 경로는 `tribute_control.unreachable`로 표현한다.
+예를 들어 망라적이라고 판정되지 않은 `case`에서 모든 arm이 실패한 경로가 그렇다.
+이 operation은 operand와 결과가 없는 `CallableExit`이며, `scf.if` region을
+`scf.yield` 대신 끝낼 수 있다. Legalization은 이를 `func.unreachable`로 바꾸고,
+target은 trap으로 lowering한다. 그 밖의 `func.unreachable`은 reject adapter 같은
+compiler helper 안에서만 legalization 뒤에 사용한다.
 
 이 dialect는 opaque type `tribute_control.resume_token<input, answer>`도
 소유한다. `input`은 중단된 operation continuation이 받는 값이고, `answer`는

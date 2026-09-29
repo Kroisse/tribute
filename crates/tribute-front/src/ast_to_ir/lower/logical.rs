@@ -1618,11 +1618,9 @@ fn lower_case_chain<'db>(
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
     match arms {
-        // Typechecking has proved this path unreachable (for example the
-        // false branch after exhaustive Bool literal arms).  The arena has no
-        // source-logical unreachable producer, so keep it as an isolated
-        // polymorphic conversion value rather than introducing `func.*`.
-        [] => Some(unreachable_case_value(builder, location, result_ty)),
+        // Typechecking rejects a case without arms, and a chain that runs out
+        // of arms ends its else region with `tribute_control.unreachable`.
+        [] => unreachable!("a case chain always has an arm to lower"),
         [last] if exhaustive && last.guard.is_none() => {
             let mut scope = builder.ctx.scope();
             super::case::bind_logical_pattern_fields(
@@ -1677,15 +1675,6 @@ fn lower_case_chain<'db>(
             Some(branch.result(builder.ir))
         }
     }
-}
-
-fn unreachable_case_value(
-    builder: &mut IrBuilder<'_, '_>,
-    location: Location,
-    result_ty: TypeRef,
-) -> ValueRef {
-    let nil = builder.emit_nil(location);
-    builder.cast_if_needed(location, nil, result_ty)
 }
 
 struct CaseArmRequest<'a, 'db> {
@@ -1810,6 +1799,17 @@ fn build_case_else_region<'db>(
         ops: Default::default(),
         parent_region: None,
     });
+    // No arm is left to match: the fallthrough is dead when the case is
+    // exhaustive, and traps otherwise.
+    if arms.is_empty() {
+        let unreachable = tribute_control::Unreachable::operands().build(ir, location);
+        ir.push_op(block, unreachable.op_ref());
+        return Some(ir.create_region(RegionData {
+            location,
+            blocks: trunk_ir::smallvec::smallvec![block],
+            parent_op: None,
+        }));
+    }
     let value = lower_case_chain(
         &mut IrBuilder::new(ctx, ir, block),
         location,

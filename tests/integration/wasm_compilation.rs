@@ -19,6 +19,8 @@
 use std::io::Write as _;
 use std::process::Command;
 
+use itertools::Itertools;
+
 use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_to_wasm_binary;
 use tribute_front::SourceCst;
@@ -256,6 +258,55 @@ fn test_execute_dynamic_bytes_write_boundary() {
     expected.extend_from_slice(right.as_bytes());
     expected.push(b'\n');
     assert_eq!(output.stdout, expected);
+}
+
+/// A case the exhaustiveness check gives up on compiles, and its dead
+/// fallthrough does not run.
+#[salsa_test]
+fn test_execute_unverified_case(db: &salsa::DatabaseImpl) {
+    const COLUMNS: usize = 20;
+    let arms = (0..COLUMNS).map(|arm| {
+        let columns = (0..COLUMNS).map(|column| if column == arm { "True" } else { "_" });
+        format!("        #({}) -> {arm}\n", columns.format(", "))
+    });
+    let code = format!(
+        r#"fn pick({params}) -> Nat {{
+    case #({names}) {{
+{arms}        #({all_false}) -> 99
+    }}
+}}
+
+fn main() ->{{std::io::Io}} Nil {{
+    case pick({last_true}) {{
+        19 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
+    }}
+}}
+"#,
+        params = (0..COLUMNS).format_with(", ", |i, f| f(&format_args!("b{i}: Bool"))),
+        names = (0..COLUMNS).format_with(", ", |i, f| f(&format_args!("b{i}"))),
+        arms = arms.format(""),
+        all_false = ["False"; COLUMNS].iter().format(", "),
+        last_true = ["False"; COLUMNS - 1]
+            .iter()
+            .chain(["True"].iter())
+            .format(", "),
+    );
+    let source = SourceCst::from_source_str(db, "unverified_case.trb", &code);
+    let binary = expect_wasm_compilation_success(db, source, "Should compile an unverified case");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary).expect("write Wasm module");
+    let output = Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok\n");
 }
 
 #[salsa_test]
