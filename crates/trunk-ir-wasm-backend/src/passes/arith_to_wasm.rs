@@ -684,10 +684,17 @@ impl RewritePattern for ArithConversionPattern {
         let Some(&dst_ty) = ctx.op_result_types(op).first() else {
             return false;
         };
-        let (Some(src), Some(dst)) = (
-            type_suffix(ctx, ctx.value_ty(operand)),
-            type_suffix(ctx, dst_ty),
-        ) else {
+        let src_ty = ctx.value_ty(operand);
+        // Narrow integers share the i32 representation with undefined upper
+        // bits, so only exact 32- and 64-bit integers convert here; other
+        // widths stay unconverted and fail the conversion boundary.
+        let exact = |ctx: &IrContext, ty| {
+            IntegerLike::width(ctx, ty).is_none_or(|width| matches!(width, 32 | 64))
+        };
+        if !exact(ctx, src_ty) || !exact(ctx, dst_ty) {
+            return false;
+        }
+        let (Some(src), Some(dst)) = (type_suffix(ctx, src_ty), type_suffix(ctx, dst_ty)) else {
             return false;
         };
         let loc = ctx.op(op).location;
@@ -700,8 +707,6 @@ impl RewritePattern for ArithConversionPattern {
                     .op_ref()
             };
         }
-        // Narrow integers share the i32 representation; converting between
-        // them is out of scope and stays unconverted.
         let new_op = match (kind, src, dst) {
             ("extsi", "i32", "i64") => build!(I64ExtendI32S),
             ("extui", "i32", "i64") => build!(I64ExtendI32U),
@@ -880,6 +885,27 @@ core.module @test {
             assert!(output.contains(op), "missing {op}:\n{output}");
         }
         assert!(!output.contains("arith."), "{output}");
+    }
+
+    #[test]
+    fn narrow_integer_conversions_are_left_unconverted() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @convert(%b: core.i8, %w: core.i64) {
+    %s = arith.extsi %b : core.i64
+    %t = arith.trunci %w : core.i8
+    %f = arith.sitofp %b : core.f64
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert_eq!(output.matches("arith.").count(), 3, "{output}");
     }
 
     #[test]

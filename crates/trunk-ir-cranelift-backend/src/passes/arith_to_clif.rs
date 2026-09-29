@@ -468,6 +468,15 @@ impl RewritePattern for ArithConversionPattern {
             return false;
         };
         let loc = ctx.op(op).location;
+        // Cranelift holds `core.i1` as an `i8` 0 or 1, so only zero extension
+        // of a boolean is a plain instruction. Other boolean conversions stay
+        // unconverted and fail the conversion boundary.
+        let is_bool = |ctx: &IrContext, ty| IntegerLike::width(ctx, ty) == Some(1);
+        if (is_bool(ctx, ctx.value_ty(operand)) && !arith::Extui::matches(ctx, op))
+            || is_bool(ctx, result_ty)
+        {
+            return false;
+        }
         // Operand and result types are constrained by each operation's
         // declaration, so the op alone selects the Cranelift instruction.
         let new_op = if arith::Extsi::matches(ctx, op) {
@@ -566,6 +575,28 @@ mod tests {
             result.contains("clif.iconst {value = 0} : core.ptr"),
             "{result}"
         );
+    }
+
+    #[test]
+    fn boolean_conversions_other_than_zero_extension_are_rejected() {
+        for body in [
+            "%s = arith.extsi %b : core.i32",
+            "%t = arith.trunci %n : core.i1",
+            "%f = arith.uitofp %b : core.f64",
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    "core.module @test {{\n  func.func @f(%b: core.i1, %n: core.i8) {{\n    {body}\n    func.return\n  }}\n}}"
+                ),
+            );
+            let error = super::lower(&mut ctx, module, TypeConverter::new()).unwrap_err();
+            assert!(
+                format!("{error:?}").contains("IllegalOp"),
+                "{body}: {error:?}"
+            );
+        }
     }
 
     #[test]

@@ -1025,7 +1025,9 @@ bit operations, and numeric conversions.
 
 `arith`는 포인터를 다루지 않는다. 정수는 포인터가 되지 않으며, 포인터와 정수 사이의
 변환 operation은 없다. 포인터는 할당, runtime, `mem.data`에서 나오고 `mem.ptr_add`로만
-파생되므로 모든 포인터의 출처를 추적할 수 있다.
+파생되므로 모든 포인터의 출처를 추적할 수 있다. 유일한 포인터 상수는 null
+(`arith.const {value = 0} : core.ptr`)이다. Null은 출처가 없고 역참조할 수 없으므로
+이 규칙의 예외가 아니다.
 
 `mem.*` represents low-level data, load, and store operations for runtime or FFI
 support. 주소는 모두 `core.ptr`다. `mem.data`는 `core.ptr`를 만들고, `mem.load`와
