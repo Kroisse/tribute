@@ -22,7 +22,7 @@ static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::d
 /// Uses lasso for string interning with 4-byte Spur keys.
 ///
 /// Ordering is based on the underlying string content (not interning order),
-/// so that `BTreeMap<Symbol, _>` iteration is deterministic.
+/// so that key-ordered collections such as `AttributeMap` iterate deterministically.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "salsa", derive(salsa::SalsaValue))]
 pub struct Symbol(Spur);
