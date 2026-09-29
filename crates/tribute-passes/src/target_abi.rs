@@ -1698,6 +1698,13 @@ mod tests {
         let (mut ctx, module, _) = dispatch_fixture("i32", "frame");
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
+        crate::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module);
+        for op in module.ops(&ctx) {
+            if let Ok(function) = func::Func::from_op(&ctx, op) {
+                crate::wasm::evidence_to_wasm::lower_evidence_to_wasm_func(&mut ctx, function)
+                    .unwrap();
+            }
+        }
         crate::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
         let result = crate::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default());
         let printed = print_module(&ctx, module.op());

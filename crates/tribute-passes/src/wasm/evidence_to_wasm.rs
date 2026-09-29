@@ -1,9 +1,17 @@
-//! Evidence runtime functions to WASM lowering (arena-based).
+//! Wasm evidence lowering and evidence runtime helpers (arena-based).
 //!
-//! This pass generates the evidence helpers required by target effect operations:
+//! Evidence lowering runs inside the representation/ABI boundary. It lowers
+//! `effect.extend`, `effect.dispatch_tail`, and `effect.dispatch_cps` to shared
+//! value/control operations that call the evidence runtime helper ABI shared
+//! with native (`tribute_ir::dialect::ability::evidence_abi`), through bodyless
+//! helper declarations.
 //!
-//! - `__tribute_evidence_lookup(ev, ability_id)` -> binary search for marker
-//! - `__tribute_evidence_extend(ev, marker)` -> sorted insertion with binary search
+//! After the boundary exit, [`bind_wasm_evidence_runtime`] replaces those
+//! declarations with the Wasm target runtime: helper implementations over a
+//! WasmGC evidence array, built on two internal helpers:
+//!
+//! - `__tribute_evidence_find_marker(ev, ability_id)` -> binary search for a marker
+//! - `__tribute_evidence_insert_marker(ev, marker)` -> sorted insertion
 //!
 //! ## Evidence Structure
 //!
@@ -14,99 +22,103 @@
 //! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }
 //! ```
 //!
-//! ## Implementation Strategy
-//!
-//! The pass generates helpers on demand and binds existing runtime declarations
-//! to implementations that use binary search (O(log n)). The evidence array is
-//! maintained in sorted order by ability_id.
+//! Marker construction and field access stay inside the helper
+//! implementations.
 
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::wasm as wasm_dialect;
+use trunk_ir::dialect::{core, func, wasm as wasm_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::ops::DialectType;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
-use trunk_ir::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, RewriteScope};
+use trunk_ir::rewrite::{
+    ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
+    TypeConverter,
+};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Location, TypeDataBuilder};
-use trunk_ir_wasm_backend::gc_types::{CLOSURE_STRUCT_IDX, EVIDENCE_IDX, MARKER_IDX};
+use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
-#[derive(Debug, PartialEq, Eq)]
-pub enum EvidenceValidationError {
-    InvalidDispatchMetadata,
-    DispatchOperandMismatch,
-    InvalidTailDispatch,
-}
+use crate::effect_dispatch;
 
-impl std::fmt::Display for EvidenceValidationError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::InvalidTailDispatch => {
-                f.write_str("Wasm tail dispatch differs from its fixed evidence/payload/result ABI")
-            }
-            Self::InvalidDispatchMetadata => f.write_str(
-                "Wasm CPS dispatch requires four operands, no results and typed metadata",
-            ),
-            Self::DispatchOperandMismatch => {
-                f.write_str("Wasm CPS dispatch operands differ from the fixed target ABI")
-            }
+/// Internal Wasm runtime helper: binary search for a marker.
+const FIND_MARKER: &str = "__tribute_evidence_find_marker";
+/// Internal Wasm runtime helper: sorted marker insertion.
+const INSERT_MARKER: &str = "__tribute_evidence_insert_marker";
+
+// =============================================================================
+// Boundary: effect lowering
+// =============================================================================
+
+/// Declare the evidence runtime helpers that the module's `effect.*`
+/// operations will call.
+///
+/// Run once on the module before [`LowerEvidenceToWasm`]. Only helpers that
+/// some operation needs are declared, so the target binds no unused runtime.
+pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
+    let (lookup, lookup_tr, extend) = evidence_helper_requirements(ctx, module);
+    let evidence_ty = ability::evidence_adt_type_ref(ctx);
+    let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+    let i32_ty = effect_dispatch::i32_type(ctx);
+    let declarations = [
+        (
+            lookup,
+            evidence_abi::LOOKUP,
+            vec![evidence_ty, i32_ty],
+            i32_ty,
+        ),
+        (
+            lookup_tr,
+            evidence_abi::LOOKUP_TR,
+            vec![evidence_ty, i32_ty],
+            closure_ty,
+        ),
+        (
+            extend,
+            evidence_abi::EXTEND,
+            vec![evidence_ty, i32_ty, i32_ty, closure_ty, closure_ty],
+            evidence_ty,
+        ),
+    ];
+    for (needed, name, params, result) in declarations {
+        if !needed || has_function(ctx, module, name) {
+            continue;
         }
+        let location = ctx.op(module.op()).location;
+        let declaration = crate::native::build_extern_func(ctx, location, name, &params, result);
+        prepend_module_op(ctx, module, declaration);
     }
 }
 
-impl std::error::Error for EvidenceValidationError {}
-
-/// Lower evidence runtime functions to WASM implementations.
+/// Lower evidence operations in one function body.
 ///
-/// This pass:
-/// 1. Replaces stub function declarations with real binary search implementations
-/// 2. Lowers `effect.extend` and dispatch operations using the generated functions.
-pub fn lower_evidence_to_wasm(
-    ctx: &mut IrContext,
-    module: Module,
-) -> Result<(), EvidenceValidationError> {
-    prepare_wasm_evidence_runtime(ctx, module)?;
-    rewrite_evidence_ops_in_scope(ctx, module);
-    Ok(())
-}
-
-/// Prepare module-scope WASM evidence runtime helper functions.
-pub fn prepare_wasm_evidence_runtime(
-    ctx: &mut IrContext,
-    module: Module,
-) -> Result<(), EvidenceValidationError> {
-    validate_final_dispatches(ctx, module.op())?;
-    materialize_evidence_runtime(ctx, module);
-    Ok(())
-}
-
-/// Lower evidence operations in one WASM function body.
-///
-/// Precondition: [`prepare_wasm_evidence_runtime`] must already have run for
-/// the containing module so the `__tribute_evidence_lookup` and
-/// `__tribute_evidence_extend` implementations exist as WASM runtime helpers.
+/// Precondition: [`prepare_wasm_evidence_runtime`] already declared the
+/// helpers for the containing module.
 pub fn lower_evidence_to_wasm_func(
     ctx: &mut IrContext,
-    func_op: wasm_dialect::Func,
-) -> Result<(), EvidenceValidationError> {
-    validate_final_dispatches(ctx, func_op.op_ref())?;
-    rewrite_evidence_ops_in_scope(ctx, func_op);
+    func_op: func::Func,
+) -> Result<(), ConversionError> {
+    PatternApplicator::new(TypeConverter::new())
+        .with_target(wasm_effect_abi_target())
+        .add_pattern(LowerEffectExtendToWasm)
+        .add_pattern(LowerEffectDispatchTailToWasm)
+        .add_pattern(LowerEffectDispatchCpsToWasm)
+        .apply_partial_conversion(ctx, func_op, "wasm-evidence-effect-abi")?;
     Ok(())
 }
 
-/// PassManager-friendly WASM evidence lowering pass.
+/// PassManager-friendly Wasm evidence lowering pass.
 ///
-/// This pass is function-scoped and does not prepare module-scope runtime
-/// helpers. Run [`prepare_wasm_evidence_runtime`] on the module before adding
-/// this pass to a `wasm.func` pipeline.
+/// This pass is function-scoped and does not declare module-scope runtime
+/// helpers. Run [`prepare_wasm_evidence_runtime`] on the module first.
 pub struct LowerEvidenceToWasm;
 
 impl Pass for LowerEvidenceToWasm {
-    type Target = wasm_dialect::Func;
+    type Target = func::Func;
 
     fn name(&self) -> &'static str {
         "lower-evidence-to-wasm"
@@ -115,100 +127,50 @@ impl Pass for LowerEvidenceToWasm {
     fn run(
         &mut self,
         ctx: &mut IrContext,
-        target: wasm_dialect::Func,
+        target: func::Func,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        lower_evidence_to_wasm_func(ctx, target).map_err(Into::into)
+        lower_evidence_to_wasm_func(ctx, target)?;
+        Ok(())
     }
 }
 
-fn rewrite_evidence_ops_in_scope<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
-    // The operations created here are `wasm.*`, so they must declare target
-    // types. Evidence lowering therefore runs with the shared WASM type
-    // converter instead of an identity converter.
-    let type_converter = crate::wasm::type_converter::wasm_type_converter(ctx);
-    let applicator = PatternApplicator::new(type_converter)
-        .add_pattern(EffectExtendPattern)
-        .add_pattern(EffectDispatchTailPattern)
-        .add_pattern(EffectDispatchCpsPattern);
-    applicator.apply_partial(ctx, scope);
+fn wasm_effect_abi_target() -> ConversionTarget {
+    ConversionTarget::new()
+        .legal_op("func", "func")
+        .recursive_legal_op("func", "func")
+        .illegal_op("effect", "extend")
+        .illegal_op("effect", "dispatch_tail")
+        .illegal_op("effect", "dispatch_cps")
 }
 
-/// Generate required helpers and bind existing evidence runtime declarations.
-fn materialize_evidence_runtime(ctx: &mut IrContext, module: Module) {
-    let (needs_lookup, needs_extend) = evidence_helper_requirements(ctx, module);
-    let ops = module.ops(ctx);
-    let mut has_lookup = false;
-    let mut has_extend = false;
-    let location = ctx.op(module.op()).location;
-
-    for op in ops {
-        let data = ctx.op(op);
-        let is_wasm_func = data.dialect == Symbol::new("wasm") && data.name == Symbol::new("func");
-        let is_func_func = data.dialect == Symbol::new("func") && data.name == Symbol::new("func");
-
-        if !is_wasm_func && !is_func_func {
-            continue;
-        }
-
-        let sym_name = data.attributes.get_symbol("sym_name");
-
-        if sym_name == Some(Symbol::new(evidence_abi::LOOKUP)) {
-            has_lookup = true;
-            let location = data.location;
-            let new_op = generate_evidence_lookup_function(ctx, location);
-            replace_module_op(ctx, module, op, new_op);
-        } else if sym_name == Some(Symbol::new(evidence_abi::EXTEND)) {
-            has_extend = true;
-            let location = data.location;
-            let new_op = generate_evidence_extend_function(ctx, location);
-            replace_module_op(ctx, module, op, new_op);
-        }
-    }
-
-    if needs_lookup && !has_lookup {
-        let new_op = generate_evidence_lookup_function(ctx, location);
-        prepend_module_op(ctx, module, new_op);
-    }
-
-    if needs_extend && !has_extend {
-        let new_op = generate_evidence_extend_function(ctx, location);
-        prepend_module_op(ctx, module, new_op);
-    }
-}
-
-fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> (bool, bool) {
-    fn visit(ctx: &IrContext, region: RegionRef, lookup: &mut bool, extend: &mut bool) {
+/// Which helpers (`lookup`, `lookup_tr`, `extend`) the module's operations need.
+fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> (bool, bool, bool) {
+    fn visit(ctx: &IrContext, region: RegionRef, needs: &mut (bool, bool, bool)) {
         for &block in &ctx.region(region).blocks {
             for &op in &ctx.block(block).ops {
-                *lookup |= effect::DispatchTail::from_op(ctx, op).is_ok()
-                    || effect::DispatchCps::from_op(ctx, op).is_ok();
-                *extend |= effect::Extend::from_op(ctx, op).is_ok();
+                needs.0 |= effect::DispatchCps::matches(ctx, op);
+                needs.1 |= effect::DispatchTail::matches(ctx, op);
+                needs.2 |= effect::Extend::matches(ctx, op);
                 for &nested in &ctx.op(op).regions {
-                    visit(ctx, nested, lookup, extend);
+                    visit(ctx, nested, needs);
                 }
             }
         }
     }
 
-    let mut lookup = false;
-    let mut extend = false;
+    let mut needs = (false, false, false);
     if let Some(body) = module.body(ctx) {
-        visit(ctx, body, &mut lookup, &mut extend);
+        visit(ctx, body, &mut needs);
     }
-    (lookup, extend)
+    needs
 }
 
-/// Replace a top-level module operation with a new one.
-fn replace_module_op(ctx: &mut IrContext, module: Module, old_op: OpRef, new_op: OpRef) {
-    let Some(first_block) = module.first_block(ctx) else {
-        return;
-    };
-
-    // Insert new op before old, then remove old
-    ctx.insert_op_before(first_block, old_op, new_op);
-    ctx.remove_op_from_block(first_block, old_op);
-    ctx.remove_op(old_op);
+fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
+    module.ops(ctx).into_iter().any(|op| {
+        ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new(name))
+            && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
+    })
 }
 
 fn prepend_module_op(ctx: &mut IrContext, module: Module, op: OpRef) {
@@ -223,15 +185,28 @@ fn prepend_module_op(ctx: &mut IrContext, module: Module, op: OpRef) {
     }
 }
 
-// =============================================================================
-// Evidence Lookup Pattern
-// =============================================================================
+/// Retype a closure operand to the canonical closure slot of a helper call.
+fn as_canonical_closure(
+    ctx: &mut IrContext,
+    loc: Location,
+    value: ValueRef,
+    rewriter: &mut PatternRewriter<'_>,
+) -> ValueRef {
+    let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+    if ctx.value_ty(value) == closure_ty {
+        return value;
+    }
+    let cast = core::UnrealizedConversionCast::operands(value)
+        .results(closure_ty)
+        .build(ctx, loc);
+    rewriter.insert_op(cast.op_ref());
+    cast.result(ctx)
+}
 
-/// Pattern that matches `effect.extend` and replaces it with
-/// `wasm.call @__tribute_evidence_extend`.
-struct EffectExtendPattern;
+/// `effect.extend` → `func.call @__tribute_evidence_extend`.
+struct LowerEffectExtendToWasm;
 
-impl RewritePattern for EffectExtendPattern {
+impl RewritePattern for LowerEffectExtendToWasm {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -241,39 +216,33 @@ impl RewritePattern for EffectExtendPattern {
         let Ok(extend_op) = effect::Extend::from_op(ctx, op) else {
             return false;
         };
-
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
         let loc = ctx.op(op).location;
-        let call_result = insert_evidence_extend_call(
-            ctx,
-            loc,
-            EvidenceExtendCall {
-                evidence: extend_op.evidence(ctx),
-                result_ty,
-                ability_ref_ty: extend_op.ability_ref(ctx),
-                prompt_tag: extend_op.prompt_tag(ctx),
-                tr_dispatch_fn: extend_op.tr_dispatch_fn(ctx),
-                handler_dispatch: extend_op.handler_dispatch(ctx),
-            },
-            rewriter,
-        );
-
-        rewriter.erase_op(vec![call_result]);
+        let ability_id =
+            effect_dispatch::insert_ability_id(ctx, loc, extend_op.ability_ref(ctx), rewriter);
+        let tr_dispatch = as_canonical_closure(ctx, loc, extend_op.tr_dispatch_fn(ctx), rewriter);
+        let handler_dispatch =
+            as_canonical_closure(ctx, loc, extend_op.handler_dispatch(ctx), rewriter);
+        let result_ty = ctx.op_result_types(op)[0];
+        let call = func::Call::operands([
+            extend_op.evidence(ctx),
+            ability_id,
+            extend_op.prompt_tag(ctx),
+            tr_dispatch,
+            handler_dispatch,
+        ])
+        .callee(Symbol::new(evidence_abi::EXTEND))
+        .results([result_ty])
+        .build(ctx, loc);
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![call.result(ctx)]);
         true
-    }
-
-    fn name(&self) -> &'static str {
-        "EffectExtendPattern"
     }
 }
 
-/// Pattern that matches `effect.dispatch_tail` and replaces it with evidence
-/// lookup plus a wasm indirect call through the stored tail-dispatch closure.
-struct EffectDispatchTailPattern;
+/// `effect.dispatch_tail` → `__tribute_evidence_lookup_tr` + indirect call.
+struct LowerEffectDispatchTailToWasm;
 
-impl RewritePattern for EffectDispatchTailPattern {
+impl RewritePattern for LowerEffectDispatchTailToWasm {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -283,157 +252,29 @@ impl RewritePattern for EffectDispatchTailPattern {
         let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) else {
             return false;
         };
-
-        let Ok(signature) = tail_dispatch_signature(ctx, op) else {
+        let converter = super::type_converter::wasm_type_converter(ctx);
+        if !effect_dispatch::is_valid_tail_dispatch(ctx, op, &converter) {
             return false;
-        };
+        }
+
         let loc = ctx.op(op).location;
-        let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
-            return false;
-        };
-        let ability_ref = dispatch_op.ability_ref(ctx);
-        let dispatch_closure = insert_dispatch_closure_lookup(
-            ctx,
-            loc,
-            dispatch_op.evidence(ctx),
-            ability_ref,
-            MarkerField::TrDispatchFn,
-            rewriter,
-        );
-        let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_closure, rewriter);
-        let op_idx = insert_op_idx_const(ctx, loc, ability_ref, dispatch_op.op_name(ctx), rewriter);
-
-        let call = wasm_dialect::CallIndirect::operands([
-            table_idx,
-            dispatch_op.evidence(ctx),
-            env,
-            op_idx,
-            dispatch_op.payload(ctx),
-        ])
-        .type_idx(0)
-        .table(0)
-        .signature(Some(signature))
-        .results([result_ty])
-        .build(ctx, loc);
-        let call_result = call.results(ctx)[0];
-        rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![call_result]);
+        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
+        let ability_id =
+            effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
+        let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
+            .callee(Symbol::new(evidence_abi::LOOKUP_TR))
+            .results([closure_ty])
+            .build(ctx, loc);
+        rewriter.insert_op(dispatch_closure.op_ref());
+        effect_dispatch::lower_tail_dispatch(ctx, op, dispatch_closure.result(ctx), rewriter);
         true
     }
-
-    fn name(&self) -> &'static str {
-        "EffectDispatchTailPattern"
-    }
 }
 
-/// Pattern that matches `effect.dispatch_cps` and replaces it with evidence
-/// lookup plus a wasm indirect call through the stored CPS dispatch closure.
-struct EffectDispatchCpsPattern;
+/// `effect.dispatch_cps` → `__tribute_evidence_lookup` + proper-tail transfer.
+struct LowerEffectDispatchCpsToWasm;
 
-fn validate_final_dispatches(
-    ctx: &mut IrContext,
-    root: OpRef,
-) -> Result<(), EvidenceValidationError> {
-    let mut dispatches = Vec::new();
-    let _ = trunk_ir::walk::walk_op::<()>(ctx, root, &mut |op| {
-        if effect::DispatchCps::matches(ctx, op) || effect::DispatchTail::matches(ctx, op) {
-            dispatches.push(op);
-        }
-        std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-    });
-    for op in dispatches {
-        if effect::DispatchTail::matches(ctx, op) {
-            tail_dispatch_signature(ctx, op)?;
-        } else {
-            final_dispatch_signature(ctx, op)?;
-        }
-    }
-    Ok(())
-}
-
-fn tail_dispatch_signature(
-    ctx: &mut IrContext,
-    op: OpRef,
-) -> Result<TypeRef, EvidenceValidationError> {
-    let evidence = evidence_ref_type(ctx);
-    let anyref = wasm_dialect::anyref(ctx).as_type_ref();
-    let i32_ty = intern_i32(ctx);
-    // Extension results can still carry the exact shared Evidence type before
-    // the pattern applicator converts their uses to the Wasm array ABI.
-    let shared_evidence = ability::evidence_adt_type_ref(ctx);
-    let [ev, payload] = ctx.op_operands(op) else {
-        return Err(EvidenceValidationError::InvalidTailDispatch);
-    };
-    if (ctx.value_ty(*ev) != evidence && ctx.value_ty(*ev) != shared_evidence)
-        || ctx.op_result_types(op) != [anyref]
-        || ctx.op(op).attributes.get_type("ability_ref").is_none()
-        || ctx.op(op).attributes.get_symbol("op_name").is_none()
-        || !trunk_ir_wasm_backend::is_wasm_physical_argument_assignable(
-            ctx,
-            ctx.value_ty(*payload),
-            anyref,
-        )
-    {
-        return Err(EvidenceValidationError::InvalidTailDispatch);
-    }
-    Ok(intern_func_type(
-        ctx,
-        &[evidence, anyref, i32_ty, anyref],
-        anyref,
-    ))
-}
-
-fn final_dispatch_signature(
-    ctx: &mut IrContext,
-    op: OpRef,
-) -> Result<TypeRef, EvidenceValidationError> {
-    if !ctx.op_result_types(op).is_empty()
-        || ctx.op(op).attributes.get_type("answer_type").is_none()
-        || ctx.op(op).attributes.get_type("ability_ref").is_none()
-        || ctx.op(op).attributes.get_symbol("op_name").is_none()
-        || ctx.op_operands(op).len() != 4
-    {
-        return Err(EvidenceValidationError::InvalidDispatchMetadata);
-    }
-    let evidence_ty = evidence_ref_type(ctx);
-    let anyref_ty = wasm_dialect::anyref(ctx).as_type_ref();
-    let closure_ty = super::type_converter::closure_adt_type(ctx);
-    let i32_ty = intern_i32(ctx);
-    // The canonical operands keep their exact identity: another array spelling
-    // is not the evidence array, and a plain `wasm.structref` is not the shared
-    // `_closure` layout. Only the payload slot accepts the verified physical
-    // widening, because its producer may leave a concrete reference after a
-    // no-op `anyref` upcast.
-    let operands = ctx.op_operands(op);
-    let canonical_match = operands
-        .iter()
-        .zip([evidence_ty, closure_ty, closure_ty])
-        .all(|(value, expected)| ctx.value_ty(*value) == expected);
-    let payload_match = trunk_ir_wasm_backend::is_wasm_physical_argument_assignable(
-        ctx,
-        ctx.value_ty(operands[3]),
-        anyref_ty,
-    );
-    if !canonical_match || !payload_match {
-        return Err(EvidenceValidationError::DispatchOperandMismatch);
-    }
-    Ok(wasm_dialect::func_sig(
-        ctx,
-        [
-            evidence_ty,
-            anyref_ty,
-            closure_ty,
-            i32_ty,
-            i32_ty,
-            i32_ty,
-            anyref_ty,
-        ],
-        [],
-    )
-    .as_type_ref())
-}
-
-impl RewritePattern for EffectDispatchCpsPattern {
+impl RewritePattern for LowerEffectDispatchCpsToWasm {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -443,186 +284,170 @@ impl RewritePattern for EffectDispatchCpsPattern {
         let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) else {
             return false;
         };
+        let converter = super::type_converter::wasm_type_converter(ctx);
+        if !effect_dispatch::is_valid_cps_dispatch(ctx, op, &converter) {
+            return false;
+        }
 
         let loc = ctx.op(op).location;
-        let Ok(signature) = final_dispatch_signature(ctx, op) else {
-            return false;
-        };
-        let ability_ref = dispatch_op.ability_ref(ctx);
-        let (table_idx, env) = insert_closure_parts(ctx, loc, dispatch_op.dispatch(ctx), rewriter);
-        let i32_ty = intern_i32(ctx);
-        let ability_id = wasm_dialect::I32Const::operands()
-            .value(compute_ability_id(ctx, ability_ref))
-            .results(i32_ty)
-            .build(ctx, loc);
-        let ability_id_value = ability_id.result(ctx);
-        rewriter.insert_op(ability_id.op_ref());
-        let marker_ty = ability::marker_adt_type_ref(ctx);
-        let marker = wasm_dialect::Call::operands([dispatch_op.evidence(ctx), ability_id_value])
+        let i32_ty = effect_dispatch::i32_type(ctx);
+        let ability_id =
+            effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
+        let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
             .callee(Symbol::new(evidence_abi::LOOKUP))
-            .results([marker_ty])
+            .results([i32_ty])
             .build(ctx, loc);
-        let prompt = wasm_dialect::StructGet::operands(marker.results(ctx)[0])
-            .type_idx(MARKER_IDX)
-            .field_idx(MarkerField::PromptTag.index())
-            .results(i32_ty)
-            .build(ctx, loc);
-        let prompt_value = prompt.result(ctx);
-        rewriter.insert_op(marker.op_ref());
         rewriter.insert_op(prompt.op_ref());
-        let op_idx = insert_op_idx_const(ctx, loc, ability_ref, dispatch_op.op_name(ctx), rewriter);
-
-        let tail = wasm_dialect::ReturnCallIndirect::operands([
-            table_idx,
-            dispatch_op.evidence(ctx),
-            env,
-            dispatch_op.resume(ctx),
-            prompt_value,
-            ability_id_value,
-            op_idx,
-            dispatch_op.payload(ctx),
-        ])
-        .type_idx(0)
-        .table(0)
-        .signature(Some(signature))
-        .build(ctx, loc);
-        rewriter.replace_op(tail.op_ref());
+        effect_dispatch::lower_cps_dispatch(ctx, op, ability_id, prompt.result(ctx), rewriter);
         true
     }
+}
 
-    fn name(&self) -> &'static str {
-        "EffectDispatchCpsPattern"
+// =============================================================================
+// After the exit: Wasm runtime helper binding
+// =============================================================================
+
+/// Bind bodyless evidence runtime helper declarations to their Wasm
+/// implementations.
+///
+/// Runs after Wasm dialect lowering has converted the declarations'
+/// signatures; each implementation adopts the declaration's signature.
+pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
+    let Some(block) = module.first_block(ctx) else {
+        return;
+    };
+    let mut needs_find = false;
+    let mut needs_insert = false;
+    for op in module.ops(ctx) {
+        let data = ctx.op(op);
+        let is_function = wasm_dialect::Func::matches(ctx, op) || func::Func::matches(ctx, op);
+        if !is_function || !data.regions.is_empty() {
+            continue;
+        }
+        let Some(name) = data.attributes.get_symbol("sym_name") else {
+            continue;
+        };
+        let Some(signature) = data.attributes.get_type("type") else {
+            continue;
+        };
+        let location = data.location;
+        let helper = if name == Symbol::new(evidence_abi::LOOKUP) {
+            needs_find = true;
+            Helper::MarkerField(MarkerField::PromptTag)
+        } else if name == Symbol::new(evidence_abi::LOOKUP_TR) {
+            needs_find = true;
+            Helper::MarkerField(MarkerField::TrDispatchFn)
+        } else if name == Symbol::new(evidence_abi::LOOKUP_HANDLER) {
+            needs_find = true;
+            Helper::MarkerField(MarkerField::HandlerDispatch)
+        } else if name == Symbol::new(evidence_abi::EXTEND) {
+            needs_insert = true;
+            Helper::Extend
+        } else {
+            continue;
+        };
+        let implementation = build_helper(ctx, location, name, signature, helper);
+        ctx.insert_op_before(block, op, implementation);
+        ctx.remove_op_from_block(block, op);
+        ctx.remove_op(op);
+    }
+
+    let location = ctx.op(module.op()).location;
+    if needs_find && !has_function(ctx, module, FIND_MARKER) {
+        let op = generate_evidence_lookup_function(ctx, location);
+        prepend_module_op(ctx, module, op);
+    }
+    if needs_insert && !has_function(ctx, module, INSERT_MARKER) {
+        let op = generate_evidence_extend_function(ctx, location);
+        prepend_module_op(ctx, module, op);
     }
 }
 
-fn insert_dispatch_closure_lookup(
+#[derive(Clone, Copy)]
+enum Helper {
+    /// Look up the marker for an ability and return one of its fields.
+    MarkerField(MarkerField),
+    /// Build a marker from its fields and insert it.
+    Extend,
+}
+
+/// Build a helper implementation with the declaration's (converted)
+/// signature.
+fn build_helper(
     ctx: &mut IrContext,
-    loc: Location,
-    evidence: ValueRef,
-    ability_ref_ty: TypeRef,
-    field: MarkerField,
-    rewriter: &mut PatternRewriter<'_>,
-) -> ValueRef {
-    let ability_id = compute_ability_id(ctx, ability_ref_ty);
-    let i32_ty = intern_i32(ctx);
+    location: Location,
+    name: Symbol,
+    signature: TypeRef,
+    helper: Helper,
+) -> OpRef {
+    let (inputs, results) = if let Some(sig) = wasm_dialect::FuncSig::from_type_ref(ctx, signature)
+    {
+        (sig.inputs(ctx).to_vec(), sig.results(ctx).to_vec())
+    } else {
+        let sig = func::FuncSig::from_type_ref(ctx, signature)
+            .expect("evidence helper declaration must have a function signature");
+        (sig.inputs(ctx).to_vec(), sig.results(ctx).to_vec())
+    };
+    let result_ty = *results
+        .first()
+        .expect("evidence helper declaration must have one result");
+    let block = ctx.create_block(BlockData {
+        location,
+        args: inputs
+            .iter()
+            .map(|&ty| BlockArgData {
+                ty,
+                attrs: Default::default(),
+            })
+            .collect(),
+        ops: smallvec![],
+        parent_region: None,
+    });
+    let args = ctx.block_args(block).to_vec();
     let marker_ty = ability::marker_adt_type_ref(ctx);
-    let closure_ty = crate::wasm::type_converter::closure_adt_type(ctx);
-
-    let ability_id_const = wasm_dialect::I32Const::operands()
-        .value(ability_id)
-        .results(i32_ty)
-        .build(ctx, loc);
-    let lookup = wasm_dialect::Call::operands([evidence, ability_id_const.result(ctx)])
-        .callee(Symbol::new(evidence_abi::LOOKUP))
-        .results([marker_ty])
-        .build(ctx, loc);
-    let marker = lookup.results(ctx)[0];
-    let closure_get = wasm_dialect::StructGet::operands(marker)
-        .type_idx(MARKER_IDX)
-        .field_idx(field.index())
-        .results(closure_ty)
-        .build(ctx, loc);
-    let closure = closure_get.result(ctx);
-
-    rewriter.insert_op(ability_id_const.op_ref());
-    rewriter.insert_op(lookup.op_ref());
-    rewriter.insert_op(closure_get.op_ref());
-    closure
-}
-
-fn insert_closure_parts(
-    ctx: &mut IrContext,
-    loc: Location,
-    closure: ValueRef,
-    rewriter: &mut PatternRewriter<'_>,
-) -> (ValueRef, ValueRef) {
-    let i32_ty = intern_i32(ctx);
-    let anyref_ty = trunk_ir::dialect::wasm::anyref(ctx).as_type_ref();
-
-    let table_idx_get = wasm_dialect::StructGet::operands(closure)
-        .type_idx(CLOSURE_STRUCT_IDX)
-        .field_idx(0)
-        .results(i32_ty)
-        .build(ctx, loc);
-    let table_idx = table_idx_get.result(ctx);
-    let env_get = wasm_dialect::StructGet::operands(closure)
-        .type_idx(CLOSURE_STRUCT_IDX)
-        .field_idx(1)
-        .results(anyref_ty)
-        .build(ctx, loc);
-    let env = env_get.result(ctx);
-
-    rewriter.insert_op(table_idx_get.op_ref());
-    rewriter.insert_op(env_get.op_ref());
-    (table_idx, env)
-}
-
-fn insert_op_idx_const(
-    ctx: &mut IrContext,
-    loc: Location,
-    ability_ref_ty: TypeRef,
-    op_name: Symbol,
-    rewriter: &mut PatternRewriter<'_>,
-) -> ValueRef {
-    let ability_name = ability::ability_name(ctx, ability_ref_ty);
-    let op_idx = ability::compute_op_idx(ability_name, Some(op_name));
-    let i32_ty = intern_i32(ctx);
-    let op_idx_const = wasm_dialect::I32Const::operands()
-        .value(op_idx as i32)
-        .results(i32_ty)
-        .build(ctx, loc);
-    let op_idx = op_idx_const.result(ctx);
-    rewriter.insert_op(op_idx_const.op_ref());
-    op_idx
-}
-
-struct EvidenceExtendCall {
-    evidence: ValueRef,
-    result_ty: TypeRef,
-    ability_ref_ty: TypeRef,
-    prompt_tag: ValueRef,
-    tr_dispatch_fn: ValueRef,
-    handler_dispatch: ValueRef,
-}
-
-fn insert_evidence_extend_call(
-    ctx: &mut IrContext,
-    loc: Location,
-    call: EvidenceExtendCall,
-    rewriter: &mut PatternRewriter<'_>,
-) -> ValueRef {
-    let ability_id = compute_ability_id(ctx, call.ability_ref_ty);
-    let i32_ty = intern_i32(ctx);
-    let marker_ty = ability::marker_adt_type_ref(ctx);
-
-    // Create: %ability_id = wasm.i32_const(ability_id)
-    let ability_id_const = wasm_dialect::I32Const::operands()
-        .value(ability_id)
-        .results(i32_ty)
-        .build(ctx, loc);
-
-    // Create: %marker = wasm.struct_new(MARKER_IDX, %ability_id, %prompt_tag, %tr_dispatch_fn, %handler_dispatch)
-    let marker_op = wasm_dialect::StructNew::operands([
-        ability_id_const.result(ctx),
-        call.prompt_tag,
-        call.tr_dispatch_fn,
-        call.handler_dispatch,
-    ])
-    .type_idx(MARKER_IDX)
-    .results(marker_ty)
-    .build(ctx, loc);
-
-    // Create: %result = wasm.call @__tribute_evidence_extend(%ev, %marker)
-    let call_op = wasm_dialect::Call::operands([call.evidence, marker_op.result(ctx)])
-        .callee(Symbol::new(evidence_abi::EXTEND))
-        .results([call.result_ty])
-        .build(ctx, loc);
-
-    let call_result = call_op.results(ctx)[0];
-    rewriter.insert_op(ability_id_const.op_ref());
-    rewriter.insert_op(marker_op.op_ref());
-    rewriter.insert_op(call_op.op_ref());
-    call_result
+    let returned = match helper {
+        Helper::MarkerField(field) => {
+            let marker = wasm_dialect::Call::operands([args[0], args[1]])
+                .callee(Symbol::new(FIND_MARKER))
+                .results([marker_ty])
+                .build(ctx, location);
+            ctx.push_op(block, marker.op_ref());
+            let get = wasm_dialect::StructGet::operands(marker.results(ctx)[0])
+                .type_idx(MARKER_IDX)
+                .field_idx(field.index())
+                .results(result_ty)
+                .build(ctx, location);
+            ctx.push_op(block, get.op_ref());
+            get.result(ctx)
+        }
+        Helper::Extend => {
+            let marker = wasm_dialect::StructNew::operands([args[1], args[2], args[3], args[4]])
+                .type_idx(MARKER_IDX)
+                .results(marker_ty)
+                .build(ctx, location);
+            ctx.push_op(block, marker.op_ref());
+            let call = wasm_dialect::Call::operands([args[0], marker.result(ctx)])
+                .callee(Symbol::new(INSERT_MARKER))
+                .results([result_ty])
+                .build(ctx, location);
+            ctx.push_op(block, call.op_ref());
+            call.results(ctx)[0]
+        }
+    };
+    let ret = wasm_dialect::Return::operands(vec![returned]).build(ctx, location);
+    ctx.push_op(block, ret.op_ref());
+    let body = ctx.create_region(RegionData {
+        location,
+        blocks: smallvec![block],
+        parent_op: None,
+    });
+    let func_ty = wasm_dialect::func_sig(ctx, inputs, [result_ty]).as_type_ref();
+    wasm_dialect::Func::operands()
+        .sym_name(name)
+        .r#type(func_ty)
+        .regions(body)
+        .build(ctx, location)
+        .op_ref()
 }
 
 // =============================================================================
@@ -636,7 +461,7 @@ mod locals {
     pub const HIGH: u32 = 3;
 }
 
-/// Generate the `__tribute_evidence_lookup` function implementation.
+/// Generate the internal `__tribute_evidence_find_marker` helper.
 ///
 /// Uses binary search to find a marker with the given ability_id.
 /// Returns the marker, or traps with unreachable if not found (compiler bug).
@@ -708,7 +533,7 @@ fn generate_evidence_lookup_function(ctx: &mut IrContext, location: Location) ->
     });
 
     let func_op = wasm_dialect::Func::operands()
-        .sym_name(Symbol::new(evidence_abi::LOOKUP))
+        .sym_name(Symbol::new(FIND_MARKER))
         .r#type(func_ty)
         .regions(body)
         .build(ctx, location);
@@ -932,7 +757,7 @@ fn build_lookup_loop_body(
     })
 }
 
-/// Generate the `__tribute_evidence_extend` function implementation.
+/// Generate the internal `__tribute_evidence_insert_marker` helper.
 ///
 /// Uses binary search to find the insertion point, then creates a new array
 /// with the marker inserted at the correct position to maintain sorted order.
@@ -1199,7 +1024,7 @@ fn generate_evidence_extend_function(ctx: &mut IrContext, location: Location) ->
     });
 
     let func_op = wasm_dialect::Func::operands()
-        .sym_name(Symbol::new(evidence_abi::EXTEND))
+        .sym_name(Symbol::new(INSERT_MARKER))
         .r#type(func_ty)
         .regions(body)
         .build(ctx, location);
@@ -1372,385 +1197,198 @@ fn intern_func_type(ctx: &mut IrContext, params: &[TypeRef], ret: TypeRef) -> Ty
     wasm_dialect::func_sig(ctx, params.iter().copied(), [ret]).as_type_ref()
 }
 
-/// Compute a stable ability ID as a WASM i32 immediate.
-fn compute_ability_id(ctx: &IrContext, ability_ty: TypeRef) -> i32 {
-    ability_id_as_wasm_i32(ability::compute_ability_id(ctx, ability_ty))
-}
-
-fn ability_id_as_wasm_i32(ability_id: u32) -> i32 {
-    i32::from_ne_bytes(ability_id.to_ne_bytes())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
-    fn lower_text(ir: &str) -> String {
+    const TYPES: &str = r#"  !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}"#;
+
+    fn module_text(body: &str) -> String {
+        format!("core.module @test {{\n{TYPES}\n{body}\n}}")
+    }
+
+    fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+        prepare_wasm_evidence_runtime(ctx, module);
+        for op in module.ops(ctx) {
+            if let Ok(function) = func::Func::from_op(ctx, op) {
+                lower_evidence_to_wasm_func(ctx, function)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn lower_text(body: &str) -> String {
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, ir);
-        lower_evidence_to_wasm(&mut ctx, module).unwrap();
+        let module = parse_test_module(&mut ctx, &module_text(body));
+        lower(&mut ctx, module).expect("evidence lowering");
         print_module(&ctx, module.op())
     }
 
-    fn dispatch_module() -> &'static str {
-        r#"core.module @test {
-  func.func @selected(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+    fn assert_shared_dialect_only(printed: &str) {
+        assert!(!printed.contains("effect."), "{printed}");
+        assert!(!printed.contains("wasm."), "{printed}");
+        assert!(!printed.contains("tribute.calling_convention"), "{printed}");
+    }
+
+    const TAIL: &str = r#"  func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : tribute_rt.anyref
     func.return %result
-  }
-  func.func @untouched(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : wasm.anyref
-    func.return %result
-  }
-}"#
-    }
+  }"#;
 
-    fn lower_funcs_to_wasm(ctx: &mut IrContext, module: Module) {
-        let tc = super::super::type_converter::wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, module, tc);
-    }
-
-    #[test]
-    fn textual_dispatch_tail_lowers_to_wasm_indirect_call() {
-        let output = lower_text(
-            r#"core.module @test {
-  func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
-    func.return %result
-  }
-}"#,
-        );
-
-        assert!(!output.contains("effect.dispatch_tail"), "{output}");
-        assert!(output.contains("__tribute_evidence_lookup"), "{output}");
-        assert!(output.contains("wasm.struct_get"), "{output}");
-        assert!(output.contains("wasm.call_indirect"), "{output}");
-    }
-
-    #[test]
-    fn tail_dispatch_preserves_fixed_signature_and_rejects_malformed_contracts() {
-        let template = r#"core.module @test {
-            func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-                %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
-                func.return %result
-            }
-        }"#;
-        let output = lower_text(template);
-        assert!(output.contains("signature = wasm.func_sig<(wasm.arrayref, wasm.anyref, core.i32, wasm.anyref) -> wasm.anyref>"), "{output}");
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, template);
-        let function = module.ops(&ctx)[0];
-        let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
-        let shared_evidence = ability::evidence_adt_type_ref(&mut ctx);
-        ctx.set_block_arg_type(block, 0, shared_evidence);
-        lower_evidence_to_wasm(&mut ctx, module)
-            .expect("exact shared Evidence is accepted before target conversion");
-
-        for source in [
-            template.replace("%ev: wasm.arrayref", "%ev: core.array(core.i32)"),
-            template.replace("%ev: wasm.arrayref", "%ev: wasm.anyref"),
-            template.replace("%payload: wasm.anyref", "%payload: core.i32"),
-            template
-                .replace("} : wasm.anyref", "} : core.i32")
-                .replace("-> wasm.anyref", "-> core.i32"),
-        ] {
-            let mut ctx = IrContext::new();
-            let module = parse_test_module(&mut ctx, &source);
-            let before = print_module(&ctx, module.op());
-            assert_eq!(
-                lower_evidence_to_wasm(&mut ctx, module),
-                Err(EvidenceValidationError::InvalidTailDispatch)
-            );
-            assert_eq!(print_module(&ctx, module.op()), before);
-        }
-    }
-
-    #[test]
-    fn fixed_dispatch_signature_is_independent_of_answer_and_rejects_operand_mutations() {
-        let source = r#"core.module @test {
-          !closure = adt.struct() {fields = [[@table_idx, core.i32], [@env, wasm.anyref]], name = @_closure}
-          func.func @run(%ev: wasm.arrayref, %dispatch: !closure, %resume: !closure, %payload: wasm.anyref) {
-            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
-          }
-        }"#;
-        let first = lower_text(source);
-        let second =
-            lower_text(&source.replace("answer_type = core.i32", "answer_type = core.i64"));
-        assert_eq!(first, second);
-        assert!(first.contains("wasm.func_sig<(wasm.arrayref, wasm.anyref, !closure, core.i32, core.i32, core.i32, wasm.anyref) -> ()>"), "{first}");
-        assert!(!first.contains("answer_type"));
-        let mut invalid_inputs: Vec<_> = [
-            source.replace("answer_type = core.i32", "answer_type = 0"),
-            source.replace(", answer_type = core.i32", ""),
-            source.replace(
-                "%ev, %dispatch, %resume, %payload",
-                "%ev, %dispatch, %resume",
-            ),
-        ]
-        .into_iter()
-        .map(|source| (source, EvidenceValidationError::InvalidDispatchMetadata))
-        .collect();
-        for original in [
-            "%ev: wasm.arrayref",
-            "%dispatch: !closure",
-            "%resume: !closure",
-            "%payload: wasm.anyref",
-        ] {
-            let changed = source.replace(
-                original,
-                &format!("{}: core.i64", original.split(':').next().unwrap()),
-            );
-            invalid_inputs.push((changed, EvidenceValidationError::DispatchOperandMismatch));
-        }
-        for (changed, expected) in invalid_inputs {
-            for stub in [
-                "",
-                "func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 { func.unreachable }",
-            ] {
-                let source =
-                    changed.replacen("func.func @run", &format!("{stub}\nfunc.func @run"), 1);
-                let mut ctx = IrContext::new();
-                let module = parse_test_module(&mut ctx, &source);
-                let before = print_module(&ctx, module.op());
-                let ops = module.ops(&ctx);
-                assert_eq!(
-                    prepare_wasm_evidence_runtime(&mut ctx, module).unwrap_err(),
-                    expected
-                );
-                assert_eq!(
-                    lower_evidence_to_wasm(&mut ctx, module).unwrap_err(),
-                    expected
-                );
-                assert_eq!(print_module(&ctx, module.op()), before);
-                assert_eq!(module.ops(&ctx), ops);
-            }
-        }
-    }
-
-    #[test]
-    fn dispatch_payload_accepts_registered_references_but_canonical_operands_stay_exact() {
-        let dispatch_source = |evidence_ty: &str, payload_ty: &str| {
-            format!(
-                r#"core.module @test {{
-          !closure = adt.struct() {{fields = [[@table_idx, core.i32], [@env, wasm.anyref]], name = @_closure}}
-          !Payload = adt.struct() {{fields = [[@value, core.i32]], name = @Payload}}
-          !TagOnly = adt.enum() {{is_variant = true, variant_tag = @Leaf}}
-          !Array = core.array(core.i32)
-          func.func @run(%ev: {evidence_ty}, %dispatch: !closure, %resume: !closure, %payload: {payload_ty}) {{
-            effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get, answer_type = core.i32}}
-          }}
-        }}"#
-            )
-        };
-        let fixed_signature = "wasm.func_sig<(wasm.arrayref, wasm.anyref, !closure, core.i32, core.i32, core.i32, wasm.anyref) -> ()>";
-
-        for payload_ty in [
-            "wasm.anyref",
-            "adt.typeref",
-            "!Payload",
-            "core.bytes",
-            "!Array",
-            "wasm.i31ref",
-            "wasm.arrayref",
-        ] {
-            let output = lower_text(&dispatch_source("wasm.arrayref", payload_ty));
-            assert!(
-                output.contains(fixed_signature),
-                "payload {payload_ty}: {output}"
-            );
-        }
-
-        for (evidence_ty, payload_ty) in [
-            ("!Array", "wasm.anyref"),
-            ("wasm.anyref", "wasm.anyref"),
-            ("core.i64", "wasm.anyref"),
-            ("wasm.arrayref", "core.i64"),
-            ("wasm.arrayref", "wasm.funcref"),
-            ("wasm.arrayref", "!TagOnly"),
-        ] {
-            let mut ctx = IrContext::new();
-            let module = parse_test_module(&mut ctx, &dispatch_source(evidence_ty, payload_ty));
-            assert_eq!(
-                lower_evidence_to_wasm(&mut ctx, module).unwrap_err(),
-                EvidenceValidationError::DispatchOperandMismatch,
-                "evidence {evidence_ty}, payload {payload_ty}"
-            );
-        }
-    }
-
-    #[test]
-    fn pass_adapter_preserves_concrete_validation_error() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-            !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]]}
-            wasm.func @run(%ev: wasm.arrayref, %dispatch: !Closure, %resume: !Closure, %payload: core.i64) {
-                effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
-            }
-        }"#,
-        );
-        let function = wasm_dialect::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
-        let before = print_module(&ctx, module.op());
-        let error = LowerEvidenceToWasm
-            .run(&mut ctx, function, &mut Default::default())
-            .unwrap_err();
-        assert_eq!(
-            error.downcast_ref::<EvidenceValidationError>(),
-            Some(&EvidenceValidationError::DispatchOperandMismatch)
-        );
-        assert_eq!(print_module(&ctx, module.op()), before);
-    }
-
-    #[test]
-    fn textual_dispatch_cps_lowers_to_wasm_indirect_call() {
-        let output = lower_text(
-            r#"core.module @test {
-          !closure = adt.struct() {fields = [[@table_idx, core.i32], [@env, wasm.anyref]], name = @_closure}
-  func.func @run(%ev: wasm.arrayref, %dispatch: !closure, %resume: !closure, %payload: wasm.anyref) {
+    const CPS: &str = r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
     effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
-  }
-}"#,
-        );
+  }"#;
 
-        assert!(!output.contains("effect.dispatch_cps"), "{output}");
-        assert!(output.contains("__tribute_evidence_lookup"), "{output}");
-        assert!(
-            output.contains("wasm.struct_get %1"),
-            "the Wasm tail must decompose the explicit dispatch operand: {output}"
-        );
-        assert!(
-            !output.contains("core.unrealized_conversion_cast"),
-            "the Wasm tail must not cast the explicit dispatch operand: {output}"
-        );
+    const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure, %handler: !Closure) -> !Evidence {
+    %extended = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref() {name = @State}} : !Evidence
+    func.return %extended
+  }"#;
 
-        assert!(output.contains("wasm.return_call_indirect"), "{output}");
+    #[test]
+    fn tail_dispatch_calls_the_selected_closure_indirectly() {
+        let printed = lower_text(TAIL);
+
+        assert_shared_dialect_only(&printed);
         assert!(
-            !output.contains("tribute.calling_convention"),
-            "the Wasm tail must not recreate semantic convention metadata: {output}"
+            printed.contains("func.func @__tribute_evidence_lookup_tr("),
+            "{printed}"
         );
-        assert!(output.contains("signature ="), "{output}");
-        assert!(!output.contains("func.indirect_call_signature"), "{output}");
+        assert!(
+            printed.contains("callee = @__tribute_evidence_lookup_tr"),
+            "{printed}"
+        );
+        assert!(printed.contains("func.call_indirect"), "{printed}");
+        assert!(
+            !printed.contains("@__tribute_evidence_lookup("),
+            "{printed}"
+        );
+        assert!(!printed.contains("@__tribute_evidence_extend"), "{printed}");
     }
 
     #[test]
-    fn result_bearing_final_dispatch_remains_unchanged() {
+    fn cps_dispatch_transfers_through_a_tail_signature() {
+        let printed = lower_text(CPS);
+
+        assert_shared_dialect_only(&printed);
+        assert!(
+            printed.contains("callee = @__tribute_evidence_lookup}"),
+            "{printed}"
+        );
+        assert!(printed.contains("func.tail_call_indirect"), "{printed}");
+        assert!(printed.contains("call_conv = @tail"), "{printed}");
+    }
+
+    #[test]
+    fn extend_calls_the_runtime_with_marker_fields() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &module_text(EXTEND));
+        lower(&mut ctx, module).unwrap();
+        let printed = print_module(&ctx, module.op());
+
+        assert_shared_dialect_only(&printed);
+        let mut calls = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if let Ok(call) = func::Call::from_op(&ctx, op) {
+                calls.push((call.callee(&ctx), ctx.op_operands(op).len()));
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        assert_eq!(calls, [(Symbol::new(evidence_abi::EXTEND), 5)], "{printed}");
+    }
+
+    #[test]
+    fn malformed_cps_dispatch_is_rejected_without_mutation() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            r#"core.module @test {
-  func.func @run(%ev: wasm.arrayref, %continuation: wasm.anyref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_cps %ev, %continuation, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : wasm.anyref
-    func.return %result
-  }
-}"#,
+            &module_text(
+                r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
+    %bad = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32} : core.i32
+  }"#,
+            ),
         );
+        prepare_wasm_evidence_runtime(&mut ctx, module);
         let before = print_module(&ctx, module.op());
-
-        rewrite_evidence_ops_in_scope(&mut ctx, module);
-
-        assert_eq!(print_module(&ctx, module.op()), before);
-    }
-
-    #[test]
-    fn textual_extend_lowers_to_wasm_evidence_extend_call() {
-        let output = lower_text(
-            r#"core.module @test {
-  func.func @run(%ev: wasm.arrayref, %prompt: core.i32, %tr: wasm.anyref, %handler: wasm.anyref) -> wasm.arrayref {
-    %result = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref() {name = @State}} : wasm.arrayref
-    func.return %result
-  }
-}"#,
-        );
-
-        assert!(!output.contains("effect.extend"), "{output}");
-        assert!(output.contains("wasm.struct_new"), "{output}");
-        assert!(output.contains("__tribute_evidence_extend"), "{output}");
-    }
-
-    #[test]
-    fn extend_result_is_produced_as_a_target_type() {
-        // `effect.extend` lowers to a `wasm.call`, so its declared result must be
-        // the converted evidence reference even when the shared IR still spells
-        // the evidence array logically.
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
-  func.func @run(%ev: !Evidence, %prompt: core.i32, %tr: wasm.anyref, %handler: wasm.anyref) {
-    %result = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref() {name = @State}} : !Evidence
-  }
-}"#,
-        );
-        lower_evidence_to_wasm(&mut ctx, module).unwrap();
-
-        let fixture = module
+        let function = module
             .ops(&ctx)
             .into_iter()
-            .find(|&op| {
-                ctx.op(op).dialect == Symbol::new("func")
-                    && ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new("run"))
+            .find_map(|op| {
+                func::Func::from_op(&ctx, op)
+                    .ok()
+                    .filter(|f| f.sym_name(&ctx) == Symbol::new("cps"))
             })
-            .expect("the fixture function must survive lowering");
-        let body = ctx.op(fixture).regions[0];
-        let block = ctx.region(body).blocks[0];
-        let calls: Vec<_> = ctx
-            .block(block)
-            .ops
-            .iter()
-            .copied()
-            .filter_map(|op| wasm_dialect::Call::from_op(&ctx, op).ok())
-            .collect();
-
-        assert_eq!(calls.len(), 1, "{}", print_module(&ctx, module.op()));
-        let expected = crate::wasm::type_converter::evidence_wasm_type(&mut ctx);
-        assert_eq!(ctx.op_result_types(calls[0].op_ref()), [expected]);
-    }
-
-    #[test]
-    fn wasm_function_scope_rewrites_only_selected_function() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, dispatch_module());
-        lower_funcs_to_wasm(&mut ctx, module);
-        let selected = module
-            .ops(&ctx)
-            .into_iter()
-            .filter_map(|op| wasm_dialect::Func::from_op(&ctx, op).ok())
-            .next()
-            .expect("test module should contain a selected wasm function");
-
-        lower_evidence_to_wasm_func(&mut ctx, selected).unwrap();
-
-        let output = print_module(&ctx, module.op());
-        assert_eq!(output.matches("effect.dispatch_tail").count(), 1);
-        assert!(output.contains("sym_name = @selected"), "{output}");
-        assert!(output.contains("sym_name = @untouched"), "{output}");
-        assert!(output.contains("op_name = @print"), "{output}");
-        assert!(output.contains("wasm.call_indirect"), "{output}");
-    }
-
-    #[test]
-    fn pass_adapter_runs_wasm_function_lowering() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, dispatch_module());
-        lower_funcs_to_wasm(&mut ctx, module);
-        let selected = module
-            .ops(&ctx)
-            .into_iter()
-            .filter_map(|op| wasm_dialect::Func::from_op(&ctx, op).ok())
-            .next()
-            .expect("test module should contain a selected wasm function");
-        let mut pass = LowerEvidenceToWasm;
-
-        assert_eq!(pass.name(), "lower-evidence-to-wasm");
-        pass.run(&mut ctx, selected, &mut Default::default())
             .unwrap();
 
-        let output = print_module(&ctx, module.op());
-        assert_eq!(output.matches("effect.dispatch_tail").count(), 1);
-        assert!(output.contains("__tribute_evidence_lookup"), "{output}");
+        let error = lower_evidence_to_wasm_func(&mut ctx, function)
+            .expect_err("a result-bearing final dispatch is malformed");
+
+        assert!(error.to_string().contains("effect.dispatch_cps"), "{error}");
+        assert_eq!(print_module(&ctx, module.op()), before);
+    }
+
+    #[test]
+    fn only_needed_helpers_are_declared() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &module_text(EXTEND));
+        prepare_wasm_evidence_runtime(&mut ctx, module);
+        let printed = print_module(&ctx, module.op());
+
+        assert!(printed.contains("@__tribute_evidence_extend("), "{printed}");
+        assert!(!printed.contains("@__tribute_evidence_lookup"), "{printed}");
+    }
+
+    #[test]
+    fn binding_replaces_declarations_with_implementations() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @__tribute_evidence_lookup_tr(%ev: wasm.arrayref, %id: core.i32) -> wasm.anyref attributes {abi = "C"}
+  func.func @__tribute_evidence_extend(%ev: wasm.arrayref, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref, %handler: wasm.anyref) -> wasm.arrayref attributes {abi = "C"}
+}"#,
+        );
+
+        bind_wasm_evidence_runtime(&mut ctx, module);
+
+        let mut functions = Vec::new();
+        for op in module.ops(&ctx) {
+            let function = wasm_dialect::Func::from_op(&ctx, op).expect("bound wasm.func");
+            assert!(!ctx.op(op).regions.is_empty(), "helpers must have bodies");
+            functions.push(function.sym_name(&ctx).to_string());
+        }
+        functions.sort();
+        assert_eq!(
+            functions,
+            [
+                "__tribute_evidence_extend",
+                "__tribute_evidence_find_marker",
+                "__tribute_evidence_insert_marker",
+                "__tribute_evidence_lookup",
+                "__tribute_evidence_lookup_tr",
+            ]
+        );
+    }
+
+    #[test]
+    fn binding_leaves_modules_without_helper_declarations_unchanged() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main() -> core.nil {
+    %nil = arith.const {value = unit} : core.nil
+    func.return %nil
+  }
+}"#,
+        );
+        let before = print_module(&ctx, module.op());
+
+        bind_wasm_evidence_runtime(&mut ctx, module);
+
+        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }

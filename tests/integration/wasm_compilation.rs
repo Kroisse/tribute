@@ -494,16 +494,36 @@ fn test_validate_fixed_wasm_dispatch_abis() {
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
         r#"core.module @test {
-        !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]]}
-        func.func @tail(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-            %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+        !Evidence = core.array(adt.struct() {name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]})
+        !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
+        func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
+            %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : tribute_rt.anyref
             func.return %result
         }
-        func.func @cps(%ev: wasm.arrayref, %dispatch: !Closure, %resume: !Closure, %payload: wasm.anyref) {
+        func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
             effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+        }
+        func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure, %handler: !Closure) -> !Evidence {
+            %extended = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref() {name = @State}} : !Evidence
+            func.return %extended
         }
     }"#,
     );
+    // Boundary evidence lowering declares the helper ABI; Wasm lowering past
+    // the exit binds it to the target's GC-array implementation.
+    tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module);
+    for op in module.ops(&ctx) {
+        if let Ok(function) =
+            <trunk_ir::dialect::func::Func as trunk_ir::ops::DialectOp>::from_op(&ctx, op)
+        {
+            tribute_passes::wasm::evidence_to_wasm::lower_evidence_to_wasm_func(&mut ctx, function)
+                .unwrap();
+        }
+    }
+    let lowered = trunk_ir::printer::print_module(&ctx, module.op());
+    assert!(!lowered.contains("effect."), "{lowered}");
+    assert!(!lowered.contains("wasm."), "{lowered}");
+    assert!(!lowered.contains("tribute.calling_convention"), "{lowered}");
     tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut Default::default()).unwrap();
     tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
     let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();

@@ -8,13 +8,15 @@
 use std::ops::ControlFlow;
 
 use tribute_core::get_physical_closure_convention;
-use tribute_ir::dialect::ability::{self, compute_op_idx, evidence_abi, evidence_runtime_symbols};
+use tribute_ir::dialect::ability::{self, evidence_abi, evidence_runtime_symbols};
 use tribute_ir::dialect::{effect, tribute_rt};
 use trunk_ir::Symbol;
+
+use crate::effect_dispatch;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
-use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunError, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
@@ -23,7 +25,7 @@ use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 /// Lower evidence operations for the native backend.
@@ -201,20 +203,6 @@ fn is_evidence_type(ctx: &IrContext, ty: TypeRef) -> bool {
     tribute_ir::dialect::ability::is_evidence_type_ref(ctx, ty)
 }
 
-fn op_idx_const(
-    ctx: &mut IrContext,
-    loc: Location,
-    i32_ty: TypeRef,
-    ability_ref: TypeRef,
-    op_name: Symbol,
-) -> arith::Const {
-    let op_idx = compute_op_idx(ability::ability_name(ctx, ability_ref), Some(op_name));
-    arith::Const::operands()
-        .value(Attribute::Int(op_idx as i128))
-        .results(i32_ty)
-        .build(ctx, loc)
-}
-
 fn core_ptr_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "ptr").build())
 }
@@ -315,60 +303,21 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
         let Ok(dispatch_op) = effect::DispatchTail::from_op(ctx, op) else {
             return false;
         };
+        let (converter, _) = super::type_converter::native_type_converter(ctx);
+        if !effect_dispatch::is_valid_tail_dispatch(ctx, op, &converter) {
+            return false;
+        }
 
         let loc = ctx.op(op).location;
         let ptr_ty = core_ptr_type(ctx);
-        let i32_ty = core_i32_type(ctx);
-        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let ability_ref = dispatch_op.ability_ref(ctx);
-
-        let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
-        let ability_id_val = ability_id_op.result(ctx);
-        rewriter.insert_op(ability_id_op.op_ref());
-
-        let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id_val])
+        let ability_id =
+            effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
+        let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
             .callee(Symbol::new(evidence_abi::LOOKUP_TR))
             .results([ptr_ty])
             .build(ctx, loc);
-        let dispatch_val = dispatch_closure.result(ctx);
         rewriter.insert_op(dispatch_closure.op_ref());
-
-        let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
-        let op_idx_val = op_idx_op.result(ctx);
-        rewriter.insert_op(op_idx_op.op_ref());
-
-        let fn_ptr_get = adt::StructGet::operands(dispatch_val)
-            .r#type(closure_ty)
-            .field(0)
-            .results(i32_ty)
-            .build(ctx, loc);
-        let fn_ptr = fn_ptr_get.result(ctx);
-        rewriter.insert_op(fn_ptr_get.op_ref());
-
-        let env_get = adt::StructGet::operands(dispatch_val)
-            .r#type(closure_ty)
-            .field(1)
-            .results(anyref_ty)
-            .build(ctx, loc);
-        let env_val = env_get.result(ctx);
-        rewriter.insert_op(env_get.op_ref());
-
-        let result_ty = ctx.op_result_types(op)[0];
-        let args = [
-            dispatch_op.evidence(ctx),
-            env_val,
-            op_idx_val,
-            dispatch_op.payload(ctx),
-        ];
-        let parameters = args.map(|value| ctx.value_ty(value));
-        let signature = func::func_sig(ctx, parameters, [result_ty]).as_type_ref();
-        let call = func::CallIndirect::operands(fn_ptr, args)
-            .signature(signature)
-            .build(ctx, loc);
-        let new_result = call.result(ctx);
-        rewriter.insert_op(call.op_ref());
-        rewriter.erase_op(vec![new_result]);
+        effect_dispatch::lower_tail_dispatch(ctx, op, dispatch_closure.result(ctx), rewriter);
         true
     }
 }
@@ -385,103 +334,21 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let Ok(dispatch_op) = effect::DispatchCps::from_op(ctx, op) else {
             return false;
         };
-
-        let loc = ctx.op(op).location;
-        // A result-bearing final dispatch is malformed. Reject it before any
-        // helper op is inserted so partial conversion leaves the IR unchanged.
-        if !ctx.op_result_types(op).is_empty()
-            || ctx.op(op).attributes.get_type("answer_type").is_none()
-            || ctx.op_operands(op).len() != 4
-        {
+        let (converter, _) = super::type_converter::native_type_converter(ctx);
+        if !effect_dispatch::is_valid_cps_dispatch(ctx, op, &converter) {
             return false;
         }
+
+        let loc = ctx.op(op).location;
         let i32_ty = core_i32_type(ctx);
-        let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-        let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
-        let ability_ref = dispatch_op.ability_ref(ctx);
-        let evidence_ty = ability::evidence_adt_type_ref(ctx);
-        let signature = func::func_sig(
-            ctx,
-            [
-                evidence_ty,
-                anyref_ty,
-                closure_ty,
-                i32_ty,
-                i32_ty,
-                i32_ty,
-                anyref_ty,
-            ],
-            [],
-        )
-        .with_call_conv(ctx, func::CallConv::Tail)
-        .as_type_ref();
-        let (converter, _) = super::type_converter::native_type_converter(ctx);
-        let expected = [evidence_ty, closure_ty, closure_ty, anyref_ty];
-        for (value, expected) in ctx.op_operands(op).to_vec().into_iter().zip(expected) {
-            if converter.convert_type_or_identity(ctx, ctx.value_ty(value))
-                != converter.convert_type_or_identity(ctx, expected)
-            {
-                return false;
-            }
-        }
-
-        let ability_id_op = ability::ability_id_const(ctx, loc, i32_ty, ability_ref);
-        let ability_id_val = ability_id_op.result(ctx);
-        rewriter.insert_op(ability_id_op.op_ref());
-
-        let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id_val])
+        let ability_id =
+            effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
+        let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
             .callee(Symbol::new(evidence_abi::LOOKUP))
             .results([i32_ty])
             .build(ctx, loc);
-        let prompt_val = prompt.result(ctx);
         rewriter.insert_op(prompt.op_ref());
-
-        let op_idx_op = op_idx_const(ctx, loc, i32_ty, ability_ref, dispatch_op.op_name(ctx));
-        let op_idx_val = op_idx_op.result(ctx);
-        rewriter.insert_op(op_idx_op.op_ref());
-
-        let fn_ptr_get = adt::StructGet::operands(dispatch_op.dispatch(ctx))
-            .r#type(closure_ty)
-            .field(0)
-            .results(i32_ty)
-            .build(ctx, loc);
-        let fn_ptr = fn_ptr_get.result(ctx);
-        rewriter.insert_op(fn_ptr_get.op_ref());
-
-        let env_get = adt::StructGet::operands(dispatch_op.dispatch(ctx))
-            .r#type(closure_ty)
-            .field(1)
-            .results(anyref_ty)
-            .build(ctx, loc);
-        let env_val = env_get.result(ctx);
-        rewriter.insert_op(env_get.op_ref());
-
-        // Closure lowering keeps a packed continuation at its semantic closure
-        // type until storage finalization; retype it to the dispatch slot.
-        let mut resume = dispatch_op.resume(ctx);
-        if get_physical_closure_convention(ctx, ctx.value_ty(resume)).is_some() {
-            let cast = core::UnrealizedConversionCast::operands(resume)
-                .results(closure_ty)
-                .build(ctx, loc);
-            rewriter.insert_op(cast.op_ref());
-            resume = cast.result(ctx);
-        }
-
-        let tail = func::TailCallIndirect::operands(
-            fn_ptr,
-            [
-                dispatch_op.evidence(ctx),
-                env_val,
-                resume,
-                prompt_val,
-                ability_id_val,
-                op_idx_val,
-                dispatch_op.payload(ctx),
-            ],
-        )
-        .signature(signature)
-        .build(ctx, loc);
-        rewriter.replace_op(tail.op_ref());
+        effect_dispatch::lower_cps_dispatch(ctx, op, ability_id, prompt.result(ctx), rewriter);
         true
     }
 }

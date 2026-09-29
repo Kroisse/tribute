@@ -462,11 +462,9 @@ Marker layout과 evidence runtime ABI는 `tribute-ir`의
 
 WasmGC uses the same field order and shared field identifiers, but its concrete
 GC marker type stores the dispatch closures as `anyref` closure references
-instead of native `ptr` values. Wasm effect ABI lowering therefore expands
-`effect.dispatch_tail` and `effect.dispatch_cps` into evidence lookup,
-`wasm.struct_get` of the selected marker closure, closure table-index/env
-decomposition, and ordinary `wasm.call_indirect` or proper-tail
-`wasm.return_call_indirect`.
+instead of native `ptr` values. Marker construction and field access stay
+inside the target's helper implementations, so effect lowering never builds or
+reads a marker directly.
 
 Empty evidence is represented in high-level IR as an empty `core.array(Marker)`
 or null evidence placeholder, and backend lowering turns that into the target
@@ -475,7 +473,9 @@ When a handler for the same `ability_id` is nested inside an outer handler,
 evidence extension replaces the existing marker so lookup resolves to the
 nearest handler.
 
-Native runtime ABI:
+두 target의 effect lowering은 같은 evidence runtime helper ABI를 호출한다.
+아래는 native 표기이며, Wasm은 `ptr` evidence 대신 GC evidence 배열 참조를,
+dispatch closure `ptr` 대신 canonical closure 참조를 쓴다.
 
 ```text
 __tribute_evidence_empty() -> ptr
@@ -584,9 +584,10 @@ decomposition, and indirect calls로 변환한다.
 ### WasmGC
 
 WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
-`effect.extend`를 marker construction + `__tribute_evidence_extend` helper
-call로 낮추고, `effect.dispatch_tail` / `effect.dispatch_cps`는
-`__tribute_evidence_lookup`, marker closure field access, closure
-table-index/env unpacking으로 낮춘다. CPS control transfer는
-`func.tail_call_indirect`를 거쳐 `wasm.return_call_indirect`가 된다. Source data를
-반환하는 일반 indirect call은 계속 `wasm.call_indirect`를 사용할 수 있다.
+representation/ABI 경계 안에서 native와 같은 구조로 `effect.*`를 낮춘다.
+`effect.extend`는 `__tribute_evidence_extend` 호출이 되고, `effect.dispatch_tail` /
+`effect.dispatch_cps`는 `__tribute_evidence_lookup_tr` / `__tribute_evidence_lookup`,
+closure field 접근, `func.call_indirect` 또는 proper-tail `func.tail_call_indirect`가
+된다. Wasm dialect lowering이 이를 `wasm.call_indirect` /
+`wasm.return_call_indirect`로 바꾼다. Helper 구현은 target runtime으로서 출구 뒤에
+GC 배열 위의 `wasm.func`로 바인딩된다.
