@@ -157,7 +157,8 @@ pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViola
         PendingViolation::Attribute("tribute.cps_continuation_frame_result"),
         // Marks the root bridge's worker call.
         PendingViolation::Unclassified("tribute.root_cps_call"),
-        // Left on intrinsic declarations after shared intrinsic lowering.
+        // Left on bytes intrinsic declarations, which target lowering past
+        // the exit still recognizes by name.
         PendingViolation::Unclassified("tribute.compiler_intrinsic"),
     ];
     const NATIVE: &[PendingViolation] = &COMMON;
