@@ -245,22 +245,23 @@ impl FuncSig {
 
     /// Each input paired with its own attributes, for rebuilding a signature
     /// with [`func_sig_with_param_attrs`].
-    pub fn inputs_with_attrs(&self, ctx: &IrContext) -> Vec<(TypeRef, AttributeMap)> {
-        self.inputs(ctx)
-            .iter()
-            .copied()
-            .zip(self.input_attrs(ctx).cloned())
-            .collect()
+    pub fn inputs_with_attrs<'a>(
+        &self,
+        ctx: &'a IrContext,
+    ) -> impl Iterator<Item = (TypeRef, &'a AttributeMap)> {
+        self.inputs(ctx).iter().copied().zip(self.input_attrs(ctx))
     }
 
     /// Each result paired with its own attributes, for rebuilding a signature
     /// with [`func_sig_with_param_attrs`].
-    pub fn results_with_attrs(&self, ctx: &IrContext) -> Vec<(TypeRef, AttributeMap)> {
+    pub fn results_with_attrs<'a>(
+        &self,
+        ctx: &'a IrContext,
+    ) -> impl Iterator<Item = (TypeRef, &'a AttributeMap)> {
         self.results(ctx)
             .iter()
             .copied()
-            .zip(self.result_attrs(ctx).cloned())
-            .collect()
+            .zip(self.result_attrs(ctx))
     }
 
     pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
@@ -922,21 +923,29 @@ mod tests {
             AttributeMap::new(),
         );
 
-        let mut inputs = source.inputs_with_attrs(&ctx);
+        let mut inputs: Vec<_> = source
+            .inputs_with_attrs(&ctx)
+            .map(|(ty, attrs)| (ty, attrs.clone()))
+            .collect();
         inputs.insert(0, (ptr_ty, AttributeMap::new()));
         let mut attrs = ctx.get_type(source.as_type_ref()).attrs.clone();
         FuncSig::remove_reserved_attrs(&mut attrs);
-        let results = source.results_with_attrs(&ctx);
+        let results: Vec<_> = source
+            .results_with_attrs(&ctx)
+            .map(|(ty, attrs)| (ty, attrs.clone()))
+            .collect();
         let rebuilt = func_sig_with_param_attrs(&mut ctx, inputs, results, attrs);
 
         assert_eq!(rebuilt.inputs(&ctx), [ptr_ty, i32_ty]);
-        assert_eq!(
-            rebuilt.inputs_with_attrs(&ctx),
-            [(ptr_ty, AttributeMap::new()), (i32_ty, marked)]
+        assert!(
+            rebuilt
+                .inputs_with_attrs(&ctx)
+                .eq([(ptr_ty, &AttributeMap::new()), (i32_ty, &marked)])
         );
-        assert_eq!(
-            rebuilt.results_with_attrs(&ctx),
-            [(i32_ty, AttributeMap::new())]
+        assert!(
+            rebuilt
+                .results_with_attrs(&ctx)
+                .eq([(i32_ty, &AttributeMap::new())])
         );
     }
 

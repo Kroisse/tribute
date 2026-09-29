@@ -184,9 +184,15 @@ parameter/attribute pairs, so each attribute stays with its parameter. Copying
 the attributes into `func_sig_with_attrs` would keep the old positions:
 
 ```rust
-let mut inputs = sig.inputs_with_attrs(ctx);
+let mut inputs: Vec<_> = sig
+    .inputs_with_attrs(ctx)
+    .map(|(ty, attrs)| (ty, attrs.clone()))
+    .collect();
 inputs.insert(index, (env_ty, AttributeMap::new()));
-let results = sig.results_with_attrs(ctx);
+let results: Vec<_> = sig
+    .results_with_attrs(ctx)
+    .map(|(ty, attrs)| (ty, attrs.clone()))
+    .collect();
 let rebuilt = func::func_sig_with_param_attrs(ctx, inputs, results, other_attrs);
 ```
 

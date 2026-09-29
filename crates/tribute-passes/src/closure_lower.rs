@@ -378,9 +378,15 @@ fn exact_physical_call_contract(
     if environment_index > args.len() {
         return None;
     }
-    let mut params = callable.inputs_with_attrs(ctx);
+    let mut params: Vec<_> = callable
+        .inputs_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
     params.insert(environment_index, (environment, AttributeMap::new()));
-    let results = callable.results_with_attrs(ctx);
+    let results: Vec<_> = callable
+        .results_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
     let mut type_attrs = ctx.get_type(function).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);

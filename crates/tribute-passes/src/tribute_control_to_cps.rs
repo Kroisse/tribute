@@ -1247,10 +1247,14 @@ impl<'a> Converter<'a> {
                 .expect("pre-CPS validation checked function convention"),
         );
         let (source_result, result_attrs) = callable.result_with_attrs(self.ctx);
+        let result_attrs = result_attrs.clone();
         let result = self.convert_type(source_result);
         let result_attrs = self.convert_attr_map(&result_attrs);
-        let params: Vec<_> = callable
+        let source_params: Vec<_> = callable
             .inputs_with_attrs(self.ctx)
+            .map(|(param, attrs)| (param, attrs.clone()))
+            .collect();
+        let params: Vec<_> = source_params
             .into_iter()
             .map(|(param, attrs)| (self.convert_type(param), self.convert_attr_map(&attrs)))
             .collect();
@@ -2084,14 +2088,20 @@ impl<'a> Converter<'a> {
             .func_type(self.ctx);
         let callable = func::FuncSig::from_type_ref(self.ctx, function)
             .expect("func_ref result lowers to a func.func_sig callable");
-        let mut inputs = callable.inputs_with_attrs(self.ctx);
+        let mut inputs: Vec<_> = callable
+            .inputs_with_attrs(self.ctx)
+            .map(|(ty, attrs)| (ty, attrs.clone()))
+            .collect();
         let env_ty = self.anyref_type();
         inputs.insert(
             usize::from(result_convention.needs_evidence()),
             (env_ty, AttributeMap::new()),
         );
         let physical_params: Vec<_> = inputs.iter().map(|(ty, _)| *ty).collect();
-        let results = callable.results_with_attrs(self.ctx);
+        let results: Vec<_> = callable
+            .results_with_attrs(self.ctx)
+            .map(|(ty, attrs)| (ty, attrs.clone()))
+            .collect();
         let mut attrs = self.ctx.get_type(function).attrs.clone();
         func::FuncSig::remove_reserved_attrs(&mut attrs);
         let adapter_ty =
@@ -5695,8 +5705,7 @@ mod tests {
         assert_eq!(
             logical
                 .inputs_with_attrs(&ctx)
-                .into_iter()
-                .map(|(_, attrs)| attrs)
+                .map(|(_, attrs)| attrs.clone())
                 .collect::<Vec<_>>(),
             [empty(), empty(), empty(), marked.clone()]
         );
@@ -5711,8 +5720,7 @@ mod tests {
         assert_eq!(
             physical
                 .inputs_with_attrs(&ctx)
-                .into_iter()
-                .map(|(_, attrs)| attrs)
+                .map(|(_, attrs)| attrs.clone())
                 .collect::<Vec<_>>(),
             [empty(), empty(), empty(), marked]
         );

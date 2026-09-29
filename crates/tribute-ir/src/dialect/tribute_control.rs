@@ -242,22 +242,19 @@ impl FuncSig {
     }
 
     /// Each input paired with its own attributes.
-    pub fn inputs_with_attrs(self, ctx: &IrContext) -> Vec<(TypeRef, AttributeMap)> {
-        let data = ctx.get_type(self.0);
-        self.inputs(ctx)
-            .iter()
-            .enumerate()
-            .map(|(index, &ty)| (ty, data.param_attrs(index).clone()))
-            .collect()
+    pub fn inputs_with_attrs(
+        self,
+        ctx: &IrContext,
+    ) -> impl Iterator<Item = (TypeRef, &AttributeMap)> {
+        let count = self.inputs(ctx).len();
+        ctx.get_type(self.0).params_with_attrs().take(count)
     }
 
     /// The result paired with its own attributes.
-    pub fn result_with_attrs(self, ctx: &IrContext) -> (TypeRef, AttributeMap) {
+    pub fn result_with_attrs(self, ctx: &IrContext) -> (TypeRef, &AttributeMap) {
         let index = self.inputs(ctx).len();
-        (
-            self.result(ctx),
-            ctx.get_type(self.0).param_attrs(index).clone(),
-        )
+        let data = ctx.get_type(self.0);
+        (data.params[index], data.param_attrs(index))
     }
 
     pub fn convention(self, ctx: &IrContext) -> CallingConvention {

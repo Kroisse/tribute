@@ -215,9 +215,15 @@ fn lower_single_lambda(
         },
     );
 
-    let mut params = callable.inputs_with_attrs(ctx);
+    let mut params: Vec<_> = callable
+        .inputs_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
     params.insert(environment_index, (anyref_ty, AttributeMap::new()));
-    let results = callable.results_with_attrs(ctx);
+    let results: Vec<_> = callable
+        .results_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
     let mut type_attrs = ctx.get_type(function_ty).attrs.clone();
     type_attrs.remove(func::NUM_INPUTS_ATTR);
     type_attrs.remove(func::NUM_RESULTS_ATTR);
@@ -655,8 +661,8 @@ mod tests {
         assert!(lifted_type.single_result(&ctx).is_some());
         // The inserted environment has no attributes; `x` keeps its own.
         assert_eq!(
-            lifted_type.inputs_with_attrs(&ctx),
-            [(anyref_ty, AttributeMap::new()), (i32_ty, marked)]
+            lifted_type.inputs_with_attrs(&ctx).collect::<Vec<_>>(),
+            [(anyref_ty, &AttributeMap::new()), (i32_ty, &marked)]
         );
     }
 

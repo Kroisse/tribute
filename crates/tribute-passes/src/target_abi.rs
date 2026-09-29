@@ -1029,9 +1029,15 @@ fn dispatch_entry_function_type(
     let callable = func::FuncSig::from_type_ref(ctx, callable_ty).ok_or_else(|| {
         TargetAbiError::new("target root bridge: frame Dispatch callable is not func.func_sig")
     })?;
-    let mut params = callable.inputs_with_attrs(ctx);
+    let mut params: Vec<_> = callable
+        .inputs_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
     params.insert(1, (anyref, AttributeMap::new()));
-    let results = callable.results_with_attrs(ctx);
+    let results: Vec<_> = callable
+        .results_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
     let type_attrs = callable
         .non_reserved_attrs(ctx)
         .map(|(key, value)| (*key, value.clone()))
@@ -1378,7 +1384,10 @@ fn validate_constant(
             "target ABI: Cps function reference must have logical core.never result",
         ));
     }
-    let mut params = target.inputs_with_attrs(ctx);
+    let mut params: Vec<_> = target
+        .inputs_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
     if let Some(index) = identity.environment_index {
         if index >= params.len() {
             return Err(TargetAbiError::new(
@@ -1387,7 +1396,10 @@ fn validate_constant(
         }
         params.remove(index);
     }
-    let results = target.results_with_attrs(ctx);
+    let results: Vec<_> = target
+        .results_with_attrs(ctx)
+        .map(|(ty, attrs)| (ty, attrs.clone()))
+        .collect();
     let type_attrs = target
         .non_reserved_attrs(ctx)
         .map(|(key, value)| (*key, value.clone()))
@@ -1527,13 +1539,21 @@ impl<'a> PhysicalTypeConverter<'a> {
                 "target ABI: Cps callable must have logical core.never result",
             ));
         }
-        let inputs = self.convert_params(callable.inputs_with_attrs(self.ctx))?;
+        let inputs = callable
+            .inputs_with_attrs(self.ctx)
+            .map(|(ty, attrs)| (ty, attrs.clone()))
+            .collect();
+        let inputs = self.convert_params(inputs)?;
         // A physical Cps callable has no result, so the logical result's
         // parameter attributes are dropped with it.
         let results = if convention == CallingConvention::Cps {
             vec![]
         } else {
-            self.convert_params(callable.results_with_attrs(self.ctx))?
+            let results = callable
+                .results_with_attrs(self.ctx)
+                .map(|(ty, attrs)| (ty, attrs.clone()))
+                .collect();
+            self.convert_params(results)?
         };
         let mut attrs = self.convert_func_attributes(callable)?;
         if attrs.contains_key(func::CALL_CONV_ATTR) {
