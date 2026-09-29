@@ -865,14 +865,14 @@ mod tests {
         let initial = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
         let stamp = ctx.analysis_stamp();
 
-        let path = ctx.intern_path("file:///same.trb".to_owned());
+        let path = ctx.intern_path("file:///same.trb");
         assert_ne!(ctx.analysis_stamp(), stamp);
         assert!(analyses.get_cached::<DummyAnalysis>(&ctx, op).is_none());
         let after_path = analyses.get::<DummyAnalysis>(&ctx, op).unwrap();
         assert!(!Arc::ptr_eq(&initial, &after_path));
 
         let unchanged = ctx.analysis_stamp();
-        assert_eq!(ctx.intern_path("file:///same.trb".to_owned()), path);
+        assert_eq!(ctx.intern_path("file:///same.trb"), path);
         assert_eq!(ctx.analysis_stamp(), unchanged);
         assert!(Arc::ptr_eq(
             &after_path,

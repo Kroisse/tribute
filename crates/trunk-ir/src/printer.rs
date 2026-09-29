@@ -1017,7 +1017,7 @@ mod tests {
     use smallvec::smallvec;
 
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.intern_path("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb");
         Location::new(path, crate::Span::new(0, 0))
     }
 

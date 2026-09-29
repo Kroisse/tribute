@@ -637,7 +637,7 @@ mod tests {
     #[test]
     fn reference_upcasts_and_representation_matches_are_not_materializations() {
         let mut ctx = IrContext::new();
-        let path = ctx.intern_path("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb");
         let location = Location::new(path, trunk_ir::location::Span::new(0, 0));
         let tc = wasm_type_converter(&mut ctx);
         let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));

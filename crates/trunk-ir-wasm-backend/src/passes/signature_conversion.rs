@@ -100,7 +100,7 @@ mod tests {
 
     fn test_ctx() -> (IrContext, trunk_ir::types::Location) {
         let mut ctx = IrContext::new();
-        let path = ctx.intern_path("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb");
         let loc = trunk_ir::types::Location::new(path, Span::new(0, 0));
         (ctx, loc)
     }

@@ -3079,7 +3079,7 @@ mod tests {
     use trunk_ir::types::AttributeMap;
 
     fn location(ctx: &mut IrContext) -> Location {
-        let path = ctx.intern_path("tribute-control-test.trb".to_owned());
+        let path = ctx.intern_path("tribute-control-test.trb");
         Location::new(path, Span::new(7, 19))
     }
 

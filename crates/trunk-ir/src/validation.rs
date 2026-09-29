@@ -1316,7 +1316,7 @@ mod tests {
     use crate::{BlockArgData, BlockData, IrContext, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.intern_path("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb");
         Location::new(path, Span::new(0, 0))
     }
 

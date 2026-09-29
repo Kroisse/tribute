@@ -200,12 +200,15 @@ impl IrContext {
     }
 
     /// Intern a path, advancing the revision only for a new entry.
-    pub fn intern_path(&mut self, path: String) -> PathRef {
-        match self.paths.entry(&path) {
+    ///
+    /// A path already interned is found without allocating; a new path is
+    /// copied into the interner once.
+    pub fn intern_path(&mut self, path: &str) -> PathRef {
+        match self.paths.entry(path) {
             InternEntry::Occupied(existing) => existing,
             InternEntry::Vacant(entry) => {
                 advance_revision(&mut self.revision);
-                entry.insert(path)
+                entry.insert(path.to_owned())
             }
         }
     }
@@ -1076,7 +1079,7 @@ mod tests {
     use smallvec::smallvec;
 
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.intern_path("file:///test.trb".to_owned());
+        let path = ctx.intern_path("file:///test.trb");
         Location::new(path, Span::new(0, 0))
     }
 

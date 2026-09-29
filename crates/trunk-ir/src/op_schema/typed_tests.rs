@@ -77,7 +77,7 @@ mod test_typed {
 }
 
 fn location(ctx: &mut IrContext) -> Location {
-    let path = ctx.intern_path("test.trb".to_owned());
+    let path = ctx.intern_path("test.trb");
     Location::new(path, crate::Span::new(0, 0))
 }
 

@@ -47,7 +47,7 @@ struct ArenaIrBuilder<'a> {
 
 impl<'a> ArenaIrBuilder<'a> {
     fn new(ctx: &'a mut IrContext) -> Self {
-        let path = ctx.intern_path("textual-ir".to_owned());
+        let path = ctx.intern_path("textual-ir");
         let location = Location::new(path, crate::location::Span::new(0, 0));
         Self {
             ctx,
@@ -367,7 +367,7 @@ impl<'a> ArenaIrBuilder<'a> {
             }
             RawAttribute::Unit => Attribute::Unit,
             RawAttribute::Location(path, start, end) => {
-                let path_ref = self.ctx.intern_path(path.clone());
+                let path_ref = self.ctx.intern_path(path);
                 Attribute::Location(Location::new(
                     path_ref,
                     crate::location::Span::new(*start, *end),
@@ -862,7 +862,7 @@ mod tests {
     }
 
     fn test_location(ctx: &mut IrContext) -> Location {
-        let path = ctx.intern_path("test.trb".to_owned());
+        let path = ctx.intern_path("test.trb");
         Location::new(path, crate::location::Span::new(0, 0))
     }
 
