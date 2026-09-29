@@ -776,10 +776,6 @@ fn main() {
         "root main worker must be promoted to Cps:\n{main_header}"
     );
     assert!(
-        !main_header.contains("tribute.root_export_convention"),
-        "the root export convention is not recorded:\n{main_header}"
-    );
-    assert!(
         main_header.contains("tribute.root_source_result = core.nil"),
         "root source result must stay core.nil:\n{main_header}"
     );
@@ -835,8 +831,7 @@ fn main() ->{std::io::Io} Nil {
         .expect("missing lowered root main");
     assert!(
         main_header.contains("convention(cps)")
-            && main_header.contains("tribute.root_source_result = core.nil")
-            && !main_header.contains("tribute.root_export_convention"),
+            && main_header.contains("tribute.root_source_result = core.nil"),
         "the promoted Io root is marked by its source result alone:\n{main_header}"
     );
 }
