@@ -811,8 +811,8 @@ fn lower_function<'db>(
     declarations: &mut Declarations<'db>,
 ) {
     let location = ctx.location(function.id);
-    let root_convention = crate::is_root_main(function.name, ctx.module_path().len() == 1)
-        .then(|| {
+    let root_convention =
+        crate::is_root_main(function.name, ctx.module_path().len() == 1).then(|| {
             let name = ctx.qualify_name(function.name);
             let scheme = ctx
                 .lookup_function_type(name)
