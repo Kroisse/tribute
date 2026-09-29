@@ -5903,7 +5903,7 @@ mod tests {
   !S = adt.struct() {name = @S, fields = []}
   !R = adt.typeref() {name = @S}
   tribute_control.func @broken(%raw: core.ptr) -> !R convention(direct) {
-    %middle = arith.cast %raw : core.i64
+    %middle = core.unrealized_conversion_cast %raw : core.i64
     %managed = core.unrealized_conversion_cast %middle : !R
     tribute_control.return %managed
   }

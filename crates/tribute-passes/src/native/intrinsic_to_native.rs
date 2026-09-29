@@ -150,10 +150,10 @@ fn references_any(ctx: &IrContext, op: OpRef, names: &[Symbol]) -> bool {
 /// Emits:
 ///   %payload  = core.unrealized_conversion_cast %bytes : core.ptr
 ///   %data_ptr = mem.load %payload {offset = 0} : core.ptr
-///   %offset   = zero-extended %index : core.i64
+///   %offset   = arith.extui %index : core.i64
 ///   %addr     = mem.ptr_add %data_ptr, %offset : core.ptr
 ///   %byte     = mem.load %addr {offset = 0} : core.i8
-///   %result   = zero-extended %byte : core.i32
+///   %result   = arith.extui %byte : core.i32
 fn lower_call(ctx: &mut IrContext, call: OpRef) {
     let [bytes, index] = ctx.op_operands(call) else {
         unreachable!("call arity is validated before lowering")
@@ -176,45 +176,33 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
         .offset(0)
         .results(ptr_ty)
         .build(ctx, loc);
-    // `arith.extend` sign-extends, so both widenings mask the extended value
-    // back to the source width: the index is an unsigned Nat, and a byte is
-    // 0..=255.
-    let mut ops = vec![payload.op_ref(), data_ptr.op_ref()];
-    let offset = zero_extend(ctx, loc, index, i64_ty, u32::MAX.into(), &mut ops);
-    let addr = mem::PtrAdd::operands(data_ptr.result(ctx), offset).build(ctx, loc);
+    // The index is an unsigned Nat and a byte is 0..=255: both widen with
+    // zero extension.
+    let offset = arith::Extui::operands(index)
+        .results(i64_ty)
+        .build(ctx, loc);
+    let addr = mem::PtrAdd::operands(data_ptr.result(ctx), offset.result(ctx)).build(ctx, loc);
     let byte = mem::Load::operands(addr.result(ctx))
         .offset(0)
         .results(i8_ty)
         .build(ctx, loc);
-    ops.extend([addr.op_ref(), byte.op_ref()]);
-    let value = zero_extend(ctx, loc, byte.result(ctx), result_ty, 0xff, &mut ops);
-    for op in ops {
+    let value = arith::Extui::operands(byte.result(ctx))
+        .results(result_ty)
+        .build(ctx, loc);
+    for op in [
+        payload.op_ref(),
+        data_ptr.op_ref(),
+        offset.op_ref(),
+        addr.op_ref(),
+        byte.op_ref(),
+        value.op_ref(),
+    ] {
         ctx.insert_op_before(block, call, op);
     }
     let old = ctx.op_results(call)[0];
-    ctx.replace_all_uses(old, value);
+    ctx.replace_all_uses(old, value.result(ctx));
     ctx.detach_op(call);
     ctx.remove_op(call);
-}
-
-/// Zero-extend `value` to `ty`: sign-extend, then keep the low bits `mask`
-/// covers.
-fn zero_extend(
-    ctx: &mut IrContext,
-    loc: trunk_ir::types::Location,
-    value: trunk_ir::refs::ValueRef,
-    ty: TypeRef,
-    mask: i128,
-    ops: &mut Vec<OpRef>,
-) -> trunk_ir::refs::ValueRef {
-    let extended = arith::Extend::operands(value).results(ty).build(ctx, loc);
-    let mask = arith::Const::operands()
-        .value(Attribute::Int(mask))
-        .results(ty)
-        .build(ctx, loc);
-    let masked = arith::And::operands(extended.result(ctx), mask.result(ctx)).build(ctx, loc);
-    ops.extend([extended.op_ref(), mask.op_ref(), masked.op_ref()]);
-    masked.result(ctx)
 }
 
 #[cfg(test)]

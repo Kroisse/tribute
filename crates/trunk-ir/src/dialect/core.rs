@@ -230,7 +230,7 @@ use crate::transforms::canonicalize::FoldResult;
 /// Safe *specifically* because both ops are
 /// `core.unrealized_conversion_cast` — dialect-conversion placeholders
 /// that carry no value-level conversion semantics. A resolved cast pair
-/// like `arith.trunc` followed by `arith.extend` is *not* safe to collapse
+/// like `arith.trunci` followed by `arith.extsi` is *not* safe to collapse
 /// the same way (narrower intermediate types lose information).
 /// `reconcile_unrealized_casts` applies the same folds across longer cast
 /// chains after target type conversion.
