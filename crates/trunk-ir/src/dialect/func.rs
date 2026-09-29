@@ -243,6 +243,44 @@ impl FuncSig {
         (num_inputs..num_inputs + num_results).map(move |index| data.param_attrs(index))
     }
 
+    /// Each input paired with its own attributes, for rebuilding a signature
+    /// with [`func_sig_with_param_attrs`].
+    pub fn inputs_with_attrs<'a>(
+        &self,
+        ctx: &'a IrContext,
+    ) -> impl Iterator<Item = (TypeRef, &'a AttributeMap)> {
+        self.inputs(ctx).iter().copied().zip(self.input_attrs(ctx))
+    }
+
+    /// Each result paired with its own attributes, for rebuilding a signature
+    /// with [`func_sig_with_param_attrs`].
+    pub fn results_with_attrs<'a>(
+        &self,
+        ctx: &'a IrContext,
+    ) -> impl Iterator<Item = (TypeRef, &'a AttributeMap)> {
+        self.results(ctx)
+            .iter()
+            .copied()
+            .zip(self.result_attrs(ctx))
+    }
+
+    /// Rebuild this signature after `edit` inserts, removes, or replaces
+    /// parameter/attribute pairs, so each attribute stays with its parameter.
+    /// Non-reserved attributes are kept.
+    pub fn rebuild(
+        self,
+        ctx: &mut IrContext,
+        edit: impl FnOnce(&mut Vec<(TypeRef, AttributeMap)>, &mut Vec<(TypeRef, AttributeMap)>),
+    ) -> FuncSig {
+        let owned = |(ty, attrs): (TypeRef, &AttributeMap)| (ty, attrs.clone());
+        let mut inputs: Vec<_> = self.inputs_with_attrs(ctx).map(owned).collect();
+        let mut results: Vec<_> = self.results_with_attrs(ctx).map(owned).collect();
+        let mut attrs = ctx.get_type(self.0).attrs.clone();
+        Self::remove_reserved_attrs(&mut attrs);
+        edit(&mut inputs, &mut results);
+        func_sig_with_param_attrs(ctx, inputs, results, attrs)
+    }
+
     pub fn single_result(&self, ctx: &IrContext) -> Option<TypeRef> {
         self.results(ctx).first().copied()
     }
@@ -326,6 +364,10 @@ pub fn func_sig(
 
 /// Construct a canonical `func.func_sig` whose inputs and results carry their
 /// own attributes, stored as the type's per-parameter attributes.
+///
+/// A per-parameter attribute value already in `attrs` is replaced, so a caller
+/// that adds, removes, or replaces parameters may pass the source signature's
+/// remaining attributes unchanged.
 pub fn func_sig_with_param_attrs(
     ctx: &mut IrContext,
     inputs: impl IntoIterator<Item = (TypeRef, AttributeMap)>,
@@ -881,6 +923,38 @@ mod tests {
                 .any(|(key, _)| *key == Symbol::new("note"))
         );
         assert_eq!(tail.with_call_conv(&mut ctx, CallConv::Platform), platform);
+    }
+
+    #[test]
+    fn inserting_a_parameter_moves_parameter_attributes_with_their_parameters() {
+        let mut ctx = crate::IrContext::new();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+            .into_iter()
+            .collect();
+        let source = func_sig_with_param_attrs(
+            &mut ctx,
+            [(i32_ty, marked.clone())],
+            [(i32_ty, AttributeMap::new())],
+            AttributeMap::new(),
+        );
+
+        let rebuilt = source.rebuild(&mut ctx, |inputs, _| {
+            inputs.insert(0, (ptr_ty, AttributeMap::new()));
+        });
+
+        assert_eq!(rebuilt.inputs(&ctx), [ptr_ty, i32_ty]);
+        assert!(
+            rebuilt
+                .inputs_with_attrs(&ctx)
+                .eq([(ptr_ty, &AttributeMap::new()), (i32_ty, &marked)])
+        );
+        assert!(
+            rebuilt
+                .results_with_attrs(&ctx)
+                .eq([(i32_ty, &AttributeMap::new())])
+        );
     }
 
     #[test]

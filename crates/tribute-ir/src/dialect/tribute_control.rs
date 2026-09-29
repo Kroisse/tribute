@@ -241,6 +241,22 @@ impl FuncSig {
         &ctx.get_type(self.0).params[inputs..]
     }
 
+    /// Each input paired with its own attributes.
+    pub fn inputs_with_attrs(
+        self,
+        ctx: &IrContext,
+    ) -> impl Iterator<Item = (TypeRef, &AttributeMap)> {
+        let count = self.inputs(ctx).len();
+        ctx.get_type(self.0).params_with_attrs().take(count)
+    }
+
+    /// The result paired with its own attributes.
+    pub fn result_with_attrs(self, ctx: &IrContext) -> (TypeRef, &AttributeMap) {
+        let index = self.inputs(ctx).len();
+        let data = ctx.get_type(self.0);
+        (data.params[index], data.param_attrs(index))
+    }
+
     pub fn convention(self, ctx: &IrContext) -> CallingConvention {
         CallingConvention::try_from(
             ctx.get_type(self.0)

@@ -178,9 +178,9 @@ fn lower_single_lambda(
     let Some(callable) = func::FuncSig::from_type_ref(ctx, function_ty) else {
         return false;
     };
-    let Some(func_result_ty) = callable.single_result(ctx) else {
+    if callable.single_result(ctx).is_none() {
         return false;
-    };
+    }
     if callable.inputs(ctx) != orig_param_types.as_slice() {
         return false;
     }
@@ -215,18 +215,11 @@ fn lower_single_lambda(
         },
     );
 
-    let mut all_param_tys = orig_param_types.clone();
-    all_param_tys.insert(environment_index, anyref_ty);
-    let mut type_attrs = ctx.get_type(function_ty).attrs.clone();
-    type_attrs.remove(func::NUM_INPUTS_ATTR);
-    type_attrs.remove(func::NUM_RESULTS_ATTR);
-    let func_ty = func::func_sig_with_attrs(
-        ctx,
-        all_param_tys.iter().copied(),
-        [func_result_ty],
-        type_attrs,
-    )
-    .as_type_ref();
+    let func_ty = callable
+        .rebuild(ctx, |inputs, _| {
+            inputs.insert(environment_index, (anyref_ty, AttributeMap::new()));
+        })
+        .as_type_ref();
 
     let func_op = func::Func::operands()
         .sym_name(lifted_name)
@@ -580,8 +573,18 @@ mod tests {
             parent_op: None,
         });
 
-        // closure type: closure.closure<func.func_sig<i32, i32>>
-        let func_ty = func::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
+        // closure type: closure.closure<func.func_sig<i32, i32>>, whose input
+        // carries a parameter attribute.
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+            .into_iter()
+            .collect();
+        let func_ty = func::func_sig_with_param_attrs(
+            &mut ctx,
+            [(i32_ty, marked.clone())],
+            [(i32_ty, AttributeMap::new())],
+            AttributeMap::new(),
+        )
+        .as_type_ref();
         let closure_ty =
             tribute_core::physical_closure_type(&mut ctx, func_ty, CallingConvention::Direct);
 
@@ -648,6 +651,11 @@ mod tests {
         let lifted_type = func::FuncSig::from_type_ref(&ctx, lifted_ty).unwrap();
         assert_eq!(lifted_type.inputs(&ctx).len(), 2); // environment + x
         assert!(lifted_type.single_result(&ctx).is_some());
+        // The inserted environment has no attributes; `x` keeps its own.
+        assert_eq!(
+            lifted_type.inputs_with_attrs(&ctx).collect::<Vec<_>>(),
+            [(anyref_ty, &AttributeMap::new()), (i32_ty, &marked)]
+        );
     }
 
     #[test]

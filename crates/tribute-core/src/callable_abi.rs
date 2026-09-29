@@ -10,7 +10,7 @@ pub struct CallableAbi<T> {
     pub source_result: T,
 }
 
-impl<T: Copy> CallableAbi<T> {
+impl<T: Clone> CallableAbi<T> {
     pub fn new(
         convention: CallingConvention,
         source_params: impl IntoIterator<Item = T>,
@@ -53,7 +53,7 @@ impl<T: Copy> CallableAbi<T> {
     pub fn interpose_environment(&self, logical_params: &[T], environment: T) -> Vec<T> {
         debug_assert_eq!(
             logical_params.len(),
-            self.lowered_params(environment, environment).len(),
+            self.source_param_offset() + self.source_params.len(),
             "logical parameter count must match the selected convention",
         );
         let env_index = usize::from(self.convention.needs_evidence());

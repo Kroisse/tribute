@@ -1162,34 +1162,8 @@ impl<'a> Converter<'a> {
         if let Some(converted) = self.converted_types.get(&ty) {
             return *converted;
         }
-        if let Some(callable) = tribute_control::FuncSig::from_type_ref(self.ctx, ty) {
-            let convention = convert_convention(
-                tribute_control::func_sig_convention(self.ctx, ty)
-                    .expect("pre-CPS validation checked callable convention"),
-            );
-            let result = self.convert_type(callable.result(self.ctx));
-            let source_params = callable.inputs(self.ctx).to_vec();
-            let params: Vec<_> = source_params
-                .into_iter()
-                .map(|param| self.convert_type(param))
-                .collect();
-            let abi = CallableAbi::new(convention, params, result);
-            let evidence = self.evidence_type();
-            let frame = self.frame_types(result).reference;
-            let lowered_params = abi.lowered_params(evidence, frame);
-            let lowered_result = if convention == CallingConvention::Cps {
-                self.never_type()
-            } else {
-                result
-            };
-            let mut attrs = self.ctx.get_type(ty).attrs.clone();
-            tribute_control::FuncSig::remove_reserved_attrs(&mut attrs);
-            for value in attrs.values_mut() {
-                *value = self.convert_attribute(value);
-            }
-            let function =
-                func::func_sig_with_attrs(self.ctx, lowered_params, [lowered_result], attrs)
-                    .as_type_ref();
+        if tribute_control::FuncSig::from_type_ref(self.ctx, ty).is_some() {
+            let (function, convention) = self.lower_callable_signature(ty);
             let converted = physical_closure_type(self.ctx, function, convention);
             self.converted_types.insert(ty, converted);
             return converted;
@@ -1258,33 +1232,53 @@ impl<'a> Converter<'a> {
     }
 
     fn physical_function_type(&mut self, logical: TypeRef) -> TypeRef {
+        self.lower_callable_signature(logical).0
+    }
+
+    /// Lower a source signature to its logical `func.func_sig` in convention
+    /// order. Parameter attributes follow the parameters they describe: hidden
+    /// parameters have none, and a Cps source result, replaced by
+    /// `core.never`, drops its own.
+    fn lower_callable_signature(&mut self, logical: TypeRef) -> (TypeRef, CallingConvention) {
         let callable = tribute_control::FuncSig::from_type_ref(self.ctx, logical)
             .expect("pre-CPS validation checked function type");
         let convention = convert_convention(
             tribute_control::func_sig_convention(self.ctx, logical)
                 .expect("pre-CPS validation checked function convention"),
         );
-        let result = self.convert_type(callable.result(self.ctx));
-        let source_params = callable.inputs(self.ctx).to_vec();
+        let (source_result, result_attrs) = callable.result_with_attrs(self.ctx);
+        let result_attrs = result_attrs.clone();
+        let result = self.convert_type(source_result);
+        let result_attrs = self.convert_attr_map(&result_attrs);
+        let source_params: Vec<_> = callable
+            .inputs_with_attrs(self.ctx)
+            .map(|(param, attrs)| (param, attrs.clone()))
+            .collect();
         let params: Vec<_> = source_params
             .into_iter()
-            .map(|param| self.convert_type(param))
+            .map(|(param, attrs)| (self.convert_type(param), self.convert_attr_map(&attrs)))
             .collect();
-        let evidence = self.evidence_type();
-        let frame = self.frame_types(result).reference;
-        let abi = CallableAbi::new(convention, params, result);
+        let evidence = (self.evidence_type(), AttributeMap::new());
+        let frame = (self.frame_types(result).reference, AttributeMap::new());
+        let abi = CallableAbi::new(convention, params, (result, result_attrs));
         let params = abi.lowered_params(evidence, frame);
         let result = if convention == CallingConvention::Cps {
-            self.never_type()
+            (self.never_type(), AttributeMap::new())
         } else {
-            result
+            abi.source_result
         };
         let mut attrs = self.ctx.get_type(logical).attrs.clone();
         tribute_control::FuncSig::remove_reserved_attrs(&mut attrs);
         for value in attrs.values_mut() {
             *value = self.convert_attribute(value);
         }
-        func::func_sig_with_attrs(self.ctx, params, [result], attrs).as_type_ref()
+        let function =
+            func::func_sig_with_param_attrs(self.ctx, params, [result], attrs).as_type_ref();
+        (function, convention)
+    }
+
+    fn convert_attr_map(&mut self, attrs: &AttributeMap) -> AttributeMap {
+        self.convert_attrs(attrs).into_iter().collect()
     }
 
     fn copy_extra_attrs(&mut self, source: OpRef, target: OpRef, excluded: &[&str]) {
@@ -2086,25 +2080,23 @@ impl<'a> Converter<'a> {
             "pre-CPS validation rejects a weaker func_ref result convention"
         );
         let result = self.convert_type(result_callable.result(self.ctx));
-        let source_params: Vec<_> = result_callable
-            .inputs(self.ctx)
-            .to_vec()
-            .into_iter()
-            .map(|ty| self.convert_type(ty))
-            .collect();
-        let evidence_ty = self.evidence_type();
-        let frame_ty = self.frame_types(result).reference;
-        let abi = CallableAbi::new(result_convention, source_params.clone(), result);
-        let logical_params = abi.lowered_params(evidence_ty, frame_ty);
+        // The adapter is the closure's callable with the environment
+        // interposed, so both share parameter attributes and metadata.
+        let closure_ty = self.convert_type(result_logical_ty);
+        let function = closure::Closure::from_type_ref(self.ctx, closure_ty)
+            .expect("func_ref result lowers to a closure")
+            .func_type(self.ctx);
+        let callable = func::FuncSig::from_type_ref(self.ctx, function)
+            .expect("func_ref result lowers to a func.func_sig callable");
         let env_ty = self.anyref_type();
-        let physical_params = abi.interpose_environment(&logical_params, env_ty);
-        let physical_result = if result_convention == CallingConvention::Cps {
-            self.never_type()
-        } else {
-            result
-        };
-        let adapter_ty =
-            func::func_sig(self.ctx, physical_params.clone(), [physical_result]).as_type_ref();
+        let adapter = callable.rebuild(self.ctx, |inputs, _| {
+            inputs.insert(
+                usize::from(result_convention.needs_evidence()),
+                (env_ty, AttributeMap::new()),
+            );
+        });
+        let physical_params = adapter.inputs(self.ctx).to_vec();
+        let adapter_ty = adapter.as_type_ref();
         let block = self.make_block(location, &physical_params);
         let args = self.ctx.block_args(block).to_vec();
         let evidence_offset = usize::from(result_convention.needs_evidence());
@@ -2168,7 +2160,6 @@ impl<'a> Converter<'a> {
             .r#type(empty_env_ty)
             .results(empty_env_ty)
             .build(self.ctx, location);
-        let closure_ty = self.convert_type(result_logical_ty);
         let closure_new = closure::New::operands(empty_env.result(self.ctx))
             .func_ref(adapter_symbol)
             .results(closure_ty)
@@ -5665,6 +5656,86 @@ mod tests {
         assert!(!printed.contains("tribute_control.func "));
         assert!(!printed.contains("tribute_control.func_ref "));
         assert!(!printed.contains("tribute_control.call_indirect "));
+    }
+
+    #[test]
+    fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
+        let input = r#"core.module @test {
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2, param_attrs = [{k = @v}, {r = @x}]}
+  tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
+    tribute_control.return %value
+  }
+  tribute_control.func @run(%value: core.i32) -> core.i32 convention(cps) {
+    %callee = tribute_control.func_ref {func_ref = @id} : !cps
+    %result = tribute_control.call_indirect %callee, %value : core.i32
+    tribute_control.return %result
+  }
+}"#;
+        let (mut ctx, module) = parse(input);
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+            .into_iter()
+            .collect();
+        let empty = AttributeMap::new;
+        let adapter_type = |ctx: &IrContext| {
+            let adapter = module
+                .ops(ctx)
+                .into_iter()
+                .find_map(|op| {
+                    let function = func::Func::from_op(ctx, op).ok()?;
+                    (function.sym_name(ctx) == Symbol::new("__tribute_func_ref_adapter_0"))
+                        .then_some(function)
+                })
+                .expect("func_ref adapter");
+            func::FuncSig::from_type_ref(ctx, adapter.r#type(ctx)).unwrap()
+        };
+
+        // Evidence, environment, and frame are hidden parameters; the Cps
+        // source result is replaced by `core.never` and loses its attributes.
+        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+        let logical = adapter_type(&ctx);
+        assert_eq!(
+            logical
+                .inputs_with_attrs(&ctx)
+                .map(|(_, attrs)| attrs.clone())
+                .collect::<Vec<_>>(),
+            [empty(), empty(), empty(), marked.clone()]
+        );
+        assert!(logical.result_attrs(&ctx).all(AttributeMap::is_empty));
+
+        // The physical Cps callable has no result. Its definition, the function
+        // reference, and the indirect call all agree on one exact type.
+        crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
+        crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+        crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
+        let physical = adapter_type(&ctx);
+        assert_eq!(
+            physical
+                .inputs_with_attrs(&ctx)
+                .map(|(_, attrs)| attrs.clone())
+                .collect::<Vec<_>>(),
+            [empty(), empty(), empty(), marked]
+        );
+        assert!(physical.results(&ctx).is_empty());
+        let mut references = Vec::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if let Ok(constant) = func::Constant::from_op(&ctx, op)
+                && constant.func_ref(&ctx) == Symbol::new("__tribute_func_ref_adapter_0")
+            {
+                references.push(ctx.op_result_types(op)[0]);
+            }
+            if let Ok(call) = func::TailCallIndirect::from_op(&ctx, op)
+                && call.signature(&ctx) == physical.as_type_ref()
+            {
+                references.push(call.signature(&ctx));
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        assert_eq!(
+            references,
+            [physical.as_type_ref(), physical.as_type_ref()],
+            "{}",
+            print_module(&ctx, module.op())
+        );
     }
 
     #[test]
