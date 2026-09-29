@@ -11,6 +11,8 @@ pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
 /// Result type carried by a private immutable CPS continuation frame.
 pub const CPS_CONTINUATION_FRAME_RESULT_ATTR: &str = "tribute.cps_continuation_frame_result";
 pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_index";
+/// Name prefix of the compiler-generated CPS continuation frame layouts.
+pub const CPS_CONTINUATION_FRAME_NAME_PREFIX: &str = "__tribute_continuation_frame_";
 
 /// The ABI strength required to call a function.
 ///

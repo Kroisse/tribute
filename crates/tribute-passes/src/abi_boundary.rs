@@ -147,16 +147,10 @@ impl PendingViolation {
 
 /// Violations still present at the exit of `target`'s boundary.
 pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViolation] {
-    const COMMON: [PendingViolation; 5] = [
+    const COMMON: [PendingViolation; 2] = [
         // Read past the exit by native entry generation, native ownership
         // planning, and Wasm `_start` generation.
         PendingViolation::Attribute("tribute.calling_convention"),
-        // Recorded on physical definitions by target ABI physicalization.
-        PendingViolation::Attribute("tribute.closure_environment_index"),
-        // Kept on continuation frame layouts.
-        PendingViolation::Attribute("tribute.cps_continuation_frame_result"),
-        // Marks the root bridge's worker call.
-        PendingViolation::Unclassified("tribute.root_cps_call"),
         // Left on bytes intrinsic declarations, which target lowering past
         // the exit still recognizes by name.
         PendingViolation::Unclassified("tribute.compiler_intrinsic"),
@@ -165,9 +159,6 @@ pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViola
     const WASM: &[PendingViolation] = &[
         COMMON[0],
         COMMON[1],
-        COMMON[2],
-        COMMON[3],
-        COMMON[4],
         // Wasm evidence lowering still runs inside Wasm dialect lowering.
         PendingViolation::Op("effect", "extend"),
         PendingViolation::Op("effect", "dispatch_tail"),

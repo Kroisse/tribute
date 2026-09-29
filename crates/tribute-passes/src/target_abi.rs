@@ -10,8 +10,8 @@ use std::fmt;
 use std::ops::ControlFlow;
 
 use tribute_core::calling_convention::{
-    CLOSURE_ENVIRONMENT_INDEX_ATTR, cps_closure_function_type, cps_continuation_frame_result_type,
-    get_physical_closure_environment_index,
+    CLOSURE_ENVIRONMENT_INDEX_ATTR, CPS_CONTINUATION_FRAME_RESULT_ATTR, cps_closure_function_type,
+    cps_continuation_frame_result_type, get_physical_closure_environment_index,
 };
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
@@ -37,7 +37,6 @@ const ROOT_DONE_K_SYMBOL: &str = "__tribute_root_done_k";
 const ROOT_DISPATCH_SYMBOL: &str = "__tribute_root_dispatch";
 const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_root_completion_cell";
 const ROOT_COMPLETION_CELL_VALUE_FIELD: &str = "value";
-const ROOT_CPS_CALL_ATTR: &str = "tribute.root_cps_call";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TargetAbiError(String);
@@ -63,6 +62,14 @@ struct FunctionIdentity {
     environment_index: Option<usize>,
 }
 
+/// Whether a contract check sees logical CPS callables or their physicalized
+/// form, which lacks the provenance physicalization consumed.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ContractPhase {
+    Logical,
+    Physical,
+}
+
 #[derive(Clone, Copy)]
 struct RootFrameContract {
     reference: TypeRef,
@@ -85,7 +92,7 @@ pub fn lower_cps_signatures_to_physical(
     let functions = collect_functions(ctx, &ops, never, anyref)?;
     validate_transfers(ctx, &ops, &functions, never)?;
     validate_dispatch_contracts(ctx, module)?;
-    validate_root_entry(ctx, module, &[never])?;
+    validate_root_entry(ctx, module, ContractPhase::Logical)?;
 
     let aliases = ctx.type_aliases().to_vec();
     let mut converter = PhysicalTypeConverter::new(ctx, never);
@@ -93,6 +100,7 @@ pub fn lower_cps_signatures_to_physical(
     let mut function_types = Vec::new();
     let mut result_types = Vec::new();
     let mut attributes = Vec::new();
+    let mut consumed_attributes = Vec::new();
     let mut indirect_signatures = Vec::new();
     let mut block_args = Vec::new();
     let mut block_attributes = Vec::new();
@@ -115,23 +123,16 @@ pub fn lower_cps_signatures_to_physical(
             if converted != signature {
                 function_types.push((op, converted));
             }
-            if convention.is_some() {
-                let identity =
-                    function_for_symbol(defined_function_name(converter.ctx, op)?, &functions)?;
-                if let Some(index) = identity.environment_index
-                    && converter
-                        .ctx
-                        .op(op)
-                        .attributes
-                        .get(Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR))
-                        .is_none()
-                {
-                    attributes.push((
-                        op,
-                        Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
-                        Attribute::Int(index as i128),
-                    ));
-                }
+            // Environment provenance was validated against the signature
+            // above; the physical signature carries the environment as an
+            // ordinary input, so no later pass reads the recorded position.
+            if converter
+                .ctx
+                .op(op)
+                .attributes
+                .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
+            {
+                consumed_attributes.push((op, Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR)));
             }
         }
 
@@ -240,6 +241,9 @@ pub fn lower_cps_signatures_to_physical(
     for (op, name, value) in attributes {
         ctx.op_mut(op).attributes.insert(name, value);
     }
+    for (op, name) in consumed_attributes {
+        ctx.op_mut(op).attributes.remove(name);
+    }
     for (op, signature) in indirect_signatures {
         assert!(IndirectCallLikeOps::set_exact_signature(ctx, op, signature));
     }
@@ -263,8 +267,13 @@ struct RootEntryContract {
 fn validate_root_entry(
     ctx: &mut IrContext,
     module: Module,
-    expected_results: &[TypeRef],
+    phase: ContractPhase,
 ) -> Result<Option<RootEntryContract>, TargetAbiError> {
+    let expected_results = match phase {
+        ContractPhase::Logical => vec![core::never(ctx).as_type_ref()],
+        ContractPhase::Physical => vec![],
+    };
+    let expected_results = expected_results.as_slice();
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(None);
     };
@@ -334,6 +343,7 @@ fn validate_root_entry(
         source_result,
         evidence_ty,
         expected_results,
+        phase,
     )?;
     if ctx.op(worker_op).regions.is_empty() {
         return Err(TargetAbiError::new(
@@ -378,7 +388,7 @@ pub fn compose_root_entry_bridge(
         source_result,
         evidence_ty,
         frame,
-    }) = validate_root_entry(ctx, module, &[])?
+    }) = validate_root_entry(ctx, module, ContractPhase::Physical)?
     else {
         return Ok(());
     };
@@ -440,10 +450,6 @@ pub fn compose_root_entry_bridge(
         .regions(done_region)
         .build(ctx, location);
     set_root_convention(ctx, done_function.op_ref(), CallingConvention::Cps);
-    ctx.op_mut(done_function.op_ref()).attributes.insert(
-        Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
-        Attribute::Int(0),
-    );
 
     let dispatch_function_ty = dispatch_entry_function_type(ctx, frame.dispatch, anyref_ty)?;
     let dispatch_entry = ctx.create_block(BlockData {
@@ -475,10 +481,6 @@ pub fn compose_root_entry_bridge(
         .regions(dispatch_region)
         .build(ctx, location);
     set_root_convention(ctx, dispatch_function.op_ref(), CallingConvention::Cps);
-    ctx.op_mut(dispatch_function.op_ref()).attributes.insert(
-        Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
-        Attribute::Int(1),
-    );
 
     let wrapper_params = if export_convention == CallingConvention::EvidenceDirect {
         vec![evidence_ty]
@@ -572,9 +574,6 @@ pub fn compose_root_entry_bridge(
         .results([])
         .build(ctx, location);
     set_root_convention(ctx, worker_call.op_ref(), CallingConvention::Cps);
-    ctx.op_mut(worker_call.op_ref())
-        .attributes
-        .insert(Symbol::new(ROOT_CPS_CALL_ATTR), Attribute::Bool(true));
     ctx.push_op(wrapper_entry, worker_call.op_ref());
     let completed = adt::StructGet::operands(cell_new.result(ctx))
         .r#type(cell_ty)
@@ -669,8 +668,14 @@ pub(crate) fn dispatch_answer_type(
             "CPS resume must have logical never or physical empty results",
         ));
     }
-    let contract =
-        validate_root_continuation_frame(ctx, frame, answer, ctx.value_ty(evidence), results)?;
+    let contract = validate_root_continuation_frame(
+        ctx,
+        frame,
+        answer,
+        ctx.value_ty(evidence),
+        results,
+        ContractPhase::Logical,
+    )?;
     if contract.dispatch != dispatch {
         return Err(TargetAbiError::new(
             "CPS dispatch differs from exact nominal frame Dispatch",
@@ -727,6 +732,7 @@ fn validate_root_continuation_frame(
     source_result: TypeRef,
     evidence: TypeRef,
     physical_results: &[TypeRef],
+    phase: ContractPhase,
 ) -> Result<RootFrameContract, TargetAbiError> {
     let reference_data = ctx.get_type(frame);
     if reference_data.dialect != Symbol::new("adt") || reference_data.name != Symbol::new("typeref")
@@ -735,7 +741,10 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame must be an exact nominal adt.typeref",
         ));
     }
-    if cps_continuation_frame_result_type(ctx, frame) != Some(source_result) {
+    // Physicalization consumes the frame answer provenance after checking it
+    // here; the physical frame's Done input then carries the source result.
+    let expected_provenance = (phase == ContractPhase::Logical).then_some(source_result);
+    if cps_continuation_frame_result_type(ctx, frame) != expected_provenance {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame result provenance differs from root source result",
         ));
@@ -750,7 +759,7 @@ fn validate_root_continuation_frame(
     if layout_data.dialect != Symbol::new("adt")
         || layout_data.name != Symbol::new("struct")
         || layout_data.attrs.get_symbol("name") != Some(name)
-        || cps_continuation_frame_result_type(ctx, layout) != Some(source_result)
+        || cps_continuation_frame_result_type(ctx, layout) != expected_provenance
     {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame layout provenance is malformed",
@@ -1490,6 +1499,12 @@ impl<'a> PhysicalTypeConverter<'a> {
             *parameter = self.convert_embedded(*parameter)?;
         }
         self.convert_type_attributes(&mut converted)?;
+        // Frame answer provenance is read only by the logical dispatch and
+        // root contract checks, which run before conversion. Physical frames
+        // are ordinary nominal layouts.
+        if cps_continuation_frame_result_type(self.ctx, ty).is_some() {
+            converted.attrs.remove(CPS_CONTINUATION_FRAME_RESULT_ATTR);
+        }
         let converted = self.intern_if_changed(ty, converted);
         self.embedded.insert(ty, converted);
         Ok(converted)
@@ -1560,6 +1575,11 @@ mod tests {
             .unwrap()
     }
 
+    fn is_worker_call(ctx: &IrContext, op: OpRef) -> bool {
+        func::Call::from_op(ctx, op)
+            .is_ok_and(|call| call.callee(ctx) == Symbol::new(CPS_MAIN_SYMBOL))
+    }
+
     fn dispatch_fixture(answer_name: &str, frame_name: &str) -> (IrContext, Module, OpRef) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -1605,10 +1625,14 @@ mod tests {
             let semantic_answer = ctx.op(dispatch).attributes.get_type("answer_type").unwrap();
             validate_dispatch_contracts(&mut ctx, module).unwrap();
             lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
-            validate_dispatch_contracts(&mut ctx, module).unwrap();
             assert_eq!(
                 ctx.op(dispatch).attributes.get_type("answer_type"),
                 Some(semantic_answer)
+            );
+            let printed = print_module(&ctx, module.op());
+            assert!(
+                !printed.contains(CPS_CONTINUATION_FRAME_RESULT_ATTR),
+                "physicalization must consume frame answer provenance:\n{printed}"
             );
             assert!(
                 func::FuncSig::from_type_ref(&ctx, function(&ctx, module, "run").r#type(&ctx))
@@ -1931,18 +1955,13 @@ mod tests {
                     .is_empty()
             );
         }
-        assert_eq!(
-            ctx.op(done_k.op_ref())
-                .attributes
-                .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR),
-            Ok(Some(0))
-        );
-        assert_eq!(
-            ctx.op(dispatch.op_ref())
-                .attributes
-                .get_u32(CLOSURE_ENVIRONMENT_INDEX_ATTR),
-            Ok(Some(1))
-        );
+        for function in [worker, done_k, dispatch] {
+            assert!(
+                !ctx.op(function.op_ref())
+                    .attributes
+                    .contains_key(CLOSURE_ENVIRONMENT_INDEX_ATTR)
+            );
+        }
         assert!(
             !ctx.op(worker.op_ref())
                 .attributes
@@ -1957,8 +1976,8 @@ mod tests {
         let call = wrapper_ops
             .iter()
             .copied()
-            .find(|op| ctx.op(*op).attributes.get_bool(ROOT_CPS_CALL_ATTR) == Some(true))
-            .expect("wrapper must make exactly one marked ordinary worker call");
+            .find(|op| is_worker_call(&ctx, *op))
+            .expect("wrapper must make exactly one ordinary worker call");
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
             ctx.op(call).attributes.get_symbol("callee"),
@@ -2057,7 +2076,7 @@ mod tests {
         let evidence = ctx.block_args(entry)[0];
         let call = collect_ops(&ctx, wrapper.op_ref())
             .into_iter()
-            .find(|op| ctx.op(*op).attributes.get_bool(ROOT_CPS_CALL_ATTR) == Some(true))
+            .find(|op| is_worker_call(&ctx, *op))
             .expect("wrapper must call CPS worker");
         assert_eq!(ctx.op_operands(call)[0], evidence);
         assert!(

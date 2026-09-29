@@ -4,8 +4,5 @@ expression: observed
 ---
 [
     "forbidden attribute tribute.calling_convention",
-    "forbidden attribute tribute.closure_environment_index",
-    "forbidden attribute tribute.cps_continuation_frame_result",
     "unclassified attribute tribute.compiler_intrinsic",
-    "unclassified attribute tribute.root_cps_call",
 ]
