@@ -16,7 +16,7 @@ mod mem {
     fn load(offset: Attr<u32>, ptr: Value<Ptr>) -> Value<impl ScalarLike> {}
 
     /// Store a scalar `value` at `ptr` plus an immediate byte `offset`.
-    fn store<V: ScalarLike>(offset: Attr<u32>, ptr: Value<Ptr>, value: Value<V>) {}
+    fn store(offset: Attr<u32>, ptr: Value<Ptr>, value: Value<impl ScalarLike>) {}
 
     /// Add a pointer-width integer byte `offset` to `base`, keeping `base`'s
     /// provenance. No element-size scaling is applied.
