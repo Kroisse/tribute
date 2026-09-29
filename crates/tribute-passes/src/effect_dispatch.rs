@@ -7,13 +7,12 @@
 //! `func.call_indirect` or a proper-tail `func.tail_call_indirect`. Only how
 //! evidence runtime values are typed differs per target; callers supply those.
 
-use tribute_core::get_physical_closure_convention;
 use tribute_ir::dialect::ability::{self, compute_op_idx};
-use tribute_ir::dialect::{effect, tribute_rt};
+use tribute_ir::dialect::{closure, effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core, func};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, TypeConverter};
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
@@ -211,7 +210,7 @@ pub(crate) fn lower_cps_dispatch(
     // Closure lowering keeps a packed continuation at its semantic closure
     // type until storage finalization; retype it to the dispatch slot.
     let mut resume = dispatch_op.resume(ctx);
-    if get_physical_closure_convention(ctx, ctx.value_ty(resume)).is_some() {
+    if closure::Closure::matches(ctx, ctx.value_ty(resume)) {
         let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
         let cast = core::UnrealizedConversionCast::operands(resume)
             .results(closure_ty)
