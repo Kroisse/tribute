@@ -1,6 +1,6 @@
 //! Type interning and path interning for arena-based IR.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::HashMap;
 use std::fmt;
 
 use cranelift_entity::PrimaryMap;
@@ -334,15 +334,14 @@ impl From<Location> for Attribute {
 }
 
 /// A deterministic map of IR attributes with ergonomic symbol and string lookup.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash)]
-pub struct AttributeMap(BTreeMap<Symbol, Attribute>);
-
-pub type AttributeIter<'a> = std::collections::btree_map::Iter<'a, Symbol, Attribute>;
-pub type AttributeIterMut<'a> = std::collections::btree_map::IterMut<'a, Symbol, Attribute>;
-pub type AttributeKeys<'a> = std::collections::btree_map::Keys<'a, Symbol, Attribute>;
-pub type AttributeValues<'a> = std::collections::btree_map::Values<'a, Symbol, Attribute>;
-pub type AttributeValuesMut<'a> = std::collections::btree_map::ValuesMut<'a, Symbol, Attribute>;
-pub type AttributeIntoIter = std::collections::btree_map::IntoIter<Symbol, Attribute>;
+///
+/// Entries are kept in a vector sorted by key. Maps hold only a few entries, so
+/// lookups scan with `Symbol` equality, which compares interned ids without
+/// resolving strings; only inserting a new key orders it by `Symbol::cmp`.
+/// Iteration, equality, and hashing follow key order, independent of the
+/// order in which entries were inserted.
+#[derive(Clone, Default, PartialEq, Eq, Hash)]
+pub struct AttributeMap(Vec<(Symbol, Attribute)>);
 
 /// A key accepted by [`AttributeMap::get`].
 pub trait AttributeKey {
@@ -368,21 +367,26 @@ impl AttributeKey for &str {
 }
 
 impl AttributeMap {
-    pub fn new() -> Self {
-        Self::default()
+    pub const fn new() -> Self {
+        Self(Vec::new())
+    }
+
+    fn position(&self, key: impl AttributeKey) -> Option<usize> {
+        let symbol = key.lookup_symbol()?;
+        self.0.iter().position(|(key, _)| *key == symbol)
     }
 
     /// Return the attribute associated with a symbol or already-interned string.
     ///
     /// A missing string key is not added to the global symbol interner.
     pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
-        let symbol = key.lookup_symbol()?;
-        self.0.get(&symbol)
+        let index = self.position(key)?;
+        Some(&self.0[index].1)
     }
 
     pub fn get_mut(&mut self, key: impl AttributeKey) -> Option<&mut Attribute> {
-        let symbol = key.lookup_symbol()?;
-        self.0.get_mut(&symbol)
+        let index = self.position(key)?;
+        Some(&mut self.0[index].1)
     }
 
     pub fn get_bool(&self, key: impl AttributeKey) -> Option<bool> {
@@ -448,39 +452,42 @@ impl AttributeMap {
     }
 
     pub fn contains_key(&self, key: impl AttributeKey) -> bool {
-        let Some(symbol) = key.lookup_symbol() else {
-            return false;
-        };
-        self.0.contains_key(&symbol)
+        self.position(key).is_some()
     }
 
+    /// Insert or replace an entry, returning the replaced value.
     pub fn insert(&mut self, key: Symbol, value: Attribute) -> Option<Attribute> {
-        self.0.insert(key, value)
+        if let Some(index) = self.position(key) {
+            return Some(std::mem::replace(&mut self.0[index].1, value));
+        }
+        let index = self.0.partition_point(|(existing, _)| *existing < key);
+        self.0.insert(index, (key, value));
+        None
     }
 
     pub fn remove(&mut self, key: impl AttributeKey) -> Option<Attribute> {
-        let symbol = key.lookup_symbol()?;
-        self.0.remove(&symbol)
+        let index = self.position(key)?;
+        Some(self.0.remove(index).1)
     }
 
     pub fn iter(&self) -> AttributeIter<'_> {
-        self.0.iter()
+        AttributeIter(self.0.iter())
     }
 
     pub fn iter_mut(&mut self) -> AttributeIterMut<'_> {
-        self.0.iter_mut()
+        AttributeIterMut(self.0.iter_mut())
     }
 
     pub fn keys(&self) -> AttributeKeys<'_> {
-        self.0.keys()
+        AttributeKeys(self.0.iter())
     }
 
     pub fn values(&self) -> AttributeValues<'_> {
-        self.0.values()
+        AttributeValues(self.0.iter())
     }
 
     pub fn values_mut(&mut self) -> AttributeValuesMut<'_> {
-        self.0.values_mut()
+        AttributeValuesMut(self.0.iter_mut())
     }
 
     pub fn len(&self) -> usize {
@@ -496,17 +503,89 @@ impl AttributeMap {
     }
 }
 
+impl fmt::Debug for AttributeMap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_map().entries(self.iter()).finish()
+    }
+}
+
+/// Later entries replace earlier ones with the same key.
 impl FromIterator<(Symbol, Attribute)> for AttributeMap {
     fn from_iter<T: IntoIterator<Item = (Symbol, Attribute)>>(iter: T) -> Self {
-        Self(iter.into_iter().collect())
+        let mut map = Self::new();
+        map.extend(iter);
+        map
     }
 }
 
 impl Extend<(Symbol, Attribute)> for AttributeMap {
     fn extend<T: IntoIterator<Item = (Symbol, Attribute)>>(&mut self, iter: T) {
-        self.0.extend(iter);
+        for (key, value) in iter {
+            self.insert(key, value);
+        }
     }
 }
+
+macro_rules! attribute_iterator {
+    ($(#[$meta:meta])* $name:ident<$lt:lifetime>($inner:ty) -> $item:ty = $map:expr) => {
+        $(#[$meta])*
+        pub struct $name<$lt>($inner);
+
+        impl<$lt> Iterator for $name<$lt> {
+            type Item = $item;
+
+            fn next(&mut self) -> Option<Self::Item> {
+                self.0.next().map($map)
+            }
+
+            fn size_hint(&self) -> (usize, Option<usize>) {
+                self.0.size_hint()
+            }
+        }
+
+        impl<$lt> DoubleEndedIterator for $name<$lt> {
+            fn next_back(&mut self) -> Option<Self::Item> {
+                self.0.next_back().map($map)
+            }
+        }
+
+        impl<$lt> ExactSizeIterator for $name<$lt> {}
+
+        impl<$lt> std::iter::FusedIterator for $name<$lt> {}
+    };
+}
+
+attribute_iterator!(
+    /// Entries of an [`AttributeMap`] in key order.
+    #[derive(Clone)]
+    AttributeIter<'a>(std::slice::Iter<'a, (Symbol, Attribute)>)
+        -> (&'a Symbol, &'a Attribute) = |(key, value)| (key, value)
+);
+attribute_iterator!(
+    /// Entries of an [`AttributeMap`] in key order, with mutable values.
+    AttributeIterMut<'a>(std::slice::IterMut<'a, (Symbol, Attribute)>)
+        -> (&'a Symbol, &'a mut Attribute) = |(key, value)| (&*key, value)
+);
+attribute_iterator!(
+    /// Keys of an [`AttributeMap`] in order.
+    #[derive(Clone)]
+    AttributeKeys<'a>(std::slice::Iter<'a, (Symbol, Attribute)>)
+        -> &'a Symbol = |(key, _)| key
+);
+attribute_iterator!(
+    /// Values of an [`AttributeMap`] in key order.
+    #[derive(Clone)]
+    AttributeValues<'a>(std::slice::Iter<'a, (Symbol, Attribute)>)
+        -> &'a Attribute = |(_, value)| value
+);
+attribute_iterator!(
+    /// Mutable values of an [`AttributeMap`] in key order.
+    AttributeValuesMut<'a>(std::slice::IterMut<'a, (Symbol, Attribute)>)
+        -> &'a mut Attribute = |(_, value)| value
+);
+
+/// Owned entries of an [`AttributeMap`] in key order.
+pub type AttributeIntoIter = std::vec::IntoIter<(Symbol, Attribute)>;
 
 impl IntoIterator for AttributeMap {
     type Item = (Symbol, Attribute);
@@ -522,7 +601,7 @@ impl<'a> IntoIterator for &'a AttributeMap {
     type IntoIter = AttributeIter<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter()
+        self.iter()
     }
 }
 
@@ -531,7 +610,7 @@ impl<'a> IntoIterator for &'a mut AttributeMap {
     type IntoIter = AttributeIterMut<'a>;
 
     fn into_iter(self) -> Self::IntoIter {
-        self.0.iter_mut()
+        self.iter_mut()
     }
 }
 
@@ -547,7 +626,7 @@ impl<'a> IntoIterator for &'a mut AttributeMap {
 /// per-parameter attributes keeps a single identity.
 pub const PARAM_ATTRS_ATTR: &str = "param_attrs";
 
-static EMPTY_ATTRIBUTE_MAP: AttributeMap = AttributeMap(BTreeMap::new());
+static EMPTY_ATTRIBUTE_MAP: AttributeMap = AttributeMap::new();
 
 /// A malformed [`PARAM_ATTRS_ATTR`] value.
 #[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
@@ -1016,6 +1095,61 @@ mod tests {
 
         assert_eq!(attrs.remove(answer), Some(Attribute::Int(42)));
         assert!(attrs.is_empty());
+    }
+
+    #[test]
+    fn attribute_map_is_ordered_by_key_regardless_of_insertion_order() {
+        use std::hash::{BuildHasher, RandomState};
+
+        let entries = [
+            (Symbol::new("zeta"), Attribute::Int(1)),
+            (Symbol::new("alpha"), Attribute::Int(2)),
+            (Symbol::new("mid"), Attribute::Int(3)),
+        ];
+        let forward: AttributeMap = entries.iter().cloned().collect();
+        let mut backward = AttributeMap::new();
+        for (key, value) in entries.iter().rev().cloned() {
+            assert_eq!(backward.insert(key, value), None);
+        }
+
+        assert_eq!(forward, backward);
+        let hasher = RandomState::new();
+        assert_eq!(hasher.hash_one(&forward), hasher.hash_one(&backward));
+        let keys = |map: &AttributeMap| map.keys().map(|key| key.to_string()).collect::<Vec<_>>();
+        assert_eq!(keys(&forward), ["alpha", "mid", "zeta"]);
+        assert_eq!(keys(&backward), ["alpha", "mid", "zeta"]);
+        assert_eq!(
+            format!("{forward:?}"),
+            r#"{Symbol("alpha"): Int(2), Symbol("mid"): Int(3), Symbol("zeta"): Int(1)}"#
+        );
+    }
+
+    #[test]
+    fn attribute_map_later_entries_replace_earlier_ones() {
+        let key = Symbol::new("key");
+        let mut attrs = AttributeMap::new();
+        assert_eq!(attrs.insert(key, Attribute::Int(1)), None);
+        assert_eq!(
+            attrs.insert(key, Attribute::Int(2)),
+            Some(Attribute::Int(1))
+        );
+        assert_eq!(attrs.len(), 1);
+        assert_eq!(attrs.get(key), Some(&Attribute::Int(2)));
+
+        let collected: AttributeMap = [
+            (key, Attribute::Int(1)),
+            (Symbol::new("other"), Attribute::Unit),
+            (key, Attribute::Int(3)),
+        ]
+        .into_iter()
+        .collect();
+        assert_eq!(collected.len(), 2);
+        assert_eq!(collected.get(key), Some(&Attribute::Int(3)));
+
+        let mut extended = collected.clone();
+        extended.extend([(key, Attribute::Int(4))]);
+        assert_eq!(extended.get(key), Some(&Attribute::Int(4)));
+        assert_eq!(extended.len(), 2);
     }
 
     #[test]
