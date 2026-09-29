@@ -96,8 +96,8 @@ impl From<PassError> for DumpIrError {
     }
 }
 
-impl From<ConversionError> for DumpIrError {
-    fn from(error: ConversionError) -> Self {
+impl From<tribute_passes::native::intrinsic_to_native::BytesIntrinsicError> for DumpIrError {
+    fn from(error: tribute_passes::native::intrinsic_to_native::BytesIntrinsicError) -> Self {
         Self {
             message: error.to_string(),
         }
