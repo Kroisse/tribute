@@ -473,38 +473,52 @@ fn main() {
 }
 
 /// A case over twenty Bool columns, each arm matching one `True`, that the
-/// exhaustiveness check gives up on. With `all_false`, a last arm covers the
-/// rest and the fallthrough is dead; without it, the fallthrough is reachable.
-fn unverified_case_source(all_false: bool) -> String {
+/// exhaustiveness check gives up on. Arm `n` yields `value(n)`. With
+/// `all_false`, a last arm yielding `value(99)` covers the rest and the
+/// fallthrough is dead; without it, the fallthrough is reachable.
+fn unverified_case_source(result: &str, value: fn(usize) -> String, all_false: bool) -> String {
     const COLUMNS: usize = 20;
     let arms = (0..COLUMNS).map(|arm| {
         let columns = (0..COLUMNS).map(|column| if column == arm { "True" } else { "_" });
-        format!("        #({}) -> {arm}\n", columns.format(", "))
+        format!("        #({}) -> {}\n", columns.format(", "), value(arm))
     });
     let last = if all_false {
         format!(
-            "        #({}) -> 99\n",
-            ["False"; COLUMNS].iter().format(", ")
+            "        #({}) -> {}\n",
+            ["False"; COLUMNS].iter().format(", "),
+            value(99)
         )
     } else {
         String::new()
     };
     format!(
-        "fn pick({params}) -> Nat {{\n    case #({names}) {{\n{arms}{last}    }}\n}}\n",
+        "fn pick({params}) -> {result} {{\n    case #({names}) {{\n{arms}{last}    }}\n}}\n",
         params = (0..COLUMNS).format_with(", ", |i, f| f(&format_args!("b{i}: Bool"))),
         names = (0..COLUMNS).format_with(", ", |i, f| f(&format_args!("b{i}"))),
         arms = arms.format(""),
     )
 }
 
+/// Calls of `pick` from [`unverified_case_source`] whose `True` column is
+/// the last one, and with no `True` column.
+fn unverified_case_inputs() -> (String, String) {
+    (
+        ["False"; 19]
+            .iter()
+            .chain(["True"].iter())
+            .format(", ")
+            .to_string(),
+        ["False"; 20].iter().format(", ").to_string(),
+    )
+}
+
 /// An unverified case compiles, and its dead fallthrough does not run.
 #[test]
 fn test_native_unverified_case_compiles() {
+    let (last_true, all_false) = unverified_case_inputs();
     let source = format!(
-        "{}\nfn main() {{\n    __tribute_print_nat(pick({}, True))\n    __tribute_print_nat(pick({}))\n}}\n",
-        unverified_case_source(true),
-        ["False"; 19].iter().format(", "),
-        ["False"; 20].iter().format(", "),
+        "{}\nfn main() {{\n    __tribute_print_nat(pick({last_true}))\n    __tribute_print_nat(pick({all_false}))\n}}\n",
+        unverified_case_source("Nat", |n| n.to_string(), true),
     );
     assert_native_output("unverified_case.trb", &source, "19\n99");
 }
@@ -512,15 +526,53 @@ fn test_native_unverified_case_compiles() {
 /// An unverified case whose arms leave a value unmatched traps on it.
 #[test]
 fn test_native_unmatched_unverified_case_traps() {
+    let (_, all_false) = unverified_case_inputs();
     let source = format!(
-        "{}\n{}\nfn main() {{\n    __tribute_print_nat(1)\n    __tribute_print_nat(pick({}))\n}}\n",
+        "{}\n{}\nfn main() {{\n    __tribute_print_nat(1)\n    __tribute_print_nat(pick({all_false}))\n}}\n",
         common::PRINT_EXTERNS,
-        unverified_case_source(false),
-        ["False"; 20].iter().format(", "),
+        unverified_case_source("Nat", |n| n.to_string(), false),
     );
     let output = compile_and_run_native("unmatched_unverified_case.trb", &source);
     assert!(!output.status.success(), "{:?}", output.status);
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1");
+}
+
+/// Managed arm results stay sound around the unreachable fallthrough, whether
+/// it is dead or traps.
+#[test]
+fn test_native_unverified_case_with_managed_result_under_asan() {
+    let (last_true, all_false) = unverified_case_inputs();
+    let program = |all_arms: bool| {
+        format!(
+            r#"{externs}
+{pick}
+fn show(value: Option(Nat)) {{
+    case value {{
+        Some(n) -> __tribute_print_nat(n)
+        None -> __tribute_print_nat(0)
+    }}
+}}
+
+fn main() {{
+    show(pick({last_true}))
+    show(pick({all_false}))
+}}
+"#,
+            externs = common::PRINT_EXTERNS,
+            pick = unverified_case_source("Option(Nat)", |n| format!("Some({n})"), all_arms),
+        )
+    };
+
+    let output = compile_and_run_native_asan("unverified_managed_case.trb", &program(true));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{:?}: {stderr}", output.status);
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "19\n99");
+
+    let output = compile_and_run_native_asan("unmatched_managed_case.trb", &program(false));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(!output.status.success(), "{:?}", output.status);
+    assert!(!stderr.contains("AddressSanitizer"), "{stderr}");
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "19");
 }
 
 /// A case over an enum spelled through a `use` import or by its short name
