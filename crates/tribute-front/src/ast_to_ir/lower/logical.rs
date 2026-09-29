@@ -1557,7 +1557,6 @@ fn lower_record<'db>(
 /// Lower a record literal that constructs a named-field enum variant. Fields
 /// are evaluated in source order and assembled in declaration order; type
 /// checking rejects spreads, so every field is written.
-#[allow(clippy::too_many_arguments)]
 fn lower_variant_record<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
