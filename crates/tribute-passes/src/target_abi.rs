@@ -1522,16 +1522,7 @@ impl<'a> PhysicalTypeConverter<'a> {
     }
 
     fn convert_attribute(&mut self, attribute: Attribute) -> Result<Attribute, TargetAbiError> {
-        match attribute {
-            Attribute::Type(ty) => Ok(Attribute::Type(self.convert_embedded(ty)?)),
-            Attribute::List(values) => Ok(Attribute::List(
-                values
-                    .into_iter()
-                    .map(|value| self.convert_attribute(value))
-                    .collect::<Result<_, _>>()?,
-            )),
-            other => Ok(other),
-        }
+        attribute.try_map_types(&mut |ty| self.convert_embedded(ty))
     }
 
     fn intern_if_changed(&mut self, original: TypeRef, data: TypeData) -> TypeRef {

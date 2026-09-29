@@ -558,16 +558,19 @@ fn func_sig_raw_type<'a>(
         inputs: params.iter().map(|(_, ty)| ty.clone()).collect(),
         results: vec![result],
         attrs: vec![(
-            CALLING_CONVENTION_ATTR,
+            CALLING_CONVENTION_ATTR.into(),
             RawAttribute::Int(convention as i128),
         )],
     }
 }
 
 fn has_duplicate_convention_attr(
-    attrs: &[(&str, trunk_ir::parser::raw::RawAttribute<'_>)],
+    attrs: &[(
+        std::borrow::Cow<'_, str>,
+        trunk_ir::parser::raw::RawAttribute<'_>,
+    )],
 ) -> bool {
-    attrs.iter().any(|(key, _)| *key == CALLING_CONVENTION_ATTR)
+    attrs.iter().any(|(key, _)| key == CALLING_CONVENTION_ATTR)
 }
 
 fn parse_func<'a>(
@@ -617,7 +620,7 @@ fn parse_func<'a>(
 
     let signature = func_sig_raw_type(result, &params, convention);
     let mut attributes = attributes;
-    attributes.push(("type", RawAttribute::Type(signature)));
+    attributes.push(("type".into(), RawAttribute::Type(signature)));
 
     Ok(RawOperation {
         results,
@@ -1867,13 +1870,11 @@ fn attribute_contains_adt_typeref(
     attribute: &Attribute,
     visiting: &mut HashSet<TypeRef>,
 ) -> bool {
-    match attribute {
-        Attribute::Type(ty) => contains_adt_typeref(ctx, *ty, visiting),
-        Attribute::List(values) => values
-            .iter()
-            .any(|value| attribute_contains_adt_typeref(ctx, value, visiting)),
-        _ => false,
-    }
+    let mut contains = false;
+    attribute.visit_types(&mut |ty| {
+        contains = contains || contains_adt_typeref(ctx, ty, visiting);
+    });
+    contains
 }
 
 fn nominal_identity(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
@@ -1959,15 +1960,7 @@ fn is_core_ptr(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 fn collect_attribute_types(ctx: &IrContext, attribute: &Attribute, types: &mut HashSet<TypeRef>) {
-    match attribute {
-        Attribute::Type(ty) => collect_reachable_type(ctx, *ty, types),
-        Attribute::List(values) => {
-            for value in values {
-                collect_attribute_types(ctx, value, types);
-            }
-        }
-        _ => {}
-    }
+    attribute.visit_types(&mut |ty| collect_reachable_type(ctx, ty, types));
 }
 
 fn collect_reachable_type(ctx: &IrContext, ty: TypeRef, types: &mut HashSet<TypeRef>) {

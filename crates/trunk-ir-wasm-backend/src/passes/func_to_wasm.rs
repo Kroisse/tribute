@@ -297,18 +297,9 @@ fn convert_nested_callable_attribute(
     attribute: &Attribute,
     converter: &TypeConverter,
 ) -> Option<Attribute> {
-    match attribute {
-        Attribute::Type(ty) => Some(Attribute::Type(convert_nested_callable_type(
-            ctx, *ty, converter,
-        )?)),
-        Attribute::List(values) => Some(Attribute::List(
-            values
-                .iter()
-                .map(|value| convert_nested_callable_attribute(ctx, value, converter))
-                .collect::<Option<_>>()?,
-        )),
-        other => Some(other.clone()),
-    }
+    attribute
+        .try_map_types(&mut |ty| convert_nested_callable_type(ctx, ty, converter).ok_or(()))
+        .ok()
 }
 
 fn convert_nested_callable_attributes(

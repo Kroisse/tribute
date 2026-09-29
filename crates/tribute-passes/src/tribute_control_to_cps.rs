@@ -123,15 +123,7 @@ fn walk_attribute_types(
     seen: &mut HashSet<TypeRef>,
     errors: &mut Vec<String>,
 ) {
-    match attribute {
-        Attribute::Type(ty) => walk_type(ctx, *ty, boundary, seen, errors),
-        Attribute::List(values) => {
-            for value in values {
-                walk_attribute_types(ctx, value, boundary, seen, errors);
-            }
-        }
-        _ => {}
-    }
+    attribute.visit_types(&mut |ty| walk_type(ctx, ty, boundary, seen, errors));
 }
 
 fn walk_type(
@@ -1153,16 +1145,7 @@ impl<'a> Converter<'a> {
     }
 
     fn convert_attribute(&mut self, attribute: &Attribute) -> Attribute {
-        match attribute {
-            Attribute::Type(ty) => Attribute::Type(self.convert_type(*ty)),
-            Attribute::List(values) => Attribute::List(
-                values
-                    .iter()
-                    .map(|value| self.convert_attribute(value))
-                    .collect(),
-            ),
-            value => value.clone(),
-        }
+        attribute.map_types(|ty| self.convert_type(ty))
     }
 
     fn convert_attrs(&mut self, attrs: &AttributeMap) -> Vec<(Symbol, Attribute)> {

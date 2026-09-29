@@ -3,6 +3,7 @@
 //! This module contains the "stage 1" parser: text → `Raw*` structs.
 //! It is shared by both the Salsa IR builder and the Arena IR builder.
 
+use std::borrow::Cow;
 use winnow::ascii;
 use winnow::combinator::{alt, delimited, opt, preceded, repeat, separated};
 use winnow::prelude::*;
@@ -44,7 +45,7 @@ pub struct RawOperation<'a> {
     /// Optional return type from `-> type`.
     pub return_type: Option<RawType<'a>>,
     pub operands: Vec<&'a str>,
-    pub attributes: Vec<(&'a str, RawAttribute<'a>)>,
+    pub attributes: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
     pub result_types: Vec<RawType<'a>>,
     pub regions: Vec<RawRegion<'a>>,
     /// Optional successor list from `[^bb0, ^bb1]`.
@@ -70,7 +71,7 @@ pub enum RawType<'a> {
         dialect: &'a str,
         name: &'a str,
         params: Vec<RawType<'a>>,
-        attrs: Vec<(&'a str, RawAttribute<'a>)>,
+        attrs: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
     },
     /// Canonical qualified `*.func_sig<(inputs...) -> results>` syntax.
     Function {
@@ -78,7 +79,7 @@ pub enum RawType<'a> {
         name: &'a str,
         inputs: Vec<RawType<'a>>,
         results: Vec<RawType<'a>>,
-        attrs: Vec<(&'a str, RawAttribute<'a>)>,
+        attrs: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
     },
     /// Type alias reference: `!name` or `!"quoted name"`
     Alias(String),
@@ -93,6 +94,7 @@ pub enum RawAttribute<'a> {
     Symbol(String),
     Type(RawType<'a>),
     List(Vec<RawAttribute<'a>>),
+    Dict(Vec<(Cow<'a, str>, RawAttribute<'a>)>),
     Unit,
     Location(String, usize, usize),
     Bytes(Vec<u8>),
@@ -365,13 +367,17 @@ pub fn raw_attr_value<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> 
         string_lit.map(RawAttribute::String),
         // Symbol reference
         symbol_ref.map(RawAttribute::Symbol),
-        // List
-        delimited(
-            ('[', ws),
-            separated(0.., (ws, raw_attr_value, ws).map(|(_, a, _)| a), ','),
-            (ws, ']'),
-        )
-        .map(RawAttribute::List),
+        alt((
+            // List
+            delimited(
+                ('[', ws),
+                separated(0.., (ws, raw_attr_value, ws).map(|(_, a, _)| a), ','),
+                (ws, ']'),
+            )
+            .map(RawAttribute::List),
+            // Dictionary; in value position `{` cannot begin a region body
+            raw_attr_dict.map(RawAttribute::Dict),
+        )),
         alt((
             // Float (requires dot: 3.14, -1.0)
             float_with_dot.map(RawAttribute::Float),
@@ -450,7 +456,9 @@ fn byte_escape(input: &mut &str) -> ModalResult<u8> {
 }
 
 /// Parse an attribute dict: {key = value, ...}
-pub fn raw_attr_dict<'a>(input: &mut &'a str) -> ModalResult<Vec<(&'a str, RawAttribute<'a>)>> {
+pub fn raw_attr_dict<'a>(
+    input: &mut &'a str,
+) -> ModalResult<Vec<(Cow<'a, str>, RawAttribute<'a>)>> {
     delimited(
         ('{', ws),
         separated(
@@ -469,25 +477,34 @@ pub fn raw_attr_dict<'a>(input: &mut &'a str) -> ModalResult<Vec<(&'a str, RawAt
 /// Attribute symbols may be namespaced with dots (for example,
 /// `test.marker`). The printer has always emitted the complete
 /// symbol, so accepting the same spelling here restores generic round-trips.
-pub fn attribute_key<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
+/// Keys that are not dot-separated identifiers use the quoted string form.
+pub fn attribute_key<'a>(input: &mut &'a str) -> ModalResult<Cow<'a, str>> {
+    if input.starts_with('"') {
+        return string_lit.map(Cow::Owned).parse_next(input);
+    }
     let key = take_while(1.., |c: char| {
         c.is_ascii_alphanumeric() || c == '_' || c == '.'
     })
     .parse_next(input)?;
-    let valid = key.split('.').all(|segment| {
-        let mut chars = segment.chars();
-        chars
-            .next()
-            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-    });
-    if valid {
-        Ok(key)
+    if is_bare_attribute_key(key) {
+        Ok(Cow::Borrowed(key))
     } else {
         Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
         ))
     }
+}
+
+/// Whether `key` can be written without quotes: dot-separated identifier
+/// segments. Other keys use the quoted string form.
+pub(crate) fn is_bare_attribute_key(key: &str) -> bool {
+    key.split('.').all(|segment| {
+        let mut chars = segment.chars();
+        chars
+            .next()
+            .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+            && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    })
 }
 
 /// Parse result list: %0 = or %0, %1 =

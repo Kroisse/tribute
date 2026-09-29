@@ -661,33 +661,17 @@ fn collect_reachable_attribute_type_contract(
     layouts: &mut HashSet<TypeRef>,
     visited_types: &mut HashSet<TypeRef>,
 ) {
-    match attribute {
-        trunk_ir::Attribute::Type(ty) => {
-            collect_reachable_type_contract(
-                ctx,
-                *ty,
-                typerefs,
-                pending_typerefs,
-                nominal_layouts,
-                layouts,
-                visited_types,
-            );
-        }
-        trunk_ir::Attribute::List(values) => {
-            for value in values {
-                collect_reachable_attribute_type_contract(
-                    ctx,
-                    value,
-                    typerefs,
-                    pending_typerefs,
-                    nominal_layouts,
-                    layouts,
-                    visited_types,
-                );
-            }
-        }
-        _ => {}
-    }
+    attribute.visit_types(&mut |ty| {
+        collect_reachable_type_contract(
+            ctx,
+            ty,
+            typerefs,
+            pending_typerefs,
+            nominal_layouts,
+            layouts,
+            visited_types,
+        );
+    });
 }
 
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {

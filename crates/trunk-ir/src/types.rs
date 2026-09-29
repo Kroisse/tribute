@@ -48,6 +48,8 @@ pub enum Attribute {
     Symbol(Symbol),
     /// List of attributes.
     List(Vec<Attribute>),
+    /// Dictionary of attributes keyed by symbol, ordered by key.
+    Dict(AttributeMap),
     /// Full source location.
     Location(Location),
 }
@@ -154,6 +156,84 @@ impl Attribute {
         }
     }
 
+    /// Extract the inner list if this is `Attribute::List`.
+    pub fn as_list(&self) -> Option<&[Attribute]> {
+        match self {
+            Attribute::List(items) => Some(items),
+            _ => None,
+        }
+    }
+
+    /// Extract the inner dictionary if this is `Attribute::Dict`.
+    pub fn as_dict(&self) -> Option<&AttributeMap> {
+        match self {
+            Attribute::Dict(dict) => Some(dict),
+            _ => None,
+        }
+    }
+
+    /// Visit every `TypeRef` nested in this attribute, including those inside
+    /// lists and dictionaries, in printing order.
+    pub fn visit_types(&self, f: &mut impl FnMut(TypeRef)) {
+        match self {
+            Attribute::Type(ty) => f(*ty),
+            Attribute::List(items) => {
+                for item in items {
+                    item.visit_types(f);
+                }
+            }
+            Attribute::Dict(dict) => {
+                for value in dict.values() {
+                    value.visit_types(f);
+                }
+            }
+            Attribute::Unit
+            | Attribute::Bool(_)
+            | Attribute::Int(_)
+            | Attribute::FloatBits(_)
+            | Attribute::String(_)
+            | Attribute::Bytes(_)
+            | Attribute::Symbol(_)
+            | Attribute::Location(_) => {}
+        }
+    }
+
+    /// Rebuild this attribute with every nested `TypeRef` replaced by `f`,
+    /// stopping at the first error.
+    pub fn try_map_types<E>(
+        &self,
+        f: &mut impl FnMut(TypeRef) -> Result<TypeRef, E>,
+    ) -> Result<Attribute, E> {
+        Ok(match self {
+            Attribute::Type(ty) => Attribute::Type(f(*ty)?),
+            Attribute::List(items) => Attribute::List(
+                items
+                    .iter()
+                    .map(|item| item.try_map_types(f))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Attribute::Dict(dict) => Attribute::Dict(
+                dict.iter()
+                    .map(|(key, value)| Ok((*key, value.try_map_types(f)?)))
+                    .collect::<Result<_, _>>()?,
+            ),
+            Attribute::Unit
+            | Attribute::Bool(_)
+            | Attribute::Int(_)
+            | Attribute::FloatBits(_)
+            | Attribute::String(_)
+            | Attribute::Bytes(_)
+            | Attribute::Symbol(_)
+            | Attribute::Location(_) => self.clone(),
+        })
+    }
+
+    /// Rebuild this attribute with every nested `TypeRef` replaced by `f`.
+    pub fn map_types(&self, mut f: impl FnMut(TypeRef) -> TypeRef) -> Attribute {
+        let Ok(mapped) = self.try_map_types(&mut |ty| Ok::<_, std::convert::Infallible>(f(ty)));
+        mapped
+    }
+
     /// Estimate the complexity of this attribute for alias generation heuristics.
     pub fn complexity(&self) -> usize {
         match self {
@@ -174,6 +254,13 @@ impl Attribute {
             Attribute::Type(_) => 10, // rough estimate; actual depends on type
             Attribute::List(list) => {
                 list.iter().map(Attribute::complexity).sum::<usize>() + list.len() * 2
+            }
+            Attribute::Dict(dict) => {
+                dict.iter()
+                    .map(|(key, value)| key.with_str(|s| s.len()) + 3 + value.complexity())
+                    .sum::<usize>()
+                    + dict.len() * 2
+                    + 2
             }
             Attribute::Location(_) => 20,
         }
@@ -231,6 +318,12 @@ impl From<String> for Attribute {
 impl From<&str> for Attribute {
     fn from(value: &str) -> Self {
         Attribute::String(value.to_string())
+    }
+}
+
+impl From<AttributeMap> for Attribute {
+    fn from(value: AttributeMap) -> Self {
+        Attribute::Dict(value)
     }
 }
 
@@ -621,6 +714,38 @@ mod tests {
     use super::*;
     use crate::IrContext;
     use crate::Symbol;
+
+    #[test]
+    fn nested_types_are_visited_and_mapped_through_lists_and_dicts() {
+        let mut ctx = IrContext::new();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+        let dict = |ty| {
+            Attribute::Dict(
+                [
+                    (Symbol::new("ty"), Attribute::Type(ty)),
+                    (Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep"))),
+                ]
+                .into_iter()
+                .collect(),
+            )
+        };
+        let attribute = Attribute::List(vec![Attribute::Type(i32_ty), dict(i32_ty)]);
+
+        let mut visited = Vec::new();
+        attribute.visit_types(&mut |ty| visited.push(ty));
+        assert_eq!(visited, vec![i32_ty, i32_ty]);
+
+        let mapped = attribute.map_types(|ty| if ty == i32_ty { i64_ty } else { ty });
+        assert_eq!(
+            mapped,
+            Attribute::List(vec![Attribute::Type(i64_ty), dict(i64_ty)])
+        );
+        assert_eq!(
+            attribute.try_map_types(&mut |_| Err::<TypeRef, _>("stop")),
+            Err("stop")
+        );
+    }
 
     #[test]
     fn attribute_map_accepts_string_and_symbol_keys_without_interning_misses() {

@@ -220,6 +220,18 @@ impl<'a> PrintState<'a> {
                 }
                 f.write_char(']')
             }
+            Attribute::Dict(dict) => {
+                f.write_char('{')?;
+                for (i, (key, value)) in dict.iter().enumerate() {
+                    if i > 0 {
+                        f.write_str(", ")?;
+                    }
+                    write_attribute_key(f, *key)?;
+                    f.write_str(" = ")?;
+                    self.write_attribute(f, value)?;
+                }
+                f.write_char('}')
+            }
             Attribute::Location(loc) => {
                 let path_str = self.ctx.paths().get(loc.path);
                 f.write_str("loc(\"")?;
@@ -470,6 +482,19 @@ fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
     }
 }
 
+/// Write a dictionary key bare when the reader accepts it, otherwise quoted.
+fn write_attribute_key(f: &mut dyn Write, key: crate::symbol::Symbol) -> fmt::Result {
+    key.with_str(|s| {
+        if crate::parser::raw::is_bare_attribute_key(s) {
+            f.write_str(s)
+        } else {
+            f.write_char('"')?;
+            write_escaped_string(f, s)?;
+            f.write_char('"')
+        }
+    })
+}
+
 fn write_symbol(f: &mut dyn Write, sym: crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| {
         let needs_quoting =
@@ -542,15 +567,7 @@ fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, 
 }
 
 fn count_attr_types(counts: &mut HashMap<TypeRef, usize>, attr: &Attribute) {
-    match attr {
-        Attribute::Type(ty) => *counts.entry(*ty).or_default() += 1,
-        Attribute::List(list) => {
-            for item in list {
-                count_attr_types(counts, item);
-            }
-        }
-        _ => {}
-    }
+    attr.visit_types(&mut |ty| *counts.entry(ty).or_default() += 1);
 }
 
 /// Generate auto aliases for types that are used frequently and are complex enough.
@@ -707,20 +724,12 @@ fn collect_attr_type_deps(
     alias_set: &HashSet<TypeRef>,
     deps: &mut HashSet<TypeRef>,
 ) {
-    match attr {
-        Attribute::Type(ty) => {
-            if alias_set.contains(ty) {
-                deps.insert(*ty);
-            }
-            collect_type_deps(ctx, *ty, alias_set, deps);
+    attr.visit_types(&mut |ty| {
+        if alias_set.contains(&ty) {
+            deps.insert(ty);
         }
-        Attribute::List(list) => {
-            for item in list {
-                collect_attr_type_deps(ctx, item, alias_set, deps);
-            }
-        }
-        _ => {}
-    }
+        collect_type_deps(ctx, ty, alias_set, deps);
+    });
 }
 
 // ============================================================================

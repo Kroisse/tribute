@@ -154,6 +154,15 @@ let nil_ty = core::nil(ctx).as_type_ref();
 let func_ty = func::func_sig(ctx, params, [return_ty]).as_type_ref();
 ```
 
+Attributes that embed types (directly or inside `List`/`Dict` values) are
+converted and inspected through the shared traversal instead of matching
+individual variants:
+
+```rust
+let converted = attribute.map_types(|ty| converter.convert_type_or_identity(ctx, ty));
+attribute.visit_types(&mut |ty| seen.push(ty));
+```
+
 Operations are created with their builders:
 
 ```rust
