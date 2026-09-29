@@ -1631,6 +1631,7 @@ version = "0.1.0"
 dependencies = [
  "cranelift-entity",
  "derive_more",
+ "hashbrown 0.16.1",
  "insta",
  "inventory",
  "itertools",
