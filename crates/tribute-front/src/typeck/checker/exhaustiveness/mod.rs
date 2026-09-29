@@ -305,15 +305,13 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                     let qualified = name
                         .parent_path()
                         .map_or(variant, |module| module.join_path(variant));
-                    let arity = self
-                        .constructor_shape(CtorId::new(db, qualified))
-                        .map_or(0, |(arity, _)| arity);
-                    VariantInfo {
+                    let (arity, _) = self.constructor_shape(CtorId::new(db, qualified))?;
+                    Some(VariantInfo {
                         name: variant,
                         arity,
-                    }
+                    })
                 })
-                .collect();
+                .collect::<Option<_>>()?;
             return Some(Family { variants });
         }
         if id.qualified(db) != name {
