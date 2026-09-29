@@ -1783,11 +1783,7 @@ mod tests {
 
         run_native_target_pipeline(&mut ctx, module)
             .expect("logical CPS root crosses native boundary");
-        for name in [
-            "__tribute_root_main",
-            "__tribute_root_done_k",
-            "__tribute_root_dispatch",
-        ] {
+        for name in ["__tribute_main", "__tribute_done_k", "__tribute_unhandled"] {
             let function = module
                 .ops(&ctx)
                 .into_iter()
@@ -1872,7 +1868,7 @@ mod tests {
             .into_iter()
             .find_map(|op| {
                 let function = wasm::Func::from_op(&ctx, op).ok()?;
-                (function.sym_name(&ctx) == Symbol::new("__tribute_root_dispatch"))
+                (function.sym_name(&ctx) == Symbol::new("__tribute_unhandled"))
                     .then_some(function.r#type(&ctx))
             })
             .unwrap();

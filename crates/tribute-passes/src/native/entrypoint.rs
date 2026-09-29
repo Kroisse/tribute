@@ -161,12 +161,12 @@ mod tests {
     }
 
     const WRAPPER_MAIN: &str = r#"core.module @test {
-  func.func @__tribute_root_main() -> core.nil {
+  func.func @__tribute_main() -> core.nil {
     %nil = arith.const {value = unit} : core.nil
     func.return %nil
   }
   func.func @main() -> core.nil {
-    %result = func.call {callee = @__tribute_root_main} : core.nil
+    %result = func.call {callee = @__tribute_main} : core.nil
     func.return %result
   }
 }"#;
@@ -179,13 +179,13 @@ mod tests {
             printed,
             r#"core.module @test {
   func.func @__tribute_init() -> core.nil attributes {abi = "C"}
-  func.func @__tribute_root_main() -> core.nil {
+  func.func @__tribute_main() -> core.nil {
       %0 = arith.const {value = unit} : core.nil
       func.return %0
   }
   func.func @main() -> core.i32 {
       %0 = func.call {callee = @__tribute_init} : core.nil
-      %1 = func.call {callee = @__tribute_root_main} : core.nil
+      %1 = func.call {callee = @__tribute_main} : core.nil
       %2 = arith.const {value = 0} : core.i32
       func.return %2
   }
@@ -205,7 +205,7 @@ mod tests {
             .find("func.call {callee = @__tribute_init}")
             .expect("runtime init call");
         let worker = printed
-            .find("func.call {callee = @__tribute_root_main}")
+            .find("func.call {callee = @__tribute_main}")
             .expect("worker call");
         assert!(asan < init && init < worker, "{printed}");
         assert!(printed.contains("func.func @__asan_init()"), "{printed}");

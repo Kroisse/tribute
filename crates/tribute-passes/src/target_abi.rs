@@ -32,10 +32,10 @@ use trunk_ir::walk::{WalkAction, walk_op};
 
 const ROOT_EXPORT_CONVENTION_ATTR: &str = "tribute.root_export_convention";
 const ROOT_SOURCE_RESULT_ATTR: &str = "tribute.root_source_result";
-const ROOT_MAIN_SYMBOL: &str = "__tribute_root_main";
-const ROOT_DONE_K_SYMBOL: &str = "__tribute_root_done_k";
-const ROOT_DISPATCH_SYMBOL: &str = "__tribute_root_dispatch";
-const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_root_completion_cell";
+const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
+const ROOT_DONE_K_SYMBOL: &str = "__tribute_done_k";
+const ROOT_UNHANDLED_SYMBOL: &str = "__tribute_unhandled";
+const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_completion_cell";
 const ROOT_COMPLETION_CELL_VALUE_FIELD: &str = "value";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -351,7 +351,7 @@ fn validate_root_entry(
     }
 
     let root_done_k = Symbol::new(ROOT_DONE_K_SYMBOL);
-    let root_dispatch = Symbol::new(ROOT_DISPATCH_SYMBOL);
+    let root_dispatch = Symbol::new(ROOT_UNHANDLED_SYMBOL);
     for &op in &top_level_ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
@@ -502,7 +502,7 @@ fn build_cps_root_call(
         frame,
     } = contract;
     let root_done_k = Symbol::new(ROOT_DONE_K_SYMBOL);
-    let root_dispatch = Symbol::new(ROOT_DISPATCH_SYMBOL);
+    let root_dispatch = Symbol::new(ROOT_UNHANDLED_SYMBOL);
     let location = ctx.op(worker_op).location;
     remove_root_contract(ctx, worker_op);
 
@@ -2009,7 +2009,7 @@ mod tests {
         let wrapper = function(&ctx, module, "main");
         let worker = function(&ctx, module, ROOT_MAIN_SYMBOL);
         let done_k = function(&ctx, module, ROOT_DONE_K_SYMBOL);
-        let dispatch = function(&ctx, module, ROOT_DISPATCH_SYMBOL);
+        let dispatch = function(&ctx, module, ROOT_UNHANDLED_SYMBOL);
 
         assert_eq!(
             get_calling_convention(&ctx, wrapper.op_ref()),
@@ -2168,7 +2168,7 @@ mod tests {
             [
                 ROOT_MAIN_SYMBOL,
                 ROOT_DONE_K_SYMBOL,
-                ROOT_DISPATCH_SYMBOL,
+                ROOT_UNHANDLED_SYMBOL,
                 "main"
             ]
         );
@@ -2293,7 +2293,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            &EVIDENCE_DIRECT_MAIN.replace("@caller", "@__tribute_root_main"),
+            &EVIDENCE_DIRECT_MAIN.replace("@caller", "@__tribute_main"),
         );
         let error = compose_root_entry_bridge(&mut ctx, module).unwrap_err();
         assert!(error.to_string().contains("reserved root symbol collision"));
