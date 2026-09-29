@@ -665,6 +665,9 @@ pub fn normalize_param_attrs(
 pub struct TypeDataBuilder {
     dialect: Symbol,
     name: Symbol,
+    /// Same inline capacity as [`TypeData::params`], so a type whose
+    /// parameters fit inline there does not allocate here either; at 32 bytes
+    /// per entry the inline buffer is 128 bytes.
     params: SmallVec<[(TypeRef, AttributeMap); 4]>,
     attrs: AttributeMap,
 }
