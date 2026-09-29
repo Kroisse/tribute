@@ -2893,6 +2893,32 @@ fn main() ->{std::io::Io} Nil {
     }
 
     #[salsa_test]
+    fn test_case_lowering_nested_non_exhaustive(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "test.trb",
+            r#"
+            fn pick(o: Option(Bool)) -> Nat {
+                case o {
+                    None -> 0
+                    Some(True) -> 1
+                }
+            }
+            "#,
+        );
+
+        let result = compile_with_diagnostics(db, source);
+        let has_non_exhaustive = result.diagnostics.iter().any(|d| {
+            d.inner.message.contains("missing patterns: Some(False)")
+                && d.inner.severity == DiagnosticSeverity::Error
+        });
+        assert!(
+            has_non_exhaustive,
+            "Expected non-exhaustive case diagnostic, got: {:?}",
+            result.diagnostics
+        );
+    }
+
+    #[salsa_test]
     fn test_case_lowering_bool_exhaustive(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
             "test.trb",

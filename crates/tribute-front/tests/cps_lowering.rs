@@ -1635,6 +1635,7 @@ fn make(callback: fn(Int) -> Int) -> Choice { Callback(#(callback, [callback])) 
 fn inspect(choice: Choice, fallback: fn(Int) -> Int) -> fn(Int) -> Int {
     case choice {
         Callback(#(callback, [nested])) -> nested
+        Callback(_) -> fallback
         Other -> fallback
     }
 }

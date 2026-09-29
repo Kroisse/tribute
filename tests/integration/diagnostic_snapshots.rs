@@ -189,6 +189,64 @@ fn first(xs: List(Nat)) -> Nat {
 }
 
 #[salsa_test]
+fn diag_non_exhaustive_tuple_case(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn both(a: Bool, b: Bool) -> Nat {
+    case #(a, b) {
+        #(True, _) -> 1
+        #(_, True) -> 2
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_non_exhaustive_nested_variant(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn pick(o: Option(Bool)) -> Nat {
+    case o {
+        None -> 0
+        Some(True) -> 1
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
+fn diag_unreachable_pattern(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn flag(value: Bool) -> Nat {
+    case value {
+        True -> 1
+        False -> 0
+        _ -> 2
+    }
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    assert!(!result.diagnostics.is_empty());
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+#[salsa_test]
 fn diag_unresolved_method_after_tdnr(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

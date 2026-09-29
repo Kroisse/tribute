@@ -175,7 +175,7 @@ fn bound(values: List(Nat)) -> Nat {
     assert_eq!(
         errors
             .iter()
-            .filter(|error| error.contains("list patterns do not cover all lengths"))
+            .filter(|error| error.contains("missing patterns: [], [_], [_, _, ..]"))
             .count(),
         2,
         "literal list patterns should not count as length-exhaustive: {errors:?}"
@@ -420,4 +420,223 @@ fn test(b: Box) -> Nat {
         errors.is_empty(),
         "an as-pattern around a nested constructor must bind the field type: {errors:#?}"
     );
+}
+
+// ========================================================================
+// Exhaustiveness
+// ========================================================================
+
+/// Messages of `severity` from checking `source`, and how many case
+/// expressions were proved exhaustive.
+fn exhaustiveness_outcome(
+    db: &salsa::DatabaseImpl,
+    source: &str,
+    severity: tribute_core::diagnostic::DiagnosticSeverity,
+) -> (Vec<String>, usize) {
+    let source = SourceCst::from_source_str(db, "test.trb", source);
+    let messages = common::ast_pipeline_diagnostics(db, source)
+        .into_iter()
+        .filter(|diagnostic| diagnostic.inner.severity == severity)
+        .map(|diagnostic| diagnostic.inner.message)
+        .collect();
+    let exhaustive = tribute_front::query::type_check_output(db, source)
+        .expect("type checking should produce output")
+        .exhaustive_cases(db)
+        .len();
+    (messages, exhaustive)
+}
+
+fn errors_and_exhaustive(db: &salsa::DatabaseImpl, source: &str) -> (Vec<String>, usize) {
+    exhaustiveness_outcome(
+        db,
+        source,
+        tribute_core::diagnostic::DiagnosticSeverity::Error,
+    )
+}
+
+fn warnings(db: &salsa::DatabaseImpl, source: &str) -> Vec<String> {
+    exhaustiveness_outcome(
+        db,
+        source,
+        tribute_core::diagnostic::DiagnosticSeverity::Warning,
+    )
+    .0
+}
+
+#[salsa_test]
+fn tuple_case_without_catch_all_is_exhaustive(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+enum Item { Number(Nat), Empty }
+
+fn value(pair: #(Item, Bool)) -> Nat {
+    case pair {
+        #(Number(n), _) -> n
+        #(Empty, True) -> 1
+        #(Empty, False) -> 0
+    }
+}
+
+fn nested(a: Bool, b: Bool, c: Bool) -> Nat {
+    case #(a, #(b, c)) {
+        #(True, #(True, _)) -> 1
+        #(True, #(False, _)) -> 2
+        #(False, _) -> 3
+    }
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(exhaustive, 2);
+}
+
+#[salsa_test]
+fn tuple_case_reports_missing_patterns(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+enum Item { Number(Nat), Empty }
+
+fn value(pair: #(Item, Bool)) -> Nat {
+    case pair {
+        #(Number(n), _) -> n
+        #(Empty, True) -> 1
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["non-exhaustive case expression: missing patterns: #(Empty, False)"]
+    );
+    assert_eq!(exhaustive, 0);
+}
+
+/// A partially covered variant field leaves the case non-exhaustive, so the
+/// last arm is not lowered without its pattern test.
+#[salsa_test]
+fn nested_variant_field_must_be_covered(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+enum Maybe(a) { Nothing, Just(a) }
+
+fn pick(o: Maybe(Bool)) -> Nat {
+    case o {
+        Nothing -> 0
+        Just(True) -> 1
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["non-exhaustive case expression: missing patterns: Just(False)"]
+    );
+    assert_eq!(exhaustive, 0);
+
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+enum Maybe(a) { Nothing, Just(a) }
+
+fn pick(o: Maybe(Bool)) -> Nat {
+    case o {
+        Nothing -> 0
+        Just(True) -> 1
+        Just(False) -> 2
+    }
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(exhaustive, 1);
+}
+
+#[salsa_test]
+fn guarded_arms_do_not_cover(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+fn pick(flag: Bool, enabled: Bool) -> Nat {
+    case flag {
+        True if enabled -> 1
+        False -> 0
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["non-exhaustive case expression: missing patterns: True"]
+    );
+    assert_eq!(exhaustive, 0);
+}
+
+#[salsa_test]
+fn struct_patterns_are_one_constructor(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+struct Flags { left: Bool, right: Bool }
+
+fn both(flags: Flags) -> Nat {
+    case flags {
+        Flags(True, True) -> 1
+        Flags(_, False) -> 2
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["non-exhaustive case expression: missing patterns: Flags(False, True)"]
+    );
+    assert_eq!(exhaustive, 0);
+}
+
+#[salsa_test]
+fn string_literals_need_a_catch_all(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+fn code(name: String) -> Nat {
+    case name {
+        "a" -> 1
+        "b" -> 2
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["non-exhaustive case expression: missing patterns: _"]
+    );
+    assert_eq!(exhaustive, 0);
+}
+
+#[salsa_test]
+fn covered_arms_are_unreachable(db: &salsa::DatabaseImpl) {
+    let warnings = warnings(
+        db,
+        r#"
+fn flag(value: Bool) -> Nat {
+    case value {
+        True -> 1
+        False -> 0
+        _ -> 2
+    }
+}
+
+fn option(value: Option(Nat)) -> Nat {
+    case value {
+        Some(_) -> 1
+        Some(1) -> 2
+        None -> 0
+    }
+}
+"#,
+    );
+    assert_eq!(warnings, ["unreachable pattern", "unreachable pattern"]);
 }

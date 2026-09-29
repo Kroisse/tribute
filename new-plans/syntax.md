@@ -1000,6 +1000,9 @@ case result {
 }
 ```
 
+`case`는 망라적이어야 한다. 망라성 검사와 도달 불가 arm 규칙은
+[types.md의 망라성과 도달 불가 arm](types.md#망라성과-도달-불가-arm)을 따른다.
+
 ## Patterns
 
 ```ebnf

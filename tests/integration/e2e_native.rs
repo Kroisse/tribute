@@ -241,6 +241,60 @@ fn main() {
     );
 }
 
+/// An exhaustive tuple case without a catch-all lowers its last arm without
+/// a pattern test; that arm must still destructure its fields.
+#[test]
+fn test_native_tuple_case_without_catch_all() {
+    assert_native_output(
+        "tuple_case_without_catch_all.trb",
+        r#"
+enum Item {
+    Number(Nat),
+    Empty,
+}
+
+fn value(pair: #(Item, Bool)) -> Nat {
+    case pair {
+        #(Empty, _) -> 0
+        #(Number(n), True) -> n
+        #(Number(n), False) -> n + 100
+    }
+}
+
+fn main() {
+    __tribute_print_nat(value(#(Empty, True)))
+    __tribute_print_nat(value(#(Number(4), True)))
+    __tribute_print_nat(value(#(Number(5), False)))
+}
+"#,
+        "0\n4\n105",
+    );
+}
+
+/// Each arm of a case over a nested variant runs only for its own values.
+#[test]
+fn test_native_nested_variant_case() {
+    assert_native_output(
+        "nested_variant_case.trb",
+        r#"
+fn pick(o: Option(Bool)) -> Nat {
+    case o {
+        None -> 0
+        Some(True) -> 1
+        Some(False) -> 2
+    }
+}
+
+fn main() {
+    __tribute_print_nat(pick(None))
+    __tribute_print_nat(pick(Some(True)))
+    __tribute_print_nat(pick(Some(False)))
+}
+"#,
+        "0\n1\n2",
+    );
+}
+
 #[test]
 fn test_native_short_lists_skip_nested_pattern_observation() {
     assert_native_output(
