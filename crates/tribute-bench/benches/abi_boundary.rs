@@ -11,6 +11,9 @@
 //! timed on a linked executable, which needs the development sysroot
 //! (`cargo xtask runtime`). Allocations and code sizes need no statistics and
 //! are reported by the `abi_boundary_report` binary of this crate.
+//!
+//! CI runs the compile stages under CodSpeed (`.github/workflows/codspeed.yml`),
+//! which counts simulated CPU work instead of wall time.
 
 use std::process::Command;
 use std::time::Duration;
@@ -82,6 +85,11 @@ fn bench_target(
 }
 
 fn native_runtime(c: &mut Criterion) {
+    // CodSpeed instruments this process only, so it cannot see the time spent
+    // in a child executable.
+    if cfg!(codspeed) {
+        return;
+    }
     let dir = tempfile::tempdir().expect("temporary directory");
     let mut group = c.benchmark_group("run/native");
     for program in PROGRAMS {
