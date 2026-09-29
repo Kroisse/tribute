@@ -97,7 +97,7 @@ pub struct IrLoweringCtx<'db> {
     variant_field_names: HashMap<(TypeRef, Symbol), Vec<Symbol>>,
     /// Type map: type name → arena TypeRef for adt.struct / adt.enum.
     /// Used for named structs, tuples, and (future) enum variants.
-    type_map: im::HashMap<Symbol, TypeRef>,
+    type_map: HashMap<Symbol, TypeRef>,
     /// All source nominal identities collected before source-logical layouts
     /// are built. This lets recursive and forward fields retain `adt.typeref`
     /// while their layout is still incomplete.
@@ -141,7 +141,7 @@ impl<'db> IrLoweringCtx<'db> {
             module_block: None,
             struct_fields: HashMap::new(),
             variant_field_names: HashMap::new(),
-            type_map: im::HashMap::new(),
+            type_map: HashMap::new(),
             logical_nominal_declarations: HashSet::new(),
             compiler_intrinsics: HashMap::new(),
 
