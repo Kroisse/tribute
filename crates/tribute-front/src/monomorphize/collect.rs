@@ -1,9 +1,9 @@
 use super::nominal_index::NominalIndex;
 use std::collections::{HashMap, HashSet};
 
+use crate::ast::visit::{RefSite, Visit};
 use crate::ast::{
-    Decl, Expr, ExprKind, FuncDefId, Module, ResolvedRef, Stmt, Type, TypeDefId, TypeKind,
-    TypeScheme, TypedRef,
+    FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
 };
 
 /// Collect all generic function instantiations from a typed module.
@@ -173,106 +173,13 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
             .or_default()
             .insert(type_args);
     }
+}
 
-    fn visit_module(&mut self, module: &Module<TypedRef<'db>>) {
-        for decl in &module.decls {
-            self.visit_decl(decl);
-        }
-    }
-
-    fn visit_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
-        match decl {
-            Decl::Function(func) => self.visit_expr(&func.body),
-            Decl::Module(m) => {
-                if let Some(body) = &m.body {
-                    for d in body {
-                        self.visit_decl(d);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
-        match expr.kind.as_ref() {
-            ExprKind::Var(typed_ref) => {
-                self.try_record(expr.id, typed_ref);
-            }
-            ExprKind::Call { callee, args } => {
-                self.visit_expr(callee);
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-            }
-            ExprKind::Block { stmts, value } => {
-                for s in stmts {
-                    self.visit_stmt(s);
-                }
-                self.visit_expr(value);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    if let Some(guard) = &arm.guard {
-                        self.visit_expr(guard);
-                    }
-                    self.visit_expr(&arm.body);
-                }
-            }
-            ExprKind::Lambda { body, .. } => self.visit_expr(body),
-            ExprKind::Handle { body, handlers } => {
-                self.visit_expr(body);
-                for h in handlers {
-                    self.visit_expr(&h.body);
-                }
-            }
-            ExprKind::Resume { arg, .. } => self.visit_expr(arg),
-            ExprKind::Cons { args, .. } => {
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            ExprKind::Record { fields, spread, .. } => {
-                for (_, e) in fields {
-                    self.visit_expr(e);
-                }
-                if let Some(s) = spread {
-                    self.visit_expr(s);
-                }
-            }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                self.visit_expr(lhs);
-                self.visit_expr(rhs);
-            }
-            ExprKind::Tuple(es) | ExprKind::List(es) => {
-                for e in es {
-                    self.visit_expr(e);
-                }
-            }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.visit_expr(receiver);
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            // Leaf nodes — no sub-expressions to traverse
-            ExprKind::NatLit(_)
-            | ExprKind::IntLit(_)
-            | ExprKind::FloatLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::BytesLit(_)
-            | ExprKind::BoolLit(_)
-            | ExprKind::RuneLit(_)
-            | ExprKind::Nil
-            | ExprKind::Error => {}
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &Stmt<TypedRef<'db>>) {
-        match stmt {
-            Stmt::Let { value, .. } => self.visit_expr(value),
-            Stmt::Expr { expr, .. } => self.visit_expr(expr),
+impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for InstantiationCollector<'_, 'db> {
+    fn visit_ref(&mut self, site: RefSite, node: NodeId, value: &'ast TypedRef<'db>) {
+        // Only a function reference in expression position is a call site.
+        if site == RefSite::Var {
+            self.try_record(node, value);
         }
     }
 }
@@ -478,121 +385,20 @@ impl<'a, 'ast, 'db> TypeInstantiationVisitor<'a, 'ast, 'db> {
     fn collect_type(&mut self, ty: Type<'db>) {
         collect_from_type(self.db, ty, self.index, self.instantiations);
     }
+}
 
-    fn visit_typed_ref(&mut self, tr: &TypedRef<'db>) {
-        self.collect_type(tr.ty);
-    }
-
-    fn visit_module(&mut self, module: &Module<TypedRef<'db>>) {
-        for decl in &module.decls {
-            self.visit_decl(decl);
-        }
-    }
-
-    fn visit_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
-        match decl {
-            Decl::Function(func) => self.visit_expr(&func.body),
-            Decl::Module(m) => {
-                if let Some(body) = &m.body {
-                    for d in body {
-                        self.visit_decl(d);
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
-
-    fn visit_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
-        match expr.kind.as_ref() {
-            ExprKind::Var(tr) => self.visit_typed_ref(tr),
-            ExprKind::Call { callee, args } => {
-                self.visit_expr(callee);
-                for arg in args {
-                    self.visit_expr(arg);
-                }
-            }
-            ExprKind::Block { stmts, value } => {
-                for s in stmts {
-                    self.visit_stmt(s);
-                }
-                self.visit_expr(value);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                self.visit_expr(scrutinee);
-                for arm in arms {
-                    if let Some(guard) = &arm.guard {
-                        self.visit_expr(guard);
-                    }
-                    self.visit_expr(&arm.body);
-                }
-            }
-            ExprKind::Lambda { body, .. } => self.visit_expr(body),
-            ExprKind::Handle { body, handlers } => {
-                self.visit_expr(body);
-                for h in handlers {
-                    self.visit_expr(&h.body);
-                }
-            }
-            ExprKind::Resume { arg, .. } => self.visit_expr(arg),
-            ExprKind::Cons { ctor, args } => {
-                self.visit_typed_ref(ctor);
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            ExprKind::Record {
-                type_name,
-                fields,
-                spread,
-                ..
-            } => {
-                self.visit_typed_ref(type_name);
-                for (_, e) in fields {
-                    self.visit_expr(e);
-                }
-                if let Some(s) = spread {
-                    self.visit_expr(s);
-                }
-            }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                self.visit_expr(lhs);
-                self.visit_expr(rhs);
-            }
-            ExprKind::Tuple(es) | ExprKind::List(es) => {
-                for e in es {
-                    self.visit_expr(e);
-                }
-            }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.visit_expr(receiver);
-                for a in args {
-                    self.visit_expr(a);
-                }
-            }
-            ExprKind::NatLit(_)
-            | ExprKind::IntLit(_)
-            | ExprKind::FloatLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::BytesLit(_)
-            | ExprKind::BoolLit(_)
-            | ExprKind::RuneLit(_)
-            | ExprKind::Nil
-            | ExprKind::Error => {}
-        }
-    }
-
-    fn visit_stmt(&mut self, stmt: &Stmt<TypedRef<'db>>) {
-        match stmt {
-            Stmt::Let { value, .. } => self.visit_expr(value),
-            Stmt::Expr { expr, .. } => self.visit_expr(expr),
+impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for TypeInstantiationVisitor<'_, '_, 'db> {
+    fn visit_ref(&mut self, site: RefSite, _: NodeId, value: &'ast TypedRef<'db>) {
+        // Patterns and handler abilities are not collected.
+        if matches!(site, RefSite::Var | RefSite::ConsCtor | RefSite::RecordType) {
+            self.collect_type(value.ty);
         }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use crate::ast::{AbilityId, Effect, EffectRow, EffectVar, NodeId, TypeParam, TypeScheme};
+    use crate::ast::{AbilityId, Decl, Effect, EffectRow, EffectVar, TypeParam};
     use trunk_ir::Symbol;
 
     use super::*;

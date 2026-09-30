@@ -8,9 +8,9 @@ use std::collections::BTreeMap;
 use trunk_ir::Span;
 
 use tribute_front::SourceCst;
+use tribute_front::ast::visit::{RefSite, Visit, walk_expr};
 use tribute_front::ast::{
-    Arm, Decl, Expr, ExprKind, FuncDecl, HandlerArm, HandlerKind, Module, NodeId, Pattern,
-    PatternKind, SpanMap, Stmt, Type, TypeKind, TypedRef, UniVarSource,
+    Expr, ExprKind, Module, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource,
 };
 use tribute_front::query as ast_query;
 
@@ -165,7 +165,7 @@ impl<'db> AstTypeIndex<'db> {
         span_map: &SpanMap,
     ) -> Self {
         let mut collector = TypeCollector::new(db, span_map);
-        collector.collect_module(module);
+        collector.visit_module(module);
 
         let mut entries = collector.entries;
 
@@ -224,237 +224,33 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
         let span = self.span_map.get_or_default(node_id);
         self.entries.push(AstTypeEntry { node_id, span, ty });
     }
+}
 
-    fn collect_module(&mut self, module: &Module<TypedRef<'db>>) {
-        for decl in &module.decls {
-            self.collect_decl(decl);
+impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for TypeCollector<'_, 'db> {
+    fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
+        // Literals carry their type in their kind. A call's type would need
+        // the callee's result type, so hover covers the callee and arguments.
+        let literal = match expr.kind.as_ref() {
+            ExprKind::NatLit(_) => Some(TypeKind::Nat),
+            ExprKind::IntLit(_) => Some(TypeKind::Int),
+            ExprKind::FloatLit(_) => Some(TypeKind::Float),
+            ExprKind::StringLit(_) => Some(TypeKind::string(self.db)),
+            ExprKind::BytesLit(_) => Some(TypeKind::Bytes),
+            ExprKind::BoolLit(_) => Some(TypeKind::Bool),
+            ExprKind::Nil => Some(TypeKind::Nil),
+            ExprKind::RuneLit(_) => Some(TypeKind::Rune),
+            _ => None,
+        };
+        if let Some(kind) = literal {
+            self.add_entry(expr.id, Type::new(self.db, kind));
         }
+        walk_expr(self, expr);
     }
 
-    fn collect_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
-        match decl {
-            Decl::Function(func) => self.collect_func(func),
-            // ExternFunction, Struct, Enum, Ability, Use don't have expression types
-            Decl::ExternFunction(_)
-            | Decl::Struct(_)
-            | Decl::Enum(_)
-            | Decl::Ability(_)
-            | Decl::Use(_) => {}
-            Decl::Module(m) => {
-                // Recursively collect from nested declarations
-                if let Some(body) = &m.body {
-                    for inner_decl in body {
-                        self.collect_decl(inner_decl);
-                    }
-                }
-            }
-        }
-    }
-
-    fn collect_func(&mut self, func: &FuncDecl<TypedRef<'db>>) {
-        // Collect function body types
-        self.collect_expr(&func.body);
-    }
-
-    fn collect_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
-        // Add type for this expression node based on its kind
-        match expr.kind.as_ref() {
-            ExprKind::Var(typed_ref) => {
-                self.add_entry(expr.id, typed_ref.ty);
-            }
-            ExprKind::NatLit(_) => {
-                // Natural literals have Nat type
-                let nat_ty = Type::new(self.db, TypeKind::Nat);
-                self.add_entry(expr.id, nat_ty);
-            }
-            ExprKind::IntLit(_) => {
-                // Integer literals have Int type
-                let int_ty = Type::new(self.db, TypeKind::Int);
-                self.add_entry(expr.id, int_ty);
-            }
-            ExprKind::FloatLit(_) => {
-                let float_ty = Type::new(self.db, TypeKind::Float);
-                self.add_entry(expr.id, float_ty);
-            }
-            ExprKind::StringLit(_) => {
-                let string_ty = Type::new(self.db, TypeKind::string(self.db));
-                self.add_entry(expr.id, string_ty);
-            }
-            ExprKind::BytesLit(_) => {
-                let bytes_ty = Type::new(self.db, TypeKind::Bytes);
-                self.add_entry(expr.id, bytes_ty);
-            }
-            ExprKind::BoolLit(_) => {
-                let bool_ty = Type::new(self.db, TypeKind::Bool);
-                self.add_entry(expr.id, bool_ty);
-            }
-            ExprKind::Nil => {
-                let nil_ty = Type::new(self.db, TypeKind::Nil);
-                self.add_entry(expr.id, nil_ty);
-            }
-            ExprKind::Call { callee, args } => {
-                // The call expression's type is the return type of the callee
-                // For now, we infer from the callee's function type
-                self.collect_expr(callee);
-                for arg in args {
-                    self.collect_expr(arg);
-                }
-                // The type of a call is extracted from the callee's return type
-                // We'd need the callee's type to extract the result type
-                // For now, skip adding the call's type - hover on callee/args works
-            }
-            ExprKind::Cons { ctor, args } => {
-                self.add_entry(expr.id, ctor.ty);
-                for arg in args {
-                    self.collect_expr(arg);
-                }
-            }
-            ExprKind::Record {
-                type_name,
-                fields,
-                spread,
-            } => {
-                self.add_entry(expr.id, type_name.ty);
-                for (_, field_expr) in fields {
-                    self.collect_expr(field_expr);
-                }
-                if let Some(spread_expr) = spread {
-                    self.collect_expr(spread_expr);
-                }
-            }
-            // (Field access is now MethodCall)
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.collect_expr(receiver);
-                for arg in args {
-                    self.collect_expr(arg);
-                }
-            }
-            ExprKind::Block { stmts, value } => {
-                for stmt in stmts {
-                    self.collect_stmt(stmt);
-                }
-                self.collect_expr(value);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                self.collect_expr(scrutinee);
-                for arm in arms {
-                    self.collect_arm(arm);
-                }
-            }
-            ExprKind::Lambda { body, .. } => {
-                self.collect_expr(body);
-            }
-            ExprKind::Handle { body, handlers } => {
-                self.collect_expr(body);
-                for handler in handlers {
-                    self.collect_handler(handler);
-                }
-            }
-            ExprKind::Resume { arg, .. } => {
-                self.collect_expr(arg);
-            }
-            ExprKind::Tuple(elems) => {
-                for elem in elems {
-                    self.collect_expr(elem);
-                }
-            }
-            ExprKind::List(elems) => {
-                for elem in elems {
-                    self.collect_expr(elem);
-                }
-            }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                self.collect_expr(lhs);
-                self.collect_expr(rhs);
-            }
-            ExprKind::RuneLit(_) => {
-                // Rune literals have Rune type (Unicode code point)
-                let rune_ty = Type::new(self.db, TypeKind::Rune);
-                self.add_entry(expr.id, rune_ty);
-            }
-            ExprKind::Error => {}
-        }
-    }
-
-    fn collect_stmt(&mut self, stmt: &Stmt<TypedRef<'db>>) {
-        match stmt {
-            Stmt::Let { pattern, value, .. } => {
-                self.collect_pattern(pattern);
-                self.collect_expr(value);
-            }
-            Stmt::Expr { expr, .. } => {
-                self.collect_expr(expr);
-            }
-        }
-    }
-
-    fn collect_pattern(&mut self, pattern: &Pattern<TypedRef<'db>>) {
-        match pattern.kind.as_ref() {
-            PatternKind::Wildcard => {}
-            PatternKind::Bind { .. } => {
-                // Bind patterns don't have TypedRef directly in the current structure
-                // The type comes from the context (let binding, case arm, etc.)
-            }
-            PatternKind::Literal(_) => {}
-            PatternKind::Variant { ctor, fields } => {
-                self.add_entry(pattern.id, ctor.ty);
-                for field in fields {
-                    self.collect_pattern(field);
-                }
-            }
-            PatternKind::Record {
-                type_name, fields, ..
-            } => {
-                self.add_entry(pattern.id, type_name.ty);
-                for field in fields {
-                    if let Some(p) = &field.pattern {
-                        self.collect_pattern(p);
-                    }
-                }
-            }
-            PatternKind::Tuple(elems) | PatternKind::List(elems) => {
-                for elem in elems {
-                    self.collect_pattern(elem);
-                }
-            }
-            PatternKind::ListRest { head, .. } => {
-                for h in head {
-                    self.collect_pattern(h);
-                }
-            }
-            PatternKind::As { pattern: inner, .. } => {
-                self.collect_pattern(inner);
-            }
-            PatternKind::Error => {}
-        }
-    }
-
-    fn collect_arm(&mut self, arm: &Arm<TypedRef<'db>>) {
-        self.collect_pattern(&arm.pattern);
-        if let Some(guard) = &arm.guard {
-            self.collect_expr(guard);
-        }
-        self.collect_expr(&arm.body);
-    }
-
-    fn collect_handler(&mut self, handler: &HandlerArm<TypedRef<'db>>) {
-        match &handler.kind {
-            HandlerKind::Do { binding } => {
-                self.collect_pattern(binding);
-            }
-            HandlerKind::Fn {
-                ability, params, ..
-            }
-            | HandlerKind::Op {
-                ability, params, ..
-            } => {
-                self.add_entry(handler.id, ability.ty);
-                for param in params {
-                    self.collect_pattern(param);
-                }
-            }
-        }
-        self.collect_expr(&handler.body);
+    /// A reference, constructor, record type, or handler ability has the
+    /// type of its resolved reference.
+    fn visit_ref(&mut self, _: RefSite, node: NodeId, value: &'ast TypedRef<'db>) {
+        self.add_entry(node, value.ty);
     }
 }
 

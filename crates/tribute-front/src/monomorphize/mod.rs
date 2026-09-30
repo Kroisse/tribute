@@ -5,7 +5,6 @@ mod nominal_index;
 mod rewrite;
 mod validate;
 pub(crate) use collect::is_concrete_type;
-pub(crate) use validate::walk as walk_typed_expr;
 pub use validate::{InstanceError, InstanceErrorKind};
 pub mod specialize;
 

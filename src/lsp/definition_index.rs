@@ -8,10 +8,12 @@ use std::collections::BTreeMap;
 use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
+use tribute_front::ast::visit::{
+    RefSite, Visit, walk_decl, walk_expr, walk_func_decl, walk_pattern,
+};
 use tribute_front::ast::{
-    AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, HandlerArm,
-    HandlerKind, LocalId, Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap,
-    Stmt, StructDecl, TypedRef,
+    AbilityDecl, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LocalId, Module, NodeId,
+    ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, StructDecl, TypedRef,
 };
 use tribute_front::query as ast_query;
 
@@ -154,7 +156,7 @@ impl<'db> AstDefinitionIndex<'db> {
         span_map: &SpanMap,
     ) -> Self {
         let mut collector = DefinitionCollector::new(db, span_map);
-        collector.collect_module(module);
+        collector.visit_module(module);
 
         let mut definitions = collector.definitions;
         let mut references = collector.references;
@@ -485,44 +487,6 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         });
     }
 
-    fn collect_module(&mut self, module: &Module<TypedRef<'db>>) {
-        for decl in &module.decls {
-            self.collect_decl(decl);
-        }
-    }
-
-    fn collect_decl(&mut self, decl: &Decl<TypedRef<'db>>) {
-        match decl {
-            Decl::Function(func) => self.collect_func(func),
-            Decl::ExternFunction(func) => self.collect_extern_func(func),
-            Decl::Struct(s) => self.collect_struct(s),
-            Decl::Enum(e) => self.collect_enum(e),
-            Decl::Ability(a) => self.collect_ability(a),
-            Decl::Use(_) => {}
-            Decl::Module(m) => {
-                // Recursively collect from nested declarations
-                if let Some(body) = &m.body {
-                    for inner_decl in body {
-                        self.collect_decl(inner_decl);
-                    }
-                }
-            }
-        }
-    }
-
-    fn collect_func(&mut self, func: &FuncDecl<TypedRef<'db>>) {
-        // Add function definition
-        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
-
-        // Add parameter definitions
-        for param in &func.params {
-            self.collect_param(param);
-        }
-
-        // Collect references in body
-        self.collect_expr(&func.body);
-    }
-
     fn collect_extern_func(&mut self, func: &ExternFuncDecl) {
         self.add_definition(func.id, func.name, DefinitionKind::Function, None);
 
@@ -584,199 +548,6 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         }
     }
 
-    fn collect_expr(&mut self, expr: &Expr<TypedRef<'db>>) {
-        match expr.kind.as_ref() {
-            ExprKind::Var(typed_ref) => {
-                let target = self.resolve_typed_ref(typed_ref);
-                self.add_reference(expr.id, target);
-            }
-            ExprKind::Call { callee, args } => {
-                self.collect_expr(callee);
-                for arg in args {
-                    self.collect_expr(arg);
-                }
-            }
-            ExprKind::Cons { ctor, args } => {
-                let target = self.resolve_typed_ref(ctor);
-                self.add_reference(expr.id, target);
-                for arg in args {
-                    self.collect_expr(arg);
-                }
-            }
-            ExprKind::Record {
-                type_name,
-                fields,
-                spread,
-            } => {
-                let target = self.resolve_typed_ref(type_name);
-                self.add_reference(expr.id, target);
-                for (_, field_expr) in fields {
-                    self.collect_expr(field_expr);
-                }
-                if let Some(spread_expr) = spread {
-                    self.collect_expr(spread_expr);
-                }
-            }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.collect_expr(receiver);
-                for arg in args {
-                    self.collect_expr(arg);
-                }
-            }
-            ExprKind::Block { stmts, value } => {
-                for stmt in stmts {
-                    self.collect_stmt(stmt);
-                }
-                self.collect_expr(value);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                self.collect_expr(scrutinee);
-                for arm in arms {
-                    self.collect_arm(arm);
-                }
-            }
-            ExprKind::Lambda { params, body } => {
-                // Lambda params have local_id assigned during name resolution
-                for param in params {
-                    self.add_definition(
-                        param.id,
-                        param.name,
-                        DefinitionKind::Parameter,
-                        param.local_id,
-                    );
-                }
-                self.collect_expr(body);
-            }
-            ExprKind::Handle { body, handlers } => {
-                self.collect_expr(body);
-                for handler in handlers {
-                    self.collect_handler(handler);
-                }
-            }
-            ExprKind::Resume { arg, .. } => {
-                self.collect_expr(arg);
-            }
-            ExprKind::Tuple(elems) | ExprKind::List(elems) => {
-                for elem in elems {
-                    self.collect_expr(elem);
-                }
-            }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                self.collect_expr(lhs);
-                self.collect_expr(rhs);
-            }
-            ExprKind::NatLit(_)
-            | ExprKind::IntLit(_)
-            | ExprKind::FloatLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::BytesLit(_)
-            | ExprKind::BoolLit(_)
-            | ExprKind::RuneLit(_)
-            | ExprKind::Nil
-            | ExprKind::Error => {}
-        }
-    }
-
-    fn collect_stmt(&mut self, stmt: &Stmt<TypedRef<'db>>) {
-        match stmt {
-            Stmt::Let { pattern, value, .. } => {
-                self.collect_pattern(pattern);
-                self.collect_expr(value);
-            }
-            Stmt::Expr { expr, .. } => {
-                self.collect_expr(expr);
-            }
-        }
-    }
-
-    fn collect_pattern(&mut self, pattern: &Pattern<TypedRef<'db>>) {
-        match pattern.kind.as_ref() {
-            PatternKind::Bind { name, local_id } => {
-                // Use LocalId for scope-aware definition tracking (shadowed variable disambiguation)
-                self.add_definition(pattern.id, *name, DefinitionKind::Local, *local_id);
-            }
-            PatternKind::Variant { ctor, fields } => {
-                let target = self.resolve_typed_ref(ctor);
-                self.add_reference(pattern.id, target);
-                for field in fields {
-                    self.collect_pattern(field);
-                }
-            }
-            PatternKind::Record {
-                type_name, fields, ..
-            } => {
-                let target = self.resolve_typed_ref(type_name);
-                self.add_reference(pattern.id, target);
-                for field in fields {
-                    if let Some(p) = &field.pattern {
-                        self.collect_pattern(p);
-                    } else {
-                        // Shorthand: `{ name }` binds `name` (no LocalId available)
-                        // Use field.id for per-field span tracking
-                        self.add_definition(field.id, field.name, DefinitionKind::Local, None);
-                    }
-                }
-            }
-            PatternKind::Tuple(elems) | PatternKind::List(elems) => {
-                for elem in elems {
-                    self.collect_pattern(elem);
-                }
-            }
-            PatternKind::ListRest {
-                head,
-                rest,
-                rest_local_id,
-            } => {
-                for h in head {
-                    self.collect_pattern(h);
-                }
-                if let Some(name) = rest {
-                    // Rest binding has LocalId from name resolution
-                    self.add_definition(pattern.id, *name, DefinitionKind::Local, *rest_local_id);
-                }
-            }
-            PatternKind::As {
-                pattern: inner,
-                name,
-                local_id,
-            } => {
-                self.collect_pattern(inner);
-                // As binding has LocalId from name resolution
-                self.add_definition(pattern.id, *name, DefinitionKind::Local, *local_id);
-            }
-            PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
-        }
-    }
-
-    fn collect_arm(&mut self, arm: &Arm<TypedRef<'db>>) {
-        self.collect_pattern(&arm.pattern);
-        if let Some(guard) = &arm.guard {
-            self.collect_expr(guard);
-        }
-        self.collect_expr(&arm.body);
-    }
-
-    fn collect_handler(&mut self, handler: &HandlerArm<TypedRef<'db>>) {
-        match &handler.kind {
-            HandlerKind::Do { binding } => {
-                self.collect_pattern(binding);
-            }
-            HandlerKind::Fn {
-                ability, params, ..
-            }
-            | HandlerKind::Op {
-                ability, params, ..
-            } => {
-                let target = self.resolve_typed_ref(ability);
-                self.add_reference(handler.id, target);
-                for param in params {
-                    self.collect_pattern(param);
-                }
-            }
-        }
-        self.collect_expr(&handler.body);
-    }
-
     fn resolve_typed_ref(&self, typed_ref: &TypedRef<'db>) -> ResolvedTarget {
         self.resolve_resolved_ref(&typed_ref.resolved)
     }
@@ -808,6 +579,73 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 name: id.name(self.db),
             },
         }
+    }
+}
+
+impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db> {
+    fn visit_decl(&mut self, decl: &'ast Decl<TypedRef<'db>>) {
+        match decl {
+            Decl::ExternFunction(func) => self.collect_extern_func(func),
+            Decl::Struct(s) => self.collect_struct(s),
+            Decl::Enum(e) => self.collect_enum(e),
+            Decl::Ability(a) => self.collect_ability(a),
+            Decl::Function(_) | Decl::Use(_) | Decl::Module(_) => {}
+        }
+        walk_decl(self, decl);
+    }
+
+    fn visit_func_decl(&mut self, func: &'ast FuncDecl<TypedRef<'db>>) {
+        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
+        for param in &func.params {
+            self.collect_param(param);
+        }
+        walk_func_decl(self, func);
+    }
+
+    fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
+        // Lambda params have local_id assigned during name resolution
+        if let ExprKind::Lambda { params, .. } = expr.kind.as_ref() {
+            for param in params {
+                self.add_definition(
+                    param.id,
+                    param.name,
+                    DefinitionKind::Parameter,
+                    param.local_id,
+                );
+            }
+        }
+        walk_expr(self, expr);
+    }
+
+    fn visit_pattern(&mut self, pattern: &'ast Pattern<TypedRef<'db>>) {
+        walk_pattern(self, pattern);
+        // Bindings carry the LocalId from name resolution, which tells
+        // shadowed variables apart.
+        match pattern.kind.as_ref() {
+            PatternKind::Bind { name, local_id } | PatternKind::As { name, local_id, .. } => {
+                self.add_definition(pattern.id, *name, DefinitionKind::Local, *local_id);
+            }
+            PatternKind::ListRest {
+                rest: Some(name),
+                rest_local_id,
+                ..
+            } => {
+                self.add_definition(pattern.id, *name, DefinitionKind::Local, *rest_local_id);
+            }
+            PatternKind::Record { fields, .. } => {
+                // Shorthand `{ name }` binds `name` (no LocalId available);
+                // the field id gives each binding its own span.
+                for field in fields.iter().filter(|field| field.pattern.is_none()) {
+                    self.add_definition(field.id, field.name, DefinitionKind::Local, None);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn visit_ref(&mut self, _: RefSite, node: NodeId, value: &'ast TypedRef<'db>) {
+        let target = self.resolve_typed_ref(value);
+        self.add_reference(node, target);
     }
 }
 
