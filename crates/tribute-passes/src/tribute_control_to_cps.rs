@@ -18,6 +18,7 @@ use tribute_core::{
     set_calling_convention,
 };
 use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
+use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func, scf};
@@ -25,7 +26,6 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
-use trunk_ir::smallvec::SmallVec;
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 use trunk_ir::{OperationDataBuilder, Symbol};
@@ -1666,7 +1666,7 @@ impl<'a> Converter<'a> {
         {
             mapping.insert(old, new);
         }
-        self.convert_sequence(SmallVec::from(source_ops), index + 1, block, mapping, flow)
+        self.convert_sequence(OpList::from(source_ops), index + 1, block, mapping, flow)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1877,7 +1877,7 @@ impl<'a> Converter<'a> {
             ..flow.clone()
         };
         self.convert_sequence(
-            SmallVec::from(source_ops),
+            OpList::from(source_ops),
             start,
             block,
             &mut suffix_mapping,
@@ -2038,7 +2038,7 @@ impl<'a> Converter<'a> {
             ..flow.clone()
         };
         self.convert_sequence(
-            SmallVec::from(source_ops),
+            OpList::from(source_ops),
             start,
             block,
             &mut body_mapping,
@@ -2243,7 +2243,7 @@ impl<'a> Converter<'a> {
         suffix_flow.exit_k = Some(resume_frame);
         suffix_flow.root_exit_k = Some(resume_frame);
         self.convert_sequence(
-            SmallVec::from(source_ops),
+            OpList::from(source_ops),
             start,
             block,
             &mut body_mapping,
@@ -3267,7 +3267,7 @@ impl<'a> Converter<'a> {
 
     fn convert_sequence(
         &mut self,
-        source_ops: SmallVec<[OpRef; 4]>,
+        source_ops: OpList,
         mut index: usize,
         block: BlockRef,
         mapping: &mut HashMap<ValueRef, ValueRef>,

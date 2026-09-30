@@ -33,6 +33,16 @@ pub struct Use {
 // Entity data types
 // ============================================================================
 
+/// The regions of an operation, or a snapshot of them.
+pub type RegionList = SmallVec<[RegionRef; 4]>;
+
+/// The blocks of a region or the successors of an operation, or a snapshot
+/// of them.
+pub type BlockList = SmallVec<[BlockRef; 4]>;
+
+/// The operations of a block, or a snapshot of them.
+pub type OpList = SmallVec<[OpRef; 4]>;
+
 /// Data for a single operation in the arena.
 #[derive(Clone)]
 pub struct OperationData {
@@ -42,8 +52,8 @@ pub struct OperationData {
     pub operands: EntityList<ValueRef>,
     pub results: EntityList<TypeRef>,
     pub attributes: AttributeMap,
-    pub regions: SmallVec<[RegionRef; 4]>,
-    pub successors: SmallVec<[BlockRef; 4]>,
+    pub regions: RegionList,
+    pub successors: BlockList,
     pub parent_block: Option<BlockRef>,
 }
 
@@ -70,7 +80,7 @@ pub struct BlockArgData {
 pub struct BlockData {
     pub location: Location,
     pub args: Vec<BlockArgData>,
-    pub ops: SmallVec<[OpRef; 4]>,
+    pub ops: OpList,
     pub parent_region: Option<RegionRef>,
 }
 
@@ -78,7 +88,7 @@ pub struct BlockData {
 #[derive(Clone)]
 pub struct RegionData {
     pub location: Location,
-    pub blocks: SmallVec<[BlockRef; 4]>,
+    pub blocks: BlockList,
     pub parent_op: Option<OpRef>,
 }
 
@@ -403,7 +413,7 @@ impl IrContext {
 
         let num_results = data.results.as_slice(&self.type_pool).len();
 
-        let regions: SmallVec<[RegionRef; 4]> = data.regions.clone();
+        let regions: RegionList = data.regions.clone();
 
         self.bump_revision();
         let op = self.ops.push(data);
@@ -811,7 +821,7 @@ impl IrContext {
         let region = self.regions.push(data);
 
         // Set parent_region on all blocks in this region
-        let blocks: SmallVec<[BlockRef; 4]> = self.regions[region].blocks.clone();
+        let blocks: BlockList = self.regions[region].blocks.clone();
         for &b in &blocks {
             if let Some(existing) = self.blocks[b].parent_region {
                 panic!(
@@ -888,8 +898,8 @@ impl IrContext {
         let dialect = data.dialect;
         let name = data.name;
         let attrs = data.attributes.clone();
-        let regions: SmallVec<[RegionRef; 4]> = data.regions.clone();
-        let successors: SmallVec<[BlockRef; 4]> = data.successors.clone();
+        let regions: RegionList = data.regions.clone();
+        let successors: BlockList = data.successors.clone();
         let operands: SmallVec<[ValueRef; 8]> = data.operands.as_slice(&self.value_pool).into();
         let result_types: SmallVec<[TypeRef; 4]> = data.results.as_slice(&self.type_pool).into();
 
@@ -938,7 +948,7 @@ impl IrContext {
     /// unchanged.
     pub fn clone_region(&mut self, src_region: RegionRef, mapping: &mut IrMapping) -> RegionRef {
         let loc = self.regions[src_region].location;
-        let src_blocks: SmallVec<[BlockRef; 4]> = self.regions[src_region].blocks.clone();
+        let src_blocks: BlockList = self.regions[src_region].blocks.clone();
 
         let mut new_blocks = Vec::with_capacity(src_blocks.len());
 
@@ -978,7 +988,7 @@ impl IrContext {
 
         // Pass 2: clone operations in each block.
         for (&src_block, &new_block) in src_blocks.iter().zip(new_blocks.iter()) {
-            let src_ops: SmallVec<[OpRef; 4]> = self.blocks[src_block].ops.clone();
+            let src_ops: OpList = self.blocks[src_block].ops.clone();
             for &op in &src_ops {
                 let new_op = self.clone_op(op, mapping);
                 self.push_op(new_block, new_op);
@@ -1072,8 +1082,8 @@ pub struct OperationDataBuilder {
     operands: Vec<ValueRef>,
     results: Vec<TypeRef>,
     attributes: AttributeMap,
-    regions: SmallVec<[RegionRef; 4]>,
-    successors: SmallVec<[BlockRef; 4]>,
+    regions: RegionList,
+    successors: BlockList,
 }
 
 impl OperationDataBuilder {
