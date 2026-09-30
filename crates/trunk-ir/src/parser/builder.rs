@@ -951,6 +951,34 @@ core.module @test {
     }
 
     #[test]
+    fn test_roundtrip_module_attributes() {
+        let input = r#"core.module @test {test.flag = 1, test.string = test.value() {name = @Str}} {
+  !Str = test.value() {name = @Str}
+
+  %0 = test.make : !Str
+}
+"#;
+        let mut ctx = IrContext::new();
+        let root = parse_module(&mut ctx, input).expect("module attributes should parse");
+        let printed = print_module(&ctx, root);
+        assert_eq!(printed, input);
+        assert_roundtrip(&ctx, root);
+    }
+
+    #[test]
+    fn test_roundtrip_module_attribute_keys_that_need_quoting() {
+        let input = r#"core.module @test {"test.dash-key" = 1, test.plain = 2} {
+  %0 = test.make : core.i32
+}
+"#;
+        let mut ctx = IrContext::new();
+        let root = parse_module(&mut ctx, input).expect("quoted module attribute keys parse");
+        let printed = print_module(&ctx, root);
+        assert_eq!(printed, input);
+        assert_roundtrip(&ctx, root);
+    }
+
+    #[test]
     fn test_roundtrip_dict_attributes() {
         let input = r#"
 core.module @test {

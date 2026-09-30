@@ -2221,6 +2221,75 @@ fn main() {
         insta::assert_debug_snapshot!(observed);
     }
 
+    /// Print `module` and parse the text into a fresh context.
+    fn reparse_module(ctx: &IrContext, module: Module, path: &str) -> (IrContext, Module) {
+        let text = trunk_ir::printer::print_module(ctx, module.op());
+        let mut reparsed = IrContext::new();
+        let op = trunk_ir::parser::parse_module(&mut reparsed, &text).unwrap_or_else(|error| {
+            panic!(
+                "{path}: printed boundary-exit IR must parse at offset {}: {}",
+                error.offset, error.message
+            )
+        });
+        let module = Module::new(&reparsed, op)
+            .unwrap_or_else(|| panic!("{path}: parsed boundary-exit IR must be a module"));
+        (reparsed, module)
+    }
+
+    /// Lowering and emission after the boundary exit need nothing but the
+    /// printed IR: a program parsed back from its boundary-exit text emits
+    /// the same binary as the original.
+    fn assert_boundary_exit_round_trips(
+        db: &crate::TributeDatabaseImpl,
+        target: tribute_passes::abi_boundary::TargetKind,
+    ) {
+        for (path, text) in BOUNDARY_EXIT_PROGRAMS {
+            let source = source_from_str(path, text);
+            let (mut ctx, module) = run_shared_pipeline(db, source)
+                .expect("shared pipeline must succeed")
+                .unwrap_or_else(|| panic!("{path} must lower"));
+            run_target_to_boundary_exit(&mut ctx, module, target)
+                .unwrap_or_else(|error| panic!("{path}: target boundary failed: {error}"));
+            let (mut reparsed, reparsed_module) = reparse_module(&ctx, module, path);
+
+            // Parsing registers every alias explicitly, which can change how
+            // the first reprint spells types; the text is stable from then on.
+            let reprinted = trunk_ir::printer::print_module(&reparsed, reparsed_module.op());
+            let (again, again_module) = reparse_module(&reparsed, reparsed_module, path);
+            assert_eq!(
+                trunk_ir::printer::print_module(&again, again_module.op()),
+                reprinted,
+                "{path}: reparsed boundary-exit IR must print stably"
+            );
+
+            let direct = emit_from_boundary_exit(&mut ctx, module, target);
+            let round_trip = emit_from_boundary_exit(&mut reparsed, reparsed_module, target);
+            match (direct, round_trip) {
+                (Ok(direct), Ok(round_trip)) => assert!(
+                    round_trip == direct,
+                    "{path}: the round-tripped IR must emit the same binary"
+                ),
+                // Programs that still reach pending work fail either way.
+                (Err(_), Err(_)) => {}
+                (direct, round_trip) => panic!(
+                    "{path}: emission outcome changed through text: direct {:?}, round trip {:?}",
+                    direct.map(|bytes| bytes.len()),
+                    round_trip.map(|bytes| bytes.len())
+                ),
+            }
+        }
+    }
+
+    #[salsa_test]
+    fn native_boundary_exit_round_trips_through_text(db: &crate::TributeDatabaseImpl) {
+        assert_boundary_exit_round_trips(db, tribute_passes::abi_boundary::TargetKind::Native);
+    }
+
+    #[salsa_test]
+    fn wasm_boundary_exit_round_trips_through_text(db: &crate::TributeDatabaseImpl) {
+        assert_boundary_exit_round_trips(db, tribute_passes::abi_boundary::TargetKind::Wasm);
+    }
+
     fn prepare_native_fixture(
         db: &crate::TributeDatabaseImpl,
         path: &str,

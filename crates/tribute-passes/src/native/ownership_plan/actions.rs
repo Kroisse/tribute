@@ -40,6 +40,9 @@ struct ActionPlanner<'a> {
     borrowed: HashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
     liveness: &'a BlockLiveness,
+    /// Position of each value's definition in program order, which orders
+    /// actions independently of arena numbering.
+    definition_order: HashMap<ValueRef, usize>,
     actions: Vec<OwnershipAction>,
 }
 
@@ -67,6 +70,21 @@ impl<'a> ActionPlanner<'a> {
                 owned.remove(&value);
             }
         }
+        let definition_order = facts
+            .cfg()
+            .blocks()
+            .iter()
+            .flat_map(|&block| {
+                let results = ir
+                    .block(block)
+                    .ops
+                    .iter()
+                    .flat_map(|&op| ir.op_results(op).iter().copied());
+                ir.block_args(block).iter().copied().chain(results)
+            })
+            .enumerate()
+            .map(|(index, value)| (value, index))
+            .collect();
         Self {
             ir,
             facts,
@@ -77,6 +95,7 @@ impl<'a> ActionPlanner<'a> {
             borrowed,
             owned,
             liveness: inputs.liveness,
+            definition_order,
             actions: Vec::new(),
         }
     }
@@ -718,7 +737,7 @@ impl ActionPlanner<'_> {
             }
         }
         let mut dying = dying.into_iter().collect::<Vec<_>>();
-        dying.sort_unstable();
+        dying.sort_unstable_by_key(|value| self.definition_order[value]);
         for (destination, value) in dying.into_iter().enumerate() {
             let anchor = if let Some(&index) = last_use.get(&value) {
                 let op = ops[index];

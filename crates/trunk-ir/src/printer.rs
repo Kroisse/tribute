@@ -929,6 +929,27 @@ fn print_module_op(
         write_symbol(f, name)?;
     }
 
+    // Type aliases are declared inside the body, so these attributes spell
+    // their types out.
+    let mut attrs = data
+        .attributes
+        .iter()
+        .filter(|(key, _)| **key != crate::Symbol::new("sym_name"))
+        .peekable();
+    if attrs.peek().is_some() {
+        let expanded = PrintState::without_aliases(state.ctx);
+        f.write_str(" {")?;
+        for (i, (key, val)) in attrs.enumerate() {
+            if i > 0 {
+                f.write_str(", ")?;
+            }
+            write_attribute_key(f, *key)?;
+            f.write_str(" = ")?;
+            expanded.write_attribute(f, val)?;
+        }
+        f.write_char('}')?;
+    }
+
     let regions = &data.regions;
     assert!(
         regions.len() <= 1,
