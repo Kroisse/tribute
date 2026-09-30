@@ -193,11 +193,12 @@ impl<'db> Resolver<'db> {
             }
         } else {
             // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
+            // A first segment the enclosing module imports names only the
+            // imported path; it does not fall back to the package root.
             if let Some(namespace) = name.namespace()
                 && let Some(binding) = self
-                    .imported_namespace(namespace)
-                    .and_then(|namespace| self.env.lookup_qualified(namespace, sym))
-                    .or_else(|| self.env.lookup_qualified(namespace, sym))
+                    .env
+                    .lookup_qualified(self.imported_namespace(namespace).unwrap_or(namespace), sym)
             {
                 return self.binding_to_ref(binding, sym);
             }
@@ -389,11 +390,19 @@ impl<'db> Resolver<'db> {
             })
             .collect();
 
+        // Resolve imported ability names in effect annotations to qualified paths.
+        // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
+        let mut effects = func.effects.clone();
+        if let Some(effs) = &mut effects {
+            self.resolve_effect_annotations(effs);
+        }
+
         // Inject ability operations from effect annotations into scope.
         // This enables effect-directed name resolution: when a function declares
         // an effect like `->{abilities::Abort}`, its operations (e.g., `abort()`)
-        // become directly callable without qualification.
-        if let Some(effects) = &func.effects {
+        // become directly callable without qualification. The resolved row names
+        // an ability imported by the enclosing module by its full path.
+        if let Some(effects) = &effects {
             self.inject_ability_operations(effects);
         }
 
@@ -402,13 +411,6 @@ impl<'db> Resolver<'db> {
 
         self.effect_ops.clear();
         self.pop_scope();
-
-        // Resolve imported ability names in effect annotations to qualified paths.
-        // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
-        let mut effects = func.effects.clone();
-        if let Some(effs) = &mut effects {
-            self.resolve_effect_annotations(effs);
-        }
 
         FuncDecl {
             id: func.id,

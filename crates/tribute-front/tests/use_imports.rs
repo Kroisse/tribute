@@ -235,7 +235,8 @@ fn main() {{
 }
 
 /// Constructors and abilities imported inside an inline module resolve in
-/// expressions, effect annotations, and handler arms.
+/// expressions, effect annotations, handler arms, and unqualified operation
+/// calls under an effect annotation.
 #[salsa_test]
 fn inline_module_imports_cover_constructors_and_abilities(db: &salsa::DatabaseImpl) {
     let errors = errors(
@@ -261,7 +262,15 @@ mod outer {
         Tick::tick()
     }
 
+    pub fn count_unqualified() ->{Tick} Nat {
+        tick()
+    }
+
     pub fn run() -> Nat {
+        let _ = handle count_unqualified() {
+            do result { result }
+            op Tick::tick() { resume 2 }
+        }
         handle count() {
             do result { result }
             op Tick::tick() { resume make().x }
@@ -299,6 +308,40 @@ fn main() {
         errors
             .iter()
             .any(|error| error.starts_with("unresolved name `outer::one`")),
+        "{errors:#?}"
+    );
+}
+
+/// An import of an inline module that gives a path prefix a name hides the
+/// package-root namespace of that name, even for members the import lacks.
+#[salsa_test]
+fn inline_module_import_hides_the_root_namespace_it_shadows(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod a {
+    pub fn one() -> Nat { 1 }
+}
+mod outer {
+    mod b {
+        pub fn two() -> Nat { 2 }
+    }
+    use outer::b as a
+
+    pub fn get() -> Nat {
+        a::one()
+    }
+}
+
+fn main() {
+    let _ = outer::get()
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.starts_with("unresolved name `a::one`")),
         "{errors:#?}"
     );
 }
