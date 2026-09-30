@@ -20,16 +20,35 @@ env:
 jobs:
   benchmarks:
     name: Benchmarks
-    runs-on: ubuntu-latest
+    # Simulation counts are compared across runs, so pin what the counts
+    # depend on: the OS image (glibc and system libraries) and the compiler.
+    # The runner CPU cannot be pinned; the next step records it.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
           submodules: recursive
           persist-credentials: false
 
+      # glibc selects string and memory routines from the host CPU, so runs on
+      # different CPU models can differ even with everything else pinned.
+      - name: Record runtime environment
+        run: |
+          {
+            echo '### Benchmark environment'
+            lscpu | grep '^Model name:' || true
+            echo "CPU features: $(grep -m1 -oE 'avx512[a-z0-9_]*|avx2|erms|fsrm' /proc/cpuinfo | sort -u | xargs)"
+            echo "glibc: $(dpkg-query -W -f='${Version}' libc6)"
+            /lib64/ld-linux-x86-64.so.2 --list-tunables \
+              | grep -E 'x86_(data_cache_size|shared_cache_size|non_temporal_threshold|rep_movsb_threshold|rep_stosb_threshold)' \
+              || true
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
       - name: Setup Rust toolchain
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          # Pinned so compiler upgrades show up only in the PR that bumps it.
+          toolchain: 1.98.1
           cache: true
           # Only main saves caches; PRs restore them without evicting main's.
           cache-save-if: ${{ github.ref == 'refs/heads/main' }}
@@ -47,5 +66,5 @@ jobs:
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v5
         with:
-          mode: simulation
+          mode: simulation,memory
           run: cargo codspeed run -p tribute-bench
