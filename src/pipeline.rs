@@ -930,7 +930,7 @@ pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrCon
 ///
 /// Optimization options apply to the native portion of the pipeline.
 /// Native emission is intentionally skipped.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_deref))]
 pub fn dump_native_ir_at_stage(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -1156,8 +1156,9 @@ fn enter_target_closure_storage_boundary(
 /// Dump IR text after running the pipeline up to the target-specific passes.
 ///
 /// If `native` is true, runs the native pipeline; otherwise runs the WASM pipeline.
-/// Returns the IR text as a string, or an error. Diagnostics are accumulated.
-#[salsa::tracked(returns(clone))]
+/// Returns the IR text borrowed from the database, or an error. Diagnostics are
+/// accumulated.
+#[salsa::tracked(returns(as_deref))]
 pub fn dump_ir(
     db: &dyn salsa::Database,
     source: SourceCst,

@@ -32,14 +32,14 @@ Tribute does not write `returns(ref)`. It chooses another mode as follows:
 - `returns(copy)` for small `Copy` values and Salsa handles.
 - `returns(deref)` for a `Vec` or `String` whose callers only borrow, so they
   see `&[T]` or `&str`.
-- `returns(as_ref)` for an `Option<T>` whose callers only borrow, so they see
-  `Option<&T>`; `returns(as_deref)` when `T` itself derefs, as for
-  `Option<Vec<T>>`.
+- `returns(as_ref)` for an `Option<T>` or `Result<T, E>` whose callers only
+  borrow, so they see `Option<&T>` or `Result<&T, &E>`; `returns(as_deref)`
+  when `T` itself derefs, as for `Option<Vec<u8>>` or `Result<String, E>`.
 - `returns(clone)` only when every caller needs an owned value, for example a
   module that each caller consumes. A caller that needs ownership of a
-  borrowed result clones it itself; compiled binaries are returned as
-  `Option<&[u8]>`, and the CLI writes or links them while the database is
-  alive.
+  borrowed result clones it itself; compiled binaries and IR dumps are
+  returned as `&[u8]` and `&str`, and the CLI writes, links, or prints them
+  while the database is alive.
 
 A borrowed result is tied to the `&db` borrow, so a caller must finish with it
 before mutating an input to start another revision.

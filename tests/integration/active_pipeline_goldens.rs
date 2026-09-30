@@ -38,7 +38,7 @@ fn shared_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str) -> Strin
     print_module(&ctx, module.op())
 }
 
-fn native_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str) -> String {
+fn native_pipeline_ir<'db>(db: &'db dyn salsa::Database, name: &str, code: &str) -> &'db str {
     let source = SourceCst::from_source_str(db, name, code);
     let ir_text = dump_ir(db, source, true).expect("native pipeline dump should succeed");
     let diagnostics: Vec<Diagnostic> = dump_ir::accumulated::<Diagnostic>(db, source, true)
@@ -379,24 +379,24 @@ fn shared_pipeline_float_comparison_predicates(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn native_pipeline_direct_fn_ability_call_uses_cps_root_contract(db: &salsa::DatabaseImpl) {
     let ir_text = native_pipeline_ir(db, "direct_fn_native.trb", DIRECT_FN_SOURCE);
-    assert_native_cps_root_contract(&ir_text);
-    insta::assert_snapshot!(pipeline_contract_summary(&ir_text, true));
+    assert_native_cps_root_contract(ir_text);
+    insta::assert_snapshot!(pipeline_contract_summary(ir_text, true));
     assert!(ir_text.contains("func.func @run"), "{ir_text}");
 }
 
 #[salsa_test]
 fn native_pipeline_resumptive_op_continuation(db: &salsa::DatabaseImpl) {
     let ir_text = native_pipeline_ir(db, "resumptive_op_native.trb", RESUMPTIVE_OP_SOURCE);
-    assert_native_cps_root_contract(&ir_text);
-    insta::assert_snapshot!(pipeline_contract_summary(&ir_text, true));
+    assert_native_cps_root_contract(ir_text);
+    insta::assert_snapshot!(pipeline_contract_summary(ir_text, true));
     assert!(ir_text.contains("__tribute_one_shot_state_"), "{ir_text}");
 }
 
 #[salsa_test]
 fn native_pipeline_mixed_nested_handler_boundary(db: &salsa::DatabaseImpl) {
     let ir_text = native_pipeline_ir(db, "mixed_nested_native.trb", MIXED_NESTED_SOURCE);
-    assert_native_cps_root_contract(&ir_text);
-    insta::assert_snapshot!(pipeline_contract_summary(&ir_text, true));
+    assert_native_cps_root_contract(ir_text);
+    insta::assert_snapshot!(pipeline_contract_summary(ir_text, true));
     assert!(ir_text.contains("func.func @run_all"), "{ir_text}");
 }
 
