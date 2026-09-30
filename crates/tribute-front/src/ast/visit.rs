@@ -9,8 +9,20 @@
 //!
 //! The phase value `V` appears at the positions named by [`RefSite`]. Node
 //! identities are visited for functions, expressions, statements, case and
-//! handler arms, patterns, and record field patterns; parameter identities are
-//! not visited.
+//! handler arms, patterns, and record field patterns.
+//!
+//! Some parts of the tree are deliberately not visited. A pass that needs them
+//! reads them from the enclosing node's hook:
+//!
+//! - Type annotations (`let` and parameter types, return types, and effect
+//!   lists) hold no phase value.
+//! - Function and lambda parameters, including their identities.
+//! - Local binding identities (`LocalId`) of patterns, `resume`, and `op`
+//!   handler arms, which are not node identities.
+//!
+//! `walk_stmt` visits a `let` pattern before its value, the order the passes
+//! built on it use. The value is evaluated outside the pattern's bindings, so
+//! a pass that tracks scopes overrides `visit_stmt`.
 //!
 //! The walks match every variant without a wildcard, so a new expression or
 //! pattern variant fails to compile here until its traversal is written.
@@ -69,6 +81,10 @@ pub trait Visit<'ast, V: 'ast> {
 
     fn visit_pattern(&mut self, pattern: &'ast Pattern<V>) {
         walk_pattern(self, pattern);
+    }
+
+    fn visit_field_pattern(&mut self, field: &'ast FieldPattern<V>) {
+        walk_field_pattern(self, field);
     }
 
     /// A phase value at `site`, owned by the node `node`.
@@ -261,11 +277,8 @@ pub fn walk_pattern<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
             type_name, fields, ..
         } => {
             visitor.visit_ref(RefSite::PatternRecordType, pattern.id, type_name);
-            for FieldPattern { id, pattern, .. } in fields {
-                visitor.visit_node_id(*id);
-                if let Some(pattern) = pattern {
-                    visitor.visit_pattern(pattern);
-                }
+            for field in fields {
+                visitor.visit_field_pattern(field);
             }
         }
         PatternKind::Tuple(elements) | PatternKind::List(elements) => {
@@ -283,6 +296,17 @@ pub fn walk_pattern<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
         | PatternKind::Bind { .. }
         | PatternKind::Literal(_)
         | PatternKind::Error => {}
+    }
+}
+
+/// A shorthand field (`{ name }`) has no pattern of its own.
+pub fn walk_field_pattern<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
+    visitor: &mut T,
+    field: &'ast FieldPattern<V>,
+) {
+    visitor.visit_node_id(field.id);
+    if let Some(pattern) = &field.pattern {
+        visitor.visit_pattern(pattern);
     }
 }
 
@@ -333,6 +357,10 @@ pub trait VisitMut<V> {
 
     fn visit_pattern_mut(&mut self, pattern: &mut Pattern<V>) {
         walk_pattern_mut(self, pattern);
+    }
+
+    fn visit_field_pattern_mut(&mut self, field: &mut FieldPattern<V>) {
+        walk_field_pattern_mut(self, field);
     }
 
     /// A phase value at `site`, owned by the node `node`.
@@ -515,11 +543,8 @@ pub fn walk_pattern_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, pattern: &m
             type_name, fields, ..
         } => {
             visitor.visit_ref_mut(RefSite::PatternRecordType, id, type_name);
-            for FieldPattern { id, pattern, .. } in fields {
-                visitor.visit_node_id_mut(id);
-                if let Some(pattern) = pattern {
-                    visitor.visit_pattern_mut(pattern);
-                }
+            for field in fields {
+                visitor.visit_field_pattern_mut(field);
             }
         }
         PatternKind::Tuple(elements) | PatternKind::List(elements) => {
@@ -537,6 +562,17 @@ pub fn walk_pattern_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, pattern: &m
         | PatternKind::Bind { .. }
         | PatternKind::Literal(_)
         | PatternKind::Error => {}
+    }
+}
+
+/// A shorthand field (`{ name }`) has no pattern of its own.
+pub fn walk_field_pattern_mut<V, T: VisitMut<V> + ?Sized>(
+    visitor: &mut T,
+    field: &mut FieldPattern<V>,
+) {
+    visitor.visit_node_id_mut(&mut field.id);
+    if let Some(pattern) = &mut field.pattern {
+        visitor.visit_pattern_mut(pattern);
     }
 }
 

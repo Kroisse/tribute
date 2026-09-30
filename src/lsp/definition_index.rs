@@ -9,11 +9,12 @@ use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
 use tribute_front::ast::visit::{
-    RefSite, Visit, walk_decl, walk_expr, walk_func_decl, walk_module, walk_pattern,
+    RefSite, Visit, walk_decl, walk_expr, walk_field_pattern, walk_func_decl, walk_module,
+    walk_pattern,
 };
 use tribute_front::ast::{
-    AbilityDecl, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LocalId, Module, NodeId,
-    ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, StructDecl, TypedRef,
+    AbilityDecl, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FieldPattern, FuncDecl, LocalId,
+    Module, NodeId, ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, StructDecl, TypedRef,
 };
 use tribute_front::query as ast_query;
 
@@ -632,15 +633,17 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
             } => {
                 self.add_definition(pattern.id, *name, DefinitionKind::Local, *rest_local_id);
             }
-            PatternKind::Record { fields, .. } => {
-                // Shorthand `{ name }` binds `name` (no LocalId available);
-                // the field id gives each binding its own span.
-                for field in fields.iter().filter(|field| field.pattern.is_none()) {
-                    self.add_definition(field.id, field.name, DefinitionKind::Local, None);
-                }
-            }
             _ => {}
         }
+    }
+
+    fn visit_field_pattern(&mut self, field: &'ast FieldPattern<TypedRef<'db>>) {
+        // Shorthand `{ name }` binds `name` (no LocalId available); the field
+        // id gives each binding its own span.
+        if field.pattern.is_none() {
+            self.add_definition(field.id, field.name, DefinitionKind::Local, None);
+        }
+        walk_field_pattern(self, field);
     }
 
     fn visit_ref(&mut self, _: RefSite, node: NodeId, value: &'ast TypedRef<'db>) {
