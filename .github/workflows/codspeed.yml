@@ -63,7 +63,7 @@ jobs:
           tool: cargo-codspeed
 
       - name: Build benchmarks
-        run: cargo codspeed build -p tribute-bench
+        run: cargo codspeed build -m ${{ matrix.mode }} -p tribute-bench
 
       # Native run-time benchmarks are skipped under CodSpeed; see
       # crates/tribute-bench/benches/abi_boundary.rs.
