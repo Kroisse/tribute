@@ -87,7 +87,7 @@ ability State(s) {
     op get() -> s
 }
 
-fn apply_open(value: Int, callback: fn(Int) -> Nil) -> Nil {
+fn apply_open(value: Int, callback: fn(Int) ->{e} Nil) ->{e} Nil {
     callback(value)
 }
 
@@ -692,11 +692,11 @@ fn test_open_callback_workers_promote_to_cps(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn forward_open(value: a, callback: fn(a) -> b) -> b {
+fn forward_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
     apply_open(value, callback)
 }
 
-fn apply_open(value: a, callback: fn(a) -> b) -> b {
+fn apply_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
     callback(value)
 }
 
@@ -813,7 +813,7 @@ fn test_open_callback_evidence_root_main_is_marked_by_its_source_result(db: &sal
         db,
         "test.trb",
         r#"
-fn apply_open(value: Int, callback: fn(Int) -> Int) -> Int {
+fn apply_open(value: Int, callback: fn(Int) ->{e} Int) ->{e} Int {
     callback(value)
 }
 
@@ -868,7 +868,7 @@ fn test_nested_open_callback_main_promotes_to_cps(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 mod Nested {
-    fn apply_open(value: a, callback: fn(a) -> b) -> b {
+    fn apply_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
         callback(value)
     }
 
@@ -1624,7 +1624,7 @@ struct Holder { callback: fn(Int) -> Int }
 enum Choice { Callback(#(fn(Int) -> Int, List(fn(Int) -> Int))), Other }
 
 fn make(callback: fn(Int) -> Int) -> Choice { Callback(#(callback, [callback])) }
-fn inspect(choice: Choice, fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+fn inspect(choice: Choice, fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     case choice {
         Callback(#(callback, [nested])) -> nested
         Callback(_) -> fallback
@@ -1661,7 +1661,7 @@ fn logical_callable_list_rest_pattern_preserves_element_type(db: &salsa::Databas
         db,
         "logical_callable_list_pattern.trb",
         r#"
-fn first_or(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+fn first_or(values: List(fn(Int) ->{e} Int), fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     case values {
         [] as empty -> fallback
         [head, ..tail] as whole -> head
@@ -1752,14 +1752,14 @@ fn logical_callable_aggregate_checks_preserve_pattern_order(db: &salsa::Database
         db,
         "logical_callable_aggregate_checks.trb",
         r#"
-fn first_nonempty(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+fn first_nonempty(values: List(fn(Int) ->{e} Int), fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     case values {
         [head, ..tail] -> head
         [] -> fallback
     }
 }
 
-fn choose_pair(pair: #(fn(Int) -> Int, Bool), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+fn choose_pair(pair: #(fn(Int) ->{e} Int, Bool), fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     case pair {
         #(callback, True) -> callback
         #(callback, False) -> callback

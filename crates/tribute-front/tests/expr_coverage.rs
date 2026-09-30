@@ -253,7 +253,7 @@ fn test_lambda_as_argument(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn apply(f: fn(Nat) -> Nat, x: Nat) -> Nat {
+fn apply(f: fn(Nat) ->{e} Nat, x: Nat) ->{e} Nat {
     f(x)
 }
 

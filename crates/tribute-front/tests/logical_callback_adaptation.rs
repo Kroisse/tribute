@@ -72,7 +72,7 @@ fn named_function_value_uses_its_callback_contract(db: &salsa::DatabaseImpl) {
         db,
         "logical_callback_adaptation.trb",
         r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 fn double(value: Int) -> Int { value + value }
 fn main() -> Nil { apply(double, 21) }
 "#,
@@ -107,7 +107,7 @@ fn named_value_uses_distinct_contracts(db: &salsa::DatabaseImpl) {
         "logical_callback_distinct_contracts.trb",
         r#"
 fn apply_direct(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn apply_open(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn apply_open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 fn double(value: Int) -> Int { value + value }
 fn main() -> Nil { apply_open(double, apply_direct(double, 21)) }
 "#,
@@ -139,7 +139,7 @@ fn lambda_value_uses_an_exact_compatible_callback_contract(db: &salsa::DatabaseI
         db,
         "logical_lambda_callback_adaptation.trb",
         r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 fn main() -> Nil { apply(fn(value) { value + value }, 21) }
 "#,
     );
