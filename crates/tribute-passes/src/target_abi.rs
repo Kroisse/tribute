@@ -196,7 +196,7 @@ pub fn lower_cps_signatures_to_physical(
             }
         }
 
-        let regions = converter.ctx.op(op).regions.to_vec();
+        let regions = converter.ctx.op(op).regions.clone();
         for region in regions {
             let block_count = converter.ctx.region(region).blocks.len();
             for block_index in 0..block_count {
@@ -275,7 +275,7 @@ fn validate_root_entry(
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(None);
     };
-    let top_level_ops = ctx.block(module_block).ops.to_vec();
+    let top_level_ops = ctx.block(module_block).ops.clone();
     let roots: Vec<_> = top_level_ops
         .iter()
         .copied()
@@ -372,7 +372,7 @@ pub fn compose_root_entry_bridge(
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(());
     };
-    let top_level_ops = ctx.block(module_block).ops.to_vec();
+    let top_level_ops = ctx.block(module_block).ops.clone();
     let main = Symbol::new("main");
     let root_main = Symbol::new(ROOT_MAIN_SYMBOL);
     let mut roots = top_level_ops.iter().copied().filter(|&op| {
@@ -1615,7 +1615,8 @@ mod tests {
     fn function(ctx: &IrContext, module: Module, name: &str) -> func::Func {
         module
             .ops(ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
                 (function.sym_name(ctx) == Symbol::from_dynamic(name)).then_some(function)
@@ -1660,7 +1661,7 @@ mod tests {
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         crate::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module);
-        for op in module.ops(&ctx) {
+        for op in module.ops_snapshot(&ctx) {
             if let Ok(function) = func::Func::from_op(&ctx, op) {
                 crate::wasm::evidence_to_wasm::lower_evidence_to_wasm_func(&mut ctx, function)
                     .unwrap();
@@ -2134,7 +2135,8 @@ mod tests {
         assert_eq!(ctx.op_operands(call)[0], evidence.result(&ctx));
         let functions: Vec<_> = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| func::Func::from_op(&ctx, op).ok())
             .map(|function| function.sym_name(&ctx).to_string())
             .collect();

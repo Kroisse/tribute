@@ -18,6 +18,7 @@ use tribute_core::{
     set_calling_convention,
 };
 use tribute_ir::dialect::{ability, closure, effect, tribute_control, tribute_rt};
+use trunk_ir::OpList;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, core, func, scf};
@@ -467,7 +468,7 @@ fn verify_physical_callable_graph(
         })
         .collect();
     let mut failures = Vec::new();
-    for op in module.ops(ctx) {
+    for &op in module.ops(ctx) {
         visit(ctx, op, &signatures, &mut failures);
     }
     failures
@@ -1352,8 +1353,8 @@ impl<'a> Converter<'a> {
             .collect();
         let result_types: Vec<_> = self.ctx.op_result_types(source).to_vec();
         let attrs = data.attributes.clone();
-        let regions = data.regions.to_vec();
-        let successors = data.successors.to_vec();
+        let regions = data.regions.clone();
+        let successors = data.successors.clone();
         if !successors.is_empty() {
             return Err(self.malformed_source(
                 source,
@@ -1399,7 +1400,7 @@ impl<'a> Converter<'a> {
         source: RegionRef,
     ) -> Result<RegionRef, TributeControlToCpsError> {
         let location = self.ctx.region(source).location;
-        let source_blocks = self.ctx.region(source).blocks.to_vec();
+        let source_blocks = self.ctx.region(source).blocks.clone();
         let mut blocks = Vec::with_capacity(source_blocks.len());
         for source_block in source_blocks {
             let logical_arg_types = self
@@ -1426,7 +1427,7 @@ impl<'a> Converter<'a> {
                 {
                     mapping.insert(old, new);
                 }
-                let source_ops = self.ctx.block(source_block).ops.to_vec();
+                let source_ops = self.ctx.block(source_block).ops.clone();
                 for source_op in source_ops {
                     let converted = if tribute_control::Func::matches(self.ctx, source_op) {
                         self.convert_func(source_op)?
@@ -1461,7 +1462,7 @@ impl<'a> Converter<'a> {
         mapping: &mut HashMap<ValueRef, ValueRef>,
     ) -> Result<RegionRef, TributeControlToCpsError> {
         let location = self.ctx.region(source).location;
-        let source_blocks = self.ctx.region(source).blocks.to_vec();
+        let source_blocks = self.ctx.region(source).blocks.clone();
         let mut blocks = Vec::with_capacity(source_blocks.len());
         for source_block in source_blocks {
             let source_arg_types: Vec<_> = self
@@ -1484,7 +1485,7 @@ impl<'a> Converter<'a> {
             {
                 mapping.insert(old, new);
             }
-            let source_ops = self.ctx.block(source_block).ops.to_vec();
+            let source_ops = self.ctx.block(source_block).ops.clone();
             for op in source_ops {
                 let cloned = self.clone_plain_op(op, mapping)?;
                 self.ctx.push_op(block, cloned);
@@ -1556,9 +1557,9 @@ impl<'a> Converter<'a> {
         }
 
         let mut converted_regions = Vec::new();
-        let source_regions = self.ctx.op(source).regions.to_vec();
+        let source_regions = self.ctx.op(source).regions.clone();
         for source_region in source_regions {
-            let source_blocks = self.ctx.region(source_region).blocks.to_vec();
+            let source_blocks = self.ctx.region(source_region).blocks.clone();
             let [source_block] = source_blocks.as_slice() else {
                 return Err(TributeControlToCpsError::one(
                     POST_CPS_BOUNDARY,
@@ -1614,7 +1615,7 @@ impl<'a> Converter<'a> {
                 },
             };
             self.convert_sequence(
-                self.ctx.block(*source_block).ops.to_vec(),
+                self.ctx.block(*source_block).ops.clone(),
                 0,
                 converted_block,
                 &mut branch_mapping,
@@ -1665,7 +1666,7 @@ impl<'a> Converter<'a> {
         {
             mapping.insert(old, new);
         }
-        self.convert_sequence(source_ops.to_vec(), index + 1, block, mapping, flow)
+        self.convert_sequence(OpList::from(source_ops), index + 1, block, mapping, flow)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1704,7 +1705,7 @@ impl<'a> Converter<'a> {
                 "scf.switch requires exactly one body region",
             ));
         };
-        let source_body_blocks = self.ctx.region(*source_body).blocks.to_vec();
+        let source_body_blocks = self.ctx.region(*source_body).blocks.clone();
         let [source_body_block] = source_body_blocks.as_slice() else {
             return Err(TributeControlToCpsError::one(
                 POST_CPS_BOUNDARY,
@@ -1714,7 +1715,7 @@ impl<'a> Converter<'a> {
             ));
         };
         let switch_block = self.make_block(location, &[]);
-        let source_cases = self.ctx.block(*source_body_block).ops.to_vec();
+        let source_cases = self.ctx.block(*source_body_block).ops.clone();
         for case in source_cases {
             let case_data = self.ctx.op(case);
             let case_location = case_data.location;
@@ -1730,7 +1731,7 @@ impl<'a> Converter<'a> {
                     "scf.switch body may contain only scf.case and scf.default",
                 ));
             }
-            let case_regions = case_data.regions.to_vec();
+            let case_regions = &case_data.regions;
             let case_value = case_data.attributes.get("value").cloned();
             let [source_region] = case_regions.as_slice() else {
                 return Err(TributeControlToCpsError::one(
@@ -1740,7 +1741,7 @@ impl<'a> Converter<'a> {
                     "scf switch arm requires exactly one region",
                 ));
             };
-            let source_case_blocks = self.ctx.region(*source_region).blocks.to_vec();
+            let source_case_blocks = &self.ctx.region(*source_region).blocks;
             let [source_case_block] = source_case_blocks.as_slice() else {
                 return Err(TributeControlToCpsError::one(
                     POST_CPS_BOUNDARY,
@@ -1749,7 +1750,7 @@ impl<'a> Converter<'a> {
                     "scf switch arm requires exactly one block",
                 ));
             };
-            let source_case_ops = self.ctx.block(*source_case_block).ops.to_vec();
+            let source_case_ops = self.ctx.block(*source_case_block).ops.clone();
             let converted_block = self.make_block(case_location, &[]);
             let mut case_mapping = mapping.clone();
             let case_flow = Flow {
@@ -1876,7 +1877,7 @@ impl<'a> Converter<'a> {
             ..flow.clone()
         };
         self.convert_sequence(
-            source_ops.to_vec(),
+            OpList::from(source_ops),
             start,
             block,
             &mut suffix_mapping,
@@ -1948,7 +1949,7 @@ impl<'a> Converter<'a> {
             preserve_scf_yield: false,
         };
         self.convert_sequence(
-            self.ctx.block(entry_source).ops.to_vec(),
+            self.ctx.block(entry_source).ops.clone(),
             0,
             block,
             &mut body_mapping,
@@ -2037,7 +2038,7 @@ impl<'a> Converter<'a> {
             ..flow.clone()
         };
         self.convert_sequence(
-            source_ops.to_vec(),
+            OpList::from(source_ops),
             start,
             block,
             &mut body_mapping,
@@ -2197,7 +2198,7 @@ impl<'a> Converter<'a> {
             preserve_scf_yield: false,
         };
         self.convert_sequence(
-            self.ctx.block(source_block).ops.to_vec(),
+            self.ctx.block(source_block).ops.clone(),
             0,
             block,
             &mut body_mapping,
@@ -2242,7 +2243,7 @@ impl<'a> Converter<'a> {
         suffix_flow.exit_k = Some(resume_frame);
         suffix_flow.root_exit_k = Some(resume_frame);
         self.convert_sequence(
-            source_ops.to_vec(),
+            OpList::from(source_ops),
             start,
             block,
             &mut body_mapping,
@@ -2906,7 +2907,7 @@ impl<'a> Converter<'a> {
             preserve_scf_yield: false,
         };
         self.convert_sequence(
-            self.ctx.block(source_block).ops.to_vec(),
+            self.ctx.block(source_block).ops.clone(),
             0,
             block,
             &mut mapping,
@@ -3134,7 +3135,7 @@ impl<'a> Converter<'a> {
         let handle_frame =
             self.frame_for_suffix(block, location, handle_answer, flow, after_handle)?;
 
-        let regions = self.ctx.op(source).regions.to_vec();
+        let regions = &self.ctx.op(source).regions;
         let [body_source, completion_source, handlers_region] = regions.as_slice() else {
             unreachable!("pre-CPS validation checked handle regions");
         };
@@ -3142,7 +3143,7 @@ impl<'a> Converter<'a> {
             (*body_source, *completion_source, *handlers_region);
         let handlers_block = self.ctx.region(handlers_region).blocks[0];
         let mut handler_arms = Vec::new();
-        let source_handlers = self.ctx.block(handlers_block).ops.to_vec();
+        let source_handlers = self.ctx.block(handlers_block).ops.clone();
         for handler in source_handlers {
             let arm = self.lower_handler_arm(handler, mapping, handle_frame, handle_answer)?;
             self.ctx.push_op(block, arm.op);
@@ -3242,7 +3243,7 @@ impl<'a> Converter<'a> {
         };
         let source_body_block = self.ctx.region(body_source).blocks[0];
         self.convert_sequence(
-            self.ctx.block(source_body_block).ops.to_vec(),
+            self.ctx.block(source_body_block).ops.clone(),
             0,
             body_block,
             &mut body_mapping,
@@ -3266,7 +3267,7 @@ impl<'a> Converter<'a> {
 
     fn convert_sequence(
         &mut self,
-        source_ops: Vec<OpRef>,
+        source_ops: OpList,
         mut index: usize,
         block: BlockRef,
         mapping: &mut HashMap<ValueRef, ValueRef>,
@@ -3638,7 +3639,7 @@ impl<'a> Converter<'a> {
             preserve_scf_yield: false,
         };
         self.convert_sequence(
-            self.ctx.block(source_block).ops.to_vec(),
+            self.ctx.block(source_block).ops.clone(),
             0,
             block,
             &mut mapping,
@@ -3772,7 +3773,7 @@ pub fn tribute_control_to_cps(
             "core.module has no body region",
         )
     })?;
-    let source_blocks = ctx.region(source_region).blocks.to_vec();
+    let source_blocks = ctx.region(source_region).blocks.clone();
     if source_blocks.len() != 1 {
         return Err(TributeControlToCpsError::one(
             PRE_CPS_BOUNDARY,
@@ -3793,7 +3794,7 @@ pub fn tribute_control_to_cps(
     {
         let mut converter = Converter::new(ctx, new_block, funcs);
         let mut mapping = HashMap::new();
-        let source_ops = converter.ctx.block(source_blocks[0]).ops.to_vec();
+        let source_ops = converter.ctx.block(source_blocks[0]).ops.clone();
         for source in source_ops {
             if tribute_control::Func::matches(converter.ctx, source) {
                 let function = converter.convert_func(source)?;
@@ -4398,7 +4399,8 @@ mod tests {
         tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let lowered = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find(|op| func::Func::matches(&ctx, *op))
             .unwrap();
         let physical = ctx.op(lowered).attributes.get_type("type").unwrap();
@@ -5549,7 +5551,7 @@ mod tests {
             .func_ref(Symbol::new("raw"))
             .results(raw_type)
             .build(&mut ctx, location);
-        let before = ctx.block(module_block).ops.to_vec();
+        let before = ctx.block(module_block).ops.clone();
         let mut converter = Converter::new(&mut ctx, module_block, HashMap::new());
 
         let error = converter
@@ -5676,7 +5678,8 @@ mod tests {
         let adapter_type = |ctx: &IrContext| {
             let adapter = module
                 .ops(ctx)
-                .into_iter()
+                .iter()
+                .copied()
                 .find_map(|op| {
                     let function = func::Func::from_op(ctx, op).ok()?;
                     (function.sym_name(ctx) == Symbol::new("__tribute_func_ref_adapter_0"))

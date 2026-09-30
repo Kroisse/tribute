@@ -36,7 +36,7 @@ use std::collections::HashMap;
 use crate::context::IrContext;
 use crate::dialect::{arith, func};
 use crate::pass::{Pass, pass_fn};
-use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
+use crate::refs::{OpRef, ValueRef};
 use crate::rewrite::{
     PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
 };
@@ -209,14 +209,16 @@ fn apply_splice(
     // Sweep up anything left in the matched op's regions — chosen
     // region's terminator (we already kept the body it preceded) plus
     // the dead branch entirely.
-    let regions: Vec<RegionRef> = ctx.op(op).regions.iter().copied().collect();
+    // Erasing ops mutates these child lists, so iterate snapshots. Cloning
+    // keeps them inline for the usual few children.
+    let regions = ctx.op(op).regions.clone();
     for region in regions {
-        let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+        let blocks = ctx.region(region).blocks.clone();
         for block in blocks {
             // Reverse so a block-internal op is erased before any op that
             // depends on its results, satisfying `remove_op`'s "no remaining
             // uses" precondition.
-            let remaining: Vec<OpRef> = ctx.block(block).ops.to_vec();
+            let remaining = ctx.block(block).ops.clone();
             for orphan in remaining.into_iter().rev() {
                 crate::rewrite::erase_op(ctx, orphan);
             }
@@ -450,7 +452,8 @@ mod tests {
         let module = parse_test_module(&mut ctx, input);
         let funcs: Vec<func::Func> = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .map(|op| func::Func::from_op(&ctx, op).expect("test op must be func.func"))
             .collect();
 

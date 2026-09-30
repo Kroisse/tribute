@@ -624,7 +624,8 @@ mod tests {
 
         let exports: Vec<_> = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| wasm_dialect::ExportFunc::from_op(&ctx, op).ok())
             .map(|export| (export.name(&ctx), export.func(&ctx)))
             .collect();
@@ -632,7 +633,8 @@ mod tests {
         assert!(
             module
                 .ops(&ctx)
-                .into_iter()
+                .iter()
+                .copied()
                 .all(|op| wasm_dialect::Func::from_op(&ctx, op).is_err()),
             "no separate start function"
         );

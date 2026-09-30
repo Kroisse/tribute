@@ -6,7 +6,7 @@
 use smallvec::SmallVec;
 
 use crate::Symbol;
-use crate::context::{BlockData, IrContext};
+use crate::context::{BlockData, BlockList, IrContext, OpList};
 use crate::refs::{BlockRef, OpRef, RegionRef};
 use crate::types::Attribute;
 
@@ -48,7 +48,7 @@ pub fn split_block(ctx: &mut IrContext, block: BlockRef, before_op: OpRef) -> Bl
         .expect("split_block: before_op not found in block");
 
     // Collect ops to move (from split point to end)
-    let tail_ops: SmallVec<[OpRef; 4]> = ops[pos..].into();
+    let tail_ops: OpList = ops[pos..].into();
 
     // Truncate the original block's ops
     ctx.block_mut(block).ops.truncate(pos);
@@ -103,8 +103,7 @@ pub fn inline_region_blocks(
     }
 
     // Take blocks from src
-    let src_blocks: SmallVec<[BlockRef; 4]> =
-        std::mem::take(&mut ctx.region_mut(src_region).blocks);
+    let src_blocks: BlockList = std::mem::take(&mut ctx.region_mut(src_region).blocks);
 
     let moved: Vec<BlockRef> = src_blocks.to_vec();
 

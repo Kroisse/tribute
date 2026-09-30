@@ -194,7 +194,7 @@ pub(crate) fn validate_final_handle_dispatches(
 
 /// Ensure the runtime prompt allocator is declared.
 fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
-    let has_next_tag = module.ops(ctx).into_iter().any(|op| {
+    let has_next_tag = module.ops(ctx).iter().copied().any(|op| {
         func::Func::from_op(ctx, op)
             .is_ok_and(|function| function.sym_name(ctx) == Symbol::new("__tribute_next_tag"))
     });
@@ -234,9 +234,9 @@ fn resolve_delimiters(
     module: Module,
     region: RegionRef,
 ) -> Result<(), ResolveEvidenceError> {
-    let blocks = ctx.region(region).blocks.to_vec();
+    let blocks = ctx.region(region).blocks.clone();
     for block in blocks {
-        let ops = ctx.block(block).ops.to_vec();
+        let ops = ctx.block(block).ops.clone();
         for op in ops {
             if ability::HandleDispatch::from_op(ctx, op).is_ok() {
                 let location = ctx.op(op).location;
@@ -275,7 +275,7 @@ fn resolve_delimiters(
 
                 ctx.replace_all_uses(shape.body_evidence, current_ev);
             }
-            let regions = ctx.op(op).regions.to_vec();
+            let regions = ctx.op(op).regions.clone();
             for region in regions {
                 resolve_delimiters(ctx, module, region)?;
             }
@@ -413,7 +413,7 @@ mod tests {
         assert_eq!(resolved.matches("effect.extend").count(), 2);
         for name in [ability::evidence_abi::LOOKUP, ability::evidence_abi::EXTEND] {
             assert!(
-                module.ops(&ctx).into_iter().all(|op| {
+                module.ops(&ctx).iter().copied().all(|op| {
                     ctx.op(op).attributes.get_symbol("sym_name") != Some(Symbol::new(name))
                 }),
                 "shared resolution must not fabricate target helper {name}"
@@ -666,7 +666,8 @@ mod tests {
         );
         let body = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find(|&op| ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new("body")))
             .unwrap();
         let entry = ctx.region(ctx.op(body).regions[0]).blocks[0];

@@ -12,7 +12,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -336,11 +336,11 @@ fn region_with_ops(
     })
 }
 
-fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> Vec<OpRef> {
+fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> OpList {
     let [block] = ctx.region(region).blocks.as_slice() else {
         unreachable!("switch regions are preflighted as single-block");
     };
-    let ops = ctx.block(*block).ops.to_vec();
+    let ops = ctx.block(*block).ops.clone();
     for &op in &ops {
         ctx.detach_op(op);
     }
@@ -521,7 +521,7 @@ impl RewritePattern for ScfLoopPattern {
         // The created `wasm.loop` owns the detached body, so its block
         // arguments become Wasm-level parameters. Declare them with target
         // types instead of leaving the SCF spelling on the boundary.
-        let body_blocks: Vec<_> = ctx.region(body).blocks.to_vec();
+        let body_blocks = ctx.region(body).blocks.clone();
         for block in body_blocks {
             let block_args = ctx.block_args(block).to_vec();
             for (index, arg) in block_args.into_iter().enumerate() {

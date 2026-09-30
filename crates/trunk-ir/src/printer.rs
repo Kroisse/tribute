@@ -341,17 +341,13 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
     /// block label is printed without args, and non-entry blocks are printed
     /// normally.
     pub fn print_region_eliding_entry(&mut self, region: RegionRef, indent: usize) -> fmt::Result {
-        let blocks: Vec<BlockRef> = self
-            .state
-            .ctx
-            .region(region)
-            .blocks
-            .iter()
-            .copied()
-            .collect();
+        // The context outlives `self`, so the child lists are read in place
+        // while the print state is updated.
+        let ctx = self.state.ctx;
+        let blocks = &ctx.region(region).blocks;
 
         // Pre-assign block labels for all blocks
-        for &block in &blocks {
+        for &block in blocks {
             self.state.assign_block_label(block);
         }
 
@@ -386,9 +382,7 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
             }
 
             // Print ops in block
-            let block_data = self.state.ctx.block(block);
-            let ops: Vec<_> = block_data.ops.iter().copied().collect();
-            for &op in &ops {
+            for &op in &ctx.block(block).ops {
                 print_operation(self.state, &mut *self.f, op, indent + 2)?;
             }
         }
@@ -862,11 +856,12 @@ fn print_region(
     region: RegionRef,
     indent: usize,
 ) -> fmt::Result {
-    let region_data = state.ctx.region(region);
-    let blocks: Vec<_> = region_data.blocks.iter().copied().collect();
+    // The context outlives `state`, so the child lists are read in place.
+    let ctx = state.ctx;
+    let blocks = &ctx.region(region).blocks;
 
     // Pre-assign block labels
-    for &block in &blocks {
+    for &block in blocks {
         state.assign_block_label(block);
     }
 
@@ -895,9 +890,7 @@ fn print_region(
         }
 
         // Print ops in this block
-        let block_data = state.ctx.block(block);
-        let ops: Vec<_> = block_data.ops.iter().copied().collect();
-        for &op in &ops {
+        for &op in &ctx.block(block).ops {
             print_operation(state, f, op, indent + 2)?;
         }
         if i + 1 < blocks.len() {
@@ -1004,12 +997,9 @@ fn print_module_op(
         }
 
         // Print each top-level op with reset numbering
-        let region_data = state.ctx.region(region);
-        let blocks: Vec<_> = region_data.blocks.iter().copied().collect();
-        for &block in &blocks {
-            let block_data = state.ctx.block(block);
-            let ops: Vec<_> = block_data.ops.iter().copied().collect();
-            for &child_op in &ops {
+        let ctx = state.ctx;
+        for &block in &ctx.region(region).blocks {
+            for &child_op in &ctx.block(block).ops {
                 let saved = state.save_counters();
                 state.reset_numbering();
                 print_operation(state, f, child_op, indent + 2)?;

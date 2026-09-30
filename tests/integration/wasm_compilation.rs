@@ -664,7 +664,7 @@ fn test_validate_fixed_wasm_dispatch_abis() {
     // Boundary evidence lowering declares the helper ABI; Wasm lowering past
     // the exit binds it to the target's GC-array implementation.
     tribute_passes::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module);
-    for op in module.ops(&ctx) {
+    for op in module.ops_snapshot(&ctx) {
         if let Ok(function) =
             <trunk_ir::dialect::func::Func as trunk_ir::ops::DialectOp>::from_op(&ctx, op)
         {

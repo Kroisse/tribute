@@ -83,8 +83,8 @@ pub use smallvec::smallvec as idvec;
 
 // Re-exports from submodules (previously from arena/mod.rs)
 pub use context::{
-    BlockArgData, BlockData, IrContext, OperationData, OperationDataBuilder, RegionData, Use,
-    ValueData,
+    BlockArgData, BlockData, BlockList, IrContext, OpList, OperationData, OperationDataBuilder,
+    RegionData, RegionList, Use, ValueData,
 };
 pub use ir_mapping::IrMapping;
 pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef};

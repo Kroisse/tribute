@@ -54,7 +54,7 @@ impl Pass for LowerListIntrinsics {
     ) -> PassRunResult {
         let module = Module::from(target);
         let mut intrinsic_declarations = IntrinsicDeclarations::default();
-        for op in module.ops(ctx) {
+        for &op in module.ops(ctx) {
             let Ok(function) = func::Func::from_op(ctx, op) else {
                 continue;
             };

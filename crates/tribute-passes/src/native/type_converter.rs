@@ -508,7 +508,8 @@ mod tests {
 
         let functions = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .map(|op| clif::Func::from_op(&ctx, op).expect("clif.func"))
             .collect::<Vec<_>>();
         let declaration = functions

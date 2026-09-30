@@ -131,9 +131,9 @@ impl<'a> ActionPlanner<'a> {
     }
 
     fn plan_block(&mut self, block: BlockRef) -> Result<(), OwnershipPlanError> {
-        let ops = self.ir.block(block).ops.to_vec();
+        let ops = &self.ir.block(block).ops;
         let mut transferred = HashSet::new();
-        for &op in &ops {
+        for &op in ops {
             self.plan_operation(op, &mut transferred)?;
             if let Some(&result) = self.ir.op_results(op).first()
                 && self.borrowed.contains_key(&result)
@@ -158,7 +158,7 @@ impl<'a> ActionPlanner<'a> {
                 });
             }
         }
-        self.plan_final_releases(block, &ops, &transferred);
+        self.plan_final_releases(block, ops, &transferred);
         Ok(())
     }
 }

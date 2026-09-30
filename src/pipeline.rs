@@ -1874,7 +1874,8 @@ mod tests {
         for name in ["__tribute_main", "__tribute_done_k", "__tribute_unhandled"] {
             let function = module
                 .ops(&ctx)
-                .into_iter()
+                .iter()
+                .copied()
                 .find_map(|op| {
                     let function = func_dialect::Func::from_op(&ctx, op).ok()?;
                     (function.sym_name(&ctx) == Symbol::from_dynamic(name)).then_some(function)
@@ -1951,7 +1952,8 @@ mod tests {
         });
         let dispatch_definition = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find_map(|op| {
                 let function = wasm::Func::from_op(&ctx, op).ok()?;
                 (function.sym_name(&ctx) == Symbol::new("__tribute_unhandled"))
@@ -3545,7 +3547,8 @@ fn main() {}
                 let parameter = logical
                     .module
                     .ops(&ir)
-                    .into_iter()
+                    .iter()
+                    .copied()
                     .find_map(|op| {
                         if after_cps {
                             let f = func_dialect::Func::from_op(&ir, op).ok()?;
@@ -3610,7 +3613,7 @@ fn main() {}
             typed.lower_to_ir(db, ir, uri)
         });
         let mut checked = 0;
-        for operation in logical.module.ops(&ir) {
+        for &operation in logical.module.ops(&ir) {
             let Ok(function) = tribute_control::Func::from_op(&ir, operation) else {
                 continue;
             };
@@ -3808,7 +3811,7 @@ mod Nested {
             .expect("shared pipeline must succeed")
             .expect("fixture must lower");
         let identity = |name: &'static str| {
-            module.ops(&ctx).into_iter().find_map(|op| {
+            module.ops(&ctx).iter().copied().find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
                 (function.sym_name(&ctx) == trunk_ir::Symbol::new(name)).then(|| {
                     assert_eq!(ctx.op(op).attributes.get_str("abi"), Some("intrinsic"));
@@ -3849,7 +3852,7 @@ mod Nested {
             }
             .unwrap_or_else(|error| panic!("{target:?} boundary failed: {error}"));
 
-            for op in module.ops(&ctx) {
+            for &op in module.ops(&ctx) {
                 assert!(
                     ctx.op(op).attributes.get(COMPILER_INTRINSIC_ATTR).is_none(),
                     "{target:?}: the identity is consumed at the boundary exit"

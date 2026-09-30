@@ -876,7 +876,8 @@ mod tests {
         let name = Symbol::new(name);
         module
             .ops(ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| func::Func::from_op(ctx, op).ok())
             .find(|func_op| func_op.sym_name(ctx) == name)
             .expect("test function should exist")
@@ -1343,7 +1344,8 @@ mod tests {
             let name = reference.func_ref(&ctx);
             let target = module
                 .ops(&ctx)
-                .into_iter()
+                .iter()
+                .copied()
                 .filter_map(|op| func::Func::from_op(&ctx, op).ok())
                 .find(|function| function.sym_name(&ctx) == name)
                 .expect("referenced function must exist");

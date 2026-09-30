@@ -27,7 +27,7 @@ fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext
 /// Helper to check which functions have evidence as first parameter.
 fn get_functions_with_evidence(ctx: &IrContext, module: &Module) -> Vec<(String, bool)> {
     let mut results = Vec::new();
-    for op in module.ops(ctx) {
+    for &op in module.ops(ctx) {
         if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx).to_string();
             let func_ty = func_op.r#type(ctx);
@@ -46,7 +46,8 @@ fn get_functions_with_evidence(ctx: &IrContext, module: &Module) -> Vec<(String,
 fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool, bool, bool) {
     let func_op = module
         .ops(ctx)
-        .into_iter()
+        .iter()
+        .copied()
         .find_map(|op| {
             let func_op = func::Func::from_op(ctx, op).ok()?;
             (func_op.sym_name(ctx) == target).then_some(func_op)
@@ -82,7 +83,8 @@ fn function_abi(ctx: &IrContext, module: &Module, target: &str) -> (usize, bool,
 fn function_param_types(ctx: &IrContext, module: &Module, target: &str) -> Vec<trunk_ir::TypeRef> {
     let func_op = module
         .ops(ctx)
-        .into_iter()
+        .iter()
+        .copied()
         .find_map(|op| {
             let func_op = func::Func::from_op(ctx, op).ok()?;
             (func_op.sym_name(ctx) == target).then_some(func_op)
@@ -416,7 +418,7 @@ fn main() { }
         let (ctx, module) = compile_to_ir(db, code, "evidence_stable.trb");
 
         // Count evidence params per function via block args
-        for op in module.ops(&ctx) {
+        for &op in module.ops(&ctx) {
             if let Ok(func_op) = func::Func::from_op(&ctx, op) {
                 let name = func_op.sym_name(&ctx).to_string();
                 let CallableBody::Definition { entry, .. } =
@@ -455,7 +457,8 @@ fn main() { }
         );
         let function = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
                 (function.sym_name(&ctx) == "foreign").then_some(function)

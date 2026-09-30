@@ -646,7 +646,8 @@ mod tests {
     fn data_segments(ctx: &IrContext, module: Module) -> Vec<Vec<u8>> {
         module
             .ops(ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| wasm_dialect::Data::from_op(ctx, op).ok())
             .map(|data| data.bytes(ctx).to_vec())
             .collect()
@@ -655,7 +656,8 @@ mod tests {
     fn bytes_from_data(ctx: &IrContext, module: Module) -> Vec<(u32, u32)> {
         let func = module
             .ops(ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find(|&op| wasm_dialect::Func::from_op(ctx, op).is_ok())
             .expect("wasm.func");
         let body = ctx.op(func).regions[0];

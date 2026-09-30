@@ -133,7 +133,7 @@ fn splice_callee_body_before(
         .first()
         .copied()
         .ok_or(InlineError::CalleeHasNoBody)?;
-    let callee_blocks: Vec<_> = ctx.region(callee_body).blocks.iter().copied().collect();
+    let callee_blocks = &ctx.region(callee_body).blocks;
     if callee_blocks.len() > 1 {
         return Err(InlineError::MultiBlockCallee);
     }
@@ -152,7 +152,9 @@ fn splice_callee_body_before(
 
     // Split the callee block's ops into body (all ops except the terminator)
     // and the `func.return` terminator itself.
-    let callee_ops: Vec<OpRef> = ctx.block(callee_entry).ops.iter().copied().collect();
+    // Cloning into the caller mutates the context, so iterate a snapshot of
+    // the callee ops; cloning keeps it inline for small bodies.
+    let callee_ops = ctx.block(callee_entry).ops.clone();
     let (ret_op, body_ops) = callee_ops
         .split_last()
         .ok_or(InlineError::CalleeHasEmptyBody)?;
@@ -220,19 +222,19 @@ impl Default for InlineConfig {
 
 /// Count all ops in a `func.func`'s body (recursively through nested regions).
 fn op_count(ctx: &IrContext, func_op: OpRef) -> usize {
-    let regions: Vec<RegionRef> = ctx.op(func_op).regions.iter().copied().collect();
-    regions.iter().map(|&r| region_op_count(ctx, r)).sum()
+    ctx.op(func_op)
+        .regions
+        .iter()
+        .map(|&r| region_op_count(ctx, r))
+        .sum()
 }
 
 fn region_op_count(ctx: &IrContext, region: RegionRef) -> usize {
-    let blocks: Vec<_> = ctx.region(region).blocks.iter().copied().collect();
     let mut total = 0usize;
-    for block in blocks {
-        let ops: Vec<_> = ctx.block(block).ops.iter().copied().collect();
-        for op in ops {
+    for &block in &ctx.region(region).blocks {
+        for &op in &ctx.block(block).ops {
             total += 1;
-            let nested: Vec<_> = ctx.op(op).regions.iter().copied().collect();
-            for r in nested {
+            for &r in &ctx.op(op).regions {
                 total += region_op_count(ctx, r);
             }
         }

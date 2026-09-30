@@ -145,7 +145,8 @@ mod tests {
         );
         let layouts = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .map(|op| Layout::from_op(&ctx, op).expect("layout"))
             .collect::<Vec<_>>();
 

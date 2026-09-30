@@ -276,7 +276,7 @@ impl PatternApplicator {
         module_first_block: Option<BlockRef>,
     ) -> usize {
         let mut changes = 0;
-        let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+        let blocks = ctx.region(region).blocks.clone();
         for block in blocks {
             changes += self.visit_block(ctx, block, module_first_block);
         }
@@ -308,7 +308,7 @@ impl PatternApplicator {
         }
 
         // Snapshot the ops in this block
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+        let ops = ctx.block(block).ops.clone();
 
         for op in ops {
             // Skip ops that have been removed from their block
@@ -321,7 +321,7 @@ impl PatternApplicator {
             }
 
             // First, recurse into nested regions
-            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+            let regions = ctx.op(op).regions.clone();
             for region in regions {
                 changes += self.visit_region(ctx, region, module_first_block);
             }

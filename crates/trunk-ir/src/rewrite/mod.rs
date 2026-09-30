@@ -56,17 +56,19 @@ impl Module {
         ctx.op(self.0).regions.first().copied()
     }
 
-    /// Get all top-level operations in the module's first block.
-    pub fn ops(self, ctx: &IrContext) -> Vec<OpRef> {
-        let region = match self.body(ctx) {
-            Some(r) => r,
-            None => return vec![],
-        };
-        let blocks = &ctx.region(region).blocks;
-        if blocks.is_empty() {
-            return vec![];
-        }
-        ctx.block(blocks[0]).ops.to_vec()
+    /// The top-level operations in the module's first block.
+    ///
+    /// Borrows the block's operation list. A caller that mutates the module
+    /// while walking its operations takes [`Self::ops_snapshot`] instead.
+    pub fn ops(self, ctx: &IrContext) -> &[OpRef] {
+        self.first_block(ctx)
+            .map_or(&[], |block| ctx.block(block).ops.as_slice())
+    }
+
+    /// A snapshot of the top-level operations, for walks that mutate the
+    /// module.
+    pub fn ops_snapshot(self, ctx: &IrContext) -> super::context::OpList {
+        self.ops(ctx).into()
     }
 
     /// Get the module name (from `sym_name` attribute).
