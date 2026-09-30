@@ -545,14 +545,11 @@ fn f(x: Float) -> Nat {
         _ -> 0
     }
 }
-// The grammar parses a rune pattern only as a case's first arm.
 fn r(x: Rune) -> Nat {
     case x {
         ?a -> 1
-        _ -> case x {
-            ?\n -> 2
-            _ -> 0
-        }
+        ?\n -> 2
+        _ -> 0
     }
 }
 fn n(x: Nil) -> Nat {
@@ -586,6 +583,42 @@ fn main() {
 }
 "#,
         "1\n1\n2\n0\n1\n2\n0\n1\n2\n0\n1\n2\n0\n7\n1\n0",
+    );
+}
+
+/// A lone `..` matches a constructor whatever its fields hold, and a lone
+/// list rest may take a trailing comma.
+#[test]
+fn test_native_lone_rest_patterns() {
+    assert_native_output(
+        "lone_rest_patterns.trb",
+        r#"
+enum Shape {
+    Circle { radius: Nat },
+    Rect { width: Nat, tall: Bool },
+}
+
+fn kind(shape: Shape) -> Nat {
+    case shape {
+        Circle { .. } -> 1
+        Rect { .., } -> 2
+    }
+}
+
+fn count(xs: List(Nat)) -> Nat {
+    case xs {
+        [] -> 0
+        [..rest,] -> 1
+    }
+}
+
+fn main() {
+    __tribute_print_nat(kind(Circle { radius: 3 }))
+    __tribute_print_nat(kind(Rect { width: 1, tall: True }))
+    __tribute_print_nat(count([4, 5]))
+}
+"#,
+        "1\n2\n1",
     );
 }
 
