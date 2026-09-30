@@ -7,7 +7,7 @@ use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute::Diagnostic;
 use tribute::pipeline::{
-    NativePipelineStage, OptimizationOptions, compile_with_diagnostics, dump_ir,
+    NativePipelineStage, OptimizationOptions, compile_ast, compile_with_diagnostics, dump_ir,
     dump_native_ir_at_stage,
 };
 use tribute_core::calling_convention::CPS_CONTINUATION_FRAME_NAME_PREFIX;
@@ -32,8 +32,8 @@ fn shared_pipeline_ir(db: &dyn salsa::Database, name: &str, code: &str) -> Strin
     let result = compile_with_diagnostics(db, source);
     assert_no_diagnostics("shared pipeline", &result.diagnostics);
 
-    let (ctx, module) = result
-        .module
+    let (ctx, module) = compile_ast(db, source)
+        .expect("shared pipeline should succeed")
         .expect("shared pipeline should produce a module when diagnostics are empty");
     print_module(&ctx, module.op())
 }

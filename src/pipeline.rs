@@ -741,10 +741,10 @@ pub fn compile_frontend_for_shared_route(
     Some(merge_and_lower_to_ir(db, &typed, source))
 }
 
-/// Result of the full compilation pipeline.
+/// Result of diagnostic compilation through the shared pipeline.
 pub struct CompilationResult {
-    /// The compiled module as arena IR (None if compilation failed).
-    pub module: Option<(IrContext, Module)>,
+    /// Whether the shared pipeline produced a module.
+    pub produced_module: bool,
     /// Diagnostics collected during compilation.
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -1728,13 +1728,20 @@ fn report_unresolved_methods<'db>(
 ///
 /// This is a `#[salsa::tracked]` function so that diagnostics accumulated
 /// during compilation can be collected via `compile_ast_tracked::accumulated`.
+/// Returns whether the shared pipeline produced a module.
 #[salsa::tracked(returns(copy))]
-fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) {
+fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) -> bool {
     // Run the shared pipeline; diagnostics are accumulated as side effects
     match run_shared_pipeline(db, source) {
-        Ok(Some((ctx, m))) => validate_and_report_arity(db, &ctx, m),
-        Ok(None) => {}
-        Err(error) => report_pass_error(db, &error),
+        Ok(Some((ctx, m))) => {
+            validate_and_report_arity(db, &ctx, m);
+            true
+        }
+        Ok(None) => false,
+        Err(error) => {
+            report_pass_error(db, &error);
+            false
+        }
     }
 }
 
@@ -1756,7 +1763,7 @@ pub fn compile_ast(
 /// Diagnostics are collected using Salsa accumulators from all compilation stages.
 pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> CompilationResult {
     // Run the tracked function to collect diagnostics
-    compile_ast_tracked(db, source);
+    let produced_module = compile_ast_tracked(db, source);
 
     // Collect all accumulated diagnostics from the compilation
     let mut diagnostics: Vec<Diagnostic> =
@@ -1766,11 +1773,8 @@ pub fn compile_with_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> 
             .collect();
     diagnostics.sort_by(compare_diagnostics);
 
-    // Run the pipeline again for the actual result (Salsa memoizes, so this is cheap)
-    let module = run_shared_pipeline(db, source).ok().flatten();
-
     CompilationResult {
-        module,
+        produced_module,
         diagnostics,
     }
 }
