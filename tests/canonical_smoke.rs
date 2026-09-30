@@ -17,7 +17,7 @@ fn canonical_invalid_source_has_stable_unresolved_name_diagnostic(db: &salsa::Da
     let result = compile_with_diagnostics(db, source);
 
     assert!(
-        result.module.is_none(),
+        !result.produced_module,
         "the canonical invalid source must not produce a module"
     );
 
