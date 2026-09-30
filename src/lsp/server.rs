@@ -712,7 +712,7 @@ impl LspServer {
         let offset = offset_from_position(&rope, position.line, position.character)?;
 
         // Use tree-sitter to find the enclosing call expression
-        let tree = source_cst.tree(&self.db).as_ref()?;
+        let tree = source_cst.tree(&self.db)?;
         let call_info = find_enclosing_call(tree, &rope, offset)?;
 
         tracing::debug!(
@@ -857,7 +857,7 @@ impl LspServer {
                 rope.remove(start_char..old_end_char);
                 rope.insert(start_char, &change.text);
 
-                let current_tree = doc.tree(&self.db).clone();
+                let current_tree = doc.tree(&self.db).cloned();
                 let updated_tree = if let Some(mut tree) = current_tree {
                     tree.edit(&InputEdit {
                         start_byte,

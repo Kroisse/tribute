@@ -112,7 +112,7 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     let text = source.text(db);
     let sh = source_hash(source.uri(db).as_str());
     let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh);
-    let module = lower_cst_to_ast_internal(&mut ctx, &cst, module_path);
+    let module = lower_cst_to_ast_internal(&mut ctx, cst, module_path);
     let span_map = ctx.finish().finish();
     Some(ParsedAst::new(db, module, span_map))
 }

@@ -9,6 +9,7 @@ use trunk_ir::Symbol;
 pub struct SourceCst {
     pub uri: Uri<String>,
     pub text: Rope,
+    #[returns(as_ref)]
     pub tree: Option<Tree>,
 }
 

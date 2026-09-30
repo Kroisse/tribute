@@ -83,9 +83,9 @@ impl Hash for ParsedCst {
 // =============================================================================
 
 /// Wrap a pre-parsed CST stored in the database.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 pub fn parse_cst(db: &dyn salsa::Database, source: SourceCst) -> Option<ParsedCst> {
-    let tree = source.tree(db).clone()?;
+    let tree = source.tree(db)?.clone();
     Some(ParsedCst::new(tree))
 }
 
