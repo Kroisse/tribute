@@ -152,7 +152,7 @@ fn lower_constructor_pattern(
             .map(|fields| lower_constructor_fields(ctx, fields))
             .unwrap_or_default();
         return PatternKind::Record {
-            type_name: Some(ctor),
+            type_name: ctor,
             fields,
             rest,
         };
@@ -634,7 +634,7 @@ mod tests {
         "#;
         let pattern = get_case_pattern(source, 0);
         let PatternKind::Record {
-            type_name: Some(ctor),
+            type_name: ctor,
             fields,
             rest,
         } = pattern

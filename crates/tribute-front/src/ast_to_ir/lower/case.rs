@@ -168,8 +168,7 @@ fn logical_constructor_pattern<'p, 'db>(
     let ctor = match &*pattern.kind {
         PatternKind::Variant { ctor, .. }
         | PatternKind::Record {
-            type_name: Some(ctor),
-            ..
+            type_name: ctor, ..
         } => ctor,
         _ => panic!("unsupported logical constructor pattern at source-logical boundary"),
     };

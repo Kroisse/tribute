@@ -808,7 +808,7 @@ impl<'db> Resolver<'db> {
                 fields,
                 rest,
             } => {
-                let resolved_type = type_name.map(|t| self.resolve_name(&t));
+                let resolved_type = self.resolve_name(&type_name);
                 let fields = fields
                     .into_iter()
                     .map(|f| {
