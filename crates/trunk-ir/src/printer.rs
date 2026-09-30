@@ -943,7 +943,8 @@ fn print_module_op(
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write!(f, "{key} = ")?;
+            write_attribute_key(f, *key)?;
+            f.write_str(" = ")?;
             expanded.write_attribute(f, val)?;
         }
         f.write_char('}')?;
