@@ -25,8 +25,9 @@ pub enum WasmSupport {
 
 const NEXT_TAG: WasmSupport =
     WasmSupport::Unsupported("handlers need `__tribute_next_tag`, unbound on Wasm (#1185)");
-const READ_LINE: WasmSupport =
-    WasmSupport::Unsupported("Wasm I/O does not lower `read_line` (new-plans/capabilities.md)");
+const READ_LINE: WasmSupport = WasmSupport::Unsupported(
+    "`read_line` does not lower on Wasm (#1215), and its Throw handler needs `__tribute_next_tag` (#1185)",
+);
 
 pub const PROGRAMS: &[Program] = &[
     Program {
