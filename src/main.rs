@@ -6,7 +6,7 @@ mod lsp;
 
 use clap::Parser;
 use cli::{Cli, Command};
-use diagnostics::{print_diagnostic, report_diagnostics};
+use diagnostics::{print_diagnostic, print_diagnostics, report_diagnostics};
 use ropey::Rope;
 use salsa::Database;
 use std::path::{Path, PathBuf};
@@ -15,6 +15,7 @@ use tribute::database::parse_with_thread_local;
 use tribute::link::link_native_binary;
 use tribute::pipeline::{
     CompilationConfig, compile_to_native_binary, compile_to_wasm_binary, compile_with_diagnostics,
+    wasm_binary_diagnostics,
 };
 use tribute::{SourceCst, TributeDatabaseImpl};
 use tribute_core::diagnostic::{Diagnostic, DiagnosticSeverity};
@@ -141,6 +142,9 @@ fn compile_file(
                     tribute::pipeline::OptimizationOptions::production(),
                 );
                 if let Some(object_bytes) = compile_to_native_binary(db, source, config) {
+                    let mut diags =
+                        compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
+                    print_diagnostics(db, source, &input_path.display().to_string(), &mut diags);
                     let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
                     if let Err(e) = link_native_binary(&object_bytes, &output, sysroot) {
                         eprintln!("Linking failed: {e}");
@@ -163,6 +167,13 @@ fn compile_file(
 
                 match compile_to_wasm_binary(db, source) {
                     Ok(wasm_bytes) => {
+                        let mut diags = wasm_binary_diagnostics(db, source);
+                        print_diagnostics(
+                            db,
+                            source,
+                            &input_path.display().to_string(),
+                            &mut diags,
+                        );
                         let output =
                             output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
 
@@ -191,16 +202,19 @@ fn compile_file(
                 println!("Compiling {}...", input_path.display());
                 let result = compile_with_diagnostics(db, source);
 
-                if result.diagnostics.is_empty() {
-                    println!("✓ Compiled successfully");
-                } else {
-                    let file_path = input_path.display().to_string();
-                    let source_text = source.text(db);
-                    for diag in &result.diagnostics {
-                        print_diagnostic(diag, source_text, &file_path);
-                    }
+                let file_path = input_path.display().to_string();
+                let source_text = source.text(db);
+                for diag in &result.diagnostics {
+                    print_diagnostic(diag, source_text, &file_path);
+                }
+                if result
+                    .diagnostics
+                    .iter()
+                    .any(|diag| diag.inner.severity == DiagnosticSeverity::Error)
+                {
                     std::process::exit(1);
                 }
+                println!("✓ Compiled successfully");
             }
             _ => {
                 eprintln!(
