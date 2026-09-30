@@ -14,7 +14,6 @@
 //!
 //! The following features need additional lowering passes:
 //! - `tribute.block` → block expressions in case branches
-//! - String literals in pattern matching (case expressions)
 
 use std::io::Write as _;
 use std::process::Command;
@@ -297,6 +296,81 @@ fn main() ->{std::io::Io} Nil {
         String::from_utf8_lossy(&output.stderr)
     );
     assert_eq!(output.stdout, b"ok\n");
+}
+
+/// Literal patterns of every kind match on Wasm as they do natively.
+#[salsa_test]
+fn test_execute_literal_patterns(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "literal_patterns.trb",
+        r#"
+fn s(x: String) -> Nat {
+    case x {
+        "abc" -> 1
+        "" -> 2
+        _ -> 0
+    }
+}
+fn by(x: Bytes) -> Nat {
+    case x {
+        b"ab" -> 1
+        _ -> 0
+    }
+}
+fn f(x: Float) -> Nat {
+    case x {
+        1.5 -> 1
+        0.0 -> 2
+        _ -> 0
+    }
+}
+fn r(x: Rune) -> Nat {
+    case x {
+        ?a -> 1
+        _ -> 0
+    }
+}
+fn n(x: Nil) -> Nat {
+    case x {
+        Nil -> 1
+    }
+}
+fn check(ok: Bool) ->{std::io::Io} Nil {
+    case ok {
+        True -> std::io::print_line("ok")
+        False -> std::io::print_line("bad")
+    }
+}
+fn main() ->{std::io::Io} Nil {
+    check(s("ab" <> "c") == 1)
+    check(s("") == 2)
+    check(s("x") == 0)
+    check(by(b"a" <> b"b") == 1)
+    check(by(b"abc") == 0)
+    check(f(1.5) == 1)
+    check(f(-0.0) == 2)
+    check(f(0.0 / 0.0) == 0)
+    check(r(?a) == 1)
+    check(r(?b) == 0)
+    check(n(Nil) == 1)
+}
+"#,
+    );
+    let binary = expect_wasm_compilation_success(db, source, "Should compile literal patterns");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary).expect("write Wasm module");
+    let output = Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok\n".repeat(11));
 }
 
 #[salsa_test]

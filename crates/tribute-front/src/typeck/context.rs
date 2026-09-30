@@ -462,9 +462,9 @@ impl<'db> ModuleTypeEnv<'db> {
         self.well_known_types
     }
 
-    /// Record the canonical `String` type selected from the prelude.
-    pub(crate) fn set_prelude_string_type(&mut self, string: Option<super::WellKnownType<'db>>) {
-        self.well_known_types.string = string;
+    /// Record the semantic identities selected from the prelude.
+    pub(crate) fn set_prelude_well_known_types(&mut self, types: super::WellKnownTypes<'db>) {
+        self.well_known_types = types;
     }
 
     // =========================================================================

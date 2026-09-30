@@ -224,7 +224,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
             PatternKind::Literal(LiteralPattern::Bool(value)) => {
                 Pat::Ctor(Ctor::Bool(*value), Vec::new())
             }
-            PatternKind::Literal(LiteralPattern::Unit) => Pat::Ctor(Ctor::Unit, Vec::new()),
+            PatternKind::Literal(LiteralPattern::Nil) => Pat::Ctor(Ctor::Nil, Vec::new()),
             PatternKind::Literal(literal) => Pat::Ctor(Ctor::Literal(literal.clone()), Vec::new()),
             PatternKind::Tuple(elements) => Pat::Ctor(
                 Ctor::Tuple(elements.len()),

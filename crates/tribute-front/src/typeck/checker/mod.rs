@@ -148,6 +148,23 @@ impl<'db> TypeChecker<'db> {
         })
     }
 
+    /// The semantic identities the prelude supplies to later phases. Literal
+    /// pattern equalities are the `==` methods of their types, resolved the
+    /// same way as an `==` expression on such a receiver.
+    fn prelude_well_known_types(&self, module: &Module<ResolvedRef<'db>>) -> WellKnownTypes<'db> {
+        let string = self.prelude_well_known_type(module, StringType);
+        let equality = |ty: Type<'db>| {
+            self.env
+                .lookup_method(Symbol::new("=="), ty)
+                .map(|entry| entry.func_id)
+        };
+        WellKnownTypes {
+            string,
+            string_equality: string.and_then(|string| equality(string.ty)),
+            bytes_equality: equality(self.env.bytes_type()),
+        }
+    }
+
     /// Create a new type checker with the given span map.
     pub fn new(db: &'db dyn salsa::Database, span_map: SpanMap) -> Self {
         Self {
@@ -221,8 +238,8 @@ impl<'db> TypeChecker<'db> {
         module: Module<ResolvedRef<'db>>,
     ) -> ModuleCheckResult<'db> {
         self.collect_declarations(&module);
-        let string_type = self.prelude_well_known_type(&module, StringType);
-        self.env.set_prelude_string_type(string_type);
+        let well_known_types = self.prelude_well_known_types(&module);
+        self.env.set_prelude_well_known_types(well_known_types);
         self.check_collected_module(module)
     }
 
@@ -359,8 +376,8 @@ impl<'db> TypeChecker<'db> {
         // Phase 1: Collect type definitions and function signatures
         // Note: module_path starts empty - prelude functions use simple names internally.
         self.collect_declarations(&module);
-        let string_type = self.prelude_well_known_type(&module, StringType);
-        self.env.set_prelude_string_type(string_type);
+        let well_known_types = self.prelude_well_known_types(&module);
+        self.env.set_prelude_well_known_types(well_known_types);
 
         // Phase 2: Type check all declarations with per-function inference
         let _decls: Vec<Decl<TypedRef<'db>>> = module
@@ -381,9 +398,6 @@ impl<'db> TypeChecker<'db> {
         let method_index = self.env.export_method_index();
         let ability_conventions = self.env.export_ability_conventions();
         let ability_definitions = self.env.export_ability_defs_for_prelude();
-        let well_known_types = WellKnownTypes {
-            string: string_type,
-        };
 
         PreludeExports::new(
             self.db(),

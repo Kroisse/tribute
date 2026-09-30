@@ -3792,6 +3792,40 @@ mod Nested {
         }
     }
 
+    /// Literal patterns compare through the prelude's `==` for their type,
+    /// resolved by receiver type, even beside a user `String` lookalike with
+    /// its own `==`.
+    #[salsa_test]
+    fn literal_pattern_equalities_are_the_prelude_methods(db: &salsa::DatabaseImpl) {
+        let source = source_from_str(
+            "lookalike_equality.trb",
+            r#"
+mod shadow {
+    pub enum String { Leaf(Bytes) }
+
+    pub mod String {
+        pub fn (==)(left: shadow::String, right: shadow::String) -> Bool { True }
+    }
+}
+
+fn main() { }
+"#,
+        );
+        let typed = parse_and_lower_ast(db, source).expect("frontend output");
+        let well_known = typed.well_known_types(db);
+        let qualified = |id: Option<tribute_front::ast::FuncDefId<'_>>| {
+            id.map(|id| id.qualified(db).to_string())
+        };
+        assert_eq!(
+            qualified(well_known.string_equality).as_deref(),
+            Some("String::==")
+        );
+        assert_eq!(
+            qualified(well_known.bytes_equality).as_deref(),
+            Some("Bytes::==")
+        );
+    }
+
     #[salsa_test]
     fn wasm_lowering_carries_only_preserved_or_pending_language_metadata(db: &salsa::DatabaseImpl) {
         use tribute_passes::abi_boundary::{

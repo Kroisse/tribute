@@ -135,10 +135,14 @@ pub enum LiteralPattern {
     Float(FloatBits),
     /// String literal: `"hello"`
     String(String),
-    /// Boolean literal: `true`, `false`
+    /// Bytes literal: `b"hello"`
+    Bytes(Vec<u8>),
+    /// Rune literal: `?a`
+    Rune(char),
+    /// Boolean literal: `True`, `False`
     Bool(bool),
-    /// Unit literal: `()`
-    Unit,
+    /// The `Nil` value, the only value of type `Nil`
+    Nil,
 }
 
 // ============================================================================

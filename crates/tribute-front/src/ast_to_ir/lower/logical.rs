@@ -281,7 +281,11 @@ pub(super) fn lower_module<'db>(
         smallvec::smallvec![module_name],
         node_types,
     )
-    .with_compiler_intrinsics(compiler_intrinsics);
+    .with_compiler_intrinsics(compiler_intrinsics)
+    .with_literal_equalities(crate::ast_to_ir::context::LiteralEqualities {
+        string: well_known_types.string_equality.map(|id| id.qualified(db)),
+        bytes: well_known_types.bytes_equality.map(|id| id.qualified(db)),
+    });
     let module_block = ir.create_block(BlockData {
         location,
         args: vec![],
@@ -1877,6 +1881,34 @@ fn bind_pattern<'db>(
     }
 }
 
+/// Call the named source function, casting each argument to its parameter
+/// type. Returns the call's result at the callee's logical result type.
+pub(super) fn emit_named_call(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    name: Symbol,
+    values: Vec<ValueRef>,
+) -> ValueRef {
+    let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+        .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
+    ensure_prelude_declaration(builder, location, name, &signature);
+    if values.len() != signature.param_types.len() {
+        panic!("typechecked call arity disagrees with logical signature for {name}");
+    }
+    let values: Vec<_> = values
+        .into_iter()
+        .zip(signature.param_types.iter().copied())
+        .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
+        .collect();
+    let call = op(builder.ir, builder.block, location, "call", |builder| {
+        builder
+            .operands(values)
+            .result(signature.return_type)
+            .attr("callee", Attribute::Symbol(name))
+    });
+    result(builder.ir, call)
+}
+
 fn lower_call<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
@@ -1997,24 +2029,7 @@ fn lower_call<'db>(
             }
             ResolvedRef::Function { id } => {
                 let name = id.qualified(builder.ctx.db);
-                let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
-                    .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
-                ensure_prelude_declaration(builder, location, name, &signature);
-                if values.len() != signature.param_types.len() {
-                    panic!("typechecked call arity disagrees with logical signature for {name}");
-                }
-                values = values
-                    .into_iter()
-                    .zip(signature.param_types.iter().copied())
-                    .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
-                    .collect();
-                let call = op(builder.ir, builder.block, location, "call", |builder| {
-                    builder
-                        .operands(values)
-                        .result(signature.return_type)
-                        .attr("callee", Attribute::Symbol(name))
-                });
-                let value = result(builder.ir, call);
+                let value = emit_named_call(builder, location, name, values);
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
             ResolvedRef::Local { id, .. } => {

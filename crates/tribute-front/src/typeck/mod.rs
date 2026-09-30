@@ -157,6 +157,10 @@ pub struct WellKnownType<'db> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct WellKnownTypes<'db> {
     pub string: Option<WellKnownType<'db>>,
+    /// The `==` that `String` literal patterns compare with.
+    pub string_equality: Option<FuncDefId<'db>>,
+    /// The `==` that `Bytes` literal patterns compare with.
+    pub bytes_equality: Option<FuncDefId<'db>>,
 }
 
 /// A typed key for extracting a semantic type from the prelude.
@@ -176,7 +180,11 @@ impl WellKnownTypeKey for StringType {
 
 impl WellKnownTypes<'_> {
     pub const fn empty() -> Self {
-        Self { string: None }
+        Self {
+            string: None,
+            string_equality: None,
+            bytes_equality: None,
+        }
     }
 }
 

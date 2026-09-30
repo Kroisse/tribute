@@ -45,13 +45,13 @@ pub(super) enum Pat {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(super) enum Ctor {
     Bool(bool),
-    Unit,
+    Nil,
     Tuple(usize),
     Variant {
         family: FamilyId,
         index: usize,
     },
-    /// A number or string literal; its domain is never covered.
+    /// A number, string, bytes, or rune literal; its domain is never covered.
     Literal(LiteralPattern),
     /// Lists of exactly this length.
     ListLen(usize),
@@ -82,7 +82,7 @@ enum Column {
     /// Only wildcards.
     Wild,
     Bool,
-    Unit,
+    Nil,
     Tuple(usize),
     Family(FamilyId),
     Literal,
@@ -213,7 +213,7 @@ impl<'a> Analyzer<'a> {
             let kind = match head {
                 Pat::Wild => continue,
                 Pat::Ctor(Ctor::Bool(_), _) => Column::Bool,
-                Pat::Ctor(Ctor::Unit, _) => Column::Unit,
+                Pat::Ctor(Ctor::Nil, _) => Column::Nil,
                 Pat::Ctor(Ctor::Tuple(n), _) => Column::Tuple(*n),
                 Pat::Ctor(Ctor::Variant { family, .. }, _) => Column::Family(*family),
                 Pat::Ctor(Ctor::Literal(_), _) => Column::Literal,
@@ -251,7 +251,7 @@ impl<'a> Analyzer<'a> {
         Some(match column {
             Column::Wild | Column::Literal => return None,
             Column::Bool => vec![Ctor::Bool(true), Ctor::Bool(false)],
-            Column::Unit => vec![Ctor::Unit],
+            Column::Nil => vec![Ctor::Nil],
             Column::Tuple(n) => vec![Ctor::Tuple(n)],
             Column::Family(family) => (0..self.families[family.0].variants.len())
                 .map(|index| Ctor::Variant { family, index })
@@ -265,7 +265,7 @@ impl<'a> Analyzer<'a> {
 
     fn arity(&self, ctor: &Ctor) -> usize {
         match ctor {
-            Ctor::Bool(_) | Ctor::Unit | Ctor::Literal(_) => 0,
+            Ctor::Bool(_) | Ctor::Nil | Ctor::Literal(_) => 0,
             Ctor::Tuple(n) | Ctor::ListLen(n) | Ctor::ListAtLeast(n) => *n,
             Ctor::Variant { family, index } => self.families[family.0].variants[*index].arity,
         }
@@ -348,7 +348,7 @@ impl fmt::Display for Rendered<'_> {
         match ctor {
             Ctor::Bool(true) => f.write_str("True"),
             Ctor::Bool(false) => f.write_str("False"),
-            Ctor::Unit => f.write_str("()"),
+            Ctor::Nil => f.write_str("Nil"),
             Ctor::Tuple(_) => write!(f, "#({})", fields()),
             Ctor::Variant { family, index } => {
                 let name = self.families[family.0].variants[*index].name;
@@ -506,7 +506,7 @@ mod tests {
             Vec::new(),
         );
         assert_eq!(missing(&[], vec![string]).unwrap(), ["_"]);
-        let unit = Pat::Ctor(Ctor::Unit, Vec::new());
+        let unit = Pat::Ctor(Ctor::Nil, Vec::new());
         assert!(missing(&[], vec![unit]).unwrap().is_empty());
     }
 

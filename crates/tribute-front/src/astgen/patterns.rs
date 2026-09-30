@@ -6,6 +6,7 @@ use trunk_ir::Symbol;
 use crate::ast::{FieldPattern, FloatBits, LiteralPattern, Pattern, PatternKind, UnresolvedName};
 
 use super::context::AstLoweringCtx;
+use super::expressions::parse_rune_literal;
 use super::helpers::{is_comment, report_in_node};
 use super::numeric::{NumericValue, parse_numeric_literal};
 use super::text_literal::lower_text_literal;
@@ -50,14 +51,27 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
                 None => PatternKind::Error,
             }
         }
-        "bool_literal" => {
-            let text = ctx.node_text(&node);
-            PatternKind::Literal(LiteralPattern::Bool(&*text == "true"))
+        "bytes_string" | "raw_bytes" | "raw_interpolated_bytes" | "multiline_bytes" => {
+            match lower_text_literal(ctx, &node) {
+                Some(bytes) => PatternKind::Literal(LiteralPattern::Bytes(bytes)),
+                None => PatternKind::Error,
+            }
         }
-        // Boolean keywords in patterns: True, False
+        "rune" => {
+            let text = ctx.node_text_owned(&node);
+            match parse_rune_literal(&text) {
+                Ok(Some(c)) => PatternKind::Literal(LiteralPattern::Rune(c)),
+                Ok(None) => PatternKind::Error,
+                Err(error) => {
+                    report_in_node(ctx, &node, error.range.clone(), error.to_string());
+                    PatternKind::Error
+                }
+            }
+        }
+        // Keyword literals in patterns: True, False, Nil
         "keyword_true" => PatternKind::Literal(LiteralPattern::Bool(true)),
         "keyword_false" => PatternKind::Literal(LiteralPattern::Bool(false)),
-        "unit_literal" => PatternKind::Literal(LiteralPattern::Unit),
+        "keyword_nil" => PatternKind::Literal(LiteralPattern::Nil),
 
         // === Constructor/Variant pattern ===
         "constructor_pattern" => lower_constructor_pattern(ctx, node),
@@ -82,11 +96,18 @@ pub fn lower_pattern(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Pattern<Unreso
             }
         }
 
-        _ => {
-            // Try to find a meaningful child
-            if let Some(child) = node.named_child(0) {
-                return lower_pattern(ctx, child);
-            }
+        // Grammar choice nodes wrap the concrete pattern.
+        "pattern" | "simple_pattern" | "literal_pattern" => match node.named_child(0) {
+            Some(child) => return lower_pattern(ctx, child),
+            None => PatternKind::Error,
+        },
+
+        // The parser has already reported syntax errors.
+        _ if node.is_error() || node.is_missing() => PatternKind::Error,
+
+        kind => {
+            let len = node.end_byte() - node.start_byte();
+            report_in_node(ctx, &node, 0..len, format!("unsupported pattern `{kind}`"));
             PatternKind::Error
         }
     };
@@ -411,6 +432,54 @@ mod tests {
             panic!("Expected string literal pattern, got {:?}", pattern);
         };
         assert_eq!(s, "hello");
+    }
+
+    #[test]
+    fn test_bytes_literal_pattern() {
+        let source = r#"
+            fn main() {
+                case x {
+                    b"a\x00" -> 1
+                    _ -> 0
+                }
+            }
+        "#;
+        let pattern = get_case_pattern(source, 0);
+        let PatternKind::Literal(LiteralPattern::Bytes(bytes)) = pattern else {
+            panic!("Expected bytes literal pattern, got {:?}", pattern);
+        };
+        assert_eq!(bytes, b"a\x00");
+    }
+
+    #[test]
+    fn test_rune_literal_pattern() {
+        let source = r#"
+            fn main() {
+                case x {
+                    ?\n -> 1
+                    _ -> 0
+                }
+            }
+        "#;
+        let pattern = get_case_pattern(source, 0);
+        let PatternKind::Literal(LiteralPattern::Rune('\n')) = pattern else {
+            panic!("Expected rune literal pattern, got {:?}", pattern);
+        };
+    }
+
+    #[test]
+    fn test_keyword_nil_in_pattern_becomes_nil_literal() {
+        let source = r#"
+            fn main() {
+                case x {
+                    Nil -> 1
+                }
+            }
+        "#;
+        let pattern = get_case_pattern(source, 0);
+        let PatternKind::Literal(LiteralPattern::Nil) = pattern else {
+            panic!("Expected Nil literal pattern, got {:?}", pattern);
+        };
     }
 
     // Note: In Tribute, `True` and `False` (capitalized) are boolean literals,

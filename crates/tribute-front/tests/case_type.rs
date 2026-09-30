@@ -773,3 +773,30 @@ fn unverified_case_is_an_error(db: &salsa::DatabaseImpl) {
     );
     assert_eq!(exhaustive, 0);
 }
+
+/// `Nil` patterns are the single constructor of `Nil`, and missing patterns
+/// name it.
+#[salsa_test]
+fn nil_patterns_cover_nil(db: &salsa::DatabaseImpl) {
+    let (errors, exhaustive) = errors_and_exhaustive(
+        db,
+        r#"
+fn pick(pair: #(Nil, Bool)) -> Nat {
+    case pair {
+        #(Nil, True) -> 1
+    }
+}
+
+fn only(value: Nil) -> Nat {
+    case value {
+        Nil -> 1
+    }
+}
+"#,
+    );
+    assert_eq!(
+        errors,
+        ["non-exhaustive case expression: missing patterns: #(Nil, False)"]
+    );
+    assert_eq!(exhaustive, 1);
+}
