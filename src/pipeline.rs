@@ -217,7 +217,7 @@ pub enum NativePipelineStage {
 }
 
 // AST-based pipeline imports
-use tribute_front::ast::visit::{Visit, walk_expr};
+use tribute_front::ast::visit::{Visit, walk_expr, walk_module};
 use tribute_front::ast::{Expr, ExprKind, SpanMap, TypedRef};
 use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
@@ -1619,7 +1619,7 @@ fn report_unresolved_methods<'db>(
             walk_expr(self, expr);
         }
     }
-    Report { db, span_map }.visit_module(module);
+    walk_module(&mut Report { db, span_map }, module);
 }
 
 /// Run the shared pipeline for diagnostic collection only.

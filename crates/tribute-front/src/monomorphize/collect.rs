@@ -1,7 +1,7 @@
 use super::nominal_index::NominalIndex;
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::visit::{RefSite, Visit};
+use crate::ast::visit::{RefSite, Visit, walk_module};
 use crate::ast::{
     FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
 };
@@ -18,7 +18,7 @@ pub fn collect_instantiations<'db>(
     function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
 ) -> HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let mut collector = InstantiationCollector::new(db, function_types, function_instances);
-    collector.visit_module(module);
+    walk_module(&mut collector, module);
     collector.instantiations
 }
 
@@ -288,7 +288,7 @@ pub(super) fn collect_type_instantiations_with_index<'db>(
         index,
         instantiations: &mut result,
     };
-    visitor.visit_module(module);
+    walk_module(&mut visitor, module);
     for ty in extra_types {
         collect_from_type(db, ty, index, &mut result);
     }

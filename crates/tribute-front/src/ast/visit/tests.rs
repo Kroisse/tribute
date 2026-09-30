@@ -246,7 +246,7 @@ impl<'ast> Visit<'ast, u32> for Record {
 
 fn record(module: &Module<u32>) -> Record {
     let mut record = Record::default();
-    record.visit_module(module);
+    walk_module(&mut record, module);
     record
 }
 
@@ -287,7 +287,7 @@ impl VisitMut<u32> for Shift {
 #[test]
 fn rewrites_every_phase_value_and_node_identity_in_place() {
     let mut module = sample();
-    Shift.visit_module_mut(&mut module);
+    walk_module_mut(&mut Shift, &mut module);
     let original = record(&sample());
     let shifted = record(&module);
     assert_eq!(
@@ -302,4 +302,32 @@ fn rewrites_every_phase_value_and_node_identity_in_place() {
         shifted.ids,
         original.ids.iter().map(|id| id + 100).collect::<Vec<_>>()
     );
+}
+
+/// Records the inline modules enclosing each visited function.
+#[derive(Default)]
+struct Scopes {
+    path: Vec<Symbol>,
+    functions: Vec<Vec<Symbol>>,
+}
+
+impl<'ast> Visit<'ast, u32> for Scopes {
+    fn visit_module_decl(&mut self, module: &'ast ModuleDecl<u32>) {
+        self.path.push(module.name);
+        walk_module_decl(self, module);
+        self.path.pop();
+    }
+
+    fn visit_func_decl(&mut self, func: &'ast FuncDecl<u32>) {
+        self.functions.push(self.path.clone());
+        walk_func_decl(self, func);
+    }
+}
+
+#[test]
+fn inline_modules_enclose_their_declarations() {
+    let mut scopes = Scopes::default();
+    walk_module(&mut scopes, &sample());
+    assert_eq!(scopes.functions, [vec![Symbol::new("inner")]]);
+    assert!(scopes.path.is_empty());
 }

@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use trunk_ir::Span;
 
 use tribute_front::SourceCst;
-use tribute_front::ast::visit::{RefSite, Visit, walk_expr};
+use tribute_front::ast::visit::{RefSite, Visit, walk_expr, walk_module};
 use tribute_front::ast::{
     Expr, ExprKind, Module, NodeId, SpanMap, Type, TypeKind, TypedRef, UniVarSource,
 };
@@ -165,7 +165,7 @@ impl<'db> AstTypeIndex<'db> {
         span_map: &SpanMap,
     ) -> Self {
         let mut collector = TypeCollector::new(db, span_map);
-        collector.visit_module(module);
+        walk_module(&mut collector, module);
 
         let mut entries = collector.entries;
 

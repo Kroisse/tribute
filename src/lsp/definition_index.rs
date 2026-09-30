@@ -9,7 +9,7 @@ use trunk_ir::{Span, Symbol};
 
 use tribute_front::SourceCst;
 use tribute_front::ast::visit::{
-    RefSite, Visit, walk_decl, walk_expr, walk_func_decl, walk_pattern,
+    RefSite, Visit, walk_decl, walk_expr, walk_func_decl, walk_module, walk_pattern,
 };
 use tribute_front::ast::{
     AbilityDecl, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FuncDecl, LocalId, Module, NodeId,
@@ -156,7 +156,7 @@ impl<'db> AstDefinitionIndex<'db> {
         span_map: &SpanMap,
     ) -> Self {
         let mut collector = DefinitionCollector::new(db, span_map);
-        collector.visit_module(module);
+        walk_module(&mut collector, module);
 
         let mut definitions = collector.definitions;
         let mut references = collector.references;

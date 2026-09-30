@@ -39,12 +39,12 @@ pub enum RefSite {
 
 /// A traversal that reads the tree.
 pub trait Visit<'ast, V: 'ast> {
-    fn visit_module(&mut self, module: &'ast Module<V>) {
-        walk_module(self, module);
-    }
-
     fn visit_decl(&mut self, decl: &'ast Decl<V>) {
         walk_decl(self, decl);
+    }
+
+    fn visit_module_decl(&mut self, module: &'ast ModuleDecl<V>) {
+        walk_module_decl(self, module);
     }
 
     fn visit_func_decl(&mut self, func: &'ast FuncDecl<V>) {
@@ -82,6 +82,8 @@ pub trait Visit<'ast, V: 'ast> {
     }
 }
 
+/// Visit every declaration of a source module. A source module has no hook of
+/// its own; this is the entry point for walking one.
 pub fn walk_module<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
     visitor: &mut T,
     module: &'ast Module<V>,
@@ -94,16 +96,21 @@ pub fn walk_module<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
 pub fn walk_decl<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(visitor: &mut T, decl: &'ast Decl<V>) {
     match decl {
         Decl::Function(func) => visitor.visit_func_decl(func),
-        Decl::Module(ModuleDecl { body, .. }) => {
-            for decl in body.iter().flatten() {
-                visitor.visit_decl(decl);
-            }
-        }
+        Decl::Module(module) => visitor.visit_module_decl(module),
         Decl::ExternFunction(_)
         | Decl::Struct(_)
         | Decl::Enum(_)
         | Decl::Ability(_)
         | Decl::Use(_) => {}
+    }
+}
+
+pub fn walk_module_decl<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
+    visitor: &mut T,
+    module: &'ast ModuleDecl<V>,
+) {
+    for decl in module.body.iter().flatten() {
+        visitor.visit_decl(decl);
     }
 }
 
@@ -296,12 +303,12 @@ pub fn for_each_expr<'ast, V: 'ast>(expr: &'ast Expr<V>, f: impl FnMut(&'ast Exp
 /// A node's identity is visited before its phase values, so a phase-value
 /// hook receives the identity as `visit_node_id_mut` left it.
 pub trait VisitMut<V> {
-    fn visit_module_mut(&mut self, module: &mut Module<V>) {
-        walk_module_mut(self, module);
-    }
-
     fn visit_decl_mut(&mut self, decl: &mut Decl<V>) {
         walk_decl_mut(self, decl);
+    }
+
+    fn visit_module_decl_mut(&mut self, module: &mut ModuleDecl<V>) {
+        walk_module_decl_mut(self, module);
     }
 
     fn visit_func_decl_mut(&mut self, func: &mut FuncDecl<V>) {
@@ -339,6 +346,8 @@ pub trait VisitMut<V> {
     }
 }
 
+/// Rewrite every declaration of a source module in place. A source module has
+/// no hook of its own; this is the entry point for walking one.
 pub fn walk_module_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, module: &mut Module<V>) {
     for decl in &mut module.decls {
         visitor.visit_decl_mut(decl);
@@ -348,16 +357,21 @@ pub fn walk_module_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, module: &mut
 pub fn walk_decl_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, decl: &mut Decl<V>) {
     match decl {
         Decl::Function(func) => visitor.visit_func_decl_mut(func),
-        Decl::Module(ModuleDecl { body, .. }) => {
-            for decl in body.iter_mut().flatten() {
-                visitor.visit_decl_mut(decl);
-            }
-        }
+        Decl::Module(module) => visitor.visit_module_decl_mut(module),
         Decl::ExternFunction(_)
         | Decl::Struct(_)
         | Decl::Enum(_)
         | Decl::Ability(_)
         | Decl::Use(_) => {}
+    }
+}
+
+pub fn walk_module_decl_mut<V, T: VisitMut<V> + ?Sized>(
+    visitor: &mut T,
+    module: &mut ModuleDecl<V>,
+) {
+    for decl in module.body.iter_mut().flatten() {
+        visitor.visit_decl_mut(decl);
     }
 }
 
