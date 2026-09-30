@@ -6,10 +6,11 @@
 //! ```
 //!
 //! Compile stages are timed separately: frontend, shared middle-end, target
-//! pipeline to the boundary exit, and lowering and emission after it. Each
-//! stage's input is prepared outside the timed region. Native runtime is
-//! timed on a linked executable, which needs the development sysroot
-//! (`cargo xtask runtime`). Allocations and code sizes need no statistics and
+//! pipeline to the boundary exit, and lowering and emission after it. The
+//! frontend and shared middle-end are timed for representative programs only
+//! (`FRONT_STAGE_PROGRAMS`). Each stage's input is prepared outside the timed
+//! region. Native runtime is timed on a linked executable, which needs the
+//! development sysroot (`cargo xtask runtime`). Allocations and code sizes need no statistics and
 //! are reported by the `abi_boundary_report` binary of this crate.
 //!
 //! CI runs the compile stages under CodSpeed (`.github/workflows/codspeed.yml`),
@@ -24,6 +25,11 @@ use tribute_passes::abi_boundary::TargetKind;
 use tribute_bench::programs::{PROGRAMS, Program};
 use tribute_bench::stages::{self, TARGETS, target_name};
 
+/// Programs whose frontend and shared middle-end are timed. Those stages cost
+/// nearly the same for every program here, so one pure and one effectful
+/// program represent them.
+const FRONT_STAGE_PROGRAMS: [&str; 2] = ["fibonacci", "state_handler"];
+
 fn compile_stages(c: &mut Criterion) {
     for program in PROGRAMS {
         if let Err(error) = stages::through_shared(program) {
@@ -31,20 +37,22 @@ fn compile_stages(c: &mut Criterion) {
             continue;
         }
         let mut group = c.benchmark_group(format!("compile/{}", program.name));
-        group.bench_function("frontend", |b| {
-            b.iter_batched(
-                || (),
-                |()| stages::frontend(program).expect("frontend"),
-                BatchSize::PerIteration,
-            )
-        });
-        group.bench_function("shared_middle_end", |b| {
-            b.iter_batched(
-                || stages::frontend(program).expect("frontend"),
-                |frontend| stages::shared_middle_end(frontend).expect("shared middle-end"),
-                BatchSize::PerIteration,
-            )
-        });
+        if FRONT_STAGE_PROGRAMS.contains(&program.name) {
+            group.bench_function("frontend", |b| {
+                b.iter_batched(
+                    || (),
+                    |()| stages::frontend(program).expect("frontend"),
+                    BatchSize::PerIteration,
+                )
+            });
+            group.bench_function("shared_middle_end", |b| {
+                b.iter_batched(
+                    || stages::frontend(program).expect("frontend"),
+                    |frontend| stages::shared_middle_end(frontend).expect("shared middle-end"),
+                    BatchSize::PerIteration,
+                )
+            });
+        }
         for target in TARGETS {
             bench_target(&mut group, program, target);
         }
