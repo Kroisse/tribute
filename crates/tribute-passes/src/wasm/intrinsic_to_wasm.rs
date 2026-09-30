@@ -1,7 +1,10 @@
-//! Lower intrinsic calls to WASM operations.
+//! Bind the `extern "C"` bytes helpers to WasmGC operations past the
+//! representation/ABI boundary.
 //!
-//! This pass transforms high-level intrinsic calls to low-level WASM instructions:
-//! - `__bytes_len`, `__bytes_get_or_panic`, etc. -> WasmGC struct/array operations
+//! `__tribute_bytes_len`, `__tribute_bytes_range_equal`, and
+//! `__tribute_bytes_concat` become struct/array operations on the bytes
+//! layout. The bytes element read intrinsic is lowered inside the boundary by
+//! `wasm/bytes.rs`.
 
 use tribute_ir::ModulePathExt;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -17,10 +20,10 @@ use trunk_ir::types::TypeDataBuilder;
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
 
-// Bytes struct field indices (must match gc_types layout)
-const BYTES_DATA_FIELD: u32 = 0; // ref (array i8)
-const BYTES_OFFSET_FIELD: u32 = 1; // i32
-const BYTES_LEN_FIELD: u32 = 2; // i32
+use super::bytes::{
+    DATA_FIELD as BYTES_DATA_FIELD, LEN_FIELD as BYTES_LEN_FIELD,
+    OFFSET_FIELD as BYTES_OFFSET_FIELD,
+};
 
 /// Extracted Bytes struct fields: (data, offset, len) values.
 struct BytesFields {
@@ -38,9 +41,7 @@ fn extract_bytes_fields(
     bytes_value: ValueRef,
 ) -> (BytesFields, Vec<OpRef>) {
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-    let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
-    let array_ty = core::array(ctx, i8_ty).as_type_ref();
-    let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();
+    let array_ref_ty = super::bytes::bytes_data_type(ctx);
 
     let get_data = wasm_dialect::StructGet::operands(bytes_value)
         .type_idx(BYTES_STRUCT_IDX)
@@ -75,7 +76,6 @@ fn extract_bytes_fields(
 pub fn lower(ctx: &mut IrContext, module: Module) {
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(BytesLenPattern)
-        .add_pattern(BytesGetOrPanicPattern)
         .add_pattern(BytesRangeEqualPattern)
         .add_pattern(BytesConcatPattern);
 
@@ -132,72 +132,6 @@ impl RewritePattern for BytesLenPattern {
 
     fn name(&self) -> &'static str {
         "BytesLenPattern"
-    }
-}
-
-/// Pattern for `Bytes::get_or_panic(bytes, index)` -> array access with offset
-///
-/// Index is i32 (Nat), returns i32 (Nat, byte value 0-255).
-struct BytesGetOrPanicPattern;
-
-impl RewritePattern for BytesGetOrPanicPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        if !is_bytes_intrinsic_call(ctx, op, &["__bytes_get_or_panic"]) {
-            return false;
-        }
-
-        let operands = ctx.op_operands(op).to_vec();
-        if operands.len() < 2 {
-            return false;
-        }
-        let bytes_ref = operands[0];
-        let index = operands[1]; // i32 (Nat)
-
-        let location = ctx.op(op).location;
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
-
-        // Get data array ref (field 0)
-        let array_ty = core::array(ctx, i8_ty).as_type_ref();
-        let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();
-        let get_data = wasm_dialect::StructGet::operands(bytes_ref)
-            .type_idx(BYTES_STRUCT_IDX)
-            .field_idx(BYTES_DATA_FIELD)
-            .results(array_ref_ty)
-            .build(ctx, location);
-
-        // Get offset (field 1)
-        let get_offset = wasm_dialect::StructGet::operands(bytes_ref)
-            .type_idx(BYTES_STRUCT_IDX)
-            .field_idx(BYTES_OFFSET_FIELD)
-            .results(i32_ty)
-            .build(ctx, location);
-
-        // Add offset to index: actual_index = offset + index
-        let add_offset =
-            wasm_dialect::I32Add::operands(get_offset.result(ctx), index).build(ctx, location);
-
-        // array.get_u (unsigned extend to i32, for byte values 0-255)
-        let array_get =
-            wasm_dialect::ArrayGetU::operands(get_data.result(ctx), add_offset.result(ctx))
-                .type_idx(BYTES_ARRAY_IDX)
-                .results(i32_ty)
-                .build(ctx, location);
-
-        rewriter.insert_op(get_data.op_ref());
-        rewriter.insert_op(get_offset.op_ref());
-        rewriter.insert_op(add_offset.op_ref());
-        rewriter.replace_op(array_get.op_ref());
-        true
-    }
-
-    fn name(&self) -> &'static str {
-        "BytesGetOrPanicPattern"
     }
 }
 
@@ -407,10 +341,8 @@ impl RewritePattern for BytesConcatPattern {
 
         let location = ctx.op(op).location;
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
         let bytes_ty = core::bytes(ctx).as_type_ref();
-        let array_ty = core::array(ctx, i8_ty).as_type_ref();
-        let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();
+        let array_ref_ty = super::bytes::bytes_data_type(ctx);
 
         // Extract fields from left and right Bytes structs
         let (left_fields, left_ops) = extract_bytes_fields(ctx, location, left);

@@ -11,7 +11,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 
-use crate::gc_types::{BOXED_F64_IDX, BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, FIRST_USER_TYPE_IDX};
+use crate::gc_types::{BOXED_F64_IDX, BYTES_STRUCT_IDX, FIRST_USER_TYPE_IDX};
 
 fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
     let data = ctx.get_type(ty);
@@ -19,30 +19,10 @@ fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
         && data.attrs.get_symbol("name") == Some(Symbol::new(expected))
 }
 
-fn is_bytes_array(ctx: &IrContext, ty: TypeRef) -> bool {
-    let reference = ctx.get_type(ty);
-    if reference.dialect != Symbol::new("core")
-        || reference.name != Symbol::new("ref")
-        || reference.params.len() != 1
-    {
-        return false;
-    }
-    let array = ctx.get_type(reference.params[0]);
-    array.dialect == Symbol::new("core")
-        && array.name == Symbol::new("array")
-        && array.params.len() == 1
-        && {
-            let element = ctx.get_type(array.params[0]);
-            element.dialect == Symbol::new("core") && element.name == Symbol::new("i8")
-        }
-}
-
 pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
     let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes") {
         Some(BYTES_STRUCT_IDX)
-    } else if is_bytes_array(ctx, ty) {
-        Some(BYTES_ARRAY_IDX)
     } else if named_adt(ctx, ty, "_BoxedF64") {
         Some(BOXED_F64_IDX)
     } else {
@@ -360,6 +340,41 @@ mod tests {
             .find_map(|&op| wasm::StructNew::from_op(&ctx, op).ok())
             .expect("typed struct.new should be lowered");
         assert_eq!(op.type_idx(&ctx), BYTES_STRUCT_IDX);
+    }
+
+    #[test]
+    fn bytes_layouts_are_identified_by_their_layout_alone() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !data = core.array(core.i8) {layout = @bytes_data}
+  !plain = core.array(core.i8)
+  !plain_ref = core.ref(core.array(core.i8))
+  !bytes = adt.struct(!data, core.i32, core.i32) {fields = [[@data, !data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}
+  !lookalike = adt.struct(!plain, core.i32, core.i32) {fields = [[@data, !plain], [@offset, core.i32], [@len, core.i32]], name = @_Bytes}
+}"#,
+        );
+        fn alias(ctx: &IrContext, name: &'static str) -> TypeRef {
+            ctx.type_alias_by_name(Symbol::new(name))
+                .expect("fixture alias")
+        }
+
+        assert_eq!(
+            builtin_type_idx(&ctx, alias(&ctx, "data")),
+            Some(crate::gc_types::BYTES_ARRAY_IDX)
+        );
+        assert_eq!(
+            builtin_type_idx(&ctx, alias(&ctx, "bytes")),
+            Some(BYTES_STRUCT_IDX)
+        );
+        for shape_only in ["plain", "plain_ref", "lookalike"] {
+            assert_eq!(
+                builtin_type_idx(&ctx, alias(&ctx, shape_only)),
+                None,
+                "{shape_only}"
+            );
+        }
     }
 
     #[test]

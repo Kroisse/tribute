@@ -55,6 +55,14 @@ pub fn is_wasm_physical_argument_assignable(
         return true;
     }
 
+    // Two spellings of one builtin layout, such as `core.bytes` and the
+    // `@bytes` layout struct Wasm type conversion maps it to, are the same
+    // concrete GC type.
+    let builtin = |ty| crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty);
+    if builtin(argument).is_some_and(|index| builtin(parameter) == Some(index)) {
+        return true;
+    }
+
     // `core.i1` is represented by an i32 in the Wasm value space.
     if is_type(ctx, argument, "core", "i1") && is_type(ctx, parameter, "core", "i32") {
         return true;
@@ -111,4 +119,50 @@ pub fn is_wasm_physical_argument_assignable(
         || argument_is_structref
         || is_type(ctx, argument, "wasm", "arrayref");
     argument_is_wasm_gc_ref && parameter_is_anyref
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+
+    #[test]
+    fn spellings_of_one_builtin_layout_are_the_same_type() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !data = core.array(core.i8) {layout = @bytes_data}
+  !bytes = adt.struct(!data, core.i32, core.i32) {fields = [[@data, !data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}
+  !closure = adt.struct(core.i32, wasm.anyref) {fields = [[@table_idx, core.i32], [@env, wasm.anyref]], layout = @closure, name = @_closure}
+  !plain = core.array(core.i8)
+}"#,
+        );
+        let core_bytes = ctx.intern_type(trunk_ir::TypeDataBuilder::new("core", "bytes").build());
+        let alias = |name: &'static str| {
+            ctx.type_alias_by_name(Symbol::new(name))
+                .expect("fixture alias")
+        };
+
+        assert!(is_wasm_physical_argument_assignable(
+            &ctx,
+            core_bytes,
+            alias("bytes")
+        ));
+        assert!(is_wasm_physical_argument_assignable(
+            &ctx,
+            alias("bytes"),
+            core_bytes
+        ));
+        assert!(!is_wasm_physical_argument_assignable(
+            &ctx,
+            core_bytes,
+            alias("closure")
+        ));
+        assert!(!is_wasm_physical_argument_assignable(
+            &ctx,
+            alias("plain"),
+            alias("data")
+        ));
+    }
 }

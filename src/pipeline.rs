@@ -96,8 +96,8 @@ impl From<PassError> for DumpIrError {
     }
 }
 
-impl From<tribute_passes::native::intrinsic_to_native::BytesIntrinsicError> for DumpIrError {
-    fn from(error: tribute_passes::native::intrinsic_to_native::BytesIntrinsicError) -> Self {
+impl From<tribute_passes::bytes_intrinsic::BytesIntrinsicError> for DumpIrError {
+    fn from(error: tribute_passes::bytes_intrinsic::BytesIntrinsicError) -> Self {
         Self {
             message: error.to_string(),
         }
@@ -1029,6 +1029,9 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
         .add_pass(tribute_passes::wasm::evidence_to_wasm::LowerEvidenceToWasm);
     pm.with_debug_verifier();
     pm.run(ctx, core_module, &mut analyses)?;
+    // Complete the supported bytes intrinsic bridge inside the boundary; the
+    // lowering consumes its verified compiler intrinsic identity.
+    tribute_passes::wasm::bytes::lower(ctx, m)?;
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
     debug_validate_value_integrity(ctx, m, "after evidence_to_wasm");
 
@@ -3739,6 +3742,42 @@ mod Nested {
             Some(Some(trunk_ir::Symbol::new("__bytes_get_or_panic"))),
             "bytes lowering consumes its identity inside the target boundary"
         );
+    }
+
+    #[salsa_test]
+    fn both_targets_consume_the_bytes_intrinsic_inside_the_boundary(db: &salsa::DatabaseImpl) {
+        use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
+        use tribute_passes::abi_boundary::TargetKind;
+        use trunk_ir::dialect::func;
+
+        for target in [TargetKind::Native, TargetKind::Wasm] {
+            let source = source_from_str(
+                "native_calculator.trb",
+                include_str!("../lang-examples/native_calculator.trb"),
+            );
+            let (mut ctx, module) = run_shared_pipeline(db, source)
+                .expect("shared pipeline must succeed")
+                .expect("fixture must lower");
+            match target {
+                TargetKind::Native => run_native_target_pipeline(&mut ctx, module),
+                TargetKind::Wasm => run_wasm_target_pipeline(&mut ctx, module),
+            }
+            .unwrap_or_else(|error| panic!("{target:?} boundary failed: {error}"));
+
+            for op in module.ops(&ctx) {
+                assert!(
+                    ctx.op(op).attributes.get(COMPILER_INTRINSIC_ATTR).is_none(),
+                    "{target:?}: the identity is consumed at the boundary exit"
+                );
+                let declares_intrinsic = func::Func::from_op(&ctx, op).is_ok_and(|function| {
+                    function.sym_name(&ctx) == trunk_ir::Symbol::new("__bytes_get_or_panic")
+                });
+                assert!(
+                    !declares_intrinsic,
+                    "{target:?}: the intrinsic declaration is removed"
+                );
+            }
+        }
     }
 
     #[salsa_test]

@@ -4,5 +4,4 @@ expression: observed
 ---
 [
     "forbidden attribute tribute.calling_convention",
-    "unclassified attribute tribute.compiler_intrinsic",
 ]

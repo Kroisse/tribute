@@ -8,12 +8,14 @@
 //! - `normalize_primitive_types`: Normalize tribute_rt types to core/wasm types
 //! - `tribute_rt_to_wasm`: Lower boxing/unboxing operations to wasm equivalents
 //! - `const_to_wasm`: Lower string/bytes constants to wasm data segments
-//! - `intrinsic_to_wasm`: Lower intrinsic calls to WASM operations
+//! - `bytes`: Bytes layout types and the in-boundary bytes read intrinsic
+//! - `intrinsic_to_wasm`: Bind the `extern "C"` bytes helpers to GC operations
 //! - `wasm_gc_to_wasm`: Resolve semantic GC types to indexed WASM operations
 //! - `evidence_to_wasm`: Lower evidence runtime functions to inline WASM operations
 //! - `lower`: Main orchestrator for lowering mid-level IR to WASM
 //! - `type_converter`: WASM type converter for IR-level type transformations
 
+pub mod bytes;
 pub mod const_to_wasm;
 pub mod evidence_to_wasm;
 pub mod intrinsic_to_wasm;

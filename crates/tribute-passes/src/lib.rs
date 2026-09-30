@@ -10,6 +10,7 @@
 
 // === TrunkIR passes ===
 pub mod abi_boundary;
+pub mod bytes_intrinsic;
 pub mod closure_lower;
 mod effect_dispatch;
 pub mod intrinsic_to_arith;
