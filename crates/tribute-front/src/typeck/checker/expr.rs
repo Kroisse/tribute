@@ -3495,7 +3495,7 @@ mod tests {
             let mut ctx = make_test_ctx(db, &checker.env);
             ctx.bind_local(source, never);
             if convert {
-                checker.convert_stmt_with_ctx(&mut ctx, &statement.clone());
+                checker.convert_stmt_with_ctx(&mut ctx, &statement);
                 assert_eq!(ctx.get_node_type(NodeId::from_raw(3)), Some(never));
             } else {
                 checker.infer_stmt_and_bind_with_ctx(&mut ctx, &statement);
@@ -3522,8 +3522,8 @@ mod tests {
         let nat = ctx.nat_type();
         let boolean = ctx.bool_type();
         let expected = ctx.func_type(vec![], nat, EffectRow::pure(db));
-        checker.check_expr_with_ctx(&mut ctx, &lambda.clone(), Mode::Check(expected));
-        checker.check_expr_with_ctx(&mut ctx, &lambda.clone(), Mode::Infer);
+        checker.check_expr_with_ctx(&mut ctx, &lambda, Mode::Check(expected));
+        checker.check_expr_with_ctx(&mut ctx, &lambda, Mode::Infer);
         let mut solver = super::TypeSolver::new(db);
         solver.solve(ctx.constraints_snapshot()).unwrap();
         let incompatible = ctx.func_type(vec![], boolean, EffectRow::pure(db));
