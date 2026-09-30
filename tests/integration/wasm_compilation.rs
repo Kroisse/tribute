@@ -298,6 +298,43 @@ fn main() ->{std::io::Io} Nil {
 }
 
 #[salsa_test]
+fn test_execute_bytes_get_or_panic_reads_high_bytes_unsigned(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "bytes_get_or_panic_high.trb",
+        r#"
+fn bool_text(value: Bool) -> String {
+    case value {
+        True -> "1"
+        False -> "0"
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    let bs = b"\xff\x80\x7f"
+    std::io::print_line(bool_text(bs.get_or_panic(0) == 255))
+    std::io::print_line(bool_text(bs.get_or_panic(1) == 128))
+    std::io::print_line(bool_text(bs.get_or_panic(2) == 127))
+}
+"#,
+    );
+    let binary = expect_wasm_compilation_success(db, source, "Should compile bytes reads");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary).expect("write Wasm module");
+    let output = Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"1\n1\n1\n");
+}
+
+#[salsa_test]
 fn test_execute_string_equality(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,

@@ -52,7 +52,7 @@ fn is_type(ctx: &IrContext, ty: TypeRef, dialect: Symbol, name: Symbol) -> bool 
 // ADT struct type constructor helper
 // =============================================================================
 
-fn make_adt_struct_type(
+pub(crate) fn make_adt_struct_type(
     ctx: &mut IrContext,
     name: Symbol,
     fields: Vec<(Symbol, TypeRef)>,
@@ -287,6 +287,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let evidence_ty = evidence_wasm_type(ctx);
     let marker_ty = marker_adt_type_ref(ctx);
+    let bytes_ty = super::bytes::bytes_struct_type(ctx);
+    let bytes_data_ty = super::bytes::bytes_data_type(ctx);
 
     let mut tc = TypeConverter::new();
 
@@ -388,6 +390,16 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
             None
         }
     });
+
+    // `core.bytes` is the Wasm bytes layout struct, the view the bytes
+    // intrinsic lowering reads.
+    tc.add_conversion(move |ctx, ty| {
+        is_type(ctx, ty, Symbol::new("core"), Symbol::new("bytes")).then_some(bytes_ty)
+    });
+
+    // The bytes backing array keeps its layout identifier rather than
+    // becoming an erased `wasm.arrayref`.
+    tc.add_conversion(move |_, ty| (ty == bytes_data_ty).then_some(bytes_data_ty));
 
     // Convert generic core.array -> wasm.arrayref
     // This handles array types that are not evidence types (e.g., user arrays)
@@ -631,6 +643,14 @@ mod tests {
         assert_eq!(
             tribute_core::runtime_layout::EVIDENCE,
             trunk_ir_wasm_backend::gc_types::EVIDENCE_LAYOUT
+        );
+        assert_eq!(
+            tribute_core::runtime_layout::BYTES,
+            trunk_ir_wasm_backend::gc_types::BYTES_LAYOUT
+        );
+        assert_eq!(
+            tribute_core::runtime_layout::BYTES_DATA,
+            trunk_ir_wasm_backend::gc_types::BYTES_DATA_LAYOUT
         );
         let mut ctx = IrContext::new();
         let closure = closure_adt_type(&mut ctx);

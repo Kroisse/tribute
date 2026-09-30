@@ -219,9 +219,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     let bytes = ctx.block_arg(body, 0);
     let newline = ctx.block_arg(body, 1);
 
-    let i8_ty = simple_type(ctx, "core", "i8");
-    let array_ty = core::array(ctx, i8_ty).as_type_ref();
-    let array_ref_ty = core::r#ref(ctx, array_ty, false).as_type_ref();
+    let array_ref_ty = super::bytes::bytes_data_type(ctx);
     let data = wasm_dialect::StructGet::operands(bytes)
         .type_idx(BYTES_STRUCT_IDX)
         .field_idx(BYTES_DATA_FIELD)

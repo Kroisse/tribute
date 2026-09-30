@@ -16,7 +16,9 @@ use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
 
 use crate::assignability::is_wasm_physical_argument_assignable;
 use crate::errors::CompilationErrorKind;
-use crate::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX};
+use crate::gc_types::{
+    BYTES_ARRAY_IDX, BYTES_DATA_LAYOUT, BYTES_LAYOUT, BYTES_STRUCT_IDX, CLOSURE_STRUCT_IDX,
+};
 use crate::{CompilationError, CompilationResult};
 
 // ============================================================================
@@ -225,7 +227,12 @@ pub(crate) fn type_to_valtype(
     ty: TypeRef,
     type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<ValType> {
-    if is_type(ctx, ty, "core", "i32") || is_type(ctx, ty, "core", "i1") {
+    if is_type(ctx, ty, "core", "i32")
+        || is_type(ctx, ty, "core", "i1")
+        || is_type(ctx, ty, "core", "i8")
+        || is_type(ctx, ty, "core", "i16")
+    {
+        // Narrow integers live in an `i32` with unspecified upper bits.
         Ok(ValType::I32)
     } else if is_type(ctx, ty, "core", "i64") {
         Ok(ValType::I64)
@@ -233,15 +240,16 @@ pub(crate) fn type_to_valtype(
         Ok(ValType::F32)
     } else if is_type(ctx, ty, "core", "f64") {
         Ok(ValType::F64)
-    } else if is_type(ctx, ty, "core", "bytes") {
+    } else if is_type(ctx, ty, "core", "bytes") || has_layout(ctx, ty, BYTES_LAYOUT) {
+        // A Bytes value always exists; its struct is never null.
         Ok(ValType::Ref(RefType {
             nullable: false,
             heap_type: HeapType::Concrete(BYTES_STRUCT_IDX),
         }))
-    } else if is_bytes_array_ref(ctx, ty) {
-        let nullable = ctx.get_type(ty).attrs.get_bool("nullable") == Some(true);
+    } else if has_layout(ctx, ty, BYTES_DATA_LAYOUT) {
+        // The Bytes struct's backing array field is non-nullable.
         Ok(ValType::Ref(RefType {
-            nullable,
+            nullable: false,
             heap_type: HeapType::Concrete(BYTES_ARRAY_IDX),
         }))
     } else if is_type(ctx, ty, "core", "ptr") {
@@ -332,21 +340,6 @@ pub(crate) fn type_to_valtype(
             data.dialect, data.name
         )))
     }
-}
-
-fn is_bytes_array_ref(ctx: &IrContext, ty: TypeRef) -> bool {
-    let reference = ctx.get_type(ty);
-    if reference.dialect != Symbol::new("core")
-        || reference.name != Symbol::new("ref")
-        || reference.params.len() != 1
-    {
-        return false;
-    }
-    let array = ctx.get_type(reference.params[0]);
-    array.dialect == Symbol::new("core")
-        && array.name == Symbol::new("array")
-        && array.params.len() == 1
-        && is_type(ctx, array.params[0], "core", "i8")
 }
 
 /// Convert an ordered Wasm signature result list to machine result slots.

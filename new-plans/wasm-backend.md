@@ -40,7 +40,9 @@ tribute-passes/           # tribute-ir 의존
 │                         # 출구 뒤: helper 선언을 GC 배열 구현으로 바인딩
 ├── wasm/tribute_rt_to_wasm.rs
 ├── wasm/const_to_wasm.rs
+├── wasm/bytes.rs         # bytes layout 타입과 경계 안 bytes 읽기 intrinsic lowering
 ├── wasm/intrinsic_to_wasm.rs
+│                         # 출구 뒤: extern "C" bytes helper를 GC 연산으로 바인딩
 ├── wasm/normalize_primitive_types.rs
 └── ...
 
@@ -352,9 +354,11 @@ user-defined type은 그 뒤에 배치된다:
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
 verifier는 closure 3, marker 4, evidence 5, user-defined type 6+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
-Index 3-5는 타입의 [runtime layout 식별자](ir.md#runtime-layout-식별자)
-(`@closure`, `@evidence_marker`, `@evidence`)로만 정해진다. Struct 이름이나 원소
-타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
+Index 1은 `@bytes_data`, index 3-5는 `@closure`, `@evidence_marker`, `@evidence`
+[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. Index 2는
+명목 타입 `core.bytes` 또는 Wasm type 변환이 그것을 바꾼 `@bytes` layout struct다.
+Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
+원소가 `core.i8`인 배열도 `@bytes_data`가 없으면 bytes 배열이 아니다.
 `_closure` environment와 Marker의 dispatch closure field는 일반 reference
 erasure이므로 계속 `anyref`를 사용할 수 있다.
 
@@ -383,6 +387,26 @@ GC struct 필드 수집은 타입 비교와 저장 전에 Wasm의 물리적 scal
 이 동등성은 Bool의 target 표현에 한정한다. `i64`, 부동소수점, 참조 타입의
 불일치를 같은 크기나 비슷한 레이아웃으로 허용하지 않는다.
 
+### 좁은 정수 표현
+
+Wasm에는 `i8`과 `i16` 값 타입이 없다. `core.i8`과 `core.i16` 값은 `i32`에 담고
+상위 비트는 정하지 않는다. 값을 읽는 쪽이 필요한 만큼 정규화한다.
+
+- 상위 비트가 결과의 하위 비트에 영향을 주지 않는 연산(`addi`, `subi`, `muli`,
+  `and`/`or`/`xor`, `shl`, 상수)은 정규화 없이 `i32` 명령으로 낮출 수 있다.
+- `extui`는 폭만큼의 mask(`i32.and`)로, `extsi`는 `i32.extend8_s`/`i32.extend16_s`로
+  정규화한다. 결과가 `i64`면 그 뒤에 `i64.extend_i32_u`/`i64.extend_i32_s`를 둔다.
+  `trunci`는 `i64` 입력이면 `i32.wrap_i64`로, `i32` 입력이면 결과 폭의 mask로
+  낮춘다.
+- 상위 비트가 결과에 영향을 주는 연산(`cmpi`, `divsi`/`divui`, `remsi`/`remui`,
+  `shr`/`shru`, `sitofp`/`uitofp`)은 좁은 정수에서 낮추지 않는다. 이 연산은
+  target 변환 경계에서 거부된다.
+- Packed 배열(`core.array(core.i8)`, `core.array(core.i16)`)의 원소 읽기는
+  `array.get_u`로 낮춘다. 상위 비트를 정하지 않으므로 `array.get_s`도 맞지만 하나로
+  고정한다. 쓰기는 `array.set`이 하위 비트만 저장한다.
+
+`core.i1`은 이 규칙의 대상이 아니다. Bool은 `i32`의 0 또는 1로 정규화된 값이다.
+
 ### 물리적 참조 할당 가능성
 
 WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struct`의
@@ -392,6 +416,7 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 
 | 값 타입 | 슬롯 | 판정 |
 | --- | --- | --- |
+| builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 (`core.bytes`와 `@bytes` struct) | 허용 |
 | builtin 레이아웃 인덱스를 갖는 struct (`core.bytes`, closure, marker 등) | `structref`, `anyref` | 허용 |
 | `adt.typeref` | `structref`, `anyref` | 허용 |
 | `base_enum`을 가진 concrete variant instance | `structref`, `anyref` | 허용 |

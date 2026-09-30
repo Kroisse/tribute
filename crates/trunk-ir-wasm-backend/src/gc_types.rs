@@ -54,9 +54,21 @@ pub const MARKER_LAYOUT: &str = "evidence_marker";
 /// Runtime layout identifier of the builtin evidence array at [`EVIDENCE_IDX`].
 pub const EVIDENCE_LAYOUT: &str = "evidence";
 
+/// Runtime layout identifier of the builtin bytes struct at
+/// [`BYTES_STRUCT_IDX`].
+pub const BYTES_LAYOUT: &str = "bytes";
+
+/// Runtime layout identifier of the builtin bytes backing array at
+/// [`BYTES_ARRAY_IDX`].
+pub const BYTES_DATA_LAYOUT: &str = "bytes_data";
+
 /// The builtin GC type index of a type carrying a runtime layout identifier.
 pub fn builtin_layout_idx(layout: trunk_ir::Symbol) -> Option<u32> {
-    if layout == CLOSURE_LAYOUT {
+    if layout == BYTES_DATA_LAYOUT {
+        Some(BYTES_ARRAY_IDX)
+    } else if layout == BYTES_LAYOUT {
+        Some(BYTES_STRUCT_IDX)
+    } else if layout == CLOSURE_LAYOUT {
         Some(CLOSURE_STRUCT_IDX)
     } else if layout == MARKER_LAYOUT {
         Some(MARKER_IDX)

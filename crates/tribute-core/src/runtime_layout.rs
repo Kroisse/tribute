@@ -17,6 +17,10 @@ pub const CLOSURE: &str = "closure";
 pub const EVIDENCE_MARKER: &str = "evidence_marker";
 /// The evidence array: markers sorted by ability id.
 pub const EVIDENCE: &str = "evidence";
+/// Wasm `Bytes` storage: a backing array, a start offset, and a length.
+pub const BYTES: &str = "bytes";
+/// The byte array a Wasm `Bytes` points into.
+pub const BYTES_DATA: &str = "bytes_data";
 
 /// Whether `ty` carries the runtime layout identifier `layout`.
 pub fn has_runtime_layout(ctx: &IrContext, ty: TypeRef, layout: &str) -> bool {
