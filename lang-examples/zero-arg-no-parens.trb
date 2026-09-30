@@ -1,11 +1,13 @@
 // Zero-arg method WITHOUT parentheses
 // According to spec: x.f should work as shorthand for x.f()
+use std::io::{Io, print_line}
 
 fn double(x: Int) -> Int {
     x + x
 }
 
-// Test without parens: 21.double
-fn main() -> Int {
-    21.double
+// Test without parens: n.double
+fn main() ->{Io} Nil {
+    let n = +21
+    print_line(Int::to_string(n.double))
 }

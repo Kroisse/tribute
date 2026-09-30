@@ -1,6 +1,8 @@
-// Simple arithmetic function for WebAssembly compilation testing
+// Simple arithmetic function
+use std::io::{Io, print_line}
+
 fn add(x: Int, y: Int) ->{} Int { x + y }
 
-fn main() ->{} Int {
-    add(40, 2)
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(add(+40, +2)))
 }

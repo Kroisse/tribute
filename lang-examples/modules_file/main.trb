@@ -18,22 +18,23 @@ mod utils
 use pkg::math::basic::{add, subtract}
 use pkg::math::advanced::power
 use pkg::utils::repeat
+use std::io::{Io, print_line}
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     print_line("Testing file-based modules:")
 
     // Using basic math operations
     print_line("Basic math:")
-    print_line(add(10, 5))         // 15
-    print_line(subtract(10, 5))    // 5
+    print_line(Int::to_string(add(+10, +5)))         // 15
+    print_line(Int::to_string(subtract(+10, +5)))    // 5
 
     // Using advanced operations
     print_line("Advanced math:")
-    print_line(power(2, 8))        // 256
+    print_line(Int::to_string(power(+2, +8)))        // 256
 
     // Using utilities
     print_line("Utilities:")
-    print_line(repeat("ha", 3))  // "hahaha"
+    print_line(repeat("ha", +3))  // "hahaha"
 
     print_line("File-based modules work!")
 }

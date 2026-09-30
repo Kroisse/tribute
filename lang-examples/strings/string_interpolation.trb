@@ -1,4 +1,6 @@
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let name = "Alice"
     let age = 25
     print_line("Hello, \{name}! You are \{age} years old.")

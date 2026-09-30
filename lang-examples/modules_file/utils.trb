@@ -2,9 +2,9 @@
 
 pub fn repeat(s: String, n: Int) -> String {
     case n {
-        0 -> ""
-        1 -> s
-        _ -> s <> repeat(s, n - 1)
+        +0 -> "",
+        +1 -> s,
+        _ -> s <> repeat(s, n - +1)
     }
 }
 

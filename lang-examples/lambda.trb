@@ -1,48 +1,53 @@
 // Lambda Examples
 // Demonstrates lambda expressions and closures
 
+use std::io::{Io, print_line}
+
 // Simple identity lambda
 fn test_identity() -> Int {
     let f = fn(x) { x }
-    f(42)
+    f(+42)
 }
 
 // Lambda with capture
 fn test_capture() -> Int {
-    let a = 10
+    let a = +10
     let f = fn(x) { x + a }
-    f(32)  // 32 + 10 = 42
+    f(+32)  // 32 + 10 = 42
 }
 
 // Multiple captures
 fn test_multiple_captures() -> Int {
-    let a = 10
-    let b = 20
+    let a = +10
+    let b = +20
     let f = fn(x) { x + a + b }
-    f(12)  // 12 + 10 + 20 = 42
+    f(+12)  // 12 + 10 + 20 = 42
 }
 
 // Nested lambda
 fn test_nested() -> Int {
-    let a = 10
+    let a = +10
     let f = fn(x) {
         let g = fn(y) { x + y + a }
-        g(20)
+        g(+20)
     }
-    f(12)  // 12 + 20 + 10 = 42
+    f(+12)  // 12 + 20 + 10 = 42
 }
 
-// Lambda passed as argument
-fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+// Lambda passed as argument; the callback's effects are the caller's
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
 
 fn test_higher_order() -> Int {
-    let offset = 40
-    apply(fn(x) { x + offset }, 2)  // 2 + 40 = 42
+    let offset = +40
+    apply(fn(x) { x + offset }, +2)  // 2 + 40 = 42
 }
 
-// Main function for e2e test
-fn main() -> Int {
-    test_identity()
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(test_identity()))
+    print_line(Int::to_string(test_capture()))
+    print_line(Int::to_string(test_multiple_captures()))
+    print_line(Int::to_string(test_nested()))
+    print_line(Int::to_string(test_higher_order()))
 }

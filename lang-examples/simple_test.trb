@@ -1,7 +1,10 @@
-fn add(a, b) {
+use std::io::{Io, print_line}
+
+fn add(a: Int, b: Int) -> Int {
     a + b
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     print_line("Hello from compiled Tribute!")
+    print_line(Int::to_string(add(+1, +2)))
 }

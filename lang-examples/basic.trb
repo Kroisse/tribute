@@ -1,11 +1,13 @@
 // Basic Example - demonstrates fundamental language features
 // - Function definitions with main entry point
 // - Built-in arithmetic operations (+, *, etc.)
-// - Built-in I/O functions (print_line)
-// - Expression evaluation and return values
+// - Standard I/O (print_line)
+// - Expression evaluation
 
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line("Hello, Tribute!")
-    print_line(10 + 5)
-    6 * 7
+    print_line(Int::to_string(+10 + +5))
+    print_line(Int::to_string(+6 * +7))
 }

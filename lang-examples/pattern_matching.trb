@@ -4,7 +4,9 @@
 // - Wildcard patterns
 // - Case expressions with modern syntax
 
-fn test_number(n) {
+use std::io::{Io, print_line}
+
+fn test_number(n: Nat) -> String {
     case n {
         0 -> "zero",
         1 -> "one",
@@ -13,7 +15,7 @@ fn test_number(n) {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     print_line("Testing pattern matching:")
     print_line(test_number(0))
     print_line(test_number(1))

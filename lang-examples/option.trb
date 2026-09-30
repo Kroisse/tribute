@@ -1,18 +1,17 @@
 // Option Examples
 // Demonstrates the Option type for representing optional values
 
-// Option type definition
-enum Option(a) {
-    None,
-    Some(a)
-}
+use std::io::{Io, print_line}
+
+// Option is defined by the prelude:
+// enum Option(a) { None, Some(a) }
 
 // A function that may or may not return a value
 fn find_value(id: Int) -> Option(Int) {
     case id {
-        1 -> Some(100)
-        2 -> Some(200)
-        3 -> Some(300)
+        +1 -> Some(+100),
+        +2 -> Some(+200),
+        +3 -> Some(+300),
         _ -> None
     }
 }
@@ -21,7 +20,7 @@ fn find_value(id: Int) -> Option(Int) {
 fn get_or_zero(id: Int) -> Int {
     case find_value(id) {
         Some(n) -> n
-        None -> 0
+        None -> +0
     }
 }
 
@@ -36,7 +35,7 @@ fn value_exists(id: Int) -> Bool {
 // Double the value if it exists
 fn double_if_present(id: Int) -> Option(Int) {
     case find_value(id) {
-        Some(n) -> Some(n * 2)
+        Some(n) -> Some(n * +2)
         None -> None
     }
 }
@@ -50,17 +49,25 @@ fn add_bonus(id: Int, bonus: Int) -> Option(Int) {
 }
 
 // Main demonstration
-fn main() -> Nil {
-    let val1 = find_value(1)              // Some(100)
-    let val99 = find_value(99)            // None
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(get_or_zero(+1)))         // 100
+    print_line(Int::to_string(get_or_zero(+99)))        // 0
 
-    let result = get_or_zero(1)           // 100
-    let missing = get_or_zero(99)         // 0
+    case value_exists(+1) {
+        True -> print_line("1 exists")
+        False -> print_line("1 is missing")
+    }
+    case value_exists(+99) {
+        True -> print_line("99 exists")
+        False -> print_line("99 is missing")
+    }
 
-    let exists = value_exists(1)          // True
-    let not_exists = value_exists(99)     // False
-
-    let doubled = double_if_present(2)    // Some(400)
-
-    Nil
+    case double_if_present(+2) {                        // Some(400)
+        Some(n) -> print_line(Int::to_string(n))
+        None -> print_line("none")
+    }
+    case add_bonus(+3, +5) {                            // Some(305)
+        Some(n) -> print_line(Int::to_string(n))
+        None -> print_line("none")
+    }
 }

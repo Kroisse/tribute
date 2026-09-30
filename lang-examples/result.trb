@@ -1,19 +1,18 @@
 // Result Examples
 // Demonstrates the Result type for operations that may fail
 
-// Result type definition
-enum Result(a, e) {
-    Ok(a),
-    Error(e)
-}
+use std::io::{Io, print_line}
+
+// Result is defined by the prelude:
+// enum Result(a, e) { Ok { value: a }, Error { error: e } }
 
 // A function that may fail (simulating parsing)
 fn parse_value(code: Int) -> Result(Int, Int) {
     case code {
-        0 -> Ok(0)
-        1 -> Ok(100)
-        2 -> Ok(200)
-        42 -> Ok(4200)
+        +0 -> Ok(+0),
+        +1 -> Ok(+100),
+        +2 -> Ok(+200),
+        +42 -> Ok(+4200),
         _ -> Error(-1)  // -1 indicates parse error
     }
 }
@@ -29,7 +28,7 @@ fn handle_result(code: Int) -> Int {
 // Division that may fail
 fn divide(a: Int, b: Int) -> Result(Int, Int) {
     case b {
-        0 -> Error(-2)  // -2 indicates division by zero
+        +0 -> Error(-2)  // -2 indicates division by zero,
         _ -> Ok(a / b)
     }
 }
@@ -38,7 +37,7 @@ fn divide(a: Int, b: Int) -> Result(Int, Int) {
 fn safe_parse(code: Int) -> Int {
     case parse_value(code) {
         Ok(n) -> n
-        Error(_) -> 0
+        Error(_) -> +0
     }
 }
 
@@ -64,20 +63,20 @@ fn parse_and_divide(num_code: Int, denom_code: Int) -> Result(Int, Int) {
 }
 
 // Main demonstration
-fn main() -> Nil {
-    let success = parse_value(42)         // Ok(4200)
-    let failure = parse_value(999)        // Error(-1)
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(handle_result(+42)))       // 4200
+    print_line(Int::to_string(handle_result(+999)))      // -1
 
-    let handled = handle_result(42)       // 4200
-    let handled_err = handle_result(999)  // -1
+    print_line(Int::to_string(safe_parse(+42)))          // 4200
+    print_line(Int::to_string(safe_parse(+999)))         // 0
 
-    let safe = safe_parse(42)             // 4200
-    let safe_default = safe_parse(999)    // 0
+    case is_valid(+42) {
+        True -> print_line("42 is valid")
+        False -> print_line("42 is invalid")
+    }
 
-    let valid = is_valid(42)              // True
-    let invalid = is_valid(999)           // False
-
-    let division = parse_and_divide(1, 2) // Ok(50) - 100 / 200 = 0 (integer div)
-
-    Nil
+    case parse_and_divide(+2, +1) {                      // Ok(2): 200 / 100
+        Ok(n) -> print_line(Int::to_string(n))
+        Error(e) -> print_line(Int::to_string(e))
+    }
 }
