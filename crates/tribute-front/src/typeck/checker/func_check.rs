@@ -473,8 +473,9 @@ impl<'db> TypeChecker<'db> {
         }
 
         // 7. Apply substitution and generalization to all TypedRef types in the body.
-        let body = self.apply_subst_to_body(
-            body,
+        let mut body = body;
+        self.apply_subst_to_body(
+            &mut body,
             type_subst,
             row_subst,
             &var_to_index,
