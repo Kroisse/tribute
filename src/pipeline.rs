@@ -704,6 +704,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
 /// Arena IR together with the exact semantic metadata required by the shared
 /// CPS conversion. The metadata stays private; [`run_shared_middle_end`] is
 /// its only consumer.
+#[derive(Clone)]
 pub struct FrontendCompilation {
     context: IrContext,
     module: Module,

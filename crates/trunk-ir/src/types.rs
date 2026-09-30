@@ -819,6 +819,7 @@ impl TypeDataBuilder {
 // ============================================================================
 
 /// Values stored once in `values`, deduplicated through an index of their keys.
+#[derive(Clone)]
 struct InternTable<K: EntityRef, V> {
     values: PrimaryMap<K, V>,
     index: HashTable<K>,
@@ -898,6 +899,7 @@ impl<K: EntityRef, V: Hash + Eq> InternTable<K, V> {
 // ============================================================================
 
 /// Deduplicating type interner. Same `TypeData` always yields the same `TypeRef`.
+#[derive(Clone)]
 pub struct TypeInterner(InternTable<TypeRef, TypeData>);
 
 impl TypeInterner {
@@ -963,6 +965,7 @@ impl Default for TypeInterner {
 // ============================================================================
 
 /// Deduplicating path (URI string) interner.
+#[derive(Clone)]
 pub struct PathInterner(InternTable<PathRef, String>);
 
 impl PathInterner {
