@@ -9,7 +9,7 @@ fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
     let spans = parsed.span_map(db).clone();
     let resolved =
         tribute_front::resolve::resolve_module(db, parsed.module(db).clone(), spans.clone());
-    tribute_front::typeck::typecheck_module(db, resolved, spans)
+    tribute_front::typeck::typecheck_module(db, &resolved, spans)
 }
 
 #[salsa_test]

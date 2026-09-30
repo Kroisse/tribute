@@ -200,7 +200,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     let ast = parsed.module(db).clone();
     let checked = tribute_front::typeck::typecheck_module(
         db,
-        tribute_front::resolve::resolve_with_env(
+        &tribute_front::resolve::resolve_with_env(
             db,
             ast.clone(),
             tribute_front::resolve::build_env(db, &ast),
@@ -290,7 +290,7 @@ fn lower_specialized_source(
     let ast = parsed.module(db).clone();
     let checked = tribute_front::typeck::typecheck_module(
         db,
-        tribute_front::resolve::resolve_with_env(
+        &tribute_front::resolve::resolve_with_env(
             db,
             ast.clone(),
             tribute_front::resolve::build_env(db, &ast),
@@ -396,7 +396,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         span_map,
     );
     let checked =
-        tribute_front::typeck::typecheck_module(db, resolved, parsed.span_map(db).clone());
+        tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone());
     let typed =
         tribute_front::tdnr::resolve_tdnr(db, checked.module(db).clone(), std::iter::empty());
     let mut ir = IrContext::new();

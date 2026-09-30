@@ -290,7 +290,7 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
 
     // Typecheck with independent TypeContext
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
-    let result = checker.check_module_as_prelude(resolved);
+    let result = checker.check_module_as_prelude(&resolved);
 
     // TDNR for remaining MethodCall → Call AST transformations
     let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module, std::iter::empty());
@@ -354,7 +354,7 @@ fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'
 
     // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map);
-    let prelude_exports = checker.check_module_for_prelude(resolved);
+    let prelude_exports = checker.check_module_for_prelude(&resolved);
 
     Some(prelude_exports)
 }
@@ -1574,7 +1574,7 @@ pub fn parse_and_lower_ast<'db>(
     if let Some(p_exports) = prelude_exports(db) {
         checker.inject_prelude(&p_exports); // Prelude TypeSchemes injected (no UniVars)
     }
-    let result = checker.check_module(resolved_ast);
+    let result = checker.check_module(&resolved_ast);
 
     tracing::debug!(
         "Phase 4: after typecheck, {} declarations, {} function_types, {} node_types",

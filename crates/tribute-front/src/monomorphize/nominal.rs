@@ -192,7 +192,7 @@ mod tests {
             crate::resolve::build_env(db, &ast),
             parsed.span_map(db).clone(),
         );
-        crate::typeck::typecheck_module(db, resolved, parsed.span_map(db).clone())
+        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone())
     }
 
     #[salsa_test]

@@ -180,8 +180,7 @@ pub fn type_check_output<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<TypeCheckOutput<'db>> {
-    // Type checking consumes the resolved module to build the typed one.
-    let module = resolved_module(db, source)?.clone();
+    let module = resolved_module(db, source)?;
     let sm = span_map(db, source)?;
     Some(crate::typeck::typecheck_module(db, module, sm))
 }

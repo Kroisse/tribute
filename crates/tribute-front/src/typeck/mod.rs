@@ -329,7 +329,7 @@ pub struct PreludeExports<'db> {
 /// Returns both the typed AST and function type schemes.
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<ResolvedRef<'db>>,
+    module: &Module<ResolvedRef<'db>>,
     span_map: SpanMap,
 ) -> TypeCheckOutput<'db> {
     let checker = TypeChecker::new(db, span_map.clone());

@@ -47,11 +47,11 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
 
     // Type-check for PreludeExports (for type injection)
     let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map.clone());
-    let exports = checker.check_module_for_prelude(resolved_prelude.clone());
+    let exports = checker.check_module_for_prelude(&resolved_prelude);
 
     // Type-check to get typed module (for TDNR imports)
     let checker2 = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
-    let result2 = checker2.check_module_as_prelude(resolved_prelude);
+    let result2 = checker2.check_module_as_prelude(&resolved_prelude);
 
     Some(PreludeData {
         exports,
@@ -88,7 +88,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     if let Some(ref p) = prelude {
         checker.inject_prelude(&p.exports);
     }
-    let result = checker.check_module(resolved);
+    let result = checker.check_module(&resolved);
 
     // TDNR with prelude module as import source for method resolution
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
@@ -168,7 +168,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     if let Some(ref p) = prelude {
         checker.inject_prelude(&p.exports);
     }
-    let result = checker.check_module(resolved);
+    let result = checker.check_module(&resolved);
 
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
     let _ = tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
@@ -199,7 +199,7 @@ fn tdnr_function_summary_inner(
     if let Some(ref p) = prelude {
         checker.inject_prelude(&p.exports);
     }
-    let result = checker.check_module(resolved);
+    let result = checker.check_module(&resolved);
 
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
     let module =

@@ -108,7 +108,7 @@ impl<'db> TypeChecker<'db> {
     pub(crate) fn check_expr_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        expr: Expr<ResolvedRef<'db>>,
+        expr: &Expr<ResolvedRef<'db>>,
         mode: Mode<'db>,
     ) -> Expr<TypedRef<'db>> {
         let lambda_expected = match mode {
@@ -656,7 +656,7 @@ impl<'db> TypeChecker<'db> {
         ctx.record_node_type(expr.id, ty);
 
         // Convert expression (MethodCall needs special handling for expr.id)
-        let kind = self.convert_expr_kind_with_ctx(ctx, expr.id, *expr.kind);
+        let kind = self.convert_expr_kind_with_ctx(ctx, expr.id, &expr.kind);
         let expr = Expr::new(expr.id, kind);
         if is_lambda {
             ctx.record_checked_lambda(lambda_expected, expr.clone());
@@ -852,7 +852,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Lambda { .. } | ExprKind::Handle { .. } => {
                 // These constructs need their scoped bodies checked before a
                 // surrounding let can solve/generalize the result relation.
-                self.check_expr_with_ctx(ctx, expr.clone(), Mode::Infer);
+                self.check_expr_with_ctx(ctx, expr, Mode::Infer);
                 ctx.get_node_type(expr.id)
                     .expect("checked expression has a type")
             }
@@ -896,7 +896,7 @@ impl<'db> TypeChecker<'db> {
         if matches!(expected.kind(self.db()), TypeKind::Func { .. })
             && matches!(*expr.kind, ExprKind::Lambda { .. } | ExprKind::Block { .. })
         {
-            self.check_expr_with_ctx(ctx, expr.clone(), Mode::Check(expected));
+            self.check_expr_with_ctx(ctx, expr, Mode::Check(expected));
             ctx.get_node_type(expr.id)
                 .expect("checked expression has a type")
         } else {
@@ -1735,17 +1735,17 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         expr_id: crate::ast::NodeId,
-        kind: ExprKind<ResolvedRef<'db>>,
+        kind: &ExprKind<ResolvedRef<'db>>,
     ) -> ExprKind<TypedRef<'db>> {
         match kind {
-            ExprKind::NatLit(n) => ExprKind::NatLit(n),
-            ExprKind::IntLit(n) => ExprKind::IntLit(n),
-            ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
-            ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
-            ExprKind::StringLit(s) => ExprKind::StringLit(s),
-            ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
+            ExprKind::NatLit(n) => ExprKind::NatLit(*n),
+            ExprKind::IntLit(n) => ExprKind::IntLit(*n),
+            ExprKind::FloatLit(f) => ExprKind::FloatLit(*f),
+            ExprKind::BoolLit(b) => ExprKind::BoolLit(*b),
+            ExprKind::StringLit(s) => ExprKind::StringLit(s.clone()),
+            ExprKind::BytesLit(b) => ExprKind::BytesLit(b.clone()),
             ExprKind::Nil => ExprKind::Nil,
-            ExprKind::RuneLit(r) => ExprKind::RuneLit(r),
+            ExprKind::RuneLit(r) => ExprKind::RuneLit(*r),
             ExprKind::Var(resolved) => {
                 ExprKind::Var(self.convert_ref_with_ctx(ctx, Some(expr_id), resolved))
             }
@@ -1776,7 +1776,7 @@ impl<'db> TypeChecker<'db> {
                 };
 
                 let converted_args: Vec<_> = args
-                    .into_iter()
+                    .iter()
                     .enumerate()
                     .map(|(i, a)| {
                         // Use Mode::Check only if param type is available and doesn't contain
@@ -1800,7 +1800,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::Cons { ctor, args } => ExprKind::Cons {
                 ctor: self.convert_ref_with_ctx(ctx, Some(expr_id), ctor),
                 args: args
-                    .into_iter()
+                    .iter()
                     .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
                     .collect(),
             },
@@ -1810,14 +1810,16 @@ impl<'db> TypeChecker<'db> {
                 spread,
             } => ExprKind::Record {
                 type_name: TypedRef {
-                    ty: self.instantiate_value_constructor_with_ctx(ctx, expr_id, &type_name),
-                    resolved: type_name,
+                    ty: self.instantiate_value_constructor_with_ctx(ctx, expr_id, type_name),
+                    resolved: type_name.clone(),
                 },
                 fields: fields
-                    .into_iter()
-                    .map(|(name, expr)| (name, self.check_expr_with_ctx(ctx, expr, Mode::Infer)))
+                    .iter()
+                    .map(|(name, expr)| (*name, self.check_expr_with_ctx(ctx, expr, Mode::Infer)))
                     .collect(),
-                spread: spread.map(|e| self.check_expr_with_ctx(ctx, e, Mode::Infer)),
+                spread: spread
+                    .as_ref()
+                    .map(|e| self.check_expr_with_ctx(ctx, e, Mode::Infer)),
             },
             ExprKind::MethodCall {
                 receiver,
@@ -1836,7 +1838,7 @@ impl<'db> TypeChecker<'db> {
 
                     let mut all_args = vec![converted_receiver];
                     all_args.extend(
-                        args.into_iter()
+                        args.iter()
                             .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer)),
                     );
                     ExprKind::Call {
@@ -1847,23 +1849,23 @@ impl<'db> TypeChecker<'db> {
                     // Unresolved — keep as MethodCall
                     ExprKind::MethodCall {
                         receiver: converted_receiver,
-                        method,
+                        method: *method,
                         args: args
-                            .into_iter()
+                            .iter()
                             .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
                             .collect(),
                     }
                 }
             }
             ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
-                op,
+                op: *op,
                 lhs: self.check_expr_with_ctx(ctx, lhs, Mode::Infer),
                 rhs: self.check_expr_with_ctx(ctx, rhs, Mode::Infer),
             },
             ExprKind::Block { stmts, value } => {
                 ctx.push_scope();
                 let converted_stmts: Vec<_> = stmts
-                    .into_iter()
+                    .iter()
                     .map(|s| self.convert_stmt_with_ctx(ctx, s))
                     .collect();
                 let converted_value = self.check_expr_with_ctx(ctx, value, Mode::Infer);
@@ -1884,7 +1886,7 @@ impl<'db> TypeChecker<'db> {
                 // type during pattern processing in check_expr_with_ctx.
 
                 let converted_arms: Vec<_> = arms
-                    .into_iter()
+                    .iter()
                     .map(|arm| {
                         // Each arm gets its own scope for pattern bindings
                         ctx.push_scope();
@@ -1963,7 +1965,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.effect_contract = outer_contract;
                 ctx.set_current_effect(outer_effect);
                 ExprKind::Lambda {
-                    params,
+                    params: params.clone(),
                     body: converted_body,
                 }
             }
@@ -1980,7 +1982,7 @@ impl<'db> TypeChecker<'db> {
                 let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
                 ctx.set_current_effect(outer_effect);
                 let handlers = handlers
-                    .into_iter()
+                    .iter()
                     .map(|h| self.convert_handler_arm_with_ctx(ctx, h, &handle_ctx))
                     .collect();
                 ctx.finish_result_join(expr_id);
@@ -1991,17 +1993,17 @@ impl<'db> TypeChecker<'db> {
             }
             ExprKind::Resume { arg, local_id } => ExprKind::Resume {
                 arg: self.check_expr_with_ctx(ctx, arg, Mode::Infer),
-                local_id,
+                local_id: *local_id,
             },
             ExprKind::Tuple(elements) => ExprKind::Tuple(
                 elements
-                    .into_iter()
+                    .iter()
                     .map(|e| self.check_expr_with_ctx(ctx, e, Mode::Infer))
                     .collect(),
             ),
             ExprKind::List(elements) => ExprKind::List(
                 elements
-                    .into_iter()
+                    .iter()
                     .map(|e| self.check_expr_with_ctx(ctx, e, Mode::Infer))
                     .collect(),
             ),
@@ -2014,11 +2016,11 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         node_id: Option<crate::ast::NodeId>,
-        resolved: ResolvedRef<'db>,
+        resolved: &ResolvedRef<'db>,
     ) -> TypedRef<'db> {
-        let ty = match (node_id, &resolved) {
+        let ty = match (node_id, resolved) {
             (Some(_), ResolvedRef::Constructor { .. }) => {
-                self.infer_var_with_ctx(ctx, node_id, &resolved)
+                self.infer_var_with_ctx(ctx, node_id, resolved)
             }
             (Some(node), ResolvedRef::Local { id, name }) => ctx
                 .lookup_local_reference(node, *id, *name)
@@ -2026,10 +2028,13 @@ impl<'db> TypeChecker<'db> {
             (Some(node), _) => ctx
                 .get_function_reference_type(node)
                 .or_else(|| ctx.get_node_type(node))
-                .unwrap_or_else(|| self.infer_var_with_ctx(ctx, node_id, &resolved)),
-            (None, _) => self.infer_var_with_ctx(ctx, node_id, &resolved),
+                .unwrap_or_else(|| self.infer_var_with_ctx(ctx, node_id, resolved)),
+            (None, _) => self.infer_var_with_ctx(ctx, node_id, resolved),
         };
-        TypedRef { resolved, ty }
+        TypedRef {
+            resolved: resolved.clone(),
+            ty,
+        }
     }
 
     /// Infer a statement's type and bind its pattern variables.
@@ -2078,7 +2083,7 @@ impl<'db> TypeChecker<'db> {
     fn convert_stmt_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        stmt: Stmt<ResolvedRef<'db>>,
+        stmt: &Stmt<ResolvedRef<'db>>,
     ) -> Stmt<TypedRef<'db>> {
         match stmt {
             Stmt::Let {
@@ -2089,13 +2094,13 @@ impl<'db> TypeChecker<'db> {
             } => {
                 let outer_effect = ctx.current_effect();
                 ctx.set_current_effect(EffectRow::pure(self.db()));
-                let value = if let Some(ann) = &ty {
+                let value = if let Some(ann) = ty {
                     let expected = self.annotation_to_type_with_ctx(ctx, ann);
                     self.check_expr_with_ctx(ctx, value, Mode::Check(expected))
                 } else {
                     self.check_expr_with_ctx(ctx, value, Mode::Infer)
                 };
-                let value_ty = if let Some(ann) = &ty {
+                let value_ty = if let Some(ann) = ty {
                     self.annotation_to_type_with_ctx(ctx, ann)
                 } else {
                     ctx.get_node_type(value.id)
@@ -2106,27 +2111,27 @@ impl<'db> TypeChecker<'db> {
                 ctx.merge_effect(evaluation_effect);
 
                 // Constrain pattern type to match value type
-                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &pattern);
+                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, pattern);
                 ctx.constrain_eq(pattern_ty, value_ty);
 
                 self.generalize_and_bind_pattern_with_ctx(
                     ctx,
-                    &pattern,
+                    pattern,
                     value_ty,
                     evaluation_effect,
                 );
                 let pattern = self.convert_pattern_with_ctx(ctx, pattern);
 
                 Stmt::Let {
-                    id,
+                    id: *id,
                     pattern,
                     value,
-                    ty,
+                    ty: ty.clone(),
                 }
             }
             Stmt::Expr { id, expr } => {
                 let expr = self.check_expr_with_ctx(ctx, expr, Mode::Infer);
-                Stmt::Expr { id, expr }
+                Stmt::Expr { id: *id, expr }
             }
         }
     }
@@ -2586,21 +2591,24 @@ impl<'db> TypeChecker<'db> {
     fn convert_pattern_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        pattern: Pattern<ResolvedRef<'db>>,
+        pattern: &Pattern<ResolvedRef<'db>>,
     ) -> Pattern<TypedRef<'db>> {
-        let kind = match *pattern.kind {
+        let kind = match &*pattern.kind {
             PatternKind::Wildcard => PatternKind::Wildcard,
-            PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
-            PatternKind::Literal(lit) => PatternKind::Literal(lit),
+            PatternKind::Bind { name, local_id } => PatternKind::Bind {
+                name: *name,
+                local_id: *local_id,
+            },
+            PatternKind::Literal(lit) => PatternKind::Literal(lit.clone()),
             PatternKind::Variant { ctor, fields } => PatternKind::Variant {
                 ctor: TypedRef {
                     ty: ctx
                         .get_node_type(pattern.id)
-                        .unwrap_or_else(|| self.infer_var_with_ctx(ctx, None, &ctor)),
-                    resolved: ctor,
+                        .unwrap_or_else(|| self.infer_var_with_ctx(ctx, None, ctor)),
+                    resolved: ctor.clone(),
                 },
                 fields: fields
-                    .into_iter()
+                    .iter()
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
                     .collect(),
             },
@@ -2613,21 +2621,21 @@ impl<'db> TypeChecker<'db> {
                 PatternKind::Record {
                     type_name,
                     fields: fields
-                        .into_iter()
+                        .iter()
                         .map(|f| self.convert_field_pattern_with_ctx(ctx, f))
                         .collect(),
-                    rest,
+                    rest: *rest,
                 }
             }
             PatternKind::Tuple(patterns) => PatternKind::Tuple(
                 patterns
-                    .into_iter()
+                    .iter()
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
                     .collect(),
             ),
             PatternKind::List(patterns) => PatternKind::List(
                 patterns
-                    .into_iter()
+                    .iter()
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
                     .collect(),
             ),
@@ -2637,11 +2645,11 @@ impl<'db> TypeChecker<'db> {
                 rest_local_id,
             } => PatternKind::ListRest {
                 head: head
-                    .into_iter()
+                    .iter()
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
                     .collect(),
-                rest,
-                rest_local_id,
+                rest: *rest,
+                rest_local_id: *rest_local_id,
             },
             PatternKind::As {
                 pattern,
@@ -2649,8 +2657,8 @@ impl<'db> TypeChecker<'db> {
                 local_id,
             } => PatternKind::As {
                 pattern: self.convert_pattern_with_ctx(ctx, pattern),
-                name,
-                local_id,
+                name: *name,
+                local_id: *local_id,
             },
             PatternKind::Error => PatternKind::Error,
         };
@@ -2677,21 +2685,27 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         pattern_id: NodeId,
-        resolved: ResolvedRef<'db>,
+        resolved: &ResolvedRef<'db>,
     ) -> TypedRef<'db> {
-        let ty = self.instantiate_value_constructor_with_ctx(ctx, pattern_id, &resolved);
-        TypedRef { resolved, ty }
+        let ty = self.instantiate_value_constructor_with_ctx(ctx, pattern_id, resolved);
+        TypedRef {
+            resolved: resolved.clone(),
+            ty,
+        }
     }
 
     fn convert_field_pattern_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        fp: FieldPattern<ResolvedRef<'db>>,
+        fp: &FieldPattern<ResolvedRef<'db>>,
     ) -> FieldPattern<TypedRef<'db>> {
         FieldPattern {
             id: fp.id,
             name: fp.name,
-            pattern: fp.pattern.map(|p| self.convert_pattern_with_ctx(ctx, p)),
+            pattern: fp
+                .pattern
+                .as_ref()
+                .map(|p| self.convert_pattern_with_ctx(ctx, p)),
         }
     }
 
@@ -2699,7 +2713,7 @@ impl<'db> TypeChecker<'db> {
     fn convert_field_pattern_with_expected_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        fp: FieldPattern<ResolvedRef<'db>>,
+        fp: &FieldPattern<ResolvedRef<'db>>,
         expected: Type<'db>,
     ) -> FieldPattern<TypedRef<'db>> {
         FieldPattern {
@@ -2707,6 +2721,7 @@ impl<'db> TypeChecker<'db> {
             name: fp.name,
             pattern: fp
                 .pattern
+                .as_ref()
                 .map(|p| self.convert_pattern_with_expected_ctx(ctx, p, expected)),
         }
     }
@@ -2715,17 +2730,17 @@ impl<'db> TypeChecker<'db> {
     fn convert_arm_with_scrutinee_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        arm: Arm<ResolvedRef<'db>>,
+        arm: &Arm<ResolvedRef<'db>>,
         scrutinee_ty: Type<'db>,
     ) -> Arm<TypedRef<'db>> {
         Arm {
             id: arm.id,
-            pattern: self.convert_pattern_with_expected_ctx(ctx, arm.pattern, scrutinee_ty),
-            guard: arm.guard.map(|g| {
+            pattern: self.convert_pattern_with_expected_ctx(ctx, &arm.pattern, scrutinee_ty),
+            guard: arm.guard.as_ref().map(|g| {
                 let bool_ty = ctx.bool_type();
                 self.check_expr_with_ctx(ctx, g, Mode::Check(bool_ty))
             }),
-            body: self.check_expr_with_ctx(ctx, arm.body, Mode::Infer),
+            body: self.check_expr_with_ctx(ctx, &arm.body, Mode::Infer),
         }
     }
 
@@ -2733,23 +2748,26 @@ impl<'db> TypeChecker<'db> {
     fn convert_pattern_with_expected_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        pattern: Pattern<ResolvedRef<'db>>,
+        pattern: &Pattern<ResolvedRef<'db>>,
         expected: Type<'db>,
     ) -> Pattern<TypedRef<'db>> {
-        let kind = match *pattern.kind {
+        let kind = match &*pattern.kind {
             PatternKind::Wildcard => PatternKind::Wildcard,
-            PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
-            PatternKind::Literal(lit) => PatternKind::Literal(lit),
+            PatternKind::Bind { name, local_id } => PatternKind::Bind {
+                name: *name,
+                local_id: *local_id,
+            },
+            PatternKind::Literal(lit) => PatternKind::Literal(lit.clone()),
             PatternKind::Variant { ctor, fields } => {
                 let ctor_ty = ctx
                     .get_node_type(pattern.id)
-                    .unwrap_or_else(|| self.infer_var_with_ctx(ctx, None, &ctor));
+                    .unwrap_or_else(|| self.infer_var_with_ctx(ctx, None, ctor));
 
                 match ctor_ty.kind(self.db()) {
                     TypeKind::Func { params, result, .. } => {
                         ctx.constrain_eq(*result, expected);
                         let fields = fields
-                            .into_iter()
+                            .iter()
                             .zip(params.iter())
                             .map(|(p, param_ty)| {
                                 self.convert_pattern_with_expected_ctx(ctx, p, *param_ty)
@@ -2757,7 +2775,7 @@ impl<'db> TypeChecker<'db> {
                             .collect();
                         PatternKind::Variant {
                             ctor: TypedRef {
-                                resolved: ctor,
+                                resolved: ctor.clone(),
                                 ty: ctor_ty,
                             },
                             fields,
@@ -2767,7 +2785,7 @@ impl<'db> TypeChecker<'db> {
                         ctx.constrain_eq(ctor_ty, expected);
                         PatternKind::Variant {
                             ctor: TypedRef {
-                                resolved: ctor,
+                                resolved: ctor.clone(),
                                 ty: ctor_ty,
                             },
                             fields: vec![],
@@ -2780,8 +2798,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 rest,
             } => {
-                let field_tys =
-                    self.record_pattern_field_types(ctx, pattern.id, &type_name, &fields);
+                let field_tys = self.record_pattern_field_types(ctx, pattern.id, type_name, fields);
                 let type_name = self.record_pattern_type_name(ctx, pattern.id, type_name);
                 let result = match type_name.ty.kind(self.db()) {
                     TypeKind::Func { result, .. } => *result,
@@ -2790,7 +2807,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.constrain_eq(result, expected);
 
                 let converted_fields = fields
-                    .into_iter()
+                    .iter()
                     .zip(field_tys)
                     .map(|(f, field_ty)| {
                         let field_expected = field_ty.unwrap_or_else(|| ctx.fresh_type_var());
@@ -2801,7 +2818,7 @@ impl<'db> TypeChecker<'db> {
                 PatternKind::Record {
                     type_name,
                     fields: converted_fields,
-                    rest,
+                    rest: *rest,
                 }
             }
             PatternKind::Tuple(patterns) => {
@@ -2813,7 +2830,7 @@ impl<'db> TypeChecker<'db> {
                     };
                 PatternKind::Tuple(
                     patterns
-                        .into_iter()
+                        .iter()
                         .zip(elem_expectations)
                         .map(|(p, exp)| self.convert_pattern_with_expected_ctx(ctx, p, exp))
                         .collect(),
@@ -2825,7 +2842,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.constrain_eq(expected, list_ty);
                 PatternKind::List(
                     patterns
-                        .into_iter()
+                        .iter()
                         .map(|p| self.convert_pattern_with_expected_ctx(ctx, p, elem_ty))
                         .collect(),
                 )
@@ -2840,11 +2857,11 @@ impl<'db> TypeChecker<'db> {
                 ctx.constrain_eq(expected, list_ty);
                 PatternKind::ListRest {
                     head: head
-                        .into_iter()
+                        .iter()
                         .map(|p| self.convert_pattern_with_expected_ctx(ctx, p, elem_ty))
                         .collect(),
-                    rest,
-                    rest_local_id,
+                    rest: *rest,
+                    rest_local_id: *rest_local_id,
                 }
             }
             PatternKind::As {
@@ -2853,8 +2870,8 @@ impl<'db> TypeChecker<'db> {
                 local_id,
             } => PatternKind::As {
                 pattern: self.convert_pattern_with_expected_ctx(ctx, pattern, expected),
-                name,
-                local_id,
+                name: *name,
+                local_id: *local_id,
             },
             PatternKind::Error => PatternKind::Error,
         };
@@ -2865,7 +2882,7 @@ impl<'db> TypeChecker<'db> {
     fn convert_handler_arm_with_ctx(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        arm: HandlerArm<ResolvedRef<'db>>,
+        arm: &HandlerArm<ResolvedRef<'db>>,
         handle_ctx: &super::super::func_context::HandleContext<'db>,
     ) -> HandlerArm<TypedRef<'db>> {
         ctx.with_scope(|ctx| self.convert_handler_arm_in_scope(ctx, arm, handle_ctx))
@@ -2875,14 +2892,14 @@ impl<'db> TypeChecker<'db> {
     fn convert_handler_arm_in_scope(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
-        arm: HandlerArm<ResolvedRef<'db>>,
+        arm: &HandlerArm<ResolvedRef<'db>>,
         handle_ctx: &super::super::func_context::HandleContext<'db>,
     ) -> HandlerArm<TypedRef<'db>> {
-        let (kind, body_mode) = match arm.kind {
+        let (kind, body_mode) = match &arm.kind {
             HandlerKind::Do { binding } => {
-                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, &binding);
+                let pattern_ty = self.infer_pattern_type_with_ctx(ctx, binding);
                 ctx.constrain_eq(pattern_ty, handle_ctx.body_ty);
-                self.bind_pattern_vars_with_ctx(ctx, &binding, handle_ctx.body_ty);
+                self.bind_pattern_vars_with_ctx(ctx, binding, handle_ctx.body_ty);
                 let binding =
                     self.convert_pattern_with_expected_ctx(ctx, binding, handle_ctx.body_ty);
                 (HandlerKind::Do { binding }, Mode::Infer)
@@ -2895,10 +2912,10 @@ impl<'db> TypeChecker<'db> {
                 let operation = self.constrain_handler_params(
                     ctx,
                     HandlerOperationRequest {
-                        ability: &ability,
-                        op,
+                        ability,
+                        op: *op,
                         syntax_kind: OpDeclKind::Fn,
-                        params: &params,
+                        params,
                         arm_id: arm.id,
                         handle_ctx,
                     },
@@ -2907,9 +2924,9 @@ impl<'db> TypeChecker<'db> {
                 (
                     HandlerKind::Fn {
                         ability: self.convert_ref_with_ctx(ctx, None, ability),
-                        op,
+                        op: *op,
                         params: params
-                            .into_iter()
+                            .iter()
                             .map(|p| self.convert_pattern_with_ctx(ctx, p))
                             .collect(),
                     },
@@ -2928,10 +2945,10 @@ impl<'db> TypeChecker<'db> {
                 let operation = self.constrain_handler_params(
                     ctx,
                     HandlerOperationRequest {
-                        ability: &ability,
-                        op,
+                        ability,
+                        op: *op,
                         syntax_kind: OpDeclKind::Op,
-                        params: &params,
+                        params,
                         arm_id: arm.id,
                         handle_ctx,
                     },
@@ -2944,12 +2961,12 @@ impl<'db> TypeChecker<'db> {
                 // so that `resume(value)` calls inside `op` arms are typed correctly.
                 // A `-> Never` operation cannot be resumed: any `resume` in its
                 // arm is reported and typed as an error.
-                if let Some(k_local_id) = resume_local_id {
+                if let Some(k_local_id) = *resume_local_id {
                     if is_non_resumptive {
                         ctx.record_non_resumptive_resume(
                             k_local_id,
                             operation.ability.name(self.db()),
-                            op,
+                            *op,
                         );
                         ctx.bind_local(k_local_id, ctx.error_type());
                     } else {
@@ -2969,12 +2986,12 @@ impl<'db> TypeChecker<'db> {
                 (
                     HandlerKind::Op {
                         ability: self.convert_ref_with_ctx(ctx, None, ability),
-                        op,
+                        op: *op,
                         params: params
-                            .into_iter()
+                            .iter()
                             .map(|p| self.convert_pattern_with_ctx(ctx, p))
                             .collect(),
-                        resume_local_id,
+                        resume_local_id: *resume_local_id,
                     },
                     // An explicit operation arm either resumes (whose result
                     // is the handler answer) or aborts with that same answer.
@@ -2983,7 +3000,7 @@ impl<'db> TypeChecker<'db> {
             }
         };
         let contributes_answer = matches!(kind, HandlerKind::Op { .. } | HandlerKind::Do { .. });
-        let body = self.check_expr_with_ctx(ctx, arm.body, body_mode);
+        let body = self.check_expr_with_ctx(ctx, &arm.body, body_mode);
         if contributes_answer {
             let actual = ctx
                 .get_node_type(body.id)
@@ -3478,7 +3495,7 @@ mod tests {
             let mut ctx = make_test_ctx(db, &checker.env);
             ctx.bind_local(source, never);
             if convert {
-                checker.convert_stmt_with_ctx(&mut ctx, statement.clone());
+                checker.convert_stmt_with_ctx(&mut ctx, &statement.clone());
                 assert_eq!(ctx.get_node_type(NodeId::from_raw(3)), Some(never));
             } else {
                 checker.infer_stmt_and_bind_with_ctx(&mut ctx, &statement);
@@ -3505,12 +3522,12 @@ mod tests {
         let nat = ctx.nat_type();
         let boolean = ctx.bool_type();
         let expected = ctx.func_type(vec![], nat, EffectRow::pure(db));
-        checker.check_expr_with_ctx(&mut ctx, lambda.clone(), Mode::Check(expected));
-        checker.check_expr_with_ctx(&mut ctx, lambda.clone(), Mode::Infer);
+        checker.check_expr_with_ctx(&mut ctx, &lambda.clone(), Mode::Check(expected));
+        checker.check_expr_with_ctx(&mut ctx, &lambda.clone(), Mode::Infer);
         let mut solver = super::TypeSolver::new(db);
         solver.solve(ctx.constraints_snapshot()).unwrap();
         let incompatible = ctx.func_type(vec![], boolean, EffectRow::pure(db));
-        checker.check_expr_with_ctx(&mut ctx, lambda, Mode::Check(incompatible));
+        checker.check_expr_with_ctx(&mut ctx, &lambda, Mode::Check(incompatible));
         assert!(solver.solve(ctx.take_constraints()).is_err());
     }
 
@@ -3542,7 +3559,7 @@ mod tests {
             })),
         };
         checker.infer_stmt_and_bind_with_ctx(&mut ctx, &statement);
-        checker.convert_stmt_with_ctx(&mut ctx, statement);
+        checker.convert_stmt_with_ctx(&mut ctx, &statement);
         let mut solver = super::TypeSolver::new(db);
         solver.solve(ctx.take_constraints()).unwrap();
         solver.finalize_relations().unwrap();
@@ -3595,7 +3612,7 @@ mod tests {
             },
             body: local_expr(3, name, LocalId::new(1)),
         };
-        let converted_do = checker.convert_handler_arm_with_ctx(&mut ctx, do_arm, &handle_ctx);
+        let converted_do = checker.convert_handler_arm_with_ctx(&mut ctx, &do_arm, &handle_ctx);
         assert!(matches!(
             &*converted_do.body.kind,
             ExprKind::Var(reference) if reference.ty == body_ty
@@ -3612,7 +3629,7 @@ mod tests {
             },
             body: local_expr(5, name, LocalId::UNRESOLVED),
         };
-        let converted_op = checker.convert_handler_arm_with_ctx(&mut ctx, op_arm, &handle_ctx);
+        let converted_op = checker.convert_handler_arm_with_ctx(&mut ctx, &op_arm, &handle_ctx);
         assert!(
             matches!(
                 &*converted_op.body.kind,
@@ -3624,7 +3641,7 @@ mod tests {
 
         let outside = checker.check_expr_with_ctx(
             &mut ctx,
-            local_expr(6, name, LocalId::UNRESOLVED),
+            &local_expr(6, name, LocalId::UNRESOLVED),
             Mode::Infer,
         );
         assert!(
@@ -3698,12 +3715,12 @@ mod tests {
 
         let nat_arm = checker.convert_handler_arm_with_ctx(
             &mut ctx,
-            make_arm(10, nat_op, LocalId::new(10)),
+            &make_arm(10, nat_op, LocalId::new(10)),
             &handle_ctx,
         );
         let bool_arm = checker.convert_handler_arm_with_ctx(
             &mut ctx,
-            make_arm(20, bool_op, LocalId::new(20)),
+            &make_arm(20, bool_op, LocalId::new(20)),
             &handle_ctx,
         );
 

@@ -221,24 +221,27 @@ impl<'db> TypeChecker<'db> {
     /// Type check a module.
     ///
     /// Returns the typed module, function type schemes, and node types.
-    pub fn check_module(self, module: Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
+    pub fn check_module(self, module: &Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
         self.check_module_inner(module)
     }
 
     /// Type check the prelude module.
     ///
     /// Returns PreludeExports containing function types, constructors, and type defs.
-    pub fn check_module_for_prelude(self, module: Module<ResolvedRef<'db>>) -> PreludeExports<'db> {
+    pub fn check_module_for_prelude(
+        self,
+        module: &Module<ResolvedRef<'db>>,
+    ) -> PreludeExports<'db> {
         self.check_module_inner_for_prelude(module)
     }
 
     /// Type check the prelude when its typed declarations are needed directly.
     pub fn check_module_as_prelude(
         mut self,
-        module: Module<ResolvedRef<'db>>,
+        module: &Module<ResolvedRef<'db>>,
     ) -> ModuleCheckResult<'db> {
-        self.collect_declarations(&module);
-        let well_known_types = self.prelude_well_known_types(&module);
+        self.collect_declarations(module);
+        let well_known_types = self.prelude_well_known_types(module);
         self.env.set_prelude_well_known_types(well_known_types);
         self.check_collected_module(module)
     }
@@ -250,23 +253,23 @@ impl<'db> TypeChecker<'db> {
     /// 2. For each function, create an isolated FunctionInferenceContext
     /// 3. Check the function body, solve constraints, and apply substitution
     /// 4. No global solve needed - each function's UniVars are resolved independently
-    fn check_module_inner(mut self, module: Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
+    fn check_module_inner(mut self, module: &Module<ResolvedRef<'db>>) -> ModuleCheckResult<'db> {
         // Phase 1: Collect type definitions and function signatures into ModuleTypeEnv
         // Note: module_path starts empty because module.name is the file-derived name,
         // which is for external references, not internal function naming.
-        self.collect_declarations(&module);
+        self.collect_declarations(module);
         self.check_collected_module(module)
     }
 
     fn check_collected_module(
         mut self,
-        module: Module<ResolvedRef<'db>>,
+        module: &Module<ResolvedRef<'db>>,
     ) -> ModuleCheckResult<'db> {
         // Phase 2: Type check each declaration with per-function inference
         // Each function gets its own FunctionInferenceContext with isolated constraints
         let decls: Vec<Decl<TypedRef<'db>>> = module
             .decls
-            .into_iter()
+            .iter()
             .map(|decl| self.check_decl(decl))
             .collect();
 
@@ -371,18 +374,18 @@ impl<'db> TypeChecker<'db> {
     /// Uses per-function type inference just like regular module checking.
     fn check_module_inner_for_prelude(
         mut self,
-        module: Module<ResolvedRef<'db>>,
+        module: &Module<ResolvedRef<'db>>,
     ) -> PreludeExports<'db> {
         // Phase 1: Collect type definitions and function signatures
         // Note: module_path starts empty - prelude functions use simple names internally.
-        self.collect_declarations(&module);
-        let well_known_types = self.prelude_well_known_types(&module);
+        self.collect_declarations(module);
+        let well_known_types = self.prelude_well_known_types(module);
         self.env.set_prelude_well_known_types(well_known_types);
 
         // Phase 2: Type check all declarations with per-function inference
         let _decls: Vec<Decl<TypedRef<'db>>> = module
             .decls
-            .into_iter()
+            .iter()
             .map(|decl| self.check_decl(decl))
             .collect();
 
@@ -419,14 +422,15 @@ impl<'db> TypeChecker<'db> {
     // =========================================================================
 
     /// Type check a declaration.
-    fn check_decl(&mut self, decl: Decl<ResolvedRef<'db>>) -> Decl<TypedRef<'db>> {
+    fn check_decl(&mut self, decl: &Decl<ResolvedRef<'db>>) -> Decl<TypedRef<'db>> {
         match decl {
             Decl::Function(func) => Decl::Function(self.check_func_decl(func)),
-            Decl::ExternFunction(e) => Decl::ExternFunction(e),
-            Decl::Struct(s) => Decl::Struct(self.check_struct_decl(s)),
-            Decl::Enum(e) => Decl::Enum(self.check_enum_decl(e)),
-            Decl::Ability(a) => Decl::Ability(self.check_ability_decl(a)),
-            Decl::Use(u) => Decl::Use(self.check_use_decl(u)),
+            // These declarations contain no expressions to check.
+            Decl::ExternFunction(e) => Decl::ExternFunction(e.clone()),
+            Decl::Struct(s) => Decl::Struct(s.clone()),
+            Decl::Enum(e) => Decl::Enum(e.clone()),
+            Decl::Ability(a) => Decl::Ability(a.clone()),
+            Decl::Use(u) => Decl::Use(u.clone()),
             Decl::Module(m) => Decl::Module(self.check_module_decl(m)),
         }
     }
@@ -434,14 +438,15 @@ impl<'db> TypeChecker<'db> {
     /// Type check a module declaration.
     fn check_module_decl(
         &mut self,
-        module: crate::ast::ModuleDecl<ResolvedRef<'db>>,
+        module: &crate::ast::ModuleDecl<ResolvedRef<'db>>,
     ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
         // Push module name to prefix
         let prev_len = crate::push_prefix(&mut self.prefix, module.name);
 
         let body = module
             .body
-            .map(|decls| decls.into_iter().map(|d| self.check_decl(d)).collect());
+            .as_ref()
+            .map(|decls| decls.iter().map(|d| self.check_decl(d)).collect());
 
         // Restore prefix
         self.prefix.truncate(prev_len);
@@ -452,25 +457,5 @@ impl<'db> TypeChecker<'db> {
             is_pub: module.is_pub,
             body,
         }
-    }
-
-    /// Type check a struct declaration (no body to check).
-    fn check_struct_decl(&mut self, s: crate::ast::StructDecl) -> crate::ast::StructDecl {
-        s // Struct declarations don't contain expressions
-    }
-
-    /// Type check an enum declaration (no body to check).
-    fn check_enum_decl(&mut self, e: crate::ast::EnumDecl) -> crate::ast::EnumDecl {
-        e // Enum declarations don't contain expressions
-    }
-
-    /// Type check an ability declaration (no body to check).
-    fn check_ability_decl(&mut self, a: crate::ast::AbilityDecl) -> crate::ast::AbilityDecl {
-        a // Ability declarations don't contain expressions
-    }
-
-    /// Type check a use declaration (nothing to check).
-    fn check_use_decl(&mut self, u: crate::ast::UseDecl) -> crate::ast::UseDecl {
-        u
     }
 }

@@ -818,7 +818,7 @@ mod tests {
         let module = input.module(db).clone();
         let span_map = SpanMap::default();
         let resolved = resolve::resolve_module(db, module, span_map.clone());
-        let _output = typeck::typecheck_module(db, resolved, span_map);
+        let _output = typeck::typecheck_module(db, &resolved, span_map);
     }
 
     proptest! {
