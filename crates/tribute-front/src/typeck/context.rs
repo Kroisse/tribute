@@ -1336,7 +1336,10 @@ mod tests {
         src: &str,
     ) -> crate::ast::Module<crate::ast::TypedRef<'db>> {
         let source = crate::SourceCst::from_source_str(db, "test.trb", src);
-        crate::query::typed_module(db, source).expect("should typecheck successfully")
+        crate::query::type_check_output(db, source)
+            .expect("should typecheck successfully")
+            .module(db)
+            .clone()
     }
 
     /// Check that no MethodCall nodes remain in the typed AST (all resolved to Call).

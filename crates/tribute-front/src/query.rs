@@ -4,6 +4,10 @@
 //! Function queries select a declaration from the cached module result; they do
 //! not run independent function-level inference.
 //!
+//! These queries analyze the source alone, without the prelude or other external
+//! declarations. The root crate's pipeline supplies them for compilation and
+//! editor features.
+//!
 //! ## Caching Strategy
 //!
 //! - Module-level queries: Parse, resolve, and type check the module
@@ -157,7 +161,7 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
 /// Resolve all names in a module.
 ///
 /// Resolution currently processes the complete module in one tracked query.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -176,20 +180,10 @@ pub fn type_check_output<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<TypeCheckOutput<'db>> {
-    let module = resolved_module(db, source)?;
+    // Type checking consumes the resolved module to build the typed one.
+    let module = resolved_module(db, source)?.clone();
     let sm = span_map(db, source)?;
     Some(crate::typeck::typecheck_module(db, module, sm))
-}
-
-/// Type check a module.
-///
-/// Derives the typed module from `type_check_output`.
-#[salsa::tracked(returns(clone))]
-pub fn typed_module<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<Module<TypedRef<'db>>> {
-    type_check_output(db, source).map(|o| o.module(db).clone())
 }
 
 /// Get function type schemes from type checking.
@@ -202,20 +196,6 @@ pub fn function_schemes<'db>(
     source: SourceCst,
 ) -> Option<Vec<(Symbol, TypeScheme<'db>)>> {
     type_check_output(db, source).map(|o| o.function_types(db).clone())
-}
-
-/// TDNR on a typed module for remaining MethodCall transformations.
-///
-/// Like the other queries in this module, this analyzes the source alone,
-/// without the prelude or other external declarations. The root crate's
-/// pipeline supplies them for compilation and editor features.
-#[salsa::tracked(returns(clone))]
-pub fn tdnr_module<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<Module<TypedRef<'db>>> {
-    let module = typed_module(db, source)?;
-    Some(crate::tdnr::resolve_tdnr(db, module, std::iter::empty()))
 }
 
 // =============================================================================
@@ -248,8 +228,8 @@ pub fn resolved_func<'db>(
 ) -> Option<FuncDecl<ResolvedRef<'db>>> {
     let module = resolved_module(db, source)?;
 
-    module.decls.into_iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f),
+    module.decls.iter().find_map(|decl| match decl {
+        Decl::Function(f) if f.name == name => Some(f.clone()),
         _ => None,
     })
 }
@@ -263,10 +243,10 @@ pub fn typed_func<'db>(
     source: SourceCst,
     name: Symbol,
 ) -> Option<FuncDecl<TypedRef<'db>>> {
-    let module = typed_module(db, source)?;
+    let module = type_check_output(db, source)?.module(db);
 
-    module.decls.into_iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f),
+    module.decls.iter().find_map(|decl| match decl {
+        Decl::Function(f) if f.name == name => Some(f.clone()),
         _ => None,
     })
 }
@@ -757,7 +737,7 @@ fn test() -> Int {
         );
 
         // Type checking should succeed
-        let module = typed_module(&db, source);
+        let module = type_check_output(&db, source);
         assert!(module.is_some(), "Type checking should succeed");
     }
 
@@ -776,7 +756,7 @@ fn test() -> Int {
         );
 
         // Type checking should succeed
-        let module = typed_module(&db, source);
+        let module = type_check_output(&db, source);
         assert!(module.is_some(), "Type checking should succeed");
     }
 }
