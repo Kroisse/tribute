@@ -293,7 +293,8 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
     let result = checker.check_module_as_prelude(&resolved);
 
     // TDNR for remaining MethodCall → Call AST transformations
-    let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module, std::iter::empty());
+    let mut tdnr_ast = result.module;
+    ast_tdnr::resolve_tdnr(db, &mut tdnr_ast, std::iter::empty());
 
     Some(ast_typeck::TypeCheckOutput::new(
         db,
@@ -1584,9 +1585,10 @@ pub fn parse_and_lower_ast<'db>(
     );
 
     // TDNR for remaining MethodCall → Call AST transformations
-    let tdnr_ast = ast_tdnr::resolve_tdnr(
+    let mut tdnr_ast = result.module;
+    ast_tdnr::resolve_tdnr(
         db,
-        result.module,
+        &mut tdnr_ast,
         prelude_module(db).iter().map(|p| p.module(db)),
     );
     report_unresolved_methods(db, &tdnr_ast, &span_map);

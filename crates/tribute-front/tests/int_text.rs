@@ -208,8 +208,8 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         ),
         parsed.span_map(db).clone(),
     );
-    let typed =
-        tribute_front::tdnr::resolve_tdnr(db, checked.module(db).clone(), std::iter::empty());
+    let mut typed = checked.module(db).clone();
+    tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
         typed,
@@ -298,8 +298,8 @@ fn lower_specialized_source(
         ),
         parsed.span_map(db).clone(),
     );
-    let typed =
-        tribute_front::tdnr::resolve_tdnr(db, checked.module(db).clone(), std::iter::empty());
+    let mut typed = checked.module(db).clone();
+    tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
         typed,
@@ -397,8 +397,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     );
     let checked =
         tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone());
-    let typed =
-        tribute_front::tdnr::resolve_tdnr(db, checked.module(db).clone(), std::iter::empty());
+    let mut typed = checked.module(db).clone();
+    tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: typed,

@@ -8,8 +8,8 @@ use std::collections::HashMap;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, Decl, Expr, ExprKind, FuncDecl, FuncDefId, HandlerArm, HandlerKind, Module, Pattern,
-    ResolvedRef, Stmt, Type, TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
+    Decl, Expr, ExprKind, FuncDecl, FuncDefId, Module, ResolvedRef, Stmt, Type, TypeAnnotation,
+    TypeAnnotationKind, TypeKind, TypedRef,
 };
 use crate::typeck::{MethodEntry, receiver_type_matches};
 use crate::{push_prefix, qualified_symbol};
@@ -53,24 +53,16 @@ impl<'db> TdnrResolver<'db> {
     }
 
     /// Resolve method calls in a module.
-    pub fn resolve_module(mut self, module: Module<TypedRef<'db>>) -> Module<TypedRef<'db>> {
+    pub fn resolve_module(mut self, module: &mut Module<TypedRef<'db>>) {
         let mut prefix = String::new();
         self.collect_type_identities(&module.decls, &mut prefix);
 
         // Phase 1: Build method index from function declarations
-        self.build_method_index(&module);
+        self.build_method_index(module);
 
         // Phase 2: Resolve method calls in all declarations
-        let decls = module
-            .decls
-            .into_iter()
-            .map(|decl| self.resolve_decl(decl))
-            .collect();
-
-        Module {
-            id: module.id,
-            name: module.name,
-            decls,
+        for decl in &mut module.decls {
+            self.resolve_decl(decl);
         }
     }
 
@@ -459,198 +451,146 @@ impl<'db> TdnrResolver<'db> {
     // =========================================================================
 
     /// Resolve method calls in a declaration.
-    fn resolve_decl(&mut self, decl: Decl<TypedRef<'db>>) -> Decl<TypedRef<'db>> {
+    fn resolve_decl(&mut self, decl: &mut Decl<TypedRef<'db>>) {
         match decl {
-            Decl::Function(func) => Decl::Function(self.resolve_func_decl(func)),
+            Decl::Function(func) => self.resolve_expr(&mut func.body),
+            Decl::Module(module) => self.resolve_module_decl(module),
             // Other declarations don't contain expressions
-            Decl::ExternFunction(e) => Decl::ExternFunction(e),
-            Decl::Struct(s) => Decl::Struct(s),
-            Decl::Enum(e) => Decl::Enum(e),
-            Decl::Ability(a) => Decl::Ability(a),
-            Decl::Use(u) => Decl::Use(u),
-            Decl::Module(m) => Decl::Module(self.resolve_module_decl(m)),
+            Decl::ExternFunction(_)
+            | Decl::Struct(_)
+            | Decl::Enum(_)
+            | Decl::Ability(_)
+            | Decl::Use(_) => {}
         }
     }
 
     /// Resolve method calls in a module declaration.
-    fn resolve_module_decl(
-        &mut self,
-        module: crate::ast::ModuleDecl<TypedRef<'db>>,
-    ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
+    fn resolve_module_decl(&mut self, module: &mut crate::ast::ModuleDecl<TypedRef<'db>>) {
         let saved = push_prefix(&mut self.current_prefix, module.name);
-        let body = module
-            .body
-            .map(|decls| decls.into_iter().map(|d| self.resolve_decl(d)).collect());
+        for decl in module.body.iter_mut().flatten() {
+            self.resolve_decl(decl);
+        }
         self.current_prefix.truncate(saved);
-
-        crate::ast::ModuleDecl {
-            id: module.id,
-            name: module.name,
-            is_pub: module.is_pub,
-            body,
-        }
-    }
-
-    /// Resolve method calls in a function declaration.
-    fn resolve_func_decl(&mut self, func: FuncDecl<TypedRef<'db>>) -> FuncDecl<TypedRef<'db>> {
-        FuncDecl {
-            id: func.id,
-            is_pub: func.is_pub,
-            name: func.name,
-            type_params: func.type_params,
-            params: func.params,
-            return_ty: func.return_ty,
-            effects: func.effects,
-            body: self.resolve_expr(func.body),
-        }
     }
 
     // =========================================================================
     // Expression resolution
     // =========================================================================
 
-    /// Resolve method calls in an expression.
-    fn resolve_expr(&mut self, expr: Expr<TypedRef<'db>>) -> Expr<TypedRef<'db>> {
-        let kind = match *expr.kind {
-            // The main case: resolve method calls
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-            } => self.resolve_method_call(expr.id, receiver, method, args),
-
-            // Recursively process other expressions
-            ExprKind::NatLit(n) => ExprKind::NatLit(n),
-            ExprKind::IntLit(n) => ExprKind::IntLit(n),
-            ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
-            ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
-            ExprKind::StringLit(s) => ExprKind::StringLit(s),
-            ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
-            ExprKind::Nil => ExprKind::Nil,
-            ExprKind::RuneLit(c) => ExprKind::RuneLit(c),
-            ExprKind::Var(v) => ExprKind::Var(v),
-
-            ExprKind::Call { callee, args } => ExprKind::Call {
-                callee: self.resolve_expr(callee),
-                args: args.into_iter().map(|a| self.resolve_expr(a)).collect(),
-            },
-
-            ExprKind::Cons { ctor, args } => ExprKind::Cons {
-                ctor,
-                args: args.into_iter().map(|a| self.resolve_expr(a)).collect(),
-            },
-
-            ExprKind::Record {
-                type_name,
-                fields,
-                spread,
-            } => ExprKind::Record {
-                type_name,
-                fields: fields
-                    .into_iter()
-                    .map(|(name, e)| (name, self.resolve_expr(e)))
-                    .collect(),
-                spread: spread.map(|e| self.resolve_expr(e)),
-            },
-
-            ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
-                op,
-                lhs: self.resolve_expr(lhs),
-                rhs: self.resolve_expr(rhs),
-            },
-
-            ExprKind::Block { stmts, value } => ExprKind::Block {
-                stmts: stmts.into_iter().map(|s| self.resolve_stmt(s)).collect(),
-                value: self.resolve_expr(value),
-            },
-
-            ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-                scrutinee: self.resolve_expr(scrutinee),
-                arms: arms.into_iter().map(|a| self.resolve_arm(a)).collect(),
-            },
-
-            ExprKind::Lambda { params, body } => ExprKind::Lambda {
-                params,
-                body: self.resolve_expr(body),
-            },
-
-            ExprKind::Handle { body, handlers } => ExprKind::Handle {
-                body: self.resolve_expr(body),
-                handlers: handlers
-                    .into_iter()
-                    .map(|h| self.resolve_handler_arm(h))
-                    .collect(),
-            },
-
-            ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-                arg: self.resolve_expr(arg),
-                local_id,
-            },
-
-            ExprKind::Tuple(elements) => {
-                ExprKind::Tuple(elements.into_iter().map(|e| self.resolve_expr(e)).collect())
+    /// Resolve method calls in an expression, in place.
+    fn resolve_expr(&mut self, expr: &mut Expr<TypedRef<'db>>) {
+        match &mut *expr.kind {
+            ExprKind::MethodCall { receiver, args, .. } => {
+                self.resolve_expr(receiver);
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
+                self.resolve_method_call(expr);
             }
-
-            ExprKind::List(elements) => {
-                ExprKind::List(elements.into_iter().map(|e| self.resolve_expr(e)).collect())
+            ExprKind::Call { callee, args } => {
+                self.resolve_expr(callee);
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
             }
-
-            ExprKind::Error => ExprKind::Error,
-        };
-
-        Expr::new(expr.id, kind)
+            ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
+                for arg in args {
+                    self.resolve_expr(arg);
+                }
+            }
+            ExprKind::Record { fields, spread, .. } => {
+                for (_, field) in fields {
+                    self.resolve_expr(field);
+                }
+                if let Some(spread) = spread {
+                    self.resolve_expr(spread);
+                }
+            }
+            ExprKind::BinOp { lhs, rhs, .. } => {
+                self.resolve_expr(lhs);
+                self.resolve_expr(rhs);
+            }
+            ExprKind::Block { stmts, value } => {
+                for stmt in stmts {
+                    match stmt {
+                        Stmt::Let { value, .. } => self.resolve_expr(value),
+                        Stmt::Expr { expr, .. } => self.resolve_expr(expr),
+                    }
+                }
+                self.resolve_expr(value);
+            }
+            ExprKind::Case { scrutinee, arms } => {
+                self.resolve_expr(scrutinee);
+                for arm in arms {
+                    if let Some(guard) = &mut arm.guard {
+                        self.resolve_expr(guard);
+                    }
+                    self.resolve_expr(&mut arm.body);
+                }
+            }
+            ExprKind::Lambda { body, .. } => self.resolve_expr(body),
+            ExprKind::Handle { body, handlers } => {
+                self.resolve_expr(body);
+                for handler in handlers {
+                    self.resolve_expr(&mut handler.body);
+                }
+            }
+            ExprKind::Resume { arg, .. } => self.resolve_expr(arg),
+            // Patterns and leaves contain no method calls.
+            ExprKind::NatLit(_)
+            | ExprKind::IntLit(_)
+            | ExprKind::FloatLit(_)
+            | ExprKind::BoolLit(_)
+            | ExprKind::StringLit(_)
+            | ExprKind::BytesLit(_)
+            | ExprKind::Nil
+            | ExprKind::RuneLit(_)
+            | ExprKind::Var(_)
+            | ExprKind::Error => {}
+        }
     }
 
-    /// Resolve a method call expression.
+    /// Resolve a method call expression whose receiver and arguments are
+    /// already resolved.
     ///
     /// Transforms `receiver.method(args)` into `method(receiver, args)`
-    /// by looking up the method in the type's namespace.
-    fn resolve_method_call(
-        &mut self,
-        id: crate::ast::NodeId,
-        receiver: Expr<TypedRef<'db>>,
-        method: Symbol,
-        args: Vec<Expr<TypedRef<'db>>>,
-    ) -> ExprKind<TypedRef<'db>> {
-        let receiver = self.resolve_expr(receiver);
-        let args: Vec<Expr<TypedRef<'db>>> =
-            args.into_iter().map(|a| self.resolve_expr(a)).collect();
+    /// by looking up the method in the type's namespace. An unresolved call
+    /// stays a `MethodCall`; later passes report it.
+    fn resolve_method_call(&mut self, expr: &mut Expr<TypedRef<'db>>) {
+        let ExprKind::MethodCall {
+            receiver, method, ..
+        } = &*expr.kind
+        else {
+            return;
+        };
+        let Some(entry) = self.lookup_method(self.get_expr_type(receiver), *method) else {
+            return;
+        };
+        let callee_ref = TypedRef {
+            resolved: ResolvedRef::Function { id: entry.func_id },
+            ty: entry.func_ty,
+        };
+        let ExprKind::MethodCall { receiver, args, .. } =
+            std::mem::replace(&mut *expr.kind, ExprKind::Error)
+        else {
+            unreachable!("checked above");
+        };
 
-        // Get the receiver's type from the TypedRef
-        let receiver_ty = self.get_expr_type(&receiver);
+        // Build callee expression (a Var referencing the function)
+        // TODO: This reuses the MethodCall's NodeId, which makes SpanMap
+        // point to the whole `receiver.method(args)` expression instead of
+        // just the method name. A fresh/synthetic NodeId would be better
+        // once the resolver has access to a NodeId generator.
+        let callee = Expr::new(expr.id, ExprKind::Var(callee_ref));
 
-        // Try to find a matching method
-        if let Some(entry) = self.lookup_method(receiver_ty, method) {
-            // Found the method - transform to a Call
-            let callee_ref = TypedRef {
-                resolved: ResolvedRef::Function { id: entry.func_id },
-                ty: entry.func_ty,
-            };
-
-            // Build callee expression (a Var referencing the function)
-            // TODO: This reuses the MethodCall's NodeId, which makes SpanMap
-            // point to the whole `receiver.method(args)` expression instead of
-            // just the method name. A fresh/synthetic NodeId would be better
-            // once the resolver has access to a NodeId generator.
-            let callee = Expr::new(id, ExprKind::Var(callee_ref));
-
-            // Prepend receiver to args
-            let mut all_args = vec![receiver];
-            all_args.extend(args);
-
-            ExprKind::Call {
-                callee,
-                args: all_args,
-            }
-        } else {
-            // Could not resolve - keep as MethodCall
-            // This may be an error, but we leave it for later passes to report
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-            }
-        }
+        // Prepend receiver to args
+        let mut all_args = Vec::with_capacity(args.len() + 1);
+        all_args.push(receiver);
+        all_args.extend(args);
+        *expr.kind = ExprKind::Call {
+            callee,
+            args: all_args,
+        };
     }
 
     /// Get the type of an expression.
@@ -762,97 +702,6 @@ impl<'db> TdnrResolver<'db> {
             return None; // ambiguous — keep as MethodCall for error reporting
         }
         Some(matched)
-    }
-
-    // =========================================================================
-    // Statement resolution
-    // =========================================================================
-
-    /// Resolve method calls in a statement.
-    fn resolve_stmt(&mut self, stmt: Stmt<TypedRef<'db>>) -> Stmt<TypedRef<'db>> {
-        match stmt {
-            Stmt::Let {
-                id,
-                pattern,
-                ty,
-                value,
-            } => Stmt::Let {
-                id,
-                pattern: self.resolve_pattern(pattern),
-                ty,
-                value: self.resolve_expr(value),
-            },
-            Stmt::Expr { id, expr } => Stmt::Expr {
-                id,
-                expr: self.resolve_expr(expr),
-            },
-        }
-    }
-
-    // =========================================================================
-    // Pattern resolution (patterns don't have method calls, but we traverse them)
-    // =========================================================================
-
-    /// Resolve method calls in a pattern (patterns themselves don't have method calls,
-    /// but we need this for completeness).
-    fn resolve_pattern(&self, pattern: Pattern<TypedRef<'db>>) -> Pattern<TypedRef<'db>> {
-        // Patterns don't contain method calls, so just return as-is
-        // But we could have guards that need resolution
-        pattern
-    }
-
-    // =========================================================================
-    // Arm resolution
-    // =========================================================================
-
-    /// Resolve method calls in a case arm.
-    fn resolve_arm(&mut self, arm: Arm<TypedRef<'db>>) -> Arm<TypedRef<'db>> {
-        Arm {
-            id: arm.id,
-            pattern: self.resolve_pattern(arm.pattern),
-            guard: arm.guard.map(|g| self.resolve_expr(g)),
-            body: self.resolve_expr(arm.body),
-        }
-    }
-
-    /// Resolve method calls in a handler arm.
-    fn resolve_handler_arm(&mut self, arm: HandlerArm<TypedRef<'db>>) -> HandlerArm<TypedRef<'db>> {
-        let kind = match arm.kind {
-            HandlerKind::Do { binding } => HandlerKind::Do {
-                binding: self.resolve_pattern(binding),
-            },
-            HandlerKind::Fn {
-                ability,
-                op,
-                params,
-            } => HandlerKind::Fn {
-                ability,
-                op,
-                params: params
-                    .into_iter()
-                    .map(|p| self.resolve_pattern(p))
-                    .collect(),
-            },
-            HandlerKind::Op {
-                ability,
-                op,
-                params,
-                resume_local_id,
-            } => HandlerKind::Op {
-                ability,
-                op,
-                params: params
-                    .into_iter()
-                    .map(|p| self.resolve_pattern(p))
-                    .collect(),
-                resume_local_id,
-            },
-        };
-        HandlerArm {
-            id: arm.id,
-            kind,
-            body: self.resolve_expr(arm.body),
-        }
     }
 }
 

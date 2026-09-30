@@ -92,8 +92,8 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 
     // TDNR with prelude module as import source for method resolution
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let tdnr_ast =
-        tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
+    let mut tdnr_ast = result.module;
+    tribute_front::tdnr::resolve_tdnr(db, &mut tdnr_ast, prelude_modules.iter().copied());
 
     let function_types_map: std::collections::HashMap<_, _> =
         result.function_types.into_iter().collect();
@@ -171,7 +171,8 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     let result = checker.check_module(&resolved);
 
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let _ = tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
+    let mut module = result.module;
+    tribute_front::tdnr::resolve_tdnr(db, &mut module, prelude_modules.iter().copied());
 }
 
 #[salsa::tracked(returns(clone))]
@@ -202,8 +203,8 @@ fn tdnr_function_summary_inner(
     let result = checker.check_module(&resolved);
 
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let module =
-        tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
+    let mut module = result.module;
+    tribute_front::tdnr::resolve_tdnr(db, &mut module, prelude_modules.iter().copied());
     let body = function_body(&module, &function_name);
     let mut summary = TdnrSummary::default();
     collect_tdnr_summary(db, body, &mut summary);
