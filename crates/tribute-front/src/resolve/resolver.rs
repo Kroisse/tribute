@@ -337,10 +337,10 @@ impl<'db> Resolver<'db> {
 
         // Resolve imported ability names in effect annotations to qualified paths.
         // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
-        let effects = func
-            .effects
-            .as_ref()
-            .map(|effs| self.resolve_effect_annotations(effs));
+        let mut effects = func.effects.clone();
+        if let Some(effs) = &mut effects {
+            self.resolve_effect_annotations(effs);
+        }
 
         FuncDecl {
             id: func.id,
@@ -420,17 +420,16 @@ impl<'db> Resolver<'db> {
     /// import stores the original module path. This method rewrites unqualified
     /// ability names in effect annotations to their qualified form so that
     /// `annotation_to_effect` creates the correct AbilityId.
-    fn resolve_effect_annotations(&self, effects: &[TypeAnnotation]) -> Vec<TypeAnnotation> {
-        effects
-            .iter()
-            .map(|ann| self.resolve_ability_in_annotation(ann))
-            .collect()
+    fn resolve_effect_annotations(&self, effects: &mut [TypeAnnotation]) {
+        for ann in effects {
+            self.resolve_ability_in_annotation(ann);
+        }
     }
 
     /// Resolve a single annotation: if the ability name was imported via `use`,
     /// rewrite it to the qualified path from the original module.
-    fn resolve_ability_in_annotation(&self, ann: &TypeAnnotation) -> TypeAnnotation {
-        match &ann.kind {
+    fn resolve_ability_in_annotation(&self, ann: &mut TypeAnnotation) {
+        match &mut ann.kind {
             TypeAnnotationKind::Named(sym)
                 if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase())) =>
             {
@@ -439,24 +438,11 @@ impl<'db> Resolver<'db> {
                     && let Some(path) = self.env.get_use_path(*sym)
                     && path.len() >= 2
                 {
-                    return TypeAnnotation {
-                        id: ann.id,
-                        kind: TypeAnnotationKind::Path(path.clone()),
-                    };
-                }
-                ann.clone()
-            }
-            TypeAnnotationKind::App { ctor, args } => {
-                let resolved_ctor = self.resolve_ability_in_annotation(ctor);
-                TypeAnnotation {
-                    id: ann.id,
-                    kind: TypeAnnotationKind::App {
-                        ctor: Box::new(resolved_ctor),
-                        args: args.clone(),
-                    },
+                    ann.kind = TypeAnnotationKind::Path(path.clone());
                 }
             }
-            _ => ann.clone(),
+            TypeAnnotationKind::App { ctor, .. } => self.resolve_ability_in_annotation(ctor),
+            _ => {}
         }
     }
 
