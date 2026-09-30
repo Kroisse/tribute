@@ -44,9 +44,10 @@ use trunk_ir::Symbol;
 use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
+use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -510,13 +511,32 @@ impl RewritePattern for ArrayGetPattern {
         let result_ty = array_get.result_ty(ctx);
 
         let array_ty = ctx.value_ty(ref_val);
-        let new_op = wasm_gc_dialect::ArrayGet::operands(ref_val, index)
-            .r#type(array_ty)
-            .results(result_ty)
-            .build(ctx, loc);
-        rewriter.replace_op(new_op.op_ref());
+        // A packed element has no Wasm value type of its own. It is read
+        // into an `i32` whose upper bits are unspecified, so the unsigned
+        // read is as good as the signed one; one is fixed here.
+        let new_op = if has_packed_elements(ctx, array_ty) {
+            wasm_gc_dialect::ArrayGetU::operands(ref_val, index)
+                .r#type(array_ty)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        } else {
+            wasm_gc_dialect::ArrayGet::operands(ref_val, index)
+                .r#type(array_ty)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref()
+        };
+        rewriter.replace_op(new_op);
         true
     }
+}
+
+/// Whether `array_ty` is a `core.array` of 8- or 16-bit integers, which
+/// WasmGC stores packed.
+fn has_packed_elements(ctx: &IrContext, array_ty: TypeRef) -> bool {
+    core::Array::from_type_ref(ctx, array_ty)
+        .is_some_and(|array| matches!(IntegerLike::width(ctx, array.element(ctx)), Some(8 | 16)))
 }
 
 /// Pattern for `adt.array_set` -> `wasm.array_set`
@@ -764,6 +784,28 @@ mod tests {
             .get_type("type")
             .expect("struct_get type must be a Type attribute");
         assert_eq!(variant_ty, ctx.value_ty(ctx.op_operands(variant_get)[0]));
+    }
+
+    #[test]
+    fn packed_array_reads_use_the_unsigned_get() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.func @read(%bytes: core.array(core.i8), %words: core.array(core.i32)) -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %byte = adt.array_get %bytes, %zero : core.i8
+    %word = adt.array_get %words, %zero : core.i32
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = trunk_ir::printer::print_module(&ctx, module.op());
+        assert_eq!(output.matches("wasm_gc.array_get_u").count(), 1, "{output}");
+        assert_eq!(output.matches("wasm_gc.array_get ").count(), 1, "{output}");
     }
 
     #[test]

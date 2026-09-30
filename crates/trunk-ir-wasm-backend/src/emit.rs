@@ -169,6 +169,8 @@ static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::n
         ("i32_wrap_i64", Instruction::I32WrapI64),
         ("i64_extend_i32_s", Instruction::I64ExtendI32S),
         ("i64_extend_i32_u", Instruction::I64ExtendI32U),
+        ("i32_extend8_s", Instruction::I32Extend8S),
+        ("i32_extend16_s", Instruction::I32Extend16S),
         // Float to int conversions
         ("i32_trunc_f32_s", Instruction::I32TruncF32S),
         ("i32_trunc_f32_u", Instruction::I32TruncF32U),

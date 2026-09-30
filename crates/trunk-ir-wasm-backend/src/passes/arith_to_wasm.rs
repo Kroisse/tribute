@@ -180,6 +180,14 @@ impl RewritePattern for ArithBinOpPattern {
         };
         let loc = ctx.op(op).location;
         let name = data.name;
+        // Division reads the unspecified upper bits of a narrow integer.
+        if is_narrow(ctx, result_ty)
+            && ["divsi", "divui", "remsi", "remui"]
+                .into_iter()
+                .any(|reads_upper| name == Symbol::new(reads_upper))
+        {
+            return false;
+        }
 
         let new_op = if name == Symbol::new("addi") {
             match suffix {
@@ -347,6 +355,10 @@ impl RewritePattern for ArithCmpPattern {
         let loc = ctx.op(op).location;
 
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
+            // Comparison reads the unspecified upper bits of a narrow integer.
+            if is_narrow(ctx, ctx.value_ty(lhs)) {
+                return false;
+            }
             let predicate = cmpi.predicate(ctx);
             let Some(suffix) = type_suffix(ctx, ctx.value_ty(lhs)) else {
                 return false;
@@ -597,6 +609,12 @@ impl RewritePattern for ArithBitwisePattern {
         let (Some(&lhs), Some(&rhs)) = (operands.first(), operands.get(1)) else {
             return false;
         };
+        // A right shift moves the unspecified upper bits of a narrow integer
+        // into the result.
+        if is_narrow(ctx, result_ty) && (name == Symbol::new("shr") || name == Symbol::new("shru"))
+        {
+            return false;
+        }
         let Some(suffix) = type_suffix(ctx, result_ty) else {
             return false;
         };
@@ -703,9 +721,11 @@ impl RewritePattern for ArithConversionPattern {
             return false;
         };
         let src_ty = ctx.value_ty(operand);
-        // Narrow integers share the i32 representation with undefined upper
-        // bits, so only exact 32- and 64-bit integers convert here; other
-        // widths stay unconverted and fail the conversion boundary.
+        if is_narrow(ctx, src_ty) || is_narrow(ctx, dst_ty) {
+            return lower_narrow_conversion(ctx, op, rewriter, kind);
+        }
+        // Other widths below 32 bits (such as booleans) have no conversion
+        // here; they stay unconverted and fail the conversion boundary.
         let exact = |ctx: &IrContext, ty| {
             IntegerLike::width(ctx, ty).is_none_or(|width| matches!(width, 32 | 64))
         };
@@ -752,6 +772,94 @@ impl RewritePattern for ArithConversionPattern {
         rewriter.replace_op(new_op);
         true
     }
+}
+
+/// Whether `ty` is an 8- or 16-bit integer.
+///
+/// These live in an `i32` whose upper bits are unspecified; whoever reads
+/// the value normalizes it.
+fn is_narrow(ctx: &IrContext, ty: TypeRef) -> bool {
+    matches!(IntegerLike::width(ctx, ty), Some(8 | 16))
+}
+
+/// Lower an integer conversion from or to an 8- or 16-bit integer.
+///
+/// Extensions normalize the unspecified upper bits: zero extension masks,
+/// sign extension uses `i32.extend{8,16}_s`. Truncation to a narrow integer
+/// masks an `i32` or wraps an `i64`. Conversions between narrow integers and
+/// floats or booleans stay unconverted.
+fn lower_narrow_conversion(
+    ctx: &mut IrContext,
+    op: OpRef,
+    rewriter: &mut PatternRewriter<'_>,
+    kind: &str,
+) -> bool {
+    let operand = ctx.op_operands(op)[0];
+    let dst_ty = ctx.op_result_types(op)[0];
+    let (Some(src), Some(dst)) = (
+        IntegerLike::width(ctx, ctx.value_ty(operand)),
+        IntegerLike::width(ctx, dst_ty),
+    ) else {
+        return false;
+    };
+    if src == 1 || dst == 1 {
+        return false;
+    }
+    let loc = ctx.op(op).location;
+    if kind == "trunci" && src == 64 {
+        let wrap = wasm_dialect::I32WrapI64::operands(operand)
+            .results(dst_ty)
+            .build(ctx, loc);
+        rewriter.replace_op(wrap.op_ref());
+        return true;
+    }
+    let i32_ty = intern_i32_type(ctx);
+    // The width to normalize from, and the type of the normalized `i32`.
+    let (width, normalized_ty) = match kind {
+        "extui" | "extsi" => (src, if dst == 64 { i32_ty } else { dst_ty }),
+        "trunci" => (dst, dst_ty),
+        _ => return false,
+    };
+    let normalized = match (kind, width) {
+        ("extsi", 8) => wasm_dialect::I32Extend8S::operands(operand)
+            .results(normalized_ty)
+            .build(ctx, loc)
+            .op_ref(),
+        ("extsi", _) => wasm_dialect::I32Extend16S::operands(operand)
+            .results(normalized_ty)
+            .build(ctx, loc)
+            .op_ref(),
+        _ => {
+            let mask = wasm_dialect::I32Const::operands()
+                .value(((1u32 << width) - 1) as i32)
+                .results(i32_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(mask.op_ref());
+            wasm_dialect::I32And::operands(operand, mask.result(ctx))
+                .results(normalized_ty)
+                .build(ctx, loc)
+                .op_ref()
+        }
+    };
+    if dst != 64 {
+        rewriter.replace_op(normalized);
+        return true;
+    }
+    rewriter.insert_op(normalized);
+    let value = ctx.op_results(normalized)[0];
+    let widen = if kind == "extsi" {
+        wasm_dialect::I64ExtendI32S::operands(value)
+            .results(dst_ty)
+            .build(ctx, loc)
+            .op_ref()
+    } else {
+        wasm_dialect::I64ExtendI32U::operands(value)
+            .results(dst_ty)
+            .build(ctx, loc)
+            .op_ref()
+    };
+    rewriter.replace_op(widen);
+    true
 }
 
 /// The name of an `arith` conversion operation, if `op` is one.
@@ -905,15 +1013,18 @@ core.module @test {
     }
 
     #[test]
-    fn narrow_integer_conversions_are_left_unconverted() {
+    fn narrow_integer_conversions_normalize_the_upper_bits() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @convert(%b: core.i8, %w: core.i64) {
-    %s = arith.extsi %b : core.i64
-    %t = arith.trunci %w : core.i8
-    %f = arith.sitofp %b : core.f64
+  func.func @convert(%b: core.i8, %h: core.i16, %n: core.i32, %w: core.i64) {
+    %zb = arith.extui %b : core.i32
+    %zh = arith.extui %h : core.i64
+    %sb = arith.extsi %b : core.i32
+    %sh = arith.extsi %h : core.i64
+    %tb = arith.trunci %n : core.i8
+    %th = arith.trunci %w : core.i16
     func.return
   }
 }"#,
@@ -922,7 +1033,45 @@ core.module @test {
         lower(&mut ctx, module, TypeConverter::new());
 
         let output = print_module(&ctx, module.op());
-        assert_eq!(output.matches("arith.").count(), 3, "{output}");
+        assert!(!output.contains("arith."), "{output}");
+        for expected in [
+            "wasm.i32_const {value = 255}",
+            "wasm.i32_const {value = 65535}",
+            "wasm.i64_extend_i32_u",
+            "wasm.i32_extend8_s",
+            "wasm.i32_extend16_s",
+            "wasm.i64_extend_i32_s",
+            "wasm.i32_wrap_i64",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
+        }
+        assert_eq!(output.matches("wasm.i32_and").count(), 3, "{output}");
+    }
+
+    #[test]
+    fn narrow_integer_operations_that_read_upper_bits_stay_unconverted() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @read(%a: core.i8, %b: core.i8, %p: core.i1) {
+    %lt = arith.cmpi %a, %b {predicate = @ult} : core.i1
+    %q = arith.divui %a, %b : core.i8
+    %r = arith.remsi %a, %b : core.i8
+    %s = arith.shru %a, %b : core.i8
+    %f = arith.sitofp %a : core.f64
+    %e = arith.extsi %p : core.i32
+    %x = arith.xor %a, %b : core.i8
+    func.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let output = print_module(&ctx, module.op());
+        assert_eq!(output.matches("arith.").count(), 6, "{output}");
+        assert!(output.contains("wasm.i32_xor"), "{output}");
     }
 
     #[test]

@@ -265,6 +265,8 @@ mod wasm {
     fn i32_wrap_i64(operand: Value<_>) -> Value<_> {}
     fn i64_extend_i32_s(operand: Value<_>) -> Value<_> {}
     fn i64_extend_i32_u(operand: Value<_>) -> Value<_> {}
+    fn i32_extend8_s(operand: Value<_>) -> Value<_> {}
+    fn i32_extend16_s(operand: Value<_>) -> Value<_> {}
 
     // Type conversions (float to int)
     fn i32_trunc_f32_s(operand: Value<_>) -> Value<_> {}
