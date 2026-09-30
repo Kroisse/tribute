@@ -583,7 +583,7 @@ mod tests {
         // entry_block (null check + brif) → do_release_block → free_block → skip_block
         let func_ops = module.ops(&ctx);
         let func_op = func_ops[0];
-        let regions = ctx.op(func_op).regions.clone();
+        let regions = &ctx.op(func_op).regions;
         let body = regions[0];
         let block_count = ctx.region(body).blocks.len();
         assert_eq!(

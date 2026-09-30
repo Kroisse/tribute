@@ -1731,7 +1731,7 @@ impl<'a> Converter<'a> {
                     "scf.switch body may contain only scf.case and scf.default",
                 ));
             }
-            let case_regions = case_data.regions.clone();
+            let case_regions = &case_data.regions;
             let case_value = case_data.attributes.get("value").cloned();
             let [source_region] = case_regions.as_slice() else {
                 return Err(TributeControlToCpsError::one(
@@ -1741,7 +1741,7 @@ impl<'a> Converter<'a> {
                     "scf switch arm requires exactly one region",
                 ));
             };
-            let source_case_blocks = self.ctx.region(*source_region).blocks.clone();
+            let source_case_blocks = &self.ctx.region(*source_region).blocks;
             let [source_case_block] = source_case_blocks.as_slice() else {
                 return Err(TributeControlToCpsError::one(
                     POST_CPS_BOUNDARY,
@@ -3135,7 +3135,7 @@ impl<'a> Converter<'a> {
         let handle_frame =
             self.frame_for_suffix(block, location, handle_answer, flow, after_handle)?;
 
-        let regions = self.ctx.op(source).regions.clone();
+        let regions = &self.ctx.op(source).regions;
         let [body_source, completion_source, handlers_region] = regions.as_slice() else {
             unreachable!("pre-CPS validation checked handle regions");
         };

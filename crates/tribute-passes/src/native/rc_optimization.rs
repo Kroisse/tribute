@@ -38,7 +38,7 @@ fn optimize_region(ctx: &mut IrContext, region: RegionRef) {
 }
 
 fn eliminate_one_pair(ctx: &mut IrContext, block: BlockRef) -> bool {
-    let ops = ctx.block(block).ops.clone();
+    let ops = &ctx.block(block).ops;
 
     for (retain_index, &retain_ref) in ops.iter().enumerate() {
         let Ok(retain) = tribute_rt::Retain::from_op(ctx, retain_ref) else {

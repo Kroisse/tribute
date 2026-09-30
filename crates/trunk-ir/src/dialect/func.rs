@@ -1012,11 +1012,10 @@ mod tests {
 }"#,
         );
         let function = Func::from_op(&ctx, module.ops(&ctx)[0]).expect("function");
-        let ops = ctx
+        let ops = &ctx
             .block(ctx.region(function.body_if_present(&ctx).unwrap()).blocks[0])
-            .ops
-            .clone();
-        for op in ops {
+            .ops;
+        for &op in ops {
             assert!(IndirectCallLikeOps::get(&ctx, op).is_some());
             assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, op), None);
         }

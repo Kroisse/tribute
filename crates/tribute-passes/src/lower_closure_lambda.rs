@@ -629,7 +629,7 @@ mod tests {
         let test_fn = func::Func::from_op(&ctx, ops[0]).unwrap();
         let test_fn_body = test_fn.body(&ctx);
         let test_fn_entry = ctx.region(test_fn_body).blocks[0];
-        let test_fn_ops = ctx.block(test_fn_entry).ops.clone();
+        let test_fn_ops = &ctx.block(test_fn_entry).ops;
 
         // Should have: adt.ref_null (env) + closure.new
         assert!(test_fn_ops.len() >= 2, "expected at least 2 ops in test_fn");
@@ -833,7 +833,7 @@ mod tests {
         let test_fn = func::Func::from_op(&ctx, ops[0]).unwrap();
         let test_fn_body = test_fn.body(&ctx);
         let test_fn_entry = ctx.region(test_fn_body).blocks[0];
-        let test_fn_ops = ctx.block(test_fn_entry).ops.clone();
+        let test_fn_ops = &ctx.block(test_fn_entry).ops;
 
         let has_struct_new = test_fn_ops
             .iter()
@@ -849,7 +849,7 @@ mod tests {
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
         let lifted_body = lifted.body(&ctx);
         let lifted_entry = ctx.region(lifted_body).blocks[0];
-        let lifted_ops = ctx.block(lifted_entry).ops.clone();
+        let lifted_ops = &ctx.block(lifted_entry).ops;
 
         // Should have: ref_cast + struct_get (env extraction) + add + return
         assert!(

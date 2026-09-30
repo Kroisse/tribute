@@ -243,7 +243,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
 
     // Prepend table and elem operations to the module body.
     // We insert before the first op in the block (if any), or push at the end.
-    let existing_ops = ctx.block(first_block).ops.clone();
+    let existing_ops = &ctx.block(first_block).ops;
     if let Some(&first_op) = existing_ops.first() {
         ctx.insert_op_before(first_block, first_op, table_op.op_ref());
         ctx.insert_op_before(first_block, first_op, elem_op.op_ref());

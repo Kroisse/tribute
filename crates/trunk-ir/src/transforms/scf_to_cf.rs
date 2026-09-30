@@ -98,7 +98,7 @@ fn transform_region(ctx: &mut IrContext, region: RegionRef, plan: &ScfToCfPlan) 
     // Process each block: if it contains an scf op, split and expand.
     let mut i = 0;
     loop {
-        let blocks = ctx.region(region).blocks.clone();
+        let blocks = &ctx.region(region).blocks;
         if i >= blocks.len() {
             break;
         }
@@ -167,7 +167,7 @@ fn lower_terminal_never_if(
 ) {
     let loc = ctx.op(scf_op).location;
     let parent_region = ctx.block(block).parent_region.unwrap();
-    let blocks = ctx.region(parent_region).blocks.clone();
+    let blocks = &ctx.region(parent_region).blocks;
     let insert_before = blocks
         .iter()
         .position(|&candidate| candidate == block)
@@ -401,7 +401,7 @@ fn lower_terminal_resultless_switch(
 ) {
     let loc = ctx.op(scf_op).location;
     let parent_region = ctx.block(block).parent_region.unwrap();
-    let blocks = ctx.region(parent_region).blocks.clone();
+    let blocks = &ctx.region(parent_region).blocks;
     let insert_before = blocks
         .iter()
         .position(|&candidate| candidate == block)
@@ -1154,7 +1154,7 @@ mod tests {
         let names = collect_op_names(&ctx, func_body);
         assert!(!names.iter().any(|n| n.starts_with("scf.")));
         // Nil-typed scf.if results are not materialized as CFG values.
-        let blocks = ctx.region(func_body).blocks.clone();
+        let blocks = &ctx.region(func_body).blocks;
         let merge = blocks.last().unwrap();
         assert_eq!(ctx.block_args(*merge).len(), 0);
     }
@@ -1598,7 +1598,7 @@ mod tests {
         lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
-        let blocks = ctx.region(body).blocks.clone();
+        let blocks = &ctx.region(body).blocks;
         let names = collect_op_names(&ctx, body);
         assert!(!names.iter().any(|name| name.starts_with("scf.")));
         assert_eq!(count_blocks(&ctx, body), 5);
@@ -1649,7 +1649,7 @@ mod tests {
         lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
-        let blocks = ctx.region(body).blocks.clone();
+        let blocks = &ctx.region(body).blocks;
         let names = collect_op_names(&ctx, body);
         assert!(!names.iter().any(|name| name.starts_with("scf.")));
         assert_eq!(count_blocks(&ctx, body), 5);
@@ -1692,7 +1692,7 @@ mod tests {
         lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
-        let blocks = ctx.region(body).blocks.clone();
+        let blocks = &ctx.region(body).blocks;
         let continuation = *blocks.last().unwrap();
         let names = collect_op_names(&ctx, body);
         assert!(!names.iter().any(|name| name.starts_with("scf.")));
@@ -1743,7 +1743,7 @@ mod tests {
         lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
-        let blocks = ctx.region(body).blocks.clone();
+        let blocks = &ctx.region(body).blocks;
         let continuation = *blocks.last().unwrap();
         let names = collect_op_names(&ctx, body);
         assert!(
@@ -1928,7 +1928,7 @@ mod tests {
         lower_scf_to_cf(&mut ctx, module, &mut Default::default());
 
         let body = func_op.body(&ctx);
-        let blocks = ctx.region(body).blocks.clone();
+        let blocks = &ctx.region(body).blocks;
         assert_eq!(blocks.len(), 3);
         assert!(
             !collect_op_names(&ctx, body)
@@ -1945,7 +1945,7 @@ mod tests {
             })
             .unwrap();
         assert!(ctx.block_args(exit).is_empty());
-        for &block in &blocks {
+        for &block in blocks {
             for &op in &ctx.block(block).ops {
                 if ctx.op(op).successors.as_slice() == [exit] {
                     assert!(
@@ -2193,7 +2193,7 @@ mod tests {
         );
 
         // scf.switch has no result, so merge block should have 0 args
-        let blocks = ctx.region(body).blocks.clone();
+        let blocks = &ctx.region(body).blocks;
         let merge = blocks.last().unwrap();
         let merge_args = ctx.block_args(*merge);
         assert_eq!(
@@ -2388,13 +2388,13 @@ mod tests {
         // Verify: the add op's operands should now reference the merge block arg,
         // not the old if_op result.
         let func_body = func_op.body(&ctx);
-        let blocks = ctx.region(func_body).blocks.clone();
+        let blocks = &ctx.region(func_body).blocks;
         let merge = blocks.last().unwrap();
         let merge_args = ctx.block_args(*merge);
         assert_eq!(merge_args.len(), 1, "merge block should have 1 arg");
 
         // The add op should use the merge block arg
-        let merge_ops = ctx.block(*merge).ops.clone();
+        let merge_ops = &ctx.block(*merge).ops;
         let add_op = merge_ops
             .iter()
             .find(|&&op| {

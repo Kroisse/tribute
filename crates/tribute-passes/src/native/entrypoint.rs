@@ -31,11 +31,11 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
     let init_sym = Symbol::new("__tribute_init");
     let asan_init_sym = Symbol::new("__asan_init");
 
-    let ops = ctx.block(first_block).ops.clone();
+    let ops = &ctx.block(first_block).ops;
     let mut main_op = None;
     let mut has_tribute_init = false;
     let mut has_asan_init = false;
-    for &op in &ops {
+    for &op in ops {
         if let Ok(func_op) = func::Func::from_op(ctx, op) {
             let name = func_op.sym_name(ctx);
             if name == main_sym {
