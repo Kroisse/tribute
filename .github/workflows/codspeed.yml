@@ -62,9 +62,10 @@ jobs:
         run: cargo codspeed build -p tribute-bench
 
       # Native run-time benchmarks are skipped under CodSpeed; see
-      # crates/tribute-bench/benches/abi_boundary.rs.
+      # crates/tribute-bench/benches/abi_boundary.rs. Simulation and memory
+      # measurements share one build.
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v5
         with:
-          mode: simulation
+          mode: simulation,memory
           run: cargo codspeed run -p tribute-bench
