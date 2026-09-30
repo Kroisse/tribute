@@ -380,3 +380,89 @@ fn main() {
     );
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+/// Effect annotations follow the same precedence as other names: an ability
+/// the inline module defines itself wins over one it imports under the same
+/// name.
+#[salsa_test]
+fn inline_module_definition_wins_over_an_imported_ability(db: &salsa::DatabaseImpl) {
+    use tribute_front::ast::{Decl, TypeAnnotationKind};
+    use trunk_ir::Symbol;
+
+    let source = SourceCst::from_source_str(
+        db,
+        "use_imports.trb",
+        r#"
+mod outer {
+    mod fx {
+        pub ability Tick {
+            op tick() -> Nat
+        }
+    }
+    pub ability Tick {
+        op other() -> Nat
+    }
+    use fx::Tick
+
+    pub fn noop() ->{Tick} Nat {
+        1
+    }
+}
+"#,
+    );
+    let module = tribute_front::query::resolved_module(db, source).expect("module resolves");
+    let effects = module
+        .decls
+        .iter()
+        .find_map(|decl| match decl {
+            Decl::Module(outer) => outer.body.as_ref(),
+            _ => None,
+        })
+        .and_then(|body| {
+            body.iter().find_map(|decl| match decl {
+                Decl::Function(function) if function.name == Symbol::new("noop") => {
+                    function.effects.clone()
+                }
+                _ => None,
+            })
+        })
+        .expect("noop declares effects");
+    assert!(
+        matches!(&effects[0].kind, TypeAnnotationKind::Named(name) if *name == Symbol::new("Tick")),
+        "{effects:?}"
+    );
+}
+
+/// An inline module may import a package-root ability under an alias; the
+/// alias names the package-root ability in effect annotations, unqualified
+/// operation calls, and handler arms.
+#[salsa_test]
+fn inline_module_import_aliases_a_root_ability(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+ability Tick {
+    op tick() -> Nat
+}
+mod outer {
+    use Tick as T
+
+    pub fn count() ->{T} Nat {
+        tick()
+    }
+
+    pub fn run() -> Nat {
+        handle count() {
+            do result { result }
+            op T::tick() { resume 1 }
+        }
+    }
+}
+
+fn main() {
+    let _ = outer::run()
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}

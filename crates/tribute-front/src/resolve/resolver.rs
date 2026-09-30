@@ -209,6 +209,14 @@ impl<'db> Resolver<'db> {
         ResolvedRef::local(LocalId::UNRESOLVED, sym)
     }
 
+    /// Whether the enclosing inline module itself defines `name`.
+    fn defined_in_module(&self, name: Symbol) -> bool {
+        !self.module_path.is_empty() && {
+            let namespace = Symbol::from_dynamic(&self.module_path.iter().format("::").to_string());
+            self.env.lookup_qualified(namespace, name).is_some()
+        }
+    }
+
     /// The package-root path an import of the enclosing inline module gives
     /// `name`.
     fn module_import(&self, name: Symbol) -> Option<&[Symbol]> {
@@ -504,9 +512,12 @@ impl<'db> Resolver<'db> {
                 if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase())) =>
             {
                 // An import of the enclosing inline module names the ability
-                // by its package-root path.
-                if let Some(target) = self.module_import(*sym)
-                    && target.len() >= 2
+                // by its package-root path, unless the module itself defines
+                // the name, as in `resolve_name`. The path is spelled out even
+                // for a single segment so it is not read relative to the
+                // module.
+                if !self.defined_in_module(*sym)
+                    && let Some(target) = self.module_import(*sym)
                 {
                     ann.kind = TypeAnnotationKind::Path(target.to_vec());
                 // Check if this name was imported via `use` with a qualified path
