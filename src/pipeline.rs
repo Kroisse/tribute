@@ -2232,43 +2232,9 @@ fn main() {
         (reparsed, module)
     }
 
-    /// Exit status and standard output of an emitted program. A Wasm module
-    /// is validated before it runs.
-    fn run_emitted(
-        bytes: &[u8],
-        target: tribute_passes::abi_boundary::TargetKind,
-        path: &str,
-    ) -> (Option<i32>, Vec<u8>) {
-        use std::process::{Command, Stdio};
-        let temp = tempfile::tempdir().expect("temporary directory");
-        let mut command = match target {
-            tribute_passes::abi_boundary::TargetKind::Native => {
-                let executable = temp.path().join("program");
-                link_native_binary(bytes, &executable, None)
-                    .unwrap_or_else(|error| panic!("{path}: linking failed: {error}"));
-                Command::new(executable)
-            }
-            tribute_passes::abi_boundary::TargetKind::Wasm => {
-                wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-                    .validate_all(bytes)
-                    .unwrap_or_else(|error| panic!("{path}: invalid Wasm module: {error}"));
-                let module = temp.path().join("program.wasm");
-                std::fs::write(&module, bytes).expect("write Wasm module");
-                let mut command = Command::new("wasmtime");
-                command.arg("-Wgc=y,function-references=y").arg(module);
-                command
-            }
-        };
-        let output = command
-            .stdin(Stdio::null())
-            .output()
-            .unwrap_or_else(|error| panic!("{path}: program must start: {error}"));
-        (output.status.code(), output.stdout)
-    }
-
     /// Lowering and emission after the boundary exit need nothing but the
     /// printed IR: a program parsed back from its boundary-exit text emits
-    /// and runs like the original.
+    /// the same binary as the original.
     fn assert_boundary_exit_round_trips(
         db: &crate::TributeDatabaseImpl,
         target: tribute_passes::abi_boundary::TargetKind,
@@ -2295,10 +2261,9 @@ fn main() {
             let direct = emit_from_boundary_exit(&mut ctx, module, target);
             let round_trip = emit_from_boundary_exit(&mut reparsed, reparsed_module, target);
             match (direct, round_trip) {
-                (Ok(direct), Ok(round_trip)) => assert_eq!(
-                    run_emitted(&round_trip, target, path),
-                    run_emitted(&direct, target, path),
-                    "{path}: the round-tripped program must behave like the original"
+                (Ok(direct), Ok(round_trip)) => assert!(
+                    round_trip == direct,
+                    "{path}: the round-tripped IR must emit the same binary"
                 ),
                 // Programs that still reach pending work fail either way.
                 (Err(_), Err(_)) => {}
