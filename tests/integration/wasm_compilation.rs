@@ -258,6 +258,46 @@ fn test_execute_dynamic_bytes_write_boundary() {
     assert_eq!(output.stdout, expected);
 }
 
+/// Guarded arms after the last unguarded arm of an exhaustive case never run.
+#[salsa_test]
+fn test_execute_guarded_arms_after_coverage(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "guarded_arms_after_coverage.trb",
+        r#"
+fn count(flag: Bool, n: Nat) -> Nat {
+    case flag {
+        True -> 1
+        False -> 2
+        _ if n > 0 -> 3
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    case count(False, 1) {
+        2 -> std::io::print_line("ok")
+        _ -> std::io::print_line("unexpected")
+    }
+}
+"#,
+    );
+    let binary =
+        expect_wasm_compilation_success(db, source, "Should compile guarded arms after coverage");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary).expect("write Wasm module");
+    let output = Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok\n");
+}
+
 #[salsa_test]
 fn test_execute_string_literals_and_dynamic_bytes(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
