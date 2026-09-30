@@ -79,7 +79,7 @@ fn compile_stages(c: &mut Criterion) {
 /// Copy the IR a stage starts from. Each iteration's setup clones a prepared
 /// input instead of compiling it again from source.
 fn clone_ir((ctx, module): &(IrContext, Module)) -> (IrContext, Module) {
-    (ctx.clone(), *module)
+    (ctx.clone_with_headroom(), *module)
 }
 
 fn bench_target(

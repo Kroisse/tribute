@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap};
+use cranelift_entity::{EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap};
 use smallvec::SmallVec;
 
 use super::refs::*;
@@ -142,6 +142,24 @@ fn next_context_identity() -> u64 {
         .expect("IrContext identity exhausted")
 }
 
+fn primary_with_headroom<K: EntityRef, V: Clone>(map: &PrimaryMap<K, V>) -> PrimaryMap<K, V> {
+    let mut copy = PrimaryMap::with_capacity(map.len().next_power_of_two());
+    for value in map.values() {
+        copy.push(value.clone());
+    }
+    copy
+}
+
+fn secondary_with_capacity<K: EntityRef, V: Clone + Default>(
+    map: &SecondaryMap<K, V>,
+) -> SecondaryMap<K, V> {
+    let mut copy = SecondaryMap::with_capacity(map.capacity());
+    for (key, value) in map.iter() {
+        copy[key] = value.clone();
+    }
+    copy
+}
+
 /// Copies the whole IR, so a compilation can continue on independent
 /// branches from one intermediate result. The cost is proportional to the
 /// IR size.
@@ -193,6 +211,31 @@ impl IrContext {
             type_alias_by_name: HashMap::new(),
             type_alias_by_type: HashMap::new(),
             diagnostics: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Like [`Clone::clone`], but every arena keeps room to grow as it would
+    /// after being built by insertion, so the clone's first insertions do not
+    /// reallocate.
+    pub fn clone_with_headroom(&self) -> Self {
+        Self {
+            identity: next_context_identity(),
+            revision: self.revision,
+            ops: primary_with_headroom(&self.ops),
+            values: primary_with_headroom(&self.values),
+            blocks: primary_with_headroom(&self.blocks),
+            regions: primary_with_headroom(&self.regions),
+            uses: secondary_with_capacity(&self.uses),
+            types: self.types.clone(),
+            paths: self.paths.clone(),
+            value_pool: self.value_pool.clone(),
+            type_pool: self.type_pool.clone(),
+            result_values: secondary_with_capacity(&self.result_values),
+            block_arg_values: secondary_with_capacity(&self.block_arg_values),
+            type_aliases: self.type_aliases.clone(),
+            type_alias_by_name: self.type_alias_by_name.clone(),
+            type_alias_by_type: self.type_alias_by_type.clone(),
+            diagnostics: self.diagnostics.clone(),
         }
     }
 
@@ -1805,6 +1848,15 @@ mod tests {
 
     #[test]
     fn cloned_context_is_independent() {
+        assert_clone_is_independent(IrContext::clone);
+    }
+
+    #[test]
+    fn context_cloned_with_headroom_is_independent() {
+        assert_clone_is_independent(IrContext::clone_with_headroom);
+    }
+
+    fn assert_clone_is_independent(clone_context: fn(&IrContext) -> IrContext) {
         use crate::parser::parse_test_module;
         use crate::printer::print_module;
 
@@ -1822,7 +1874,7 @@ mod tests {
         );
         let original_text = print_module(&ctx, module.op());
 
-        let mut clone = ctx.clone();
+        let mut clone = clone_context(&ctx);
         assert_ne!(clone.analysis_stamp().0, ctx.analysis_stamp().0);
         assert_eq!(clone.analysis_stamp().1, ctx.analysis_stamp().1);
         assert_eq!(print_module(&clone, module.op()), original_text);
