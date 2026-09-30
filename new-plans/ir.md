@@ -1290,6 +1290,8 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 | `@closure` | canonical closure `adt.struct` | 함수 참조와 environment로 이루어진 closure 저장 |
 | `@evidence_marker` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure |
 | `@evidence` | evidence `core.array` | ability id 순으로 정렬된 marker 배열 |
+| `@bytes` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
+| `@bytes_data` | Wasm bytes backing `core.array(core.i8)` | `Bytes`가 가리키는 byte 배열 |
 
 - 속성은 저장 layout만 나타낸다. 의미 분류를 physical 이름으로 복제하지 않으며,
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
