@@ -234,9 +234,9 @@ fn resolve_delimiters(
     module: Module,
     region: RegionRef,
 ) -> Result<(), ResolveEvidenceError> {
-    let blocks = ctx.region(region).blocks.to_vec();
+    let blocks = ctx.region(region).blocks.clone();
     for block in blocks {
-        let ops = ctx.block(block).ops.to_vec();
+        let ops = ctx.block(block).ops.clone();
         for op in ops {
             if ability::HandleDispatch::from_op(ctx, op).is_ok() {
                 let location = ctx.op(op).location;
@@ -275,7 +275,7 @@ fn resolve_delimiters(
 
                 ctx.replace_all_uses(shape.body_evidence, current_ev);
             }
-            let regions = ctx.op(op).regions.to_vec();
+            let regions = ctx.op(op).regions.clone();
             for region in regions {
                 resolve_delimiters(ctx, module, region)?;
             }

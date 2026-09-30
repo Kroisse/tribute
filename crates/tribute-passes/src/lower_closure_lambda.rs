@@ -309,7 +309,7 @@ fn build_lifted_body(
     let orig_param_types = params.orig_param_types;
     let environment_index = params.environment_index;
     let anyref_ty = params.anyref_ty;
-    let orig_blocks: Vec<BlockRef> = ctx.region(orig_body).blocks.to_vec();
+    let orig_blocks = ctx.region(orig_body).blocks.clone();
     let orig_entry = orig_blocks[0];
     let orig_param_count = orig_param_types.len();
 
@@ -403,7 +403,7 @@ fn build_lifted_body(
     // --- Pass 2: Clone ops from original blocks to new blocks ---
     for (idx, &orig_block) in orig_blocks.iter().enumerate() {
         let new_block = new_blocks[idx];
-        let ops: Vec<OpRef> = ctx.block(orig_block).ops.to_vec();
+        let ops = ctx.block(orig_block).ops.clone();
         for op in ops {
             ctx.clone_op_into_block(new_block, op, &mut mapping);
         }
@@ -629,7 +629,7 @@ mod tests {
         let test_fn = func::Func::from_op(&ctx, ops[0]).unwrap();
         let test_fn_body = test_fn.body(&ctx);
         let test_fn_entry = ctx.region(test_fn_body).blocks[0];
-        let test_fn_ops: Vec<OpRef> = ctx.block(test_fn_entry).ops.to_vec();
+        let test_fn_ops = ctx.block(test_fn_entry).ops.clone();
 
         // Should have: adt.ref_null (env) + closure.new
         assert!(test_fn_ops.len() >= 2, "expected at least 2 ops in test_fn");
@@ -833,7 +833,7 @@ mod tests {
         let test_fn = func::Func::from_op(&ctx, ops[0]).unwrap();
         let test_fn_body = test_fn.body(&ctx);
         let test_fn_entry = ctx.region(test_fn_body).blocks[0];
-        let test_fn_ops: Vec<OpRef> = ctx.block(test_fn_entry).ops.to_vec();
+        let test_fn_ops = ctx.block(test_fn_entry).ops.clone();
 
         let has_struct_new = test_fn_ops
             .iter()
@@ -849,7 +849,7 @@ mod tests {
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
         let lifted_body = lifted.body(&ctx);
         let lifted_entry = ctx.region(lifted_body).blocks[0];
-        let lifted_ops: Vec<OpRef> = ctx.block(lifted_entry).ops.to_vec();
+        let lifted_ops = ctx.block(lifted_entry).ops.clone();
 
         // Should have: ref_cast + struct_get (env extraction) + add + return
         assert!(

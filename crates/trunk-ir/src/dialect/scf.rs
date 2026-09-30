@@ -534,11 +534,11 @@ pub(crate) fn fold_if(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
     };
 
     // Active region must be a single block whose terminator is `scf.yield`.
-    let blocks = ctx.region(active_region).blocks.to_vec();
+    let blocks = ctx.region(active_region).blocks.clone();
     let [active_block] = blocks.as_slice() else {
         return None;
     };
-    let region_ops: Vec<OpRef> = ctx.block(*active_block).ops.to_vec();
+    let region_ops = ctx.block(*active_block).ops.clone();
     let (yield_op, body_ops) = region_ops.split_last()?;
     if !Yield::matches(ctx, *yield_op) {
         return None;

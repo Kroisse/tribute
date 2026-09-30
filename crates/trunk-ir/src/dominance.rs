@@ -20,7 +20,7 @@ pub struct DominatorTree {
 impl DominatorTree {
     /// Compute dominance from the region's first block.
     pub fn compute(ctx: &IrContext, region: RegionRef) -> Self {
-        let blocks = ctx.region(region).blocks.to_vec();
+        let blocks = ctx.region(region).blocks.clone();
         let block_set: HashSet<_> = blocks.iter().copied().collect();
         let entry = blocks.first().copied();
         let mut predecessors: HashMap<_, Vec<_>> = blocks

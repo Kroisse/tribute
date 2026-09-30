@@ -31,7 +31,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
     let init_sym = Symbol::new("__tribute_init");
     let asan_init_sym = Symbol::new("__asan_init");
 
-    let ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+    let ops = ctx.block(first_block).ops.clone();
     let mut main_op = None;
     let mut has_tribute_init = false;
     let mut has_asan_init = false;
@@ -69,7 +69,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
         .first()
         .copied()
         .expect("entrypoint: root `main` must be a definition");
-    let blocks: Vec<BlockRef> = ctx.region(body).blocks.to_vec();
+    let blocks = ctx.region(body).blocks.clone();
     let entry = *blocks
         .first()
         .expect("entrypoint: root `main` must have an entry block");

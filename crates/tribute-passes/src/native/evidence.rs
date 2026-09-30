@@ -191,7 +191,7 @@ fn native_evidence_rewrite_error(
 }
 
 fn rewrite_evidence_ops_in_region(ctx: &mut IrContext, region: RegionRef) -> PassRunResult {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+    let blocks = ctx.region(region).blocks.clone();
     for block in blocks {
         rewrite_evidence_ops_in_block(ctx, block)?;
     }
@@ -382,7 +382,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
     // Ops to erase after processing
     let mut ops_to_erase: Vec<OpRef> = Vec::new();
 
-    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+    let ops = ctx.block(block).ops.clone();
 
     for op in ops {
         let op_data = ctx.op(op);
@@ -443,7 +443,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
         if func::Func::from_op(ctx, op).is_ok() {
             continue;
         }
-        let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+        let regions = ctx.op(op).regions.clone();
         for region in regions {
             rewrite_evidence_ops_in_region(ctx, region)?;
         }

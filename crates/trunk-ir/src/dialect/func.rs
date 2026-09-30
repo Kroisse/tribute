@@ -1015,7 +1015,7 @@ mod tests {
         let ops = ctx
             .block(ctx.region(function.body_if_present(&ctx).unwrap()).blocks[0])
             .ops
-            .to_vec();
+            .clone();
         for op in ops {
             assert!(IndirectCallLikeOps::get(&ctx, op).is_some());
             assert_eq!(IndirectCallLikeOps::exact_signature(&ctx, op), None);

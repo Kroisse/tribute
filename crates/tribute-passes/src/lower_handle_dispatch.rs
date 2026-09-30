@@ -72,7 +72,7 @@ impl RewritePattern for LowerHandleDispatchPattern {
     ) -> bool {
         if let Ok(dispatch_op) = ability::HandleDispatch::from_op(ctx, op) {
             let body = dispatch_op.body(ctx);
-            let blocks = ctx.region(body).blocks.to_vec();
+            let blocks = ctx.region(body).blocks.clone();
             let [body_block] = blocks.as_slice() else {
                 return false;
             };
@@ -88,7 +88,7 @@ impl RewritePattern for LowerHandleDispatchPattern {
             {
                 return false;
             }
-            let body_ops = ctx.block(*body_block).ops.to_vec();
+            let body_ops = ctx.block(*body_block).ops.clone();
             for body_op in body_ops {
                 ctx.detach_op(body_op);
                 rewriter.insert_op(body_op);

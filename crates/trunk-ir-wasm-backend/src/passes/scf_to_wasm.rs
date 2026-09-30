@@ -521,7 +521,7 @@ impl RewritePattern for ScfLoopPattern {
         // The created `wasm.loop` owns the detached body, so its block
         // arguments become Wasm-level parameters. Declare them with target
         // types instead of leaving the SCF spelling on the boundary.
-        let body_blocks: Vec<_> = ctx.region(body).blocks.to_vec();
+        let body_blocks = ctx.region(body).blocks.clone();
         for block in body_blocks {
             let block_args = ctx.block_args(block).to_vec();
             for (index, arg) in block_args.into_iter().enumerate() {

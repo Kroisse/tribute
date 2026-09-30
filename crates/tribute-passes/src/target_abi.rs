@@ -196,7 +196,7 @@ pub fn lower_cps_signatures_to_physical(
             }
         }
 
-        let regions = converter.ctx.op(op).regions.to_vec();
+        let regions = converter.ctx.op(op).regions.clone();
         for region in regions {
             let block_count = converter.ctx.region(region).blocks.len();
             for block_index in 0..block_count {
@@ -275,7 +275,7 @@ fn validate_root_entry(
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(None);
     };
-    let top_level_ops = ctx.block(module_block).ops.to_vec();
+    let top_level_ops = ctx.block(module_block).ops.clone();
     let roots: Vec<_> = top_level_ops
         .iter()
         .copied()
@@ -372,7 +372,7 @@ pub fn compose_root_entry_bridge(
     let Some(module_block) = module.first_block(ctx) else {
         return Ok(());
     };
-    let top_level_ops = ctx.block(module_block).ops.to_vec();
+    let top_level_ops = ctx.block(module_block).ops.clone();
     let main = Symbol::new("main");
     let root_main = Symbol::new(ROOT_MAIN_SYMBOL);
     let mut roots = top_level_ops.iter().copied().filter(|&op| {

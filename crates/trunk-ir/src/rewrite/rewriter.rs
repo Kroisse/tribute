@@ -221,11 +221,11 @@ pub(crate) fn apply_mutations(
         if let Some(block) = parent_block {
             // Insert new_op right after original_op, then remove original_op
             // We need to find position after the original to maintain ordering
-            let ops = ctx.block(block).ops.to_vec();
+            let ops = ctx.block(block).ops.clone();
             let pos = ops.iter().position(|&o| o == original_op);
             ctx.remove_op_from_block(block, original_op);
             if let Some(pos) = pos {
-                let ops_after = ctx.block(block).ops.to_vec();
+                let ops_after = ctx.block(block).ops.clone();
                 if pos < ops_after.len() {
                     ctx.insert_op_before(block, ops_after[pos], new_op);
                 } else {

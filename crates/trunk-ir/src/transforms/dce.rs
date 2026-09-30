@@ -99,7 +99,7 @@ fn sweep_scope<S: RewriteScope>(ctx: &mut IrContext, scope: S, config: &DceConfi
 
 /// Sweep all blocks in a region. Returns the number of ops removed.
 fn sweep_region(ctx: &mut IrContext, region: RegionRef, config: &DceConfig) -> usize {
-    let blocks: Vec<BlockRef> = ctx.region(region).blocks.to_vec();
+    let blocks = ctx.region(region).blocks.clone();
     let mut removed = 0;
     for block in blocks {
         removed += sweep_block(ctx, block, config);
@@ -116,9 +116,9 @@ fn sweep_block(ctx: &mut IrContext, block: BlockRef, config: &DceConfig) -> usiz
 
     // First, recursively process nested regions of all ops
     if config.recursive {
-        let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+        let ops = ctx.block(block).ops.clone();
         for op in ops {
-            let regions: Vec<RegionRef> = ctx.op(op).regions.to_vec();
+            let regions = ctx.op(op).regions.clone();
             for region in regions {
                 removed += sweep_region(ctx, region, config);
             }
@@ -126,7 +126,7 @@ fn sweep_block(ctx: &mut IrContext, block: BlockRef, config: &DceConfig) -> usiz
     }
 
     // Now sweep this block's ops in reverse
-    let ops: Vec<OpRef> = ctx.block(block).ops.to_vec();
+    let ops = ctx.block(block).ops.clone();
     for &op in ops.iter().rev() {
         if is_dead(ctx, op) {
             ctx.remove_op_from_block(block, op);

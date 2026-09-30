@@ -131,7 +131,7 @@ impl<'a> ActionPlanner<'a> {
     }
 
     fn plan_block(&mut self, block: BlockRef) -> Result<(), OwnershipPlanError> {
-        let ops = self.ir.block(block).ops.to_vec();
+        let ops = self.ir.block(block).ops.clone();
         let mut transferred = HashSet::new();
         for &op in &ops {
             self.plan_operation(op, &mut transferred)?;

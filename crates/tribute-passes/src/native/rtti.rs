@@ -600,7 +600,7 @@ fn generate_release_function_for_struct(
     if managed_field_offsets.is_empty() {
         // No managed fields: entry block IS the dealloc block
         // Move dealloc ops to entry block
-        let dealloc_ops: Vec<OpRef> = ctx.block(dealloc_block).ops.to_vec();
+        let dealloc_ops = ctx.block(dealloc_block).ops.clone();
         for op in dealloc_ops {
             ctx.remove_op_from_block(dealloc_block, op);
             ctx.push_op(entry_block, op);
@@ -680,7 +680,7 @@ fn generate_release_function_for_struct(
 
     // Entry block gets the ops of the first check block
     let first_check = blocks_after_entry.pop().unwrap();
-    let first_check_ops: Vec<OpRef> = ctx.block(first_check).ops.to_vec();
+    let first_check_ops = ctx.block(first_check).ops.clone();
     for op in first_check_ops {
         ctx.remove_op_from_block(first_check, op);
         ctx.push_op(entry_block, op);

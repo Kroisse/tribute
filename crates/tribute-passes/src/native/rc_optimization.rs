@@ -23,13 +23,13 @@ pub fn eliminate_paired_rc(ctx: &mut IrContext, module: Module) {
 }
 
 fn optimize_region(ctx: &mut IrContext, region: RegionRef) {
-    let blocks = ctx.region(region).blocks.to_vec();
+    let blocks = ctx.region(region).blocks.clone();
     for block in blocks {
         while eliminate_one_pair(ctx, block) {}
 
-        let ops = ctx.block(block).ops.to_vec();
+        let ops = ctx.block(block).ops.clone();
         for op in ops {
-            let nested_regions = ctx.op(op).regions.to_vec();
+            let nested_regions = ctx.op(op).regions.clone();
             for nested in nested_regions {
                 optimize_region(ctx, nested);
             }
@@ -38,7 +38,7 @@ fn optimize_region(ctx: &mut IrContext, region: RegionRef) {
 }
 
 fn eliminate_one_pair(ctx: &mut IrContext, block: BlockRef) -> bool {
-    let ops = ctx.block(block).ops.to_vec();
+    let ops = ctx.block(block).ops.clone();
 
     for (retain_index, &retain_ref) in ops.iter().enumerate() {
         let Ok(retain) = tribute_rt::Retain::from_op(ctx, retain_ref) else {

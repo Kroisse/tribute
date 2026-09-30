@@ -132,9 +132,9 @@ fn materialize_nested_callable_value_types(
             ctx.op_mut(op).attributes = converted_attributes;
         }
 
-        let regions = ctx.op(op).regions.to_vec();
+        let regions = ctx.op(op).regions.clone();
         for region in regions {
-            let blocks = ctx.region(region).blocks.to_vec();
+            let blocks = ctx.region(region).blocks.clone();
             for block in blocks {
                 let arguments = ctx.block_args(block).to_vec();
                 for (index, argument) in arguments.into_iter().enumerate() {
@@ -243,7 +243,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
 
     // Prepend table and elem operations to the module body.
     // We insert before the first op in the block (if any), or push at the end.
-    let existing_ops: Vec<OpRef> = ctx.block(first_block).ops.to_vec();
+    let existing_ops = ctx.block(first_block).ops.clone();
     if let Some(&first_op) = existing_ops.first() {
         ctx.insert_op_before(first_block, first_op, table_op.op_ref());
         ctx.insert_op_before(first_block, first_op, elem_op.op_ref());
