@@ -135,3 +135,64 @@ fn main() {
     );
     assert_eq!(errors, ["expected a constructor, found module `M`"]);
 }
+
+/// A type imported by a path written relative to the enclosing inline module
+/// keeps the identity name resolution found; type checking does not reread the
+/// path from the package root.
+#[salsa_test]
+fn relative_type_imports_keep_the_resolved_type(db: &salsa::DatabaseImpl) {
+    for import in ["use a::P", "use outer::a::P", "use a::P as Q"] {
+        let annotation = if import.ends_with("as Q") { "Q" } else { "P" };
+        let errors = errors(
+            db,
+            &format!(
+                r#"
+mod outer {{
+    mod a {{
+        pub struct P {{ x: Nat }}
+    }}
+    {import}
+
+    pub fn get(p: {annotation}) -> Nat {{
+        p.x
+    }}
+}}
+
+fn main() {{
+    let _ = outer::get(outer::a::P {{ x: 1 }})
+}}
+"#
+            ),
+        );
+        assert!(errors.is_empty(), "{import}: {errors:#?}");
+    }
+}
+
+/// A path that names something from both the package root and the enclosing
+/// inline module is read from the package root.
+#[salsa_test]
+fn root_relative_reading_wins_over_the_enclosing_module(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod a {
+    pub struct P { root: Nat }
+}
+mod outer {
+    mod a {
+        pub struct P { nested: Nat }
+    }
+    use a::P
+
+    pub fn get(p: P) -> Nat {
+        p.root
+    }
+}
+
+fn main() {
+    let _ = outer::get(a::P { root: 1 })
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}

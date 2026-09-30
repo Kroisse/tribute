@@ -757,6 +757,7 @@ fn lower_use(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<UseDecl> {
             is_pub,
             path,
             alias,
+            target: None,
         })
         .collect()
 }

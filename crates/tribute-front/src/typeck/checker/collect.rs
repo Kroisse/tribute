@@ -57,7 +57,14 @@ impl<'db> TypeChecker<'db> {
         for declaration in declarations {
             match declaration {
                 Decl::Use(import) => {
-                    let Some(target) = crate::qualified_path_symbol(&import.path) else {
+                    // Name resolution recorded what the import names; a path
+                    // written relative to the enclosing module must not be
+                    // reread from the package root.
+                    let Some(target) = import
+                        .target
+                        .as_deref()
+                        .and_then(crate::qualified_path_symbol)
+                    else {
                         continue;
                     };
                     let Some(scheme) = self.env.lookup_type_def(target) else {
