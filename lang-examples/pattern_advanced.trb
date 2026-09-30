@@ -13,7 +13,7 @@ fn test_number_with_variable(x) {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     print_line("Testing advanced patterns:")
     print_line(test_string_patterns("hello"))
     print_line(test_string_patterns("world"))

@@ -20,7 +20,7 @@ fn named_operator_preserves_target_and_consumer_conventions(db: &salsa::Database
             r#"
 fn pure(f: fn(Int, Int) ->{{}} Int) ->{{}} Int {{ f(+3, +4) }}
 fn open(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
-fn main() {{
+fn main() -> Nil {{
     let add = (Int::+)
     let alias = add
     let first = pure({argument})
@@ -96,7 +96,7 @@ fn escaping_lambda_retains_open_callable_contract(db: &salsa::DatabaseImpl) {
         "escaping_lambda.trb",
         r#"
 fn make() -> fn(Int) -> Int { fn(x) x }
-fn main() {}
+fn main() -> Nil {}
 "#,
     );
     let ir = common::run_ast_pipeline_with_ir(db, source);
@@ -115,7 +115,7 @@ fn open_effect_consumer_keeps_lambda_cps(db: &salsa::DatabaseImpl) {
         "open_lambda_consumer.trb",
         r#"
 fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
-fn main() { open(fn(x) x, +3) }
+fn main() -> Nil { open(fn(x) x, +3) }
 "#,
     );
     let ir = common::run_ast_pipeline_with_ir(db, source);
@@ -250,7 +250,7 @@ fn call(consumer: fn(fn(Int) ->{e} Int, Int) ->{e} Int) ->{e} Int {
     let alias = named
     consumer(alias, +3)
 }
-fn main() {}
+fn main() -> Nil {}
 "#,
     );
     let ir = common::run_ast_pipeline_with_ir(db, source);
@@ -290,7 +290,7 @@ fn invalid() ->{State(Int)} Int {
     let action = effectful
     apply(action, +3)
 }
-fn main() {}
+fn main() -> Nil {}
 "#,
     );
     let errors = common::ast_pipeline_error_messages(db, source);

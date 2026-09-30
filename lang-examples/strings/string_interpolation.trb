@@ -1,4 +1,4 @@
-fn main() {
+fn main() -> Nil {
     let name = "Alice"
     let age = 25
     print_line("Hello, \{name}! You are \{age} years old.")

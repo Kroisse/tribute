@@ -62,7 +62,7 @@ fn run(point: Point) ->{Trace} fn() -> Point {
     fn() { Point { x: +1, ..point } }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -97,7 +97,7 @@ fn run() ->{State(Int)} Int {
     +0
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 

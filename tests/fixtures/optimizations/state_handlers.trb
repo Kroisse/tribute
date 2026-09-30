@@ -39,6 +39,6 @@ fn run_state_once_more() -> Int {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_int(run_state())
 }

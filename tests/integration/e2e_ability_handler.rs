@@ -71,14 +71,14 @@ fn nested_gate(stop: Bool) -> ReadOutcome {
     }
 }
 
-fn print_outcome(outcome: ReadOutcome) {
+fn print_outcome(outcome: ReadOutcome) ->{Io} Nil {
     case outcome {
         ReadOutcome::Line(text) -> print_line("line:" <> text)
         ReadOutcome::EndOfInput -> print_line("eof")
     }
 }
 
-fn main() {
+fn main() ->{Io} Nil {
     print_outcome(read_outcome())
     print_outcome(nested_gate(False))
     print_outcome(nested_gate(True))
@@ -169,7 +169,7 @@ fn outer_boundary() -> String {
     }
 }
 
-fn main() {
+fn main() ->{std::io::Io} Nil {
     print_line(outer_boundary())
 }
 "#
@@ -243,7 +243,7 @@ fn inner() -> String {
     }
 }
 
-fn main() {
+fn main() ->{std::io::Io} Nil {
     let value = handle inner() {
         do result { "outer-do:" <> result }
         op Stop::stop() { "outer-handler" }
@@ -270,7 +270,7 @@ ability Ping {
     op ping() -> String
 }
 
-fn run(next: fn() -> String) -> String {
+fn run(next: fn() ->{e} String) ->{e} String {
     handle Ping::ping() {
         do value { "do:" <> value }
         op Ping::ping() { next() }
@@ -279,7 +279,7 @@ fn run(next: fn() -> String) -> String {
 
 fn base() -> String { "base" }
 
-fn main() {
+fn main() ->{std::io::Io} Nil {
     print_line(run(fn() { run(fn() { base() }) }))
 }
 "#,
@@ -317,7 +317,7 @@ fn inner() ->{Stop} String {
     }
 }
 
-fn main() {
+fn main() ->{std::io::Io} Nil {
     let value = handle inner() {
         do result { "outer-do:" <> result }
         op Stop::stop() { "stop-handler" }
@@ -366,7 +366,7 @@ fn get_state() ->{State(Int)} Int {
     State::get()
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = handle get_state() {
         do result { result }
         op State::get() { resume +42 }
@@ -404,7 +404,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run_state(fn() { set_then_get() }, +0)
 }
 "#;
@@ -445,7 +445,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run_state(fn() { double_increment() }, 5)
 }
 "#;
@@ -490,7 +490,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run_state(fn() { triple_increment() }, 10)
 }
 "#;
@@ -523,7 +523,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run_state(fn() { no_effects() }, +0)
 }
 "#;
@@ -556,7 +556,7 @@ fn might_fail() ->{Fail} Nat {
     x + 100
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle might_fail() {
         do result { result }
         op Fail::fail() { 99 }
@@ -583,7 +583,7 @@ fn might_fail() ->{FailNever} Nat {
     FailNever::fail()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle might_fail() {
         do result { result }
         op FailNever::fail() { 99 }
@@ -608,7 +608,7 @@ fn do_abort() ->{Abort} Nat {
     Abort::abort(99)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle do_abort() {
         do result { result }
         op Abort::abort(code) { code }
@@ -632,7 +632,7 @@ fn always_abort() ->{Abort} Nat {
     Abort::abort()
 }
 
-fn main() {
+fn main() -> Nil {
     let a = handle always_abort() {
         do result { result }
         op Abort::abort() { 10 }
@@ -661,7 +661,7 @@ fn might_abort(should_abort: Bool) ->{Abort} Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let a = handle might_abort(True) {
         do result { result }
         op Abort::abort() { 0 }
@@ -708,7 +708,7 @@ fn count() ->{MyMod::Counter} Nat {
     a + b
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle count() {
         do result { result }
         op MyMod::Counter::inc() { resume 1 }
@@ -738,7 +738,7 @@ fn use_ask() ->{Ask} Nat {
     Ask::ask()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle use_ask() {
         do result { result }
         fn Ask::ask() { 42 }
@@ -764,7 +764,7 @@ fn use_ask() ->{Ask} Int {
     Ask::ask()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle use_ask() {
         do result {
             __tribute_print_int(+30)
@@ -803,7 +803,7 @@ fn pure_value() ->{Ask} Nat {
     10
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle pure_value() {
         do result { result }
         op Ask::ask() { resume 0 }
@@ -825,7 +825,7 @@ fn pure_value() ->{Ask} Nat {
     10
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle pure_value() {
         do result { 42 }
         op Ask::ask() { resume 0 }
@@ -851,7 +851,7 @@ fn pure_value() ->{State(Nat)} Nat {
     10
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle pure_value() {
         do result { result + result }
         op State::get() { resume 0 }
@@ -879,7 +879,7 @@ fn effectful_value() ->{State(Nat)} Nat {
     first + State::get()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle effectful_value() {
         do result { result + result }
         op State::get() { resume 10 }
@@ -919,7 +919,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_state(fn() { counter() }, 0)
     __tribute_print_nat(result)
 }
@@ -951,7 +951,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_state(fn() { counter() }, 10)
     __tribute_print_nat(result)
 }
@@ -988,7 +988,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_state(fn() { mutate() }, 0)
     __tribute_print_nat(result)
 }
@@ -1014,7 +1014,7 @@ fn compute() ->{State(Nat)} Nat {
     a + b
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle compute() {
         do result { result + 1 }
         op State::get() { resume 5 }
@@ -1051,7 +1051,7 @@ fn compute() ->{State(Nat)} Nat {
     add(a, b)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle compute() {
         do result { result }
         op State::get() { resume 5 }
@@ -1081,7 +1081,7 @@ fn compute() ->{State(Nat)} Nat {
     identity(n)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle compute() {
         do result { result }
         op State::get() { resume 7 }
@@ -1114,7 +1114,7 @@ fn use_multi() ->{Multi} Nat {
     Multi::combine(10, 20, 30)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle use_multi() {
         do result { result }
         op Multi::combine(x, y, z) { resume x + y + z }
@@ -1136,7 +1136,7 @@ fn use_pair() ->{Pair} Nat {
     Pair::make(3, 7)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle use_pair() {
         do result { result }
         op Pair::make(a, b) { resume a + b }
@@ -1158,7 +1158,7 @@ fn use_pick() ->{Pick} Nat {
     Pick::choose(100, 200, 300)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle use_pick() {
         do result { result }
         op Pick::choose(a, _, c) { resume a + c }
@@ -1180,7 +1180,7 @@ fn use_arith() ->{Arith} Nat {
     Arith::add(15, 27)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle use_arith() {
         do result { result }
         fn Arith::add(a, b) { a + b }
@@ -1204,7 +1204,7 @@ fn computation() ->{Math} Nat {
     y
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle computation() {
         do result { result }
         op Math::mul(a, b) { resume a * b }
@@ -1231,7 +1231,7 @@ fn test_throw_basic() {
     abilities::Throw::throw(42)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle do_throw() {
         do result { result }
         op abilities::Throw::throw(error) { error }
@@ -1252,7 +1252,7 @@ fn test_throw_with_payload() {
     abilities::Throw::throw(x + 100)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle throw_with_offset(5) {
         do result { result }
         op abilities::Throw::throw(error) { error }
@@ -1283,7 +1283,7 @@ fn do_work() ->{abilities::Throw(Nat)} Nat {
     a + b
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle do_work() {
         do result { result }
         op abilities::Throw::throw(error) { error }
@@ -1301,7 +1301,7 @@ fn test_prelude_abort() {
     abilities::Abort::abort()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle do_abort() {
         do result { result }
         op abilities::Abort::abort() { 99 }
@@ -1323,7 +1323,7 @@ fn test_effect_directed_abort() {
     abort()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle do_abort() {
         do result { result }
         op abilities::Abort::abort() { 99 }
@@ -1341,7 +1341,7 @@ fn test_effect_directed_throw() {
     throw(42)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle do_throw() {
         do result { result }
         op abilities::Throw::throw(error) { error }
@@ -1358,11 +1358,11 @@ fn main() {
 /// `abort()` invokes the parameter (a function), not the ability operation.
 #[test]
 fn test_effect_directed_local_shadows_op() {
-    let code = r#"fn use_local(abort: fn() -> Nat) ->{abilities::Abort} Nat {
+    let code = r#"fn use_local(abort: fn() ->{} Nat) ->{abilities::Abort} Nat {
     abort()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle use_local(fn() 77) {
         do result { result }
         op abilities::Abort::abort() { 0 }
@@ -1387,7 +1387,7 @@ fn do_abort() ->{Abort} Nat {
     abort()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle do_abort() {
         do result { result }
         op Abort::abort() { 99 }
@@ -1407,7 +1407,7 @@ fn do_throw() ->{Throw(Nat)} Nat {
     throw(42)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle do_throw() {
         do result { result }
         op Throw::throw(error) { error }

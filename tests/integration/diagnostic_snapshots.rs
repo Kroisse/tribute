@@ -53,7 +53,7 @@ mod basic {
 use self::basic::add
 use basic::sub
 
-fn main() {
+fn main() -> Nil {
     let _ = add(1, 2)
 }
 "#,

@@ -1,6 +1,6 @@
 // Test let destructuring
 
-fn main() {
+fn main() -> Nil {
     // Tuple destructuring
     let #(a, b) = #(1, 2)
     print_line(a)

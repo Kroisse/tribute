@@ -12,7 +12,7 @@ fn first(triple) {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     // Tuple expression
     let pair = #(1, "hello")
     print_line(pair)

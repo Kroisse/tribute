@@ -129,10 +129,6 @@ fn explicit_pure() ->{} Int { +1 }
 
 fn evidence_direct() ->{Logger} Int { +2 }
 
-fn inferred_evidence_direct() {
-    Logger::log("inferred")
-}
-
 fn call_evidence_direct() ->{Logger} Int {
     evidence_direct()
 }
@@ -141,11 +137,7 @@ fn cps() ->{State} Int {
     State::get()
 }
 
-fn inferred_cps() -> Int {
-    State::get()
-}
-
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -167,15 +159,7 @@ fn main() { }
             function_abi(&ctx, &module, "call_evidence_direct"),
             (0, true, false, false)
         );
-        assert_eq!(
-            function_abi(&ctx, &module, "inferred_evidence_direct"),
-            (0, true, false, false)
-        );
         assert_eq!(function_abi(&ctx, &module, "cps"), (0, true, true, false));
-        assert_eq!(
-            function_abi(&ctx, &module, "inferred_cps"),
-            (0, true, true, false)
-        );
     });
 }
 
@@ -217,7 +201,7 @@ fn cps_closure() ->{State} Int {
     call_state(fn() { State::get() })
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -263,7 +247,7 @@ fn run() ->{} Int {
     apply(fn(n) { n + +1 }, +41)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -312,7 +296,7 @@ fn run() -> Int {
     run_with_state(fn() { State::get() })
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -360,7 +344,7 @@ fn run() -> Int {
     run_with_state(fn() { counter() })
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -411,7 +395,7 @@ fn run() -> Int {
     run_with_state(fn() { State::get() })
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     TributeDatabaseImpl::default().attach(|db| {
@@ -451,7 +435,7 @@ fn c_extern_declarations_preserve_signature_without_a_body() {
             db,
             r#"
 extern "C" fn foreign(value: Nat) -> Nat
-fn main() { }
+fn main() -> Nil { }
 "#,
             "extern_declaration.trb",
         );

@@ -59,7 +59,7 @@ use collections::Option::{Some, None}
 // Aliased import
 use helpers::double as dbl
 
-fn main() {
+fn main() -> Nil {
     print_line("Testing use declarations:")
 
     // Using imported List

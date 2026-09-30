@@ -271,7 +271,7 @@ mod tests {
     #[test]
     fn test_parsed_module() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { 42 }");
+        let source = make_source(&db, "fn main() -> Nil { 42 }");
 
         let module = parsed_module(&db, source);
         assert!(module.is_some());
@@ -326,7 +326,7 @@ mod tests {
     #[test]
     fn test_resolved_func() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { 42 }");
+        let source = make_source(&db, "fn main() -> Nil { 42 }");
 
         let func = resolved_func(&db, source, Symbol::new("main"));
         assert!(func.is_some());
@@ -335,7 +335,7 @@ mod tests {
     #[test]
     fn test_typed_func() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { 42 }");
+        let source = make_source(&db, "fn main() -> Nil { 42 }");
 
         let func = typed_func(&db, source, Symbol::new("main"));
         assert!(func.is_some());
@@ -344,7 +344,7 @@ mod tests {
     #[test]
     fn test_parsed_ast_provides_both_module_and_span_map() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { 42 }");
+        let source = make_source(&db, "fn main() -> Nil { 42 }");
 
         // parsed_ast should provide both module and span_map from same parse
         let ast = parsed_ast(&db, source);
@@ -366,7 +366,7 @@ mod tests {
     #[test]
     fn test_parsed_module_and_span_map_derive_from_same_parse() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { 42 }");
+        let source = make_source(&db, "fn main() -> Nil { 42 }");
 
         // Both should succeed if parsed_ast succeeds
         let module = parsed_module(&db, source);
@@ -445,7 +445,7 @@ fn explicit() ->{} Nil { Nil }
     #[test]
     fn test_type_check_output_has_both_fields() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { 42 }");
+        let source = make_source(&db, "fn main() -> Nil { 42 }");
 
         let output = type_check_output(&db, source);
         assert!(output.is_some(), "type_check_output should return Some");
@@ -691,7 +691,7 @@ fn explicit() ->{} Nil { Nil }
     #[test]
     fn test_unresolved_name_emits_diagnostic() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { undefined_var }");
+        let source = make_source(&db, "fn main() -> Nil { undefined_var }");
 
         // Call resolved_module to trigger name resolution
         let _module = resolved_module(&db, source);

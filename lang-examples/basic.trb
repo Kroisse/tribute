@@ -4,7 +4,7 @@
 // - Built-in I/O functions (print_line)
 // - Expression evaluation and return values
 
-fn main() {
+fn main() -> Nil {
     print_line("Hello, Tribute!")
     print_line(10 + 5)
     6 * 7

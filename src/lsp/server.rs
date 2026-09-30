@@ -1445,7 +1445,7 @@ mod tests {
 
     #[test]
     fn test_position_offset_roundtrip() {
-        let rope = Rope::from_str("fn main() {\n    println!(\"hello\");\n}");
+        let rope = Rope::from_str("fn main() -> Nil {\n    println!(\"hello\");\n}");
 
         // Test various positions
         let test_positions = [(0, 0), (0, 5), (1, 4), (1, 10), (2, 0)];
@@ -1741,7 +1741,7 @@ mod tests {
     fn test_completion_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("completion_msg");
-        let source = "fn main() { le }";
+        let source = "fn main() -> Nil { le }";
 
         harness.open_document(&uri, source);
 
@@ -1750,7 +1750,7 @@ mod tests {
                 text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
                     line: 0,
-                    character: 14,
+                    character: 21,
                 },
             },
             work_done_progress_params: Default::default(),
@@ -1773,7 +1773,7 @@ mod tests {
     fn test_goto_definition_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("goto_def_msg");
-        let source = "fn main() { let x = 1; x }";
+        let source = "fn main() -> Nil { let x = 1; x }";
 
         harness.open_document(&uri, source);
 
@@ -1782,7 +1782,7 @@ mod tests {
                 text_document: lsp_types::TextDocumentIdentifier { uri },
                 position: lsp_types::Position {
                     line: 0,
-                    character: 23,
+                    character: 30,
                 },
             },
             work_done_progress_params: Default::default(),
@@ -1800,7 +1800,7 @@ mod tests {
     fn test_find_references_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("references_msg");
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     let x = 1
     x + x
 }"#;
@@ -2017,7 +2017,7 @@ mod tests {
     fn test_prepare_rename_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("prepare_rename_msg");
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     let foo = 1
     foo
 }"#;
@@ -2046,7 +2046,7 @@ mod tests {
     fn test_rename_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("rename_msg");
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     let foo = 1
     foo + foo
 }"#;
@@ -2212,7 +2212,7 @@ mod tests {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_type_nat_literal");
         // Hover on natural number literals directly
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     42
 }"#;
 
@@ -2243,7 +2243,7 @@ mod tests {
     fn test_hover_type_content_for_string_literal() {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_type_string");
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     "hello"
 }"#;
 
@@ -2272,7 +2272,7 @@ mod tests {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_type_func_name");
         let source = r#"fn double(n: Int): Int { n + n }
-fn main() {
+fn main() -> Nil {
     double(5)
 }"#;
 
@@ -2306,7 +2306,7 @@ fn main() {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_type_binop");
         // Integer literals default to Nat type in Tribute
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     let result = 1 + 2
     result
 }"#;
@@ -2339,7 +2339,7 @@ fn main() {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_type_bool");
         // Bool literals in Tribute are True/False (capitalized)
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     True
 }"#;
 
@@ -2368,7 +2368,7 @@ fn main() {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_type_let_binding");
         // Test that let-bound variables have correctly inferred types
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     let x = 42
     x
 }"#;
@@ -2403,7 +2403,7 @@ fn main() {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_type_nested_block");
         // Test that variables in nested blocks are correctly typed
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     let outer = {
         let inner = "hello"
         inner
@@ -2440,7 +2440,7 @@ fn main() {
         let mut harness = TestHarness::new();
         let uri = test_uri("hover_type_multiple_lets");
         // Test multiple let bindings in sequence
-        let source = r#"fn main() {
+        let source = r#"fn main() -> Nil {
     let a = 1
     let b = 2
     let c = a + b

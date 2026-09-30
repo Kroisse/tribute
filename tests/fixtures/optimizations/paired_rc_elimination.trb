@@ -19,6 +19,6 @@ fn run_state() -> Int {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_int(run_state())
 }

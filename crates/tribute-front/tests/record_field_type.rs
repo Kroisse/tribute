@@ -203,7 +203,7 @@ fn record_shape_argument_revisits_preserve_distinct_occurrences(db: &salsa::Data
     for occurrences in [1, 2] {
         let calls = format!("take({record})\n").repeat(occurrences);
         let text = format!(
-            "struct Point {{ x: Int, y: Int }}\nfn take(p: Point) {{}}\nfn run() {{ {calls} }}"
+            "struct Point {{ x: Int, y: Int }}\nfn take(p: Point) -> Nil {{}}\nfn run() -> Nil {{ {calls} }}"
         );
         let expected: Vec<_> = (0..occurrences)
             .map(|occurrence| {
@@ -225,7 +225,7 @@ fn record_shape_nested_errors_survive_argument_revisits(db: &salsa::DatabaseImpl
     let outer = format!("Wrapper {{ point: {inner}, extra: +2 }}");
     let text = format!(
         "struct Point {{ x: Int, y: Int }}\nstruct Wrapper {{ point: Point }}\n\
-         fn take(value: Wrapper) {{}}\nfn run() {{ take({outer}) }}"
+         fn take(value: Wrapper) -> Nil {{}}\nfn run() -> Nil {{ take({outer}) }}"
     );
     assert_eq!(
         diagnostics(db, &text),
@@ -392,7 +392,10 @@ fn generic_record_fields_infer_and_receive_contextual_arguments(db: &salsa::Data
         r#"
 struct Pair(a, b) { first: a, second: b }
 
-fn inferred() { Pair { first: +1, second: True } }
+fn inferred() -> Nil {
+    let pair = Pair { first: +1, second: True }
+    Nil
+}
 fn expected_return() -> Pair(Int, Bool) { Pair { first: +1, second: True } }
 fn take(value: Pair(Int, Bool)) -> Pair(Int, Bool) { value }
 fn expected_argument() -> Pair(Int, Bool) { take(Pair { first: +1, second: True }) }
@@ -410,8 +413,26 @@ fn expected_argument() -> Pair(Int, Bool) { take(Pair { first: +1, second: True 
     let module = checked.module(db);
     let pair = declared_struct_id(db, module, "Pair");
     let expected = [TypeKind::Int, TypeKind::Bool];
-    for name in ["inferred", "expected_return"] {
-        let record = typed_function_tail(module, name);
+    // `inferred` binds the record without an expected type.
+    let ExprKind::Block { stmts, .. } = &*typed_function_body(module, "inferred").kind else {
+        panic!("inferred must have a block body");
+    };
+    let [
+        tribute_front::ast::Stmt::Let {
+            value: inferred, ..
+        },
+        ..,
+    ] = stmts.as_slice()
+    else {
+        panic!("inferred must start with a let");
+    };
+    for (name, record) in [
+        ("inferred", inferred),
+        (
+            "expected_return",
+            typed_function_tail(module, "expected_return"),
+        ),
+    ] {
         assert_named_args(db, node_type(metadata, record), pair, "Pair", &expected);
         let ExprKind::Record { fields, .. } = &*record.kind else {
             panic!("{name} must end in a record");

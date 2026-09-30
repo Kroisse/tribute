@@ -37,7 +37,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_state(fn() {
         apply(fn(x: Nat) {
             State::set(x)
@@ -85,7 +85,7 @@ fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_reader(fn() {
         run_state(fn() {
             apply(fn() {
@@ -112,7 +112,7 @@ fn test_effect_row_poly_pure_for_effectful() {
     f(x)
 }
 
-fn main() {
+fn main() -> Nil {
     let result = apply(fn(x: Nat) { x + 10 }, 5)
     __tribute_print_nat(result)
 }
@@ -155,7 +155,7 @@ fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     // call 1: e = {State(Nat)}
     let a = run_state(fn() {
         apply(fn() { State::get() })
@@ -181,11 +181,11 @@ fn main() {
 /// with a closure obtained from a function return value.
 #[test]
 fn test_returned_closure_call() {
-    let code = r#"fn identity(f: fn(Nat) -> Nat) -> fn(Nat) -> Nat {
+    let code = r#"fn identity(f: fn(Nat) ->{e} Nat) -> fn(Nat) ->{e} Nat {
     f
 }
 
-fn main() {
+fn main() -> Nil {
     let f = identity(fn(x: Nat) { x + 10 })
     let result = f(5)
     __tribute_print_nat(result)

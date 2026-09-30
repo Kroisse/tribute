@@ -3,7 +3,7 @@
 // - Variable references within function scope
 // - Sequential variable definitions
 
-fn main() {
+fn main() -> Nil {
     let x = 42
     let y = x + 8
     print_line("Testing let bindings:")

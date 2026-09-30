@@ -28,7 +28,7 @@ fn basic_database_usage() {
 
     // Parse some Tribute code
     let source_code = r#"
-        fn main() {
+        fn main() -> Nil {
             let greeting = "Hello, Salsa!"
             print_line(greeting)
         }
@@ -82,7 +82,7 @@ fn incremental_compilation_demo() {
         .expect("Failed to set language");
 
     // Create a source file
-    let initial_text = "fn main() { 1 + 2 }";
+    let initial_text = "fn main() -> Nil { 1 + 2 }";
     let initial_tree = parser.parse(initial_text, None).expect("tree");
     let source_file =
         SourceCst::from_path(&db, "math.trb", initial_text.into(), Some(initial_tree));
@@ -98,7 +98,7 @@ fn incremental_compilation_demo() {
 
     // Modify the source file
     println!("Modifying source...");
-    let updated_text = "fn main() { 3 * (1 + 2) }";
+    let updated_text = "fn main() -> Nil { 3 * (1 + 2) }";
     let updated_tree = parser.parse(updated_text, None).expect("tree");
     source_file.set_text(&mut db).to(updated_text.into());
     source_file.set_tree(&mut db).to(Some(updated_tree));

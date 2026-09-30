@@ -15,7 +15,7 @@ fn complex_interpolation() {
     print_line("You have \{items} \{item_type} worth \{items * price} dollars total.")
 }
 
-fn main() {
+fn main() -> Nil {
     greet("Alice", 30)
     calculate()
     complex_interpolation()

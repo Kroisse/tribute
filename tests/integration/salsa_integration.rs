@@ -93,12 +93,12 @@ fn test_salsa_database_examples(db: &salsa::DatabaseImpl) {
     let examples = vec![
         (
             "hello.trb",
-            r#"fn main() { print_line("Hello, World!") }"#,
+            r#"fn main() -> Nil { print_line("Hello, World!") }"#,
             vec!["main"],
         ),
         (
             "calc.trb",
-            r#"fn main() { let _ = 1 + 2 + 3 }"#,
+            r#"fn main() -> Nil { let _ = 1 + 2 + 3 }"#,
             vec!["main"],
         ),
         (
@@ -111,7 +111,7 @@ fn factorial(n: Nat) -> Nat {
   }
 }
 
-fn main() {
+fn main() -> Nil {
   let _ = factorial(5)
 }
 "#,
@@ -158,14 +158,14 @@ fn test_salsa_incremental_computation_detailed() {
     parser
         .set_language(&tree_sitter_tribute::LANGUAGE.into())
         .expect("Failed to set language");
-    let text = "fn value() -> Nat { 3 } fn main() {}";
+    let text = "fn value() -> Nat { 3 } fn main() -> Nil {}";
     let tree = parser.parse(text, None).expect("tree");
     let source_file = SourceCst::from_path(&db, "incremental.trb", text.into(), Some(tree));
     let (ctx1, module1) = expect_compilation_success(&db, source_file);
     assert_source_signature(&ctx1, &module1, "value", 0, "i32");
     assert_eq!(returned_constant(&ctx1, &module1, "value"), 3);
 
-    let updated_text = "fn value() -> Nat { 10 } fn main() {}";
+    let updated_text = "fn value() -> Nat { 10 } fn main() -> Nil {}";
     let updated_tree = parser.parse(updated_text, None).expect("tree");
     source_file.set_text(&mut db).to(updated_text.into());
     source_file.set_tree(&mut db).to(Some(updated_tree));
@@ -337,7 +337,7 @@ fn test_salsa_multiple_functions(db: &salsa::DatabaseImpl) {
     let text = r#"
 fn add(a: Nat, b: Nat) -> Nat { a + b }
 fn multiply(a: Nat, b: Nat) -> Nat { a * b }
-fn main() { print_line("test") }
+fn main() -> Nil { print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));
@@ -356,7 +356,7 @@ fn test_salsa_database_isolation() {
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
-        let text = "fn main() { let _ = 1 + 2 }";
+        let text = "fn main() -> Nil { let _ = 1 + 2 }";
         let tree = parser.parse(text, None).expect("tree");
         let source1 = SourceCst::from_path(db, "test1.trb", text.into(), Some(tree));
         let (ctx, module) = expect_compilation_success(db, source1);
@@ -368,7 +368,7 @@ fn test_salsa_database_isolation() {
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
             .expect("Failed to set language");
-        let text = "fn main() { let _ = 3 * 4 }";
+        let text = "fn main() -> Nil { let _ = 3 * 4 }";
         let tree = parser.parse(text, None).expect("tree");
         let source2 = SourceCst::from_path(db, "test2.trb", text.into(), Some(tree));
         let (ctx, module) = expect_compilation_success(db, source2);
@@ -382,7 +382,7 @@ fn test_salsa_database_isolation() {
 
 #[salsa_test]
 fn test_function_lowering(db: &salsa::DatabaseImpl) {
-    let source = "fn main() { let _ = 1 + 2 }";
+    let source = "fn main() -> Nil { let _ = 1 + 2 }";
     let mut parser = Parser::new();
     parser
         .set_language(&tree_sitter_tribute::LANGUAGE.into())

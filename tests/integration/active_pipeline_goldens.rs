@@ -260,7 +260,7 @@ fn run() -> Int {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run()
 }
 "#;
@@ -285,7 +285,7 @@ fn run_state() -> Int {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run_state()
 }
 "#;
@@ -325,13 +325,13 @@ fn run_all() -> Int {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run_all()
 }
 "#;
 
 const FLOAT_COMPARISON_SOURCE: &str = r#"
-fn main() {
+fn main() -> Nil {
     let a = 1.0
     let b = 2.0
     let _ = #(a == b, a != b, a < b, a <= b, a > b, a >= b)

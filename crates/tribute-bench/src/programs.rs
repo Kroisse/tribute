@@ -32,8 +32,8 @@ pub const PROGRAMS: &[Program] = &[
     },
     Program {
         name: "closure_capture",
-        source: r#"fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
-fn main() {
+        source: r#"fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
+fn main() -> Nil {
     let a = +1
     let _ = apply(fn(n) { n + a }, +41)
 }
@@ -50,7 +50,7 @@ fn use_ask() ->{Ask} Nat {
     Ask::ask()
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = handle use_ask() {
         do result { result }
         fn Ask::ask() { 42 }
@@ -79,7 +79,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run_state(fn() { set_then_get() }, +0)
 }
 "#,

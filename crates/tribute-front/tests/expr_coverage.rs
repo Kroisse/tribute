@@ -169,11 +169,11 @@ fn test_list_literals_use_shared_sequence_ops(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn empty() {
+fn empty() -> List(a) {
     []
 }
 
-fn numbers() {
+fn numbers() -> List(Nat) {
     [1, 2, 3]
 }
 "#,

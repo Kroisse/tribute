@@ -13,7 +13,7 @@ fn pick(flag: Bool) -> Nat {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
 /// Remove ANSI escape sequences from terminal output.

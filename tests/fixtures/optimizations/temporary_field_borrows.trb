@@ -20,7 +20,7 @@ fn read_nested(outer: Outer) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let inner = Value(10)
     let outer = Wrapped(inner)
     let first = read_nested(outer)

@@ -340,7 +340,7 @@ mod tests {
     #[test]
     fn test_wildcard_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 let _ = 42;
                 0
             }
@@ -354,7 +354,7 @@ mod tests {
     #[test]
     fn test_bind_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 let x = 42;
                 x
             }
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn test_nat_literal_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     42 -> 1
                     _ -> 0
@@ -387,7 +387,7 @@ mod tests {
     #[test]
     fn test_int_literal_pattern_negative() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     -42 -> 1
                     _ -> 0
@@ -403,7 +403,7 @@ mod tests {
     #[test]
     fn test_float_literal_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     2.5 -> 1
                     _ -> 0
@@ -420,7 +420,7 @@ mod tests {
     #[test]
     fn test_string_literal_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     "hello" -> 1
                     _ -> 0
@@ -437,7 +437,7 @@ mod tests {
     #[test]
     fn test_bytes_literal_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     b"a\x00" -> 1
                     _ -> 0
@@ -454,7 +454,7 @@ mod tests {
     #[test]
     fn test_rune_literal_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     ?\n -> 1
                     _ -> 0
@@ -470,7 +470,7 @@ mod tests {
     #[test]
     fn test_keyword_nil_in_pattern_becomes_nil_literal() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     Nil -> 1
                 }
@@ -488,7 +488,7 @@ mod tests {
     #[test]
     fn test_lowercase_true_in_pattern_becomes_identifier() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     true -> 1
                     _ -> 0
@@ -507,7 +507,7 @@ mod tests {
     #[test]
     fn test_keyword_true_in_pattern_becomes_bool_literal() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     True -> 1
                     _ -> 0
@@ -527,7 +527,7 @@ mod tests {
     #[test]
     fn test_keyword_false_in_pattern_becomes_bool_literal() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     False -> 0
                     _ -> 1
@@ -549,7 +549,7 @@ mod tests {
     #[test]
     fn test_constructor_pattern_no_args() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     None -> 0
                     _ -> 1
@@ -567,7 +567,7 @@ mod tests {
     #[test]
     fn test_constructor_pattern_with_args() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     Some(y) -> y
                     _ -> 0
@@ -589,7 +589,7 @@ mod tests {
     #[test]
     fn test_qualified_constructor_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     std::io::ReadLine(bytes) -> bytes
                     _ -> b""
@@ -607,7 +607,7 @@ mod tests {
     #[test]
     fn test_constructor_pattern_multiple_args() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     Pair(a, b) -> a
                     _ -> 0
@@ -625,7 +625,7 @@ mod tests {
     #[test]
     fn test_constructor_pattern_struct_style() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     Point { x: px, y: py } -> px
                     _ -> 0
@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn test_constructor_pattern_struct_style_shorthand_and_rest() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     Point { y, .. } -> y
                     _ -> 0
@@ -674,7 +674,7 @@ mod tests {
     #[test]
     fn test_tuple_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 let #(a, b) = pair;
                 a
             }
@@ -689,7 +689,7 @@ mod tests {
     #[test]
     fn test_tuple_pattern_nested() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 let #(a, #(b, c)) = nested;
                 a
             }
@@ -710,7 +710,7 @@ mod tests {
     #[test]
     fn test_list_pattern_empty() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     [] -> 0
                     _ -> 1
@@ -727,7 +727,7 @@ mod tests {
     #[test]
     fn test_list_pattern_elements() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     [a, b, c] -> 0
                     _ -> 1
@@ -744,7 +744,7 @@ mod tests {
     #[test]
     fn test_list_pattern_with_rest() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     [head, ..tail] -> head
                     _ -> 0
@@ -763,7 +763,7 @@ mod tests {
     #[test]
     fn test_list_pattern_with_anonymous_rest() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     [head, ..] -> head
                     _ -> 0
@@ -784,7 +784,7 @@ mod tests {
     #[test]
     fn test_as_pattern() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     Some(y) as opt -> opt
                     _ -> None
@@ -810,7 +810,7 @@ mod tests {
     #[test]
     fn test_as_pattern_with_wildcard() {
         let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     _ as all -> all
                 }

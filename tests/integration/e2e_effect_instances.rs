@@ -78,7 +78,7 @@ fn run_writer(comp: fn() ->{{e, Writer(w)}} a) ->{{e}} a {{
     }}
 }}
 fn relay(comp: fn() ->{{e}} a) ->{{e}} a {{ comp() }}
-fn main() {{ __tribute_print_nat(run_writer({callback})) }}
+fn main() -> Nil {{ __tribute_print_nat(run_writer({callback})) }}
 "#,
             common::PRINT_EXTERNS
         );

@@ -2,7 +2,7 @@
 // - Let binding: let var = value
 // - Returns the bound value
 
-fn main() {
+fn main() -> Nil {
     let x = 42
     x
 }

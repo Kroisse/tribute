@@ -12,7 +12,7 @@ fn read_while_borrowing(boxed: BoxedNat) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let boxed = Boxed(10)
     __tribute_print_nat(read_while_borrowing(boxed))
 }

@@ -91,7 +91,7 @@ fn test_ability_definition() {
     op set(value: s) -> Nil
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "ability_def.trb");
@@ -119,7 +119,7 @@ fn counter() ->{State(Nat)} Nat {
     n
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "ability_effect.trb");
@@ -157,7 +157,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "handle_expr.trb");
@@ -206,7 +206,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "milestone_100.trb");
@@ -244,7 +244,7 @@ fn stateful_print() ->{State(Nat), Console} Nat {
     n
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "effect_row.trb");
@@ -274,7 +274,7 @@ fn copy() ->{Reader(Int), Writer(Int)} Nil {
     Writer::tell(x)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "multiple_abilities.trb");
@@ -309,7 +309,7 @@ fn read_state() ->{State(Int)} Int {
     x
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "let_effect_propagation.trb");
@@ -341,7 +341,7 @@ fn copy_value() ->{Reader(Int), Writer(Int)} Nil {
     Nil
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "multiple_let_effects.trb");
@@ -370,7 +370,7 @@ fn sequential_state() ->{State(Nat)} Nat {
     c + 1
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "sequential_let_effects.trb");
@@ -402,7 +402,7 @@ fn nested_state() ->{State(Nat)} Nat {
     a + b
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "nested_let_effects.trb");
@@ -426,7 +426,7 @@ fn test_pure_let_binding_no_spurious_effects() {
     x + y
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "pure_let_binding.trb");
@@ -472,7 +472,7 @@ fn touch_world() ->{Io} Nil {
     Io::touch()
 }
 
-fn main() {
+fn main() -> Nil {
     touch_world()
 }
 "#;
@@ -499,7 +499,7 @@ fn touch_world() ->{Io} Nil {
     Io::touch()
 }
 
-fn main() {
+fn main() -> Nil {
     touch_world()
 }
 "#;
@@ -547,7 +547,7 @@ fn test_unhandled_effect_error() {
     op set(value: s) -> Nil
 }
 
-fn main() {
+fn main() -> Nil {
     let n = State::get()
     State::set(n + 1)
 }
@@ -578,7 +578,7 @@ fn greet() ->{Console} Nil {
     Console::print("hello")
 }
 
-fn main() {
+fn main() -> Nil {
     greet()
 }
 "#;
@@ -618,7 +618,7 @@ fn run() -> Nil {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     run()
 }
 "#;
@@ -636,10 +636,11 @@ fn main() {
     );
 }
 
-/// Test that non-main functions can freely use effects without error.
+/// A function's signature is not widened by its body: an effect the body
+/// performs must be declared, while a declared one needs no handler here.
 #[test]
-fn test_non_main_effectful_function_no_error() {
-    let code = r#"ability State(s) {
+fn test_effectful_function_must_declare_its_effects() {
+    let undeclared = r#"ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -650,19 +651,24 @@ fn counter() -> Nat {
     n
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
-
-    // Use frontend-only check because the backend panics for
-    // undecorated effectful functions (missing evidence params).
-    let diagnostics = compile_frontend_and_check(code, "non_main_effectful.trb");
-
+    let diagnostics = compile_frontend_and_check(undeclared, "undeclared_effect.trb");
     print_diagnostics(&diagnostics);
+    assert!(
+        diagnostics.iter().any(|d| d
+            .inner
+            .message
+            .contains("function 'counter' uses undeclared effects: State")),
+        "an omitted effect row must not absorb the body's effects: {diagnostics:?}"
+    );
 
+    let declared = undeclared.replace("fn counter() -> Nat", "fn counter() ->{State(Nat)} Nat");
+    let diagnostics = compile_frontend_and_check(&declared, "declared_effect.trb");
+    print_diagnostics(&diagnostics);
     assert!(
         diagnostics.is_empty(),
-        "Non-main functions should allow effect inference without errors, got {} diagnostics",
-        diagnostics.len()
+        "a declared effect needs no handler in the function itself: {diagnostics:?}"
     );
 }
 
@@ -698,7 +704,7 @@ fn run() -> Nat {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "duplicate_handlers.trb");
@@ -735,7 +741,7 @@ fn wrapper() ->{State(Bool)} Int {
     use_int_state()
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "param_ability_distinct.trb");
@@ -781,7 +787,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "param_ability_same.trb");
@@ -820,7 +826,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "param_ability_typevar.trb");
@@ -847,7 +853,7 @@ fn bad_func() ->{State()} Int {
     State::get()
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "param_ability_arity.trb");
@@ -887,7 +893,7 @@ fn run() -> Nat {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "handle_param_ability.trb");
@@ -917,7 +923,7 @@ fn use_state() ->{State(Nat)} Nat {
     x + 1
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "ability_op_subst.trb");
@@ -960,7 +966,7 @@ fn run() -> Nat {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "call_indirect_effectful_closure.trb");
@@ -985,7 +991,7 @@ fn test_empty_ability_no_operations() {
     let code = r#"ability Empty {
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "empty_ability.trb");
@@ -1009,7 +1015,7 @@ fn with_empty() ->{Empty} Nat {
     42
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_frontend_and_check(code, "empty_ability_effect.trb");
@@ -1038,7 +1044,7 @@ fn use_multi() ->{Multi} Int {
     Multi::combine(+1, 2, True)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_frontend_and_check(code, "ability_op_multi_params.trb");
@@ -1070,7 +1076,7 @@ fn run() -> Nat {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "ability_op_multi_params_handler.trb");
@@ -1100,7 +1106,7 @@ fn use_pair() ->{Pair(Int, Nat)} Int {
     Pair::get_first()
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let diagnostics = compile_and_check(code, "ability_multi_type_params.trb");

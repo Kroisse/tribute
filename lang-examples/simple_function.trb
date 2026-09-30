@@ -4,6 +4,6 @@ fn add(a, b) {
     a + b
 }
 
-fn main() {
+fn main() -> Nil {
     print_line("Hello World")
 }

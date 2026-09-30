@@ -39,7 +39,7 @@ fn assert_escape_error(db: &dyn salsa::Database, text: &str, escape: &str, messa
 fn valid_unicode_escapes_are_accepted(db: &salsa::DatabaseImpl) {
     let errors = lowering_errors(
         db,
-        r#"fn main() {
+        r#"fn main() -> Nil {
     let s = "caf\u{E9} \u{1F600} \u{0}\u{D7FF}\u{E000}\u{10FFFF}"
     let r = ?\u{1F600}
     case s { "\u{41}" -> r, _ -> ?\u{41} }
@@ -52,7 +52,7 @@ fn valid_unicode_escapes_are_accepted(db: &salsa::DatabaseImpl) {
 fn surrogate_escape_in_string_is_rejected(db: &salsa::DatabaseImpl) {
     assert_escape_error(
         db,
-        r#"fn main() { "a\u{D800}b" }"#,
+        r#"fn main() -> Nil { "a\u{D800}b" }"#,
         r"\u{D800}",
         "U+D800 is a surrogate code point",
     );
@@ -62,7 +62,7 @@ fn surrogate_escape_in_string_is_rejected(db: &salsa::DatabaseImpl) {
 fn out_of_range_escape_in_string_is_rejected(db: &salsa::DatabaseImpl) {
     assert_escape_error(
         db,
-        r#"fn main() { s"x\u{110000}" }"#,
+        r#"fn main() -> Nil { s"x\u{110000}" }"#,
         r"\u{110000}",
         "U+110000 exceeds the maximum U+10FFFF",
     );
@@ -72,7 +72,7 @@ fn out_of_range_escape_in_string_is_rejected(db: &salsa::DatabaseImpl) {
 fn surrogate_escape_in_rune_is_rejected(db: &salsa::DatabaseImpl) {
     assert_escape_error(
         db,
-        r"fn main() { ?\u{dfff} }",
+        r"fn main() -> Nil { ?\u{dfff} }",
         r"\u{dfff}",
         "U+DFFF is a surrogate code point",
     );
@@ -91,7 +91,7 @@ fn surrogate_escape_in_string_pattern_is_rejected(db: &salsa::DatabaseImpl) {
 #[salsa_test]
 fn fixed_width_unicode_escape_is_a_parse_error(db: &salsa::DatabaseImpl) {
     // Built at runtime: the removed form is `\u` followed by four hex digits.
-    let text = format!(r#"fn main() {{ "{}u0041" }}"#, '\\');
+    let text = format!(r#"fn main() -> Nil {{ "{}u0041" }}"#, '\\');
     let errors = lowering_errors(db, &text);
     assert!(
         errors.iter().any(|d| d.phase == CompilationPhase::Parsing),
@@ -101,7 +101,7 @@ fn fixed_width_unicode_escape_is_a_parse_error(db: &salsa::DatabaseImpl) {
 
 #[salsa_test]
 fn unicode_escape_in_bytes_is_a_parse_error(db: &salsa::DatabaseImpl) {
-    let errors = lowering_errors(db, r#"fn main() { b"\u{41}" }"#);
+    let errors = lowering_errors(db, r#"fn main() -> Nil { b"\u{41}" }"#);
     assert!(
         errors.iter().any(|d| d.phase == CompilationPhase::Parsing),
         "expected a parse error, got {errors:?}"

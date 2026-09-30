@@ -19,7 +19,7 @@ use pkg::math::basic::{add, subtract}
 use pkg::math::advanced::power
 use pkg::utils::repeat
 
-fn main() {
+fn main() -> Nil {
     print_line("Testing file-based modules:")
 
     // Using basic math operations
