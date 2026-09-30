@@ -22,7 +22,6 @@ use super::phases::{FuncDefId, TypeDefId};
 /// by unification.
 #[salsa::interned(debug)]
 pub struct Type<'db> {
-    #[returns(ref)]
     pub kind: TypeKind<'db>,
 }
 
@@ -205,15 +204,11 @@ pub struct TypeScheme<'db> {
     /// Type parameters (universally quantified).
     ///
     /// The order matters: `type_params[0]` corresponds to `BoundVar { index: 0 }`.
-    #[returns(ref)]
     pub type_params: Vec<TypeParam>,
     /// Effect-row variables quantified by this scheme.
-    #[returns(ref)]
     pub effect_params: Vec<EffectVar>,
     /// Retained exact effect unions, quantified together with the body.
-    #[returns(ref)]
     pub row_unions: Vec<RowUnion<'db>>,
-    #[returns(ref)]
     pub row_removals: Vec<RowRemoval<'db>>,
     /// The body type with BoundVar references to type_params.
     #[returns(copy)]
@@ -447,7 +442,6 @@ pub enum Kind {
 #[salsa::interned(debug)]
 pub struct EffectRow<'db> {
     /// Known effects in this row.
-    #[returns(ref)]
     pub effects: Vec<Effect<'db>>,
     /// Optional row variable for open effect rows.
     ///

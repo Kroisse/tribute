@@ -7,11 +7,8 @@ use trunk_ir::Symbol;
 
 #[salsa::input(debug)]
 pub struct SourceCst {
-    #[returns(ref)]
     pub uri: Uri<String>,
-    #[returns(ref)]
     pub text: Rope,
-    #[returns(ref)]
     pub tree: Option<Tree>,
 }
 

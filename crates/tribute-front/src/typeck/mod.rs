@@ -251,37 +251,27 @@ impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
-    #[returns(ref)]
     pub module: Module<TypedRef<'db>>,
     /// Function type schemes collected during type checking.
     /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
-    #[returns(ref)]
     pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
     /// Constructor schemes used to build logical nominal layouts without
     /// reinterpreting source annotations.
-    #[returns(ref)]
     pub constructor_types: ConstructorTypeMetadata<'db>,
     /// Exact expression types and callee instantiations.
-    #[returns(ref)]
     pub expression_types: ExpressionTypeMetadata<'db>,
     /// Ability-level calling-convention requirements.
-    #[returns(ref)]
     pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
     /// Deterministic ability schemas required by the public logical-lowering
     /// boundary. This preserves semantic declarations without re-inspection.
-    #[returns(ref)]
     pub ability_definitions: Vec<AbilitySchema<'db>>,
     /// Exact semantic operation instances for handler arms.
-    #[returns(ref)]
     pub handler_operations: Vec<(NodeId, InstantiatedHandlerOperation<'db>)>,
     /// Exact semantic operation instances for ability-operation calls.
-    #[returns(ref)]
     pub perform_operations: Vec<(NodeId, InstantiatedPerformOperation<'db>)>,
     /// Fully solved callable signatures for lambda expressions.
-    #[returns(ref)]
     pub lambda_signatures: Vec<(NodeId, LambdaSignature<'db>)>,
     /// Case expressions which type checking proved exhaustive.
-    #[returns(ref)]
     pub exhaustive_cases: Vec<NodeId>,
     /// Prelude-defined semantic type identities.
     #[returns(copy)]
@@ -302,38 +292,29 @@ pub struct TypeCheckOutput<'db> {
 #[salsa::tracked]
 pub struct PreludeExports<'db> {
     /// Function type schemes keyed by FuncDefId.
-    #[returns(ref)]
     pub function_types: Vec<(FuncDefId<'db>, TypeScheme<'db>)>,
 
     /// Constructor type schemes keyed by CtorId.
-    #[returns(ref)]
     pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
 
     /// Type definitions keyed by name.
-    #[returns(ref)]
     pub type_defs: Vec<(Symbol, TypeScheme<'db>)>,
 
     /// Struct field definitions keyed by nominal declaration identity.
-    #[returns(ref)]
     pub struct_fields: Vec<(TypeDefId<'db>, (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>))>,
 
     /// Enum variant information: enum_name → [variant_names].
-    #[returns(ref)]
     pub enum_variants: Vec<(Symbol, Vec<Symbol>)>,
 
     /// Field names of constructors whose fields are all named.
-    #[returns(ref)]
     pub constructor_field_names: Vec<(CtorId<'db>, Vec<Symbol>)>,
 
     /// Method index for UFCS resolution: method_name → candidates.
-    #[returns(ref)]
     pub method_index: Vec<(Symbol, Vec<MethodEntry<'db>>)>,
     /// Ability-level calling-convention requirements exported by the prelude.
-    #[returns(ref)]
     pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
     /// Ability operation schemas exported by the prelude as deterministic
     /// vectors (the module environment rebuilds its lookup map on injection).
-    #[returns(ref)]
     pub ability_definitions: Vec<(
         AbilityId<'db>,
         Vec<TypeParam>,

@@ -339,7 +339,6 @@ mod tests {
     /// Input wrapper for Module to use in tracked functions.
     #[salsa::input]
     struct TestModuleInput {
-        #[returns(ref)]
         module: Module<UnresolvedName>,
     }
 

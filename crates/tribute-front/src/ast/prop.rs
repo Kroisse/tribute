@@ -806,7 +806,6 @@ mod tests {
     /// `#[salsa::tracked]` helper functions (which require Salsa struct params).
     #[salsa::input]
     struct PropTestInput {
-        #[returns(ref)]
         module: Module<UnresolvedName>,
     }
 
