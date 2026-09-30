@@ -1226,6 +1226,12 @@ pub fn compile_to_wasm_binary(
         .ok_or_else(|| compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source))
 }
 
+/// Diagnostics accumulated by [`compile_to_wasm_binary`], including the
+/// warnings of a successful compilation.
+pub fn wasm_binary_diagnostics(db: &dyn salsa::Database, source: SourceCst) -> Vec<&Diagnostic> {
+    compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source)
+}
+
 // =============================================================================
 // Native Pipeline (Cranelift)
 // =============================================================================

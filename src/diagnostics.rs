@@ -68,6 +68,19 @@ pub fn print_diagnostic(diag: &Diagnostic, source: &Rope, file_path: &str) {
         .ok();
 }
 
+/// Print accumulated diagnostics in source order.
+pub fn print_diagnostics(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+    file_path: &str,
+    diags: &mut [&Diagnostic],
+) {
+    diags.sort_by(|left, right| tribute::pipeline::compare_diagnostics(left, right));
+    for diag in diags.iter() {
+        print_diagnostic(diag, source.text(db), file_path);
+    }
+}
+
 /// Collect and print diagnostics from a failed compilation.
 ///
 /// First tries target-specific accumulated diagnostics; if empty,
@@ -80,11 +93,7 @@ pub fn report_diagnostics(
 ) {
     let source_text = source.text(db);
     if !accumulated_diags.is_empty() {
-        accumulated_diags
-            .sort_by(|left, right| tribute::pipeline::compare_diagnostics(left, right));
-        for diag in &accumulated_diags {
-            print_diagnostic(diag, source_text, file_path);
-        }
+        print_diagnostics(db, source, file_path, &mut accumulated_diags);
     } else {
         let result = compile_with_diagnostics(db, source);
         if !result.diagnostics.is_empty() {

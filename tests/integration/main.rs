@@ -3,6 +3,7 @@
 mod common;
 
 mod active_pipeline_goldens;
+mod cli_diagnostics;
 mod constructor_instances;
 mod cps_closure_lowering;
 mod diagnostic_snapshots;
