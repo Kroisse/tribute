@@ -1334,12 +1334,11 @@ mod tests {
     fn parse_and_typecheck<'db>(
         db: &'db dyn salsa::Database,
         src: &str,
-    ) -> crate::ast::Module<crate::ast::TypedRef<'db>> {
+    ) -> &'db crate::ast::Module<crate::ast::TypedRef<'db>> {
         let source = crate::SourceCst::from_source_str(db, "test.trb", src);
         crate::query::type_check_output(db, source)
             .expect("should typecheck successfully")
             .module(db)
-            .clone()
     }
 
     /// Check that no MethodCall nodes remain in the typed AST (all resolved to Call).

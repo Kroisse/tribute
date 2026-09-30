@@ -132,18 +132,6 @@ fn derive_module_name_from_uri(uri: &fluent_uri::Uri<String>) -> Option<trunk_ir
         .map(trunk_ir::Symbol::from_dynamic)
 }
 
-/// Lower a source file to an AST Module.
-///
-/// Convenience function that extracts the CST from the source file.
-/// Note: This function does not preserve span information.
-/// Use `lower_source_to_parsed_ast` for span-preserving lowering.
-pub fn lower_source_to_ast(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-) -> Option<Module<UnresolvedName>> {
-    lower_source_to_parsed_ast(db, source).map(|parsed| parsed.module(db).clone())
-}
-
 // =============================================================================
 // Tests
 // =============================================================================

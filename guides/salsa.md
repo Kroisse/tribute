@@ -44,6 +44,13 @@ Tribute does not write `returns(ref)`. It chooses another mode as follows:
 A borrowed result is tied to the `&db` borrow, so a caller must finish with it
 before mutating an input to start another revision.
 
+A tracked result cannot hold a reference tied to the database lifetime, such as
+`Option<&'db Module<V>>`: the memo outlives the revision that owns the target.
+A function that only projects a field of another tracked result, such as
+`query::parsed_module` over `parsed_ast`, is therefore a plain function that
+borrows through the tracked handle. Making it tracked would store a second copy
+of the field.
+
 Salsa uses `PartialEq` to decide whether a recomputed value changed. Ordinary
 `'static` values do not need `SalsaValue` at a tracked storage boundary. Values
 that carry the database lifetime derive `salsa::SalsaValue`; owned leaf types

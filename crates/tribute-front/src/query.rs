@@ -120,14 +120,14 @@ pub fn parsed_ast_with_module_path<'db>(
 
 /// Parse a source file to an AST module.
 ///
-/// This is the entry point for parsing. The result is cached by Salsa.
+/// Borrows the module of the cached [`parsed_ast`] result. This is not a
+/// tracked query of its own, so the module is stored only once.
 /// Use `span_map` to get the corresponding span information.
-#[salsa::tracked(returns(as_ref))]
 pub fn parsed_module(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<Module<UnresolvedName>> {
-    parsed_ast(db, source).map(|parsed| parsed.module(db).clone())
+) -> Option<&Module<UnresolvedName>> {
+    parsed_ast(db, source).map(|parsed| parsed.module(db))
 }
 
 /// Get the span map for a parsed source file.
@@ -187,67 +187,59 @@ pub fn type_check_output<'db>(
 
 /// Get function type schemes from type checking.
 ///
-/// Returns the function type schemes collected during type checking,
+/// Borrows the function type schemes collected during type checking,
 /// keyed by function name (Symbol).
-#[salsa::tracked(returns(clone))]
 pub fn function_schemes<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Option<Vec<(Symbol, TypeScheme<'db>)>> {
-    type_check_output(db, source).map(|o| o.function_types(db).clone())
+) -> Option<&'db [(Symbol, TypeScheme<'db>)]> {
+    type_check_output(db, source).map(|o| o.function_types(db).as_slice())
 }
 
 // =============================================================================
 // Function-level queries
 // =============================================================================
+//
+// These borrow a declaration from the cached module result; they are not
+// tracked queries of their own.
+
+/// Find the function declaration named `name` in `module`.
+fn find_func<V: salsa::SalsaValue>(module: &Module<V>, name: Symbol) -> Option<&FuncDecl<V>> {
+    module.decls.iter().find_map(|decl| match decl {
+        Decl::Function(f) if f.name == name => Some(f),
+        _ => None,
+    })
+}
 
 /// Get a parsed function by name.
-#[salsa::tracked(returns(clone))]
 pub fn parsed_func(
     db: &dyn salsa::Database,
     source: SourceCst,
     name: Symbol,
-) -> Option<FuncDecl<UnresolvedName>> {
-    let module = parsed_module(db, source)?;
-
-    module.decls.iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f.clone()),
-        _ => None,
-    })
+) -> Option<&FuncDecl<UnresolvedName>> {
+    find_func(parsed_module(db, source)?, name)
 }
 
 /// Resolve a single function by name.
 ///
 /// The function is resolved in the context of the full module environment.
-#[salsa::tracked(returns(clone))]
 pub fn resolved_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     name: Symbol,
-) -> Option<FuncDecl<ResolvedRef<'db>>> {
-    let module = resolved_module(db, source)?;
-
-    module.decls.iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f.clone()),
-        _ => None,
-    })
+) -> Option<&'db FuncDecl<ResolvedRef<'db>>> {
+    find_func(resolved_module(db, source)?, name)
 }
 
 /// Type check a single function by name.
 ///
 /// The function is type checked in the context of the full module.
-#[salsa::tracked(returns(clone))]
 pub fn typed_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     name: Symbol,
-) -> Option<FuncDecl<TypedRef<'db>>> {
-    let module = type_check_output(db, source)?.module(db);
-
-    module.decls.iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f.clone()),
-        _ => None,
-    })
+) -> Option<&'db FuncDecl<TypedRef<'db>>> {
+    find_func(type_check_output(db, source)?.module(db), name)
 }
 
 // =============================================================================
@@ -563,7 +555,7 @@ fn explicit() ->{} Nil { Nil }
         assert!(schemes.is_some(), "function_schemes should return Some");
 
         let schemes = schemes.unwrap();
-        for (name, scheme) in &schemes {
+        for (name, scheme) in schemes {
             let body = scheme.body(&db);
             assert!(
                 !contains_univar(&db, body),
