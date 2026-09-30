@@ -18,7 +18,7 @@ const EXPECTED_FAILURES: &[(&str, &str)] = &[
         "invalid_unresolved_name.trb",
         "unresolved name `missing_value`",
     ),
-    // String interpolation is not implemented yet.
+    // String interpolation is not implemented yet (#92).
     (
         "string_interpolation.trb",
         "interpolation is not implemented yet",
@@ -27,7 +27,7 @@ const EXPECTED_FAILURES: &[(&str, &str)] = &[
         "strings/string_interpolation.trb",
         "interpolation is not implemented yet",
     ),
-    // Qualified UFCS (`x.a::b()`) is designed but not implemented.
+    // Qualified UFCS (`x.a::b()`) is designed but not implemented (#1210).
     ("ufcs-qualified.trb", "unresolved method 'math::double'"),
 ];
 

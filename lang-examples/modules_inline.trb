@@ -47,6 +47,7 @@ pub mod outer {
     }
 
     pub fn use_inner() -> Int {
+        // `inner::value()` does not resolve relative to `outer` yet (#1211).
         outer::inner::value()
     }
 }
