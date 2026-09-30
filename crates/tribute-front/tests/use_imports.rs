@@ -1,4 +1,5 @@
-//! Diagnostics for `use` paths that do not resolve.
+//! Resolution of `use` paths: diagnostics for paths that do not resolve,
+//! and the identity of what a resolved import names.
 
 mod common;
 

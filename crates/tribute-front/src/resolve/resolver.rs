@@ -446,20 +446,19 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve a use declaration.
-    ///
-    /// Records the package-root path of what the import names, and reports a
-    /// path that names nothing, which would otherwise leave the import as a
-    /// module placeholder.
+    /// Resolve a use declaration, recording the package-root path of what it
+    /// names.
     fn resolve_use_decl(&self, u: &UseDecl) -> UseDecl {
-        let target = self.check_use_path(u);
         UseDecl {
-            target,
+            target: self.resolve_use_target(u),
             ..u.clone()
         }
     }
 
-    fn check_use_path(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
+    /// The package-root path of what `u` names. A path that names nothing is
+    /// reported, since it would otherwise leave the import as a module
+    /// placeholder.
+    fn resolve_use_target(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
         let first = u.path.first()?;
         let message = if first.with_str(|name| PATH_KEYWORDS.contains(&name)) {
             format!("path keyword `{first}` is not supported in `use` paths yet")
