@@ -63,6 +63,7 @@ mod phases;
 pub mod prop;
 mod span_map;
 mod types;
+pub mod visit;
 
 // Re-export core types
 pub use calling_convention::*;
