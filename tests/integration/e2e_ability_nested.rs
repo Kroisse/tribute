@@ -49,7 +49,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_reader(fn() { run_state(fn() { use_both() }, 0) }, 42)
     __tribute_print_nat(result)
 }
@@ -90,7 +90,7 @@ fn outer() ->{State(Nat)} Nat {
     State::get()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_state(fn() { outer() }, 0)
     __tribute_print_nat(result)
 }
@@ -121,7 +121,7 @@ fn use_both() ->{State(Nat), Reader(Nat)} Nat {
     n + 1
 }
 
-fn main() {
+fn main() -> Nil {
     let result = handle use_both() {
         do result { result }
         op State::get() { resume 0 }
@@ -177,7 +177,7 @@ fn inner_comp() ->{State(Nat)} Nat {
     State::get()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_state(fn() {
         let inner_result = run_state(fn() { inner_comp() }, 0)
         __tribute_print_nat(inner_result)
@@ -209,7 +209,7 @@ ability State(s) {
     op set(value: s) -> Nil
 }
 
-fn run_logging_state(comp: fn() ->{e, State(s), Logger} a, init: s) ->{e, Logger} a {
+fn run_logging_state(comp: fn() ->{e, State(Nat), Logger} a, init: Nat) ->{e, Logger} a {
     handle comp() {
         op State::get() { run_logging_state(fn() { resume init }, init) }
         op State::set(v) {
@@ -234,7 +234,7 @@ fn computation() ->{State(Nat), Logger} Nat {
     State::get()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_logger(fn() {
         run_logging_state(fn() { computation() }, 0)
     })
@@ -281,7 +281,7 @@ fn computation() ->{A, B} Nat {
     a + b
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_a(fn() { run_b(fn() { computation() }) })
     __tribute_print_nat(result)
 }
@@ -315,7 +315,7 @@ fn level4() ->{State(Nat)} Nat {
     State::get()
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_state(fn() {
         let v4 = State::get()
         __tribute_print_nat(v4)

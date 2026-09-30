@@ -139,8 +139,8 @@ fn assert_root(db: &salsa::DatabaseImpl, root: Root) {
         r#"
 struct Packet(a) { value: a }
 ability Marker(a) { op mark(value: a) -> Nil }
-fn marker() { Nil }
-fn main() { marker() }
+fn marker() -> Nil { Nil }
+fn main() -> Nil { marker() }
 "#,
     );
     let prepared = prepare_root(db, source, root);

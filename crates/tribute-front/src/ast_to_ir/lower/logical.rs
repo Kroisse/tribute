@@ -826,7 +826,27 @@ fn lower_function<'db>(
             let scheme = ctx
                 .lookup_function_type(name)
                 .expect("root main has a typechecked logical signature");
-            ctx.calling_convention_for_type(scheme.body(ctx.db))
+            // Nothing calls the root entry to supply its effect tail, so the
+            // entry instantiates an open tail as the empty row.
+            let ty = scheme.body(ctx.db);
+            let entry_ty = match ty.kind(ctx.db) {
+                crate::ast::TypeKind::Func {
+                    params,
+                    result,
+                    effect,
+                    minimum_convention,
+                } if effect.rest(ctx.db).is_some() => crate::ast::Type::new(
+                    ctx.db,
+                    crate::ast::TypeKind::Func {
+                        params: params.clone(),
+                        result: *result,
+                        effect: crate::ast::EffectRow::new(ctx.db, effect.effects(ctx.db), None),
+                        minimum_convention: *minimum_convention,
+                    },
+                ),
+                _ => ty,
+            };
+            ctx.calling_convention_for_type(entry_ty)
                 .expect("root main has a function type")
         });
     let parent_type_parameters = ctx

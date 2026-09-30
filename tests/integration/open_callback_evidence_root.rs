@@ -14,7 +14,7 @@ use trunk_ir::ops::DialectOp;
 // Keep the original generic frontend regression on the production path, which
 // specializes its callback before lowering source-logical IR.
 const SOURCE: &str = r#"
-fn apply_open(value: a, callback: fn(a) -> b) -> b {
+fn apply_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
     callback(value)
 }
 

@@ -169,11 +169,11 @@ fn test_list_literals_use_shared_sequence_ops(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn empty() {
+fn empty() -> List(a) {
     []
 }
 
-fn numbers() {
+fn numbers() -> List(Nat) {
     [1, 2, 3]
 }
 "#,
@@ -253,7 +253,7 @@ fn test_lambda_as_argument(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn apply(f: fn(Nat) -> Nat, x: Nat) -> Nat {
+fn apply(f: fn(Nat) ->{e} Nat, x: Nat) ->{e} Nat {
     f(x)
 }
 

@@ -129,7 +129,7 @@ struct Box { value: Nat }
 
 fn abort() ->{Stop} Never { Stop::stop() }
 fn takes_nat(value: Nat) -> Nat { value }
-fn invoke(thunk: fn() -> Nat) -> Nat { thunk() }
+fn invoke(thunk: fn() ->{e} Nat) ->{e} Nat { thunk() }
 fn return_context() ->{Stop} Nat { abort() }
 fn factory() -> fn() ->{Stop} Nat { fn() { abort() } }
 
@@ -162,7 +162,7 @@ fn abort() ->{Stop} Never { Stop::stop() }
 fn mixed() ->{Stop} List(Nat) { [abort(), 1] }
 fn reversed() ->{Stop} List(Nat) { [1, abort()] }
 fn all_never() ->{Stop} List(Never) { [abort(), abort()] }
-fn empty() { [] }
+fn empty() -> List(a) { [] }
 "#,
     );
 
@@ -407,9 +407,9 @@ fn returned_callback_preserves_cps_convention_after_pure_let(db: &salsa::Databas
         r#"
 extern "C" fn __tribute_print_nat(value: Nat) -> Nil
 
-fn identity(f: fn(Nat) -> Nat) -> fn(Nat) -> Nat { f }
+fn identity(f: fn(Nat) ->{e} Nat) -> fn(Nat) ->{e} Nat { f }
 
-fn main() {
+fn main() -> Nil {
     let f = identity(fn(x: Nat) { x + 10 })
     let result = f(5)
     __tribute_print_nat(result)
@@ -799,7 +799,7 @@ struct Bomb {}
 pub mod Bomb { extern "intrinsic" fn explode(value: Bomb) -> Never }
 struct Runner {}
 pub mod Runner {
-    fn run(receiver: Runner, callback: fn() -> Nat) -> Nat { callback() }
+    fn run(receiver: Runner, callback: fn() ->{e} Nat) ->{e} Nat { callback() }
 }
 fn late_method() -> Nat {
     let invoke = fn(receiver) {
@@ -877,7 +877,7 @@ struct Bomb {}
 pub mod Bomb { extern "intrinsic" fn explode(value: Bomb) -> Never }
 struct Runner {}
 pub mod Runner {
-    fn run(receiver: Runner, callback: fn() -> fn() -> Nat) -> Nat {
+    fn run(receiver: Runner, callback: fn() ->{e} fn() ->{e} Nat) ->{e} Nat {
         let f = callback()
         f()
     }

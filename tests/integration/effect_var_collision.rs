@@ -35,7 +35,7 @@ fn effectful_with_lambda() ->{State(Int)} Int {
     f(n)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let source = SourceCst::from_source_str(db, "effect_collision.trb", code);
@@ -68,7 +68,7 @@ fn effectful_with_multiple_lambdas() ->{State(Int)} Int {
     f2(f1(n))
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let source = SourceCst::from_source_str(db, "multiple_lambdas.trb", code);
@@ -118,7 +118,7 @@ fn effectful_using_pure(init: Int) ->{State(Int)} Int {
     apply_pure(pure_fn, init)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let source = SourceCst::from_source_str(db, "pure_in_effectful.trb", code);
@@ -167,7 +167,7 @@ fn should_fail() ->{State(Int)} Int {
     apply_pure(effectful_fn, +0)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let source = SourceCst::from_source_str(db, "effectful_rejected.trb", code);
@@ -204,7 +204,7 @@ fn nested_lambdas() ->{State(Int)} Int {
     outer(n)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let source = SourceCst::from_source_str(db, "nested_lambdas.trb", code);
@@ -231,7 +231,7 @@ fn main() { }
 fn test_pure_lambda_basic(db: &salsa::DatabaseImpl) {
     // Use negative numbers to ensure Int inference (positive literals are Nat)
     let code = r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
 
@@ -240,7 +240,7 @@ fn test_lambda() -> Int {
     apply(double, -21)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let source = SourceCst::from_source_str(db, "pure_lambda_basic.trb", code);
@@ -262,7 +262,7 @@ fn main() { }
 fn test_multiple_pure_lambdas(db: &salsa::DatabaseImpl) {
     // Use negative numbers to ensure Int inference
     let code = r#"
-fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int, x: Int) -> Int {
+fn compose(f: fn(Int) ->{e} Int, g: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(g(x))
 }
 
@@ -272,7 +272,7 @@ fn test_compose() -> Int {
     compose(add_one, double, -10)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let source = SourceCst::from_source_str(db, "multiple_pure_lambdas.trb", code);
@@ -302,7 +302,7 @@ fn test_nested() -> Int {
     outer(-20)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#;
 
     let source = SourceCst::from_source_str(db, "nested_pure_lambdas.trb", code);

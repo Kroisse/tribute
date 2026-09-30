@@ -1,6 +1,6 @@
 // Test operator functions
 
-fn main() {
+fn main() -> Nil {
     // Bytes concatenation using concat directly
     let a = b"Hello, "
     let b = b"Bytes!"

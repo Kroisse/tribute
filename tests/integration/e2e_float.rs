@@ -15,7 +15,7 @@ fn test_float_multiply() {
     assert_native_output(
         "float_multiply.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     __tribute_print_float(3.0 * 2.0)
 }
 "#,
@@ -29,7 +29,7 @@ fn test_float_subtraction() {
     assert_native_output(
         "float_subtraction.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     __tribute_print_float(5.5 - 2.5)
 }
 "#,
@@ -43,7 +43,7 @@ fn test_float_division() {
     assert_native_output(
         "float_division.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     __tribute_print_float(10.0 / 4.0)
 }
 "#,
@@ -56,7 +56,7 @@ fn test_float_literal_compiles() {
     assert_native_output(
         "float_literal.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     __tribute_print_float(3.14159)
 }
 "#,
@@ -69,7 +69,7 @@ fn test_negative_float_literal() {
     assert_native_output(
         "negative_float.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     __tribute_print_float(-3.14)
 }
 "#,
@@ -86,7 +86,7 @@ fn double(x: Float) -> Float {
     x * 2.0
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_float(double(3.5))
 }
 "#,
@@ -100,7 +100,7 @@ fn test_float_combined_arithmetic() {
     assert_native_output(
         "float_combined.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 3.0 * 2.0
     let b = 10.0 / 2.0
     __tribute_print_float(a + b - 1.0)
@@ -119,7 +119,7 @@ fn test_float_comparison_less_than() {
     assert_native_output(
         "float_less_than.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let _ = 1.5 < 2.5
 }
 "#,
@@ -132,7 +132,7 @@ fn test_float_comparison_greater_than() {
     assert_native_output(
         "float_greater_than.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let _ = 2.5 > 1.5
 }
 "#,
@@ -145,7 +145,7 @@ fn test_float_comparison_equality() {
     assert_native_output(
         "float_equality.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let _ = 1.5 == 1.5
 }
 "#,
@@ -158,7 +158,7 @@ fn test_float_comparison_lte() {
     assert_native_output(
         "float_lte.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let _ = 1.5 <= 2.5
 }
 "#,
@@ -171,7 +171,7 @@ fn test_float_comparison_gte() {
     assert_native_output(
         "float_gte.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let _ = 2.5 >= 1.5
 }
 "#,
@@ -188,7 +188,7 @@ fn test_float_comparison_branch_eq() {
     assert_native_output(
         "float_cmp_branch_eq.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 1.5
     let b = 1.5
     case a == b {
@@ -206,7 +206,7 @@ fn test_float_comparison_branch_lt() {
     assert_native_output(
         "float_cmp_branch_lt.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 1.0
     let b = 2.0
     case a < b {
@@ -224,7 +224,7 @@ fn test_float_comparison_branch_ne() {
     assert_native_output(
         "float_cmp_branch_ne.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 1.0
     let b = 2.0
     case a != b {
@@ -242,7 +242,7 @@ fn test_float_comparison_branch_gt() {
     assert_native_output(
         "float_cmp_branch_gt.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 2.0
     let b = 1.0
     case a > b {
@@ -260,7 +260,7 @@ fn test_float_comparison_branch_le() {
     assert_native_output(
         "float_cmp_branch_le.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 1.0
     let b = 2.0
     case a <= b {
@@ -278,7 +278,7 @@ fn test_float_comparison_branch_ge() {
     assert_native_output(
         "float_cmp_branch_ge.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 2.0
     let b = 2.0
     case a >= b {
@@ -296,7 +296,7 @@ fn test_float_comparison_nan_semantics() {
     assert_native_output(
         "float_cmp_nan_semantics.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let nan = 0.0 / 0.0
     let x = 1.0
 

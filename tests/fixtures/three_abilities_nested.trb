@@ -40,7 +40,7 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let result = run_reader(fn() {
         run_writer(fn() {
             run_state(fn() { use_all() }, 0)

@@ -25,7 +25,7 @@ fn describe(user) {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let alice = User { name: "Alice", age: 30 }
     let bob = User { name: "Bob", age: 15 }
 

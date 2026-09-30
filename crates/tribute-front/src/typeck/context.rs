@@ -1372,7 +1372,7 @@ mod tests {
             pub mod Foo {
                 pub fn get_value(f: Foo) -> Nat { f.value }
             }
-            fn main() {
+            fn main() -> Nil {
                 let f = Foo { value: 42 }
                 let _ = f.get_value()
             }
@@ -1402,7 +1402,7 @@ mod tests {
             pub mod B {
                 pub fn get(b: B) -> Nat { b.x }
             }
-            fn main() {
+            fn main() -> Nil {
                 let a = A { x: 1 }
                 let b = B { x: 2 }
                 let _ = a.get()

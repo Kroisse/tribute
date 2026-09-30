@@ -21,11 +21,11 @@ pub mod Other {
     }
 }
 
-fn apply(f: fn(Nat, Sequence(Nat)) -> Sequence(Nat), tail: Sequence(Nat)) -> Sequence(Nat) {
+fn apply(f: fn(Nat, Sequence(Nat)) ->{e} Sequence(Nat), tail: Sequence(Nat)) ->{e} Sequence(Nat) {
     f(3, tail)
 }
 
-fn main() {
+fn main() -> Nil {
     let first = std::collections::List::prepend(1, [])
     let second = Sequence::prepend(2, first)
     let third = apply(push, second)

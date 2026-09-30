@@ -42,7 +42,7 @@ fn main() ->{Io} Nil {
 
 #[test]
 fn test_native_simple_literal() {
-    let output = compile_and_run_native("simple_literal.trb", "fn main() { }");
+    let output = compile_and_run_native("simple_literal.trb", "fn main() -> Nil { }");
     assert!(
         output.status.success(),
         "Native binary exited with non-zero status: {:?}\nstderr: {}",
@@ -56,7 +56,7 @@ fn named_local_operator_prints_three() {
     let source = format!(
         r#"{}
 fn apply(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
-fn main() {{
+fn main() -> Nil {{
     let add = (Int::+)
     let alias = add
     __tribute_print_int(apply(alias, +1, +2))
@@ -75,7 +75,7 @@ fn named_direct_both_reaches_native_execution() {
         r#"{}
 fn apply(f: fn(Int, Int) ->{{e}} Int, x: Int, y: Int) ->{{e}} Int {{ f(x, y) }}
 fn pure(f: fn(Int, Int) ->{{}} Int) ->{{}} Int {{ f(+3, +4) }}
-fn main() {{
+fn main() -> Nil {{
     __tribute_print_int(pure((Int::+)))
     __tribute_print_int(apply((Int::+), +1, +2))
 }}
@@ -92,7 +92,7 @@ fn test_native_arithmetic() {
     assert_native_output(
         "arithmetic.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(10 + 20 + 3)
 }
 "#,
@@ -109,7 +109,7 @@ fn add(a: Nat, b: Nat) -> Nat {
     a + b
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(add(10, 20))
 }
 "#,
@@ -134,10 +134,10 @@ fn keep(value: a) -> a {
     value
 }
 
-fn accept_a(_value: A::Thing) {}
-fn accept_b(_value: B::Thing) {}
+fn accept_a(_value: A::Thing) -> Nil {}
+fn accept_b(_value: B::Thing) -> Nil {}
 
-fn main() {
+fn main() -> Nil {
     accept_a(keep(A::Thing { value: 1 }))
     accept_b(keep(B::Thing { value: 2 }))
     __tribute_print_nat(3)
@@ -168,7 +168,7 @@ pub mod B {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let a = A::Token {}
     let b = B::Token {}
     __tribute_print_nat(a.tag())
@@ -184,7 +184,7 @@ fn test_native_let_binding() {
     assert_native_output(
         "let_binding.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 10
     let b = 20
     __tribute_print_nat(a + b)
@@ -204,7 +204,7 @@ fn mark(value: Nat) -> Nat {
     value
 }
 
-fn main() {
+fn main() -> Nil {
     let values = [mark(1), mark(2), mark(3)]
     case values {
         [] -> Nil
@@ -230,7 +230,7 @@ fn classify(values: List(Nat)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(classify([]))
     __tribute_print_nat(classify([4]))
     __tribute_print_nat(classify([5, 6]))
@@ -261,7 +261,7 @@ fn value(pair: #(Item, Bool)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(value(#(Empty, True)))
     __tribute_print_nat(value(#(Number(4), True)))
     __tribute_print_nat(value(#(Number(5), False)))
@@ -285,7 +285,7 @@ fn pick(o: Option(Bool)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(pick(None))
     __tribute_print_nat(pick(Some(True)))
     __tribute_print_nat(pick(Some(False)))
@@ -324,7 +324,7 @@ fn positional(p: Point) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(pick(Point { x: 1, y: True }))
     __tribute_print_nat(pick(Point { x: 2, y: False }))
     __tribute_print_nat(first(Point { x: 3, y: True }))
@@ -355,7 +355,7 @@ fn size(shape: Shape) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(size(Circle(1)))
     __tribute_print_nat(size(Rect(2, True)))
     __tribute_print_nat(size(Rect(3, False)))
@@ -378,7 +378,7 @@ fn right(pair: Pair(Nat, Nat)) -> Nat {
     right
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(right(Pair { left: 1, right: 2 }))
 }
 "#,
@@ -415,7 +415,7 @@ fn nested(o: Option(Point)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(get(Box(1, True)))
     __tribute_print_nat(get(Box(2, False)))
     __tribute_print_nat(get(Empty))
@@ -459,7 +459,7 @@ fn get(w: Wrap(Nat)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(size(Rect { tall: True, width: 7 }))
     __tribute_print_nat(size(Rect { width: 3, tall: False }))
     __tribute_print_nat(get(Box { tagged: True, value: 1 }))
@@ -494,14 +494,14 @@ fn wrap(flag: Bool, n: Nat) -> Option(Nat) {{
     }}
 }}
 
-fn show(value: Option(Nat)) {{
+fn show(value: Option(Nat)) -> Nil {{
     case value {{
         Some(n) -> __tribute_print_nat(n)
         None -> __tribute_print_nat(0)
     }}
 }}
 
-fn main() {{
+fn main() -> Nil {{
     __tribute_print_nat(count(True, 1))
     __tribute_print_nat(count(False, 1))
     show(wrap(True, 7))
@@ -563,7 +563,7 @@ fn t(x: #(Nil, String)) -> Nat {
         #(Nil, _) -> 0
     }
 }
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(s("abc"))
     __tribute_print_nat(s("ab" <> "c"))
     __tribute_print_nat(s(""))
@@ -612,7 +612,7 @@ fn count(xs: List(Nat)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(kind(Circle { radius: 3 }))
     __tribute_print_nat(kind(Rect { width: 1, tall: True }))
     __tribute_print_nat(count([4, 5]))
@@ -649,7 +649,7 @@ fn outer(shape: Shape) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(shapes::inner(shapes::Dot(7)))
     __tribute_print_nat(outer(shapes::Dot(7)))
     __tribute_print_nat(outer(shapes::Other))
@@ -682,7 +682,7 @@ fn prefix(values: List(Item)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(exact([]))
     __tribute_print_nat(exact([Number(1)]))
     __tribute_print_nat(prefix([]))
@@ -721,7 +721,7 @@ fn nested(values: List(List(Item))) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(exact([Number(3), Number(4)]))
     __tribute_print_nat(exact([Number(3), Number(4), Number(5)]))
     __tribute_print_nat(exact([Other, Number(4)]))
@@ -815,7 +815,7 @@ fn head_or_zero(values: List(Nat)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let original = [4, 5, 6]
     let rest = tail(original)
     let last = tail(rest)
@@ -843,7 +843,7 @@ fn observe(values: List(Nat)) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(observe([]))
     __tribute_print_nat(observe([2, 3]))
 }
@@ -933,7 +933,7 @@ fn only_or_default(values: List(Float)) -> Float {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_float(only_or_default([]))
     __tribute_print_float(only_or_default([1.25]))
 }
@@ -966,7 +966,7 @@ fn source_value(value: List(Nat)) -> Nat {
     2
 }
 
-fn main() {
+fn main() -> Nil {
     let source = source_value(keep(SourceList(2)))
     __tribute_print_nat(builtin_value() + source)
 }
@@ -986,7 +986,7 @@ pub mod List {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(List::prepend(20, 22))
 }
 "#,
@@ -1020,7 +1020,7 @@ fn classify(n: Nat) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(classify(5))
 }
 "#,
@@ -1035,7 +1035,7 @@ fn test_native_struct() {
         r#"
 struct Point { x: Nat, y: Nat }
 
-fn main() {
+fn main() -> Nil {
     let p = Point { x: 10, y: 20 }
     __tribute_print_nat(p.x())
 }
@@ -1049,7 +1049,7 @@ fn test_native_closure() {
     assert_native_output(
         "closure.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = 10
     let f = fn(x) { x + a }
     __tribute_print_nat(f(32))
@@ -1076,7 +1076,7 @@ fn area(s: Shape) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(area(Circle(5)))
 }
 "#,
@@ -1104,7 +1104,7 @@ fn to_num(c: Color) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(to_num(Green))
 }
 "#,
@@ -1130,7 +1130,7 @@ fn maybe_unwrap(m: Maybe, default: Nat) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(maybe_unwrap(Just(42), 0))
     __tribute_print_nat(maybe_unwrap(Nothing, 99))
 }
@@ -1152,7 +1152,7 @@ fn fibonacci(n: Nat) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(fibonacci(10))
 }
 "#,
@@ -1165,7 +1165,7 @@ fn test_native_tuple_create_and_match() {
     assert_native_output(
         "tuple_create_match.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let t = #(1, 2)
     let #(a, b) = t
     __tribute_print_nat(a + b)
@@ -1199,7 +1199,7 @@ fn sum(items: List(#(Item, Nat))) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(first(#(Number(1), 2)))
     __tribute_print_nat(first(#(Empty, 5)))
     __tribute_print_nat(sum([#(Number(10), 1), #(Empty, 2), #(Number(3), 4)]))
@@ -1222,7 +1222,7 @@ fn pick(b: Bool) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(pick(True))
     __tribute_print_nat(pick(False))
 }
@@ -1244,7 +1244,7 @@ fn bool_to_nat(b: Bool) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(bool_to_nat(False && True))
     __tribute_print_nat(bool_to_nat(True && True))
     __tribute_print_nat(bool_to_nat(True && False))
@@ -1267,7 +1267,7 @@ fn bool_to_nat(b: Bool) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(bool_to_nat(True || False))
     __tribute_print_nat(bool_to_nat(False || True))
     __tribute_print_nat(bool_to_nat(False || False))
@@ -1289,7 +1289,7 @@ fn side_effect() -> Bool {
     True
 }
 
-fn main() {
+fn main() -> Nil {
     case False && side_effect() {
         True -> __tribute_print_nat(1)
         False -> __tribute_print_nat(0)
@@ -1311,7 +1311,7 @@ fn side_effect() -> Bool {
     False
 }
 
-fn main() {
+fn main() -> Nil {
     case True || side_effect() {
         True -> __tribute_print_nat(1)
         False -> __tribute_print_nat(0)
@@ -1341,7 +1341,7 @@ fn sum(t: Tree) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let t = Branch(Leaf(1), Branch(Leaf(2), Leaf(3), 0), 0)
     __tribute_print_nat(sum(t))
 }
@@ -1359,7 +1359,7 @@ fn test_native_print_line() {
     let output = compile_and_run_native(
         "print_line.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     print_line("Hello, World!")
 }
 "#,
@@ -1381,7 +1381,7 @@ fn test_native_string_escape_sequences() {
     let output = compile_and_run_native(
         "string_escape.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     print_line("a\tb\nc")
 }
 "#,
@@ -1402,7 +1402,7 @@ fn test_native_string_escape_hex() {
     let output = compile_and_run_native(
         "string_escape_hex.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     print_line("\x41\x42\x43")
 }
 "#,
@@ -1422,7 +1422,7 @@ fn test_native_block_string_literal_strips_indentation() {
     let output = compile_and_run_native(
         "block_string_literal.trb",
         r##"
-fn main() {
+fn main() -> Nil {
     print_line(s#"
         SELECT *
           FROM t\tx
@@ -1446,7 +1446,7 @@ fn test_native_string_escape_unicode() {
     let output = compile_and_run_native(
         "string_escape_unicode.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     print_line("\u{41}\u{E9}\u{1F600}")
 }
 "#,
@@ -1466,7 +1466,7 @@ fn test_native_numeric_literal_separators_exponents_and_suffixes() {
     let output = compile_and_run_native(
         "numeric_literal_forms.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     print_line(Int::to_string(1_000i + 2e3i + +0xFF))
     print_line(Int::to_string(-1e3 + +0b1010_1010))
 }
@@ -1487,7 +1487,7 @@ fn test_native_print_line_empty() {
     let output = compile_and_run_native(
         "print_line_empty.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     print_line("")
 }
 "#,
@@ -1510,7 +1510,7 @@ fn test_native_print_line_multiple() {
     let output = compile_and_run_native(
         "print_line_multi.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     print_line("Hello")
     print_line("World")
 }
@@ -1569,7 +1569,7 @@ fn bool_to_nat(value: Bool) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(bool_to_nat("same" == "same"))
     __tribute_print_nat(bool_to_nat("same" != "different"))
     __tribute_print_nat(bool_to_nat("" == String::empty()))
@@ -1696,7 +1696,7 @@ fn bool_to_nat(value: Bool) -> Nat {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let cursor = UserCursor(7)
     case cursor {
         UserCursor(value) -> __tribute_print_nat(value)
@@ -1834,7 +1834,7 @@ fn greet(name: String) -> Nil {
     print_line(name)
 }
 
-fn main() {
+fn main() -> Nil {
     greet("Tribute")
 }
 "#,
@@ -1857,7 +1857,7 @@ fn test_native_string_dedup_rodata() {
     let output = compile_and_run_native(
         "string_dedup.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     print_line("echo")
     print_line("echo")
 }
@@ -1885,7 +1885,7 @@ fn test_native_ufcs_string_len() {
     let output = compile_and_run_native(
         "ufcs_string_len.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let s = "Hello"
     let _ = s.len()
 }
@@ -1906,7 +1906,7 @@ fn test_native_ufcs_method_disambiguation() {
     let output = compile_and_run_native(
         "ufcs_method_disambiguation.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let s = "hello"
     let bs = String::to_bytes(s)
     let _ = s.len()
@@ -1929,7 +1929,7 @@ fn test_native_ufcs_chained() {
     let output = compile_and_run_native(
         "ufcs_chained.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let s = "hello"
     let _ = s.to_bytes().len()
 }
@@ -1966,7 +1966,7 @@ pub mod Baz {
     pub fn get_value(b: Baz) -> Nat { b.value }
 }
 
-fn main() {
+fn main() -> Nil {
     let f = Foo { value: 10 }
     let _ = f.to_bar().to_baz().get_value()
 }
@@ -2003,7 +2003,7 @@ pub mod Triple {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let p = Pair { x: 1, y: 2 }
     let _ = p.extend(3).scale(10).sum()
 }
@@ -2036,7 +2036,7 @@ pub mod Triple {
     pub fn sum(t: Triple) -> Nat { t.x + t.y + t.z }
 }
 
-fn main() {
+fn main() -> Nil {
     let p = Pair { x: 1, y: 2 }
     let _ = p.extend(3).sum()
 }
@@ -2059,7 +2059,7 @@ fn test_native_bytes_literal_basic() {
     let output = compile_and_run_native(
         "bytes_lit_basic.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b"hello"
     print_line(String::from_bytes(bs))
 }
@@ -2080,7 +2080,7 @@ fn test_native_bytes_literal_empty() {
     let output = compile_and_run_native(
         "bytes_lit_empty.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b""
     print_line(String::from_bytes(bs))
 }
@@ -2101,7 +2101,7 @@ fn test_native_bytes_literal_escape_sequences() {
     let output = compile_and_run_native(
         "bytes_lit_escape.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b"a\tb\nc"
     print_line(String::from_bytes(bs))
 }
@@ -2123,7 +2123,7 @@ fn test_native_bytes_literal_raw() {
     let output = compile_and_run_native(
         "bytes_lit_raw.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = rb"\n\t"
     print_line(String::from_bytes(bs))
 }
@@ -2144,7 +2144,7 @@ fn test_native_bytes_literal_len() {
     assert_native_output(
         "bytes_lit_len.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b"hello"
     __tribute_print_nat(bs.len())
 }
@@ -2158,7 +2158,7 @@ fn test_native_bytes_literal_concat() {
     let output = compile_and_run_native(
         "bytes_lit_concat.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let a = b"Hello, "
     let b = b"World!"
     print_line(String::from_bytes(a <> b))
@@ -2184,7 +2184,7 @@ fn test_native_bytes_get_or_panic() {
     assert_native_output(
         "bytes_get_or_panic.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b"abc"
     __tribute_print_nat(bs.get_or_panic(0))
     __tribute_print_nat(bs.get_or_panic(1))
@@ -2200,7 +2200,7 @@ fn test_native_bytes_get_or_panic_reads_high_bytes_unsigned() {
     assert_native_output(
         "bytes_get_or_panic_high.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b"\xff\x80\x7f"
     __tribute_print_nat(bs.get_or_panic(0))
     __tribute_print_nat(bs.get_or_panic(1))
@@ -2239,7 +2239,7 @@ fn test_native_bytes_slice_or_panic() {
     assert_native_output(
         "bytes_slice_or_panic.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b"hello world"
     let sl = bs.slice_or_panic(0, 5)
     print(String::from_bytes(sl))
@@ -2254,7 +2254,7 @@ fn test_native_bytes_slice_safe() {
     assert_native_output(
         "bytes_slice_safe.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b"hello world"
     let sl = bs.slice(6, 11)
     print(String::from_bytes(sl))
@@ -2269,7 +2269,7 @@ fn test_native_bytes_slice_clamping() {
     assert_native_output(
         "bytes_slice_clamp.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = b"hello"
     let sl = bs.slice(3, 100)
     __tribute_print_nat(sl.len())
@@ -2288,7 +2288,7 @@ fn print_bytes_len(bs: Bytes) -> Nil {
     __tribute_print_nat(bs.len())
 }
 
-fn main() {
+fn main() -> Nil {
     let bs = b"test"
     print_bytes_len(bs)
 }
@@ -2306,7 +2306,7 @@ fn test_native_string_empty() {
     assert_native_output(
         "string_empty.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let s = String::empty()
     __tribute_print_nat(s.len())
 }
@@ -2320,7 +2320,7 @@ fn test_native_bytes_empty() {
     assert_native_output(
         "bytes_empty.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let bs = Bytes::empty()
     __tribute_print_nat(bs.len())
 }

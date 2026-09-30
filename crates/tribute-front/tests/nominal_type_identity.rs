@@ -12,11 +12,11 @@ fn local_nominal_shadows_imported_list_type_alias(db: &salsa::DatabaseImpl) {
         r#"
 use std::collections::List as Sequence
 
-fn take_source(value: Sequence(Nat)) {}
+fn take_source(value: Sequence(Nat)) -> Nil {}
 
 enum Sequence(a) { UserSequence(a) }
 
-fn main() { take_source([1]) }
+fn main() -> Nil { take_source([1]) }
 "#,
     );
     let errors = ast_pipeline_error_messages(db, source);
@@ -61,9 +61,9 @@ enum String {
     Fake
 }
 
-fn take_user_string(_value: String) {}
+fn take_user_string(_value: String) -> Nil {}
 
-fn main() {
+fn main() -> Nil {
     take_user_string("hello")
 }
 "#,

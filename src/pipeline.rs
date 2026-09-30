@@ -1987,8 +1987,8 @@ mod tests {
         ),
         (
             "closure_capture.trb",
-            r#"fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
-fn main() {
+            r#"fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
+fn main() -> Nil {
     let a = +1
     let _ = apply(fn(n) { n + a }, +41)
 }
@@ -2004,7 +2004,7 @@ fn use_ask() ->{Ask} Nat {
     Ask::ask()
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = handle use_ask() {
         do result { result }
         fn Ask::ask() { 42 }
@@ -2032,7 +2032,7 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = run_state(fn() { set_then_get() }, +0)
 }
 "#,
@@ -2251,7 +2251,7 @@ fn main() {
             r#"
 extern "C" fn __tribute_print_nat(value: Nat) -> Nil
 
-fn main() {
+fn main() -> Nil {
     let f = fn(x) { x + 1 }
     __tribute_print_nat(f(41))
 }
@@ -2287,9 +2287,9 @@ fn main() {
             r#"
 extern "C" fn __tribute_print_nat(value: Nat) -> Nil
 
-fn apply(f: fn(Nat) -> Nat, value: Nat) -> Nat { f(value) }
+fn apply(f: fn(Nat) ->{e} Nat, value: Nat) ->{e} Nat { f(value) }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(apply(fn(x) { x + 1 }, 41))
 }
 "#,
@@ -2629,7 +2629,10 @@ fn main() {
 
     #[salsa_test]
     fn test_full_pipeline(db: &salsa::DatabaseImpl) {
-        let source = source_from_str("test.trb", "fn compute() -> Int { +42 }\nfn main() { }");
+        let source = source_from_str(
+            "test.trb",
+            "fn compute() -> Int { +42 }\nfn main() -> Nil { }",
+        );
 
         let result = compile_ast(db, source).expect("pipeline should not fail");
         assert!(result.is_some(), "Should compile successfully");
@@ -2650,7 +2653,7 @@ fn count() ->{Counter} Int {
     Counter::next()
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = handle count() {
         do result { result }
         op Counter::next() { resume +1 }
@@ -3010,7 +3013,10 @@ fn main() ->{std::io::Io} Nil {
 
     #[salsa_test]
     fn test_ast_pipeline_simple_function(db: &salsa::DatabaseImpl) {
-        let source = source_from_str("test.trb", "fn compute() -> Int { +42 }\nfn main() { }");
+        let source = source_from_str(
+            "test.trb",
+            "fn compute() -> Int { +42 }\nfn main() -> Nil { }",
+        );
 
         let result = compile_frontend(db, source);
         assert!(result.is_some());
@@ -3034,7 +3040,7 @@ fn main() ->{std::io::Io} Nil {
             let source = source_from_str(
                 "prelude_list_prepend.trb",
                 r#"
-fn main() {
+fn main() -> Nil {
     let _ = List::prepend("token", [])
 }
 "#,
@@ -3104,7 +3110,7 @@ fn main() {
 use std::collections::List as Sequence
 use std::collections::List::prepend as push
 
-fn main() {
+fn main() -> Nil {
     let first = List::prepend(1, [])
     let second = std::collections::List::prepend(2, first)
     let third = Sequence::prepend(3, second)
@@ -3154,7 +3160,7 @@ fn main() {
         use tribute_front::ast::{Decl, Type, TypeKind, TypeScheme};
         let source = source_from_str(
             "invalid_enum_schema.trb",
-            "enum Boxed(a) { Box(a), Empty }\nfn keep(value: Boxed(Int)) -> Boxed(Int) { value }\nfn main() {}",
+            "enum Boxed(a) { Box(a), Empty }\nfn keep(value: Boxed(Int)) -> Boxed(Int) { value }\nfn main() -> Nil {}",
         );
         let typed = parse_and_lower_ast(db, source).unwrap();
         for (missing, expected) in [
@@ -3234,7 +3240,7 @@ fn keep_a(value: A::Token(Int)) -> A::Token(Int) { value }
 fn keep_b(value: B::Token(Bool)) -> B::Token(Bool) { value }
 fn int_payload(value: Boxed(Int)) -> Int { case value { Box(x) -> x, EmptyBox -> +0 } }
 fn bool_payload(value: Boxed(Bool)) -> Bool { case value { Box(x) -> x, EmptyBox -> False } }
-fn main() {}
+fn main() -> Nil {}
 "#,
         );
         let typed = parse_and_lower_ast(db, source).expect("typed fixture");
@@ -3401,7 +3407,7 @@ fn keep_choice(value: Choice(Nat)) -> Choice(Nat) { value }
 fn keep_holder(value: Holder) -> Holder { value }
 fn keep_node(value: Node) -> Node { value }
 fn keep_first(value: First) -> First { value }
-fn main() {}
+fn main() -> Nil {}
 "#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
@@ -3490,7 +3496,7 @@ fn main() {}
 
         let source = source_from_str(
             "unused_source_list.trb",
-            "enum List(a) { SourceList(a), }\nfn main() {}",
+            "enum List(a) { SourceList(a), }\nfn main() -> Nil {}",
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
         let (ir, logical) = merge_and_lower_to_ir_with(db, &typed, source, |typed, db, ir, uri| {
@@ -3541,9 +3547,9 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn consume(value: Nat) { Nil }
+fn consume(value: Nat) -> Nil { Nil }
 
-fn main() {
+fn main() -> Nil {
     consume(run_state(fn() { State::get() }, 0))
 }
 "#,
@@ -3592,7 +3598,7 @@ fn main() {
             db,
             "unused_c_ffi.trb",
             r#"extern "C" fn user_bridge(value: String) -> String
-fn main() { Nil }"#,
+fn main() -> Nil { Nil }"#,
         );
         let binary = compile_to_wasm_binary(db, source)
             .expect("unused managed C declaration may be omitted");
@@ -3607,7 +3613,7 @@ fn main() { Nil }"#,
             db,
             "used_c_ffi.trb",
             r#"extern "C" fn user_bridge(value: String) -> String
-fn main() {
+fn main() -> Nil {
     let _ = user_bridge("hello")
     Nil
 }"#,
@@ -3768,7 +3774,7 @@ mod shadow {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
@@ -3884,7 +3890,7 @@ fn main() -> String { "hello" }
         let source = source_from_str(
             "test.trb",
             r#"
-            fn main() {
+            fn main() -> Nil {
                 let x = 10
                 let y = 20
                 let _ = x + y
@@ -3912,7 +3918,7 @@ fn main() -> String { "hello" }
                 y: Int,
             }
 
-            fn main() { }
+            fn main() -> Nil { }
             "#,
         );
 
@@ -3928,7 +3934,7 @@ fn main() -> String { "hello" }
 
     #[salsa_test]
     fn test_main_returns_nil_ok(db: &salsa::DatabaseImpl) {
-        let source = source_from_str("test.trb", "fn main() { }");
+        let source = source_from_str("test.trb", "fn main() -> Nil { }");
 
         let result = compile_with_diagnostics(db, source);
         let has_main_error = result

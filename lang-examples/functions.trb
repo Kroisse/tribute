@@ -8,7 +8,7 @@ fn add(x: Int, y: Int) -> Int {
     x + y
 }
 
-fn main() {
+fn main() -> Nil {
     print_line("Testing user-defined functions:")
     print_line(add(10, 20))
     print_line("Testing nested arithmetic:")

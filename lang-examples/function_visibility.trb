@@ -6,6 +6,6 @@ fn add_and_double(x, y) {
     double(x + y)
 }
 
-fn main() {
+fn main() -> Nil {
     add_and_double(5, 10)
 }

@@ -13,7 +13,7 @@ fn test_number(n) {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     print_line("Testing pattern matching:")
     print_line(test_number(0))
     print_line(test_number(1))

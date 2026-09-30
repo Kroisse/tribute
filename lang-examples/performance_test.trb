@@ -14,7 +14,7 @@ fn string_operations() {
     result
 }
 
-fn main() {
+fn main() -> Nil {
     // Test recursion performance
     let fib_result = fibonacci(20)
     

@@ -104,23 +104,17 @@ fn shared(comp: fn() ->{e} Nil) ->{e} Nil {
 }
 "#,
     );
-    let output = checked(db, source);
-    let errors = checked::accumulated::<Diagnostic>(db, source);
-    assert!(errors.is_empty(), "{errors:?}");
-    let scheme = output
-        .function_types(db)
-        .iter()
-        .find(|(name, _)| *name == trunk_ir::Symbol::new("shared"))
-        .unwrap()
-        .1;
-    let TypeKind::Func { params, effect, .. } = scheme.body(db).kind(db) else {
-        panic!("function")
-    };
-    assert!(effect.is_pure(db));
-    let TypeKind::Func { effect, .. } = params[0].kind(db) else {
-        panic!("callback")
-    };
-    assert!(effect.is_pure(db));
+    // The lambda's `e` is the signature's `e`, which is rigid in the body:
+    // passing `other` where a pure callback is expected would close it.
+    checked(db, source);
+    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect();
+    assert_eq!(
+        errors,
+        ["effect variable `e` in the signature of `shared` is closed in its body"],
+    );
 }
 
 #[salsa_test]
@@ -200,7 +194,7 @@ fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
 op Writer::tell(v) { run_writer(fn() { resume Nil }) } }
 }
 fn relay(comp: fn() ->{e} a) ->{e} a { comp() }
-fn main() { print(run_writer(fn() { relay(use_writer) })) }
+fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
 "#,
     );
     let output = checked(db, source);

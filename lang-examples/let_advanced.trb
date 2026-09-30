@@ -3,7 +3,7 @@
 // - Variable scoping and shadowing
 // - Sequential variable definitions
 
-fn main() {
+fn main() -> Nil {
     let x = 10
     let y = 20
     let sum = x + y

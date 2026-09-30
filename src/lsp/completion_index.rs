@@ -490,7 +490,7 @@ mod tests {
     #[test]
     fn test_completion_items_imported_builtin_io() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "use std::io::Io\nfn main() { Nil }");
+        let source = make_source(&db, "use std::io::Io\nfn main() -> Nil { Nil }");
 
         let items = completion_items(&db, source);
         let io = items
@@ -531,7 +531,7 @@ mod tests {
     #[test]
     fn test_document_symbols_function() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { 1 }");
+        let source = make_source(&db, "fn main() -> Nil { 1 }");
 
         let symbols = document_symbols(&db, source);
         assert!(!symbols.is_empty());
@@ -686,7 +686,7 @@ mod tests {
         let source = make_source(
             &db,
             r#"extern "intrinsic" fn __add(a: Int, b: Int) -> Int
-fn main() { 1 }"#,
+fn main() -> Nil { 1 }"#,
         );
 
         let items = completion_items(&db, source);

@@ -27,7 +27,7 @@ fn effectful() ->{Foo} Nat {
     Foo::bar()
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -56,7 +56,7 @@ fn use_counter() ->{Counter} Nat {
     a + b
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -79,7 +79,7 @@ fn use_ask() ->{Ask} Nat {
     Ask::ask()
 }
 
-fn main() {
+fn main() -> Nil {
     let r = handle use_ask() {
         do result { result }
         op Ask::ask() { resume 42 }

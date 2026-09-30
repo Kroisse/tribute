@@ -16,7 +16,7 @@ fn parse_and_lower(source: &str) -> Module<UnresolvedName> {
 #[test]
 fn operator_values_preserve_names_in_bindings_and_arguments() {
     for name in ["Int::+", "+", "Nat::*"] {
-        let source = format!("fn main() {{ let action = ({name})\nconsume(({name})) }}");
+        let source = format!("fn main() -> Nil {{ let action = ({name})\nconsume(({name})) }}");
         let mut parser = Parser::new();
         parser
             .set_language(&tree_sitter_tribute::LANGUAGE.into())
@@ -47,7 +47,7 @@ fn operator_values_preserve_names_in_bindings_and_arguments() {
 
 #[test]
 fn test_simple_function() {
-    let source = "fn main() { 42 }";
+    let source = "fn main() -> Nil { 42 }";
     let module = parse_and_lower(source);
 
     assert_eq!(module.decls.len(), 1);
@@ -84,7 +84,7 @@ fn test_function_with_params() {
 
 #[test]
 fn test_let_binding() {
-    let source = "fn main() { let x = 10; x }";
+    let source = "fn main() -> Nil { let x = 10; x }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -118,7 +118,7 @@ fn test_let_binding() {
 
 #[test]
 fn test_binary_expression() {
-    let source = "fn main() { 1 + 2 * 3 }";
+    let source = "fn main() -> Nil { 1 + 2 * 3 }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -183,7 +183,7 @@ fn test_enum_declaration() {
 #[test]
 fn test_case_expression() {
     let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     0 -> "zero"
                     1 -> "one"
@@ -207,7 +207,7 @@ fn test_case_expression() {
 
 #[test]
 fn test_lambda_expression() {
-    let source = "fn main() { fn(x) { x + 1 } }";
+    let source = "fn main() -> Nil { fn(x) { x + 1 } }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -226,7 +226,7 @@ fn test_lambda_expression() {
 fn test_use_declaration() {
     let source = r#"
             use std::io
-            fn main() { 0 }
+            fn main() -> Nil { 0 }
         "#;
     let module = parse_and_lower(source);
 
@@ -239,7 +239,7 @@ fn test_use_declaration() {
 
 #[test]
 fn test_tuple_pattern() {
-    let source = "fn main() { let #(a, b) = #(1, 2); a }";
+    let source = "fn main() -> Nil { let #(a, b) = #(1, 2); a }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -264,7 +264,7 @@ fn test_tuple_pattern() {
 
 #[test]
 fn test_list_expression() {
-    let source = "fn main() { [1, 2, 3] }";
+    let source = "fn main() -> Nil { [1, 2, 3] }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -305,7 +305,7 @@ fn test_ability_declaration() {
 
 #[test]
 fn test_int_literal() {
-    let source = "fn main() { -42 }";
+    let source = "fn main() -> Nil { -42 }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -322,7 +322,7 @@ fn test_int_literal() {
 
 #[test]
 fn test_float_literal() {
-    let source = "fn main() { 2.5 }";
+    let source = "fn main() -> Nil { 2.5 }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -342,7 +342,7 @@ fn test_float_literal() {
 
 #[test]
 fn test_unit_literal() {
-    let source = "fn main() { () }";
+    let source = "fn main() -> Nil { () }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -358,7 +358,7 @@ fn test_unit_literal() {
 
 #[test]
 fn test_nat_literal_hex() {
-    let source = "fn main() { 0xFF }";
+    let source = "fn main() -> Nil { 0xFF }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -375,7 +375,7 @@ fn test_nat_literal_hex() {
 
 #[test]
 fn test_nat_literal_binary() {
-    let source = "fn main() { 0b1010 }";
+    let source = "fn main() -> Nil { 0b1010 }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -398,7 +398,7 @@ fn test_nat_literal_binary() {
 fn test_binary_all_arithmetic() {
     // Arithmetic operators are desugared to MethodCall
     for op_str in ["+", "-", "*", "/", "%"] {
-        let source = format!("fn main() {{ 1 {} 2 }}", op_str);
+        let source = format!("fn main() -> Nil {{ 1 {} 2 }}", op_str);
         let module = parse_and_lower(&source);
 
         let Decl::Function(func) = &module.decls[0] else {
@@ -424,7 +424,7 @@ fn test_binary_all_arithmetic() {
 fn test_binary_all_comparison() {
     // Comparison operators are desugared to MethodCall
     for op_str in ["==", "!=", "<", "<=", ">", ">="] {
-        let source = format!("fn main() {{ 1 {} 2 }}", op_str);
+        let source = format!("fn main() -> Nil {{ 1 {} 2 }}", op_str);
         let module = parse_and_lower(&source);
 
         let Decl::Function(func) = &module.decls[0] else {
@@ -453,7 +453,7 @@ fn test_binary_logical() {
         ("&&", crate::ast::BinOpKind::And),
         ("||", crate::ast::BinOpKind::Or),
     ] {
-        let source = format!("fn main() {{ a {} b }}", op_str);
+        let source = format!("fn main() -> Nil {{ a {} b }}", op_str);
         let module = parse_and_lower(&source);
 
         let Decl::Function(func) = &module.decls[0] else {
@@ -475,7 +475,7 @@ fn test_binary_logical() {
 
 #[test]
 fn test_binary_concat() {
-    let source = r#"fn main() { "a" <> "b" }"#;
+    let source = r#"fn main() -> Nil { "a" <> "b" }"#;
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -498,7 +498,7 @@ fn test_binary_concat() {
 
 #[test]
 fn test_call_expression_no_args() {
-    let source = "fn main() { foo() }";
+    let source = "fn main() -> Nil { foo() }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -519,7 +519,7 @@ fn test_call_expression_no_args() {
 
 #[test]
 fn test_call_expression_with_args() {
-    let source = "fn main() { add(1, 2, 3) }";
+    let source = "fn main() -> Nil { add(1, 2, 3) }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -541,7 +541,7 @@ fn test_call_expression_with_args() {
 
 #[test]
 fn test_method_call() {
-    let source = "fn main() { x.to_string() }";
+    let source = "fn main() -> Nil { x.to_string() }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -568,7 +568,7 @@ fn test_method_call() {
 
 #[test]
 fn test_method_call_with_args() {
-    let source = "fn main() { list.map(inc) }";
+    let source = "fn main() -> Nil { list.map(inc) }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -586,7 +586,7 @@ fn test_method_call_with_args() {
 
 #[test]
 fn test_qualified_method_path_for_field_update() {
-    let source = "fn main() { user.name::set(\"Jane\") }";
+    let source = "fn main() -> Nil { user.name::set(\"Jane\") }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -614,7 +614,7 @@ fn test_qualified_method_path_for_field_update() {
 
 #[test]
 fn test_method_call_with_multiple_args() {
-    let source = "fn main() { bytes.slice(0, 5) }";
+    let source = "fn main() -> Nil { bytes.slice(0, 5) }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -646,7 +646,7 @@ fn test_method_call_with_multiple_args() {
 #[test]
 fn test_chained_method_call_with_args() {
     // Regression test for #582: chained method calls must preserve arguments
-    let source = "fn main() { x.foo().bar(1, 2).baz() }";
+    let source = "fn main() -> Nil { x.foo().bar(1, 2).baz() }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -698,7 +698,7 @@ fn test_chained_method_call_with_args() {
 
 #[test]
 fn test_constructor_expression() {
-    let source = "fn main() { Some(42) }";
+    let source = "fn main() -> Nil { Some(42) }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -715,7 +715,7 @@ fn test_constructor_expression() {
 
 #[test]
 fn test_qualified_constructor_expression() {
-    let source = "fn main() { std::io::Error::EndOfFile }";
+    let source = "fn main() -> Nil { std::io::Error::EndOfFile }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -732,7 +732,7 @@ fn test_qualified_constructor_expression() {
 
 #[test]
 fn test_constructor_no_args() {
-    let source = "fn main() { None() }";
+    let source = "fn main() -> Nil { None() }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -752,7 +752,7 @@ fn test_constructor_no_args() {
 #[test]
 fn test_record_expression() {
     // Record expression basic structure
-    let source = "fn main() { Point { x: 1, y: 2 } }";
+    let source = "fn main() -> Nil { Point { x: 1, y: 2 } }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -769,7 +769,7 @@ fn test_record_expression() {
 
 #[test]
 fn test_qualified_record_expression() {
-    let source = "fn main() { std::io::SystemError { code: 1 } }";
+    let source = "fn main() -> Nil { std::io::SystemError { code: 1 } }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -808,7 +808,7 @@ fn test_qualified_type_annotation() {
 fn test_field_access() {
     // Field access syntax: point.x
     // Note: This might be parsed as method call depending on grammar
-    let source = "fn main() { let p = pt; p.x }";
+    let source = "fn main() -> Nil { let p = pt; p.x }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -835,7 +835,7 @@ fn test_field_access() {
 
 #[test]
 fn test_block_with_multiple_statements() {
-    let source = "fn main() { let a = 1; let b = 2; a + b }";
+    let source = "fn main() -> Nil { let a = 1; let b = 2; a + b }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -852,7 +852,7 @@ fn test_block_with_multiple_statements() {
 
 #[test]
 fn test_empty_block() {
-    let source = "fn main() { }";
+    let source = "fn main() -> Nil { }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -870,7 +870,7 @@ fn test_empty_block() {
 
 #[test]
 fn test_expression_statement() {
-    let source = "fn main() { foo(); bar() }";
+    let source = "fn main() -> Nil { foo(); bar() }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -895,7 +895,7 @@ fn test_expression_statement() {
 #[test]
 fn test_case_with_patterns() {
     let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case opt {
                     Some(x) -> x
                     None -> 0
@@ -923,7 +923,7 @@ fn test_case_with_patterns() {
 #[test]
 fn test_case_with_wildcard() {
     let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     1 -> "one"
                     _ -> "other"
@@ -952,7 +952,7 @@ fn test_case_with_wildcard() {
 #[test]
 fn test_case_with_multiple_guarded_branches() {
     let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case value {
                     _ if first -> 1
                       if second -> 2
@@ -992,7 +992,7 @@ fn test_case_with_multiple_guarded_branches() {
 
 #[test]
 fn test_lambda_no_params() {
-    let source = "fn main() { fn() { 42 } }";
+    let source = "fn main() -> Nil { fn() { 42 } }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1009,7 +1009,7 @@ fn test_lambda_no_params() {
 
 #[test]
 fn test_lambda_multiple_params() {
-    let source = "fn main() { fn(a, b, c) { a + b + c } }";
+    let source = "fn main() -> Nil { fn(a, b, c) { a + b + c } }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1033,7 +1033,7 @@ fn test_lambda_multiple_params() {
 
 #[test]
 fn test_tuple_expression() {
-    let source = "fn main() { #(1, 2, 3) }";
+    let source = "fn main() -> Nil { #(1, 2, 3) }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1050,7 +1050,7 @@ fn test_tuple_expression() {
 
 #[test]
 fn test_empty_list() {
-    let source = "fn main() { [] }";
+    let source = "fn main() -> Nil { [] }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1067,7 +1067,7 @@ fn test_empty_list() {
 
 #[test]
 fn test_nested_list() {
-    let source = "fn main() { [[1, 2], [3, 4]] }";
+    let source = "fn main() -> Nil { [[1, 2], [3, 4]] }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1101,7 +1101,7 @@ fn test_nested_list() {
 #[test]
 fn test_block_as_expression() {
     // Blocks can be used to group expressions: {1 + 2} * 3
-    let source = "fn main() { {1 + 2} * 3 }";
+    let source = "fn main() -> Nil { {1 + 2} * 3 }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1141,7 +1141,7 @@ fn test_block_as_expression() {
 fn test_block_trailing_let_statement() {
     // A trailing let statement should be executed for side effects,
     // and the block should return Nil
-    let source = "fn main() { let x = 42 }";
+    let source = "fn main() -> Nil { let x = 42 }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1170,7 +1170,7 @@ fn test_block_trailing_let_statement() {
 #[test]
 fn test_block_trailing_expression() {
     // A trailing expression should be the block's value
-    let source = r#"fn main() {
+    let source = r#"fn main() -> Nil {
     let x = 1
     x + 1
 }"#;
@@ -1199,7 +1199,7 @@ fn test_block_trailing_expression() {
 
 #[test]
 fn test_qualified_identifier() {
-    let source = "fn main() { std::io::println }";
+    let source = "fn main() -> Nil { std::io::println }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1222,7 +1222,7 @@ fn test_qualified_identifier() {
 #[test]
 fn test_constructor_pattern() {
     let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case x {
                     Some(value) -> value
                     None() -> 0
@@ -1247,7 +1247,7 @@ fn test_constructor_pattern() {
 #[test]
 fn test_literal_pattern() {
     let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case n {
                     0 -> "zero"
                     1 -> "one"
@@ -1273,7 +1273,7 @@ fn test_literal_pattern() {
 #[test]
 fn test_list_pattern() {
     let source = r#"
-            fn main() {
+            fn main() -> Nil {
                 case xs {
                     [] -> 0
                     [x] -> x
@@ -1616,7 +1616,7 @@ fn test_return_type_annotation_preserved() {
 
 #[test]
 fn test_bytes_literal_simple() {
-    let source = r#"fn main() { b"hello" }"#;
+    let source = r#"fn main() -> Nil { b"hello" }"#;
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1635,7 +1635,7 @@ fn test_bytes_literal_simple() {
 
 #[test]
 fn test_bytes_literal_raw() {
-    let source = r#"fn main() { rb"hello\n" }"#;
+    let source = r#"fn main() -> Nil { rb"hello\n" }"#;
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1655,7 +1655,7 @@ fn test_bytes_literal_raw() {
 
 #[test]
 fn test_bytes_literal_with_single_hash() {
-    let source = r###"fn main() { b#"test"# }"###;
+    let source = r###"fn main() -> Nil { b#"test"# }"###;
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1674,7 +1674,7 @@ fn test_bytes_literal_with_single_hash() {
 
 #[test]
 fn test_bytes_literal_with_multiple_hashes() {
-    let source = r####"fn main() { b##"hello"## }"####;
+    let source = r####"fn main() -> Nil { b##"hello"## }"####;
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1693,7 +1693,7 @@ fn test_bytes_literal_with_multiple_hashes() {
 
 #[test]
 fn test_bytes_literal_with_embedded_quote() {
-    let source = r###"fn main() { b#"say "hello""# }"###;
+    let source = r###"fn main() -> Nil { b#"say "hello""# }"###;
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1716,7 +1716,7 @@ fn test_bytes_literal_with_embedded_quote() {
 
 #[test]
 fn test_rune_literal_simple() {
-    let source = "fn main() { ?a }";
+    let source = "fn main() -> Nil { ?a }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1735,7 +1735,7 @@ fn test_rune_literal_simple() {
 
 #[test]
 fn test_rune_literal_unicode() {
-    let source = "fn main() { ?😀 }";
+    let source = "fn main() -> Nil { ?😀 }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1754,7 +1754,7 @@ fn test_rune_literal_unicode() {
 
 #[test]
 fn test_rune_literal_escape_newline() {
-    let source = r"fn main() { ?\n }";
+    let source = r"fn main() -> Nil { ?\n }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1786,9 +1786,9 @@ fn first_body_value(source: &str) -> ExprKind<UnresolvedName> {
 #[test]
 fn test_rune_literal_unicode_escape() {
     for (source, expected) in [
-        (r"fn main() { ?\u{41} }", 'A'),
-        (r"fn main() { ?\u{3042} }", '\u{3042}'),
-        (r"fn main() { ?\u{1F600} }", '😀'),
+        (r"fn main() -> Nil { ?\u{41} }", 'A'),
+        (r"fn main() -> Nil { ?\u{3042} }", '\u{3042}'),
+        (r"fn main() -> Nil { ?\u{1F600} }", '😀'),
     ] {
         match first_body_value(source) {
             ExprKind::RuneLit(c) => assert_eq!(c, expected, "{source}"),
@@ -1799,7 +1799,7 @@ fn test_rune_literal_unicode_escape() {
 
 #[test]
 fn test_string_literal_unicode_escape() {
-    match first_body_value(r#"fn main() { "caf\u{E9} \u{1f600}" }"#) {
+    match first_body_value(r#"fn main() -> Nil { "caf\u{E9} \u{1f600}" }"#) {
         ExprKind::StringLit(s) => assert_eq!(s, "café 😀"),
         other => panic!("Expected StringLit, got {other:?}"),
     }
@@ -1808,9 +1808,9 @@ fn test_string_literal_unicode_escape() {
 #[test]
 fn test_invalid_unicode_escape_lowers_to_error() {
     for source in [
-        r#"fn main() { "\u{D800}" }"#,
-        r#"fn main() { "\u{110000}" }"#,
-        r"fn main() { ?\u{DFFF} }",
+        r#"fn main() -> Nil { "\u{D800}" }"#,
+        r#"fn main() -> Nil { "\u{110000}" }"#,
+        r"fn main() -> Nil { ?\u{DFFF} }",
     ] {
         assert!(
             matches!(first_body_value(source), ExprKind::Error),
@@ -1826,7 +1826,7 @@ fn test_invalid_unicode_escape_lowers_to_error() {
 #[test]
 fn test_lambda_param_name_with_type_annotation() {
     // Ensure lambda parameter extracts just the name, not "x: Int"
-    let source = "fn main() { fn(x: Int) { x } }";
+    let source = "fn main() -> Nil { fn(x: Int) { x } }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1850,7 +1850,7 @@ fn test_lambda_param_name_with_type_annotation() {
 
 #[test]
 fn test_lambda_multiple_typed_params() {
-    let source = "fn main() { fn(a: Int, b: Float) { a } }";
+    let source = "fn main() -> Nil { fn(a: Int, b: Float) { a } }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -1871,7 +1871,7 @@ fn test_lambda_multiple_typed_params() {
 #[test]
 fn test_lambda_untyped_params() {
     // Untyped parameters should also work correctly
-    let source = "fn main() { fn(x) { x } }";
+    let source = "fn main() -> Nil { fn(x) { x } }";
     let module = parse_and_lower(source);
 
     let Decl::Function(func) = &module.decls[0] else {
@@ -2356,7 +2356,7 @@ fn test_handle_expression() {
                 fn ask() -> Nat
             }
 
-            fn main() {
+            fn main() -> Nil {
                 handle {
                     Ask::ask()
                 } {
@@ -2408,7 +2408,7 @@ fn test_handle_with_op_handler() {
                 fn ask() -> Nat
             }
 
-            fn main() {
+            fn main() -> Nil {
                 handle {
                     Ask::ask()
                 } {
@@ -2445,7 +2445,7 @@ fn test_resume_expression() {
                 fn ask() -> Nat
             }
 
-            fn main() {
+            fn main() -> Nil {
                 handle {
                     Ask::ask()
                 } {

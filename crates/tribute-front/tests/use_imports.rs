@@ -33,7 +33,7 @@ use helper
 
 fn helper() -> Nat { 1 }
 
-fn main() {
+fn main() -> Nil {
     let _ = add(1, plus(2, 3))
 }
 "#,
@@ -53,7 +53,7 @@ use basic::sub
 use nowhere::thing
 use nothing_here
 
-fn main() {}
+fn main() -> Nil {}
 "#,
     );
     assert_eq!(
@@ -78,7 +78,7 @@ mod basic {
 }
 use self::basic::add
 
-fn main() {
+fn main() -> Nil {
     let _ = add(1, 2)
 }
 "#,
@@ -129,7 +129,7 @@ fn module_in_record_literal_is_reported(db: &salsa::DatabaseImpl) {
         r#"
 mod M { pub fn f() -> Nat { 1 } }
 
-fn main() {
+fn main() -> Nil {
     let _ = M { x: 1 }
 }
 "#,
@@ -159,7 +159,7 @@ mod outer {{
     }}
 }}
 
-fn main() {{
+fn main() -> Nil {{
     let _ = outer::get(outer::a::P {{ x: 1 }})
 }}
 "#
@@ -190,7 +190,7 @@ mod outer {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = outer::get(a::P { root: 1 })
 }
 "#,

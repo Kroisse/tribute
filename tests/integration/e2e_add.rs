@@ -21,7 +21,7 @@ fn test_add_compiles_and_runs() {
         r#"
 fn add(x: Nat, y: Nat) -> Nat { x + y }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(add(40, 2))
 }
 "#,
@@ -38,7 +38,7 @@ fn test_generic_int_identity() {
         r#"
 fn identity(x: a) ->{} a { x }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(identity(42))
 }
 "#,
@@ -54,7 +54,7 @@ fn test_struct_construction() {
         r#"
 struct Point { x: Nat, y: Nat }
 
-fn main() {
+fn main() -> Nil {
     let p = Point { x: 10, y: 20 }
     __tribute_print_nat(42)
 }
@@ -71,7 +71,7 @@ fn test_struct_accessor() {
         r#"
 struct Point { x: Nat, y: Nat }
 
-fn main() {
+fn main() -> Nil {
     let p = Point { x: 10, y: 20 }
     __tribute_print_nat(p.x())
 }
@@ -91,7 +91,7 @@ fn test_generic_float_identity() {
         r#"
 fn identity(x: a) ->{} a { x }
 fn compute() ->{} Float { identity(3.125) }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -114,7 +114,7 @@ struct Point { x: Nat, y: Nat }
 
 fn identity(x: a) ->{} a { x }
 
-fn main() {
+fn main() -> Nil {
     let p = Point { x: 10, y: 20 }
     let p2 = identity(p)
     __tribute_print_nat(p2.x())
@@ -132,7 +132,7 @@ fn test_generic_multiple_types() {
         r#"
 fn identity(x: a) ->{} a { x }
 
-fn main() {
+fn main() -> Nil {
     let i = identity(42)
     let _ = identity(3.14)
     __tribute_print_nat(i)
@@ -150,7 +150,7 @@ fn test_generic_two_params() {
         r#"
 fn first(x: a, y: b) ->{} a { x }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(first(10, 3.14))
 }
 "#,
@@ -166,7 +166,7 @@ fn test_generic_nested_calls() {
         r#"
 fn identity(x: a) ->{} a { x }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(identity(identity(identity(42))))
 }
 "#,
@@ -180,10 +180,10 @@ fn main() {
 #[test]
 fn test_generic_indirect_call() {
     let code = r#"
-fn apply_generic(f: fn(a) -> a, x: a) ->{} a { f(x) }
+fn apply_generic(f: fn(a) ->{} a, x: a) ->{} a { f(x) }
 fn compute_int() ->{} Int { apply_generic(fn(x) { x }, +42) }
 fn compute_float() ->{} Float { apply_generic(fn(x) { x }, 3.5) }
-fn main() { }
+fn main() -> Nil { }
 "#;
     TributeDatabaseImpl::default().attach(|db| {
         let source = SourceCst::from_source_str(db, "generic_indirect.trb", code);
@@ -224,7 +224,7 @@ fn test_function_type_parameter() {
     assert_native_output(
         "function_type.trb",
         r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
 
@@ -232,7 +232,7 @@ fn double(n: Int) -> Int {
     n + n
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_int(apply(double, +21))
 }
 "#,
@@ -247,11 +247,11 @@ fn test_open_callback_root_main_executes() {
     assert_native_output(
         "open_callback_root_main.trb",
         r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_int(apply(fn(value) { value + +1 }, +41))
 }
 "#,
@@ -268,7 +268,7 @@ fn test_nested_function_type() {
 
     let source_code = Rope::from_str(
         r#"
-fn compose(f: fn(Int) -> Int, g: fn(Int) -> Int, x: Int) -> Int {
+fn compose(f: fn(Int) ->{e} Int, g: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(g(x))
 }
 
@@ -278,7 +278,7 @@ fn double(n: Int) -> Int { n + n }
 fn compute() ->{} Int {
     compose(inc, double, +10)
 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -310,7 +310,7 @@ fn test_generic_function_type() {
 
     let source_code = Rope::from_str(
         r#"
-fn apply_generic(f: fn(a) -> b, x: a) ->{} b {
+fn apply_generic(f: fn(a) ->{} b, x: a) ->{} b {
     f(x)
 }
 
@@ -321,7 +321,7 @@ fn to_float(n: Int) -> Float {
 fn compute() ->{} Float {
     apply_generic(to_float, +42)
 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -369,7 +369,7 @@ fn eval(e: Expr) -> Int {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let expr = Div(
         Mul(
             Add(Num(+1), Num(+2)),
@@ -543,7 +543,7 @@ fn test_lambda_identity() {
         let source = SourceCst::from_source_str(
             db,
             "lambda_identity.trb",
-            "fn compute() ->{} Int { let f = fn(x) { x } f(+42) } fn main() {}",
+            "fn compute() ->{} Int { let f = fn(x) { x } f(+42) } fn main() -> Nil {}",
         );
         let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .unwrap()
@@ -574,7 +574,7 @@ fn test_lambda_identity() {
 #[test]
 fn test_lambda_with_capture() {
     TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceCst::from_source_str(db, "lambda_capture.trb", "fn test_capture() ->{} Int { let a = +10 let f = fn(x) { x + a } f(+32) } fn main() {}");
+        let source = SourceCst::from_source_str(db, "lambda_capture.trb", "fn test_capture() ->{} Int { let a = +10 let f = fn(x) { x + a } f(+32) } fn main() -> Nil {}");
         let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source).unwrap().unwrap();
         let (closure, lifted) = source_closure(&ctx, module, "test_capture");
         let call = only_indirect_call(&ctx, named_function(&ctx, module, "test_capture"));
@@ -607,7 +607,7 @@ fn test_indirect_call_ir_generation() {
         let source = SourceCst::from_source_str(
             db,
             "indirect_call.trb",
-            "fn invoke(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn main() {}",
+            "fn invoke(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) } fn main() -> Nil {}",
         );
         let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .unwrap()
@@ -628,7 +628,7 @@ fn test_indirect_call_ir_generation() {
 #[test]
 fn test_higher_order_function_ir() {
     TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceCst::from_source_str(db, "higher_order.trb", "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn compute() ->{} Int { apply(fn(n) { n + +1 }, +41) } fn main() {}");
+        let source = SourceCst::from_source_str(db, "higher_order.trb", "fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) } fn compute() ->{} Int { apply(fn(n) { n + +1 }, +41) } fn main() -> Nil {}");
         let (ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source).unwrap().unwrap();
         let apply = named_function(&ctx, module, "apply");
         assert_indirect_signature(&ctx, apply, only_indirect_call(&ctx, apply));
@@ -648,7 +648,7 @@ fn test_higher_order_function_ir() {
 #[test]
 fn test_closure_lowering() {
     TributeDatabaseImpl::default().attach(|db| {
-        let source = SourceCst::from_source_str(db, "closure_lower.trb", "fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) } fn compute() ->{} Int { let a = +1 apply(fn(n) { n + a }, +41) } fn main() {}");
+        let source = SourceCst::from_source_str(db, "closure_lower.trb", "fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) } fn compute() ->{} Int { let a = +1 apply(fn(n) { n + a }, +41) } fn main() -> Nil {}");
         let (mut ctx, module) = tribute::pipeline::run_through_cps_lowering(db, source)
             .unwrap()
             .unwrap();
@@ -711,7 +711,7 @@ fn test_closure_execution_simple() {
     assert_native_output(
         "closure_exec_simple.trb",
         r#"
-fn main() {
+fn main() -> Nil {
     let f = fn(x) { x + 1 }
     __tribute_print_nat(f(41))
 }
@@ -738,7 +738,7 @@ fn test_binop_type_mismatch_int_nat() {
 fn compute() ->{} Int {
     +1 + 2
 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -771,7 +771,7 @@ fn test_binop_comparison_type_mismatch() {
 fn compute() ->{} Bool {
     +1 < 2.0
 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -808,7 +808,7 @@ fn test_binop_boolean_requires_bool() {
 fn compute() ->{} Bool {
     +1 && +2
 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -839,7 +839,7 @@ fn test_binop_matching_types_succeed() {
     let source_code = Rope::from_str(
         r#"
 fn compute() ->{} Int { +1 + +2 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -873,7 +873,7 @@ fn test_binop_nat_plus_nat_succeeds() {
     let source_code = Rope::from_str(
         r#"
 fn compute() ->{} Nat { 1 + 2 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -907,7 +907,7 @@ fn test_binop_float_plus_float_succeeds() {
     let source_code = Rope::from_str(
         r#"
 fn compute() ->{} Float { 1.5 + 2.5 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -944,7 +944,7 @@ fn test_binop_bool_and_bool_succeeds() {
     let source_code = Rope::from_str(
         r#"
 fn compute() ->{} Bool { True && False }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 

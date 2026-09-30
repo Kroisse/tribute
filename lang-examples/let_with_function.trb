@@ -3,7 +3,7 @@
 // - Function call using bound variable
 // - Sequential statements
 
-fn main() {
+fn main() -> Nil {
     let x = 10
     print_line(x)
 }

@@ -19,7 +19,7 @@ extern "C" fn consume_bool(value: Bool) -> Nil
 enum Boxed(a) { Box(a), Empty }
 fn int_box() -> Boxed(Int) { Box(+42) }
 fn bool_box() -> Boxed(Bool) { Box(True) }
-fn main() {
+fn main() -> Nil {
     case Box(+42) {
         Box(value) -> consume_int(value)
         Empty -> Nil
@@ -96,7 +96,7 @@ fn let_variant_pattern_preserves_its_constrained_constructor(db: &salsa::Databas
     let source = SourceCst::from_source_str(
         db,
         "let_constructor.trb",
-        "enum Wrapped(a) { Wrapped(a) }\nfn unpack() -> Int { let Wrapped(value) = Wrapped(+42)\nvalue }\nfn main() { Nil }",
+        "enum Wrapped(a) { Wrapped(a) }\nfn unpack() -> Int { let Wrapped(value) = Wrapped(+42)\nvalue }\nfn main() -> Nil { Nil }",
     );
     let typed = parse_and_lower_ast(db, source).unwrap();
     assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());

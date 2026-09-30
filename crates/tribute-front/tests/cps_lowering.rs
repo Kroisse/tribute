@@ -87,11 +87,11 @@ ability State(s) {
     op get() -> s
 }
 
-fn apply_open(value: Int, callback: fn(Int) -> Nil) -> Nil {
+fn apply_open(value: Int, callback: fn(Int) ->{e} Nil) ->{e} Nil {
     callback(value)
 }
 
-fn main() {
+fn main() -> Nil {
     apply_open(State::get, fn(_) { Nil })
 }
 "#,
@@ -139,7 +139,7 @@ fn run() ->{State(Int)} Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -174,7 +174,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -311,7 +311,7 @@ fn run() -> Int {
 
 #[salsa_test]
 fn logical_root_main_preserves_pure_and_io_conventions(db: &salsa::DatabaseImpl) {
-    let pure = SourceCst::from_source_str(db, "pure.trb", "fn main() { }");
+    let pure = SourceCst::from_source_str(db, "pure.trb", "fn main() -> Nil { }");
     let pure_ir = run_ast_pipeline_with_ir(db, pure);
     assert!(
         pure_ir.contains("tribute_control.func @main() -> core.nil convention(direct)"),
@@ -337,7 +337,7 @@ ability State {
 mod Nested {
     fn main() ->{State} Int { State::get() }
 }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
     let ir_text = run_ast_pipeline_with_ir(db, source);
@@ -522,7 +522,7 @@ ability Phantom(p) {
     fn get() -> Int
 }
 fn read() ->{Phantom(Bool)} Int { Phantom::get() }
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
     let phantom_ir = run_ast_pipeline_with_ir(db, phantom);
@@ -566,7 +566,7 @@ fn get_state() ->{State(Int)} Int {
     State::get()
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -592,7 +592,7 @@ fn get_value() ->{State(Int)} Int {
     n
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -617,7 +617,7 @@ fn set_and_get() ->{State(Int)} Int {
     State::get()
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -649,7 +649,7 @@ fn run() ->{State(Int)} Int {
     add_one(read())
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -674,7 +674,7 @@ fn run() ->{State(Int)} Int {
     read() + 1
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -692,11 +692,11 @@ fn test_open_callback_workers_promote_to_cps(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn forward_open(value: a, callback: fn(a) -> b) -> b {
+fn forward_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
     apply_open(value, callback)
 }
 
-fn apply_open(value: a, callback: fn(a) -> b) -> b {
+fn apply_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
     callback(value)
 }
 
@@ -717,7 +717,7 @@ mod Nested {
     fn use_nested() ->{} Int { unwrap(Box { value: +41 }) }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = forward_open(+41, fn(value) { value })
     let _ = unwrap(Box { value: +1 })
     let _ = Nested::use_nested()
@@ -813,7 +813,7 @@ fn test_open_callback_evidence_root_main_is_marked_by_its_source_result(db: &sal
         db,
         "test.trb",
         r#"
-fn apply_open(value: Int, callback: fn(Int) -> Int) -> Int {
+fn apply_open(value: Int, callback: fn(Int) ->{e} Int) ->{e} Int {
     callback(value)
 }
 
@@ -844,15 +844,11 @@ fn test_nested_main_is_not_subject_to_entrypoint_diagnostics(db: &salsa::Databas
         db,
         "test.trb",
         r#"
-ability State(s) {
-    op get() -> s
-}
-
 mod Nested {
-    fn main() -> Int { State::get() }
+    fn main() -> Int { +1 }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -872,7 +868,7 @@ fn test_nested_open_callback_main_promotes_to_cps(db: &salsa::DatabaseImpl) {
         "test.trb",
         r#"
 mod Nested {
-    fn apply_open(value: a, callback: fn(a) -> b) -> b {
+    fn apply_open(value: a, callback: fn(a) ->{e} b) ->{e} b {
         callback(value)
     }
 
@@ -881,7 +877,7 @@ mod Nested {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -916,7 +912,7 @@ mod Nested {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
     let ir = run_ast_pipeline_with_ir(db, source);
@@ -958,7 +954,7 @@ fn run(flag: Bool) ->{State(Int)} Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -986,7 +982,7 @@ fn run() ->{Flag} Bool {
     False && read()
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1017,7 +1013,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1055,7 +1051,7 @@ fn run() ->{Log} Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1089,7 +1085,7 @@ fn run() ->{Flag} Nat {
     })
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1114,7 +1110,7 @@ fn after(value: Bool) -> Bool { value }
 
 fn run() ->{Flag} Bool { after(False || effectful()) }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1144,7 +1140,7 @@ fn run(value: Bool) ->{Flag} Nat {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1182,7 +1178,7 @@ fn run() ->{Log} Nat {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1219,7 +1215,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1252,7 +1248,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1290,7 +1286,7 @@ fn run() -> Int {
     }))
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1324,7 +1320,7 @@ fn run() ->{Trace} Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1354,7 +1350,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1384,7 +1380,7 @@ fn run() -> Int {
     }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1430,7 +1426,7 @@ fn run() ->{Trace} Boxed(fn() -> Bool) {
     })
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1458,7 +1454,7 @@ fn run(point: Point) ->{Trace} fn() -> Point {
     fn() { Point { x: 1, ..point } }
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1494,7 +1490,7 @@ fn run() ->{State(Int)} Int {
     0
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 
@@ -1545,10 +1541,10 @@ fn logical_callable_tuple_and_list_layouts_remain_distinct(db: &salsa::DatabaseI
         db,
         "callable_aggregates.trb",
         r#"
-fn tuple_int(callback: fn(Int) -> Int) {
+fn tuple_int(callback: fn(Int) -> Int) -> Nil {
     let tuple = #(callback, True)
 }
-fn tuple_bool(callback: fn(Bool) -> Bool) {
+fn tuple_bool(callback: fn(Bool) -> Bool) -> Nil {
     let tuple = #(callback, 0)
 }
 
@@ -1556,14 +1552,14 @@ struct A {}
 struct B {}
 struct A__named_B {}
 
-fn delimiter_pair(left: A, right: B) {
+fn delimiter_pair(left: A, right: B) -> Nil {
     let pair = #(left, right)
 }
-fn delimiter_spoof(value: A__named_B) {
+fn delimiter_spoof(value: A__named_B) -> Nil {
     let singleton = #(value)
 }
 
-fn from_list(callback: fn(Int) -> Int) -> Int {
+fn from_list(callback: fn(Int) ->{e} Int) ->{e} Int {
     case [callback] {
         [callback] -> callback(+1)
         _ -> +0
@@ -1628,7 +1624,7 @@ struct Holder { callback: fn(Int) -> Int }
 enum Choice { Callback(#(fn(Int) -> Int, List(fn(Int) -> Int))), Other }
 
 fn make(callback: fn(Int) -> Int) -> Choice { Callback(#(callback, [callback])) }
-fn inspect(choice: Choice, fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+fn inspect(choice: Choice, fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     case choice {
         Callback(#(callback, [nested])) -> nested
         Callback(_) -> fallback
@@ -1665,7 +1661,7 @@ fn logical_callable_list_rest_pattern_preserves_element_type(db: &salsa::Databas
         db,
         "logical_callable_list_pattern.trb",
         r#"
-fn first_or(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+fn first_or(values: List(fn(Int) ->{e} Int), fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     case values {
         [] as empty -> fallback
         [head, ..tail] as whole -> head
@@ -1756,14 +1752,14 @@ fn logical_callable_aggregate_checks_preserve_pattern_order(db: &salsa::Database
         db,
         "logical_callable_aggregate_checks.trb",
         r#"
-fn first_nonempty(values: List(fn(Int) -> Int), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+fn first_nonempty(values: List(fn(Int) ->{e} Int), fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     case values {
         [head, ..tail] -> head
         [] -> fallback
     }
 }
 
-fn choose_pair(pair: #(fn(Int) -> Int, Bool), fallback: fn(Int) -> Int) -> fn(Int) -> Int {
+fn choose_pair(pair: #(fn(Int) ->{e} Int, Bool), fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     case pair {
         #(callback, True) -> callback
         #(callback, False) -> callback
@@ -1967,7 +1963,7 @@ fn store() ->{KV(Int, Int)} Nil {
     KV::put(+1, +2)
 }
 
-fn main() { }
+fn main() -> Nil { }
 "#,
     );
 

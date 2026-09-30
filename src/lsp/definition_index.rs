@@ -779,7 +779,7 @@ mod tests {
         // Variable definition and uses (newline-separated)
         let source = make_source(
             &db,
-            r#"fn main() {
+            r#"fn main() -> Nil {
     let foo = 1
     foo + foo
 }"#,
@@ -873,7 +873,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(
             &db,
-            r#"fn main() {
+            r#"fn main() -> Nil {
     let x = 1
     x + x
 }"#,

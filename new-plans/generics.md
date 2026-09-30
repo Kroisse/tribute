@@ -152,7 +152,7 @@ swap + [(Int, Bool)]          → swap$Tup$0$Int$Bool$1
 // 원본
 fn identity(a)(x: a) -> a { x }
 
-fn main() {
+fn main() -> Nil {
     identity(42)       // identity<Int>
     identity("hello")  // identity<String>
 }
@@ -161,7 +161,7 @@ fn main() {
 fn identity$Int(x: Int) -> Int { x }
 fn identity$String(x: String) -> String { x }
 
-fn main() {
+fn main() -> Nil {
     identity$Int(42)
     identity$String("hello")
 }

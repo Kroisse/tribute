@@ -31,7 +31,7 @@ extern "C" fn __tribute_print_float(value: Float) -> Nil
 
 fn identity(value: a) -> a { value }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_int(identity(+7))
     __tribute_print_float(identity(3.5))
 }

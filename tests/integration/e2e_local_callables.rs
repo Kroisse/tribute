@@ -23,7 +23,7 @@ fn fixed_local_identity_prints_three() {
     assert_native(
         r#"
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() {
+fn main() -> Nil {
     let identity = fn(x: Int) x
     __tribute_print_int(apply(identity, +3))
 }
@@ -42,7 +42,7 @@ fn captured(k: Int) ->{} Int {
     let alias = action
     apply(alias, +3)
 }
-fn main() { __tribute_print_int(captured(+9)) }
+fn main() -> Nil { __tribute_print_int(captured(+9)) }
 "#,
         b"9\n",
     );
@@ -57,7 +57,7 @@ fn make() -> fn(Int) ->{} Int {
     fn(x: Int) ->{} Int { x }
 }
 fn apply(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
-fn main() {
+fn main() -> Nil {
     let action = make()
     let alias = action
     __tribute_print_int(apply(action, +3))
@@ -81,7 +81,7 @@ fn invalid() ->{State(Int)} Int {
     let action = effectful
     apply(action, +3)
 }
-fn main() {}
+fn main() -> Nil {}
 "#,
     );
     let _ = parse_and_lower_ast(db, source);
@@ -108,7 +108,7 @@ fn named_direct_pure_and_open_consumers() {
 fn identity(x: Int) ->{} Int { x }
 fn pure(f: fn(Int) ->{} Int, x: Int) ->{} Int { f(x) }
 fn open(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
-fn main() {
+fn main() -> Nil {
     let first = pure(identity, +3)
     __tribute_print_int(open(identity, first))
 }
@@ -132,7 +132,7 @@ fn run() ->{{}} Int {{
     let action = fn(x: Int) x
     {calls}
 }}
-fn main() {{ __tribute_print_int(run()) }}
+fn main() -> Nil {{ __tribute_print_int(run()) }}
 "#
             ),
             b"3\n",
@@ -144,7 +144,7 @@ fn main() {{ __tribute_print_int(run()) }}
 fn existing_generalized_local_direct_calls() {
     assert_native(
         r#"
-fn main() {
+fn main() -> Nil {
     let identity = fn(x) x
     __tribute_print_int(identity(+3))
     case identity(True) {
@@ -167,7 +167,7 @@ fn captured(k: Box) ->{} Int {
     let action = fn(x: Int) k.value
     apply(action, +3)
 }
-fn main() { __tribute_print_int(captured(Box { value: +9 })) }
+fn main() -> Nil { __tribute_print_int(captured(Box { value: +9 })) }
 "#,
         b"9\n",
     );
@@ -184,7 +184,7 @@ fn run() ->{} Int {
     let first = open(action, +3)
     pure(action, first)
 }
-fn main() { __tribute_print_int(run()) }
+fn main() -> Nil { __tribute_print_int(run()) }
 "#,
         b"3\n",
     );

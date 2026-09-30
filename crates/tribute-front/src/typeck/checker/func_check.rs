@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use itertools::Itertools;
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use trunk_ir::Symbol;
 
 use crate::ast::{
     ExprKind, FuncDecl, FuncDefId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
@@ -40,6 +41,8 @@ impl<'db> TypeChecker<'db> {
         // Use function definition ID for globally unique UniVar IDs
         let func_id = self.func_def_id(func.name);
         let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, func_id);
+        // Only the exact root `main` is an entrypoint.
+        let is_root_main = crate::is_root_main(func.name, self.current_prefix().is_empty());
 
         // 2. Get the function's registered type scheme and instantiate it
 
@@ -84,18 +87,12 @@ impl<'db> TypeChecker<'db> {
             ctx.bind_local_by_name(param.name, ty);
         }
 
-        // Set effect row from the function's declared type before checking body
+        // Set effect row from the function's declared type before checking
+        // body. An omitted annotation is exactly a fresh `->{e}`; the body's
+        // effects never widen the declared row.
         let declared_effect =
             if let TypeKind::Func { effect, .. } = instantiated_func_ty.kind(self.db()) {
-                // Omission is semantically `->{e}`, but the fresh generalized
-                // tail is not an effect performed by the body. Infer residual
-                // effects from a closed-empty accumulator and reattach the tail
-                // to the resulting function type after solving.
-                if func.effects.is_none() {
-                    ctx.set_current_effect(crate::ast::EffectRow::pure(self.db()));
-                } else {
-                    ctx.set_current_effect(*effect);
-                }
+                ctx.set_current_effect(*effect);
                 Some(*effect)
             } else {
                 None
@@ -104,14 +101,9 @@ impl<'db> TypeChecker<'db> {
         ctx.effect_contract = declared_effect;
         // 3. Check body against expected return type
         let body = self.check_expr_with_ctx(&mut ctx, &func.body, Mode::Check(expected_return));
+        let mut reported_undeclared = false;
 
-        if func.effects.is_none()
-            && ctx.current_effect().rest(self.db()).is_some()
-            && let Some(declared) = declared_effect
-        {
-            ctx.constrain_row_eq(declared, ctx.current_effect());
-        }
-        if let Some(declared) = declared_effect.filter(|row| row.rest(self.db()).is_none()) {
+        if let Some(declared) = declared_effect {
             // A sole handler expression owns the whole body's residual row.
             // Retain that boundary's location after delayed union solving.
             // With preceding statements the row belongs to the whole function.
@@ -127,7 +119,16 @@ impl<'db> TypeChecker<'db> {
             } else {
                 (func.id, ConstraintOriginKind::Expression)
             };
-            ctx.constrain_row_eq_at(declared, ctx.current_effect(), node_id, kind);
+            // An open declared row would absorb any concrete effect through
+            // its tail, so name the undeclared ones instead of a mismatch.
+            if declared.rest(self.db()).is_some()
+                && let Some(undeclared) = self.undeclared_effects(declared, ctx.current_effect())
+            {
+                self.report_undeclared_effects(func, is_root_main, &undeclared);
+                reported_undeclared = true;
+            } else {
+                ctx.constrain_row_eq_at(declared, ctx.current_effect(), node_id, kind);
+            }
         }
         // 4. Solve constraints for this function only
         let constraints = ctx.take_constraints();
@@ -195,54 +196,9 @@ impl<'db> TypeChecker<'db> {
         let type_subst = solver.type_subst();
         let row_subst = solver.row_subst();
 
-        // Only the exact root `main` is an entrypoint. Its omitted effect
-        // annotation is closed over the effects actually performed by its body:
-        // pure roots remain Direct and ambient-Io roots EvidenceDirect.  The
-        // later control/backend pipeline owns any root completion adaptation.
-        let is_root_main = crate::is_root_main(func.name, self.current_prefix().is_empty());
-
-        // An omitted annotation denotes an open effect row. Preserve the
-        // concrete residual effects discovered while checking the body, then
-        // reattach the generalized tail supplied by the collected signature.
-        let inferred_func_ty = if func.effects.is_none() {
-            match instantiated_func_ty.kind(self.db()) {
-                TypeKind::Func {
-                    params,
-                    result,
-                    effect: declared_effect,
-                    minimum_convention,
-                    ..
-                } => {
-                    let inferred_effect = if is_root_main {
-                        crate::ast::EffectRow::new(
-                            self.db(),
-                            body_effect_row.effects(self.db()),
-                            None,
-                        )
-                    } else if body_effect_row.rest(self.db()).is_some() {
-                        body_effect_row
-                    } else {
-                        crate::ast::EffectRow::new(
-                            self.db(),
-                            body_effect_row.effects(self.db()),
-                            declared_effect.rest(self.db()),
-                        )
-                    };
-                    Type::new(
-                        self.db(),
-                        TypeKind::Func {
-                            params: params.clone(),
-                            result: *result,
-                            effect: inferred_effect,
-                            minimum_convention: *minimum_convention,
-                        },
-                    )
-                }
-                _ => instantiated_func_ty,
-            }
-        } else {
-            instantiated_func_ty
-        };
+        // The declared signature is the function's type; the body is checked
+        // against it and never refines it.
+        let inferred_func_ty = instantiated_func_ty;
 
         // Solver aliases can point at a representative created after a local
         // scheme was generalized. Preserve both spellings before collecting
@@ -312,7 +268,7 @@ impl<'db> TypeChecker<'db> {
         // Validate that root `main` returns Nil.
         if is_root_main
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
-            && !matches!(result.kind(self.db()), TypeKind::Nil)
+            && !matches!(result.kind(self.db()), TypeKind::Nil | TypeKind::Error)
         {
             Diagnostic::new(
                 format!("function 'main' must return Nil, but returns `{}`", result),
@@ -323,80 +279,32 @@ impl<'db> TypeChecker<'db> {
             .accumulate(self.db());
         }
 
-        // Validate that root `main` has no unhandled effects.
-        // We check body_effect_row (the accumulated effect from type-checking the body)
-        // rather than the function signature's effect row, because effect inference
-        // tracks effects in the context's current_effect rather than constraining
-        // the function type's row variable.
-        if is_root_main {
-            let resolved_effect = row_subst.apply(self.db(), body_effect_row);
-            let unhandled = resolved_effect
-                .effects(self.db())
-                .iter()
-                .filter(|effect| !effect.ability_id.is_builtin_io(self.db()))
-                .collect_vec();
-            if !unhandled.is_empty() {
-                Diagnostic::new(
-                    format!(
-                        "function 'main' has unhandled effects: {}",
-                        unhandled.iter().format(", ")
-                    ),
-                    self.get_span(func.id),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .accumulate(self.db());
+        if let Some(declared) = declared_effect {
+            if func.effects.is_some() {
+                self.report_duplicate_effect(func, func_id, row_subst.apply(self.db(), declared));
             }
-        }
-
-        // Validate that functions with explicit closed effect annotations
-        // do not use undeclared effects in their body.
-        if func.effects.is_some()
-            && let Some(declared) = declared_effect
-        {
-            let resolved_declared = row_subst.apply(self.db(), declared);
-            if let Some(duplicate) = self
-                .effect_annotation_origins
-                .get(&func_id)
-                .and_then(|origins| origins.find_duplicate(self.db(), resolved_declared))
+            if !solve_failed
+                && !reported_undeclared
+                && let Some(undeclared) =
+                    self.undeclared_effects(declared, row_subst.apply(self.db(), body_effect_row))
             {
-                Diagnostic::builder(
-                    format!(
-                        "function '{}' declares duplicate effect: {}",
-                        func.name,
-                        duplicate.effects.iter().format(", "),
-                    ),
-                    self.get_span(duplicate.duplicate_annotation_id),
-                    DiagnosticSeverity::Error,
-                    CompilationPhase::TypeChecking,
-                )
-                .label(
-                    self.get_span(duplicate.first_annotation_id),
-                    "first matching effect annotation is here",
-                )
-                .build()
-                .accumulate(self.db());
+                // The body may perform only the concrete effects the signature
+                // declares; the declared tail stands for the caller's effects.
+                self.report_undeclared_effects(func, is_root_main, &undeclared);
             }
 
-            // Only check if the declared row is closed (no rest variable)
-            if resolved_declared.rest(self.db()).is_none() {
-                let resolved_body = row_subst.apply(self.db(), body_effect_row);
-                let declared_ids: HashSet<_> = resolved_declared
+            // Root `main` may leave only the ambient `Io` unhandled.
+            if is_root_main {
+                let unhandled = declared
                     .effects(self.db())
                     .iter()
-                    .map(|e| e.ability_id)
-                    .collect();
-                let body_effects = resolved_body.effects(self.db());
-                let mut undeclared = body_effects
-                    .iter()
-                    .filter(|e| !declared_ids.contains(&e.ability_id))
-                    .peekable();
-                if !solve_failed && undeclared.peek().is_some() {
+                    .filter(|effect| !effect.ability_id.is_builtin_io(self.db()))
+                    .collect_vec();
+                if !unhandled.is_empty() {
                     Diagnostic::new(
                         format!(
-                            "function '{}' uses undeclared effects: {}",
-                            func.name,
-                            undeclared.format(", "),
+                            "function 'main' has unhandled effects: {}",
+                            unhandled.iter().format(", ")
                         ),
                         self.get_span(func.id),
                         DiagnosticSeverity::Error,
@@ -405,6 +313,18 @@ impl<'db> TypeChecker<'db> {
                     .accumulate(self.db());
                 }
             }
+        }
+
+        if !solve_failed && let Some((scheme, instance)) = &signature_instance {
+            self.report_signature_rigidity(func, func_id, *scheme, instance, type_subst, row_subst);
+            self.report_undeclared_row_unions(
+                func,
+                func_id,
+                *scheme,
+                instance,
+                &retained_unions,
+                row_subst,
+            );
         }
 
         let generalized =
@@ -743,6 +663,308 @@ impl<'db> TypeChecker<'db> {
             deferred = remaining;
         }
         resolved
+    }
+
+    /// Concrete effects of `body` that `declared` does not name.
+    fn undeclared_effects(
+        &self,
+        declared: crate::ast::EffectRow<'db>,
+        body: crate::ast::EffectRow<'db>,
+    ) -> Option<Vec<crate::ast::Effect<'db>>> {
+        let declared_ids: HashSet<_> = declared
+            .effects(self.db())
+            .iter()
+            .map(|effect| effect.ability_id)
+            .collect();
+        let undeclared: Vec<_> = body
+            .effects(self.db())
+            .iter()
+            .filter(|effect| !declared_ids.contains(&effect.ability_id))
+            .cloned()
+            .collect();
+        (!undeclared.is_empty()).then_some(undeclared)
+    }
+
+    /// Report effects the body performs outside its declared row. Nothing
+    /// handles an effect that escapes root `main`, so there any effect but
+    /// the ambient `Io` is unhandled rather than merely undeclared.
+    fn report_undeclared_effects(
+        &self,
+        func: &FuncDecl<ResolvedRef<'db>>,
+        is_root_main: bool,
+        undeclared: &[crate::ast::Effect<'db>],
+    ) {
+        let (unhandled, undeclared): (Vec<_>, Vec<_>) = undeclared
+            .iter()
+            .partition(|effect| is_root_main && !effect.ability_id.is_builtin_io(self.db()));
+        for (message, effects) in [
+            ("has unhandled effects", unhandled),
+            ("uses undeclared effects", undeclared),
+        ] {
+            if effects.is_empty() {
+                continue;
+            }
+            Diagnostic::new(
+                format!(
+                    "function '{}' {message}: {}",
+                    func.name,
+                    effects.iter().format(", "),
+                ),
+                self.get_span(func.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
+    }
+
+    /// Report signature rows whose effects the body propagates into the
+    /// function's own effect row without the signature saying so.
+    ///
+    /// Calling a callback whose row is not the function's own joins that row
+    /// into the function's effects through a retained union. The signature
+    /// is final, so a row may flow into the function's effects only when it
+    /// is that row's tail or a declared union reaches it.
+    fn report_undeclared_row_unions(
+        &self,
+        func: &FuncDecl<ResolvedRef<'db>>,
+        func_id: FuncDefId<'db>,
+        scheme: TypeScheme<'db>,
+        instance: &crate::typeck::subst::SchemeInstance<'db>,
+        retained: &[crate::ast::RowUnion<'db>],
+        row_subst: &crate::typeck::solver::RowSubst<'db>,
+    ) {
+        let db = self.db();
+        let tail = |row: &crate::ast::EffectRow<'db>| row_subst.apply(db, *row).rest(db);
+        let Some(own) = (match instance.ty.kind(db) {
+            TypeKind::Func { effect, .. } => tail(effect),
+            _ => None,
+        }) else {
+            return;
+        };
+
+        // Rows the signature itself puts into the function's effects.
+        let mut declared = HashSet::from([own]);
+        loop {
+            let before = declared.len();
+            for union in &instance.row_unions {
+                if tail(&union.result).is_some_and(|result| declared.contains(&result)) {
+                    declared.extend(union.sources.iter().filter_map(tail));
+                }
+            }
+            if declared.len() == before {
+                break;
+            }
+        }
+
+        // Rows each row flows into through the body's retained unions.
+        let mut flows: HashMap<crate::ast::EffectVar, Vec<crate::ast::EffectVar>> = HashMap::new();
+        for union in retained {
+            if let Some(result) = tail(&union.result) {
+                for source in union.sources.iter().filter_map(tail) {
+                    flows.entry(source).or_default().push(result);
+                }
+            }
+        }
+        let reaches_own = |start: crate::ast::EffectVar| {
+            let mut seen = HashSet::from([start]);
+            let mut pending = vec![start];
+            while let Some(row) = pending.pop() {
+                if row == own {
+                    return true;
+                }
+                for next in flows.get(&row).into_iter().flatten() {
+                    if seen.insert(*next) {
+                        pending.push(*next);
+                    }
+                }
+            }
+            false
+        };
+
+        let mut reported = HashSet::new();
+        for (index, row) in instance.row_args.iter().enumerate() {
+            let Some(row) = tail(row) else { continue };
+            if declared.contains(&row) || !reaches_own(row) || !reported.insert(row) {
+                continue;
+            }
+            Diagnostic::new(
+                format!(
+                    "function '{}' performs the effects of {} without declaring them; \
+                     use the same effect variable in its own effect row",
+                    func.name,
+                    self.signature_row_name(func_id, scheme, index),
+                ),
+                self.get_span(func.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(db);
+        }
+    }
+
+    /// How diagnostics name the signature's `index`-th effect parameter.
+    fn signature_row_name(
+        &self,
+        func_id: FuncDefId<'db>,
+        scheme: TypeScheme<'db>,
+        index: usize,
+    ) -> String {
+        let var = scheme.effect_params(self.db()).get(index).copied();
+        self.signature_row_names
+            .get(&func_id)
+            .into_iter()
+            .flatten()
+            .find(|(_, candidate)| Some(**candidate) == var)
+            .map_or_else(
+                || "an omitted effect row".to_owned(),
+                |(name, _)| format!("effect variable `{name}`"),
+            )
+    }
+
+    /// Report a duplicate effect in the function's annotation.
+    fn report_duplicate_effect(
+        &self,
+        func: &FuncDecl<ResolvedRef<'db>>,
+        func_id: FuncDefId<'db>,
+        resolved_declared: crate::ast::EffectRow<'db>,
+    ) {
+        let Some(duplicate) = self
+            .effect_annotation_origins
+            .get(&func_id)
+            .and_then(|origins| origins.find_duplicate(self.db(), resolved_declared))
+        else {
+            return;
+        };
+        Diagnostic::builder(
+            format!(
+                "function '{}' declares duplicate effect: {}",
+                func.name,
+                duplicate.effects.iter().format(", "),
+            ),
+            self.get_span(duplicate.duplicate_annotation_id),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+        .label(
+            self.get_span(duplicate.first_annotation_id),
+            "first matching effect annotation is here",
+        )
+        .build()
+        .accumulate(self.db());
+    }
+
+    /// Report signature variables that the body made more specific.
+    ///
+    /// The declared signature is the function's final type, so its type and
+    /// row variables are rigid in the body: each must stay an unsolved
+    /// variable, distinct from the others. The function's own effect tail is
+    /// covered by the undeclared-effect check.
+    fn report_signature_rigidity(
+        &self,
+        func: &FuncDecl<ResolvedRef<'db>>,
+        func_id: FuncDefId<'db>,
+        scheme: TypeScheme<'db>,
+        instance: &crate::typeck::subst::SchemeInstance<'db>,
+        type_subst: &crate::typeck::solver::TypeSubst<'db>,
+        row_subst: &crate::typeck::solver::RowSubst<'db>,
+    ) {
+        let db = self.db();
+        let report = |message: String| {
+            Diagnostic::new(
+                message,
+                self.get_span(func.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(db);
+        };
+
+        let type_names: HashMap<u32, Symbol> = self
+            .signature_type_names
+            .get(&func_id)
+            .into_iter()
+            .flatten()
+            .map(|(name, index)| (*index, *name))
+            .collect();
+        let type_name = |index: usize| {
+            type_names
+                .get(&(index as u32))
+                .map_or_else(|| format!("#{index}"), |name| name.to_string())
+        };
+        let mut seen_types: HashMap<UniVarId<'db>, usize> = HashMap::new();
+        for (index, ty) in instance.type_args.iter().enumerate() {
+            let resolved = type_subst.apply_with_rows(db, *ty, row_subst);
+            match resolved.kind(db) {
+                TypeKind::UniVar { id } => {
+                    if let Some(first) = seen_types.insert(*id, index) {
+                        report(format!(
+                            "type variables `{}` and `{}` in the signature of `{}` are the same type in its body",
+                            type_name(first),
+                            type_name(index),
+                            func.name,
+                        ));
+                    }
+                }
+                TypeKind::Error => {}
+                _ => report(format!(
+                    "type variable `{}` in the signature of `{}` is `{}` in its body",
+                    type_name(index),
+                    func.name,
+                    resolved,
+                )),
+            }
+        }
+
+        let row_names: HashMap<crate::ast::EffectVar, Symbol> = self
+            .signature_row_names
+            .get(&func_id)
+            .into_iter()
+            .flatten()
+            .map(|(name, var)| (*var, *name))
+            .collect();
+        let effect_params = scheme.effect_params(db);
+        let row_name = |index: usize| {
+            effect_params
+                .get(index)
+                .and_then(|var| row_names.get(var))
+                .map_or_else(
+                    || "an omitted effect row".to_owned(),
+                    |name| format!("effect variable `{name}`"),
+                )
+        };
+        let own_tail = match instance.ty.kind(db) {
+            TypeKind::Func { effect, .. } => effect.rest(db),
+            _ => None,
+        };
+        let mut seen_rows: HashMap<crate::ast::EffectVar, usize> = HashMap::new();
+        for (index, row) in instance.row_args.iter().enumerate() {
+            let resolved = row_subst.apply(db, *row);
+            let Some(tail) = resolved.rest(db) else {
+                report(format!(
+                    "{} in the signature of `{}` is closed in its body",
+                    row_name(index),
+                    func.name,
+                ));
+                continue;
+            };
+            if let Some(first) = seen_rows.insert(tail, index) {
+                report(format!(
+                    "{} and {} in the signature of `{}` are the same row in its body",
+                    row_name(first),
+                    row_name(index),
+                    func.name,
+                ));
+            }
+            if row.rest(db) != own_tail && !resolved.effects(db).is_empty() {
+                report(format!(
+                    "{} in the signature of `{}` has {} in its body",
+                    row_name(index),
+                    func.name,
+                    resolved.effects(db).iter().format(", "),
+                ));
+            }
+        }
     }
 
     /// Get function signature from the registered scheme.

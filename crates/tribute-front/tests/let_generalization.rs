@@ -441,7 +441,7 @@ ability Audit {
     fn mark() -> Nil
 }
 
-fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e} a {
+fn run_writer(comp: fn() ->{e, Writer(w)} a) ->{e, Audit} a {
     handle comp() {
         do result { result }
         op Writer::tell(v) { run_writer(fn() {

@@ -72,7 +72,7 @@ fn damaged_instances_are_tracked_diagnostics(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "instance.trb",
-        "fn identity(value: a) -> a { value }\nfn main() { let _ = identity(5) }",
+        "fn identity(value: a) -> a { value }\nfn main() -> Nil { let _ = identity(5) }",
     );
     for (damage, expected) in [
         (0, "MissingInstance"),
@@ -109,7 +109,7 @@ fn run(comp: fn() ->{e, Writer(w)} Nil) ->{e} Nil {
         op Writer::tell(value) { run(fn() { resume Nil }) }
     }
 }
-fn main() {
+fn main() -> Nil {
     run(fn() {
         expects(hidden)
         emit()

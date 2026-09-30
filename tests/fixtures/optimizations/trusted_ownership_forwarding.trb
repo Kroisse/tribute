@@ -20,6 +20,6 @@ fn read_root(boxed: BoxedNat) -> Nat {
     read_middle(boxed) + read_middle(boxed)
 }
 
-fn main() {
+fn main() -> Nil {
     __tribute_print_nat(read_root(Boxed(10)))
 }

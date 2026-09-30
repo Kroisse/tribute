@@ -183,11 +183,11 @@ fn test_compile_open_callback_root_main(db: &salsa::DatabaseImpl) {
         db,
         "open_callback_root_main.trb",
         r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int {
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int {
     f(x)
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = apply(fn(value) { value + +1 }, +41)
 }
 "#,

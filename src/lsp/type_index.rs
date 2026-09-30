@@ -336,7 +336,7 @@ mod tests {
     #[test]
     fn test_type_index_query() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { 42 }");
+        let source = make_source(&db, "fn main() -> Nil { 42 }");
 
         let index = type_index(&db, source);
         assert!(index.is_some());
@@ -406,7 +406,7 @@ mod tests {
     #[test]
     fn test_print_ast_type_local_bound_var() {
         let db = salsa::DatabaseImpl::default();
-        let source = make_source(&db, "fn main() { Nil }");
+        let source = make_source(&db, "fn main() -> Nil { Nil }");
         let scope = ast_query::parsed_ast(&db, source).unwrap().module(&db).id;
         for (index, expected) in [(0, "a"), (1, "b"), (26, "t26")] {
             let ty = Type::new(&db, TypeKind::LocalBoundVar { scope, index });

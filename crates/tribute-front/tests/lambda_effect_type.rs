@@ -24,7 +24,7 @@ fn test_pure_lambda_no_effect(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 
 fn main() -> Int {
     apply(fn(n) { n + 1 }, 41)
@@ -43,7 +43,7 @@ fn test_pure_lambda_with_capture_no_effect(db: &salsa::DatabaseImpl) {
         db,
         "test.trb",
         r#"
-fn apply(f: fn(Int) -> Int, x: Int) -> Int { f(x) }
+fn apply(f: fn(Int) ->{e} Int, x: Int) ->{e} Int { f(x) }
 
 fn main() -> Int {
     let offset = 10
@@ -299,7 +299,7 @@ fn run_with_state(f: fn() ->{State(Int)} Int) -> Int {
     }
 }
 
-fn apply_thunk(f: fn() -> Int) -> Int { f() }
+fn apply_thunk(f: fn() ->{e} Int) ->{e} Int { f() }
 
 fn main() -> Int {
     apply_thunk(fn() {
