@@ -118,33 +118,24 @@ pub fn monomorphize_functions<'db>(
             .extend(compiler_intrinsic_specializations);
 
         let rewrite_map = build_rewrite_map(db, &instantiations, &source_function_types);
-        let rewritten_module = rewrite::rewrite_module(
-            db,
-            module,
-            &source_function_types,
-            &rewrite_map,
-            &metadata.function_instances,
-        );
-        let specialized_decls: Vec<Decl<TypedRef<'db>>> = specialized_declarations
+        rewrite::rewrite_module(db, &mut module, &rewrite_map, &metadata.function_instances);
+        let mut specialized_decls: Vec<Decl<TypedRef<'db>>> = specialized_declarations
             .into_iter()
             .map(Decl::Function)
             .collect();
-        let rewritten_specialized = rewrite::rewrite_decls(
+        rewrite::rewrite_decls(
             db,
-            specialized_decls,
-            &source_function_types,
+            &mut specialized_decls,
             &rewrite_map,
             &metadata.function_instances,
         );
 
-        let mut decls = rewritten_module.decls;
-        decls.extend(rewritten_specialized);
-        decls.extend(
+        module.decls.extend(specialized_decls);
+        module.decls.extend(
             specialized_extern_declarations
                 .into_iter()
                 .map(Decl::ExternFunction),
         );
-        module = Module::new(rewritten_module.id, rewritten_module.name, decls);
         all_function_types.extend(specialized_function_types);
     }
     if !reached_fixpoint {
@@ -294,14 +285,16 @@ pub fn monomorphize_functions<'db>(
             }
             op.result = rewrite_ty(op.result);
         }
-        let rewritten_module = rewrite::rewrite_types_in_module(db, module, &type_rewrite_map);
+        rewrite::rewrite_types_in_module(db, &mut module, &type_rewrite_map);
 
         // Append specialized types to module
-        let mut decls = rewritten_module.decls;
-        decls.extend(specialized_structs.into_iter().map(Decl::Struct));
-        decls.extend(specialized_enums.into_iter().map(Decl::Enum));
-
-        Module::new(rewritten_module.id, rewritten_module.name, decls)
+        module
+            .decls
+            .extend(specialized_structs.into_iter().map(Decl::Struct));
+        module
+            .decls
+            .extend(specialized_enums.into_iter().map(Decl::Enum));
+        module
     } else {
         module
     };
