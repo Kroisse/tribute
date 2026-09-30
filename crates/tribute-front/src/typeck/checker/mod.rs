@@ -225,25 +225,20 @@ impl<'db> TypeChecker<'db> {
         self.check_module_inner(module)
     }
 
-    /// Type check the prelude module.
+    /// Type check the prelude module once.
     ///
-    /// Returns PreludeExports containing function types, constructors, and type defs.
-    pub fn check_module_for_prelude(
-        self,
-        module: &Module<ResolvedRef<'db>>,
-    ) -> PreludeExports<'db> {
-        self.check_module_inner_for_prelude(module)
-    }
-
-    /// Type check the prelude when its typed declarations are needed directly.
-    pub fn check_module_as_prelude(
+    /// Returns the typed prelude, and the exports that user modules inject:
+    /// function types, constructors, type definitions, and the method index.
+    pub fn check_prelude(
         mut self,
         module: &Module<ResolvedRef<'db>>,
-    ) -> ModuleCheckResult<'db> {
+    ) -> (ModuleCheckResult<'db>, PreludeExports<'db>) {
         self.collect_declarations(module);
         let well_known_types = self.prelude_well_known_types(module);
         self.env.set_prelude_well_known_types(well_known_types);
-        self.check_collected_module(module)
+        let decls = self.check_decls(module);
+        let exports = self.prelude_exports(well_known_types);
+        (self.into_module_result(module, decls), exports)
     }
 
     /// Internal implementation for module type checking.
@@ -265,17 +260,27 @@ impl<'db> TypeChecker<'db> {
         mut self,
         module: &Module<ResolvedRef<'db>>,
     ) -> ModuleCheckResult<'db> {
-        // Phase 2: Type check each declaration with per-function inference
-        // Each function gets its own FunctionInferenceContext with isolated constraints
-        let decls: Vec<Decl<TypedRef<'db>>> = module
+        let decls = self.check_decls(module);
+        self.into_module_result(module, decls)
+    }
+
+    /// Phase 2: Type check each declaration with per-function inference.
+    /// Each function gets its own FunctionInferenceContext with isolated
+    /// constraints, so no global solve follows.
+    fn check_decls(&mut self, module: &Module<ResolvedRef<'db>>) -> Vec<Decl<TypedRef<'db>>> {
+        module
             .decls
             .iter()
             .map(|decl| self.check_decl(decl))
-            .collect();
+            .collect()
+    }
 
-        // Phase 3: No global solve needed!
-        // Each function's constraints were solved in check_func_decl
-
+    /// Assemble the result of checking `module` from its checked declarations.
+    fn into_module_result(
+        mut self,
+        module: &Module<ResolvedRef<'db>>,
+        decls: Vec<Decl<TypedRef<'db>>>,
+    ) -> ModuleCheckResult<'db> {
         // Export the function types (already finalized during per-function checking)
         let function_types = self.env.export_function_types();
         let constructor_types = self.env.export_constructor_types();
@@ -368,51 +373,19 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
-    /// Internal implementation for prelude module type checking.
-    ///
-    /// Similar to check_module_inner but returns PreludeExports with FuncDefId keys.
-    /// Uses per-function type inference just like regular module checking.
-    fn check_module_inner_for_prelude(
-        mut self,
-        module: &Module<ResolvedRef<'db>>,
-    ) -> PreludeExports<'db> {
-        // Phase 1: Collect type definitions and function signatures
-        // Note: module_path starts empty - prelude functions use simple names internally.
-        self.collect_declarations(module);
-        let well_known_types = self.prelude_well_known_types(module);
-        self.env.set_prelude_well_known_types(well_known_types);
-
-        // Phase 2: Type check all declarations with per-function inference
-        let _decls: Vec<Decl<TypedRef<'db>>> = module
-            .decls
-            .iter()
-            .map(|decl| self.check_decl(decl))
-            .collect();
-
-        // Phase 3: No global solve needed - each function was solved independently
-
-        // Export the finalized types (already substituted and generalized per-function)
-        let function_types = self.env.export_function_types_with_ids();
-        let constructor_types = self.env.export_constructor_types();
-        let type_defs = self.env.export_type_defs();
-        let struct_fields = self.env.export_struct_fields();
-        let enum_variants = self.env.export_enum_variants();
-        let constructor_field_names = self.env.export_constructor_field_names();
-        let method_index = self.env.export_method_index();
-        let ability_conventions = self.env.export_ability_conventions();
-        let ability_definitions = self.env.export_ability_defs_for_prelude();
-
+    /// Export the prelude's finalized types for injection into user modules.
+    fn prelude_exports(&self, well_known_types: WellKnownTypes<'db>) -> PreludeExports<'db> {
         PreludeExports::new(
             self.db(),
-            function_types,
-            constructor_types,
-            type_defs,
-            struct_fields,
-            enum_variants,
-            constructor_field_names,
-            method_index,
-            ability_conventions,
-            ability_definitions,
+            self.env.export_function_types_with_ids(),
+            self.env.export_constructor_types(),
+            self.env.export_type_defs(),
+            self.env.export_struct_fields(),
+            self.env.export_enum_variants(),
+            self.env.export_constructor_field_names(),
+            self.env.export_method_index(),
+            self.env.export_ability_conventions(),
+            self.env.export_ability_defs_for_prelude(),
             well_known_types,
         )
     }
