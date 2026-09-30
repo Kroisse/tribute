@@ -1,6 +1,5 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{MonomorphizeMetadata, collect::is_concrete_type};
-use crate::ast::visit::for_each_expr;
 use crate::ast::{
     Decl, ExprKind, FuncDecl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
 };
@@ -112,7 +111,7 @@ pub(super) fn validate<'db>(
             break;
         }
         let mut nodes = Vec::new();
-        for_each_expr(&func.body, |node| nodes.push(node));
+        func.body.for_each_expr(|node| nodes.push(node));
         for expr in nodes {
             if let Some(op) = metadata.perform_operations.get(&expr.id)
                 && op.ability_args.iter().any(|ty| {

@@ -310,16 +310,19 @@ pub fn walk_field_pattern<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
     }
 }
 
-/// Call `f` on `expr` and every expression nested in it, in pre-order.
-pub fn for_each_expr<'ast, V: 'ast>(expr: &'ast Expr<V>, f: impl FnMut(&'ast Expr<V>)) {
-    struct Exprs<F>(F);
-    impl<'ast, V: 'ast, F: FnMut(&'ast Expr<V>)> Visit<'ast, V> for Exprs<F> {
-        fn visit_expr(&mut self, expr: &'ast Expr<V>) {
-            (self.0)(expr);
-            walk_expr(self, expr);
+impl<V> Expr<V> {
+    /// Call `f` on this expression and every expression nested in it, in
+    /// pre-order.
+    pub fn for_each_expr<'ast>(&'ast self, f: impl FnMut(&'ast Expr<V>)) {
+        struct Exprs<F>(F);
+        impl<'ast, V: 'ast, F: FnMut(&'ast Expr<V>)> Visit<'ast, V> for Exprs<F> {
+            fn visit_expr(&mut self, expr: &'ast Expr<V>) {
+                (self.0)(expr);
+                walk_expr(self, expr);
+            }
         }
+        Exprs(f).visit_expr(self);
     }
-    Exprs(f).visit_expr(expr);
 }
 
 /// A traversal that rewrites the tree in place.
