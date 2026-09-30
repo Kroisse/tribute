@@ -197,3 +197,108 @@ fn main() {
     );
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+/// Imports declared inside an inline module are in scope in that module's
+/// body, whether the path is written from the package root or relative to the
+/// module, aliased, or names a module used as a path prefix.
+#[salsa_test]
+fn inline_module_imports_are_in_scope_in_the_module(db: &salsa::DatabaseImpl) {
+    for (import, call) in [
+        ("use outer::a::one", "one()"),
+        ("use a::one", "one()"),
+        ("use a::one as uno", "uno()"),
+        ("use a", "a::one()"),
+    ] {
+        let errors = errors(
+            db,
+            &format!(
+                r#"
+mod outer {{
+    mod a {{
+        pub fn one() -> Nat {{ 1 }}
+    }}
+    {import}
+
+    pub fn get() -> Nat {{
+        {call}
+    }}
+}}
+
+fn main() {{
+    let _ = outer::get()
+}}
+"#
+            ),
+        );
+        assert!(errors.is_empty(), "{import}: {errors:#?}");
+    }
+}
+
+/// Constructors and abilities imported inside an inline module resolve in
+/// expressions, effect annotations, and handler arms.
+#[salsa_test]
+fn inline_module_imports_cover_constructors_and_abilities(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod outer {
+    mod a {
+        pub struct P { x: Nat }
+    }
+    mod fx {
+        pub ability Tick {
+            op tick() -> Nat
+        }
+    }
+    use a::P
+    use fx::Tick
+
+    pub fn make() -> P {
+        P { x: 1 }
+    }
+
+    pub fn count() ->{Tick} Nat {
+        Tick::tick()
+    }
+
+    pub fn run() -> Nat {
+        handle count() {
+            do result { result }
+            op Tick::tick() { resume make().x }
+        }
+    }
+}
+
+fn main() {
+    let _ = outer::run()
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+/// An inline module's import is not a member of the module.
+#[salsa_test]
+fn inline_module_imports_are_not_visible_outside_the_module(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod outer {
+    mod a {
+        pub fn one() -> Nat { 1 }
+    }
+    use a::one
+}
+
+fn main() {
+    let _ = outer::one()
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.starts_with("unresolved name `outer::one`")),
+        "{errors:#?}"
+    );
+}

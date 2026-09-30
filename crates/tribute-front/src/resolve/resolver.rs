@@ -99,6 +99,10 @@ pub struct Resolver<'db> {
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
+    /// For each inline module entered, its imports: the imported name and the
+    /// package-root path it names. An import is visible only in the body of
+    /// the module that declares it.
+    module_imports: Vec<HashMap<Symbol, Vec<Symbol>>>,
 }
 
 impl<'db> Resolver<'db> {
@@ -113,6 +117,7 @@ impl<'db> Resolver<'db> {
             span_map,
             effect_ops: HashMap::new(),
             module_path: Vec::new(),
+            module_imports: Vec::new(),
         }
     }
 
@@ -170,6 +175,13 @@ impl<'db> Resolver<'db> {
                 }
             }
 
+            // Then the enclosing inline module's imports.
+            if let Some(target) = self.module_import(sym)
+                && let Some(binding) = self.lookup_path(target)
+            {
+                return self.binding_to_ref(binding, sym);
+            }
+
             // Check module environment (unqualified lookup)
             if let Some(binding) = self.env.lookup(sym) {
                 return self.binding_to_ref(binding, sym);
@@ -182,7 +194,10 @@ impl<'db> Resolver<'db> {
         } else {
             // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
             if let Some(namespace) = name.namespace()
-                && let Some(binding) = self.env.lookup_qualified(namespace, sym)
+                && let Some(binding) = self
+                    .imported_namespace(namespace)
+                    .and_then(|namespace| self.env.lookup_qualified(namespace, sym))
+                    .or_else(|| self.env.lookup_qualified(namespace, sym))
             {
                 return self.binding_to_ref(binding, sym);
             }
@@ -191,6 +206,42 @@ impl<'db> Resolver<'db> {
         // Not found - emit diagnostic and return unresolved sentinel
         self.report_unresolved_name(name);
         ResolvedRef::local(LocalId::UNRESOLVED, sym)
+    }
+
+    /// The package-root path an import of the enclosing inline module gives
+    /// `name`.
+    fn module_import(&self, name: Symbol) -> Option<&[Symbol]> {
+        self.module_imports.last()?.get(&name).map(Vec::as_slice)
+    }
+
+    /// `namespace` with its first segment replaced by the path an import of
+    /// the enclosing inline module gives it, e.g. `Abort` after
+    /// `use outer::abilities::Abort` becomes `outer::abilities::Abort`.
+    fn imported_namespace(&self, namespace: Symbol) -> Option<Symbol> {
+        let imports = self.module_imports.last()?;
+        // Copy the segments out before interning: interning inside
+        // `with_str` would re-enter the interner.
+        let (first, rest) = namespace.with_str(|path| {
+            let (first, rest) = path.split_once("::").unwrap_or((path, ""));
+            (first.to_owned(), rest.to_owned())
+        });
+        let target = imports.get(&Symbol::from_dynamic(&first))?;
+        let mut path = target.iter().format("::").to_string();
+        if !rest.is_empty() {
+            path.push_str("::");
+            path.push_str(&rest);
+        }
+        Some(Symbol::from_dynamic(&path))
+    }
+
+    /// The binding a package-root path names.
+    fn lookup_path(&self, path: &[Symbol]) -> Option<&Binding<'db>> {
+        let (last, namespace) = path.split_last()?;
+        if namespace.is_empty() {
+            return self.env.lookup(*last);
+        }
+        let namespace = Symbol::from_dynamic(&namespace.iter().format("::").to_string());
+        self.env.lookup_qualified(namespace, *last)
     }
 
     /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
@@ -291,10 +342,27 @@ impl<'db> Resolver<'db> {
     ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
         // For inline modules, recursively resolve nested declarations
         self.module_path.push(module.name);
+        // The module's imports are in scope throughout its body, including
+        // before the `use` that declares them.
+        let imports = module
+            .body
+            .iter()
+            .flatten()
+            .filter_map(|decl| match decl {
+                Decl::Use(import) => {
+                    let target = self.use_target(&import.path)?;
+                    let name = import.alias.or_else(|| import.path.last().copied())?;
+                    Some((name, target))
+                }
+                _ => None,
+            })
+            .collect();
+        self.module_imports.push(imports);
         let body = module
             .body
             .as_ref()
             .map(|decls| decls.iter().map(|d| self.resolve_decl(d)).collect());
+        self.module_imports.pop();
         self.module_path.pop();
 
         crate::ast::ModuleDecl {
@@ -433,8 +501,14 @@ impl<'db> Resolver<'db> {
             TypeAnnotationKind::Named(sym)
                 if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase())) =>
             {
+                // An import of the enclosing inline module names the ability
+                // by its package-root path.
+                if let Some(target) = self.module_import(*sym)
+                    && target.len() >= 2
+                {
+                    ann.kind = TypeAnnotationKind::Path(target.to_vec());
                 // Check if this name was imported via `use` with a qualified path
-                if !self.env.has_definition(*sym)
+                } else if !self.env.has_definition(*sym)
                     && let Some(path) = self.env.get_use_path(*sym)
                     && path.len() >= 2
                 {
