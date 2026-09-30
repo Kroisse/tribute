@@ -144,9 +144,7 @@ fn next_context_identity() -> u64 {
 
 fn primary_with_headroom<K: EntityRef, V: Clone>(map: &PrimaryMap<K, V>) -> PrimaryMap<K, V> {
     let mut copy = PrimaryMap::with_capacity(map.len().next_power_of_two());
-    for value in map.values() {
-        copy.push(value.clone());
-    }
+    copy.extend(map.values().cloned());
     copy
 }
 
