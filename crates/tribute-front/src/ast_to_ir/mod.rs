@@ -114,18 +114,13 @@ pub struct UnsupportedCompilerIntrinsic {
 /// the validation boundary; return every unknown directive for source diagnostics.
 pub fn registered_compiler_intrinsics<V>(
     module: &AstModule<V>,
-) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>>
-where
-    V: salsa::SalsaValue,
-{
+) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>> {
     fn collect<V>(
         declarations: &[crate::ast::Decl<V>],
         prefix: &mut String,
         result: &mut HashMap<NodeId, Symbol>,
         unsupported: &mut Vec<UnsupportedCompilerIntrinsic>,
-    ) where
-        V: salsa::SalsaValue,
-    {
+    ) {
         for declaration in declarations {
             match declaration {
                 crate::ast::Decl::ExternFunction(function)

@@ -21,10 +21,7 @@ use super::types::TypeAnnotation;
 /// - After resolve: `Expr<ResolvedRef<'db>>`
 /// - After typecheck: `Expr<TypedRef<'db>>`
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct Expr<V>
-where
-    V: salsa::SalsaValue,
-{
+pub struct Expr<V> {
     /// Unique identifier for span lookup.
     pub id: NodeId,
     /// The kind of expression.
@@ -33,10 +30,7 @@ where
     pub kind: Box<ExprKind<V>>,
 }
 
-impl<V> Expr<V>
-where
-    V: salsa::SalsaValue,
-{
+impl<V> Expr<V> {
     /// Create a new expression with the given ID and kind.
     pub fn new(id: NodeId, kind: ExprKind<V>) -> Self {
         Self {
@@ -48,10 +42,7 @@ where
 
 /// The different kinds of expressions.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub enum ExprKind<V>
-where
-    V: salsa::SalsaValue,
-{
+pub enum ExprKind<V> {
     // === References ===
     /// Variable or function reference.
     /// The type `V` determines what we know about the reference.
@@ -156,10 +147,7 @@ where
 
 /// A statement in a block.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub enum Stmt<V>
-where
-    V: salsa::SalsaValue,
-{
+pub enum Stmt<V> {
     /// Let binding: `let pattern = expr`
     Let {
         id: NodeId,
@@ -174,10 +162,7 @@ where
 
 /// A case arm in pattern matching.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct Arm<V>
-where
-    V: salsa::SalsaValue,
-{
+pub struct Arm<V> {
     /// Node ID for span lookup.
     pub id: NodeId,
     /// The pattern to match.
@@ -190,10 +175,7 @@ where
 
 /// A handler arm in a handle expression.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct HandlerArm<V>
-where
-    V: salsa::SalsaValue,
-{
+pub struct HandlerArm<V> {
     /// Node ID for span lookup.
     pub id: NodeId,
     /// The kind of handler (result or effect).
@@ -204,10 +186,7 @@ where
 
 /// The kind of handler arm.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub enum HandlerKind<V>
-where
-    V: salsa::SalsaValue,
-{
+pub enum HandlerKind<V> {
     /// Completion handler: `do result { body }`
     Do { binding: Pattern<V> },
 
