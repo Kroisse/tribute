@@ -299,7 +299,7 @@ fn test(thing: Thing) -> Nat {
     );
     let result = compile_with_diagnostics(db, source);
     assert!(!result.diagnostics.is_empty());
-    assert!(result.module.is_none());
+    assert!(!result.produced_module);
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
@@ -329,7 +329,7 @@ fn test() -> Point {
 "#,
     );
     let result = compile_with_diagnostics(db, source);
-    assert!(result.module.is_none());
+    assert!(!result.produced_module);
     let diagnostics = result.diagnostics;
     insta::assert_yaml_snapshot!(diagnostics);
 }
@@ -348,7 +348,7 @@ fn test() -> Point {
 "#,
     );
     let result = compile_with_diagnostics(db, source);
-    assert!(result.module.is_none());
+    assert!(!result.produced_module);
     let diagnostics = result.diagnostics;
     insta::assert_yaml_snapshot!(diagnostics);
 }
@@ -367,7 +367,7 @@ fn test() -> Point {
 "#,
     );
     let result = compile_with_diagnostics(db, source);
-    assert!(result.module.is_none());
+    assert!(!result.produced_module);
     let diagnostics = result.diagnostics;
     insta::assert_yaml_snapshot!(diagnostics);
 }
@@ -410,7 +410,7 @@ fn invalid_record_shapes_block_public_compilation_apis(db: &salsa::DatabaseImpl)
         // Public diagnostics retain phase/span/message sorting, including mixed errors.
         // Exact equality also rejects spurious missing-field diagnostics.
         assert_eq!(result.diagnostics, expected, "{record}");
-        assert!(result.module.is_none(), "{record}");
+        assert!(!result.produced_module, "{record}");
         assert!(tribute::compile_frontend(db, source).is_none(), "{record}");
         assert!(matches!(compile_ast(db, source), Ok(None)), "{record}");
     }
@@ -436,7 +436,7 @@ fn invalid(base: Pair(Int, Bool)) -> Pair(Int, Int) {
     assert!(diagnostic.inner.message.contains("type error"));
     assert!(diagnostic.inner.message.contains("Int"));
     assert!(diagnostic.inner.message.contains("Bool"));
-    assert!(result.module.is_none());
+    assert!(!result.produced_module);
     assert!(tribute::compile_frontend(db, source).is_none());
     assert!(matches!(compile_ast(db, source), Ok(None)));
 }

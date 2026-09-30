@@ -307,13 +307,12 @@ fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
         assert_eq!(first.diagnostics, expected, "revision {revision}");
         assert_eq!(cached.diagnostics, first.diagnostics, "revision {revision}");
         assert_eq!(
-            first.module.is_some(),
+            first.produced_module,
             expected.is_empty(),
             "revision {revision}"
         );
         assert_eq!(
-            cached.module.is_some(),
-            first.module.is_some(),
+            cached.produced_module, first.produced_module,
             "revision {revision}"
         );
 
@@ -322,8 +321,7 @@ fn record_shape_diagnostics_follow_incremental_declaration_edits_slow() {
             let fresh = compile_with_diagnostics(fresh_db, fresh_source);
             assert_eq!(fresh.diagnostics, first.diagnostics, "revision {revision}");
             assert_eq!(
-                fresh.module.is_some(),
-                first.module.is_some(),
+                fresh.produced_module, first.produced_module,
                 "revision {revision}"
             );
         });
