@@ -7,9 +7,10 @@ use std::collections::HashMap;
 
 use trunk_ir::Symbol;
 
+use crate::ast::visit::{VisitMut, walk_expr_mut, walk_module_decl_mut, walk_module_mut};
 use crate::ast::{
-    Decl, Expr, ExprKind, FuncDecl, FuncDefId, Module, ResolvedRef, Stmt, Type, TypeAnnotation,
-    TypeAnnotationKind, TypeKind, TypedRef,
+    Decl, Expr, ExprKind, FuncDecl, FuncDefId, Module, ModuleDecl, ResolvedRef, Type,
+    TypeAnnotation, TypeAnnotationKind, TypeKind, TypedRef,
 };
 use crate::typeck::{MethodEntry, receiver_type_matches};
 use crate::{push_prefix, qualified_symbol};
@@ -61,9 +62,7 @@ impl<'db> TdnrResolver<'db> {
         self.build_method_index(module);
 
         // Phase 2: Resolve method calls in all declarations
-        for decl in &mut module.decls {
-            self.resolve_decl(decl);
-        }
+        walk_module_mut(&mut self, module);
     }
 
     // =========================================================================
@@ -449,106 +448,6 @@ impl<'db> TdnrResolver<'db> {
     // Declaration resolution
     // =========================================================================
 
-    /// Resolve method calls in a declaration.
-    fn resolve_decl(&mut self, decl: &mut Decl<TypedRef<'db>>) {
-        match decl {
-            Decl::Function(func) => self.resolve_expr(&mut func.body),
-            Decl::Module(module) => self.resolve_module_decl(module),
-            // Other declarations don't contain expressions
-            Decl::ExternFunction(_)
-            | Decl::Struct(_)
-            | Decl::Enum(_)
-            | Decl::Ability(_)
-            | Decl::Use(_) => {}
-        }
-    }
-
-    /// Resolve method calls in a module declaration.
-    fn resolve_module_decl(&mut self, module: &mut crate::ast::ModuleDecl<TypedRef<'db>>) {
-        let saved = push_prefix(&mut self.current_prefix, module.name);
-        for decl in module.body.iter_mut().flatten() {
-            self.resolve_decl(decl);
-        }
-        self.current_prefix.truncate(saved);
-    }
-
-    // =========================================================================
-    // Expression resolution
-    // =========================================================================
-
-    /// Resolve method calls in an expression, in place.
-    fn resolve_expr(&mut self, expr: &mut Expr<TypedRef<'db>>) {
-        match &mut *expr.kind {
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.resolve_expr(receiver);
-                for arg in args {
-                    self.resolve_expr(arg);
-                }
-                self.resolve_method_call(expr);
-            }
-            ExprKind::Call { callee, args } => {
-                self.resolve_expr(callee);
-                for arg in args {
-                    self.resolve_expr(arg);
-                }
-            }
-            ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
-                for arg in args {
-                    self.resolve_expr(arg);
-                }
-            }
-            ExprKind::Record { fields, spread, .. } => {
-                for (_, field) in fields {
-                    self.resolve_expr(field);
-                }
-                if let Some(spread) = spread {
-                    self.resolve_expr(spread);
-                }
-            }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                self.resolve_expr(lhs);
-                self.resolve_expr(rhs);
-            }
-            ExprKind::Block { stmts, value } => {
-                for stmt in stmts {
-                    match stmt {
-                        Stmt::Let { value, .. } => self.resolve_expr(value),
-                        Stmt::Expr { expr, .. } => self.resolve_expr(expr),
-                    }
-                }
-                self.resolve_expr(value);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                self.resolve_expr(scrutinee);
-                for arm in arms {
-                    if let Some(guard) = &mut arm.guard {
-                        self.resolve_expr(guard);
-                    }
-                    self.resolve_expr(&mut arm.body);
-                }
-            }
-            ExprKind::Lambda { body, .. } => self.resolve_expr(body),
-            ExprKind::Handle { body, handlers } => {
-                self.resolve_expr(body);
-                for handler in handlers {
-                    self.resolve_expr(&mut handler.body);
-                }
-            }
-            ExprKind::Resume { arg, .. } => self.resolve_expr(arg),
-            // Patterns and leaves contain no method calls.
-            ExprKind::NatLit(_)
-            | ExprKind::IntLit(_)
-            | ExprKind::FloatLit(_)
-            | ExprKind::BoolLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::BytesLit(_)
-            | ExprKind::Nil
-            | ExprKind::RuneLit(_)
-            | ExprKind::Var(_)
-            | ExprKind::Error => {}
-        }
-    }
-
     /// Resolve a method call expression whose receiver and arguments are
     /// already resolved.
     ///
@@ -701,6 +600,21 @@ impl<'db> TdnrResolver<'db> {
             return None; // ambiguous — keep as MethodCall for error reporting
         }
         Some(matched)
+    }
+}
+
+impl<'db> VisitMut<TypedRef<'db>> for TdnrResolver<'db> {
+    fn visit_module_decl_mut(&mut self, module: &mut ModuleDecl<TypedRef<'db>>) {
+        let saved = push_prefix(&mut self.current_prefix, module.name);
+        walk_module_decl_mut(self, module);
+        self.current_prefix.truncate(saved);
+    }
+
+    fn visit_expr_mut(&mut self, expr: &mut Expr<TypedRef<'db>>) {
+        // The receiver and arguments are resolved first, so the receiver's
+        // type reflects any call they became.
+        walk_expr_mut(self, expr);
+        self.resolve_method_call(expr);
     }
 }
 

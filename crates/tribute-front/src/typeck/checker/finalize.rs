@@ -5,11 +5,8 @@
 
 use super::TypeChecker;
 use crate::ast::NodeId;
-use crate::ast::visit::{RefSite, Visit};
-use crate::ast::{
-    Arm, Expr, ExprKind, FieldPattern, FuncDefId, HandlerArm, HandlerKind, Pattern, PatternKind,
-    ResolvedRef, Stmt, Type, TypedRef, UniVarId,
-};
+use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut};
+use crate::ast::{Expr, ExprKind, FuncDefId, ResolvedRef, Type, TypedRef, UniVarId};
 use crate::typeck::solver::{RowSubst, TypeSubst};
 use std::collections::HashMap;
 
@@ -19,326 +16,25 @@ impl<'db> TypeChecker<'db> {
     /// This ensures that all TypedRef types have UniVars replaced with:
     /// 1. Their resolved concrete type (from substitution), or
     /// 2. The corresponding BoundVar (from generalization mapping)
+    ///
+    /// Deferred method calls become direct calls, and case expressions whose
+    /// substituted arms cover their scrutinee are recorded as exhaustive.
     pub(super) fn apply_subst_to_body(
         &mut self,
-        body: Expr<TypedRef<'db>>,
+        body: &mut Expr<TypedRef<'db>>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
-        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
-    ) -> Expr<TypedRef<'db>> {
-        let kind = self.apply_subst_to_expr_kind(
-            body.id,
-            *body.kind,
+        deferred_resolutions: &HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+    ) {
+        Finalize {
+            checker: self,
             type_subst,
             row_subst,
             var_to_index,
             deferred_resolutions,
-        );
-        Expr::new(body.id, kind)
-    }
-
-    /// Apply substitution to an expression kind.
-    fn apply_subst_to_expr_kind(
-        &mut self,
-        node_id: crate::ast::NodeId,
-        kind: ExprKind<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
-    ) -> ExprKind<TypedRef<'db>> {
-        match kind {
-            ExprKind::NatLit(n) => ExprKind::NatLit(n),
-            ExprKind::IntLit(n) => ExprKind::IntLit(n),
-            ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
-            ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
-            ExprKind::StringLit(s) => ExprKind::StringLit(s),
-            ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
-            ExprKind::Nil => ExprKind::Nil,
-            ExprKind::RuneLit(r) => ExprKind::RuneLit(r),
-            ExprKind::Error => ExprKind::Error,
-
-            ExprKind::Var(typed_ref) => ExprKind::Var(self.apply_subst_to_typed_ref(
-                typed_ref,
-                type_subst,
-                row_subst,
-                var_to_index,
-            )),
-            ExprKind::Call { callee, args } => ExprKind::Call {
-                callee: self.apply_subst_to_body(
-                    callee,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-                args: args
-                    .into_iter()
-                    .map(|a| {
-                        self.apply_subst_to_body(
-                            a,
-                            type_subst,
-                            row_subst,
-                            var_to_index,
-                            deferred_resolutions,
-                        )
-                    })
-                    .collect(),
-            },
-            ExprKind::Cons { ctor, args } => ExprKind::Cons {
-                ctor: self.apply_subst_to_typed_ref(ctor, type_subst, row_subst, var_to_index),
-                args: args
-                    .into_iter()
-                    .map(|a| {
-                        self.apply_subst_to_body(
-                            a,
-                            type_subst,
-                            row_subst,
-                            var_to_index,
-                            deferred_resolutions,
-                        )
-                    })
-                    .collect(),
-            },
-            ExprKind::Record {
-                type_name,
-                fields,
-                spread,
-            } => ExprKind::Record {
-                type_name: self.apply_subst_to_typed_ref(
-                    type_name,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                ),
-                fields: fields
-                    .into_iter()
-                    .map(|(name, expr)| {
-                        (
-                            name,
-                            self.apply_subst_to_body(
-                                expr,
-                                type_subst,
-                                row_subst,
-                                var_to_index,
-                                deferred_resolutions,
-                            ),
-                        )
-                    })
-                    .collect(),
-                spread: spread.map(|e| {
-                    self.apply_subst_to_body(
-                        e,
-                        type_subst,
-                        row_subst,
-                        var_to_index,
-                        deferred_resolutions,
-                    )
-                }),
-            },
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-            } => {
-                let converted_receiver = self.apply_subst_to_body(
-                    receiver,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                );
-                let converted_args: Vec<_> = args
-                    .into_iter()
-                    .map(|a| {
-                        self.apply_subst_to_body(
-                            a,
-                            type_subst,
-                            row_subst,
-                            var_to_index,
-                            deferred_resolutions,
-                        )
-                    })
-                    .collect();
-
-                if let Some((func_id, callee_ty)) = deferred_resolutions.get(&node_id) {
-                    // Deferred method was resolved — convert to Call
-                    let substituted_ty =
-                        self.apply_subst_to_type(*callee_ty, type_subst, row_subst, var_to_index);
-                    let callee_ref = TypedRef {
-                        resolved: ResolvedRef::Function { id: *func_id },
-                        ty: substituted_ty,
-                    };
-                    let callee = Expr::new(node_id, ExprKind::Var(callee_ref));
-                    let mut all_args = vec![converted_receiver];
-                    all_args.extend(converted_args);
-                    ExprKind::Call {
-                        callee,
-                        args: all_args,
-                    }
-                } else {
-                    // Still unresolved — keep as MethodCall for TDNR
-                    ExprKind::MethodCall {
-                        receiver: converted_receiver,
-                        method,
-                        args: converted_args,
-                    }
-                }
-            }
-            ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
-                op,
-                lhs: self.apply_subst_to_body(
-                    lhs,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-                rhs: self.apply_subst_to_body(
-                    rhs,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-            },
-            ExprKind::Block { stmts, value } => ExprKind::Block {
-                stmts: stmts
-                    .into_iter()
-                    .map(|s| {
-                        self.apply_subst_to_stmt(
-                            s,
-                            type_subst,
-                            row_subst,
-                            var_to_index,
-                            deferred_resolutions,
-                        )
-                    })
-                    .collect(),
-                value: self.apply_subst_to_body(
-                    value,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-            },
-            ExprKind::Case { scrutinee, arms } => {
-                let scrutinee = self.apply_subst_to_body(
-                    scrutinee,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                );
-                let arms = arms
-                    .into_iter()
-                    .map(|arm| {
-                        self.apply_subst_to_arm(
-                            arm,
-                            type_subst,
-                            row_subst,
-                            var_to_index,
-                            deferred_resolutions,
-                        )
-                    })
-                    .collect::<Vec<_>>();
-
-                if let Some(scrutinee_ty) = self.node_types.get(&scrutinee.id).copied()
-                    && self.check_exhaustiveness(scrutinee_ty, &arms, scrutinee.id)
-                    && !self.exhaustive_cases.contains(&node_id)
-                {
-                    self.exhaustive_cases.push(node_id);
-                }
-
-                ExprKind::Case { scrutinee, arms }
-            }
-            ExprKind::Lambda { params, body } => ExprKind::Lambda {
-                params,
-                body: self.apply_subst_to_body(
-                    body,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-            },
-            ExprKind::Handle { body, handlers } => ExprKind::Handle {
-                body: self.apply_subst_to_body(
-                    body,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-                handlers: handlers
-                    .into_iter()
-                    .map(|h| {
-                        self.apply_subst_to_handler_arm(
-                            h,
-                            type_subst,
-                            row_subst,
-                            var_to_index,
-                            deferred_resolutions,
-                        )
-                    })
-                    .collect(),
-            },
-            ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-                arg: self.apply_subst_to_body(
-                    arg,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-                local_id,
-            },
-            ExprKind::Tuple(elems) => ExprKind::Tuple(
-                elems
-                    .into_iter()
-                    .map(|e| {
-                        self.apply_subst_to_body(
-                            e,
-                            type_subst,
-                            row_subst,
-                            var_to_index,
-                            deferred_resolutions,
-                        )
-                    })
-                    .collect(),
-            ),
-            ExprKind::List(elems) => ExprKind::List(
-                elems
-                    .into_iter()
-                    .map(|e| {
-                        self.apply_subst_to_body(
-                            e,
-                            type_subst,
-                            row_subst,
-                            var_to_index,
-                            deferred_resolutions,
-                        )
-                    })
-                    .collect(),
-            ),
         }
-    }
-
-    /// Apply substitution to a TypedRef.
-    fn apply_subst_to_typed_ref(
-        &self,
-        typed_ref: TypedRef<'db>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-    ) -> TypedRef<'db> {
-        let ty = self.apply_subst_to_type(typed_ref.ty, type_subst, row_subst, var_to_index);
-        TypedRef {
-            resolved: typed_ref.resolved,
-            ty,
-        }
+        .visit_expr_mut(body);
     }
 
     /// Apply substitution and generalization to a type.
@@ -361,231 +57,6 @@ impl<'db> TypeChecker<'db> {
         )
     }
 
-    /// Apply substitution to a statement.
-    fn apply_subst_to_stmt(
-        &mut self,
-        stmt: Stmt<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
-    ) -> Stmt<TypedRef<'db>> {
-        match stmt {
-            Stmt::Let {
-                id,
-                pattern,
-                value,
-                ty,
-            } => Stmt::Let {
-                id,
-                pattern: self.apply_subst_to_pattern(pattern, type_subst, row_subst, var_to_index),
-                value: self.apply_subst_to_body(
-                    value,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-                ty,
-            },
-            Stmt::Expr { id, expr } => Stmt::Expr {
-                id,
-                expr: self.apply_subst_to_body(
-                    expr,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                ),
-            },
-        }
-    }
-
-    /// Apply substitution to a case arm.
-    fn apply_subst_to_arm(
-        &mut self,
-        arm: Arm<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
-    ) -> Arm<TypedRef<'db>> {
-        Arm {
-            id: arm.id,
-            pattern: self.apply_subst_to_pattern(arm.pattern, type_subst, row_subst, var_to_index),
-            guard: arm.guard.map(|g| {
-                self.apply_subst_to_body(
-                    g,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                    deferred_resolutions,
-                )
-            }),
-            body: self.apply_subst_to_body(
-                arm.body,
-                type_subst,
-                row_subst,
-                var_to_index,
-                deferred_resolutions,
-            ),
-        }
-    }
-
-    /// Apply substitution to a handler arm.
-    fn apply_subst_to_handler_arm(
-        &mut self,
-        arm: HandlerArm<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
-    ) -> HandlerArm<TypedRef<'db>> {
-        let kind = match arm.kind {
-            HandlerKind::Do { binding } => HandlerKind::Do {
-                binding: self.apply_subst_to_pattern(binding, type_subst, row_subst, var_to_index),
-            },
-            HandlerKind::Fn {
-                ability,
-                op,
-                params,
-            } => HandlerKind::Fn {
-                ability: self.apply_subst_to_typed_ref(
-                    ability,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                ),
-                op,
-                params: params
-                    .into_iter()
-                    .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
-                    .collect(),
-            },
-            HandlerKind::Op {
-                ability,
-                op,
-                params,
-                resume_local_id,
-            } => HandlerKind::Op {
-                ability: self.apply_subst_to_typed_ref(
-                    ability,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                ),
-                op,
-                params: params
-                    .into_iter()
-                    .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
-                    .collect(),
-                resume_local_id,
-            },
-        };
-        HandlerArm {
-            id: arm.id,
-            kind,
-            body: self.apply_subst_to_body(
-                arm.body,
-                type_subst,
-                row_subst,
-                var_to_index,
-                deferred_resolutions,
-            ),
-        }
-    }
-
-    /// Apply substitution to a pattern.
-    fn apply_subst_to_pattern(
-        &self,
-        pattern: Pattern<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-    ) -> Pattern<TypedRef<'db>> {
-        let kind = match *pattern.kind {
-            PatternKind::Wildcard => PatternKind::Wildcard,
-            PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
-            PatternKind::Literal(lit) => PatternKind::Literal(lit),
-            PatternKind::Error => PatternKind::Error,
-            PatternKind::Variant { ctor, fields } => PatternKind::Variant {
-                ctor: self.apply_subst_to_typed_ref(ctor, type_subst, row_subst, var_to_index),
-                fields: fields
-                    .into_iter()
-                    .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
-                    .collect(),
-            },
-            PatternKind::Record {
-                type_name,
-                fields,
-                rest,
-            } => PatternKind::Record {
-                type_name: self.apply_subst_to_typed_ref(
-                    type_name,
-                    type_subst,
-                    row_subst,
-                    var_to_index,
-                ),
-                fields: fields
-                    .into_iter()
-                    .map(|f| {
-                        self.apply_subst_to_field_pattern(f, type_subst, row_subst, var_to_index)
-                    })
-                    .collect(),
-                rest,
-            },
-            PatternKind::Tuple(pats) => PatternKind::Tuple(
-                pats.into_iter()
-                    .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
-                    .collect(),
-            ),
-            PatternKind::List(pats) => PatternKind::List(
-                pats.into_iter()
-                    .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
-                    .collect(),
-            ),
-            PatternKind::ListRest {
-                head,
-                rest,
-                rest_local_id,
-            } => PatternKind::ListRest {
-                head: head
-                    .into_iter()
-                    .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index))
-                    .collect(),
-                rest,
-                rest_local_id,
-            },
-            PatternKind::As {
-                pattern,
-                name,
-                local_id,
-            } => PatternKind::As {
-                pattern: self.apply_subst_to_pattern(pattern, type_subst, row_subst, var_to_index),
-                name,
-                local_id,
-            },
-        };
-        Pattern::new(pattern.id, kind)
-    }
-
-    /// Apply substitution to a field pattern.
-    fn apply_subst_to_field_pattern(
-        &self,
-        fp: FieldPattern<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-    ) -> FieldPattern<TypedRef<'db>> {
-        FieldPattern {
-            id: fp.id,
-            name: fp.name,
-            pattern: fp
-                .pattern
-                .map(|p| self.apply_subst_to_pattern(p, type_subst, row_subst, var_to_index)),
-        }
-    }
-
     // =========================================================================
     // UniVar collection from body
     // =========================================================================
@@ -598,29 +69,13 @@ impl<'db> TypeChecker<'db> {
         row_subst: &RowSubst<'db>,
         out: &mut Vec<UniVarId<'db>>,
     ) {
-        struct Collect<'a, 'db> {
-            db: &'db dyn salsa::Database,
-            type_subst: &'a TypeSubst<'db>,
-            row_subst: &'a RowSubst<'db>,
-            out: &'a mut Vec<UniVarId<'db>>,
-        }
-        impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Collect<'_, 'db> {
-            fn visit_ref(&mut self, _: RefSite, _: NodeId, value: &'ast TypedRef<'db>) {
-                self.type_subst.collect_univars_from_type(
-                    self.db,
-                    value.ty,
-                    self.row_subst,
-                    self.out,
-                );
-            }
-        }
-        Collect {
-            db: self.db(),
-            type_subst,
-            row_subst,
-            out,
-        }
-        .visit_expr(body);
+        let db = self.db();
+        walk_expr(
+            &mut Refs(|_, _, value: &TypedRef<'db>| {
+                type_subst.collect_univars_from_type(db, value.ty, row_subst, out);
+            }),
+            body,
+        );
     }
 
     pub(super) fn collect_univars_from_deferred_resolutions(
@@ -635,6 +90,72 @@ impl<'db> TypeChecker<'db> {
         for node_id in node_ids {
             let (_, callee_ty) = deferred_resolutions[&node_id];
             type_subst.collect_univars_from_type(self.db(), callee_ty, row_subst, out);
+        }
+    }
+}
+
+/// Applies one function's solved substitution to its checked body.
+struct Finalize<'a, 'db> {
+    checker: &'a mut TypeChecker<'db>,
+    type_subst: &'a TypeSubst<'db>,
+    row_subst: &'a RowSubst<'db>,
+    var_to_index: &'a HashMap<UniVarId<'db>, u32>,
+    deferred_resolutions: &'a HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+}
+
+impl<'db> Finalize<'_, 'db> {
+    fn apply(&self, ty: Type<'db>) -> Type<'db> {
+        self.checker
+            .apply_subst_to_type(ty, self.type_subst, self.row_subst, self.var_to_index)
+    }
+}
+
+impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
+    fn visit_ref_mut(&mut self, _: RefSite, _: NodeId, value: &mut TypedRef<'db>) {
+        value.ty = self.apply(value.ty);
+    }
+
+    fn visit_expr_mut(&mut self, expr: &mut Expr<TypedRef<'db>>) {
+        // Children first: the rewrites below read substituted subtrees.
+        walk_expr_mut(self, expr);
+        match &mut *expr.kind {
+            ExprKind::MethodCall { .. } => {
+                // A deferred method resolved during solving becomes a call;
+                // an unresolved one stays a MethodCall for TDNR.
+                let Some(&(func_id, callee_ty)) = self.deferred_resolutions.get(&expr.id) else {
+                    return;
+                };
+                let callee = Expr::new(
+                    expr.id,
+                    ExprKind::Var(TypedRef {
+                        resolved: ResolvedRef::Function { id: func_id },
+                        ty: self.apply(callee_ty),
+                    }),
+                );
+                let ExprKind::MethodCall { receiver, args, .. } =
+                    std::mem::replace(&mut *expr.kind, ExprKind::Error)
+                else {
+                    unreachable!("matched above");
+                };
+                let mut all_args = Vec::with_capacity(args.len() + 1);
+                all_args.push(receiver);
+                all_args.extend(args);
+                *expr.kind = ExprKind::Call {
+                    callee,
+                    args: all_args,
+                };
+            }
+            ExprKind::Case { scrutinee, arms } => {
+                if let Some(scrutinee_ty) = self.checker.node_types.get(&scrutinee.id).copied()
+                    && self
+                        .checker
+                        .check_exhaustiveness(scrutinee_ty, arms, scrutinee.id)
+                    && !self.checker.exhaustive_cases.contains(&expr.id)
+                {
+                    self.checker.exhaustive_cases.push(expr.id);
+                }
+            }
+            _ => {}
         }
     }
 }

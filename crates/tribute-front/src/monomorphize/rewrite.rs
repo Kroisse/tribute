@@ -8,10 +8,9 @@ use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
+use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_module_mut};
 use crate::ast::{
-    Arm, CtorId, Decl, Expr, ExprKind, FieldPattern, FuncDefId, HandlerArm, HandlerKind, Module,
-    ModuleDecl, Pattern, PatternKind, ResolvedRef, Stmt, Type, TypeDefId, TypeKind, TypeScheme,
-    TypedRef,
+    CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
 };
 
 use super::mangle::mangle_type_name;
@@ -25,227 +24,58 @@ pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symb
 /// Rewrite all generic function call sites in a module to use specialized versions.
 pub fn rewrite_module<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<TypedRef<'db>>,
-    function_types: &[(Symbol, TypeScheme<'db>)],
+    module: &mut Module<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-) -> Module<TypedRef<'db>> {
-    let mut rewriter = make_rewriter(db, function_types, rewrite_map, instances);
-    let decls = module
-        .decls
-        .into_iter()
-        .map(|d| rewriter.rewrite_decl(d))
-        .collect();
-    Module::new(module.id, module.name, decls)
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+) {
+    rewrite_decls(db, &mut module.decls, rewrite_map, instances);
 }
 
 /// Rewrite call sites in a list of declarations (e.g., specialized function bodies).
 pub fn rewrite_decls<'db>(
     db: &'db dyn salsa::Database,
-    decls: Vec<Decl<TypedRef<'db>>>,
-    function_types: &[(Symbol, TypeScheme<'db>)],
+    decls: &mut [Decl<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-) -> Vec<Decl<TypedRef<'db>>> {
-    let mut rewriter = make_rewriter(db, function_types, rewrite_map, instances);
-    decls
-        .into_iter()
-        .map(|d| rewriter.rewrite_decl(d))
-        .collect()
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+) {
+    let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
+        // Only a function reference in expression position is a call site.
+        if site == RefSite::Var
+            && let Some(callee) = specialized_callee(db, rewrite_map, instances, node, value)
+        {
+            *value = callee;
+        }
+    });
+    for decl in decls {
+        walk_decl_mut(&mut rewrite, decl);
+    }
 }
 
-fn make_rewriter<'a, 'db>(
+/// The specialized function a call site at `node` refers to, if the callee
+/// is generic and was specialized for the call's type arguments.
+fn specialized_callee<'db>(
     db: &'db dyn salsa::Database,
-    function_types: &[(Symbol, TypeScheme<'db>)],
-    rewrite_map: &'a RewriteMap<'db>,
-    instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-) -> CallSiteRewriter<'a, 'db> {
-    let _ = function_types;
-    CallSiteRewriter {
-        db,
-        rewrite_map,
-        instances,
+    rewrite_map: &RewriteMap<'db>,
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    node: NodeId,
+    typed_ref: &TypedRef<'db>,
+) -> Option<TypedRef<'db>> {
+    let ResolvedRef::Function { id } = &typed_ref.resolved else {
+        return None;
+    };
+    let entries = rewrite_map.get(id)?;
+    let instance = instances.get(&node)?;
+    if instance.function != *id {
+        return None;
     }
-}
-
-struct CallSiteRewriter<'a, 'db> {
-    db: &'db dyn salsa::Database,
-    rewrite_map: &'a RewriteMap<'db>,
-    instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-}
-
-impl<'a, 'db> CallSiteRewriter<'a, 'db> {
-    fn try_rewrite_ref(
-        &self,
-        node: crate::ast::NodeId,
-        typed_ref: &TypedRef<'db>,
-    ) -> Option<TypedRef<'db>> {
-        let ResolvedRef::Function { id } = &typed_ref.resolved else {
-            return None;
-        };
-        let entries = self.rewrite_map.get(id)?;
-        let instance = self.instances.get(&node)?;
-        if instance.function != *id {
-            return None;
-        }
-        let type_args = &instance.type_arguments;
-
-        // Find the matching mangled name
-        let mangled =
-            entries.iter().find_map(
-                |(args, name)| {
-                    if args == type_args { Some(*name) } else { None }
-                },
-            )?;
-
-        let specialized_id = FuncDefId::new(self.db, mangled);
-        Some(TypedRef::new(
-            ResolvedRef::Function { id: specialized_id },
-            typed_ref.ty,
-        ))
-    }
-
-    fn rewrite_typed_ref(&self, node: crate::ast::NodeId, tr: TypedRef<'db>) -> TypedRef<'db> {
-        self.try_rewrite_ref(node, &tr).unwrap_or(tr)
-    }
-
-    fn rewrite_decl(&mut self, decl: Decl<TypedRef<'db>>) -> Decl<TypedRef<'db>> {
-        match decl {
-            Decl::Function(mut func) => {
-                func.body = self.rewrite_expr(func.body);
-                Decl::Function(func)
-            }
-            Decl::Module(m) => {
-                let body = m
-                    .body
-                    .map(|decls| decls.into_iter().map(|d| self.rewrite_decl(d)).collect());
-                Decl::Module(ModuleDecl {
-                    id: m.id,
-                    name: m.name,
-                    is_pub: m.is_pub,
-                    body,
-                })
-            }
-            other => other,
-        }
-    }
-
-    fn rewrite_expr(&mut self, expr: Expr<TypedRef<'db>>) -> Expr<TypedRef<'db>> {
-        let kind = match *expr.kind {
-            ExprKind::Var(tr) => ExprKind::Var(self.rewrite_typed_ref(expr.id, tr)),
-            ExprKind::Call { callee, args } => ExprKind::Call {
-                callee: self.rewrite_expr(callee),
-                args: args.into_iter().map(|a| self.rewrite_expr(a)).collect(),
-            },
-            ExprKind::Block { stmts, value } => ExprKind::Block {
-                stmts: stmts.into_iter().map(|s| self.rewrite_stmt(s)).collect(),
-                value: self.rewrite_expr(value),
-            },
-            ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-                scrutinee: self.rewrite_expr(scrutinee),
-                arms: arms.into_iter().map(|a| self.rewrite_arm(a)).collect(),
-            },
-            ExprKind::Lambda { params, body } => ExprKind::Lambda {
-                params,
-                body: self.rewrite_expr(body),
-            },
-            ExprKind::Handle { body, handlers } => ExprKind::Handle {
-                body: self.rewrite_expr(body),
-                handlers: handlers
-                    .into_iter()
-                    .map(|h| self.rewrite_handler_arm(h))
-                    .collect(),
-            },
-            ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-                arg: self.rewrite_expr(arg),
-                local_id,
-            },
-            ExprKind::Cons { ctor, args } => ExprKind::Cons {
-                ctor,
-                args: args.into_iter().map(|a| self.rewrite_expr(a)).collect(),
-            },
-            ExprKind::Record {
-                type_name,
-                fields,
-                spread,
-            } => ExprKind::Record {
-                type_name,
-                fields: fields
-                    .into_iter()
-                    .map(|(name, e)| (name, self.rewrite_expr(e)))
-                    .collect(),
-                spread: spread.map(|s| self.rewrite_expr(s)),
-            },
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-            } => ExprKind::MethodCall {
-                receiver: self.rewrite_expr(receiver),
-                method,
-                args: args.into_iter().map(|a| self.rewrite_expr(a)).collect(),
-            },
-            ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
-                op,
-                lhs: self.rewrite_expr(lhs),
-                rhs: self.rewrite_expr(rhs),
-            },
-            ExprKind::Tuple(es) => {
-                ExprKind::Tuple(es.into_iter().map(|e| self.rewrite_expr(e)).collect())
-            }
-            ExprKind::List(es) => {
-                ExprKind::List(es.into_iter().map(|e| self.rewrite_expr(e)).collect())
-            }
-            // Leaf nodes
-            ExprKind::NatLit(v) => ExprKind::NatLit(v),
-            ExprKind::IntLit(v) => ExprKind::IntLit(v),
-            ExprKind::FloatLit(v) => ExprKind::FloatLit(v),
-            ExprKind::StringLit(v) => ExprKind::StringLit(v),
-            ExprKind::BytesLit(v) => ExprKind::BytesLit(v),
-            ExprKind::BoolLit(v) => ExprKind::BoolLit(v),
-            ExprKind::RuneLit(v) => ExprKind::RuneLit(v),
-            ExprKind::Nil => ExprKind::Nil,
-            ExprKind::Error => ExprKind::Error,
-        };
-        Expr::new(expr.id, kind)
-    }
-
-    fn rewrite_stmt(&mut self, stmt: Stmt<TypedRef<'db>>) -> Stmt<TypedRef<'db>> {
-        match stmt {
-            Stmt::Let {
-                id,
-                pattern,
-                ty,
-                value,
-            } => Stmt::Let {
-                id,
-                pattern,
-                ty,
-                value: self.rewrite_expr(value),
-            },
-            Stmt::Expr { id, expr } => Stmt::Expr {
-                id,
-                expr: self.rewrite_expr(expr),
-            },
-        }
-    }
-
-    fn rewrite_arm(&mut self, arm: Arm<TypedRef<'db>>) -> Arm<TypedRef<'db>> {
-        Arm {
-            id: arm.id,
-            pattern: arm.pattern,
-            guard: arm.guard.map(|g| self.rewrite_expr(g)),
-            body: self.rewrite_expr(arm.body),
-        }
-    }
-
-    fn rewrite_handler_arm(&mut self, arm: HandlerArm<TypedRef<'db>>) -> HandlerArm<TypedRef<'db>> {
-        HandlerArm {
-            id: arm.id,
-            kind: arm.kind,
-            body: self.rewrite_expr(arm.body),
-        }
-    }
+    let type_args = &instance.type_arguments;
+    let (_, mangled) = entries.iter().find(|(args, _)| args == type_args)?;
+    Some(TypedRef::new(
+        ResolvedRef::Function {
+            id: FuncDefId::new(db, *mangled),
+        },
+        typed_ref.ty,
+    ))
 }
 
 // ============================================================================
@@ -273,46 +103,18 @@ pub fn build_type_rewrite_map<'db>(
 }
 
 /// Rewrite all Named types with type arguments to their mangled monomorphic versions
-/// throughout a module's expressions.
+/// throughout a module's expressions and patterns.
 pub fn rewrite_types_in_module<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<TypedRef<'db>>,
+    module: &mut Module<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
-) -> Module<TypedRef<'db>> {
-    let decls = module
-        .decls
-        .into_iter()
-        .map(|d| rewrite_types_in_decl(db, d, type_rewrite_map))
-        .collect();
-    Module::new(module.id, module.name, decls)
-}
-
-fn rewrite_types_in_decl<'db>(
-    db: &'db dyn salsa::Database,
-    decl: Decl<TypedRef<'db>>,
-    map: &TypeRewriteMap<'db>,
-) -> Decl<TypedRef<'db>> {
-    match decl {
-        Decl::Function(mut func) => {
-            func.body = rewrite_types_in_expr(db, func.body, map);
-            Decl::Function(func)
-        }
-        Decl::Module(m) => {
-            let body = m.body.map(|decls| {
-                decls
-                    .into_iter()
-                    .map(|d| rewrite_types_in_decl(db, d, map))
-                    .collect()
-            });
-            Decl::Module(ModuleDecl {
-                id: m.id,
-                name: m.name,
-                is_pub: m.is_pub,
-                body,
-            })
-        }
-        other => other,
-    }
+) {
+    walk_module_mut(
+        &mut Refs(|_, _, value: &mut TypedRef<'db>| {
+            *value = rewrite_typed_ref_type(db, value.clone(), type_rewrite_map);
+        }),
+        module,
+    );
 }
 
 /// Rewrite a Type, replacing Named types with non-empty args with their mangled versions.
@@ -523,250 +325,6 @@ fn find_mangled_for_typedef<'db>(
         }
         _ => None,
     }
-}
-
-fn rewrite_types_in_expr<'db>(
-    db: &'db dyn salsa::Database,
-    expr: Expr<TypedRef<'db>>,
-    map: &TypeRewriteMap<'db>,
-) -> Expr<TypedRef<'db>> {
-    let kind = match *expr.kind {
-        ExprKind::Var(tr) => ExprKind::Var(rewrite_typed_ref_type(db, tr, map)),
-        ExprKind::Call { callee, args } => ExprKind::Call {
-            callee: rewrite_types_in_expr(db, callee, map),
-            args: args
-                .into_iter()
-                .map(|a| rewrite_types_in_expr(db, a, map))
-                .collect(),
-        },
-        ExprKind::Block { stmts, value } => ExprKind::Block {
-            stmts: stmts
-                .into_iter()
-                .map(|s| rewrite_types_in_stmt(db, s, map))
-                .collect(),
-            value: rewrite_types_in_expr(db, value, map),
-        },
-        ExprKind::Case { scrutinee, arms } => ExprKind::Case {
-            scrutinee: rewrite_types_in_expr(db, scrutinee, map),
-            arms: arms
-                .into_iter()
-                .map(|a| rewrite_types_in_arm(db, a, map))
-                .collect(),
-        },
-        ExprKind::Lambda { params, body } => ExprKind::Lambda {
-            params,
-            body: rewrite_types_in_expr(db, body, map),
-        },
-        ExprKind::Handle { body, handlers } => ExprKind::Handle {
-            body: rewrite_types_in_expr(db, body, map),
-            handlers: handlers
-                .into_iter()
-                .map(|h| {
-                    let kind = match h.kind {
-                        HandlerKind::Do { binding } => HandlerKind::Do {
-                            binding: rewrite_types_in_pattern(db, binding, map),
-                        },
-                        HandlerKind::Fn {
-                            ability,
-                            op,
-                            params,
-                        } => HandlerKind::Fn {
-                            ability: rewrite_typed_ref_type(db, ability, map),
-                            op,
-                            params: params
-                                .into_iter()
-                                .map(|p| rewrite_types_in_pattern(db, p, map))
-                                .collect(),
-                        },
-                        HandlerKind::Op {
-                            ability,
-                            op,
-                            params,
-                            resume_local_id,
-                        } => HandlerKind::Op {
-                            ability: rewrite_typed_ref_type(db, ability, map),
-                            op,
-                            params: params
-                                .into_iter()
-                                .map(|p| rewrite_types_in_pattern(db, p, map))
-                                .collect(),
-                            resume_local_id,
-                        },
-                    };
-                    HandlerArm {
-                        id: h.id,
-                        kind,
-                        body: rewrite_types_in_expr(db, h.body, map),
-                    }
-                })
-                .collect(),
-        },
-        ExprKind::Resume { arg, local_id } => ExprKind::Resume {
-            arg: rewrite_types_in_expr(db, arg, map),
-            local_id,
-        },
-        ExprKind::Cons { ctor, args } => ExprKind::Cons {
-            ctor: rewrite_typed_ref_type(db, ctor, map),
-            args: args
-                .into_iter()
-                .map(|a| rewrite_types_in_expr(db, a, map))
-                .collect(),
-        },
-        ExprKind::Record {
-            type_name,
-            fields,
-            spread,
-        } => ExprKind::Record {
-            type_name: rewrite_typed_ref_type(db, type_name, map),
-            fields: fields
-                .into_iter()
-                .map(|(name, e)| (name, rewrite_types_in_expr(db, e, map)))
-                .collect(),
-            spread: spread.map(|s| rewrite_types_in_expr(db, s, map)),
-        },
-        ExprKind::MethodCall {
-            receiver,
-            method,
-            args,
-        } => ExprKind::MethodCall {
-            receiver: rewrite_types_in_expr(db, receiver, map),
-            method,
-            args: args
-                .into_iter()
-                .map(|a| rewrite_types_in_expr(db, a, map))
-                .collect(),
-        },
-        ExprKind::BinOp { op, lhs, rhs } => ExprKind::BinOp {
-            op,
-            lhs: rewrite_types_in_expr(db, lhs, map),
-            rhs: rewrite_types_in_expr(db, rhs, map),
-        },
-        ExprKind::Tuple(es) => ExprKind::Tuple(
-            es.into_iter()
-                .map(|e| rewrite_types_in_expr(db, e, map))
-                .collect(),
-        ),
-        ExprKind::List(es) => ExprKind::List(
-            es.into_iter()
-                .map(|e| rewrite_types_in_expr(db, e, map))
-                .collect(),
-        ),
-        ExprKind::NatLit(v) => ExprKind::NatLit(v),
-        ExprKind::IntLit(v) => ExprKind::IntLit(v),
-        ExprKind::FloatLit(v) => ExprKind::FloatLit(v),
-        ExprKind::StringLit(v) => ExprKind::StringLit(v),
-        ExprKind::BytesLit(v) => ExprKind::BytesLit(v),
-        ExprKind::BoolLit(v) => ExprKind::BoolLit(v),
-        ExprKind::RuneLit(v) => ExprKind::RuneLit(v),
-        ExprKind::Nil => ExprKind::Nil,
-        ExprKind::Error => ExprKind::Error,
-    };
-    Expr::new(expr.id, kind)
-}
-
-fn rewrite_types_in_stmt<'db>(
-    db: &'db dyn salsa::Database,
-    stmt: Stmt<TypedRef<'db>>,
-    map: &TypeRewriteMap<'db>,
-) -> Stmt<TypedRef<'db>> {
-    match stmt {
-        Stmt::Let {
-            id,
-            pattern,
-            ty,
-            value,
-        } => Stmt::Let {
-            id,
-            pattern: rewrite_types_in_pattern(db, pattern, map),
-            ty,
-            value: rewrite_types_in_expr(db, value, map),
-        },
-        Stmt::Expr { id, expr } => Stmt::Expr {
-            id,
-            expr: rewrite_types_in_expr(db, expr, map),
-        },
-    }
-}
-
-fn rewrite_types_in_arm<'db>(
-    db: &'db dyn salsa::Database,
-    arm: Arm<TypedRef<'db>>,
-    map: &TypeRewriteMap<'db>,
-) -> Arm<TypedRef<'db>> {
-    Arm {
-        id: arm.id,
-        pattern: rewrite_types_in_pattern(db, arm.pattern, map),
-        guard: arm.guard.map(|g| rewrite_types_in_expr(db, g, map)),
-        body: rewrite_types_in_expr(db, arm.body, map),
-    }
-}
-
-fn rewrite_types_in_pattern<'db>(
-    db: &'db dyn salsa::Database,
-    pattern: Pattern<TypedRef<'db>>,
-    map: &TypeRewriteMap<'db>,
-) -> Pattern<TypedRef<'db>> {
-    let kind = match *pattern.kind {
-        PatternKind::Variant { ctor, fields } => PatternKind::Variant {
-            ctor: rewrite_typed_ref_type(db, ctor, map),
-            fields: fields
-                .into_iter()
-                .map(|f| rewrite_types_in_pattern(db, f, map))
-                .collect(),
-        },
-        PatternKind::Record {
-            type_name,
-            fields,
-            rest,
-        } => PatternKind::Record {
-            type_name: rewrite_typed_ref_type(db, type_name, map),
-            fields: fields
-                .into_iter()
-                .map(|f| FieldPattern {
-                    id: f.id,
-                    name: f.name,
-                    pattern: f.pattern.map(|p| rewrite_types_in_pattern(db, p, map)),
-                })
-                .collect(),
-            rest,
-        },
-        PatternKind::Tuple(ps) => PatternKind::Tuple(
-            ps.into_iter()
-                .map(|p| rewrite_types_in_pattern(db, p, map))
-                .collect(),
-        ),
-        PatternKind::List(ps) => PatternKind::List(
-            ps.into_iter()
-                .map(|p| rewrite_types_in_pattern(db, p, map))
-                .collect(),
-        ),
-        PatternKind::ListRest {
-            head,
-            rest,
-            rest_local_id,
-        } => PatternKind::ListRest {
-            head: head
-                .into_iter()
-                .map(|p| rewrite_types_in_pattern(db, p, map))
-                .collect(),
-            rest,
-            rest_local_id,
-        },
-        PatternKind::As {
-            pattern: inner,
-            name,
-            local_id,
-        } => PatternKind::As {
-            pattern: rewrite_types_in_pattern(db, inner, map),
-            name,
-            local_id,
-        },
-        PatternKind::Wildcard => PatternKind::Wildcard,
-        PatternKind::Bind { name, local_id } => PatternKind::Bind { name, local_id },
-        PatternKind::Literal(lit) => PatternKind::Literal(lit),
-        PatternKind::Error => PatternKind::Error,
-    };
-    Pattern::new(pattern.id, kind)
 }
 
 #[cfg(test)]
