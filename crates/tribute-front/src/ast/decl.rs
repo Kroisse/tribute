@@ -219,10 +219,16 @@ pub struct UseDecl {
     pub id: NodeId,
     /// Whether this import is public (re-export).
     pub is_pub: bool,
-    /// The import path.
+    /// The import path as written.
     pub path: Vec<Symbol>,
     /// Optional alias.
     pub alias: Option<Symbol>,
+    /// The package-root path of what the import names, recorded by name
+    /// resolution. `None` before resolution, or when the path names nothing.
+    ///
+    /// A path may be written relative to the enclosing inline module; later
+    /// phases read this instead of reinterpreting `path`.
+    pub target: Option<Vec<Symbol>>,
 }
 
 /// Inline module declaration: `mod name { ... }`

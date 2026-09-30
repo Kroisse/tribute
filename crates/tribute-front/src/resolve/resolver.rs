@@ -446,24 +446,24 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve a use declaration.
-    ///
-    /// The environment already holds the import; this only reports a path
-    /// that names nothing, which would otherwise leave the import as a
-    /// module placeholder.
+    /// Resolve a use declaration, recording the package-root path of what it
+    /// names.
     fn resolve_use_decl(&self, u: &UseDecl) -> UseDecl {
-        self.check_use_path(u);
-        u.clone()
+        UseDecl {
+            target: self.resolve_use_target(u),
+            ..u.clone()
+        }
     }
 
-    fn check_use_path(&self, u: &UseDecl) {
-        let Some(first) = u.path.first() else {
-            return;
-        };
+    /// The package-root path of what `u` names. A path that names nothing is
+    /// reported, since it would otherwise leave the import as a module
+    /// placeholder.
+    fn resolve_use_target(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
+        let first = u.path.first()?;
         let message = if first.with_str(|name| PATH_KEYWORDS.contains(&name)) {
             format!("path keyword `{first}` is not supported in `use` paths yet")
-        } else if self.use_path_resolves(&u.path) {
-            return;
+        } else if let Some(target) = self.use_target(&u.path) {
+            return Some(target);
         } else {
             format!("unresolved import `{}`", u.path.iter().format("::"))
         };
@@ -474,11 +474,14 @@ impl<'db> Resolver<'db> {
             CompilationPhase::NameResolution,
         )
         .accumulate(self.db);
+        None
     }
 
-    /// Whether `path` names a definition or a module, from the package root
-    /// or from the enclosing inline module.
-    fn use_path_resolves(&self, path: &[Symbol]) -> bool {
+    /// The package-root path of the definition or module `path` names.
+    ///
+    /// The path is read from the package root first, then from the enclosing
+    /// inline module.
+    fn use_target(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
         let names = |path: &[Symbol]| {
             let Some((last, namespace)) = path.split_last() else {
                 return false;
@@ -494,10 +497,11 @@ impl<'db> Resolver<'db> {
             };
             found || self.env.has_namespace(full)
         };
-        names(path) || {
-            let nested: Vec<Symbol> = self.module_path.iter().chain(path).copied().collect();
-            !self.module_path.is_empty() && names(&nested)
+        if names(path) {
+            return Some(path.to_vec());
         }
+        let nested: Vec<Symbol> = self.module_path.iter().chain(path).copied().collect();
+        (!self.module_path.is_empty() && names(&nested)).then_some(nested)
     }
 
     /// Resolve an expression.
