@@ -31,27 +31,27 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
         trunk_ir::Symbol::new("prelude"),
     )?;
 
-    let prelude_ast = parsed.module(db).clone();
+    let prelude_ast = parsed.module(db);
     let prelude_span_map = parsed.span_map(db).clone();
 
     // Build env for name resolution merging
-    let env = tribute_front::resolve::build_env(db, &prelude_ast);
+    let env = tribute_front::resolve::build_env(db, prelude_ast);
 
     // Resolve prelude with its own env
     let resolved_prelude = tribute_front::resolve::resolve_with_env(
         db,
-        prelude_ast.clone(),
+        prelude_ast,
         env.clone(),
         prelude_span_map.clone(),
     );
 
     // Type-check for PreludeExports (for type injection)
     let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map.clone());
-    let exports = checker.check_module_for_prelude(resolved_prelude.clone());
+    let exports = checker.check_module_for_prelude(&resolved_prelude);
 
     // Type-check to get typed module (for TDNR imports)
     let checker2 = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
-    let result2 = checker2.check_module_as_prelude(resolved_prelude);
+    let result2 = checker2.check_module_as_prelude(&resolved_prelude);
 
     Some(PreludeData {
         exports,
@@ -70,14 +70,14 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     assert!(parsed.is_some(), "Should parse successfully");
 
     let parsed = parsed.unwrap();
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
 
     // Load prelude for operator declarations (Int::(+) etc.)
     let prelude = load_prelude(db);
 
     // Build env, merging prelude bindings so operator names resolve
-    let mut env = tribute_front::resolve::build_env(db, &ast);
+    let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
         env.merge(&p.env);
     }
@@ -88,12 +88,12 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     if let Some(ref p) = prelude {
         checker.inject_prelude(&p.exports);
     }
-    let result = checker.check_module(resolved);
+    let result = checker.check_module(&resolved);
 
     // TDNR with prelude module as import source for method resolution
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let tdnr_ast =
-        tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
+    let mut tdnr_ast = result.module;
+    tribute_front::tdnr::resolve_tdnr(db, &mut tdnr_ast, prelude_modules.iter().copied());
 
     let function_types_map: std::collections::HashMap<_, _> =
         result.function_types.into_iter().collect();
@@ -148,17 +148,17 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     print_module(&ir, module.module.op())
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
 
     let parsed = parsed.unwrap();
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
     let prelude = load_prelude(db);
 
-    let mut env = tribute_front::resolve::build_env(db, &ast);
+    let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
         env.merge(&p.env);
     }
@@ -168,10 +168,11 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     if let Some(ref p) = prelude {
         checker.inject_prelude(&p.exports);
     }
-    let result = checker.check_module(resolved);
+    let result = checker.check_module(&resolved);
 
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let _ = tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
+    let mut module = result.module;
+    tribute_front::tdnr::resolve_tdnr(db, &mut module, prelude_modules.iter().copied());
 }
 
 #[salsa::tracked(returns(clone))]
@@ -184,12 +185,12 @@ fn tdnr_function_summary_inner(
     assert!(parsed.is_some(), "Should parse successfully");
 
     let parsed = parsed.unwrap();
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
 
     let prelude = load_prelude(db);
 
-    let mut env = tribute_front::resolve::build_env(db, &ast);
+    let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
         env.merge(&p.env);
     }
@@ -199,11 +200,11 @@ fn tdnr_function_summary_inner(
     if let Some(ref p) = prelude {
         checker.inject_prelude(&p.exports);
     }
-    let result = checker.check_module(resolved);
+    let result = checker.check_module(&resolved);
 
     let prelude_modules: Vec<_> = prelude.iter().map(|p| &p.typed_module).collect();
-    let module =
-        tribute_front::tdnr::resolve_tdnr(db, result.module, prelude_modules.iter().copied());
+    let mut module = result.module;
+    tribute_front::tdnr::resolve_tdnr(db, &mut module, prelude_modules.iter().copied());
     let body = function_body(&module, &function_name);
     let mut summary = TdnrSummary::default();
     collect_tdnr_summary(db, body, &mut summary);

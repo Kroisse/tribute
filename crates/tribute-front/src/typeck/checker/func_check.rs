@@ -34,7 +34,7 @@ impl<'db> TypeChecker<'db> {
     /// 6. Updates the function's type scheme in ModuleTypeEnv
     pub(crate) fn check_func_decl(
         &mut self,
-        func: FuncDecl<ResolvedRef<'db>>,
+        func: &FuncDecl<ResolvedRef<'db>>,
     ) -> FuncDecl<TypedRef<'db>> {
         // 1. Create a fresh FunctionInferenceContext for this function
         // Use function definition ID for globally unique UniVar IDs
@@ -45,7 +45,7 @@ impl<'db> TypeChecker<'db> {
 
         // Get the instantiated function type (with UniVars) for later generalization
         let (param_types, expected_return, instantiated_func_ty, signature_instance) =
-            self.get_func_signature_with_type(&mut ctx, func_id, &func);
+            self.get_func_signature_with_type(&mut ctx, func_id, func);
         if let Some((_, instance)) = &signature_instance
             && let Some(names) = self.signature_type_names.get(&func_id)
         {
@@ -103,7 +103,7 @@ impl<'db> TypeChecker<'db> {
 
         ctx.effect_contract = declared_effect;
         // 3. Check body against expected return type
-        let body = self.check_expr_with_ctx(&mut ctx, func.body, Mode::Check(expected_return));
+        let body = self.check_expr_with_ctx(&mut ctx, &func.body, Mode::Check(expected_return));
 
         if func.effects.is_none()
             && ctx.current_effect().rest(self.db()).is_some()
@@ -216,7 +216,7 @@ impl<'db> TypeChecker<'db> {
                     let inferred_effect = if is_root_main {
                         crate::ast::EffectRow::new(
                             self.db(),
-                            body_effect_row.effects(self.db()).clone(),
+                            body_effect_row.effects(self.db()),
                             None,
                         )
                     } else if body_effect_row.rest(self.db()).is_some() {
@@ -224,7 +224,7 @@ impl<'db> TypeChecker<'db> {
                     } else {
                         crate::ast::EffectRow::new(
                             self.db(),
-                            body_effect_row.effects(self.db()).clone(),
+                            body_effect_row.effects(self.db()),
                             declared_effect.rest(self.db()),
                         )
                     };
@@ -611,10 +611,10 @@ impl<'db> TypeChecker<'db> {
             id: func.id,
             is_pub: func.is_pub,
             name: func.name,
-            type_params: func.type_params,
-            params: func.params,
-            return_ty: func.return_ty,
-            effects: func.effects,
+            type_params: func.type_params.clone(),
+            params: func.params.clone(),
+            return_ty: func.return_ty.clone(),
+            effects: func.effects.clone(),
             body,
         }
     }

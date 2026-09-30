@@ -268,10 +268,10 @@ fn resolve_prelude(
     db: &dyn salsa::Database,
 ) -> Option<(ResolvedModule<'_>, SpanMap, crate::SourceCst)> {
     let (parsed, prelude_source) = parse_prelude(db)?;
-    let prelude_ast = parsed.module(db).clone();
+    let prelude_ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
 
-    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
+    let prelude_env = ast_resolve::build_env(db, prelude_ast);
     let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
 
     Some((resolved, span_map, prelude_source))
@@ -290,10 +290,11 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
 
     // Typecheck with independent TypeContext
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
-    let result = checker.check_module_as_prelude(resolved);
+    let result = checker.check_module_as_prelude(&resolved);
 
     // TDNR for remaining MethodCall → Call AST transformations
-    let tdnr_ast = ast_tdnr::resolve_tdnr(db, result.module, std::iter::empty());
+    let mut tdnr_ast = result.module;
+    ast_tdnr::resolve_tdnr(db, &mut tdnr_ast, std::iter::empty());
 
     Some(ast_typeck::TypeCheckOutput::new(
         db,
@@ -333,11 +334,11 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 ///
 /// This parses the prelude to AST and builds its module environment.
 /// Cached by Salsa - computed once and reused.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
-    Some(ast_resolve::build_env(db, &prelude_ast))
+    Some(ast_resolve::build_env(db, prelude_ast))
 }
 
 /// Process prelude through AST pipeline and extract type exports.
@@ -354,7 +355,7 @@ fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'
 
     // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map);
-    let prelude_exports = checker.check_module_for_prelude(resolved);
+    let prelude_exports = checker.check_module_for_prelude(&resolved);
 
     Some(prelude_exports)
 }
@@ -402,7 +403,7 @@ pub fn prepare_frontend_for_lowering<'db>(
     prepare_frontend_details(db, typed, source).map(|prepared| prepared.typed)
 }
 
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 fn prepare_frontend_details<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
@@ -541,22 +542,22 @@ fn prepare_frontend_details<'db>(
             function_instances,
             handler_operations: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.handler_operations(db).clone())
+                .flat_map(|prelude| prelude.handler_operations(db).iter().cloned())
                 .chain(typed.handler_operations(db).iter().cloned())
                 .collect(),
             perform_operations: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.perform_operations(db).clone())
+                .flat_map(|prelude| prelude.perform_operations(db).iter().cloned())
                 .chain(typed.perform_operations(db).iter().cloned())
                 .collect(),
             lambda_signatures: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.lambda_signatures(db).clone())
+                .flat_map(|prelude| prelude.lambda_signatures(db).iter().cloned())
                 .chain(typed.lambda_signatures(db).iter().cloned())
                 .collect(),
             exhaustive_cases: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.exhaustive_cases(db).clone())
+                .flat_map(|prelude| prelude.exhaustive_cases(db).iter().copied())
                 .chain(typed.exhaustive_cases(db).iter().copied())
                 .collect(),
             compiler_intrinsics,
@@ -613,7 +614,7 @@ fn prepare_frontend_details<'db>(
             local_instances,
         },
         merged_ability_conventions.into_iter().collect::<Vec<_>>(),
-        typed.ability_definitions(db).clone(),
+        typed.ability_definitions(db).to_vec(),
         mono_result
             .metadata
             .handler_operations
@@ -634,7 +635,7 @@ fn prepare_frontend_details<'db>(
             .exhaustive_cases
             .into_iter()
             .collect::<Vec<_>>(),
-        typed.well_known_types(db),
+        *typed.well_known_types(db),
         merged_span_map,
     );
     Some(PreparedFrontend {
@@ -652,7 +653,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
     let prepared = prepare_frontend_details(db, *typed, source)
         .expect("frontend instances must be checked before lowering");
     let typed = prepared.typed;
-    let compiler_intrinsics = prepared.compiler_intrinsics;
+    let compiler_intrinsics = prepared.compiler_intrinsics.clone();
     let mut ir = IrContext::new();
     let module = lower(
         ast_to_ir::TypedModule {
@@ -691,7 +692,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             perform_operations: typed.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
-            well_known_types: typed.well_known_types(db),
+            well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
         },
         db,
@@ -930,7 +931,7 @@ pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrCon
 ///
 /// Optimization options apply to the native portion of the pipeline.
 /// Native emission is intentionally skipped.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_deref))]
 pub fn dump_native_ir_at_stage(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -1156,8 +1157,9 @@ fn enter_target_closure_storage_boundary(
 /// Dump IR text after running the pipeline up to the target-specific passes.
 ///
 /// If `native` is true, runs the native pipeline; otherwise runs the WASM pipeline.
-/// Returns the IR text as a string, or an error. Diagnostics are accumulated.
-#[salsa::tracked(returns(clone))]
+/// Returns the IR text borrowed from the database, or an error. Diagnostics are
+/// accumulated.
+#[salsa::tracked(returns(as_deref))]
 pub fn dump_ir(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -1177,7 +1179,7 @@ pub fn dump_ir(
     Ok(trunk_ir::printer::print_module(&ctx, m.op()))
 }
 
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_deref))]
 fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = match run_shared_pipeline(db, source) {
         Ok(Some(result)) => result,
@@ -1221,11 +1223,12 @@ fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -
 /// Runs the full pipeline (frontend → shared passes → WASM lowering → emit)
 /// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
 ///
-/// Returns the raw WASM bytes on success, or the accumulated diagnostics on failure.
+/// Returns the raw WASM bytes on success, borrowed from the database, or the
+/// accumulated diagnostics on failure.
 pub fn compile_to_wasm_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Result<Vec<u8>, Vec<&Diagnostic>> {
+) -> Result<&[u8], Vec<&Diagnostic>> {
     compile_to_wasm_binary_tracked(db, source)
         .ok_or_else(|| compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source))
 }
@@ -1476,7 +1479,7 @@ fn wasm_lowering_failure(error: tribute_passes::wasm::lower::WasmLowerError) -> 
 /// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
 ///
 /// Returns `None` if compilation fails, with diagnostics accumulated.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_deref))]
 pub fn compile_to_native_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -1549,7 +1552,7 @@ pub fn parse_and_lower_ast<'db>(
     // Phase 1: Parse user code to AST
     let parsed = ast_query::parsed_ast(db, source)?;
 
-    let user_ast = parsed.module(db).clone();
+    let user_ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
     tracing::debug!(
         "Phase 1: parsed AST has {} declarations",
@@ -1557,9 +1560,9 @@ pub fn parse_and_lower_ast<'db>(
     );
 
     // Phase 2: Build user env and merge prelude bindings
-    let mut user_env = ast_resolve::build_env(db, &user_ast);
+    let mut user_env = ast_resolve::build_env(db, user_ast);
     if let Some(p_env) = prelude_env(db) {
-        user_env.merge(&p_env); // Prelude bindings injected, user definitions take precedence
+        user_env.merge(p_env); // Prelude bindings injected, user definitions take precedence
     }
     // Resolve `use` imports that reference prelude modules (e.g., `use abilities::Abort`)
     ast_resolve::resolve_use_imports(&mut user_env);
@@ -1572,7 +1575,7 @@ pub fn parse_and_lower_ast<'db>(
     if let Some(p_exports) = prelude_exports(db) {
         checker.inject_prelude(&p_exports); // Prelude TypeSchemes injected (no UniVars)
     }
-    let result = checker.check_module(resolved_ast);
+    let result = checker.check_module(&resolved_ast);
 
     tracing::debug!(
         "Phase 4: after typecheck, {} declarations, {} function_types, {} node_types",
@@ -1582,9 +1585,10 @@ pub fn parse_and_lower_ast<'db>(
     );
 
     // TDNR for remaining MethodCall → Call AST transformations
-    let tdnr_ast = ast_tdnr::resolve_tdnr(
+    let mut tdnr_ast = result.module;
+    ast_tdnr::resolve_tdnr(
         db,
-        result.module,
+        &mut tdnr_ast,
         prelude_module(db).iter().map(|p| p.module(db)),
     );
     report_unresolved_methods(db, &tdnr_ast, &span_map);
@@ -3637,7 +3641,7 @@ fn main() { Nil }"#,
         let binary = compile_to_wasm_binary(db, source)
             .expect("unused managed C declaration may be omitted");
         wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-            .validate_all(&binary)
+            .validate_all(binary)
             .expect("unused C declaration must not leave an invalid Wasm definition");
     }
 

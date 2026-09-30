@@ -365,7 +365,7 @@ fn prescan_definition_conventions<'db>(
                 {
                     convention = ctx.calling_convention_for_effect_row(EffectRow::new(
                         ctx.db,
-                        effect.effects(ctx.db).clone(),
+                        effect.effects(ctx.db),
                         None,
                     ));
                 }

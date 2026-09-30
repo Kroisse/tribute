@@ -32,11 +32,11 @@ use crate::{push_prefix, qualified_symbol};
 /// This is the main entry point for name resolution.
 pub fn resolve_module<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<UnresolvedName>,
+    module: &Module<UnresolvedName>,
     span_map: SpanMap,
 ) -> Module<ResolvedRef<'db>> {
     // Build the module environment from declarations
-    let mut env = build_env(db, &module);
+    let mut env = build_env(db, module);
     resolve_use_imports(&mut env);
 
     // Create resolver and process the module
@@ -51,7 +51,7 @@ pub fn resolve_module<'db>(
 /// prelude bindings into the environment before calling this.
 pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<UnresolvedName>,
+    module: &Module<UnresolvedName>,
     env: ModuleEnv<'db>,
     span_map: SpanMap,
 ) -> Module<ResolvedRef<'db>> {
@@ -339,7 +339,6 @@ mod tests {
     /// Input wrapper for Module to use in tracked functions.
     #[salsa::input]
     struct TestModuleInput {
-        #[returns(ref)]
         module: Module<UnresolvedName>,
     }
 
@@ -347,7 +346,7 @@ mod tests {
     // Tracked test functions - one per test case
     // =========================================================================
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_module_function_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
@@ -375,7 +374,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_module_struct_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
@@ -391,7 +390,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_module_enum_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
@@ -414,7 +413,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_module_multiple_definitions(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
@@ -438,7 +437,7 @@ mod tests {
         assert!(env.lookup(Symbol::new("Data")).is_none());
     }
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_multiple_modules_namespaces(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
@@ -457,7 +456,7 @@ mod tests {
         }
     }
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_nested_module_enum_namespace(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
@@ -484,7 +483,7 @@ mod tests {
         );
     }
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_module_no_override_parent(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
@@ -729,7 +728,7 @@ mod tests {
     // Extern function tests
     // =========================================================================
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_extern_function_registered(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
@@ -771,7 +770,7 @@ mod tests {
         verify_extern_function_registered(db, input);
     }
 
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn verify_struct_field_accessors_in_namespace(
         db: &dyn salsa::Database,
         input: TestModuleInput,

@@ -185,14 +185,14 @@ mod tests {
         source: crate::SourceCst,
     ) -> crate::typeck::TypeCheckOutput<'db> {
         let parsed = crate::query::parsed_ast(db, source).unwrap();
-        let ast = parsed.module(db).clone();
+        let ast = parsed.module(db);
         let resolved = crate::resolve::resolve_with_env(
             db,
-            ast.clone(),
-            crate::resolve::build_env(db, &ast),
+            ast,
+            crate::resolve::build_env(db, ast),
             parsed.span_map(db).clone(),
         );
-        crate::typeck::typecheck_module(db, resolved, parsed.span_map(db).clone())
+        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone())
     }
 
     #[salsa_test]

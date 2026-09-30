@@ -191,25 +191,25 @@ fn use_through() -> Nat { through(0) }
     generic_extern_specialization_has_a_logical_signature_inner(db, source);
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn generic_extern_specialization_has_a_logical_signature_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let checked = tribute_front::typeck::typecheck_module(
         db,
-        tribute_front::resolve::resolve_with_env(
+        &tribute_front::resolve::resolve_with_env(
             db,
-            ast.clone(),
-            tribute_front::resolve::build_env(db, &ast),
+            ast,
+            tribute_front::resolve::build_env(db, ast),
             parsed.span_map(db).clone(),
         ),
         parsed.span_map(db).clone(),
     );
-    let typed =
-        tribute_front::tdnr::resolve_tdnr(db, checked.module(db).clone(), std::iter::empty());
+    let mut typed = checked.module(db).clone();
+    tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
         typed,
@@ -270,7 +270,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         perform_operations: mono.metadata.perform_operations,
         lambda_signatures: mono.metadata.lambda_signatures,
         exhaustive_cases: mono.metadata.exhaustive_cases,
-        well_known_types: checked.well_known_types(db),
+        well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: std::collections::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -287,19 +287,19 @@ fn lower_specialized_source(
     source: SourceCst,
 ) -> (IrContext, tribute_front::ast_to_ir::FrontendIrModule) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let checked = tribute_front::typeck::typecheck_module(
         db,
-        tribute_front::resolve::resolve_with_env(
+        &tribute_front::resolve::resolve_with_env(
             db,
-            ast.clone(),
-            tribute_front::resolve::build_env(db, &ast),
+            ast,
+            tribute_front::resolve::build_env(db, ast),
             parsed.span_map(db).clone(),
         ),
         parsed.span_map(db).clone(),
     );
-    let typed =
-        tribute_front::tdnr::resolve_tdnr(db, checked.module(db).clone(), std::iter::empty());
+    let mut typed = checked.module(db).clone();
+    tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
     let mono = tribute_front::monomorphize::monomorphize_functions(
         db,
         typed,
@@ -360,7 +360,7 @@ fn lower_specialized_source(
         perform_operations: mono.metadata.perform_operations,
         lambda_signatures: mono.metadata.lambda_signatures,
         exhaustive_cases: mono.metadata.exhaustive_cases,
-        well_known_types: checked.well_known_types(db),
+        well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: std::collections::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -384,21 +384,21 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
 /// The public typecheck-to-logical-lowering boundary carries deterministic,
 /// exact operation declarations rather than reconstructing them from printed
 /// operations. First source use is bounce, then echo; handler repeats dedupe.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
     let resolved = tribute_front::resolve::resolve_with_env(
         db,
-        ast.clone(),
-        tribute_front::resolve::build_env(db, &ast),
+        ast,
+        tribute_front::resolve::build_env(db, ast),
         span_map,
     );
     let checked =
-        tribute_front::typeck::typecheck_module(db, resolved, parsed.span_map(db).clone());
-    let typed =
-        tribute_front::tdnr::resolve_tdnr(db, checked.module(db).clone(), std::iter::empty());
+        tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone());
+    let mut typed = checked.module(db).clone();
+    tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: typed,
@@ -436,7 +436,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         perform_operations: checked.perform_operations(db).iter().cloned().collect(),
         lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
         exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-        well_known_types: checked.well_known_types(db),
+        well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: std::collections::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
@@ -599,7 +599,7 @@ fn use_bool() ->{} Bool { apply(True) }
     assert!(errors.is_empty(), "{errors:?}");
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
     use std::ops::ControlFlow;
     use tribute_ir::dialect::tribute_control::{Call, CallingConvention, Func, FuncSig, Lambda};

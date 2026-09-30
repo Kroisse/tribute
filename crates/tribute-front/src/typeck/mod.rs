@@ -251,40 +251,36 @@ impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<
 #[salsa::tracked]
 pub struct TypeCheckOutput<'db> {
     /// The type-checked AST module.
-    #[returns(ref)]
     pub module: Module<TypedRef<'db>>,
     /// Function type schemes collected during type checking.
     /// Stored as Vec<(Symbol, TypeScheme)> because FuncDefId doesn't implement Ord.
-    #[returns(ref)]
+    #[returns(deref)]
     pub function_types: Vec<(Symbol, TypeScheme<'db>)>,
     /// Constructor schemes used to build logical nominal layouts without
     /// reinterpreting source annotations.
-    #[returns(ref)]
     pub constructor_types: ConstructorTypeMetadata<'db>,
     /// Exact expression types and callee instantiations.
-    #[returns(ref)]
     pub expression_types: ExpressionTypeMetadata<'db>,
     /// Ability-level calling-convention requirements.
-    #[returns(ref)]
+    #[returns(deref)]
     pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
     /// Deterministic ability schemas required by the public logical-lowering
     /// boundary. This preserves semantic declarations without re-inspection.
-    #[returns(ref)]
+    #[returns(deref)]
     pub ability_definitions: Vec<AbilitySchema<'db>>,
     /// Exact semantic operation instances for handler arms.
-    #[returns(ref)]
+    #[returns(deref)]
     pub handler_operations: Vec<(NodeId, InstantiatedHandlerOperation<'db>)>,
     /// Exact semantic operation instances for ability-operation calls.
-    #[returns(ref)]
+    #[returns(deref)]
     pub perform_operations: Vec<(NodeId, InstantiatedPerformOperation<'db>)>,
     /// Fully solved callable signatures for lambda expressions.
-    #[returns(ref)]
+    #[returns(deref)]
     pub lambda_signatures: Vec<(NodeId, LambdaSignature<'db>)>,
     /// Case expressions which type checking proved exhaustive.
-    #[returns(ref)]
+    #[returns(deref)]
     pub exhaustive_cases: Vec<NodeId>,
     /// Prelude-defined semantic type identities.
-    #[returns(copy)]
     pub well_known_types: WellKnownTypes<'db>,
     /// Source span information for AST nodes.
     #[returns(clone)]
@@ -302,45 +298,44 @@ pub struct TypeCheckOutput<'db> {
 #[salsa::tracked]
 pub struct PreludeExports<'db> {
     /// Function type schemes keyed by FuncDefId.
-    #[returns(ref)]
+    #[returns(deref)]
     pub function_types: Vec<(FuncDefId<'db>, TypeScheme<'db>)>,
 
     /// Constructor type schemes keyed by CtorId.
-    #[returns(ref)]
+    #[returns(deref)]
     pub constructor_types: Vec<(CtorId<'db>, TypeScheme<'db>)>,
 
     /// Type definitions keyed by name.
-    #[returns(ref)]
+    #[returns(deref)]
     pub type_defs: Vec<(Symbol, TypeScheme<'db>)>,
 
     /// Struct field definitions keyed by nominal declaration identity.
-    #[returns(ref)]
+    #[returns(deref)]
     pub struct_fields: Vec<(TypeDefId<'db>, (Vec<TypeParam>, Vec<(Symbol, Type<'db>)>))>,
 
     /// Enum variant information: enum_name → [variant_names].
-    #[returns(ref)]
+    #[returns(deref)]
     pub enum_variants: Vec<(Symbol, Vec<Symbol>)>,
 
     /// Field names of constructors whose fields are all named.
-    #[returns(ref)]
+    #[returns(deref)]
     pub constructor_field_names: Vec<(CtorId<'db>, Vec<Symbol>)>,
 
     /// Method index for UFCS resolution: method_name → candidates.
-    #[returns(ref)]
+    #[returns(deref)]
     pub method_index: Vec<(Symbol, Vec<MethodEntry<'db>>)>,
     /// Ability-level calling-convention requirements exported by the prelude.
-    #[returns(ref)]
+    #[returns(deref)]
     pub ability_conventions: Vec<(AbilityId<'db>, CallingConvention)>,
     /// Ability operation schemas exported by the prelude as deterministic
     /// vectors (the module environment rebuilds its lookup map on injection).
-    #[returns(ref)]
+    #[returns(deref)]
     pub ability_definitions: Vec<(
         AbilityId<'db>,
         Vec<TypeParam>,
         Vec<crate::typeck::context::AbilityOpInfo<'db>>,
     )>,
     /// Prelude-defined semantic type identities.
-    #[returns(copy)]
     pub well_known_types: WellKnownTypes<'db>,
 }
 
@@ -350,7 +345,7 @@ pub struct PreludeExports<'db> {
 /// Returns both the typed AST and function type schemes.
 pub fn typecheck_module<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<ResolvedRef<'db>>,
+    module: &Module<ResolvedRef<'db>>,
     span_map: SpanMap,
 ) -> TypeCheckOutput<'db> {
     let checker = TypeChecker::new(db, span_map.clone());

@@ -177,8 +177,8 @@ fn phase_errors(
     source: SourceCst,
     phase: CompilationPhase,
 ) -> Vec<String> {
-    let _ = tribute_front::query::typed_module(db, source);
-    tribute_front::query::typed_module::accumulated::<Diagnostic>(db, source)
+    let _ = tribute_front::query::type_check_output(db, source);
+    tribute_front::query::type_check_output::accumulated::<Diagnostic>(db, source)
         .into_iter()
         .filter(|diagnostic| {
             diagnostic.inner.severity == DiagnosticSeverity::Error && diagnostic.phase == phase

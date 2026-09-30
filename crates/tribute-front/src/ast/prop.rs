@@ -806,7 +806,6 @@ mod tests {
     /// `#[salsa::tracked]` helper functions (which require Salsa struct params).
     #[salsa::input]
     struct PropTestInput {
-        #[returns(ref)]
         module: Module<UnresolvedName>,
     }
 
@@ -814,12 +813,12 @@ mod tests {
     ///
     /// Running inside a tracked function provides the accumulator context
     /// that the type checker needs to report diagnostics.
-    #[salsa::tracked(returns(copy))]
+    #[salsa::tracked]
     fn run_resolve_and_typecheck(db: &dyn salsa::Database, input: PropTestInput) {
-        let module = input.module(db).clone();
+        let module = input.module(db);
         let span_map = SpanMap::default();
         let resolved = resolve::resolve_module(db, module, span_map.clone());
-        let _output = typeck::typecheck_module(db, resolved, span_map);
+        let _output = typeck::typecheck_module(db, &resolved, span_map);
     }
 
     proptest! {
@@ -920,7 +919,7 @@ mod tests {
         #[test]
         fn resolve_does_not_panic(module in parsed_module()) {
             let db = salsa::DatabaseImpl::new();
-            let _resolved = resolve::resolve_module(&db, module, SpanMap::default());
+            let _resolved = resolve::resolve_module(&db, &module, SpanMap::default());
         }
 
         /// Type checking does not panic on generated ASTs.

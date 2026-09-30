@@ -418,7 +418,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// This is called before type checking user code to make prelude's
     /// types available. The injected types contain only BoundVars (no UniVars).
     pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
-        self.well_known_types = exports.well_known_types(self.db);
+        self.well_known_types = *exports.well_known_types(self.db);
         for (id, scheme) in exports.function_types(self.db) {
             self.function_types.insert(*id, *scheme);
         }
@@ -1334,9 +1334,11 @@ mod tests {
     fn parse_and_typecheck<'db>(
         db: &'db dyn salsa::Database,
         src: &str,
-    ) -> crate::ast::Module<crate::ast::TypedRef<'db>> {
+    ) -> &'db crate::ast::Module<crate::ast::TypedRef<'db>> {
         let source = crate::SourceCst::from_source_str(db, "test.trb", src);
-        crate::query::typed_module(db, source).expect("should typecheck successfully")
+        crate::query::type_check_output(db, source)
+            .expect("should typecheck successfully")
+            .module(db)
     }
 
     /// Check that no MethodCall nodes remain in the typed AST (all resolved to Call).

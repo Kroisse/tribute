@@ -75,7 +75,6 @@ pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName
 #[salsa::tracked]
 pub struct ParsedAst<'db> {
     /// The parsed AST module with unresolved names.
-    #[returns(clone)]
     pub module: Module<UnresolvedName>,
     /// The span map for looking up source locations.
     #[returns(clone)]
@@ -113,7 +112,7 @@ pub fn lower_source_to_parsed_ast_with_module_path<'db>(
     let text = source.text(db);
     let sh = source_hash(source.uri(db).as_str());
     let mut ctx = AstLoweringCtx::with_db(db, text.clone(), sh);
-    let module = lower_cst_to_ast_internal(&mut ctx, &cst, module_path);
+    let module = lower_cst_to_ast_internal(&mut ctx, cst, module_path);
     let span_map = ctx.finish().finish();
     Some(ParsedAst::new(db, module, span_map))
 }
@@ -131,18 +130,6 @@ fn derive_module_name_from_uri(uri: &fluent_uri::Uri<String>) -> Option<trunk_ir
         .file_stem()
         .and_then(|stem| stem.to_str())
         .map(trunk_ir::Symbol::from_dynamic)
-}
-
-/// Lower a source file to an AST Module.
-///
-/// Convenience function that extracts the CST from the source file.
-/// Note: This function does not preserve span information.
-/// Use `lower_source_to_parsed_ast` for span-preserving lowering.
-pub fn lower_source_to_ast(
-    db: &dyn salsa::Database,
-    source: SourceCst,
-) -> Option<Module<UnresolvedName>> {
-    lower_source_to_parsed_ast(db, source).map(|parsed| parsed.module(db))
 }
 
 // =============================================================================

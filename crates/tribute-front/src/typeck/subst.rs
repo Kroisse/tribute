@@ -254,11 +254,11 @@ pub fn instantiate_with_arguments<'db>(
         });
         *row = EffectRow::new(db, effects, rest);
     };
-    let mut row_unions = scheme.row_unions(db).clone();
+    let mut row_unions = scheme.row_unions(db).to_vec();
     for union in &mut row_unions {
         union.for_each_row_mut(&mut map_row);
     }
-    let mut row_removals = scheme.row_removals(db).clone();
+    let mut row_removals = scheme.row_removals(db).to_vec();
     for removal in &mut row_removals {
         removal.for_each_row_mut(&mut map_row);
     }

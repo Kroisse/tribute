@@ -26,12 +26,30 @@ analysis infrastructure, not Salsa dependency tracking.
 
 ## Salsa 0.28 Value and Return Contracts
 
-Salsa field getters and tracked functions return references by default. Tribute
-explicitly uses `#[returns(copy)]` for small values and Salsa handles,
-`#[returns(clone)]` for owned data, and `#[returns(ref)]` or
-`returns(deref)` where callers already borrow data. This keeps existing
-ownership boundaries stable, especially when a caller retains a query result
+Salsa field getters and tracked functions return references by default, so
+Tribute does not write `returns(ref)`. It chooses another mode as follows:
+
+- `returns(copy)` for small `Copy` values and Salsa handles.
+- `returns(deref)` for a `Vec` or `String` whose callers only borrow, so they
+  see `&[T]` or `&str`.
+- `returns(as_ref)` for an `Option<T>` or `Result<T, E>` whose callers only
+  borrow, so they see `Option<&T>` or `Result<&T, &E>`; `returns(as_deref)`
+  when `T` itself derefs, as for `Option<Vec<u8>>` or `Result<String, E>`.
+- `returns(clone)` only when every caller needs an owned value, for example a
+  module that each caller consumes. A caller that needs ownership of a
+  borrowed result clones it itself; compiled binaries and IR dumps are
+  returned as `&[u8]` and `&str`, and the CLI writes, links, or prints them
+  while the database is alive.
+
+A borrowed result is tied to the `&db` borrow, so a caller must finish with it
 before mutating an input to start another revision.
+
+A tracked result cannot hold a reference tied to the database lifetime, such as
+`Option<&'db Module<V>>`: the memo outlives the revision that owns the target.
+A function that only projects a field of another tracked result, such as
+`query::parsed_module` over `parsed_ast`, is therefore a plain function that
+borrows through the tracked handle. Making it tracked would store a second copy
+of the field.
 
 Salsa uses `PartialEq` to decide whether a recomputed value changed. Ordinary
 `'static` values do not need `SalsaValue` at a tracked storage boundary. Values

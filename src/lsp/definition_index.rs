@@ -143,7 +143,6 @@ pub struct AstDefinitionIndex<'db> {
     #[returns(deref)]
     pub references: Vec<AstReferenceEntry>,
     /// Map from name to definition indices.
-    #[returns(ref)]
     by_name: BTreeMap<Symbol, Vec<usize>>,
 }
 

@@ -188,7 +188,7 @@ pub struct DocumentSymbolInfo {
 /// Build document symbols from a parsed module.
 ///
 /// Uses the parsed module (before type checking) for faster response.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(deref))]
 pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<DocumentSymbolInfo> {
     let Some(module) = ast_query::parsed_module(db, source) else {
         return Vec::new();

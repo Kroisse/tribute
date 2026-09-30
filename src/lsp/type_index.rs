@@ -154,7 +154,6 @@ pub struct AstTypeIndex<'db> {
     #[returns(deref)]
     entries: Vec<AstTypeEntry<'db>>,
     /// Map from NodeId to index for direct lookup.
-    #[returns(ref)]
     by_node_id: BTreeMap<NodeId, usize>,
 }
 

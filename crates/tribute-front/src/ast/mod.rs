@@ -49,7 +49,7 @@
 //! let resolved: ResolvedModule<'db> = resolve_module(db, parsed);
 //!
 //! // After type checking
-//! let typed: TypedModule<'db> = typecheck_module(db, resolved);
+//! let typed: TypedModule<'db> = typecheck_module(db, &resolved);
 //! ```
 
 mod calling_convention;

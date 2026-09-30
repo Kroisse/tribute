@@ -4,6 +4,10 @@
 //! Function queries select a declaration from the cached module result; they do
 //! not run independent function-level inference.
 //!
+//! These queries analyze the source alone, without the prelude or other external
+//! declarations. The root crate's pipeline supplies them for compilation and
+//! editor features.
+//!
 //! ## Caching Strategy
 //!
 //! - Module-level queries: Parse, resolve, and type check the module
@@ -79,9 +83,9 @@ impl Hash for ParsedCst {
 // =============================================================================
 
 /// Wrap a pre-parsed CST stored in the database.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 pub fn parse_cst(db: &dyn salsa::Database, source: SourceCst) -> Option<ParsedCst> {
-    let tree = source.tree(db).clone()?;
+    let tree = source.tree(db)?.clone();
     Some(ParsedCst::new(tree))
 }
 
@@ -116,13 +120,13 @@ pub fn parsed_ast_with_module_path<'db>(
 
 /// Parse a source file to an AST module.
 ///
-/// This is the entry point for parsing. The result is cached by Salsa.
+/// Borrows the module of the cached [`parsed_ast`] result. This is not a
+/// tracked query of its own, so the module is stored only once.
 /// Use `span_map` to get the corresponding span information.
-#[salsa::tracked(returns(clone))]
 pub fn parsed_module(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Option<Module<UnresolvedName>> {
+) -> Option<&Module<UnresolvedName>> {
     parsed_ast(db, source).map(|parsed| parsed.module(db))
 }
 
@@ -157,7 +161,7 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
 /// Resolve all names in a module.
 ///
 /// Resolution currently processes the complete module in one tracked query.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
@@ -181,94 +185,61 @@ pub fn type_check_output<'db>(
     Some(crate::typeck::typecheck_module(db, module, sm))
 }
 
-/// Type check a module.
-///
-/// Derives the typed module from `type_check_output`.
-#[salsa::tracked(returns(clone))]
-pub fn typed_module<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<Module<TypedRef<'db>>> {
-    type_check_output(db, source).map(|o| o.module(db).clone())
-}
-
 /// Get function type schemes from type checking.
 ///
-/// Returns the function type schemes collected during type checking,
+/// Borrows the function type schemes collected during type checking,
 /// keyed by function name (Symbol).
-#[salsa::tracked(returns(clone))]
 pub fn function_schemes<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-) -> Option<Vec<(Symbol, TypeScheme<'db>)>> {
-    type_check_output(db, source).map(|o| o.function_types(db).clone())
-}
-
-/// TDNR on a typed module for remaining MethodCall transformations.
-///
-/// Like the other queries in this module, this analyzes the source alone,
-/// without the prelude or other external declarations. The root crate's
-/// pipeline supplies them for compilation and editor features.
-#[salsa::tracked(returns(clone))]
-pub fn tdnr_module<'db>(
-    db: &'db dyn salsa::Database,
-    source: SourceCst,
-) -> Option<Module<TypedRef<'db>>> {
-    let module = typed_module(db, source)?;
-    Some(crate::tdnr::resolve_tdnr(db, module, std::iter::empty()))
+) -> Option<&'db [(Symbol, TypeScheme<'db>)]> {
+    type_check_output(db, source).map(|o| o.function_types(db))
 }
 
 // =============================================================================
 // Function-level queries
 // =============================================================================
+//
+// These borrow a declaration from the cached module result; they are not
+// tracked queries of their own.
+
+/// Find the function declaration named `name` in `module`.
+fn find_func<V>(module: &Module<V>, name: Symbol) -> Option<&FuncDecl<V>> {
+    module.decls.iter().find_map(|decl| match decl {
+        Decl::Function(f) if f.name == name => Some(f),
+        _ => None,
+    })
+}
 
 /// Get a parsed function by name.
-#[salsa::tracked(returns(clone))]
 pub fn parsed_func(
     db: &dyn salsa::Database,
     source: SourceCst,
     name: Symbol,
-) -> Option<FuncDecl<UnresolvedName>> {
-    let module = parsed_module(db, source)?;
-
-    module.decls.into_iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f),
-        _ => None,
-    })
+) -> Option<&FuncDecl<UnresolvedName>> {
+    find_func(parsed_module(db, source)?, name)
 }
 
 /// Resolve a single function by name.
 ///
 /// The function is resolved in the context of the full module environment.
-#[salsa::tracked(returns(clone))]
 pub fn resolved_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     name: Symbol,
-) -> Option<FuncDecl<ResolvedRef<'db>>> {
-    let module = resolved_module(db, source)?;
-
-    module.decls.into_iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f),
-        _ => None,
-    })
+) -> Option<&'db FuncDecl<ResolvedRef<'db>>> {
+    find_func(resolved_module(db, source)?, name)
 }
 
 /// Type check a single function by name.
 ///
 /// The function is type checked in the context of the full module.
-#[salsa::tracked(returns(clone))]
 pub fn typed_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
     name: Symbol,
-) -> Option<FuncDecl<TypedRef<'db>>> {
-    let module = typed_module(db, source)?;
-
-    module.decls.into_iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f),
-        _ => None,
-    })
+) -> Option<&'db FuncDecl<TypedRef<'db>>> {
+    find_func(type_check_output(db, source)?.module(db), name)
 }
 
 // =============================================================================
@@ -584,7 +555,7 @@ fn explicit() ->{} Nil { Nil }
         assert!(schemes.is_some(), "function_schemes should return Some");
 
         let schemes = schemes.unwrap();
-        for (name, scheme) in &schemes {
+        for (name, scheme) in schemes {
             let body = scheme.body(&db);
             assert!(
                 !contains_univar(&db, body),
@@ -757,7 +728,7 @@ fn test() -> Int {
         );
 
         // Type checking should succeed
-        let module = typed_module(&db, source);
+        let module = type_check_output(&db, source);
         assert!(module.is_some(), "Type checking should succeed");
     }
 
@@ -776,7 +747,7 @@ fn test() -> Int {
         );
 
         // Type checking should succeed
-        let module = typed_module(&db, source);
+        let module = type_check_output(&db, source);
         assert!(module.is_some(), "Type checking should succeed");
     }
 }

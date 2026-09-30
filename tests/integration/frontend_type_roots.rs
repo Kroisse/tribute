@@ -56,7 +56,7 @@ fn prepare_root<'db>(
         sources: vec![row],
         result: row,
     };
-    let mut functions = typed.function_types(db).clone();
+    let mut functions = typed.function_types(db).to_vec();
     let mut constructors = typed.constructor_types(db).clone();
     let mut metadata = typed.expression_types(db).clone();
     let (_, scheme) = functions
@@ -81,7 +81,7 @@ fn prepare_root<'db>(
         }
         Root::RowArgument => {
             *scheme = tribute_front::ast::TypeScheme::builder(
-                scheme.type_params(db).clone(),
+                scheme.type_params(db).to_vec(),
                 vec![EffectVar { id: 999 }],
                 scheme.body(db),
             )
@@ -114,13 +114,13 @@ fn prepare_root<'db>(
         functions,
         constructors,
         metadata,
-        typed.ability_conventions(db).clone(),
-        typed.ability_definitions(db).clone(),
-        typed.handler_operations(db).clone(),
-        typed.perform_operations(db).clone(),
-        typed.lambda_signatures(db).clone(),
-        typed.exhaustive_cases(db).clone(),
-        typed.well_known_types(db),
+        typed.ability_conventions(db).to_vec(),
+        typed.ability_definitions(db).to_vec(),
+        typed.handler_operations(db).to_vec(),
+        typed.perform_operations(db).to_vec(),
+        typed.lambda_signatures(db).to_vec(),
+        typed.exhaustive_cases(db).to_vec(),
+        *typed.well_known_types(db),
         typed.span_map(db).clone(),
     );
     let prepared = prepare_frontend_for_lowering(db, input, source);

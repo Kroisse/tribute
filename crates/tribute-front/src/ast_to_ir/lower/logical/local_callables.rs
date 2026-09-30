@@ -316,7 +316,7 @@ fn fixed_instance<'db>(
     // turn a free environment row into a newly quantified row.
     if scheme_effect.effects(db) != effect.effects(db)
         || match scheme_effect.rest(db) {
-            Some(row) => instance.scheme.effect_params(db) != &[row],
+            Some(row) => instance.scheme.effect_params(db) != [row],
             None => !instance.scheme.effect_params(db).is_empty(),
         }
     {

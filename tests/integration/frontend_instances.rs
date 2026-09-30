@@ -13,8 +13,8 @@ use trunk_ir::Symbol;
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let mut metadata = typed.expression_types(db).clone();
-    let mut handlers = typed.handler_operations(db).clone();
-    let mut performs = typed.perform_operations(db).clone();
+    let mut handlers = typed.handler_operations(db).to_vec();
+    let mut performs = typed.perform_operations(db).to_vec();
     let target = if damage >= 6 { "hidden" } else { "identity" };
     let index = metadata
         .function_instances
@@ -52,16 +52,16 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
     let damaged = TypeCheckOutput::new(
         db,
         typed.module(db).clone(),
-        typed.function_types(db).clone(),
+        typed.function_types(db).to_vec(),
         typed.constructor_types(db).clone(),
         metadata,
-        typed.ability_conventions(db).clone(),
-        typed.ability_definitions(db).clone(),
+        typed.ability_conventions(db).to_vec(),
+        typed.ability_definitions(db).to_vec(),
         handlers,
         performs,
-        typed.lambda_signatures(db).clone(),
-        typed.exhaustive_cases(db).clone(),
-        typed.well_known_types(db),
+        typed.lambda_signatures(db).to_vec(),
+        typed.exhaustive_cases(db).to_vec(),
+        *typed.well_known_types(db),
         typed.span_map(db).clone(),
     );
     prepare_frontend_for_lowering(db, damaged, source).is_some()

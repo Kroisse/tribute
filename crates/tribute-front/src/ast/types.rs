@@ -10,6 +10,8 @@
 
 mod display;
 
+use std::borrow::Cow;
+
 use trunk_ir::Symbol;
 
 use super::NodeId;
@@ -22,7 +24,6 @@ use super::phases::{FuncDefId, TypeDefId};
 /// by unification.
 #[salsa::interned(debug)]
 pub struct Type<'db> {
-    #[returns(ref)]
     pub kind: TypeKind<'db>,
 }
 
@@ -205,15 +206,15 @@ pub struct TypeScheme<'db> {
     /// Type parameters (universally quantified).
     ///
     /// The order matters: `type_params[0]` corresponds to `BoundVar { index: 0 }`.
-    #[returns(ref)]
+    #[returns(deref)]
     pub type_params: Vec<TypeParam>,
     /// Effect-row variables quantified by this scheme.
-    #[returns(ref)]
+    #[returns(deref)]
     pub effect_params: Vec<EffectVar>,
     /// Retained exact effect unions, quantified together with the body.
-    #[returns(ref)]
+    #[returns(deref)]
     pub row_unions: Vec<RowUnion<'db>>,
-    #[returns(ref)]
+    #[returns(deref)]
     pub row_removals: Vec<RowRemoval<'db>>,
     /// The body type with BoundVar references to type_params.
     #[returns(copy)]
@@ -274,21 +275,22 @@ impl<'db> TypeScheme<'db> {
         body: Type<'db>,
     ) -> TypeSchemeBuilder<'db> {
         TypeSchemeBuilder {
-            type_params,
-            effect_params,
-            row_unions: Vec::new(),
-            row_removals: Vec::new(),
+            type_params: Cow::Owned(type_params),
+            effect_params: Cow::Owned(effect_params),
+            row_unions: Cow::Borrowed(&[]),
+            row_removals: Cow::Borrowed(&[]),
             body,
         }
     }
 
-    /// Copy the complete scheme into ordinary data for rewriting before publication.
+    /// Start rewriting the complete scheme before publication. The builder
+    /// borrows the interned fields and copies only those it changes.
     pub fn to_builder(self, db: &'db dyn salsa::Database) -> TypeSchemeBuilder<'db> {
         TypeSchemeBuilder {
-            type_params: self.type_params(db).clone(),
-            effect_params: self.effect_params(db).clone(),
-            row_unions: self.row_unions(db).clone(),
-            row_removals: self.row_removals(db).clone(),
+            type_params: Cow::Borrowed(self.type_params(db)),
+            effect_params: Cow::Borrowed(self.effect_params(db)),
+            row_unions: Cow::Borrowed(self.row_unions(db)),
+            row_removals: Cow::Borrowed(self.row_removals(db)),
             body: self.body(db),
         }
     }
@@ -335,33 +337,33 @@ impl<'db> TypeScheme<'db> {
 /// Mutable construction data; only `build` interns a scheme.
 #[must_use]
 pub struct TypeSchemeBuilder<'db> {
-    type_params: Vec<TypeParam>,
-    effect_params: Vec<EffectVar>,
-    row_unions: Vec<RowUnion<'db>>,
-    row_removals: Vec<RowRemoval<'db>>,
+    type_params: Cow<'db, [TypeParam]>,
+    effect_params: Cow<'db, [EffectVar]>,
+    row_unions: Cow<'db, [RowUnion<'db>]>,
+    row_removals: Cow<'db, [RowRemoval<'db>]>,
     body: Type<'db>,
 }
 
 impl<'db> TypeSchemeBuilder<'db> {
     pub fn type_params(mut self, params: Vec<TypeParam>) -> Self {
-        self.type_params = params;
+        self.type_params = Cow::Owned(params);
         self
     }
 
     pub fn row_unions(mut self, unions: Vec<RowUnion<'db>>) -> Self {
-        self.row_unions = unions;
+        self.row_unions = Cow::Owned(unions);
         self
     }
 
     pub fn row_removals(mut self, removals: Vec<RowRemoval<'db>>) -> Self {
-        self.row_removals = removals;
+        self.row_removals = Cow::Owned(removals);
         self
     }
 
     /// Transform the body and every type argument in retained constraints.
     /// The callback owns recursive traversal within each type; binder identities
-    /// and constraint order remain unchanged. Owned constraint vectors are reused;
-    /// interned rows remain immutable.
+    /// and constraint order remain unchanged. Borrowed constraint lists are
+    /// copied only when they are non-empty; interned rows remain immutable.
     pub fn map_types(
         mut self,
         db: &'db dyn salsa::Database,
@@ -381,11 +383,15 @@ impl<'db> TypeSchemeBuilder<'db> {
                 row.rest(db),
             );
         };
-        for union in &mut self.row_unions {
-            union.for_each_row_mut(&mut map_row);
+        if !self.row_unions.is_empty() {
+            for union in self.row_unions.to_mut() {
+                union.for_each_row_mut(&mut map_row);
+            }
         }
-        for removal in &mut self.row_removals {
-            removal.for_each_row_mut(&mut map_row);
+        if !self.row_removals.is_empty() {
+            for removal in self.row_removals.to_mut() {
+                removal.for_each_row_mut(&mut map_row);
+            }
         }
         self
     }
@@ -447,7 +453,7 @@ pub enum Kind {
 #[salsa::interned(debug)]
 pub struct EffectRow<'db> {
     /// Known effects in this row.
-    #[returns(ref)]
+    #[returns(deref)]
     pub effects: Vec<Effect<'db>>,
     /// Optional row variable for open effect rows.
     ///

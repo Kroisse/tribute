@@ -530,7 +530,7 @@ impl<'db> RowSubst<'db> {
             }
             visited.push(var.id);
 
-            let mut effects = row.effects(db).clone();
+            let mut effects = row.effects(db).to_vec();
             for effect in subst_row.effects(db) {
                 if !effects.contains(effect) {
                     effects.push(effect.clone());

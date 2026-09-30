@@ -146,7 +146,7 @@ fn compile_file(
                         compile_to_native_binary::accumulated::<Diagnostic>(db, source, config);
                     print_diagnostics(db, source, &input_path.display().to_string(), &mut diags);
                     let output = output_path.unwrap_or_else(|| input_path.with_extension(""));
-                    if let Err(e) = link_native_binary(&object_bytes, &output, sysroot) {
+                    if let Err(e) = link_native_binary(object_bytes, &output, sysroot) {
                         eprintln!("Linking failed: {e}");
                         std::process::exit(1);
                     }
@@ -177,7 +177,7 @@ fn compile_file(
                         let output =
                             output_path.unwrap_or_else(|| input_path.with_extension("wasm"));
 
-                        if let Err(error) = std::fs::write(&output, &wasm_bytes) {
+                        if let Err(error) = std::fs::write(&output, wasm_bytes) {
                             eprintln!(
                                 "Error writing output file {}: {}",
                                 output.display(),
@@ -259,7 +259,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         if show_env {
             println!("\n=== Module Environment ===");
             if let Some(parsed) = parsed_ast(db, source) {
-                let env = build_env(db, &parsed.module(db));
+                let env = build_env(db, parsed.module(db));
                 println!("{:#?}", env);
             } else {
                 println!("(Failed to parse AST)");

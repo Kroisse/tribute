@@ -290,15 +290,15 @@ fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
     )
     .expect("elided forwarding IR should be available");
     assert_eq!(
-        generated_rtti_field_releases(&preserved),
+        generated_rtti_field_releases(preserved),
         "@__tribute_release_5=1"
     );
     assert_eq!(
-        generated_rtti_field_releases(&elided),
+        generated_rtti_field_releases(elided),
         "@__tribute_release_5=1"
     );
-    let preserved = focused_rc_ops(&preserved);
-    let elided = focused_rc_ops(&elided);
+    let preserved = focused_rc_ops(preserved);
+    let elided = focused_rc_ops(elided);
     assert_eq!(
         preserved, elided,
         "physical CPS functions are conservatively consumed; typed-plan policy coverage lives with the pre-erasure action planner"
@@ -458,9 +458,9 @@ fn paired_rc_elimination_has_focused_before_after_ir(db: &salsa::DatabaseImpl) {
         assert_source_allocation_field_releases(ir);
     }
 
-    let before = focused_rc_ops(&before);
-    let after = focused_rc_ops(&after);
-    let disabled_after = focused_rc_ops(&disabled_after);
+    let before = focused_rc_ops(before);
+    let after = focused_rc_ops(after);
+    let disabled_after = focused_rc_ops(disabled_after);
 
     assert_eq!(before, disabled_after);
     let before_retain = before.matches("tribute_rt.retain").count();
@@ -508,21 +508,21 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     .expect("preserved parameter RC IR should be available");
 
     assert_eq!(
-        generated_rtti_field_releases(&before),
+        generated_rtti_field_releases(before),
         "@__tribute_release_5=1"
     );
     assert_eq!(
-        generated_rtti_field_releases(&after),
+        generated_rtti_field_releases(after),
         "@__tribute_release_5=1"
     );
     assert_eq!(
-        generated_rtti_field_releases(&preserved_after),
+        generated_rtti_field_releases(preserved_after),
         "@__tribute_release_5=1"
     );
 
-    let before = focused_rc_ops(&before);
-    let after = focused_rc_ops(&after);
-    let preserved_after = focused_rc_ops(&preserved_after);
+    let before = focused_rc_ops(before);
+    let after = focused_rc_ops(after);
+    let preserved_after = focused_rc_ops(preserved_after);
 
     assert_eq!(before, preserved_after);
     assert_eq!(before, after, "recursive summaries must fail closed");
@@ -557,20 +557,20 @@ fn temporary_field_borrows_have_focused_before_after_ir(db: &salsa::DatabaseImpl
     )
     .expect("preserved temporary-borrow stage IR should be available");
     assert_eq!(
-        generated_rtti_field_releases(&before),
+        generated_rtti_field_releases(before),
         "@__tribute_release_6=1"
     );
     assert_eq!(
-        generated_rtti_field_releases(&after),
+        generated_rtti_field_releases(after),
         "@__tribute_release_6=1"
     );
     assert_eq!(
-        generated_rtti_field_releases(&preserved_after),
+        generated_rtti_field_releases(preserved_after),
         "@__tribute_release_6=1"
     );
-    let before = focused_rc_ops(&before);
-    let after = focused_rc_ops(&after);
-    let preserved_after = focused_rc_ops(&preserved_after);
+    let before = focused_rc_ops(before);
+    let after = focused_rc_ops(after);
+    let preserved_after = focused_rc_ops(preserved_after);
     assert_eq!(before, preserved_after);
     let before_retain = before.matches("tribute_rt.retain").count();
     let before_release = before.matches("tribute_rt.release").count();

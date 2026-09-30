@@ -21,7 +21,7 @@ unsafe extern "C" {
 
 /// Compile source to a native object file, panicking with diagnostics on failure.
 #[allow(dead_code)]
-pub fn compile_native_or_panic(db: &dyn salsa::Database, source_file: SourceCst) -> Vec<u8> {
+pub fn compile_native_or_panic(db: &dyn salsa::Database, source_file: SourceCst) -> &[u8] {
     compile_native_or_panic_with(db, source_file, false)
 }
 
@@ -31,7 +31,7 @@ pub fn compile_native_or_panic_with(
     db: &dyn salsa::Database,
     source_file: SourceCst,
     sanitize_address: bool,
-) -> Vec<u8> {
+) -> &[u8] {
     compile_native_or_panic_with_options(
         db,
         source_file,
@@ -47,7 +47,7 @@ pub fn compile_native_or_panic_with_options(
     source_file: SourceCst,
     sanitize_address: bool,
     optimizations: OptimizationOptions,
-) -> Vec<u8> {
+) -> &[u8] {
     let config = CompilationConfig::new(db, sanitize_address, optimizations);
     compile_to_native_binary(db, source_file, config).unwrap_or_else(|| {
         let diagnostics: Vec<_> =
@@ -384,6 +384,6 @@ fn compile_native_test_binary_impl(
         };
         let object_bytes =
             compile_native_or_panic_with_options(db, source_file, sanitize_address, optimizations);
-        NativeTestBinary::from_object_bytes(&object_bytes)
+        NativeTestBinary::from_object_bytes(object_bytes)
     })
 }
