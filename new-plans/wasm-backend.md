@@ -393,7 +393,7 @@ Wasm에는 `i8`과 `i16` 값 타입이 없다. `core.i8`과 `core.i16` 값은 `i
 상위 비트는 정하지 않는다. 값을 읽는 쪽이 필요한 만큼 정규화한다.
 
 - 상위 비트가 결과의 하위 비트에 영향을 주지 않는 연산(`addi`, `subi`, `muli`,
-  `and`/`or`/`xor`, `shl`, 상수)은 `i32` 명령으로 그대로 낮춘다.
+  `and`/`or`/`xor`, `shl`, 상수)은 정규화 없이 `i32` 명령으로 낮출 수 있다.
 - `extui`는 폭만큼의 mask(`i32.and`)로, `extsi`는 `i32.extend8_s`/`i32.extend16_s`로
   정규화한다. 결과가 `i64`면 그 뒤에 `i64.extend_i32_u`/`i64.extend_i32_s`를 둔다.
   `trunci`는 `i64` 입력이면 `i32.wrap_i64`로, `i32` 입력이면 결과 폭의 mask로
@@ -416,6 +416,7 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 
 | 값 타입 | 슬롯 | 판정 |
 | --- | --- | --- |
+| builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 (`core.bytes`와 `@bytes` struct) | 허용 |
 | builtin 레이아웃 인덱스를 갖는 struct (`core.bytes`, closure, marker 등) | `structref`, `anyref` | 허용 |
 | `adt.typeref` | `structref`, `anyref` | 허용 |
 | `base_enum`을 가진 concrete variant instance | `structref`, `anyref` | 허용 |
