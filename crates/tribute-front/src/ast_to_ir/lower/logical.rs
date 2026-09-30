@@ -1344,12 +1344,20 @@ fn lower_expr<'db>(
             let scrutinee = lower_expr(builder, scrutinee, declarations)?;
             let result_ty = expr_type_for_id(builder, expr.id);
             let exhaustive = declarations.exhaustive_cases.contains(&expr.id);
+            // The unguarded arms of an exhaustive case match every value, so
+            // the arms after the last of them never run; typechecking reports
+            // them as unreachable. Dropping them leaves no path on which every
+            // arm fails.
+            let arms = match arms.iter().rposition(|arm| arm.guard.is_none()) {
+                Some(last) if exhaustive => &arms[..=last],
+                _ => &arms[..],
+            };
             lower_case_chain(
                 builder,
                 location,
                 scrutinee,
                 result_ty,
-                &arms,
+                arms,
                 exhaustive,
                 declarations,
             )
@@ -1618,11 +1626,9 @@ fn lower_case_chain<'db>(
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
     match arms {
-        // Typechecking has proved this path unreachable (for example the
-        // false branch after exhaustive Bool literal arms).  The arena has no
-        // source-logical unreachable producer, so keep it as an isolated
-        // polymorphic conversion value rather than introducing `func.*`.
-        [] => Some(unreachable_case_value(builder, location, result_ty)),
+        // Typechecking rejects a case it does not prove exhaustive, and an
+        // exhaustive chain ends with an unguarded arm lowered without a test.
+        [] => panic!("a case whose arms can all fail reached lowering"),
         [last] if exhaustive && last.guard.is_none() => {
             let mut scope = builder.ctx.scope();
             super::case::bind_logical_pattern_fields(
@@ -1677,15 +1683,6 @@ fn lower_case_chain<'db>(
             Some(branch.result(builder.ir))
         }
     }
-}
-
-fn unreachable_case_value(
-    builder: &mut IrBuilder<'_, '_>,
-    location: Location,
-    result_ty: TypeRef,
-) -> ValueRef {
-    let nil = builder.emit_nil(location);
-    builder.cast_if_needed(location, nil, result_ty)
 }
 
 struct CaseArmRequest<'a, 'db> {

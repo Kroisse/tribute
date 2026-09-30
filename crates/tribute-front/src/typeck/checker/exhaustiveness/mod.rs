@@ -142,11 +142,12 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// A case not proved exhaustive is rejected like a non-exhaustive one.
     fn report_unverified(&self, node: NodeId) {
         self.report_case(
             node,
-            "exhaustiveness check: unable to verify all cases are covered",
-            DiagnosticSeverity::Warning,
+            "cannot verify that the case expression is exhaustive; add a `_` arm",
+            DiagnosticSeverity::Error,
         );
     }
 

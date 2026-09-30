@@ -470,6 +470,52 @@ fn main() {
     );
 }
 
+/// Guarded arms after the last unguarded arm of an exhaustive case never
+/// run; the case compiles with scalar and managed results.
+#[test]
+fn test_native_guarded_arms_after_coverage() {
+    let output = compile_and_run_native_asan(
+        "guarded_arms_after_coverage.trb",
+        &format!(
+            r#"{}
+fn count(flag: Bool, n: Nat) -> Nat {{
+    case flag {{
+        True -> 1
+        False -> 2
+        _ if n > 0 -> 3
+    }}
+}}
+
+fn wrap(flag: Bool, n: Nat) -> Option(Nat) {{
+    case flag {{
+        True -> Some(n)
+        False -> None
+        _ if n > 0 -> Some(0)
+    }}
+}}
+
+fn show(value: Option(Nat)) {{
+    case value {{
+        Some(n) -> __tribute_print_nat(n)
+        None -> __tribute_print_nat(0)
+    }}
+}}
+
+fn main() {{
+    __tribute_print_nat(count(True, 1))
+    __tribute_print_nat(count(False, 1))
+    show(wrap(True, 7))
+    show(wrap(False, 7))
+}}
+"#,
+            common::PRINT_EXTERNS
+        ),
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(output.status.success(), "{:?}: {stderr}", output.status);
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1\n2\n7\n0");
+}
+
 /// A case over an enum spelled through a `use` import or by its short name
 /// inside its module lowers without a fallthrough.
 #[test]

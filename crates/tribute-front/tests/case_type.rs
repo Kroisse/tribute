@@ -7,6 +7,7 @@ mod common;
 
 use self::common::{ast_pipeline_error_messages, run_ast_pipeline_with_ir};
 use insta::assert_snapshot;
+use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute_front::{
     SourceCst,
@@ -714,4 +715,61 @@ fn option(value: Option(Nat)) -> Nat {
 "#,
     );
     assert_eq!(warnings, ["unreachable pattern", "unreachable pattern"]);
+}
+
+/// Arms after the last unguarded arm of an exhaustive case are unreachable,
+/// and lowering leaves no path on which every arm fails.
+#[salsa_test]
+fn guarded_arms_after_coverage_are_unreachable(db: &salsa::DatabaseImpl) {
+    let text = r#"
+fn pick(flag: Bool, n: Nat) -> Nat {
+    case flag {
+        True -> 1
+        False -> 2
+        _ if n > 0 -> 3
+        True if n > 1 -> 4
+    }
+}
+"#;
+    let (errors, exhaustive) = errors_and_exhaustive(db, text);
+    assert!(errors.is_empty(), "{errors:?}");
+    assert_eq!(exhaustive, 1);
+    assert_eq!(
+        warnings(db, text),
+        ["unreachable pattern", "unreachable pattern"]
+    );
+
+    let source = SourceCst::from_source_str(db, "test.trb", text);
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    assert!(
+        !ir_text.contains("core.nil"),
+        "no fallthrough may be lowered:\n{ir_text}"
+    );
+}
+
+/// A case the check gives up on is rejected, even though its arms do cover
+/// every value.
+#[salsa_test]
+fn unverified_case_is_an_error(db: &salsa::DatabaseImpl) {
+    // Each arm matches one `True` column, and the last all `False`: complete,
+    // but every column splits the search in two until the step budget runs
+    // out.
+    const COLUMNS: usize = 20;
+    let arms = (0..COLUMNS).map(|arm| {
+        let columns = (0..COLUMNS).map(|column| if column == arm { "True" } else { "_" });
+        format!("        #({}) -> {arm}\n", columns.format(", "))
+    });
+    let text = format!(
+        "fn pick({params}) -> Nat {{\n    case #({names}) {{\n{arms}        #({all_false}) -> 99\n    }}\n}}\n",
+        params = (0..COLUMNS).format_with(", ", |i, f| f(&format_args!("b{i}: Bool"))),
+        names = (0..COLUMNS).format_with(", ", |i, f| f(&format_args!("b{i}"))),
+        arms = arms.format(""),
+        all_false = ["False"; COLUMNS].iter().format(", "),
+    );
+    let (errors, exhaustive) = errors_and_exhaustive(db, &text);
+    assert_eq!(
+        errors,
+        ["cannot verify that the case expression is exhaustive; add a `_` arm"]
+    );
+    assert_eq!(exhaustive, 0);
 }
