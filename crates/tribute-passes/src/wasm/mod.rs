@@ -12,6 +12,7 @@
 //! - `intrinsic_to_wasm`: Bind the `extern "C"` bytes helpers to GC operations
 //! - `wasm_gc_to_wasm`: Resolve semantic GC types to indexed WASM operations
 //! - `evidence_to_wasm`: Lower evidence runtime functions to inline WASM operations
+//! - `runtime_bindings`: The C runtime helpers the Wasm target binds
 //! - `lower`: Main orchestrator for lowering mid-level IR to WASM
 //! - `type_converter`: WASM type converter for IR-level type transformations
 
@@ -22,5 +23,6 @@ pub mod intrinsic_to_wasm;
 pub mod io;
 pub mod lower;
 pub mod normalize_primitive_types;
+pub mod runtime_bindings;
 pub mod tribute_rt_to_wasm;
 pub mod type_converter;
