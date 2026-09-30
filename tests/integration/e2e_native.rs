@@ -545,14 +545,11 @@ fn f(x: Float) -> Nat {
         _ -> 0
     }
 }
-// The grammar parses a rune pattern only as a case's first arm.
 fn r(x: Rune) -> Nat {
     case x {
         ?a -> 1
-        _ -> case x {
-            ?\n -> 2
-            _ -> 0
-        }
+        ?\n -> 2
+        _ -> 0
     }
 }
 fn n(x: Nil) -> Nat {
