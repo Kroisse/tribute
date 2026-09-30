@@ -1022,12 +1022,15 @@ WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
 VariantPattern ::= TypePath ('(' PatternList? ')' | '{' RecordPatternFields? '}')?
 RecordPattern ::= VariantPattern                // 중괄호 형식; 필드를 이름으로 매칭
-ListPattern ::= '[' PatternList? ']'
-              | '[' PatternList ',' '..' Identifier? ']'    // [head, ..tail] or [head, ..]
+ListPattern ::= '[' ListPatternItems? ']'
+ListPatternItems ::= Pattern (',' Pattern)* (',' RestPattern)? ','?  // [head, ..tail] or [head, ..]
+                   | RestPattern ','?                                // [..tail]
+RestPattern ::= '..' Identifier?
 TuplePattern ::= '#(' PatternList ')'
 
 PatternList ::= Pattern (',' Pattern)* ','?
 RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* (',' '..')? ','?
+                      | '..' ','?                   // Name { .. }
 RecordPatternField ::= Identifier (':' Pattern)?
 ```
 

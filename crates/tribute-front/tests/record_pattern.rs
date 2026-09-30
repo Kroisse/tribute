@@ -227,7 +227,7 @@ enum Shape {
         r#"
 fn area(shape: Shape) -> Nat {
     case shape {
-        Circle { radius: _, .. } -> 0
+        Circle { .. } -> 0
         Rect { tall: True, width } -> width
         Rect { width: _, tall: False } -> 1
     }
@@ -242,7 +242,7 @@ fn area(shape: Shape) -> Nat {
         r#"
 fn area(shape: Shape) -> Nat {
     case shape {
-        Circle { radius: _, .. } -> 0
+        Circle { .. } -> 0
         Rect { tall: True, .. } -> 1
     }
 }
@@ -269,4 +269,33 @@ fn area(shape: Shape) -> Nat {
         messages(db, &repeated, DiagnosticSeverity::Warning),
         ["unreachable pattern"]
     );
+}
+
+#[salsa_test]
+fn lone_spread_matches_every_field(db: &salsa::DatabaseImpl) {
+    let source = format!(
+        "{POINT}{}",
+        r#"
+enum Shape {
+    Circle { radius: Nat },
+    Rect { width: Nat, tall: Bool },
+    Empty,
+}
+
+fn kind(shape: Shape) -> Nat {
+    case shape {
+        Circle { .. } -> 0
+        Rect { .., } -> 1
+        Empty { .. } -> 2
+    }
+}
+
+fn ignore(p: Point) -> Nat {
+    let Point { .. } = p
+    0
+}
+"#
+    );
+    let errors = errors(db, &source);
+    assert!(errors.is_empty(), "{errors:?}");
 }

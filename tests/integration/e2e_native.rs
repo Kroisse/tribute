@@ -589,6 +589,42 @@ fn main() {
     );
 }
 
+/// A lone `..` matches a constructor whatever its fields hold, and a lone
+/// list rest may take a trailing comma.
+#[test]
+fn test_native_lone_rest_patterns() {
+    assert_native_output(
+        "lone_rest_patterns.trb",
+        r#"
+enum Shape {
+    Circle { radius: Nat },
+    Rect { width: Nat, tall: Bool },
+}
+
+fn kind(shape: Shape) -> Nat {
+    case shape {
+        Circle { .. } -> 1
+        Rect { .., } -> 2
+    }
+}
+
+fn count(xs: List(Nat)) -> Nat {
+    case xs {
+        [] -> 0
+        [..rest,] -> 1
+    }
+}
+
+fn main() {
+    __tribute_print_nat(kind(Circle { radius: 3 }))
+    __tribute_print_nat(kind(Rect { width: 1, tall: True }))
+    __tribute_print_nat(count([4, 5]))
+}
+"#,
+        "1\n2\n1",
+    );
+}
+
 /// A case over an enum spelled through a `use` import or by its short name
 /// inside its module lowers without a fallthrough.
 #[test]
