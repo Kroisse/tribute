@@ -25,6 +25,9 @@ Effect annotation을 생략하면 fresh한 ability 변수가 생성된다:
 fn(a) -> b       // fn(a) ->{e} b (fresh e)
 ```
 
+함수 선언의 effect는 본문에서 추론하지 않는다. Effect를 생략한 함수의 본문은
+concrete ability를 수행할 수 없으며, ability를 수행하는 함수는 row에 명시한다.
+
 따라서 고차 함수에서 내부 함수의 effect를 전파하려면 **같은 변수를 명시**해야 한다:
 
 ```rust

@@ -711,13 +711,20 @@ fn run_maybe(comp: fn() ->{e, Fail} a) ->{e} Option(a) {
 ### Function Definition
 
 ```ebnf
-FunctionDef ::= 'pub'? 'fn' Identifier '(' ParamList? ')' ReturnType? Block
+FunctionDef ::= 'pub'? 'fn' Identifier '(' TypedParamList? ')' ReturnType Block
+
+TypedParamList ::= TypedParam (',' TypedParam)* ','?
+TypedParam ::= Identifier ':' Type
 
 ParamList ::= Param (',' Param)* ','?
 Param ::= Identifier (':' Type)?
 
 // ReturnType은 Type Syntax 섹션에 정의됨
 ```
+
+함수 선언은 파라미터 타입과 반환 타입을 모두 적는다. `main`도 `fn main() -> Nil`로
+쓴다. Effect row는 생략할 수 있으며, 생략하면 fresh row 변수이다. 람다의
+파라미터 타입은 생략할 수 있다([Lambda Expression](#lambda-expression)).
 
 **예시:**
 
@@ -945,7 +952,7 @@ numbers.reduce((Int::*))        // 곱셈
 ```rust
 fn apply(f: fn(Int, Int) ->{} Int, x: Int, y: Int) ->{} Int { f(x, y) }
 
-fn main() {
+fn main() -> Nil {
     let add = (Int::+)
     let alias = add
     let sum = apply(alias, +1, +2)    // +3

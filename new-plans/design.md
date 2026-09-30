@@ -193,22 +193,22 @@ fn(a) ->{} b    // 빈 effect를 명시한 pure 함수
 
 ### Ability 추론
 
-대부분의 경우 ability는 추론된다:
+람다와 지역 binding의 ability는 본문에서 추론된다. 모듈 수준 함수의 시그니처는
+추론하지 않는다. Ability를 수행하는 함수는 그 ability를 선언한다:
 
 ```rust
-fn example() {
-    let x = State::get()     // State ability 추론
-    let y = Async::await(p)  // Async ability 추론
-    x + y
+fn example(p: Promise(Int)) ->{State(Int), Async} Int {
+    let x = State::get()
+    let y = fn() Async::await(p)   // 람다: ->{Async}로 추론
+    x + y()
 }
-// 추론된 타입: fn example() ->{State(Int), Async} Int
 ```
 
 ### Ability Polymorphism 예시
 
 ```rust
-// f의 ability가 그대로 전파됨
-fn map(f: fn(a) -> b, list: List(a)) -> List(b)
+// f의 ability를 전파하려면 같은 row 변수를 명시
+fn map(f: fn(a) ->{e} b, list: List(a)) ->{e} List(b)
 
 // 순수 함수만 받는 경우 명시
 fn memoize(f: fn(a) ->{} b) ->{} fn(a) ->{} b

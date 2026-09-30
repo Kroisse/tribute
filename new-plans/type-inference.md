@@ -142,8 +142,8 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c
 // 순수 함수 (빈 row)
 fn pure(x: a) ->{} a
 
-// 암묵적 polymorphic (생략 시)
-fn map(xs: List(a), f: fn(a) -> b) -> List(b)
+// 암묵적 polymorphic (생략 시): fresh row 변수
+fn length(xs: List(a)) -> Nat
 ```
 
 `std::io::Io`도 effect row의 concrete label로 전파된다. 다만 compiler-owned
@@ -157,15 +157,16 @@ Named type unification은 declaration identity와 type argument를 모두 비교
 
 ### 암묵적 Effect Polymorphism
 
-Effect annotation이 생략되면 암묵적으로 polymorphic:
+Effect annotation이 생략되면 그 위치마다 fresh row 변수를 쓴 것과 같다:
 
 ```rust
 // 이 두 선언은 동일
-fn map(xs: List(a), f: fn(a) -> b) -> List(b)
-fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
+fn length(xs: List(a)) -> Nat
+fn length(xs: List(a)) ->{e} Nat
 ```
 
-고차 함수에서 전달받은 함수의 effect가 그대로 전파된다.
+생략된 row는 서로 다른 변수이다. 고차 함수가 전달받은 함수의 effect를
+전파하려면 같은 row 변수를 명시한다([Effect Annotation 규칙](#effect-annotation-규칙)).
 
 ### Row 구성 요소
 
@@ -394,8 +395,8 @@ fresh α, β, e
 
 람다 본문을 검사할 때의 누적기는 항상 닫힌 빈 row `{}`에서 시작한다. 본문이
 실제로 요구한 잔여 row가 이미 열려 있으면 그 row를 그대로 callable type에
-기록한다. 잔여 row가 닫혀 있으면 named function의 생략 effect 규칙과 같이
-본문에서 확정한 concrete effect만 보존하고, 람다가 검사된 문맥의 callable
+기록한다. 잔여 row가 닫혀 있으면 본문에서 확정한 concrete effect만 보존하고,
+람다가 검사된 문맥의 callable
 signature가 제공한 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
@@ -655,7 +656,8 @@ let h = compose(
 
 ### Function Type Annotation 규칙
 
-**Top-level 함수는 반드시 타입을 명시**해야 한다:
+**모듈 수준 함수는 반드시 타입을 명시**해야 한다. 소스 파일 최상위와 inline
+`mod` 안의 함수 선언이 모두 해당하며, `main`도 예외가 아니다:
 
 ```rust
 // OK: 파라미터와 반환 타입 명시
@@ -669,6 +671,22 @@ fn add(x, y) -> Int { x + y }
 
 // Error: 반환 타입 누락
 fn add(x: Int, y: Int) { x + y }
+
+// OK: main도 반환 타입을 명시
+fn main() -> Nil { ... }
+```
+
+선언 시그니처가 그 함수의 최종 타입 스킴이다. 본문을 검사해서 시그니처를 더
+구체적으로 만들거나 효과를 덧붙이지 않는다. 시그니처의 타입 변수와 row 변수는
+본문 안에서 rigid하다. 본문이 타입 변수를 구체 타입으로 정하거나, 서로 다른 두
+변수를 같게 만들거나, 선언된 row에 없는 concrete effect를 수행하면 오류이다:
+
+```rust
+// Error: 본문이 `a`를 Nat으로 정함
+fn first(x: a) -> a { 1 }
+
+// Error: 선언된 row에 없는 Ask를 수행
+fn ask_twice() ->{State(Int), e} Nat { Ask::ask() + Ask::ask() }
 ```
 
 **중첩 함수와 람다는 추론 가능**:
@@ -688,11 +706,16 @@ fn example() -> Int {
 3. **증분 컴파일**: 함수 단위로 Salsa 캐싱 가능
 4. **별도 컴파일**: 모듈 간 의존성 분석에 시그니처만 필요
 
-**추론 범위**: 타입 추론은 **함수 본문 내부에서만** 동작한다. 각 함수는 독립적으로 타입 체크되며, 함수 간에 타입 변수가 공유되지 않는다.
+**추론 범위**: 타입 추론은 **함수 본문 내부에서만** 동작한다. 각 함수는
+독립적으로 타입 체크되며, 함수 간에 타입 변수가 공유되지 않는다. 호출하는 쪽은
+피호출 함수의 선언 시그니처만 사용하므로, 검사 순서와 자기 재귀는 결과에 영향을
+주지 않는다.
 
 ### Effect Annotation 규칙
 
-Effect annotation을 생략하면 fresh한 ability 변수가 생성된다:
+Effect annotation을 생략하면 fresh한 ability 변수가 생성된다. 본문의 effect로
+시그니처를 추론하지 않으므로, 생략한 함수의 본문은 concrete ability를 수행할 수
+없다. Ability를 수행하는 함수는 그 ability를 row에 명시한다:
 
 ```rust
 // 단순 함수: 생략 가능
@@ -726,7 +749,8 @@ fn compose(f: fn(a) ->{e1} b, g: fn(b) ->{e2} c) -> fn(a) ->{e1, e2} c
 **참고**: 순수 함수(`->{} T`)와 polymorphic 함수(`-> T`, 즉 `->{e} T`)는 다르다:
 
 - `->{} Int`: 어떤 effect도 수행하지 않음
-- `-> Int`: 암묵적 effect 변수, 컨텍스트의 effect 수행 가능
+- `-> Int`: 암묵적 effect 변수. 본문은 concrete ability를 수행할 수 없지만, 같은
+  row 변수를 쓰는 effect-polymorphic 함수를 호출할 수 있다.
 
 ---
 
