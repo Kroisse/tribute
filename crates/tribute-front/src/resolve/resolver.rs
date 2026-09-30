@@ -517,6 +517,15 @@ impl<'db> Resolver<'db> {
                     ann.kind = TypeAnnotationKind::Path(path.clone());
                 }
             }
+            // A path whose first segment the enclosing inline module imports
+            // continues from the import's package-root path.
+            TypeAnnotationKind::Path(segments) => {
+                if let Some((first, rest)) = segments.split_first()
+                    && let Some(target) = self.module_import(*first)
+                {
+                    *segments = target.iter().chain(rest).copied().collect();
+                }
+            }
             TypeAnnotationKind::App { ctor, .. } => self.resolve_ability_in_annotation(ctor),
             _ => {}
         }

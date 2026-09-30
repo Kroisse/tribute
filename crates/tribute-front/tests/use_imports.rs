@@ -345,3 +345,38 @@ fn main() {
         "{errors:#?}"
     );
 }
+
+/// An effect annotation may reach an ability through a module an inline
+/// module imports under an alias, and its operations are callable unqualified.
+#[salsa_test]
+fn inline_module_import_prefixes_qualified_effect_annotations(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod outer {
+    mod fx {
+        pub ability Tick {
+            op tick() -> Nat
+        }
+    }
+    use fx as effects
+
+    pub fn count() ->{effects::Tick} Nat {
+        tick()
+    }
+
+    pub fn run() -> Nat {
+        handle count() {
+            do result { result }
+            op effects::Tick::tick() { resume 1 }
+        }
+    }
+}
+
+fn main() {
+    let _ = outer::run()
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
