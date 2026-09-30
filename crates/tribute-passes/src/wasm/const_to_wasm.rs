@@ -502,7 +502,7 @@ mod tests {
     }
 
     #[test]
-    fn textual_ir_round_trip_drops_metadata_and_fails_conservatively() {
+    fn textual_ir_round_trip_preserves_the_canonical_string_type() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -522,10 +522,13 @@ mod tests {
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
         let analysis = analyze_consts(&reparsed_ctx, reparsed);
 
-        assert_eq!(analysis.string_enum_ty, None);
+        assert_eq!(
+            analysis.string_enum_ty,
+            Some(type_alias(&reparsed_ctx, "String"))
+        );
         assert_eq!(
             validate_for_wasm(&reparsed_ctx, reparsed, &analysis),
-            Err(ConstValidationError::MissingCanonicalStringType)
+            Ok(())
         );
     }
 
