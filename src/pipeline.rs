@@ -1177,7 +1177,7 @@ pub fn dump_ir(
     Ok(trunk_ir::printer::print_module(&ctx, m.op()))
 }
 
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_deref))]
 fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -> Option<Vec<u8>> {
     let (mut ctx, m) = match run_shared_pipeline(db, source) {
         Ok(Some(result)) => result,
@@ -1221,11 +1221,12 @@ fn compile_to_wasm_binary_tracked(db: &dyn salsa::Database, source: SourceCst) -
 /// Runs the full pipeline (frontend → shared passes → WASM lowering → emit)
 /// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
 ///
-/// Returns the raw WASM bytes on success, or the accumulated diagnostics on failure.
+/// Returns the raw WASM bytes on success, borrowed from the database, or the
+/// accumulated diagnostics on failure.
 pub fn compile_to_wasm_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
-) -> Result<Vec<u8>, Vec<&Diagnostic>> {
+) -> Result<&[u8], Vec<&Diagnostic>> {
     compile_to_wasm_binary_tracked(db, source)
         .ok_or_else(|| compile_to_wasm_binary_tracked::accumulated::<Diagnostic>(db, source))
 }
@@ -1476,7 +1477,7 @@ fn wasm_lowering_failure(error: tribute_passes::wasm::lower::WasmLowerError) -> 
 /// in a single arena session, avoiding Salsa↔Arena round-trips after ast_to_ir.
 ///
 /// Returns `None` if compilation fails, with diagnostics accumulated.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_deref))]
 pub fn compile_to_native_binary(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -3637,7 +3638,7 @@ fn main() { Nil }"#,
         let binary = compile_to_wasm_binary(db, source)
             .expect("unused managed C declaration may be omitted");
         wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-            .validate_all(&binary)
+            .validate_all(binary)
             .expect("unused C declaration must not leave an invalid Wasm definition");
     }
 

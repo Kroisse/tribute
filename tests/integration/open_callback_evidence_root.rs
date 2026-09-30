@@ -50,10 +50,10 @@ fn generic_callback_preserves_evidence_root_and_executes_wasm(db: &salsa::Databa
 
     let binary = compile_to_wasm_binary(db, source).expect("generic root should compile to Wasm");
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-        .validate_all(&binary)
+        .validate_all(binary)
         .expect("generic root must produce a valid Wasm binary");
     let mut file = tempfile::NamedTempFile::new().expect("temporary Wasm file");
-    file.write_all(&binary).expect("write Wasm binary");
+    file.write_all(binary).expect("write Wasm binary");
     let output = Command::new("wasmtime")
         .arg("run")
         .arg(file.path())

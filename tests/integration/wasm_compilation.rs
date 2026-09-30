@@ -22,11 +22,11 @@ use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_to_wasm_binary;
 use tribute_front::SourceCst;
 
-fn expect_wasm_compilation_success(
-    db: &dyn salsa::Database,
+fn expect_wasm_compilation_success<'db>(
+    db: &'db dyn salsa::Database,
     source: SourceCst,
     message: &str,
-) -> Vec<u8> {
+) -> &'db [u8] {
     compile_to_wasm_binary(db, source)
         .unwrap_or_else(|diagnostics| panic!("{message}: {diagnostics:?}"))
 }
@@ -198,7 +198,7 @@ fn main() {
         "Should compile a root main that closes an open callback worker",
     );
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-        .validate_all(&binary)
+        .validate_all(binary)
         .expect("compiled source must produce a valid Wasm binary");
 }
 
@@ -284,7 +284,7 @@ fn main() ->{std::io::Io} Nil {
     let binary =
         expect_wasm_compilation_success(db, source, "Should compile guarded arms after coverage");
     let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
-    wasm.write_all(&binary).expect("write Wasm module");
+    wasm.write_all(binary).expect("write Wasm module");
     let output = Command::new("wasmtime")
         .arg("-Wgc=y,function-references=y")
         .arg(wasm.path())
@@ -359,7 +359,7 @@ fn main() ->{std::io::Io} Nil {
     );
     let binary = expect_wasm_compilation_success(db, source, "Should compile literal patterns");
     let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
-    wasm.write_all(&binary).expect("write Wasm module");
+    wasm.write_all(binary).expect("write Wasm module");
     let output = Command::new("wasmtime")
         .arg("-Wgc=y,function-references=y")
         .arg(wasm.path())
@@ -395,7 +395,7 @@ fn main() ->{std::io::Io} Nil {
     );
     let binary = expect_wasm_compilation_success(db, source, "Should compile String literals");
     let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
-    wasm.write_all(&binary).expect("write Wasm module");
+    wasm.write_all(binary).expect("write Wasm module");
     let output = Command::new("wasmtime")
         .arg("-Wgc=y,function-references=y")
         .arg(wasm.path())
@@ -435,7 +435,7 @@ fn main() ->{std::io::Io} Nil {
     );
     let binary = expect_wasm_compilation_success(db, source, "Should compile bytes reads");
     let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
-    wasm.write_all(&binary).expect("write Wasm module");
+    wasm.write_all(binary).expect("write Wasm module");
     let output = Command::new("wasmtime")
         .arg("-Wgc=y,function-references=y")
         .arg(wasm.path())
@@ -502,7 +502,7 @@ fn main() ->{std::io::Io} Nil {
     );
     let binary = expect_wasm_compilation_success(db, source, "Should compile String equality");
     let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
-    wasm.write_all(&binary).expect("write Wasm module");
+    wasm.write_all(binary).expect("write Wasm module");
     let output = Command::new("wasmtime")
         .arg("-Wgc=y,function-references=y")
         .arg(wasm.path())
@@ -595,7 +595,7 @@ fn main() ->{std::io::Io} Nil {
         "Should compile tail-dispatch ability through wasm effect ABI lowering",
     );
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-        .validate_all(&binary)
+        .validate_all(binary)
         .expect("compiled source must produce a valid Wasm binary");
 }
 
@@ -636,7 +636,7 @@ fn main() ->{std::io::Io} Nil {
         "Should compile CPS ability dispatch through wasm effect ABI lowering",
     );
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-        .validate_all(&binary)
+        .validate_all(binary)
         .expect("compiled source must produce a valid Wasm binary");
 }
 
