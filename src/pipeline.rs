@@ -217,7 +217,7 @@ pub enum NativePipelineStage {
 }
 
 // AST-based pipeline imports
-use tribute_front::ast::{Decl, Expr, ExprKind, ResolvedRef, SpanMap, Stmt, TypedRef};
+use tribute_front::ast::{Decl, Expr, ExprKind, SpanMap, Stmt, TypedRef};
 use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
@@ -258,45 +258,30 @@ fn parse_prelude<'db>(db: &'db dyn salsa::Database) -> Option<(ParsedAst<'db>, c
     Some((parsed, prelude_source))
 }
 
-/// Type alias for resolved AST module.
-type ResolvedModule<'db> = tribute_front::ast::Module<ResolvedRef<'db>>;
-
-/// Parse and resolve names in the prelude.
+/// Parse, resolve, type check, and apply TDNR to the prelude once.
 ///
-/// Returns the resolved AST, span map, and SourceCst, ready for type checking.
-fn resolve_prelude(
-    db: &dyn salsa::Database,
-) -> Option<(ResolvedModule<'_>, SpanMap, crate::SourceCst)> {
-    let (parsed, prelude_source) = parse_prelude(db)?;
+/// Returns both the typed prelude, which user modules import methods from and
+/// merge before lowering, and the exports injected into their type checking.
+/// Salsa caches the result for all subsequent compilations.
+#[salsa::tracked(returns(copy))]
+fn checked_prelude<'db>(
+    db: &'db dyn salsa::Database,
+) -> Option<(ast_typeck::TypeCheckOutput<'db>, PreludeExports<'db>)> {
+    let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
-
     let prelude_env = ast_resolve::build_env(db, prelude_ast);
     let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
 
-    Some((resolved, span_map, prelude_source))
-}
-
-/// Load and cache the prelude's typed AST using the AST pipeline.
-///
-/// This is a Salsa tracked function, so the prelude is parsed only once
-/// and cached for all subsequent compilations.
-///
-/// Returns the typed AST (parse → resolve → typecheck → TDNR) without
-/// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
-#[salsa::tracked(returns(copy))]
-fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'db>> {
-    let (resolved, span_map, _prelude_source) = resolve_prelude(db)?;
-
-    // Typecheck with independent TypeContext
+    // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
-    let result = checker.check_module_as_prelude(&resolved);
+    let (result, exports) = checker.check_prelude(&resolved);
 
     // TDNR for remaining MethodCall → Call AST transformations
     let mut tdnr_ast = result.module;
     ast_tdnr::resolve_tdnr(db, &mut tdnr_ast, std::iter::empty());
 
-    Some(ast_typeck::TypeCheckOutput::new(
+    let typed = ast_typeck::TypeCheckOutput::new(
         db,
         tdnr_ast,
         result.function_types,
@@ -314,7 +299,14 @@ fn prelude_module<'db>(db: &'db dyn salsa::Database) -> Option<ast_typeck::TypeC
         result.exhaustive_cases,
         result.well_known_types,
         span_map,
-    ))
+    );
+    Some((typed, exports))
+}
+
+/// The prelude's typed AST (parse → resolve → typecheck → TDNR), without
+/// lowering to TrunkIR. The caller is responsible for `ast_to_ir`.
+fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutput<'_>> {
+    checked_prelude(db).map(|(typed, _)| typed)
 }
 
 /// Create a SourceCst for the prelude.
@@ -341,23 +333,10 @@ fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
     Some(ast_resolve::build_env(db, prelude_ast))
 }
 
-/// Process prelude through AST pipeline and extract type exports.
-///
-/// This function:
-/// 1. Uses `resolve_prelude` for parsing and name resolution (cached)
-/// 2. Type checks prelude with independent TypeContext (all UniVars resolved)
-/// 3. Extracts PreludeExports (TypeSchemes only, no UniVars)
-///
-/// Cached by Salsa - computed once and reused.
-#[salsa::tracked(returns(copy))]
-fn prelude_exports<'db>(db: &'db dyn salsa::Database) -> Option<PreludeExports<'db>> {
-    let (resolved, span_map, _) = resolve_prelude(db)?;
-
-    // Typecheck with independent TypeContext (all UniVars resolved)
-    let checker = ast_typeck::TypeChecker::new(db, span_map);
-    let prelude_exports = checker.check_module_for_prelude(&resolved);
-
-    Some(prelude_exports)
+/// The prelude's type exports (TypeSchemes only, no UniVars), injected into
+/// user module type checking.
+fn prelude_exports(db: &dyn salsa::Database) -> Option<PreludeExports<'_>> {
+    checked_prelude(db).map(|(_, exports)| exports)
 }
 
 /// Merge prelude decls into user's typed AST and lower to arena IR.

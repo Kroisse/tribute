@@ -45,18 +45,15 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
         prelude_span_map.clone(),
     );
 
-    // Type-check for PreludeExports (for type injection)
-    let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map.clone());
-    let exports = checker.check_module_for_prelude(&resolved_prelude);
-
-    // Type-check to get typed module (for TDNR imports)
-    let checker2 = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
-    let result2 = checker2.check_module_as_prelude(&resolved_prelude);
+    // Type-check once for both the exports injected into user modules and
+    // the typed module that TDNR imports methods from.
+    let checker = tribute_front::typeck::TypeChecker::new(db, prelude_span_map);
+    let (result, exports) = checker.check_prelude(&resolved_prelude);
 
     Some(PreludeData {
         exports,
         env,
-        typed_module: result2.module,
+        typed_module: result.module,
     })
 }
 
