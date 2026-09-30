@@ -33,15 +33,16 @@ const FRONT_STAGE_PROGRAMS: [&str; 2] = ["fibonacci", "state_handler"];
 
 fn compile_stages(c: &mut Criterion) {
     for program in PROGRAMS {
-        let shared = match stages::through_shared(program) {
-            Ok(shared) => shared,
+        let frontend = match stages::frontend(program) {
+            Ok(frontend) => frontend,
             Err(error) => {
                 eprintln!("skipping {}: {error}", program.name);
                 continue;
             }
         };
         let mut group = c.benchmark_group(format!("compile/{}", program.name));
-        if FRONT_STAGE_PROGRAMS.contains(&program.name) {
+        let front_stages = FRONT_STAGE_PROGRAMS.contains(&program.name);
+        if front_stages {
             group.bench_function("frontend", |b| {
                 b.iter_batched(
                     || (),
@@ -49,7 +50,17 @@ fn compile_stages(c: &mut Criterion) {
                     BatchSize::PerIteration,
                 )
             });
-            let frontend = stages::frontend(program).expect("frontend");
+        }
+        // A shared middle-end failure skips only the stages that need its output.
+        let shared = match stages::shared_middle_end(frontend.clone()) {
+            Ok(shared) => shared,
+            Err(error) => {
+                eprintln!("skipping {} after the frontend: {error}", program.name);
+                group.finish();
+                continue;
+            }
+        };
+        if front_stages {
             group.bench_function("shared_middle_end", |b| {
                 b.iter_batched(
                     || frontend.clone(),
