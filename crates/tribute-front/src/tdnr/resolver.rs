@@ -229,9 +229,8 @@ impl<'db> TdnrResolver<'db> {
                             }
                         };
                         let self_ty =
-                            self.annotation_to_type_in_scope(&Some(self_annotation), prefix);
-                        let field_ty =
-                            self.annotation_to_type_in_scope(&Some(field.ty.clone()), prefix);
+                            self.annotation_to_type_in_scope(Some(&self_annotation), prefix);
+                        let field_ty = self.annotation_to_type_in_scope(Some(&field.ty), prefix);
 
                         let effect = crate::ast::EffectRow::pure(self.db);
                         let func_ty = Type::new(
@@ -274,14 +273,14 @@ impl<'db> TdnrResolver<'db> {
         let params: Vec<Type<'db>> = func
             .params
             .iter()
-            .map(|p| self.annotation_to_type_in_scope(&p.ty, prefix))
+            .map(|p| self.annotation_to_type_in_scope(p.ty.as_ref(), prefix))
             .collect();
 
         // Get return type from annotation or infer from body
         let result = func
             .return_ty
             .as_ref()
-            .map(|ann| self.annotation_to_type_in_scope(&Some(ann.clone()), prefix))
+            .map(|ann| self.annotation_to_type_in_scope(Some(ann), prefix))
             .unwrap_or_else(|| {
                 // Try to get return type from body expression
                 self.get_expr_type(&func.body)
@@ -325,20 +324,20 @@ impl<'db> TdnrResolver<'db> {
             self.db,
             anns,
             "",
-            &mut |ann| self.annotation_to_type_in_scope(&Some(ann.clone()), prefix),
+            &mut |ann| self.annotation_to_type_in_scope(Some(ann), prefix),
             || unreachable!("TDNR does not support open effect rows"),
         )
     }
 
     /// Convert a type annotation to a Type.
     #[cfg(test)]
-    fn annotation_to_type(&self, annotation: &Option<crate::ast::TypeAnnotation>) -> Type<'db> {
+    fn annotation_to_type(&self, annotation: Option<&crate::ast::TypeAnnotation>) -> Type<'db> {
         self.annotation_to_type_in_scope(annotation, &self.current_prefix)
     }
 
     fn annotation_to_type_in_scope(
         &self,
-        annotation: &Option<crate::ast::TypeAnnotation>,
+        annotation: Option<&crate::ast::TypeAnnotation>,
         prefix: &str,
     ) -> Type<'db> {
         use crate::ast::{TypeAnnotationKind, TypeKind};
@@ -369,10 +368,10 @@ impl<'db> TdnrResolver<'db> {
                 )
             }
             TypeAnnotationKind::App { ctor, args } => {
-                let ctor_ty = self.annotation_to_type_in_scope(&Some((**ctor).clone()), prefix);
+                let ctor_ty = self.annotation_to_type_in_scope(Some(ctor), prefix);
                 let arg_tys: Vec<Type<'db>> = args
                     .iter()
-                    .map(|a| self.annotation_to_type_in_scope(&Some(a.clone()), prefix))
+                    .map(|a| self.annotation_to_type_in_scope(Some(a), prefix))
                     .collect();
                 Type::new(
                     self.db,
@@ -894,7 +893,7 @@ mod tests {
             kind: TypeAnnotationKind::Named(Symbol::new("Rune")),
         });
 
-        let ty = resolver.annotation_to_type(&ann);
+        let ty = resolver.annotation_to_type(ann.as_ref());
         assert!(
             matches!(*ty.kind(&db), TypeKind::Rune),
             "Expected Rune type, got {:?}",
