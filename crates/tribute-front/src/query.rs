@@ -204,7 +204,7 @@ pub fn function_schemes<'db>(
 // tracked queries of their own.
 
 /// Find the function declaration named `name` in `module`.
-fn find_func<V: salsa::SalsaValue>(module: &Module<V>, name: Symbol) -> Option<&FuncDecl<V>> {
+fn find_func<V>(module: &Module<V>, name: Symbol) -> Option<&FuncDecl<V>> {
     module.decls.iter().find_map(|decl| match decl {
         Decl::Function(f) if f.name == name => Some(f),
         _ => None,
