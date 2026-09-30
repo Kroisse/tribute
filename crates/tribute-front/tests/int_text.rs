@@ -191,7 +191,7 @@ fn use_through() -> Nat { through(0) }
     generic_extern_specialization_has_a_logical_signature_inner(db, source);
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn generic_extern_specialization_has_a_logical_signature_inner(
     db: &dyn salsa::Database,
     source: SourceCst,
@@ -384,7 +384,7 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
 /// The public typecheck-to-logical-lowering boundary carries deterministic,
 /// exact operation declarations rather than reconstructing them from printed
 /// operations. First source use is bounce, then echo; handler repeats dedupe.
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
     let ast = parsed.module(db);
@@ -599,7 +599,7 @@ fn use_bool() ->{} Bool { apply(True) }
     assert!(errors.is_empty(), "{errors:?}");
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
     use std::ops::ControlFlow;
     use tribute_ir::dialect::tribute_control::{Call, CallingConvention, Func, FuncSig, Lambda};

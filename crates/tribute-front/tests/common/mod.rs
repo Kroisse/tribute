@@ -148,7 +148,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     print_module(&ir, module.module.op())
 }
 
-#[salsa::tracked(returns(copy))]
+#[salsa::tracked]
 fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source);
     assert!(parsed.is_some(), "Should parse successfully");
