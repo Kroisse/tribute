@@ -15,6 +15,10 @@
 //! This allows the same AST structure to be used throughout compilation
 //! while the type system ensures correct phase handling.
 //!
+//! The types themselves place no bound on `V`. Each implements
+//! `salsa::SalsaValue` exactly when `V` does, so code that only walks or
+//! rebuilds the tree needs no Salsa bound of its own.
+//!
 //! ## NodeId + SpanMap Pattern
 //!
 //! Following rust-analyzer's approach, AST nodes don't store spans directly.
@@ -69,3 +73,65 @@ pub use pattern::*;
 pub use phases::*;
 pub use span_map::*;
 pub use types::*;
+
+#[cfg(test)]
+mod tests {
+    use std::marker::PhantomData;
+
+    use super::*;
+
+    /// Reports whether `T` implements `salsa::SalsaValue`: the inherent
+    /// method exists only under that bound and takes precedence over the
+    /// trait fallback.
+    struct Probe<T>(PhantomData<T>);
+
+    trait NotSalsaValue {
+        fn is_salsa_value(&self) -> bool {
+            false
+        }
+    }
+
+    impl<T> NotSalsaValue for Probe<T> {}
+
+    impl<T: salsa::SalsaValue> Probe<T> {
+        fn is_salsa_value(&self) -> bool {
+            true
+        }
+    }
+
+    /// A phase value that Salsa cannot store.
+    #[derive(Clone, Debug, PartialEq, Eq, Hash)]
+    struct Opaque;
+
+    macro_rules! assert_salsa_value_follows_phase {
+        ($($ty:ident),* $(,)?) => {$(
+            assert!(
+                Probe::<$ty<UnresolvedName>>(PhantomData).is_salsa_value(),
+                concat!(stringify!($ty), " stores a Salsa phase value"),
+            );
+            assert!(
+                !Probe::<$ty<Opaque>>(PhantomData).is_salsa_value(),
+                concat!(stringify!($ty), " requires a Salsa phase value"),
+            );
+        )*};
+    }
+
+    #[test]
+    fn ast_nodes_are_salsa_values_exactly_when_their_phase_is() {
+        assert_salsa_value_follows_phase!(
+            Module,
+            Decl,
+            FuncDecl,
+            ModuleDecl,
+            Expr,
+            ExprKind,
+            Stmt,
+            Arm,
+            HandlerArm,
+            HandlerKind,
+            Pattern,
+            PatternKind,
+            FieldPattern,
+        );
+    }
+}

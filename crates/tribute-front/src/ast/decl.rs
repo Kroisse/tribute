@@ -18,10 +18,7 @@ use super::types::TypeAnnotation;
 ///
 /// This is the top-level AST node for a source file.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct Module<V>
-where
-    V: salsa::SalsaValue,
-{
+pub struct Module<V> {
     /// Node ID for span lookup.
     pub id: NodeId,
     /// The module name (derived from file path or explicit module declaration).
@@ -30,10 +27,7 @@ where
     pub decls: Vec<Decl<V>>,
 }
 
-impl<V> Module<V>
-where
-    V: salsa::SalsaValue,
-{
+impl<V> Module<V> {
     /// Create a new module.
     pub fn new(id: NodeId, name: Option<Symbol>, decls: Vec<Decl<V>>) -> Self {
         Self { id, name, decls }
@@ -42,10 +36,7 @@ where
 
 /// A declaration in a module.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub enum Decl<V>
-where
-    V: salsa::SalsaValue,
-{
+pub enum Decl<V> {
     /// Function declaration.
     Function(FuncDecl<V>),
     /// Extern function declaration (no body).
@@ -83,10 +74,7 @@ pub struct ExternFuncDecl {
 
 /// Function declaration: `fn name(params) -> ReturnType { body }`
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct FuncDecl<V>
-where
-    V: salsa::SalsaValue,
-{
+pub struct FuncDecl<V> {
     /// Node ID for span lookup.
     pub id: NodeId,
     /// Whether this function is public.
@@ -239,10 +227,7 @@ pub struct UseDecl {
 
 /// Inline module declaration: `mod name { ... }`
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct ModuleDecl<V>
-where
-    V: salsa::SalsaValue,
-{
+pub struct ModuleDecl<V> {
     /// Node ID for span lookup.
     pub id: NodeId,
     /// Module name.

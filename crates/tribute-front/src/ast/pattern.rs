@@ -14,10 +14,7 @@ use super::node_id::NodeId;
 
 /// A pattern in the AST, parameterized by phase type `V`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct Pattern<V>
-where
-    V: salsa::SalsaValue,
-{
+pub struct Pattern<V> {
     /// Unique identifier for span lookup.
     pub id: NodeId,
     /// The kind of pattern.
@@ -26,10 +23,7 @@ where
     pub kind: Box<PatternKind<V>>,
 }
 
-impl<V> Pattern<V>
-where
-    V: salsa::SalsaValue,
-{
+impl<V> Pattern<V> {
     /// Create a new pattern with the given ID and kind.
     pub fn new(id: NodeId, kind: PatternKind<V>) -> Self {
         Self {
@@ -41,10 +35,7 @@ where
 
 /// The different kinds of patterns.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub enum PatternKind<V>
-where
-    V: salsa::SalsaValue,
-{
+pub enum PatternKind<V> {
     /// Wildcard pattern: `_`
     ///
     /// Matches anything without binding.
@@ -113,10 +104,7 @@ where
 
 /// A field in a record pattern.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
-pub struct FieldPattern<V>
-where
-    V: salsa::SalsaValue,
-{
+pub struct FieldPattern<V> {
     /// Unique identifier for span lookup.
     pub id: NodeId,
     /// The field name.

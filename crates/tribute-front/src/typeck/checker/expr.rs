@@ -2659,7 +2659,7 @@ impl<'db> TypeChecker<'db> {
 
     /// The field type of each field of a record pattern, in source order,
     /// taken from its constructor instance.
-    fn record_pattern_field_types<V: salsa::SalsaValue>(
+    fn record_pattern_field_types<V>(
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         pattern_id: NodeId,
