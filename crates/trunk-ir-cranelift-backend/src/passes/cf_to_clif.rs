@@ -85,7 +85,7 @@ pub fn rebuild_op_as(ctx: &mut IrContext, op: OpRef, dialect: Symbol, name: Symb
     let loc = data.location;
     let attrs = data.attributes.clone();
     let regions = data.regions.clone();
-    let successors = data.successors.to_vec();
+    let successors = data.successors.clone();
     let operands: Vec<_> = ctx.op_operands(op).to_vec();
     let result_types: Vec<_> = ctx.op_result_types(op).to_vec();
 

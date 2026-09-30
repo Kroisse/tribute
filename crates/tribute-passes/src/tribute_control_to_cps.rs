@@ -1354,7 +1354,7 @@ impl<'a> Converter<'a> {
         let result_types: Vec<_> = self.ctx.op_result_types(source).to_vec();
         let attrs = data.attributes.clone();
         let regions = data.regions.clone();
-        let successors = data.successors.to_vec();
+        let successors = data.successors.clone();
         if !successors.is_empty() {
             return Err(self.malformed_source(
                 source,
