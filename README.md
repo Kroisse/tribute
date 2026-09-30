@@ -1,6 +1,7 @@
 # Tribute
 
 [![codecov](https://codecov.io/github/Kroisse/tribute/graph/badge.svg?token=T09M1R6UGG)](https://codecov.io/github/Kroisse/tribute)
+[![CodSpeed Badge](https://img.shields.io/endpoint?url=https://app.codspeed.io/badge.json)](https://app.codspeed.io/Kroisse/tribute?utm_source=badge)
 
 A pure, practical functional language that's easy to learn with simple and
 familiar syntax.

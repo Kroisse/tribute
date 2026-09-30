@@ -22,3 +22,7 @@ criterion.workspace = true
 [[bench]]
 name = "abi_boundary"
 harness = false
+
+[lints.rust]
+# `cargo codspeed build` sets `--cfg codspeed`.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(codspeed)"] }
