@@ -120,7 +120,7 @@ fn prepare_root<'db>(
         typed.perform_operations(db).clone(),
         typed.lambda_signatures(db).clone(),
         typed.exhaustive_cases(db).clone(),
-        typed.well_known_types(db),
+        *typed.well_known_types(db),
         typed.span_map(db).clone(),
     );
     let prepared = prepare_frontend_for_lowering(db, input, source);

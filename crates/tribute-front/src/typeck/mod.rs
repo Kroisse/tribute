@@ -274,7 +274,6 @@ pub struct TypeCheckOutput<'db> {
     /// Case expressions which type checking proved exhaustive.
     pub exhaustive_cases: Vec<NodeId>,
     /// Prelude-defined semantic type identities.
-    #[returns(copy)]
     pub well_known_types: WellKnownTypes<'db>,
     /// Source span information for AST nodes.
     #[returns(clone)]
@@ -321,7 +320,6 @@ pub struct PreludeExports<'db> {
         Vec<crate::typeck::context::AbilityOpInfo<'db>>,
     )>,
     /// Prelude-defined semantic type identities.
-    #[returns(copy)]
     pub well_known_types: WellKnownTypes<'db>,
 }
 

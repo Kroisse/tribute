@@ -418,7 +418,7 @@ impl<'db> ModuleTypeEnv<'db> {
     /// This is called before type checking user code to make prelude's
     /// types available. The injected types contain only BoundVars (no UniVars).
     pub fn inject_prelude(&mut self, exports: &super::PreludeExports<'db>) {
-        self.well_known_types = exports.well_known_types(self.db);
+        self.well_known_types = *exports.well_known_types(self.db);
         for (id, scheme) in exports.function_types(self.db) {
             self.function_types.insert(*id, *scheme);
         }

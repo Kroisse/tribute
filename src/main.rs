@@ -259,7 +259,7 @@ fn debug_file(path: std::path::PathBuf, show_env: bool) {
         if show_env {
             println!("\n=== Module Environment ===");
             if let Some(parsed) = parsed_ast(db, source) {
-                let env = build_env(db, &parsed.module(db));
+                let env = build_env(db, parsed.module(db));
                 println!("{:#?}", env);
             } else {
                 println!("(Failed to parse AST)");

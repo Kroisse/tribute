@@ -75,7 +75,6 @@ pub fn lower_cst_to_ast(source: &Rope, cst: &ParsedCst) -> Module<UnresolvedName
 #[salsa::tracked]
 pub struct ParsedAst<'db> {
     /// The parsed AST module with unresolved names.
-    #[returns(clone)]
     pub module: Module<UnresolvedName>,
     /// The span map for looking up source locations.
     #[returns(clone)]
@@ -142,7 +141,7 @@ pub fn lower_source_to_ast(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<UnresolvedName>> {
-    lower_source_to_parsed_ast(db, source).map(|parsed| parsed.module(db))
+    lower_source_to_parsed_ast(db, source).map(|parsed| parsed.module(db).clone())
 }
 
 // =============================================================================

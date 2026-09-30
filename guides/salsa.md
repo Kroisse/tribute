@@ -26,11 +26,20 @@ analysis infrastructure, not Salsa dependency tracking.
 
 ## Salsa 0.28 Value and Return Contracts
 
-Salsa field getters and tracked functions return references by default. Tribute
-explicitly uses `#[returns(copy)]` for small values and Salsa handles,
-`#[returns(clone)]` for owned data, and `#[returns(ref)]` or
-`returns(deref)` where callers already borrow data. This keeps existing
-ownership boundaries stable, especially when a caller retains a query result
+Salsa field getters and tracked functions return references by default, so
+Tribute does not write `returns(ref)`. It chooses another mode as follows:
+
+- `returns(copy)` for small `Copy` values and Salsa handles.
+- `returns(deref)` for a `Vec` or `String` whose callers only borrow, so they
+  see `&[T]` or `&str`.
+- `returns(as_ref)` for an `Option<T>` whose callers only borrow, so they see
+  `Option<&T>`; `returns(as_deref)` when `T` itself derefs, as for
+  `Option<Vec<T>>`.
+- `returns(clone)` only when callers need an owned value, for example a
+  binary returned from a public API independently of the database borrow.
+  A caller that needs ownership of a borrowed result clones it itself.
+
+A borrowed result is tied to the `&db` borrow, so a caller must finish with it
 before mutating an input to start another revision.
 
 Salsa uses `PartialEq` to decide whether a recomputed value changed. Ordinary

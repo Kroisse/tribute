@@ -118,12 +118,12 @@ pub fn parsed_ast_with_module_path<'db>(
 ///
 /// This is the entry point for parsing. The result is cached by Salsa.
 /// Use `span_map` to get the corresponding span information.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 pub fn parsed_module(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<UnresolvedName>> {
-    parsed_ast(db, source).map(|parsed| parsed.module(db))
+    parsed_ast(db, source).map(|parsed| parsed.module(db).clone())
 }
 
 /// Get the span map for a parsed source file.
@@ -162,7 +162,7 @@ pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<ResolvedRef<'db>>> {
-    let module = parsed_module(db, source)?;
+    let module = parsed_module(db, source)?.clone();
     let sm = span_map(db, source)?;
     Some(crate::resolve::resolve_module(db, module, sm))
 }
@@ -231,8 +231,8 @@ pub fn parsed_func(
 ) -> Option<FuncDecl<UnresolvedName>> {
     let module = parsed_module(db, source)?;
 
-    module.decls.into_iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f),
+    module.decls.iter().find_map(|decl| match decl {
+        Decl::Function(f) if f.name == name => Some(f.clone()),
         _ => None,
     })
 }

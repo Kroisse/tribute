@@ -333,11 +333,11 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 ///
 /// This parses the prelude to AST and builds its module environment.
 /// Cached by Salsa - computed once and reused.
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = parsed.module(db);
-    Some(ast_resolve::build_env(db, &prelude_ast))
+    Some(ast_resolve::build_env(db, prelude_ast))
 }
 
 /// Process prelude through AST pipeline and extract type exports.
@@ -402,7 +402,7 @@ pub fn prepare_frontend_for_lowering<'db>(
     prepare_frontend_details(db, typed, source).map(|prepared| prepared.typed)
 }
 
-#[salsa::tracked(returns(clone))]
+#[salsa::tracked(returns(as_ref))]
 fn prepare_frontend_details<'db>(
     db: &'db dyn salsa::Database,
     typed: ast_typeck::TypeCheckOutput<'db>,
@@ -634,7 +634,7 @@ fn prepare_frontend_details<'db>(
             .exhaustive_cases
             .into_iter()
             .collect::<Vec<_>>(),
-        typed.well_known_types(db),
+        *typed.well_known_types(db),
         merged_span_map,
     );
     Some(PreparedFrontend {
@@ -652,7 +652,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
     let prepared = prepare_frontend_details(db, *typed, source)
         .expect("frontend instances must be checked before lowering");
     let typed = prepared.typed;
-    let compiler_intrinsics = prepared.compiler_intrinsics;
+    let compiler_intrinsics = prepared.compiler_intrinsics.clone();
     let mut ir = IrContext::new();
     let module = lower(
         ast_to_ir::TypedModule {
@@ -691,7 +691,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             perform_operations: typed.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
-            well_known_types: typed.well_known_types(db),
+            well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
         },
         db,
@@ -1559,7 +1559,7 @@ pub fn parse_and_lower_ast<'db>(
     // Phase 2: Build user env and merge prelude bindings
     let mut user_env = ast_resolve::build_env(db, &user_ast);
     if let Some(p_env) = prelude_env(db) {
-        user_env.merge(&p_env); // Prelude bindings injected, user definitions take precedence
+        user_env.merge(p_env); // Prelude bindings injected, user definitions take precedence
     }
     // Resolve `use` imports that reference prelude modules (e.g., `use abilities::Abort`)
     ast_resolve::resolve_use_imports(&mut user_env);
