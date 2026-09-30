@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+use salsa::Accumulator;
+use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -185,8 +187,9 @@ impl<'db> TypeChecker<'db> {
     ///
     /// This is called during declaration collection (Phase 1) to register
     /// function signatures in ModuleTypeEnv. Type variables in annotations
-    /// are converted to BoundVars here, since actual type inference happens
-    /// per-function in check_func_decl.
+    /// are converted to BoundVars here. The declared signature is the
+    /// function's final scheme, so every parameter type and the return type
+    /// must be written; a missing one is reported and typed as an error.
     fn collect_function_signature(&mut self, func: &FuncDecl<ResolvedRef<'db>>) {
         // Per-function map: same lowercase name → same BoundVar index
         let mut vars = SignatureVariables::default();
@@ -197,26 +200,24 @@ impl<'db> TypeChecker<'db> {
             .iter()
             .map(|p| match &p.ty {
                 Some(ann) => self.annotation_to_type_for_sig(ann, &mut vars),
-                // No annotation: use a fresh BoundVar (will be inferred during function body check)
-                None => {
-                    let index = vars.next_type;
-                    vars.next_type += 1;
-                    Type::new(self.db(), TypeKind::BoundVar { index })
-                }
+                None => self.missing_signature_type(
+                    p.id,
+                    format!(
+                        "function `{}` needs a type annotation for parameter `{}`",
+                        func.name, p.name
+                    ),
+                ),
             })
             .collect();
 
         // Build return type from annotation
-        let return_ty = func
-            .return_ty
-            .as_ref()
-            .map(|ann| self.annotation_to_type_for_sig(ann, &mut vars))
-            .unwrap_or_else(|| {
-                // No annotation: use a fresh BoundVar
-                let index = vars.next_type;
-                vars.next_type += 1;
-                Type::new(self.db(), TypeKind::BoundVar { index })
-            });
+        let return_ty = match &func.return_ty {
+            Some(ann) => self.annotation_to_type_for_sig(ann, &mut vars),
+            None => self.missing_signature_type(
+                func.id,
+                format!("function `{}` needs a return type", func.name),
+            ),
+        };
         // Build effect row from annotations (effects don't have BoundVars for now)
         let (effect, effect_origins) = match &func.effects {
             Some(anns) => {
@@ -263,6 +264,18 @@ impl<'db> TypeChecker<'db> {
             self.env
                 .register_method(func.name, MethodEntry { func_id, func_ty });
         }
+    }
+
+    /// Report a missing part of a function signature, typed as an error.
+    fn missing_signature_type(&self, node: crate::ast::NodeId, message: String) -> Type<'db> {
+        Diagnostic::new(
+            message,
+            self.get_span(node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+        .accumulate(self.db());
+        Type::new(self.db(), TypeKind::Error)
     }
 
     /// Collect an extern function's type signature.

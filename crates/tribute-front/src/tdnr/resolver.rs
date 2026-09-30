@@ -316,15 +316,15 @@ impl<'db> TdnrResolver<'db> {
             return EffectRow::pure(self.db);
         }
 
-        // TDNR builds closed rows only (no fresh row variables).
-        // Lowercase names and Infer annotations are filtered out by the shared helper.
-        // We use an empty prefix since TDNR works after resolution phase.
+        // TDNR matches receivers by parameter types; an open row only needs
+        // a tail, the same one an omitted annotation gets. We use an empty
+        // prefix since TDNR works after resolution phase.
         crate::ast::abilities_to_effect_row(
             self.db,
             anns,
             "",
             &mut |ann| self.annotation_to_type_in_scope(Some(ann), prefix),
-            || unreachable!("TDNR does not support open effect rows"),
+            || crate::ast::EffectVar { id: 0 },
         )
     }
 
