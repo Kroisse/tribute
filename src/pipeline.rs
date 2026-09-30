@@ -2167,7 +2167,7 @@ fn main() {
             }
             .unwrap_or_else(|error| panic!("{path}: target boundary failed: {error}"));
             kinds.extend(
-                verify_boundary_exit(&ctx, module)
+                verify_boundary_exit(&ctx, module, target)
                     .into_iter()
                     .map(|violation| violation.kind),
             );
@@ -3745,8 +3745,9 @@ mod Nested {
         };
         assert_eq!(
             identity("Int::+"),
-            Some(None),
-            "arithmetic lowering is the last reader of its identities"
+            None,
+            "arithmetic lowering is the last reader of its identities and removes \
+             declarations nothing references"
         );
         assert_eq!(
             identity("__bytes_get_or_panic"),
@@ -3789,6 +3790,41 @@ mod Nested {
                 );
             }
         }
+    }
+
+    #[salsa_test]
+    fn wasm_lowering_carries_only_preserved_or_pending_language_metadata(db: &salsa::DatabaseImpl) {
+        use tribute_passes::abi_boundary::{
+            TargetKind, ViolationKind, is_preserved_attribute, pending_boundary_violations,
+        };
+
+        let source = source_from_str(
+            "wasm_dynamic_output.trb",
+            include_str!("../lang-examples/wasm_dynamic_output.trb"),
+        );
+        let (mut ctx, module) = run_shared_pipeline(db, source)
+            .expect("shared pipeline must succeed")
+            .expect("fixture must lower");
+        run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
+        tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut AnalysisCache::new())
+            .expect("Wasm lowering");
+
+        // Wasm lowering copies operation attributes without interpreting
+        // them, so what it carries is exactly what the boundary let through.
+        let mut unexpected = std::collections::BTreeSet::new();
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            for name in ctx.op(op).attributes.keys() {
+                let name = name.to_string();
+                let pending = pending_boundary_violations(TargetKind::Wasm)
+                    .iter()
+                    .any(|entry| entry.covers(&ViolationKind::ForbiddenAttribute(name.clone())));
+                if name.starts_with("tribute.") && !is_preserved_attribute(&name) && !pending {
+                    unexpected.insert(format!("{}.{} {name}", ctx.op(op).dialect, ctx.op(op).name));
+                }
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        assert!(unexpected.is_empty(), "{unexpected:#?}");
     }
 
     #[salsa_test]

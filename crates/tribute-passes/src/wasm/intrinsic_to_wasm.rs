@@ -6,7 +6,9 @@
 //! layout. The bytes element read intrinsic is lowered inside the boundary by
 //! `wasm/bytes.rs`.
 
-use tribute_ir::ModulePathExt;
+use std::rc::Rc;
+
+use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -16,6 +18,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
+use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::TypeDataBuilder;
 
 use trunk_ir_wasm_backend::gc_types::{BYTES_ARRAY_IDX, BYTES_STRUCT_IDX};
@@ -72,33 +75,41 @@ fn extract_bytes_fields(
     (fields, ops)
 }
 
-/// Lower target-independent Bytes intrinsic calls.
+/// C link name of the bytes length helper.
+pub const BYTES_LEN: &str = "__tribute_bytes_len";
+/// C link name of the bytes concatenation helper.
+pub const BYTES_CONCAT: &str = "__tribute_bytes_concat";
+/// C link name of the bytes range comparison helper.
+pub const BYTES_RANGE_EQUAL: &str = "__tribute_bytes_range_equal";
+
+/// Bind calls to the `extern "C"` bytes helpers to WasmGC operations.
 pub fn lower(ctx: &mut IrContext, module: Module) {
+    let symbols = Rc::new(SymbolTable::collect(ctx, module));
     let applicator = PatternApplicator::new(TypeConverter::new())
-        .add_pattern(BytesLenPattern)
-        .add_pattern(BytesRangeEqualPattern)
-        .add_pattern(BytesConcatPattern);
+        .add_pattern(BytesLenPattern(Rc::clone(&symbols)))
+        .add_pattern(BytesRangeEqualPattern(Rc::clone(&symbols)))
+        .add_pattern(BytesConcatPattern(symbols));
 
     applicator.apply_partial(ctx, module);
 }
 
 // =============================================================================
-// Bytes intrinsic patterns
+// Bytes helper patterns
 // =============================================================================
 
-/// Check whether an operation calls one of the target-lowered Bytes helpers.
-fn is_bytes_intrinsic_call(ctx: &IrContext, op: OpRef, intrinsic_names: &[&str]) -> bool {
-    let Ok(call) = wasm_dialect::Call::from_op(ctx, op) else {
-        return false;
-    };
-    let callee = call.callee(ctx).last_segment();
-    intrinsic_names.iter().any(|name| callee == *name)
+/// Whether `op` calls the C helper `helper`: its callee resolves to a
+/// bodyless `abi = "C"` declaration with that link name.
+fn calls_c_helper(ctx: &IrContext, symbols: &SymbolTable, op: OpRef, helper: &'static str) -> bool {
+    wasm_dialect::Call::from_op(ctx, op).is_ok_and(|call| {
+        super::runtime_bindings::c_helper(ctx, symbols, call.callee(ctx))
+            .is_some_and(|name| name == Symbol::new(helper))
+    })
 }
 
-/// Pattern for `__bytes_len(bytes)` -> `struct.get $bytes 2`
+/// Pattern for `__tribute_bytes_len(bytes)` -> `struct.get $bytes 2`
 ///
 /// Returns i32 directly since Nat is mapped to i32.
-struct BytesLenPattern;
+struct BytesLenPattern(Rc<SymbolTable>);
 
 impl RewritePattern for BytesLenPattern {
     fn match_and_rewrite(
@@ -107,7 +118,7 @@ impl RewritePattern for BytesLenPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(ctx, op, &["__bytes_len", "__tribute_bytes_len"]) {
+        if !calls_c_helper(ctx, &self.0, op, BYTES_LEN) {
             return false;
         }
 
@@ -140,7 +151,7 @@ impl RewritePattern for BytesLenPattern {
 /// The generated Wasm loop compares bytes directly in the two backing arrays
 /// and exits at the first mismatch. String equality invokes this once per pair
 /// of contiguous rope-leaf spans rather than once per logical byte.
-struct BytesRangeEqualPattern;
+struct BytesRangeEqualPattern(Rc<SymbolTable>);
 
 impl RewritePattern for BytesRangeEqualPattern {
     fn match_and_rewrite(
@@ -149,7 +160,7 @@ impl RewritePattern for BytesRangeEqualPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(ctx, op, &["__tribute_bytes_range_equal"]) {
+        if !calls_c_helper(ctx, &self.0, op, BYTES_RANGE_EQUAL) {
             return false;
         }
 
@@ -318,8 +329,8 @@ fn value_break_region(
     })
 }
 
-/// Pattern for `Bytes::concat(left, right)` -> allocate new array and copy both
-struct BytesConcatPattern;
+/// Pattern for `__tribute_bytes_concat(left, right)` -> allocate a new array and copy both
+struct BytesConcatPattern(Rc<SymbolTable>);
 
 impl RewritePattern for BytesConcatPattern {
     fn match_and_rewrite(
@@ -328,7 +339,7 @@ impl RewritePattern for BytesConcatPattern {
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        if !is_bytes_intrinsic_call(ctx, op, &["__bytes_concat", "__tribute_bytes_concat"]) {
+        if !calls_c_helper(ctx, &self.0, op, BYTES_CONCAT) {
             return false;
         }
 

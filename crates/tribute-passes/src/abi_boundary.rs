@@ -44,11 +44,29 @@ const PRESERVED_ATTRIBUTES: &[&str] = &[
     "tribute.type.string",
 ];
 
+/// Whether `name` is language-specific metadata the boundary preserves.
+pub fn is_preserved_attribute(name: &str) -> bool {
+    PRESERVED_ATTRIBUTES.contains(&name)
+}
+
 /// The target whose boundary exit is verified.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TargetKind {
     Native,
     Wasm,
+}
+
+impl TargetKind {
+    /// Whether this target binds the C helper whose link name is `name`.
+    ///
+    /// Native links every C name through the runtime library and the linker;
+    /// Wasm binds only the helpers it implements.
+    pub fn binds_c_helper(self, name: Symbol) -> bool {
+        match self {
+            TargetKind::Native => true,
+            TargetKind::Wasm => crate::wasm::runtime_bindings::provides(name),
+        }
+    }
 }
 
 /// One class of boundary exit violation.
@@ -78,6 +96,9 @@ pub enum ViolationKind {
     /// A function definition or indirect call without an exact signature.
     #[display("missing exact callable signature")]
     MissingExactSignature,
+    /// A referenced C declaration that the target does not bind.
+    #[display("unsatisfiable runtime binding {_0}")]
+    UnsatisfiableRuntimeBinding(String),
 }
 
 /// A single boundary exit violation.
@@ -90,11 +111,17 @@ pub struct BoundaryViolation {
     pub detail: String,
 }
 
-/// Report every boundary exit violation in `module`, in IR order.
+/// Report every boundary exit violation in `module` for `target`, in IR
+/// order.
 ///
 /// Operations, aliases, result types, block arguments and their attributes,
-/// and nested type parameters and attributes are all inspected.
-pub fn verify_boundary_exit(ctx: &IrContext, module: Module) -> Vec<BoundaryViolation> {
+/// and nested type parameters and attributes are all inspected. Referenced C
+/// declarations that `target` does not bind are reported last.
+pub fn verify_boundary_exit(
+    ctx: &IrContext,
+    module: Module,
+    target: TargetKind,
+) -> Vec<BoundaryViolation> {
     let mut verifier = Verifier::new(ctx);
     for &(name, ty) in ctx.type_aliases() {
         verifier.check_type(ty, None, &format!("alias !{name}"));
@@ -105,9 +132,10 @@ pub fn verify_boundary_exit(ctx: &IrContext, module: Module) -> Vec<BoundaryViol
         ControlFlow::Continue(WalkAction::Advance)
     });
     let functions = SymbolTable::collect(ctx, module);
-    for op in ops {
+    for &op in &ops {
         verifier.check_op(op, &functions);
     }
+    verifier.check_runtime_bindings(&ops, &functions, target);
     verifier.violations
 }
 
@@ -123,6 +151,9 @@ pub enum PendingViolation {
     /// An attribute that has not been classified yet.
     #[display("unclassified attribute {_0}")]
     Unclassified(&'static str),
+    /// A C helper the target does not bind yet.
+    #[display("unsatisfiable runtime binding {_0}")]
+    UnboundHelper(&'static str),
 }
 
 impl PendingViolation {
@@ -139,6 +170,9 @@ impl PendingViolation {
             (Self::Unclassified(expected), ViolationKind::UnclassifiedAttribute(name)) => {
                 name == expected
             }
+            (Self::UnboundHelper(expected), ViolationKind::UnsatisfiableRuntimeBinding(name)) => {
+                name == expected
+            }
             _ => false,
         }
     }
@@ -146,12 +180,20 @@ impl PendingViolation {
 
 /// Violations still present at the exit of `target`'s boundary.
 pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViolation] {
-    const PENDING: &[PendingViolation] = &[
+    const NATIVE: &[PendingViolation] = &[
         // Read past the exit by native ownership planning.
         PendingViolation::Attribute("tribute.calling_convention"),
     ];
+    const WASM: &[PendingViolation] = &[
+        NATIVE[0],
+        // C helpers the Wasm target has no implementation of yet; emission
+        // rejects programs that reach them.
+        PendingViolation::UnboundHelper("__tribute_next_tag"),
+        PendingViolation::UnboundHelper("__tribute_bytes_slice_or_panic"),
+    ];
     match target {
-        TargetKind::Native | TargetKind::Wasm => PENDING,
+        TargetKind::Native => NATIVE,
+        TargetKind::Wasm => WASM,
     }
 }
 
@@ -162,7 +204,7 @@ pub fn unexpected_boundary_violations(
     target: TargetKind,
 ) -> Vec<BoundaryViolation> {
     let pending = pending_boundary_violations(target);
-    verify_boundary_exit(ctx, module)
+    verify_boundary_exit(ctx, module, target)
         .into_iter()
         .filter(|violation| !pending.iter().any(|entry| entry.covers(&violation.kind)))
         .collect()
@@ -192,6 +234,49 @@ impl<'a> Verifier<'a> {
 
     fn report(&mut self, kind: ViolationKind, op: Option<OpRef>, detail: String) {
         self.violations.push(BoundaryViolation { kind, op, detail });
+    }
+
+    /// Report each C declaration referenced from another operation that
+    /// `target` does not bind.
+    fn check_runtime_bindings(
+        &mut self,
+        ops: &[OpRef],
+        functions: &SymbolTable,
+        target: TargetKind,
+    ) {
+        let ctx = self.ctx;
+        let mut unbound = Vec::new();
+        for &op in ops {
+            for value in ctx.op(op).attributes.values() {
+                let Attribute::Symbol(reference) = value else {
+                    continue;
+                };
+                let Some(declaration) = functions.resolve(*reference) else {
+                    continue;
+                };
+                if declaration == op
+                    || unbound.contains(&declaration)
+                    || !crate::wasm::runtime_bindings::is_c_declaration(ctx, declaration)
+                {
+                    continue;
+                }
+                let Some(name) = ctx.op(declaration).attributes.get_symbol("sym_name") else {
+                    continue;
+                };
+                if !target.binds_c_helper(name) {
+                    unbound.push(declaration);
+                }
+            }
+        }
+        for declaration in unbound {
+            let name = ctx.op(declaration).attributes.get_symbol("sym_name");
+            let name = name.map(|name| name.to_string()).unwrap_or_default();
+            self.report(
+                ViolationKind::UnsatisfiableRuntimeBinding(name.clone()),
+                Some(declaration),
+                format!("C declaration @{name} is referenced but {target:?} does not bind it"),
+            );
+        }
     }
 
     fn check_op(&mut self, op: OpRef, functions: &SymbolTable) {
@@ -385,7 +470,7 @@ mod tests {
     fn kinds(input: &str) -> Vec<ViolationKind> {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        verify_boundary_exit(&ctx, module)
+        verify_boundary_exit(&ctx, module, TargetKind::Native)
             .into_iter()
             .map(|violation| violation.kind)
             .collect()
@@ -393,6 +478,46 @@ mod tests {
 
     fn attribute(name: &str) -> ViolationKind {
         ViolationKind::ForbiddenAttribute(name.to_owned())
+    }
+
+    const RUNTIME_BINDINGS: &str = r#"core.module @test {
+  func.func @__tribute_evidence_lookup(%ev: core.ptr, %id: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @__tribute_bytes_len(%bytes: core.bytes) -> core.i32 attributes {abi = "C"}
+  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
+  func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @unused_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @main(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
+    %tag = func.call {callee = @__tribute_next_tag} : core.i32
+    %id = func.call %tag {callee = @user_bridge} : core.i32
+    %marker = func.call %ev, %id {callee = @__tribute_evidence_lookup} : core.i32
+    %len = func.call %bytes {callee = @__tribute_bytes_len} : core.i32
+    func.return %len
+  }
+}"#;
+
+    fn runtime_binding_violations(target: TargetKind) -> Vec<ViolationKind> {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, RUNTIME_BINDINGS);
+        verify_boundary_exit(&ctx, module, target)
+            .into_iter()
+            .map(|violation| violation.kind)
+            .collect()
+    }
+
+    #[test]
+    fn wasm_rejects_referenced_c_declarations_it_does_not_bind() {
+        assert_eq!(
+            runtime_binding_violations(TargetKind::Wasm),
+            [
+                ViolationKind::UnsatisfiableRuntimeBinding("__tribute_next_tag".to_owned()),
+                ViolationKind::UnsatisfiableRuntimeBinding("user_bridge".to_owned()),
+            ]
+        );
+    }
+
+    #[test]
+    fn native_links_every_c_declaration() {
+        assert_eq!(runtime_binding_violations(TargetKind::Native), []);
     }
 
     #[test]
@@ -522,7 +647,7 @@ mod tests {
             Attribute::Type(nil),
         );
         assert_eq!(
-            verify_boundary_exit(&ctx, module)
+            verify_boundary_exit(&ctx, module, TargetKind::Native)
                 .into_iter()
                 .map(|violation| violation.kind)
                 .collect::<Vec<_>>(),
@@ -655,7 +780,7 @@ mod tests {
   }
 }"#,
         );
-        let sites: Vec<_> = verify_boundary_exit(&ctx, module)
+        let sites: Vec<_> = verify_boundary_exit(&ctx, module, TargetKind::Native)
             .into_iter()
             .filter(|violation| violation.kind == ViolationKind::NeverCallableResult)
             .map(|violation| violation.op)

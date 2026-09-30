@@ -223,10 +223,11 @@ fn test_execute_dynamic_bytes_write_boundary() {
     let right = "y".repeat(35_000);
     let ir = format!(
         r#"core.module @test {{
+  func.func @__tribute_bytes_concat(%left: core.bytes, %right: core.bytes) -> core.bytes attributes {{abi = "C"}}
   func.func @main() -> core.nil {{
     %left = adt.bytes_const {{value = b"{left}"}} : core.bytes
     %right = adt.bytes_const {{value = b"{right}"}} : core.bytes
-    %joined = func.call %left, %right {{callee = @__bytes_concat}} : core.bytes
+    %joined = func.call %left, %right {{callee = @__tribute_bytes_concat}} : core.bytes
     %newline = arith.const {{value = 1}} : core.i1
     %result = tribute_io.write %joined, %newline : core.nil
     func.return

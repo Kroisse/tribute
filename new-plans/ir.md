@@ -515,7 +515,9 @@ mutation 전에 검증하며, unknown directive나 signature mismatch는 lowerin
 Compiler intrinsic identity는 prelude와 사용자 선언을 병합한 AST 전체에서
 monomorphization 전에 검증한다. 미사용 generic 선언과 중첩 모듈의 선언도 포함하며, 지원하지 않는 모든
 directive를 각 선언의 source span에서 진단한다. 등록된 compiler
-intrinsic의 logical callable convention은 항상 `Direct`이다. Generic specialization은 base
+intrinsic의 logical callable convention은 항상 `Direct`이다. Intrinsic lowering은
+identity의 마지막 독자다. 직접 호출을 모두 낮춘 뒤 identity를 소비하고, 참조가 남지
+않은 선언은 지운다. Generic specialization은 base
 identity를 concrete declaration으로 transport할 수 있지만, mangled name을 parse하여
 identity를 복구하지 않는다. Private runtime helper는 target stage에서만 physical
 signature로 만들며
@@ -1177,9 +1179,14 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   이때 runtime 초기화, 종료 코드, sanitizer 초기화처럼 platform 고유 작업만 더하고,
   별도 진입 함수를 만들거나 `main`의 이름을 바꾸지 않는다.
 - **Runtime helper 바인딩:** 출구에서 참조가 남은 bodyless 선언은 명시적 바인딩
-  의도를 가진다. Target이 충족할 수 없다고 알려진 helper(예: 해당 target에 없는
-  runtime allocator)에 대한 참조는 emission이 아니라 경계 출구 검증에서 거부한다.
-  최종 import 등록과 미참조 선언의 처분은 target emission이 정한다.
+  의도를 가진다. `abi = "C"` 선언은 C linkage이므로 선언의 symbol 이름이 곧 바인딩
+  정체성이다. 이는 symbol 철자에서 의미를 추론하는 것이 아니라 FFI 선언이 명시한
+  링크 이름이다. 각 target은 자신이 충족하는 C 바인딩을 명시적으로 선언한다. Native는
+  runtime library와 링커가 C 이름을 해석하므로 모든 C 선언을 충족한다고 본다. Wasm은
+  target이 구현을 제공하는 runtime helper 목록만 충족하며, 그 목록은 구현과 같은
+  곳에서 정의한다. 참조되는 C 선언을 target이 충족하지 못하면 emission이 아니라 경계
+  출구 검증이 거부한다. 최종 import 등록과 미참조 선언의 처분은 target emission이
+  정한다.
 
 #### 출구 적법성
 
