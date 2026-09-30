@@ -894,7 +894,7 @@ fn substitute_pattern<'db>(
             fields,
             rest,
         } => PatternKind::Record {
-            type_name: type_name.map(|tn| subst_typed_ref(db, tn, type_args)),
+            type_name: subst_typed_ref(db, type_name, type_args),
             fields: fields
                 .into_iter()
                 .map(|f| FieldPattern {
@@ -997,7 +997,7 @@ mod tests {
         let let_pattern = Pattern::new(
             node_id(10),
             PatternKind::Record {
-                type_name: None,
+                type_name: typed_ref(2),
                 fields: vec![FieldPattern {
                     id: node_id(11),
                     name: Symbol::new("field"),

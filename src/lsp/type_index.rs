@@ -406,9 +406,7 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
             PatternKind::Record {
                 type_name, fields, ..
             } => {
-                if let Some(tn) = type_name {
-                    self.add_entry(pattern.id, tn.ty);
-                }
+                self.add_entry(pattern.id, type_name.ty);
                 for field in fields {
                     if let Some(p) = &field.pattern {
                         self.collect_pattern(p);

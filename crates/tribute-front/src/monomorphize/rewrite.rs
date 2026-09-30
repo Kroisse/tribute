@@ -719,7 +719,7 @@ fn rewrite_types_in_pattern<'db>(
             fields,
             rest,
         } => PatternKind::Record {
-            type_name: type_name.map(|tn| rewrite_typed_ref_type(db, tn, map)),
+            type_name: rewrite_typed_ref_type(db, type_name, map),
             fields: fields
                 .into_iter()
                 .map(|f| FieldPattern {

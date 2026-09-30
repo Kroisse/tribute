@@ -254,9 +254,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 Pat::Ctor(ctor, fields)
             }
             PatternKind::Record {
-                type_name: Some(type_name),
-                fields,
-                ..
+                type_name, fields, ..
             } => {
                 let ResolvedRef::Constructor { id, variant } = type_name.resolved else {
                     self.saw_error = true;
@@ -281,26 +279,6 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                     positional[index] = self.lower(pattern);
                 }
                 Pat::Ctor(ctor, positional)
-            }
-            PatternKind::Record {
-                type_name: None,
-                fields,
-                ..
-            } if fields.iter().all(|field| {
-                field.pattern.as_ref().is_none_or(|pattern| {
-                    matches!(
-                        &*pattern.kind,
-                        PatternKind::Wildcard | PatternKind::Bind { .. }
-                    )
-                })
-            }) =>
-            {
-                Pat::Wild
-            }
-            // A record without a constructor name has no known shape.
-            PatternKind::Record { .. } => {
-                self.unanalyzable = true;
-                Pat::Wild
             }
             PatternKind::Error => {
                 self.saw_error = true;

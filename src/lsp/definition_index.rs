@@ -706,10 +706,8 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             PatternKind::Record {
                 type_name, fields, ..
             } => {
-                if let Some(tn) = type_name {
-                    let target = self.resolve_typed_ref(tn);
-                    self.add_reference(pattern.id, target);
-                }
+                let target = self.resolve_typed_ref(type_name);
+                self.add_reference(pattern.id, target);
                 for field in fields {
                     if let Some(p) = &field.pattern {
                         self.collect_pattern(p);

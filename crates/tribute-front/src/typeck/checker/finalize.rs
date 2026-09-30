@@ -518,8 +518,12 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 rest,
             } => PatternKind::Record {
-                type_name: type_name
-                    .map(|t| self.apply_subst_to_typed_ref(t, type_subst, row_subst, var_to_index)),
+                type_name: self.apply_subst_to_typed_ref(
+                    type_name,
+                    type_subst,
+                    row_subst,
+                    var_to_index,
+                ),
                 fields: fields
                     .into_iter()
                     .map(|f| {
@@ -762,9 +766,7 @@ impl<'db> TypeChecker<'db> {
             PatternKind::Record {
                 type_name, fields, ..
             } => {
-                if let Some(t) = type_name {
-                    type_subst.collect_univars_from_type(self.db(), t.ty, row_subst, out);
-                }
+                type_subst.collect_univars_from_type(self.db(), type_name.ty, row_subst, out);
                 for f in fields {
                     if let Some(p) = &f.pattern {
                         self.collect_univars_from_pattern(p, type_subst, row_subst, out);

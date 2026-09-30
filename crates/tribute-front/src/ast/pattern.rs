@@ -69,9 +69,11 @@ where
     /// The `ctor` is the constructor reference (phase-dependent).
     Variant { ctor: V, fields: Vec<Pattern<V>> },
 
-    /// Record pattern: `{ name, age: a }`
+    /// Brace-form constructor pattern: `User { name, age: a, .. }`.
+    ///
+    /// Fields are matched by name against the constructor's declaration.
     Record {
-        type_name: Option<V>,
+        type_name: V,
         fields: Vec<FieldPattern<V>>,
         /// Whether there's a `..` to ignore remaining fields.
         rest: bool,
