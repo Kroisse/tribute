@@ -4,6 +4,8 @@
 //! function orchestration supplies the solved state and binder mapping.
 
 use super::TypeChecker;
+use crate::ast::NodeId;
+use crate::ast::visit::{RefSite, Visit};
 use crate::ast::{
     Arm, Expr, ExprKind, FieldPattern, FuncDefId, HandlerArm, HandlerKind, Pattern, PatternKind,
     ResolvedRef, Stmt, Type, TypedRef, UniVarId,
@@ -596,7 +598,29 @@ impl<'db> TypeChecker<'db> {
         row_subst: &RowSubst<'db>,
         out: &mut Vec<UniVarId<'db>>,
     ) {
-        self.collect_univars_from_expr_kind(&body.kind, type_subst, row_subst, out);
+        struct Collect<'a, 'db> {
+            db: &'db dyn salsa::Database,
+            type_subst: &'a TypeSubst<'db>,
+            row_subst: &'a RowSubst<'db>,
+            out: &'a mut Vec<UniVarId<'db>>,
+        }
+        impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Collect<'_, 'db> {
+            fn visit_ref(&mut self, _: RefSite, _: NodeId, value: &'ast TypedRef<'db>) {
+                self.type_subst.collect_univars_from_type(
+                    self.db,
+                    value.ty,
+                    self.row_subst,
+                    self.out,
+                );
+            }
+        }
+        Collect {
+            db: self.db(),
+            type_subst,
+            row_subst,
+            out,
+        }
+        .visit_expr(body);
     }
 
     pub(super) fn collect_univars_from_deferred_resolutions(
@@ -611,181 +635,6 @@ impl<'db> TypeChecker<'db> {
         for node_id in node_ids {
             let (_, callee_ty) = deferred_resolutions[&node_id];
             type_subst.collect_univars_from_type(self.db(), callee_ty, row_subst, out);
-        }
-    }
-
-    fn collect_univars_from_expr_kind(
-        &self,
-        kind: &ExprKind<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        match kind {
-            ExprKind::NatLit(_)
-            | ExprKind::IntLit(_)
-            | ExprKind::FloatLit(_)
-            | ExprKind::BoolLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::BytesLit(_)
-            | ExprKind::Nil
-            | ExprKind::RuneLit(_)
-            | ExprKind::Error => {}
-
-            ExprKind::Var(typed_ref) => {
-                type_subst.collect_univars_from_type(self.db(), typed_ref.ty, row_subst, out);
-            }
-            ExprKind::Call { callee, args } => {
-                self.collect_univars_from_body(callee, type_subst, row_subst, out);
-                for arg in args {
-                    self.collect_univars_from_body(arg, type_subst, row_subst, out);
-                }
-            }
-            ExprKind::Cons { ctor, args } => {
-                type_subst.collect_univars_from_type(self.db(), ctor.ty, row_subst, out);
-                for arg in args {
-                    self.collect_univars_from_body(arg, type_subst, row_subst, out);
-                }
-            }
-            ExprKind::Record {
-                type_name,
-                fields,
-                spread,
-            } => {
-                type_subst.collect_univars_from_type(self.db(), type_name.ty, row_subst, out);
-                for (_, expr) in fields {
-                    self.collect_univars_from_body(expr, type_subst, row_subst, out);
-                }
-                if let Some(e) = spread {
-                    self.collect_univars_from_body(e, type_subst, row_subst, out);
-                }
-            }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                self.collect_univars_from_body(receiver, type_subst, row_subst, out);
-                for arg in args {
-                    self.collect_univars_from_body(arg, type_subst, row_subst, out);
-                }
-            }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                self.collect_univars_from_body(lhs, type_subst, row_subst, out);
-                self.collect_univars_from_body(rhs, type_subst, row_subst, out);
-            }
-            ExprKind::Block { stmts, value } => {
-                for stmt in stmts {
-                    self.collect_univars_from_stmt(stmt, type_subst, row_subst, out);
-                }
-                self.collect_univars_from_body(value, type_subst, row_subst, out);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                self.collect_univars_from_body(scrutinee, type_subst, row_subst, out);
-                for arm in arms {
-                    self.collect_univars_from_pattern(&arm.pattern, type_subst, row_subst, out);
-                    if let Some(g) = &arm.guard {
-                        self.collect_univars_from_body(g, type_subst, row_subst, out);
-                    }
-                    self.collect_univars_from_body(&arm.body, type_subst, row_subst, out);
-                }
-            }
-            ExprKind::Lambda { body, .. } => {
-                self.collect_univars_from_body(body, type_subst, row_subst, out);
-            }
-            ExprKind::Handle { body, handlers } => {
-                self.collect_univars_from_body(body, type_subst, row_subst, out);
-                for handler in handlers {
-                    match &handler.kind {
-                        HandlerKind::Do { binding } => {
-                            self.collect_univars_from_pattern(binding, type_subst, row_subst, out);
-                        }
-                        HandlerKind::Fn {
-                            ability, params, ..
-                        }
-                        | HandlerKind::Op {
-                            ability, params, ..
-                        } => {
-                            type_subst.collect_univars_from_type(
-                                self.db(),
-                                ability.ty,
-                                row_subst,
-                                out,
-                            );
-                            for p in params {
-                                self.collect_univars_from_pattern(p, type_subst, row_subst, out);
-                            }
-                        }
-                    }
-                    self.collect_univars_from_body(&handler.body, type_subst, row_subst, out);
-                }
-            }
-            ExprKind::Resume { arg, .. } => {
-                self.collect_univars_from_body(arg, type_subst, row_subst, out);
-            }
-            ExprKind::Tuple(elems) | ExprKind::List(elems) => {
-                for elem in elems {
-                    self.collect_univars_from_body(elem, type_subst, row_subst, out);
-                }
-            }
-        }
-    }
-
-    fn collect_univars_from_stmt(
-        &self,
-        stmt: &Stmt<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        match stmt {
-            Stmt::Let { pattern, value, .. } => {
-                self.collect_univars_from_pattern(pattern, type_subst, row_subst, out);
-                self.collect_univars_from_body(value, type_subst, row_subst, out);
-            }
-            Stmt::Expr { expr, .. } => {
-                self.collect_univars_from_body(expr, type_subst, row_subst, out);
-            }
-        }
-    }
-
-    fn collect_univars_from_pattern(
-        &self,
-        pattern: &Pattern<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        out: &mut Vec<UniVarId<'db>>,
-    ) {
-        match &*pattern.kind {
-            PatternKind::Wildcard
-            | PatternKind::Bind { .. }
-            | PatternKind::Literal(_)
-            | PatternKind::Error => {}
-            PatternKind::Variant { ctor, fields } => {
-                type_subst.collect_univars_from_type(self.db(), ctor.ty, row_subst, out);
-                for f in fields {
-                    self.collect_univars_from_pattern(f, type_subst, row_subst, out);
-                }
-            }
-            PatternKind::Record {
-                type_name, fields, ..
-            } => {
-                type_subst.collect_univars_from_type(self.db(), type_name.ty, row_subst, out);
-                for f in fields {
-                    if let Some(p) = &f.pattern {
-                        self.collect_univars_from_pattern(p, type_subst, row_subst, out);
-                    }
-                }
-            }
-            PatternKind::Tuple(pats) | PatternKind::List(pats) => {
-                for p in pats {
-                    self.collect_univars_from_pattern(p, type_subst, row_subst, out);
-                }
-            }
-            PatternKind::ListRest { head, .. } => {
-                for p in head {
-                    self.collect_univars_from_pattern(p, type_subst, row_subst, out);
-                }
-            }
-            PatternKind::As { pattern, .. } => {
-                self.collect_univars_from_pattern(pattern, type_subst, row_subst, out);
-            }
         }
     }
 }

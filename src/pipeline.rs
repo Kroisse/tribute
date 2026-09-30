@@ -217,7 +217,8 @@ pub enum NativePipelineStage {
 }
 
 // AST-based pipeline imports
-use tribute_front::ast::{Decl, Expr, ExprKind, SpanMap, Stmt, TypedRef};
+use tribute_front::ast::visit::{Visit, walk_expr, walk_module};
+use tribute_front::ast::{Expr, ExprKind, SpanMap, TypedRef};
 use tribute_front::ast_to_ir;
 use tribute_front::astgen::ParsedAst;
 use tribute_front::query as ast_query;
@@ -1600,121 +1601,25 @@ fn report_unresolved_methods<'db>(
     module: &tribute_front::ast::Module<TypedRef<'db>>,
     span_map: &SpanMap,
 ) {
-    fn visit_decl<'db>(
+    struct Report<'a, 'db> {
         db: &'db dyn salsa::Database,
-        decl: &Decl<TypedRef<'db>>,
-        span_map: &SpanMap,
-    ) {
-        match decl {
-            Decl::Function(function) => visit_expr(db, &function.body, span_map),
-            Decl::Module(module) => {
-                if let Some(body) = &module.body {
-                    for decl in body {
-                        visit_decl(db, decl, span_map);
-                    }
-                }
-            }
-            Decl::ExternFunction(_)
-            | Decl::Struct(_)
-            | Decl::Enum(_)
-            | Decl::Ability(_)
-            | Decl::Use(_) => {}
-        }
+        span_map: &'a SpanMap,
     }
-
-    fn visit_expr<'db>(
-        db: &'db dyn salsa::Database,
-        expr: &Expr<TypedRef<'db>>,
-        span_map: &SpanMap,
-    ) {
-        match expr.kind.as_ref() {
-            ExprKind::MethodCall {
-                receiver,
-                method,
-                args,
-            } => {
+    impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Report<'_, 'db> {
+        fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
+            if let ExprKind::MethodCall { method, .. } = &*expr.kind {
                 Diagnostic::new(
                     format!("unresolved method '{}' for this receiver type", method),
-                    span_map.get_or_default(expr.id),
+                    self.span_map.get_or_default(expr.id),
                     DiagnosticSeverity::Error,
                     CompilationPhase::TypeChecking,
                 )
-                .accumulate(db);
-                visit_expr(db, receiver, span_map);
-                for arg in args {
-                    visit_expr(db, arg, span_map);
-                }
+                .accumulate(self.db);
             }
-            ExprKind::Call { callee, args } => {
-                visit_expr(db, callee, span_map);
-                for arg in args {
-                    visit_expr(db, arg, span_map);
-                }
-            }
-            ExprKind::Cons { args, .. } => {
-                for arg in args {
-                    visit_expr(db, arg, span_map);
-                }
-            }
-            ExprKind::Record { fields, spread, .. } => {
-                for (_, value) in fields {
-                    visit_expr(db, value, span_map);
-                }
-                if let Some(spread) = spread {
-                    visit_expr(db, spread, span_map);
-                }
-            }
-            ExprKind::Block { stmts, value } => {
-                for statement in stmts {
-                    match statement {
-                        Stmt::Let { value, .. } => visit_expr(db, value, span_map),
-                        Stmt::Expr { expr, .. } => visit_expr(db, expr, span_map),
-                    }
-                }
-                visit_expr(db, value, span_map);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                visit_expr(db, scrutinee, span_map);
-                for arm in arms {
-                    if let Some(guard) = &arm.guard {
-                        visit_expr(db, guard, span_map);
-                    }
-                    visit_expr(db, &arm.body, span_map);
-                }
-            }
-            ExprKind::Lambda { body, .. } => visit_expr(db, body, span_map),
-            ExprKind::Handle { body, handlers } => {
-                visit_expr(db, body, span_map);
-                for handler in handlers {
-                    visit_expr(db, &handler.body, span_map);
-                }
-            }
-            ExprKind::Resume { arg, .. } => visit_expr(db, arg, span_map),
-            ExprKind::Tuple(elements) | ExprKind::List(elements) => {
-                for element in elements {
-                    visit_expr(db, element, span_map);
-                }
-            }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                visit_expr(db, lhs, span_map);
-                visit_expr(db, rhs, span_map);
-            }
-            ExprKind::Var(_)
-            | ExprKind::NatLit(_)
-            | ExprKind::IntLit(_)
-            | ExprKind::FloatLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::BytesLit(_)
-            | ExprKind::BoolLit(_)
-            | ExprKind::Nil
-            | ExprKind::RuneLit(_)
-            | ExprKind::Error => {}
+            walk_expr(self, expr);
         }
     }
-
-    for decl in &module.decls {
-        visit_decl(db, decl, span_map);
-    }
+    walk_module(&mut Report { db, span_map }, module);
 }
 
 /// Run the shared pipeline for diagnostic collection only.

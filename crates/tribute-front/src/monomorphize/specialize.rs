@@ -5,6 +5,7 @@ use std::num::NonZero;
 
 use trunk_ir::Symbol;
 
+use crate::ast::visit::Visit;
 use crate::ast::{
     Arm, Decl, EnumDecl, Expr, ExprKind, ExternFuncDecl, FieldDecl, FieldPattern, FuncDecl,
     FuncDefId, HandlerArm, HandlerKind, Module, NodeId, Pattern, PatternKind, Stmt, StructDecl,
@@ -127,134 +128,15 @@ pub(super) fn generate_specializations<'db>(
 }
 
 fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
-    fn pattern<'db>(value: &Pattern<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
-        ids.insert(value.id);
-        match value.kind.as_ref() {
-            PatternKind::Variant { fields, .. }
-            | PatternKind::Tuple(fields)
-            | PatternKind::List(fields) => {
-                for field in fields {
-                    pattern(field, ids);
-                }
-            }
-            PatternKind::Record { fields, .. } => {
-                for field in fields {
-                    ids.insert(field.id);
-                    if let Some(field_pattern) = &field.pattern {
-                        pattern(field_pattern, ids);
-                    }
-                }
-            }
-            PatternKind::ListRest { head, .. } => {
-                for head_pattern in head {
-                    pattern(head_pattern, ids);
-                }
-            }
-            PatternKind::As { pattern: inner, .. } => pattern(inner, ids),
-            PatternKind::Wildcard
-            | PatternKind::Bind { .. }
-            | PatternKind::Literal(_)
-            | PatternKind::Error => {}
+    struct Ids(HashSet<NodeId>);
+    impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Ids {
+        fn visit_node_id(&mut self, id: NodeId) {
+            self.0.insert(id);
         }
     }
-
-    fn expr<'db>(value: &Expr<TypedRef<'db>>, ids: &mut HashSet<NodeId>) {
-        ids.insert(value.id);
-        match value.kind.as_ref() {
-            ExprKind::Call { callee, args } => {
-                expr(callee, ids);
-                for arg in args {
-                    expr(arg, ids);
-                }
-            }
-            ExprKind::Block { stmts, value } => {
-                for stmt in stmts {
-                    match stmt {
-                        Stmt::Let {
-                            id,
-                            pattern: binding,
-                            value,
-                            ..
-                        } => {
-                            ids.insert(*id);
-                            pattern(binding, ids);
-                            expr(value, ids);
-                        }
-                        Stmt::Expr { id, expr: value } => {
-                            ids.insert(*id);
-                            expr(value, ids);
-                        }
-                    }
-                }
-                expr(value, ids);
-            }
-            ExprKind::Case { scrutinee, arms } => {
-                expr(scrutinee, ids);
-                for arm in arms {
-                    ids.insert(arm.id);
-                    pattern(&arm.pattern, ids);
-                    if let Some(guard) = &arm.guard {
-                        expr(guard, ids);
-                    }
-                    expr(&arm.body, ids);
-                }
-            }
-            ExprKind::Lambda { body, .. } => expr(body, ids),
-            ExprKind::Handle { body, handlers } => {
-                expr(body, ids);
-                for handler in handlers {
-                    ids.insert(handler.id);
-                    match &handler.kind {
-                        HandlerKind::Do { binding } => pattern(binding, ids),
-                        HandlerKind::Fn { params, .. } | HandlerKind::Op { params, .. } => {
-                            for param in params {
-                                pattern(param, ids);
-                            }
-                        }
-                    }
-                    expr(&handler.body, ids);
-                }
-            }
-            ExprKind::Resume { arg, .. } => expr(arg, ids),
-            ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
-                for arg in args {
-                    expr(arg, ids);
-                }
-            }
-            ExprKind::Record { fields, spread, .. } => {
-                for (_, value) in fields {
-                    expr(value, ids);
-                }
-                if let Some(value) = spread {
-                    expr(value, ids);
-                }
-            }
-            ExprKind::MethodCall { receiver, args, .. } => {
-                expr(receiver, ids);
-                for arg in args {
-                    expr(arg, ids);
-                }
-            }
-            ExprKind::BinOp { lhs, rhs, .. } => {
-                expr(lhs, ids);
-                expr(rhs, ids);
-            }
-            ExprKind::Var(_)
-            | ExprKind::NatLit(_)
-            | ExprKind::IntLit(_)
-            | ExprKind::FloatLit(_)
-            | ExprKind::StringLit(_)
-            | ExprKind::BytesLit(_)
-            | ExprKind::BoolLit(_)
-            | ExprKind::RuneLit(_)
-            | ExprKind::Nil
-            | ExprKind::Error => {}
-        }
-    }
-    let mut ids = HashSet::new();
-    ids.insert(func.id);
-    expr(&func.body, &mut ids);
-    ids
+    let mut ids = Ids(HashSet::new());
+    ids.visit_func_decl(func);
+    ids.0
 }
 
 // ============================================================================

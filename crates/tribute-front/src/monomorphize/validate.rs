@@ -1,8 +1,8 @@
 //! Validate checker-selected instances on executable reference paths before erasure.
 use super::{MonomorphizeMetadata, collect::is_concrete_type};
+use crate::ast::visit::for_each_expr;
 use crate::ast::{
-    Decl, Expr, ExprKind, FuncDecl, FuncDefId, Module, NodeId, ResolvedRef, Stmt, Type, TypeScheme,
-    TypedRef,
+    Decl, ExprKind, FuncDecl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
 };
 use std::collections::{HashMap, HashSet};
 use trunk_ir::Symbol;
@@ -112,7 +112,7 @@ pub(super) fn validate<'db>(
             break;
         }
         let mut nodes = Vec::new();
-        walk(&func.body, &mut |node| nodes.push(node));
+        for_each_expr(&func.body, |node| nodes.push(node));
         for expr in nodes {
             if let Some(op) = metadata.perform_operations.get(&expr.id)
                 && op.ability_args.iter().any(|ty| {
@@ -241,69 +241,4 @@ pub(super) fn validate<'db>(
     errors.sort_by_key(|error| error.node);
     errors.dedup();
     errors
-}
-
-pub(crate) fn walk<'a, 'db>(
-    expr: &'a Expr<TypedRef<'db>>,
-    visit: &mut impl FnMut(&'a Expr<TypedRef<'db>>),
-) {
-    visit(expr);
-    match expr.kind.as_ref() {
-        ExprKind::Call { callee, args } => {
-            walk(callee, visit);
-            for arg in args {
-                walk(arg, visit);
-            }
-        }
-        ExprKind::Block { stmts, value } => {
-            for stmt in stmts {
-                match stmt {
-                    Stmt::Let { value, .. } => walk(value, visit),
-                    Stmt::Expr { expr, .. } => walk(expr, visit),
-                }
-            }
-            walk(value, visit);
-        }
-        ExprKind::Case { scrutinee, arms } => {
-            walk(scrutinee, visit);
-            for arm in arms {
-                if let Some(guard) = &arm.guard {
-                    walk(guard, visit);
-                }
-                walk(&arm.body, visit);
-            }
-        }
-        ExprKind::Lambda { body, .. } => walk(body, visit),
-        ExprKind::Handle { body, handlers } => {
-            walk(body, visit);
-            for arm in handlers {
-                walk(&arm.body, visit);
-            }
-        }
-        ExprKind::Resume { arg, .. } => walk(arg, visit),
-        ExprKind::Cons { args, .. } | ExprKind::Tuple(args) | ExprKind::List(args) => {
-            for arg in args {
-                walk(arg, visit);
-            }
-        }
-        ExprKind::Record { fields, spread, .. } => {
-            for (_, expr) in fields {
-                walk(expr, visit);
-            }
-            if let Some(spread) = spread {
-                walk(spread, visit);
-            }
-        }
-        ExprKind::BinOp { lhs, rhs, .. } => {
-            walk(lhs, visit);
-            walk(rhs, visit);
-        }
-        ExprKind::MethodCall { receiver, args, .. } => {
-            walk(receiver, visit);
-            for arg in args {
-                walk(arg, visit);
-            }
-        }
-        _ => {}
-    }
 }

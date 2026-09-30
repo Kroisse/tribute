@@ -1,7 +1,8 @@
 //! Bounded local callable materialization, before any source lambda is emitted.
 use super::*;
+use crate::ast::visit::for_each_expr;
 use crate::ast::{LocalId, NodeId, Type};
-use crate::monomorphize::{is_concrete_type, walk_typed_expr};
+use crate::monomorphize::is_concrete_type;
 use crate::typeck::LambdaSignature;
 
 type Key<'db> = (NodeId, Type<'db>, TypeRef);
@@ -21,7 +22,7 @@ impl<'db> Plan<'db> {
         parent_type_parameters: usize,
     ) -> Self {
         let mut nodes = Vec::new();
-        walk_typed_expr(body, &mut |expr| nodes.push(expr));
+        for_each_expr(body, |expr| nodes.push(expr));
         let mut origins: HashMap<LocalId, (NodeId, &Expr<TypedRef<'db>>)> = HashMap::new();
         let mut bindings = HashMap::new();
         let mut named = HashMap::new();
@@ -328,7 +329,7 @@ fn fixed_instance<'db>(
             .is_some_and(|row| crate::ast::collect_effect_vars(db, ty).contains(&row))
     };
     let mut independent = true;
-    walk_typed_expr(body, &mut |expr| {
+    for_each_expr(body, |expr| {
         independent &= !ctx
             .get_node_type(expr.id)
             .is_some_and(|ty| changes_row(*ty));
