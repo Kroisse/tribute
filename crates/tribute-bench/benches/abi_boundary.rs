@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use tribute_passes::abi_boundary::TargetKind;
+use trunk_ir::{IrContext, Module};
 
 use tribute_bench::programs::{PROGRAMS, Program};
 use tribute_bench::stages::{self, TARGETS, target_name};
@@ -32,12 +33,16 @@ const FRONT_STAGE_PROGRAMS: [&str; 2] = ["fibonacci", "state_handler"];
 
 fn compile_stages(c: &mut Criterion) {
     for program in PROGRAMS {
-        if let Err(error) = stages::through_shared(program) {
-            eprintln!("skipping {}: {error}", program.name);
-            continue;
-        }
+        let frontend = match stages::frontend(program) {
+            Ok(frontend) => frontend,
+            Err(error) => {
+                eprintln!("skipping {}: {error}", program.name);
+                continue;
+            }
+        };
         let mut group = c.benchmark_group(format!("compile/{}", program.name));
-        if FRONT_STAGE_PROGRAMS.contains(&program.name) {
+        let front_stages = FRONT_STAGE_PROGRAMS.contains(&program.name);
+        if front_stages {
             group.bench_function("frontend", |b| {
                 b.iter_batched(
                     || (),
@@ -45,34 +50,63 @@ fn compile_stages(c: &mut Criterion) {
                     BatchSize::PerIteration,
                 )
             });
+        }
+        // A shared middle-end failure skips only the stages that need its output.
+        let shared = match stages::shared_middle_end(frontend.clone()) {
+            Ok(shared) => shared,
+            Err(error) => {
+                eprintln!("skipping {} after the frontend: {error}", program.name);
+                group.finish();
+                continue;
+            }
+        };
+        if front_stages {
             group.bench_function("shared_middle_end", |b| {
                 b.iter_batched(
-                    || stages::frontend(program).expect("frontend"),
+                    || frontend.clone(),
                     |frontend| stages::shared_middle_end(frontend).expect("shared middle-end"),
                     BatchSize::PerIteration,
                 )
             });
         }
         for target in TARGETS {
-            bench_target(&mut group, program, target);
+            bench_target(&mut group, program, &shared, target);
         }
         group.finish();
     }
 }
 
+/// Copy the IR a stage starts from. Each iteration's setup clones a prepared
+/// input instead of compiling it again from source.
+fn clone_ir((ctx, module): &(IrContext, Module)) -> (IrContext, Module) {
+    (ctx.clone_with_headroom(), *module)
+}
+
 fn bench_target(
     group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
     program: &Program,
+    shared: &(IrContext, Module),
     target: TargetKind,
 ) {
     let name = target_name(target);
-    if let Err(error) = stages::emitted(program, target) {
-        eprintln!("skipping {}/{name}: {error}", program.name);
-        return;
-    }
+    let exit = {
+        let (mut ctx, module) = clone_ir(shared);
+        stages::to_boundary_exit(&mut ctx, module, target).map(|()| (ctx, module))
+    };
+    let exit = exit.and_then(|exit| {
+        let (mut ctx, module) = clone_ir(&exit);
+        stages::after_boundary_exit(&mut ctx, module, target).map(|_| exit)
+    });
+    let exit = match exit {
+        Ok(exit) => exit,
+        Err(error) => {
+            eprintln!("skipping {}/{name}: {error}", program.name);
+            return;
+        }
+    };
     group.bench_function(format!("{name}/to_boundary_exit"), |b| {
         b.iter_batched(
-            || stages::through_shared(program).expect("shared middle-end"),
+            || clone_ir(shared),
             |(mut ctx, module)| {
                 stages::to_boundary_exit(&mut ctx, module, target).expect("boundary exit");
                 ctx
@@ -82,7 +116,7 @@ fn bench_target(
     });
     group.bench_function(format!("{name}/after_boundary_exit"), |b| {
         b.iter_batched(
-            || stages::through_boundary_exit(program, target).expect("boundary exit"),
+            || clone_ir(&exit),
             |(mut ctx, module)| {
                 stages::after_boundary_exit(&mut ctx, module, target).expect("emission");
                 ctx

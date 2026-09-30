@@ -8,7 +8,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cranelift_entity::{EntityList, ListPool, PrimaryMap, SecondaryMap};
+use cranelift_entity::{EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap};
 use smallvec::SmallVec;
 
 use super::refs::*;
@@ -34,6 +34,7 @@ pub struct Use {
 // ============================================================================
 
 /// Data for a single operation in the arena.
+#[derive(Clone)]
 pub struct OperationData {
     pub location: Location,
     pub dialect: Symbol,
@@ -52,6 +53,7 @@ pub struct OperationData {
 /// operation (`OperationData.results`) or block (`BlockArgData.ty`) via
 /// [`IrContext::value_ty`].  This eliminates the possibility of type
 /// information going out of sync between a value and its definition site.
+#[derive(Clone)]
 pub struct ValueData {
     pub def: ValueDef,
 }
@@ -64,6 +66,7 @@ pub struct BlockArgData {
 }
 
 /// Data for a basic block.
+#[derive(Clone)]
 pub struct BlockData {
     pub location: Location,
     pub args: Vec<BlockArgData>,
@@ -72,6 +75,7 @@ pub struct BlockData {
 }
 
 /// Data for a region (list of blocks).
+#[derive(Clone)]
 pub struct RegionData {
     pub location: Location,
     pub blocks: SmallVec<[BlockRef; 4]>,
@@ -129,16 +133,66 @@ fn advance_revision(revision: &mut u64) {
     *revision = revision.checked_add(1).expect("IR revision exhausted");
 }
 
+/// Allocate an identity no other context in this process has.
+fn next_context_identity() -> u64 {
+    NEXT_CONTEXT_ID
+        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+            next.checked_add(1)
+        })
+        .expect("IrContext identity exhausted")
+}
+
+fn primary_with_headroom<K: EntityRef, V: Clone>(map: &PrimaryMap<K, V>) -> PrimaryMap<K, V> {
+    let mut copy = PrimaryMap::with_capacity(map.len().next_power_of_two());
+    copy.extend(map.values().cloned());
+    copy
+}
+
+fn secondary_with_capacity<K: EntityRef, V: Clone + Default>(
+    map: &SecondaryMap<K, V>,
+) -> SecondaryMap<K, V> {
+    let mut copy = SecondaryMap::with_capacity(map.capacity());
+    for (key, value) in map.iter() {
+        copy[key] = value.clone();
+    }
+    copy
+}
+
+/// Copies the whole IR, so a compilation can continue on independent
+/// branches from one intermediate result. The cost is proportional to the
+/// IR size.
+///
+/// The clone gets a fresh identity: analyses are cached by identity and
+/// revision, and the two contexts diverge from the same revision.
+impl Clone for IrContext {
+    fn clone(&self) -> Self {
+        Self {
+            identity: next_context_identity(),
+            revision: self.revision,
+            ops: self.ops.clone(),
+            values: self.values.clone(),
+            blocks: self.blocks.clone(),
+            regions: self.regions.clone(),
+            uses: self.uses.clone(),
+            types: self.types.clone(),
+            paths: self.paths.clone(),
+            value_pool: self.value_pool.clone(),
+            type_pool: self.type_pool.clone(),
+            result_values: self.result_values.clone(),
+            block_arg_values: self.block_arg_values.clone(),
+            type_aliases: self.type_aliases.clone(),
+            type_alias_by_name: self.type_alias_by_name.clone(),
+            type_alias_by_type: self.type_alias_by_type.clone(),
+            diagnostics: self.diagnostics.clone(),
+        }
+    }
+}
+
 impl IrContext {
     /// Create a new empty IR context.
     pub fn new() -> Self {
-        let identity = NEXT_CONTEXT_ID
-            .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
-                next.checked_add(1)
-            })
-            .expect("IrContext identity exhausted");
         Self {
-            identity,
+            identity: next_context_identity(),
             revision: 0,
             ops: PrimaryMap::new(),
             values: PrimaryMap::new(),
@@ -155,6 +209,31 @@ impl IrContext {
             type_alias_by_name: HashMap::new(),
             type_alias_by_type: HashMap::new(),
             diagnostics: RefCell::new(Vec::new()),
+        }
+    }
+
+    /// Like [`Clone::clone`], but every arena keeps room to grow as it would
+    /// after being built by insertion, so the clone's first insertions do not
+    /// reallocate.
+    pub fn clone_with_headroom(&self) -> Self {
+        Self {
+            identity: next_context_identity(),
+            revision: self.revision,
+            ops: primary_with_headroom(&self.ops),
+            values: primary_with_headroom(&self.values),
+            blocks: primary_with_headroom(&self.blocks),
+            regions: primary_with_headroom(&self.regions),
+            uses: secondary_with_capacity(&self.uses),
+            types: self.types.clone(),
+            paths: self.paths.clone(),
+            value_pool: self.value_pool.clone(),
+            type_pool: self.type_pool.clone(),
+            result_values: secondary_with_capacity(&self.result_values),
+            block_arg_values: secondary_with_capacity(&self.block_arg_values),
+            type_aliases: self.type_aliases.clone(),
+            type_alias_by_name: self.type_alias_by_name.clone(),
+            type_alias_by_type: self.type_alias_by_type.clone(),
+            diagnostics: self.diagnostics.clone(),
         }
     }
 
@@ -1764,6 +1843,59 @@ mod tests {
     // ====================================================================
     // Deep clone tests
     // ====================================================================
+
+    #[test]
+    fn cloned_context_is_independent() {
+        assert_clone_is_independent(IrContext::clone);
+    }
+
+    #[test]
+    fn context_cloned_with_headroom_is_independent() {
+        assert_clone_is_independent(IrContext::clone_with_headroom);
+    }
+
+    fn assert_clone_is_independent(clone_context: fn(&IrContext) -> IrContext) {
+        use crate::parser::parse_test_module;
+        use crate::printer::print_module;
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = arith.const {value = 2} : core.i32
+    %2 = arith.negi %0 : core.i32
+    func.return %2
+  }
+}"#,
+        );
+        let original_text = print_module(&ctx, module.op());
+
+        let mut clone = clone_context(&ctx);
+        assert_ne!(clone.analysis_stamp().0, ctx.analysis_stamp().0);
+        assert_eq!(clone.analysis_stamp().1, ctx.analysis_stamp().1);
+        assert_eq!(print_module(&clone, module.op()), original_text);
+
+        // Redirect the negation to the other constant in the clone only.
+        let func_body = clone.op(module.op()).regions[0];
+        let func_op = clone.block(clone.region(func_body).blocks[0]).ops[0];
+        let entry = clone.region(clone.op(func_op).regions[0]).blocks[0];
+        let [first, second, ..] = clone.block(entry).ops[..] else {
+            panic!("expected two constants");
+        };
+        let one = clone.op_results(first)[0];
+        let two = clone.op_results(second)[0];
+        clone.replace_all_uses(one, two);
+        clone.intern_type(TypeDataBuilder::new("core", "i64").build());
+
+        assert_eq!(print_module(&ctx, module.op()), original_text);
+        assert_eq!(ctx.uses(one).len(), 1);
+        assert!(ctx.uses(two).is_empty());
+        assert!(clone.uses(one).is_empty());
+        assert_eq!(clone.uses(two).len(), 1);
+        assert_ne!(print_module(&clone, module.op()), original_text);
+    }
 
     /// Helper: parse IR, clone the first func's body region, add the
     /// clone as a new func, and print the whole module.

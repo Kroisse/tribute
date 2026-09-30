@@ -19,11 +19,15 @@ env:
 
 jobs:
   benchmarks:
-    name: Benchmarks
+    name: Benchmarks (${{ matrix.mode }})
     # Simulation counts are compared across runs, so pin what the counts
     # depend on: the OS image (glibc and system libraries) and the compiler.
     # The runner CPU cannot be pinned; the next step records it.
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [simulation, memory]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -51,7 +55,7 @@ jobs:
           toolchain: 1.98.1
           cache: true
           # Only main saves caches; PRs restore them without evicting main's.
-          cache-save-if: ${{ github.ref == 'refs/heads/main' }}
+          cache-save-if: ${{ github.ref == 'refs/heads/main' && matrix.mode == 'simulation' }}
 
       - name: Install cargo-codspeed
         uses: taiki-e/install-action@v2
@@ -59,12 +63,12 @@ jobs:
           tool: cargo-codspeed
 
       - name: Build benchmarks
-        run: cargo codspeed build -p tribute-bench
+        run: cargo codspeed build -m ${{ matrix.mode }} -p tribute-bench
 
       # Native run-time benchmarks are skipped under CodSpeed; see
       # crates/tribute-bench/benches/abi_boundary.rs.
       - name: Run benchmarks
         uses: CodSpeedHQ/action@v5
         with:
-          mode: simulation,memory
+          mode: ${{ matrix.mode }}
           run: cargo codspeed run -p tribute-bench
