@@ -694,6 +694,118 @@ mod tests {
     }
 
     #[test]
+    fn reference_calling_convention_must_match_its_target() {
+        let module = |definition: &str, reference: &str| {
+            format!(
+                r#"core.module @test {{
+  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {definition}}} {{
+    func.return
+  }}
+  func.func @caller() {{
+    %reference = func.constant {{func_ref = @target}} : func.func_sig<(core.i32) -> ()> {reference}
+    func.return
+  }}
+}}"#
+            )
+        };
+        assert_eq!(
+            kinds(&module("{call_conv = @tail}", "")),
+            [ViolationKind::ReferenceSignatureMismatch]
+        );
+        assert_eq!(
+            kinds(&module("", "{call_conv = @tail}")),
+            [ViolationKind::ReferenceSignatureMismatch]
+        );
+        assert_eq!(
+            kinds(&module("{call_conv = @tail}", "{call_conv = @tail}")),
+            []
+        );
+    }
+
+    #[test]
+    fn forbidden_markers_are_found_deep_inside_types() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !frame = adt.typeref() {name = @Frame, tribute.cps_continuation_frame_result = core.nil}
+  !holder = adt.struct() {fields = [[@callback, func.func_sig<(core.ptr) -> !frame>]], name = @Holder}
+  func.func @run(%value: !holder) {
+    func.return
+  }
+}"#,
+        );
+        let run = module.ops(&ctx)[0];
+        let violations = verify_boundary_exit(&ctx, module, TargetKind::Native);
+        assert!(
+            violations
+                .iter()
+                .all(|violation| violation.kind
+                    == attribute("tribute.cps_continuation_frame_result")),
+            "{violations:#?}"
+        );
+        assert!(
+            violations.iter().any(|violation| violation.op == Some(run)),
+            "the marker must be reported where the function uses it: {violations:#?}"
+        );
+    }
+
+    #[test]
+    fn debug_information_does_not_change_the_result() {
+        let verify = |input: &str, relocate: bool| {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, input);
+            if relocate {
+                let path = ctx.intern_path("file:///elsewhere.trb");
+                let location = trunk_ir::types::Location::new(path, trunk_ir::Span::new(7, 11));
+                let mut ops = Vec::new();
+                let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+                    ops.push(op);
+                    ControlFlow::Continue(WalkAction::Advance)
+                });
+                for op in ops {
+                    ctx.op_mut(op).location = location;
+                }
+            }
+            verify_boundary_exit(&ctx, module, TargetKind::Native)
+                .into_iter()
+                .map(|violation| (violation.kind, violation.detail))
+                .collect::<Vec<_>>()
+        };
+        let plain = verify(
+            r#"core.module @test {
+  !frame = adt.typeref() {name = @Frame}
+  func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2} {
+    %same = core.unrealized_conversion_cast %frame : !frame
+    func.return
+  }
+}"#,
+            false,
+        );
+        let annotated = verify(
+            r#"core.module @test {
+  !frame = adt.typeref() {name = @Frame, tribute.definition.end = 20, tribute.definition.source = 1, tribute.definition.start = 10}
+  func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2, tribute.definition.end = 40, tribute.definition.source = 1, tribute.definition.start = 30} {
+    %same = core.unrealized_conversion_cast %frame : !frame
+    func.return
+  }
+}"#,
+            true,
+        );
+        assert_eq!(
+            plain
+                .iter()
+                .map(|(kind, _)| kind.clone())
+                .collect::<Vec<_>>(),
+            [
+                attribute("tribute.calling_convention"),
+                ViolationKind::IdentityCast
+            ]
+        );
+        assert_eq!(annotated, plain);
+    }
+
+    #[test]
     fn references_resolve_by_root_qualified_path() {
         let violations = kinds(
             r#"core.module @test {
