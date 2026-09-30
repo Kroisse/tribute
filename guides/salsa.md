@@ -38,7 +38,10 @@ Salsa uses `PartialEq` to decide whether a recomputed value changed. Ordinary
 that carry the database lifetime derive `salsa::SalsaValue`; owned leaf types
 also need the trait when nested in containers whose implementation requires it.
 The generic AST holds both `UnresolvedName` and database-lifetime references,
-so its phase bound is `V: SalsaValue`, not `V: 'static`. Its three recursive child
+so its storage requirement is `V: SalsaValue`, not `V: 'static`. The node types
+declare no bound on `V`; the derive bounds each `SalsaValue` impl by the field
+types, so a node implements the trait exactly when `V` does, and code that only
+walks or rebuilds the tree needs no Salsa bound. Its three recursive child
 fields have narrow `salsa_value` proofs: they own their children, and `V` must
 itself implement `SalsaValue`. Do not store a reference tied to an old database
 revision in a tracked value.
