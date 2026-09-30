@@ -6,6 +6,7 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
@@ -21,7 +22,9 @@ use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::Location;
+use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::types::{Attribute, Location};
+use trunk_ir::walk::{WalkAction, walk_op};
 
 /// Lower intrinsic arithmetic/comparison calls to arith dialect operations.
 ///
@@ -58,13 +61,42 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     applicator.apply_partial(ctx, module);
 
     // Every call was rewritten against the authenticated identity, so this
-    // pass is its last reader. Remaining declarations keep only their
-    // `abi = "intrinsic"` binding.
-    for op in module.ops(ctx) {
-        if func::Func::from_op(ctx, op)
-            .is_ok_and(|function| eligible.contains(&function.sym_name(ctx)))
-        {
-            ctx.op_mut(op).attributes.remove(COMPILER_INTRINSIC_ATTR);
+    // pass is its last reader. A bodyless declaration nothing references any
+    // more is removed; one still referenced as a value keeps only its
+    // `abi = "intrinsic"` binding. A declaration given a body above is an
+    // ordinary definition now.
+    let declarations: Vec<OpRef> = module
+        .ops(ctx)
+        .into_iter()
+        .filter(|&op| {
+            func::Func::from_op(ctx, op)
+                .is_ok_and(|function| eligible.contains(&function.sym_name(ctx)))
+        })
+        .collect();
+    if declarations.is_empty() {
+        return;
+    }
+    let symbols = SymbolTable::collect(ctx, module);
+    let mut referenced = HashSet::new();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        for value in ctx.op(op).attributes.values() {
+            if let Attribute::Symbol(reference) = value
+                && let Some(target) = symbols.resolve(*reference)
+                && target != op
+            {
+                referenced.insert(target);
+            }
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    for declaration in declarations {
+        if !ctx.op(declaration).regions.is_empty() || referenced.contains(&declaration) {
+            ctx.op_mut(declaration)
+                .attributes
+                .remove(COMPILER_INTRINSIC_ATTR);
+        } else {
+            ctx.detach_op(declaration);
+            ctx.remove_op(declaration);
         }
     }
 }
@@ -477,7 +509,7 @@ mod tests {
     }
 
     #[test]
-    fn bodyless_intrinsic_decl_keeps_binding_and_consumes_identity() {
+    fn unreferenced_bodyless_intrinsic_decl_is_removed() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -485,6 +517,36 @@ mod tests {
             core.module @test {
                 func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
                     attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+                func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
+                ^bb0:
+                    %2 = func.call %0, %1 {callee = @"Nat::+"} : core.i32
+                    func.return %2
+                }
+            }
+        "#,
+        );
+
+        lower_intrinsic_to_arith(&mut ctx, module);
+        let after = print_module(&ctx, module.op());
+
+        assert!(after.contains("arith.addi"), "{after}");
+        assert!(!after.contains(r#"@"Nat::+""#), "{after}");
+    }
+
+    #[test]
+    fn referenced_bodyless_intrinsic_decl_keeps_binding_and_consumes_identity() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"
+            core.module @test {
+                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+                func.func @user() -> func.func_sig<(core.i32, core.i32) -> core.i32> {
+                ^bb0:
+                    %f = func.constant {func_ref = @"Nat::+"} : func.func_sig<(core.i32, core.i32) -> core.i32>
+                    func.return %f
+                }
             }
         "#,
         );
@@ -495,7 +557,7 @@ mod tests {
         assert!(
             after.contains(r#"func.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 attributes {abi = "intrinsic"}"#)
                 && !after.contains(COMPILER_INTRINSIC_ATTR),
-            "bodyless declaration must keep its binding without the identity:\n{after}"
+            "a declaration referenced as a value keeps its binding without the identity:\n{after}"
         );
     }
 
