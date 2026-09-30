@@ -197,3 +197,272 @@ fn main() -> Nil {
     );
     assert!(errors.is_empty(), "{errors:#?}");
 }
+
+/// Imports declared inside an inline module are in scope in that module's
+/// body, whether the path is written from the package root or relative to the
+/// module, aliased, or names a module used as a path prefix.
+#[salsa_test]
+fn inline_module_imports_are_in_scope_in_the_module(db: &salsa::DatabaseImpl) {
+    for (import, call) in [
+        ("use outer::a::one", "one()"),
+        ("use a::one", "one()"),
+        ("use a::one as uno", "uno()"),
+        ("use a", "a::one()"),
+    ] {
+        let errors = errors(
+            db,
+            &format!(
+                r#"
+mod outer {{
+    mod a {{
+        pub fn one() -> Nat {{ 1 }}
+    }}
+    {import}
+
+    pub fn get() -> Nat {{
+        {call}
+    }}
+}}
+
+fn main() {{
+    let _ = outer::get()
+}}
+"#
+            ),
+        );
+        assert!(errors.is_empty(), "{import}: {errors:#?}");
+    }
+}
+
+/// Constructors and abilities imported inside an inline module resolve in
+/// expressions, effect annotations, handler arms, and unqualified operation
+/// calls under an effect annotation.
+#[salsa_test]
+fn inline_module_imports_cover_constructors_and_abilities(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod outer {
+    mod a {
+        pub struct P { x: Nat }
+    }
+    mod fx {
+        pub ability Tick {
+            op tick() -> Nat
+        }
+    }
+    use a::P
+    use fx::Tick
+
+    pub fn make() -> P {
+        P { x: 1 }
+    }
+
+    pub fn count() ->{Tick} Nat {
+        Tick::tick()
+    }
+
+    pub fn count_unqualified() ->{Tick} Nat {
+        tick()
+    }
+
+    pub fn run() -> Nat {
+        let _ = handle count_unqualified() {
+            do result { result }
+            op Tick::tick() { resume 2 }
+        }
+        handle count() {
+            do result { result }
+            op Tick::tick() { resume make().x }
+        }
+    }
+}
+
+fn main() {
+    let _ = outer::run()
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+/// An inline module's import is not a member of the module.
+#[salsa_test]
+fn inline_module_imports_are_not_visible_outside_the_module(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod outer {
+    mod a {
+        pub fn one() -> Nat { 1 }
+    }
+    use a::one
+}
+
+fn main() {
+    let _ = outer::one()
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.starts_with("unresolved name `outer::one`")),
+        "{errors:#?}"
+    );
+}
+
+/// An import of an inline module that gives a path prefix a name hides the
+/// package-root namespace of that name, even for members the import lacks.
+#[salsa_test]
+fn inline_module_import_hides_the_root_namespace_it_shadows(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod a {
+    pub fn one() -> Nat { 1 }
+}
+mod outer {
+    mod b {
+        pub fn two() -> Nat { 2 }
+    }
+    use outer::b as a
+
+    pub fn get() -> Nat {
+        a::one()
+    }
+}
+
+fn main() {
+    let _ = outer::get()
+}
+"#,
+    );
+    assert!(
+        errors
+            .iter()
+            .any(|error| error.starts_with("unresolved name `a::one`")),
+        "{errors:#?}"
+    );
+}
+
+/// An effect annotation may reach an ability through a module an inline
+/// module imports under an alias, and its operations are callable unqualified.
+#[salsa_test]
+fn inline_module_import_prefixes_qualified_effect_annotations(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod outer {
+    mod fx {
+        pub ability Tick {
+            op tick() -> Nat
+        }
+    }
+    use fx as effects
+
+    pub fn count() ->{effects::Tick} Nat {
+        tick()
+    }
+
+    pub fn run() -> Nat {
+        handle count() {
+            do result { result }
+            op effects::Tick::tick() { resume 1 }
+        }
+    }
+}
+
+fn main() {
+    let _ = outer::run()
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
+
+/// Effect annotations follow the same precedence as other names: an ability
+/// the inline module defines itself wins over one it imports under the same
+/// name.
+#[salsa_test]
+fn inline_module_definition_wins_over_an_imported_ability(db: &salsa::DatabaseImpl) {
+    use tribute_front::ast::{Decl, TypeAnnotationKind};
+    use trunk_ir::Symbol;
+
+    let source = SourceCst::from_source_str(
+        db,
+        "use_imports.trb",
+        r#"
+mod outer {
+    mod fx {
+        pub ability Tick {
+            op tick() -> Nat
+        }
+    }
+    pub ability Tick {
+        op other() -> Nat
+    }
+    use fx::Tick
+
+    pub fn noop() ->{Tick} Nat {
+        1
+    }
+}
+"#,
+    );
+    let module = tribute_front::query::resolved_module(db, source).expect("module resolves");
+    let effects = module
+        .decls
+        .iter()
+        .find_map(|decl| match decl {
+            Decl::Module(outer) => outer.body.as_ref(),
+            _ => None,
+        })
+        .and_then(|body| {
+            body.iter().find_map(|decl| match decl {
+                Decl::Function(function) if function.name == Symbol::new("noop") => {
+                    function.effects.clone()
+                }
+                _ => None,
+            })
+        })
+        .expect("noop declares effects");
+    assert!(
+        matches!(&effects[0].kind, TypeAnnotationKind::Named(name) if *name == Symbol::new("Tick")),
+        "{effects:?}"
+    );
+}
+
+/// An inline module may import a package-root ability under an alias; the
+/// alias names the package-root ability in effect annotations, unqualified
+/// operation calls, and handler arms.
+#[salsa_test]
+fn inline_module_import_aliases_a_root_ability(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+ability Tick {
+    op tick() -> Nat
+}
+mod outer {
+    use Tick as T
+
+    pub fn count() ->{T} Nat {
+        tick()
+    }
+
+    pub fn run() -> Nat {
+        handle count() {
+            do result { result }
+            op T::tick() { resume 1 }
+        }
+    }
+}
+
+fn main() {
+    let _ = outer::run()
+}
+"#,
+    );
+    assert!(errors.is_empty(), "{errors:#?}");
+}
