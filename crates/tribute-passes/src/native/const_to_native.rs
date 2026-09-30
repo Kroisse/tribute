@@ -543,7 +543,8 @@ mod tests {
     fn data_objects(ctx: &IrContext, module: Module) -> Vec<(String, Vec<u8>, u32)> {
         module
             .ops(ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| clif::Data::from_op(ctx, op).ok())
             .map(|data| {
                 (

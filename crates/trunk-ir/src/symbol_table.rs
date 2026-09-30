@@ -207,7 +207,8 @@ mod tests {
         let root = parse_test_module(&mut ctx, NESTED);
         let outer = root
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find_map(|op| Module::new(&ctx, op))
             .expect("outer module");
         let table = SymbolTable::collect(&ctx, outer);

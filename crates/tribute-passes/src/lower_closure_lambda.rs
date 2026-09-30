@@ -101,7 +101,7 @@ impl Pass for LowerClosureLambda {
 /// Collect all `closure.lambda` ops in the module (DFS, outermost first).
 fn collect_closure_lambdas(ctx: &IrContext, module: Module) -> Vec<OpRef> {
     let mut result = Vec::new();
-    for op in module.ops(ctx) {
+    for &op in module.ops(ctx) {
         collect_lambdas_in_op(ctx, op, &mut result);
     }
     result

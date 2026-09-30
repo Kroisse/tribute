@@ -138,7 +138,8 @@ pub fn declare_rtti_layouts(ctx: &mut IrContext, module: Module, rtti_types: &[R
 pub fn declared_rtti_layouts(ctx: &IrContext, module: Module) -> Vec<tribute_rtti::Layout> {
     module
         .ops(ctx)
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(|op| tribute_rtti::Layout::from_op(ctx, op).ok())
         .collect()
 }

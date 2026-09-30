@@ -1208,7 +1208,7 @@ mod tests {
 
         let mut direct = 0;
         let mut indirect = 0;
-        for func in module.ops(&ctx) {
+        for &func in module.ops(&ctx) {
             for &region in &ctx.op(func).regions {
                 for &block in &ctx.region(region).blocks {
                     for &op in &ctx.block(block).ops {

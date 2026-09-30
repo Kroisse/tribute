@@ -468,7 +468,7 @@ fn verify_physical_callable_graph(
         })
         .collect();
     let mut failures = Vec::new();
-    for op in module.ops(ctx) {
+    for &op in module.ops(ctx) {
         visit(ctx, op, &signatures, &mut failures);
     }
     failures
@@ -4399,7 +4399,8 @@ mod tests {
         tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let lowered = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find(|op| func::Func::matches(&ctx, *op))
             .unwrap();
         let physical = ctx.op(lowered).attributes.get_type("type").unwrap();
@@ -5677,7 +5678,8 @@ mod tests {
         let adapter_type = |ctx: &IrContext| {
             let adapter = module
                 .ops(ctx)
-                .into_iter()
+                .iter()
+                .copied()
                 .find_map(|op| {
                     let function = func::Func::from_op(ctx, op).ok()?;
                     (function.sym_name(ctx) == Symbol::new("__tribute_func_ref_adapter_0"))

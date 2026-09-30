@@ -51,7 +51,8 @@ pub(crate) fn lower_get_or_panic(
 ) -> Result<(), BytesIntrinsicError> {
     let declarations: Vec<OpRef> = module
         .ops(ctx)
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|&op| {
             func::Func::matches(ctx, op)
                 && ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)

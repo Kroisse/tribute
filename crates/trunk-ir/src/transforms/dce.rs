@@ -375,7 +375,8 @@ mod tests {
         );
         let funcs: Vec<_> = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| func::Func::from_op(&ctx, op).ok())
             .collect();
         let selected = funcs[0];

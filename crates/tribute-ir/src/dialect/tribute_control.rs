@@ -3618,7 +3618,8 @@ mod tests {
 
         let funcs: Vec<_> = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|op| Func::matches(&ctx, *op))
             .collect();
         let declaration = funcs

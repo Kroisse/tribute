@@ -651,7 +651,8 @@ mod tests {
     fn op_names(ctx: &IrContext, module: Module) -> Vec<String> {
         module
             .ops(ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .map(|op| format!("{}.{}", ctx.op(op).dialect, ctx.op(op).name))
             .collect()
     }

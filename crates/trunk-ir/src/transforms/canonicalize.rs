@@ -452,7 +452,8 @@ mod tests {
         let module = parse_test_module(&mut ctx, input);
         let funcs: Vec<func::Func> = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .map(|op| func::Func::from_op(&ctx, op).expect("test op must be func.func"))
             .collect();
 

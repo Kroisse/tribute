@@ -33,7 +33,8 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
     let native_ty = native_closure_struct_type(ctx);
     let layouts = module
         .ops(ctx)
-        .into_iter()
+        .iter()
+        .copied()
         .filter_map(|op| tribute_rtti::Layout::from_op(ctx, op).ok())
         .collect::<Vec<_>>();
     for layout in layouts {
@@ -162,7 +163,8 @@ mod tests {
         assert_ne!(native, semantic);
         let layouts = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| tribute_rtti::Layout::from_op(&ctx, op).ok())
             .collect::<Vec<_>>();
         assert_eq!(layouts[0].r#type(&ctx), native);

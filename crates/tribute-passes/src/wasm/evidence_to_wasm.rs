@@ -167,7 +167,7 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> (bool, bool,
 }
 
 fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
-    module.ops(ctx).into_iter().any(|op| {
+    module.ops(ctx).iter().copied().any(|op| {
         ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new(name))
             && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
     })
@@ -318,7 +318,7 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
     };
     let mut needs_find = false;
     let mut needs_insert = false;
-    for op in module.ops(ctx) {
+    for op in module.ops_snapshot(ctx) {
         let data = ctx.op(op);
         let is_function = wasm_dialect::Func::matches(ctx, op) || func::Func::matches(ctx, op);
         if !is_function || !data.regions.is_empty() {
@@ -1212,7 +1212,7 @@ mod tests {
 
     fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
         prepare_wasm_evidence_runtime(ctx, module);
-        for op in module.ops(ctx) {
+        for op in module.ops_snapshot(ctx) {
             if let Ok(function) = func::Func::from_op(ctx, op) {
                 lower_evidence_to_wasm_func(ctx, function)?;
             }
@@ -1314,7 +1314,8 @@ mod tests {
         let before = print_module(&ctx, module.op());
         let function = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find_map(|op| {
                 func::Func::from_op(&ctx, op)
                     .ok()
@@ -1355,7 +1356,7 @@ mod tests {
         bind_wasm_evidence_runtime(&mut ctx, module);
 
         let mut functions = Vec::new();
-        for op in module.ops(&ctx) {
+        for &op in module.ops(&ctx) {
             let function = wasm_dialect::Func::from_op(&ctx, op).expect("bound wasm.func");
             assert!(!ctx.op(op).regions.is_empty(), "helpers must have bodies");
             functions.push(function.sym_name(&ctx).to_string());

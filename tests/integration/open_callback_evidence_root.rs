@@ -30,7 +30,8 @@ fn generic_callback_preserves_evidence_root_and_executes_wasm(db: &salsa::Databa
     let (ctx, module) = compile_frontend(db, source).expect("production frontend should lower");
     let main = module
         .ops(&ctx)
-        .into_iter()
+        .iter()
+        .copied()
         .find_map(|op| {
             let function = tribute_control::Func::from_op(&ctx, op).ok()?;
             (function.sym_name(&ctx) == "main").then_some(function)

@@ -150,7 +150,8 @@ mod tests {
         );
         let selected = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| func::Func::from_op(&ctx, op).ok())
             .next()
             .expect("test module should contain a selected function");

@@ -38,7 +38,8 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let eligible: Rc<HashSet<Symbol>> = Rc::new(
         module
             .ops(ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
                 let symbol = function.sym_name(ctx);
@@ -67,7 +68,8 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     // ordinary definition now.
     let declarations: Vec<OpRef> = module
         .ops(ctx)
-        .into_iter()
+        .iter()
+        .copied()
         .filter(|&op| {
             func::Func::from_op(ctx, op)
                 .is_ok_and(|function| eligible.contains(&function.sym_name(ctx)))

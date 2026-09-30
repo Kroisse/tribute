@@ -100,7 +100,7 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::LOOKUP_HANDLER, &[ptr_ty, i32_ty][..], ptr_ty),
     ] {
-        if module.ops(ctx).into_iter().any(|op| {
+        if module.ops(ctx).iter().copied().any(|op| {
             func::Func::from_op(ctx, op)
                 .is_ok_and(|function| function.sym_name(ctx) == Symbol::new(name))
         }) {
@@ -563,10 +563,10 @@ mod tests {
             );
         }
         let before = print_module(&ctx, module.op());
-        let ops = module.ops(&ctx);
+        let ops = module.ops_snapshot(&ctx);
         prepare_native_evidence_runtime(&mut ctx, module);
         assert_eq!(print_module(&ctx, module.op()), before);
-        assert_eq!(module.ops(&ctx), ops);
+        assert_eq!(module.ops(&ctx), ops.as_slice());
     }
 
     #[test]
@@ -575,7 +575,8 @@ mod tests {
         let module = parse_test_module(&mut ctx, dispatch_module());
         let selected = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| func::Func::from_op(&ctx, op).ok())
             .next()
             .expect("test module should contain a selected function");
@@ -646,7 +647,8 @@ mod tests {
         let module = parse_test_module(&mut ctx, dispatch_module());
         let selected = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| func::Func::from_op(&ctx, op).ok())
             .next()
             .expect("test module should contain a selected function");
@@ -675,7 +677,8 @@ mod tests {
         );
         let runtime_func = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| func::Func::from_op(&ctx, op).ok())
             .next()
             .expect("test module should contain a runtime function");

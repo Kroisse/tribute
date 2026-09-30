@@ -1615,7 +1615,8 @@ mod tests {
     fn function(ctx: &IrContext, module: Module, name: &str) -> func::Func {
         module
             .ops(ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .find_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
                 (function.sym_name(ctx) == Symbol::from_dynamic(name)).then_some(function)
@@ -1660,7 +1661,7 @@ mod tests {
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         crate::wasm::evidence_to_wasm::prepare_wasm_evidence_runtime(&mut ctx, module);
-        for op in module.ops(&ctx) {
+        for op in module.ops_snapshot(&ctx) {
             if let Ok(function) = func::Func::from_op(&ctx, op) {
                 crate::wasm::evidence_to_wasm::lower_evidence_to_wasm_func(&mut ctx, function)
                     .unwrap();
@@ -2134,7 +2135,8 @@ mod tests {
         assert_eq!(ctx.op_operands(call)[0], evidence.result(&ctx));
         let functions: Vec<_> = module
             .ops(&ctx)
-            .into_iter()
+            .iter()
+            .copied()
             .filter_map(|op| func::Func::from_op(&ctx, op).ok())
             .map(|function| function.sym_name(&ctx).to_string())
             .collect();
