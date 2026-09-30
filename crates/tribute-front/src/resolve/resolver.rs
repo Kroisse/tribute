@@ -11,9 +11,9 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityDecl, Arm, Decl, EnumDecl, Expr, ExprKind, FieldPattern, FuncDecl, HandlerArm,
-    HandlerKind, LocalId, LocalIdGen, Module, ModulePath, Param, Pattern, PatternKind, ResolvedRef,
-    SpanMap, Stmt, StructDecl, TypeAnnotation, TypeAnnotationKind, UnresolvedName, UseDecl,
+    Arm, Decl, Expr, ExprKind, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId,
+    LocalIdGen, Module, ModulePath, Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
+    TypeAnnotation, TypeAnnotationKind, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -256,10 +256,10 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve a module, transforming all declarations.
-    pub fn resolve_module(&mut self, module: Module<UnresolvedName>) -> Module<ResolvedRef<'db>> {
+    pub fn resolve_module(&mut self, module: &Module<UnresolvedName>) -> Module<ResolvedRef<'db>> {
         let decls = module
             .decls
-            .into_iter()
+            .iter()
             .map(|decl| self.resolve_decl(decl))
             .collect();
 
@@ -271,13 +271,14 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve a declaration.
-    fn resolve_decl(&mut self, decl: Decl<UnresolvedName>) -> Decl<ResolvedRef<'db>> {
+    fn resolve_decl(&mut self, decl: &Decl<UnresolvedName>) -> Decl<ResolvedRef<'db>> {
         match decl {
             Decl::Function(f) => Decl::Function(self.resolve_func_decl(f)),
-            Decl::ExternFunction(e) => Decl::ExternFunction(e),
-            Decl::Struct(s) => Decl::Struct(self.resolve_struct_decl(s)),
-            Decl::Enum(e) => Decl::Enum(self.resolve_enum_decl(e)),
-            Decl::Ability(a) => Decl::Ability(self.resolve_ability_decl(a)),
+            // These declarations contain no expressions to resolve.
+            Decl::ExternFunction(e) => Decl::ExternFunction(e.clone()),
+            Decl::Struct(s) => Decl::Struct(s.clone()),
+            Decl::Enum(e) => Decl::Enum(e.clone()),
+            Decl::Ability(a) => Decl::Ability(a.clone()),
             Decl::Use(u) => Decl::Use(self.resolve_use_decl(u)),
             Decl::Module(m) => Decl::Module(self.resolve_module_decl(m)),
         }
@@ -286,13 +287,14 @@ impl<'db> Resolver<'db> {
     /// Resolve a module declaration.
     fn resolve_module_decl(
         &mut self,
-        module: crate::ast::ModuleDecl<UnresolvedName>,
+        module: &crate::ast::ModuleDecl<UnresolvedName>,
     ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
         // For inline modules, recursively resolve nested declarations
         self.module_path.push(module.name);
         let body = module
             .body
-            .map(|decls| decls.into_iter().map(|d| self.resolve_decl(d)).collect());
+            .as_ref()
+            .map(|decls| decls.iter().map(|d| self.resolve_decl(d)).collect());
         self.module_path.pop();
 
         crate::ast::ModuleDecl {
@@ -304,17 +306,17 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve a function declaration.
-    fn resolve_func_decl(&mut self, func: FuncDecl<UnresolvedName>) -> FuncDecl<ResolvedRef<'db>> {
+    fn resolve_func_decl(&mut self, func: &FuncDecl<UnresolvedName>) -> FuncDecl<ResolvedRef<'db>> {
         // Enter a new scope for function body
         self.push_scope();
 
         // Bind parameters and assign local IDs
         let params = func
             .params
-            .into_iter()
-            .map(|mut p| {
-                let local_id = self.bind_local(p.name);
-                p.local_id = Some(local_id);
+            .iter()
+            .map(|p| {
+                let mut p = p.clone();
+                p.local_id = Some(self.bind_local(p.name));
                 p
             })
             .collect();
@@ -328,7 +330,7 @@ impl<'db> Resolver<'db> {
         }
 
         // Resolve body
-        let body = self.resolve_expr(func.body);
+        let body = self.resolve_expr(&func.body);
 
         self.effect_ops.clear();
         self.pop_scope();
@@ -337,15 +339,16 @@ impl<'db> Resolver<'db> {
         // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
         let effects = func
             .effects
+            .as_ref()
             .map(|effs| self.resolve_effect_annotations(effs));
 
         FuncDecl {
             id: func.id,
             is_pub: func.is_pub,
             name: func.name,
-            type_params: func.type_params,
+            type_params: func.type_params.clone(),
             params,
-            return_ty: func.return_ty,
+            return_ty: func.return_ty.clone(),
             effects,
             body,
         }
@@ -411,34 +414,22 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve a struct declaration.
-    fn resolve_struct_decl(&self, s: StructDecl) -> StructDecl {
-        // Struct declarations don't contain expressions to resolve
-        s
-    }
-
-    /// Resolve an enum declaration.
-    fn resolve_enum_decl(&self, e: EnumDecl) -> EnumDecl {
-        // Enum declarations don't contain expressions to resolve
-        e
-    }
-
     /// Resolve imported ability names in effect annotations to qualified paths.
     ///
     /// When an ability is imported via `use` (e.g., `use abilities::Abort`), the
     /// import stores the original module path. This method rewrites unqualified
     /// ability names in effect annotations to their qualified form so that
     /// `annotation_to_effect` creates the correct AbilityId.
-    fn resolve_effect_annotations(&self, effects: Vec<TypeAnnotation>) -> Vec<TypeAnnotation> {
+    fn resolve_effect_annotations(&self, effects: &[TypeAnnotation]) -> Vec<TypeAnnotation> {
         effects
-            .into_iter()
+            .iter()
             .map(|ann| self.resolve_ability_in_annotation(ann))
             .collect()
     }
 
     /// Resolve a single annotation: if the ability name was imported via `use`,
     /// rewrite it to the qualified path from the original module.
-    fn resolve_ability_in_annotation(&self, ann: TypeAnnotation) -> TypeAnnotation {
+    fn resolve_ability_in_annotation(&self, ann: &TypeAnnotation) -> TypeAnnotation {
         match &ann.kind {
             TypeAnnotationKind::Named(sym)
                 if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase())) =>
@@ -453,10 +444,10 @@ impl<'db> Resolver<'db> {
                         kind: TypeAnnotationKind::Path(path.clone()),
                     };
                 }
-                ann
+                ann.clone()
             }
             TypeAnnotationKind::App { ctor, args } => {
-                let resolved_ctor = self.resolve_ability_in_annotation((**ctor).clone());
+                let resolved_ctor = self.resolve_ability_in_annotation(ctor);
                 TypeAnnotation {
                     id: ann.id,
                     kind: TypeAnnotationKind::App {
@@ -465,14 +456,8 @@ impl<'db> Resolver<'db> {
                     },
                 }
             }
-            _ => ann,
+            _ => ann.clone(),
         }
-    }
-
-    /// Resolve an ability declaration.
-    fn resolve_ability_decl(&self, a: AbilityDecl) -> AbilityDecl {
-        // Ability declarations don't contain expressions to resolve
-        a
     }
 
     /// Resolve a use declaration.
@@ -480,9 +465,9 @@ impl<'db> Resolver<'db> {
     /// The environment already holds the import; this only reports a path
     /// that names nothing, which would otherwise leave the import as a
     /// module placeholder.
-    fn resolve_use_decl(&self, u: UseDecl) -> UseDecl {
-        self.check_use_path(&u);
-        u
+    fn resolve_use_decl(&self, u: &UseDecl) -> UseDecl {
+        self.check_use_path(u);
+        u.clone()
     }
 
     fn check_use_path(&self, u: &UseDecl) {
@@ -530,28 +515,28 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve an expression.
-    pub fn resolve_expr(&mut self, expr: Expr<UnresolvedName>) -> Expr<ResolvedRef<'db>> {
-        let kind = match *expr.kind {
-            ExprKind::Var(name) => ExprKind::Var(self.resolve_name(&name)),
+    pub fn resolve_expr(&mut self, expr: &Expr<UnresolvedName>) -> Expr<ResolvedRef<'db>> {
+        let kind = match &*expr.kind {
+            ExprKind::Var(name) => ExprKind::Var(self.resolve_name(name)),
 
-            ExprKind::NatLit(n) => ExprKind::NatLit(n),
-            ExprKind::IntLit(n) => ExprKind::IntLit(n),
-            ExprKind::FloatLit(f) => ExprKind::FloatLit(f),
-            ExprKind::StringLit(s) => ExprKind::StringLit(s),
-            ExprKind::BytesLit(b) => ExprKind::BytesLit(b),
-            ExprKind::BoolLit(b) => ExprKind::BoolLit(b),
+            ExprKind::NatLit(n) => ExprKind::NatLit(*n),
+            ExprKind::IntLit(n) => ExprKind::IntLit(*n),
+            ExprKind::FloatLit(f) => ExprKind::FloatLit(*f),
+            ExprKind::StringLit(s) => ExprKind::StringLit(s.clone()),
+            ExprKind::BytesLit(b) => ExprKind::BytesLit(b.clone()),
+            ExprKind::BoolLit(b) => ExprKind::BoolLit(*b),
             ExprKind::Nil => ExprKind::Nil,
-            ExprKind::RuneLit(c) => ExprKind::RuneLit(c),
+            ExprKind::RuneLit(c) => ExprKind::RuneLit(*c),
 
             ExprKind::Call { callee, args } => {
                 let callee = self.resolve_expr(callee);
-                let args = args.into_iter().map(|a| self.resolve_expr(a)).collect();
+                let args = args.iter().map(|a| self.resolve_expr(a)).collect();
                 ExprKind::Call { callee, args }
             }
 
             ExprKind::Cons { ctor, args } => {
-                let resolved_ctor = self.resolve_name(&ctor);
-                let args = args.into_iter().map(|a| self.resolve_expr(a)).collect();
+                let resolved_ctor = self.resolve_name(ctor);
+                let args = args.iter().map(|a| self.resolve_expr(a)).collect();
                 ExprKind::Cons {
                     ctor: resolved_ctor,
                     args,
@@ -563,12 +548,12 @@ impl<'db> Resolver<'db> {
                 fields,
                 spread,
             } => {
-                let resolved_type = self.resolve_name(&type_name);
+                let resolved_type = self.resolve_name(type_name);
                 let fields = fields
-                    .into_iter()
-                    .map(|(name, expr)| (name, self.resolve_expr(expr)))
+                    .iter()
+                    .map(|(name, expr)| (*name, self.resolve_expr(expr)))
                     .collect();
-                let spread = spread.map(|e| self.resolve_expr(e));
+                let spread = spread.as_ref().map(|e| self.resolve_expr(e));
                 ExprKind::Record {
                     type_name: resolved_type,
                     fields,
@@ -582,17 +567,17 @@ impl<'db> Resolver<'db> {
                 args,
             } => {
                 let receiver = self.resolve_expr(receiver);
-                let args = args.into_iter().map(|a| self.resolve_expr(a)).collect();
+                let args = args.iter().map(|a| self.resolve_expr(a)).collect();
                 ExprKind::MethodCall {
                     receiver,
-                    method,
+                    method: *method,
                     args,
                 }
             }
 
             ExprKind::Block { stmts, value } => {
                 self.push_scope();
-                let stmts = stmts.into_iter().map(|s| self.resolve_stmt(s)).collect();
+                let stmts = stmts.iter().map(|s| self.resolve_stmt(s)).collect();
                 let value = self.resolve_expr(value);
                 self.pop_scope();
                 ExprKind::Block { stmts, value }
@@ -600,17 +585,17 @@ impl<'db> Resolver<'db> {
 
             ExprKind::Case { scrutinee, arms } => {
                 let scrutinee = self.resolve_expr(scrutinee);
-                let arms = arms.into_iter().map(|a| self.resolve_arm(a)).collect();
+                let arms = arms.iter().map(|a| self.resolve_arm(a)).collect();
                 ExprKind::Case { scrutinee, arms }
             }
 
             ExprKind::Lambda { params, body } => {
                 self.push_scope();
                 let params: Vec<Param> = params
-                    .into_iter()
-                    .map(|mut p| {
-                        let local_id = self.bind_local(p.name);
-                        p.local_id = Some(local_id);
+                    .iter()
+                    .map(|p| {
+                        let mut p = p.clone();
+                        p.local_id = Some(self.bind_local(p.name));
                         p
                     })
                     .collect();
@@ -622,7 +607,7 @@ impl<'db> Resolver<'db> {
             ExprKind::Handle { body, handlers } => {
                 let body = self.resolve_expr(body);
                 let handlers = handlers
-                    .into_iter()
+                    .iter()
                     .map(|h| self.resolve_handler_arm(h))
                     .collect();
                 ExprKind::Handle { body, handlers }
@@ -635,19 +620,19 @@ impl<'db> Resolver<'db> {
             }
 
             ExprKind::Tuple(exprs) => {
-                let exprs = exprs.into_iter().map(|e| self.resolve_expr(e)).collect();
+                let exprs = exprs.iter().map(|e| self.resolve_expr(e)).collect();
                 ExprKind::Tuple(exprs)
             }
 
             ExprKind::List(exprs) => {
-                let exprs = exprs.into_iter().map(|e| self.resolve_expr(e)).collect();
+                let exprs = exprs.iter().map(|e| self.resolve_expr(e)).collect();
                 ExprKind::List(exprs)
             }
 
             ExprKind::BinOp { op, lhs, rhs } => {
                 let lhs = self.resolve_expr(lhs);
                 let rhs = self.resolve_expr(rhs);
-                ExprKind::BinOp { op, lhs, rhs }
+                ExprKind::BinOp { op: *op, lhs, rhs }
             }
 
             ExprKind::Error => ExprKind::Error,
@@ -657,7 +642,7 @@ impl<'db> Resolver<'db> {
     }
 
     /// Resolve a statement.
-    fn resolve_stmt(&mut self, stmt: Stmt<UnresolvedName>) -> Stmt<ResolvedRef<'db>> {
+    fn resolve_stmt(&mut self, stmt: &Stmt<UnresolvedName>) -> Stmt<ResolvedRef<'db>> {
         match stmt {
             Stmt::Let {
                 id,
@@ -668,25 +653,25 @@ impl<'db> Resolver<'db> {
                 let value = self.resolve_expr(value);
                 let pattern = self.resolve_pattern_with_bindings(pattern);
                 Stmt::Let {
-                    id,
+                    id: *id,
                     pattern,
-                    ty,
+                    ty: ty.clone(),
                     value,
                 }
             }
             Stmt::Expr { id, expr } => {
                 let expr = self.resolve_expr(expr);
-                Stmt::Expr { id, expr }
+                Stmt::Expr { id: *id, expr }
             }
         }
     }
 
     /// Resolve a case arm.
-    fn resolve_arm(&mut self, arm: Arm<UnresolvedName>) -> Arm<ResolvedRef<'db>> {
+    fn resolve_arm(&mut self, arm: &Arm<UnresolvedName>) -> Arm<ResolvedRef<'db>> {
         self.push_scope();
-        let pattern = self.resolve_pattern_with_bindings(arm.pattern);
-        let guard = arm.guard.map(|e| self.resolve_expr(e));
-        let body = self.resolve_expr(arm.body);
+        let pattern = self.resolve_pattern_with_bindings(&arm.pattern);
+        let guard = arm.guard.as_ref().map(|e| self.resolve_expr(e));
+        let body = self.resolve_expr(&arm.body);
         self.pop_scope();
 
         Arm {
@@ -700,11 +685,11 @@ impl<'db> Resolver<'db> {
     /// Resolve a handler arm.
     fn resolve_handler_arm(
         &mut self,
-        handler: HandlerArm<UnresolvedName>,
+        handler: &HandlerArm<UnresolvedName>,
     ) -> HandlerArm<ResolvedRef<'db>> {
         self.push_scope();
 
-        let kind = match handler.kind {
+        let kind = match &handler.kind {
             HandlerKind::Do { binding } => {
                 let binding = self.resolve_pattern_with_bindings(binding);
                 HandlerKind::Do { binding }
@@ -714,14 +699,14 @@ impl<'db> Resolver<'db> {
                 op,
                 params,
             } => {
-                let resolved_ability = self.resolve_handler_ability(&ability);
+                let resolved_ability = self.resolve_handler_ability(ability);
                 let resolved_params = params
-                    .into_iter()
+                    .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
                 HandlerKind::Fn {
                     ability: resolved_ability,
-                    op,
+                    op: *op,
                     params: resolved_params,
                 }
             }
@@ -731,9 +716,9 @@ impl<'db> Resolver<'db> {
                 params,
                 ..
             } => {
-                let resolved_ability = self.resolve_handler_ability(&ability);
+                let resolved_ability = self.resolve_handler_ability(ability);
                 let resolved_params = params
-                    .into_iter()
+                    .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
                 // Allocate a synthetic LocalId for `resume` so that lambda
@@ -742,7 +727,7 @@ impl<'db> Resolver<'db> {
                 self.resume_local_id_stack.push(resume_id);
                 HandlerKind::Op {
                     ability: resolved_ability,
-                    op,
+                    op: *op,
                     params: resolved_params,
                     resume_local_id: Some(resume_id),
                 }
@@ -750,7 +735,7 @@ impl<'db> Resolver<'db> {
         };
 
         let is_op = matches!(kind, HandlerKind::Op { .. });
-        let body = self.resolve_expr(handler.body);
+        let body = self.resolve_expr(&handler.body);
         if is_op {
             self.resume_local_id_stack.pop();
         }
@@ -776,25 +761,25 @@ impl<'db> Resolver<'db> {
     /// Resolve a pattern, binding any names it introduces.
     fn resolve_pattern_with_bindings(
         &mut self,
-        pattern: Pattern<UnresolvedName>,
+        pattern: &Pattern<UnresolvedName>,
     ) -> Pattern<ResolvedRef<'db>> {
-        let kind = match *pattern.kind {
+        let kind = match &*pattern.kind {
             PatternKind::Wildcard => PatternKind::Wildcard,
 
             PatternKind::Bind { name, .. } => {
-                let local_id = self.bind_local(name);
+                let local_id = self.bind_local(*name);
                 PatternKind::Bind {
-                    name,
+                    name: *name,
                     local_id: Some(local_id),
                 }
             }
 
-            PatternKind::Literal(lit) => PatternKind::Literal(lit),
+            PatternKind::Literal(lit) => PatternKind::Literal(lit.clone()),
 
             PatternKind::Variant { ctor, fields } => {
-                let resolved_ctor = self.resolve_name(&ctor);
+                let resolved_ctor = self.resolve_name(ctor);
                 let fields = fields
-                    .into_iter()
+                    .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
                 PatternKind::Variant {
@@ -808,11 +793,11 @@ impl<'db> Resolver<'db> {
                 fields,
                 rest,
             } => {
-                let resolved_type = self.resolve_name(&type_name);
+                let resolved_type = self.resolve_name(type_name);
                 let fields = fields
-                    .into_iter()
+                    .iter()
                     .map(|f| {
-                        let pattern = if let Some(pattern) = f.pattern {
+                        let pattern = if let Some(pattern) = &f.pattern {
                             self.resolve_pattern_with_bindings(pattern)
                         } else {
                             let local_id = self.bind_local(f.name);
@@ -834,13 +819,13 @@ impl<'db> Resolver<'db> {
                 PatternKind::Record {
                     type_name: resolved_type,
                     fields,
-                    rest,
+                    rest: *rest,
                 }
             }
 
             PatternKind::Tuple(patterns) => {
                 let patterns = patterns
-                    .into_iter()
+                    .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
                 PatternKind::Tuple(patterns)
@@ -848,7 +833,7 @@ impl<'db> Resolver<'db> {
 
             PatternKind::List(patterns) => {
                 let patterns = patterns
-                    .into_iter()
+                    .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
                 PatternKind::List(patterns)
@@ -856,11 +841,11 @@ impl<'db> Resolver<'db> {
 
             PatternKind::ListRest { head, rest, .. } => {
                 let head = head
-                    .into_iter()
+                    .iter()
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
                 // Bind the rest variable if it's not "_"
-                let rest_local_id = if let Some(rest_name) = rest
+                let rest_local_id = if let Some(rest_name) = *rest
                     && rest_name != "_"
                 {
                     Some(self.bind_local(rest_name))
@@ -869,17 +854,17 @@ impl<'db> Resolver<'db> {
                 };
                 PatternKind::ListRest {
                     head,
-                    rest,
+                    rest: *rest,
                     rest_local_id,
                 }
             }
 
             PatternKind::As { pattern, name, .. } => {
                 let pattern = self.resolve_pattern_with_bindings(pattern);
-                let local_id = Some(self.bind_local(name));
+                let local_id = Some(self.bind_local(*name));
                 PatternKind::As {
                     pattern,
-                    name,
+                    name: *name,
                     local_id,
                 }
             }
@@ -1028,7 +1013,7 @@ mod tests {
         );
 
         // Resolve the pattern
-        let resolved = resolver.resolve_pattern_with_bindings(list_rest_pattern);
+        let resolved = resolver.resolve_pattern_with_bindings(&list_rest_pattern);
 
         // Check that rest has a LocalId
         let PatternKind::ListRest {
@@ -1065,7 +1050,7 @@ mod tests {
         );
 
         // Resolve the pattern
-        let resolved = resolver.resolve_pattern_with_bindings(as_pattern);
+        let resolved = resolver.resolve_pattern_with_bindings(&as_pattern);
 
         // Check that the as-binding has a LocalId
         let PatternKind::As { local_id, name, .. } = resolved.kind.as_ref() else {

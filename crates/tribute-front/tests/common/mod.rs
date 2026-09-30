@@ -31,16 +31,16 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
         trunk_ir::Symbol::new("prelude"),
     )?;
 
-    let prelude_ast = parsed.module(db).clone();
+    let prelude_ast = parsed.module(db);
     let prelude_span_map = parsed.span_map(db).clone();
 
     // Build env for name resolution merging
-    let env = tribute_front::resolve::build_env(db, &prelude_ast);
+    let env = tribute_front::resolve::build_env(db, prelude_ast);
 
     // Resolve prelude with its own env
     let resolved_prelude = tribute_front::resolve::resolve_with_env(
         db,
-        prelude_ast.clone(),
+        prelude_ast,
         env.clone(),
         prelude_span_map.clone(),
     );
@@ -70,14 +70,14 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     assert!(parsed.is_some(), "Should parse successfully");
 
     let parsed = parsed.unwrap();
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
 
     // Load prelude for operator declarations (Int::(+) etc.)
     let prelude = load_prelude(db);
 
     // Build env, merging prelude bindings so operator names resolve
-    let mut env = tribute_front::resolve::build_env(db, &ast);
+    let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
         env.merge(&p.env);
     }
@@ -154,11 +154,11 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
     assert!(parsed.is_some(), "Should parse successfully");
 
     let parsed = parsed.unwrap();
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
     let prelude = load_prelude(db);
 
-    let mut env = tribute_front::resolve::build_env(db, &ast);
+    let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
         env.merge(&p.env);
     }
@@ -184,12 +184,12 @@ fn tdnr_function_summary_inner(
     assert!(parsed.is_some(), "Should parse successfully");
 
     let parsed = parsed.unwrap();
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
 
     let prelude = load_prelude(db);
 
-    let mut env = tribute_front::resolve::build_env(db, &ast);
+    let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
         env.merge(&p.env);
     }

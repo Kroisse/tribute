@@ -166,7 +166,7 @@ pub fn resolved_module<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<Module<ResolvedRef<'db>>> {
-    let module = parsed_module(db, source)?.clone();
+    let module = parsed_module(db, source)?;
     let sm = span_map(db, source)?;
     Some(crate::resolve::resolve_module(db, module, sm))
 }

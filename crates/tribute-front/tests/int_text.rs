@@ -197,13 +197,13 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     source: SourceCst,
 ) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let checked = tribute_front::typeck::typecheck_module(
         db,
         &tribute_front::resolve::resolve_with_env(
             db,
-            ast.clone(),
-            tribute_front::resolve::build_env(db, &ast),
+            ast,
+            tribute_front::resolve::build_env(db, ast),
             parsed.span_map(db).clone(),
         ),
         parsed.span_map(db).clone(),
@@ -287,13 +287,13 @@ fn lower_specialized_source(
     source: SourceCst,
 ) -> (IrContext, tribute_front::ast_to_ir::FrontendIrModule) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let checked = tribute_front::typeck::typecheck_module(
         db,
         &tribute_front::resolve::resolve_with_env(
             db,
-            ast.clone(),
-            tribute_front::resolve::build_env(db, &ast),
+            ast,
+            tribute_front::resolve::build_env(db, ast),
             parsed.span_map(db).clone(),
         ),
         parsed.span_map(db).clone(),
@@ -387,12 +387,12 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
 #[salsa::tracked(returns(copy))]
 fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
-    let ast = parsed.module(db).clone();
+    let ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
     let resolved = tribute_front::resolve::resolve_with_env(
         db,
-        ast.clone(),
-        tribute_front::resolve::build_env(db, &ast),
+        ast,
+        tribute_front::resolve::build_env(db, ast),
         span_map,
     );
     let checked =

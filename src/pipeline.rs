@@ -268,10 +268,10 @@ fn resolve_prelude(
     db: &dyn salsa::Database,
 ) -> Option<(ResolvedModule<'_>, SpanMap, crate::SourceCst)> {
     let (parsed, prelude_source) = parse_prelude(db)?;
-    let prelude_ast = parsed.module(db).clone();
+    let prelude_ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
 
-    let prelude_env = ast_resolve::build_env(db, &prelude_ast);
+    let prelude_env = ast_resolve::build_env(db, prelude_ast);
     let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
 
     Some((resolved, span_map, prelude_source))
@@ -1551,7 +1551,7 @@ pub fn parse_and_lower_ast<'db>(
     // Phase 1: Parse user code to AST
     let parsed = ast_query::parsed_ast(db, source)?;
 
-    let user_ast = parsed.module(db).clone();
+    let user_ast = parsed.module(db);
     let span_map = parsed.span_map(db).clone();
     tracing::debug!(
         "Phase 1: parsed AST has {} declarations",
@@ -1559,7 +1559,7 @@ pub fn parse_and_lower_ast<'db>(
     );
 
     // Phase 2: Build user env and merge prelude bindings
-    let mut user_env = ast_resolve::build_env(db, &user_ast);
+    let mut user_env = ast_resolve::build_env(db, user_ast);
     if let Some(p_env) = prelude_env(db) {
         user_env.merge(p_env); // Prelude bindings injected, user definitions take precedence
     }

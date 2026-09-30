@@ -32,11 +32,11 @@ use crate::{push_prefix, qualified_symbol};
 /// This is the main entry point for name resolution.
 pub fn resolve_module<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<UnresolvedName>,
+    module: &Module<UnresolvedName>,
     span_map: SpanMap,
 ) -> Module<ResolvedRef<'db>> {
     // Build the module environment from declarations
-    let mut env = build_env(db, &module);
+    let mut env = build_env(db, module);
     resolve_use_imports(&mut env);
 
     // Create resolver and process the module
@@ -51,7 +51,7 @@ pub fn resolve_module<'db>(
 /// prelude bindings into the environment before calling this.
 pub fn resolve_with_env<'db>(
     db: &'db dyn salsa::Database,
-    module: Module<UnresolvedName>,
+    module: &Module<UnresolvedName>,
     env: ModuleEnv<'db>,
     span_map: SpanMap,
 ) -> Module<ResolvedRef<'db>> {
