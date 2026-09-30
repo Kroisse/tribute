@@ -331,3 +331,36 @@ fn inline_modules_enclose_their_declarations() {
     assert_eq!(scopes.functions, [vec![Symbol::new("inner")]]);
     assert!(scopes.path.is_empty());
 }
+
+#[test]
+fn closures_visit_phase_values_through_refs() {
+    let mut module = sample();
+    walk_module_mut(&mut Refs(|_, _, value: &mut u32| *value *= 2), &mut module);
+    let mut values = Vec::new();
+    walk_module(&mut Refs(|_, _, value: &u32| values.push(*value)), &module);
+    assert_eq!(values, [2, 4, 6, 8, 10, 12, 14]);
+}
+
+#[test]
+fn for_each_visits_expressions_in_pre_order() {
+    let module = sample();
+    let Decl::Module(ModuleDecl {
+        body: Some(decls), ..
+    }) = &module.decls[0]
+    else {
+        unreachable!()
+    };
+    let Decl::Function(func) = &decls[0] else {
+        unreachable!()
+    };
+    let mut ids = Vec::new();
+    func.body.for_each(|expr| ids.push(expr.id.raw()));
+    let mut expected = record(&module).ids;
+    // Only expressions: drop the function, statements, arms, and patterns.
+    expected.retain(|id| {
+        ![1, 3, 9, 13, 19, 41, 44, 47].contains(id)
+            && !(20..=32).contains(id)
+            && ![4, 42, 45, 48].contains(id)
+    });
+    assert_eq!(ids, expected);
+}

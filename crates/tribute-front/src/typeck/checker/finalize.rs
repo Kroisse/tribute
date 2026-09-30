@@ -5,7 +5,7 @@
 
 use super::TypeChecker;
 use crate::ast::NodeId;
-use crate::ast::visit::{RefSite, Visit, VisitMut, walk_expr_mut};
+use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut};
 use crate::ast::{Expr, ExprKind, FuncDefId, ResolvedRef, Type, TypedRef, UniVarId};
 use crate::typeck::solver::{RowSubst, TypeSubst};
 use std::collections::HashMap;
@@ -69,29 +69,13 @@ impl<'db> TypeChecker<'db> {
         row_subst: &RowSubst<'db>,
         out: &mut Vec<UniVarId<'db>>,
     ) {
-        struct Collect<'a, 'db> {
-            db: &'db dyn salsa::Database,
-            type_subst: &'a TypeSubst<'db>,
-            row_subst: &'a RowSubst<'db>,
-            out: &'a mut Vec<UniVarId<'db>>,
-        }
-        impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Collect<'_, 'db> {
-            fn visit_ref(&mut self, _: RefSite, _: NodeId, value: &'ast TypedRef<'db>) {
-                self.type_subst.collect_univars_from_type(
-                    self.db,
-                    value.ty,
-                    self.row_subst,
-                    self.out,
-                );
-            }
-        }
-        Collect {
-            db: self.db(),
-            type_subst,
-            row_subst,
-            out,
-        }
-        .visit_expr(body);
+        let db = self.db();
+        walk_expr(
+            &mut Refs(|_, _, value: &TypedRef<'db>| {
+                type_subst.collect_univars_from_type(db, value.ty, row_subst, out);
+            }),
+            body,
+        );
     }
 
     pub(super) fn collect_univars_from_deferred_resolutions(

@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
-use crate::ast::visit::{RefSite, VisitMut, walk_module_mut};
+use crate::ast::visit::{RefSite, Refs, walk_decl_mut, walk_module_mut};
 use crate::ast::{
     CtorId, Decl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypedRef,
 };
@@ -26,16 +26,9 @@ pub fn rewrite_module<'db>(
     db: &'db dyn salsa::Database,
     module: &mut Module<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
-    walk_module_mut(
-        &mut CallSiteRewriter {
-            db,
-            rewrite_map,
-            instances,
-        },
-        module,
-    );
+    rewrite_decls(db, &mut module.decls, rewrite_map, instances);
 }
 
 /// Rewrite call sites in a list of declarations (e.g., specialized function bodies).
@@ -43,65 +36,46 @@ pub fn rewrite_decls<'db>(
     db: &'db dyn salsa::Database,
     decls: &mut [Decl<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
-    instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
-    let mut rewriter = CallSiteRewriter {
-        db,
-        rewrite_map,
-        instances,
-    };
-    for decl in decls {
-        rewriter.visit_decl_mut(decl);
-    }
-}
-
-struct CallSiteRewriter<'a, 'db> {
-    db: &'db dyn salsa::Database,
-    rewrite_map: &'a RewriteMap<'db>,
-    instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-}
-
-impl<'a, 'db> CallSiteRewriter<'a, 'db> {
-    fn try_rewrite_ref(
-        &self,
-        node: crate::ast::NodeId,
-        typed_ref: &TypedRef<'db>,
-    ) -> Option<TypedRef<'db>> {
-        let ResolvedRef::Function { id } = &typed_ref.resolved else {
-            return None;
-        };
-        let entries = self.rewrite_map.get(id)?;
-        let instance = self.instances.get(&node)?;
-        if instance.function != *id {
-            return None;
-        }
-        let type_args = &instance.type_arguments;
-
-        // Find the matching mangled name
-        let mangled =
-            entries.iter().find_map(
-                |(args, name)| {
-                    if args == type_args { Some(*name) } else { None }
-                },
-            )?;
-
-        let specialized_id = FuncDefId::new(self.db, mangled);
-        Some(TypedRef::new(
-            ResolvedRef::Function { id: specialized_id },
-            typed_ref.ty,
-        ))
-    }
-}
-
-impl<'db> VisitMut<TypedRef<'db>> for CallSiteRewriter<'_, 'db> {
-    fn visit_ref_mut(&mut self, site: RefSite, node: NodeId, value: &mut TypedRef<'db>) {
+    let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
         // Only a function reference in expression position is a call site.
         if site == RefSite::Var
-            && let Some(rewritten) = self.try_rewrite_ref(node, value)
+            && let Some(callee) = specialized_callee(db, rewrite_map, instances, node, value)
         {
-            *value = rewritten;
+            *value = callee;
         }
+    });
+    for decl in decls {
+        walk_decl_mut(&mut rewrite, decl);
     }
+}
+
+/// The specialized function a call site at `node` refers to, if the callee
+/// is generic and was specialized for the call's type arguments.
+fn specialized_callee<'db>(
+    db: &'db dyn salsa::Database,
+    rewrite_map: &RewriteMap<'db>,
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    node: NodeId,
+    typed_ref: &TypedRef<'db>,
+) -> Option<TypedRef<'db>> {
+    let ResolvedRef::Function { id } = &typed_ref.resolved else {
+        return None;
+    };
+    let entries = rewrite_map.get(id)?;
+    let instance = instances.get(&node)?;
+    if instance.function != *id {
+        return None;
+    }
+    let type_args = &instance.type_arguments;
+    let (_, mangled) = entries.iter().find(|(args, _)| args == type_args)?;
+    Some(TypedRef::new(
+        ResolvedRef::Function {
+            id: FuncDefId::new(db, *mangled),
+        },
+        typed_ref.ty,
+    ))
 }
 
 // ============================================================================
@@ -135,20 +109,10 @@ pub fn rewrite_types_in_module<'db>(
     module: &mut Module<TypedRef<'db>>,
     type_rewrite_map: &TypeRewriteMap<'db>,
 ) {
-    struct Types<'a, 'db> {
-        db: &'db dyn salsa::Database,
-        map: &'a TypeRewriteMap<'db>,
-    }
-    impl<'db> VisitMut<TypedRef<'db>> for Types<'_, 'db> {
-        fn visit_ref_mut(&mut self, _: RefSite, _: NodeId, value: &mut TypedRef<'db>) {
-            *value = rewrite_typed_ref_type(self.db, value.clone(), self.map);
-        }
-    }
     walk_module_mut(
-        &mut Types {
-            db,
-            map: type_rewrite_map,
-        },
+        &mut Refs(|_, _, value: &mut TypedRef<'db>| {
+            *value = rewrite_typed_ref_type(db, value.clone(), type_rewrite_map);
+        }),
         module,
     );
 }

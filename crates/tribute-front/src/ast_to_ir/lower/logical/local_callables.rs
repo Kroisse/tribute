@@ -21,7 +21,7 @@ impl<'db> Plan<'db> {
         parent_type_parameters: usize,
     ) -> Self {
         let mut nodes = Vec::new();
-        body.for_each_expr(|expr| nodes.push(expr));
+        body.for_each(|expr| nodes.push(expr));
         let mut origins: HashMap<LocalId, (NodeId, &Expr<TypedRef<'db>>)> = HashMap::new();
         let mut bindings = HashMap::new();
         let mut named = HashMap::new();
@@ -328,7 +328,7 @@ fn fixed_instance<'db>(
             .is_some_and(|row| crate::ast::collect_effect_vars(db, ty).contains(&row))
     };
     let mut independent = true;
-    body.for_each_expr(|expr| {
+    body.for_each(|expr| {
         independent &= !ctx
             .get_node_type(expr.id)
             .is_some_and(|ty| changes_row(*ty));

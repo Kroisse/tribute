@@ -111,7 +111,7 @@ pub(super) fn validate<'db>(
             break;
         }
         let mut nodes = Vec::new();
-        func.body.for_each_expr(|node| nodes.push(node));
+        func.body.for_each(|node| nodes.push(node));
         for expr in nodes {
             if let Some(op) = metadata.perform_operations.get(&expr.id)
                 && op.ability_args.iter().any(|ty| {

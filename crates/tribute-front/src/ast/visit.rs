@@ -313,7 +313,7 @@ pub fn walk_field_pattern<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
 impl<V> Expr<V> {
     /// Call `f` on this expression and every expression nested in it, in
     /// pre-order.
-    pub fn for_each_expr<'ast>(&'ast self, f: impl FnMut(&'ast Expr<V>)) {
+    pub fn for_each<'ast>(&'ast self, f: impl FnMut(&'ast Expr<V>)) {
         struct Exprs<F>(F);
         impl<'ast, V: 'ast, F: FnMut(&'ast Expr<V>)> Visit<'ast, V> for Exprs<F> {
             fn visit_expr(&mut self, expr: &'ast Expr<V>) {
@@ -322,6 +322,35 @@ impl<V> Expr<V> {
             }
         }
         Exprs(f).visit_expr(self);
+    }
+
+    /// Call `f` on this expression and then on every expression nested in
+    /// it, in pre-order. The children walked are those `f` leaves in place.
+    pub fn for_each_mut(&mut self, f: impl FnMut(&mut Expr<V>)) {
+        struct Exprs<F>(F);
+        impl<V, F: FnMut(&mut Expr<V>)> VisitMut<V> for Exprs<F> {
+            fn visit_expr_mut(&mut self, expr: &mut Expr<V>) {
+                (self.0)(expr);
+                walk_expr_mut(self, expr);
+            }
+        }
+        Exprs(f).visit_expr_mut(self);
+    }
+}
+
+/// A visitor that calls a closure on each phase value and uses the default
+/// walk everywhere else: `walk_module(&mut Refs(|site, node, value| ..), m)`.
+pub struct Refs<F>(pub F);
+
+impl<'ast, V: 'ast, F: FnMut(RefSite, NodeId, &'ast V)> Visit<'ast, V> for Refs<F> {
+    fn visit_ref(&mut self, site: RefSite, node: NodeId, value: &'ast V) {
+        (self.0)(site, node, value);
+    }
+}
+
+impl<V, F: FnMut(RefSite, NodeId, &mut V)> VisitMut<V> for Refs<F> {
+    fn visit_ref_mut(&mut self, site: RefSite, node: NodeId, value: &mut V) {
+        (self.0)(site, node, value);
     }
 }
 

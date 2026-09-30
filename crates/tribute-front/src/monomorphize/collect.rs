@@ -1,10 +1,8 @@
 use super::nominal_index::NominalIndex;
 use std::collections::{HashMap, HashSet};
 
-use crate::ast::visit::{RefSite, Visit, walk_module};
-use crate::ast::{
-    FuncDefId, Module, NodeId, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef,
-};
+use crate::ast::visit::{RefSite, Refs, walk_module};
+use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef};
 
 /// Collect all generic function instantiations from a typed module.
 ///
@@ -18,7 +16,15 @@ pub fn collect_instantiations<'db>(
     function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
 ) -> HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let mut collector = InstantiationCollector::new(db, function_types, function_instances);
-    walk_module(&mut collector, module);
+    walk_module(
+        &mut Refs(|site, node, value: &TypedRef<'db>| {
+            // Only a function reference in expression position is a call site.
+            if site == RefSite::Var {
+                collector.try_record(node, value);
+            }
+        }),
+        module,
+    );
     collector.instantiations
 }
 
@@ -175,15 +181,6 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
     }
 }
 
-impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for InstantiationCollector<'_, 'db> {
-    fn visit_ref(&mut self, site: RefSite, node: NodeId, value: &'ast TypedRef<'db>) {
-        // Only a function reference in expression position is a call site.
-        if site == RefSite::Var {
-            self.try_record(node, value);
-        }
-    }
-}
-
 pub(crate) fn is_concrete_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
     is_concrete_type_cached(db, ty, &mut HashMap::new())
 }
@@ -283,12 +280,15 @@ pub(super) fn collect_type_instantiations_with_index<'db>(
 ) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let mut result: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = HashMap::new();
 
-    let mut visitor = TypeInstantiationVisitor {
-        db,
-        index,
-        instantiations: &mut result,
-    };
-    walk_module(&mut visitor, module);
+    walk_module(
+        &mut Refs(|site, _, value: &TypedRef<'db>| {
+            // Patterns and handler abilities are not collected.
+            if matches!(site, RefSite::Var | RefSite::ConsCtor | RefSite::RecordType) {
+                collect_from_type(db, value.ty, index, &mut result);
+            }
+        }),
+        module,
+    );
     for ty in extra_types {
         collect_from_type(db, ty, index, &mut result);
     }
@@ -375,30 +375,9 @@ fn collect_from_type_inner<'db>(
     }
 }
 
-struct TypeInstantiationVisitor<'a, 'ast, 'db> {
-    db: &'db dyn salsa::Database,
-    index: &'a NominalIndex<'ast, 'db>,
-    instantiations: &'a mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
-}
-
-impl<'a, 'ast, 'db> TypeInstantiationVisitor<'a, 'ast, 'db> {
-    fn collect_type(&mut self, ty: Type<'db>) {
-        collect_from_type(self.db, ty, self.index, self.instantiations);
-    }
-}
-
-impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for TypeInstantiationVisitor<'_, '_, 'db> {
-    fn visit_ref(&mut self, site: RefSite, _: NodeId, value: &'ast TypedRef<'db>) {
-        // Patterns and handler abilities are not collected.
-        if matches!(site, RefSite::Var | RefSite::ConsCtor | RefSite::RecordType) {
-            self.collect_type(value.ty);
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use crate::ast::{AbilityId, Decl, Effect, EffectRow, EffectVar, TypeParam};
+    use crate::ast::{AbilityId, Decl, Effect, EffectRow, EffectVar, NodeId, TypeParam};
     use trunk_ir::Symbol;
 
     use super::*;
