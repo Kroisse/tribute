@@ -541,22 +541,22 @@ fn prepare_frontend_details<'db>(
             function_instances,
             handler_operations: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.handler_operations(db).clone())
+                .flat_map(|prelude| prelude.handler_operations(db).iter().cloned())
                 .chain(typed.handler_operations(db).iter().cloned())
                 .collect(),
             perform_operations: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.perform_operations(db).clone())
+                .flat_map(|prelude| prelude.perform_operations(db).iter().cloned())
                 .chain(typed.perform_operations(db).iter().cloned())
                 .collect(),
             lambda_signatures: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.lambda_signatures(db).clone())
+                .flat_map(|prelude| prelude.lambda_signatures(db).iter().cloned())
                 .chain(typed.lambda_signatures(db).iter().cloned())
                 .collect(),
             exhaustive_cases: prelude_module(db)
                 .into_iter()
-                .flat_map(|prelude| prelude.exhaustive_cases(db).clone())
+                .flat_map(|prelude| prelude.exhaustive_cases(db).iter().copied())
                 .chain(typed.exhaustive_cases(db).iter().copied())
                 .collect(),
             compiler_intrinsics,
@@ -613,7 +613,7 @@ fn prepare_frontend_details<'db>(
             local_instances,
         },
         merged_ability_conventions.into_iter().collect::<Vec<_>>(),
-        typed.ability_definitions(db).clone(),
+        typed.ability_definitions(db).to_vec(),
         mono_result
             .metadata
             .handler_operations

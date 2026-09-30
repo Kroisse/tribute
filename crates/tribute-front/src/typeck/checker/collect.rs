@@ -638,7 +638,7 @@ impl<'db> TypeChecker<'db> {
             }
         };
         crate::ast::EffectRowConversion {
-            row: EffectRow::new(self.db(), conversion.row.effects(self.db()).clone(), rest),
+            row: EffectRow::new(self.db(), conversion.row.effects(self.db()), rest),
             origins: conversion.origins,
         }
     }

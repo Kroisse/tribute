@@ -193,7 +193,7 @@ pub fn function_schemes<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
 ) -> Option<&'db [(Symbol, TypeScheme<'db>)]> {
-    type_check_output(db, source).map(|o| o.function_types(db).as_slice())
+    type_check_output(db, source).map(|o| o.function_types(db))
 }
 
 // =============================================================================

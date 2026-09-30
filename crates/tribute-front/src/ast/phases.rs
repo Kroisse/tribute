@@ -280,6 +280,7 @@ impl<'db> AbilityId<'db> {
 #[salsa::tracked(debug)]
 pub struct ModulePath<'db> {
     /// The path segments (e.g., ["std", "collections", "List"])
+    #[returns(deref)]
     pub segments: Vec<Symbol>,
 }
 

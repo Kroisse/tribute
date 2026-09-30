@@ -381,7 +381,7 @@ impl<'db> TypeChecker<'db> {
                 let inferred_effect = if accumulated.rest(self.db()).is_none() {
                     EffectRow::new(
                         self.db(),
-                        accumulated.effects(self.db()).clone(),
+                        accumulated.effects(self.db()),
                         expected_effect
                             .and_then(|effect| effect.rest(self.db()).map(|_| ctx.fresh_row_var())),
                     )
@@ -3349,7 +3349,7 @@ impl<'db> TypeChecker<'db> {
                     &mut |a| self.annotation_to_type_with_ctx(ctx, a),
                     || rest.expect("row annotations allocate a tail"),
                 );
-                let effect = EffectRow::new(self.db(), converted.effects(self.db()).clone(), rest);
+                let effect = EffectRow::new(self.db(), converted.effects(self.db()), rest);
                 ctx.func_type(param_types, result_ty, effect)
             }
             TypeAnnotationKind::Tuple(elems) => {

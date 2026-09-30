@@ -216,7 +216,7 @@ impl<'db> TypeChecker<'db> {
                     let inferred_effect = if is_root_main {
                         crate::ast::EffectRow::new(
                             self.db(),
-                            body_effect_row.effects(self.db()).clone(),
+                            body_effect_row.effects(self.db()),
                             None,
                         )
                     } else if body_effect_row.rest(self.db()).is_some() {
@@ -224,7 +224,7 @@ impl<'db> TypeChecker<'db> {
                     } else {
                         crate::ast::EffectRow::new(
                             self.db(),
-                            body_effect_row.effects(self.db()).clone(),
+                            body_effect_row.effects(self.db()),
                             declared_effect.rest(self.db()),
                         )
                     };

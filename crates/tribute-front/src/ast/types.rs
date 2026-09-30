@@ -204,11 +204,15 @@ pub struct TypeScheme<'db> {
     /// Type parameters (universally quantified).
     ///
     /// The order matters: `type_params[0]` corresponds to `BoundVar { index: 0 }`.
+    #[returns(deref)]
     pub type_params: Vec<TypeParam>,
     /// Effect-row variables quantified by this scheme.
+    #[returns(deref)]
     pub effect_params: Vec<EffectVar>,
     /// Retained exact effect unions, quantified together with the body.
+    #[returns(deref)]
     pub row_unions: Vec<RowUnion<'db>>,
+    #[returns(deref)]
     pub row_removals: Vec<RowRemoval<'db>>,
     /// The body type with BoundVar references to type_params.
     #[returns(copy)]
@@ -280,10 +284,10 @@ impl<'db> TypeScheme<'db> {
     /// Copy the complete scheme into ordinary data for rewriting before publication.
     pub fn to_builder(self, db: &'db dyn salsa::Database) -> TypeSchemeBuilder<'db> {
         TypeSchemeBuilder {
-            type_params: self.type_params(db).clone(),
-            effect_params: self.effect_params(db).clone(),
-            row_unions: self.row_unions(db).clone(),
-            row_removals: self.row_removals(db).clone(),
+            type_params: self.type_params(db).to_vec(),
+            effect_params: self.effect_params(db).to_vec(),
+            row_unions: self.row_unions(db).to_vec(),
+            row_removals: self.row_removals(db).to_vec(),
             body: self.body(db),
         }
     }
@@ -442,6 +446,7 @@ pub enum Kind {
 #[salsa::interned(debug)]
 pub struct EffectRow<'db> {
     /// Known effects in this row.
+    #[returns(deref)]
     pub effects: Vec<Effect<'db>>,
     /// Optional row variable for open effect rows.
     ///

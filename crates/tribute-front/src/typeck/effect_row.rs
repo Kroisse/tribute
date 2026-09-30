@@ -75,7 +75,7 @@ pub fn add_effect<'db>(
     row: EffectRow<'db>,
     effect: Effect<'db>,
 ) -> EffectRow<'db> {
-    let mut effects = row.effects(db).clone();
+    let mut effects = row.effects(db).to_vec();
     if !effects.contains(&effect) {
         effects.push(effect);
     }
@@ -92,7 +92,7 @@ pub fn remove_effect<'db>(
 ) -> Option<EffectRow<'db>> {
     let effects = row.effects(db);
     if let Some(pos) = effects.iter().position(|e| e == effect) {
-        let mut new_effects = effects.clone();
+        let mut new_effects = effects.to_vec();
         new_effects.remove(pos);
         Some(EffectRow::new(db, new_effects, row.rest(db)))
     } else {
@@ -135,7 +135,7 @@ pub fn union<'db>(
     row2: EffectRow<'db>,
     fresh_var: impl FnOnce() -> EffectVar,
 ) -> (EffectRow<'db>, Option<crate::ast::RowUnion<'db>>) {
-    let mut effects = row1.effects(db).clone();
+    let mut effects = row1.effects(db).to_vec();
     for effect in row2.effects(db) {
         if !effects.contains(effect) {
             effects.push(effect.clone());
