@@ -224,7 +224,7 @@ mod outer {{
     }}
 }}
 
-fn main() {{
+fn main() -> Nil {{
     let _ = outer::get()
 }}
 "#
@@ -278,7 +278,7 @@ mod outer {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = outer::run()
 }
 "#,
@@ -299,7 +299,7 @@ mod outer {
     use a::one
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = outer::one()
 }
 "#,
@@ -333,7 +333,7 @@ mod outer {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = outer::get()
 }
 "#,
@@ -373,7 +373,7 @@ mod outer {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = outer::run()
 }
 "#,
@@ -459,7 +459,7 @@ mod outer {
     }
 }
 
-fn main() {
+fn main() -> Nil {
     let _ = outer::run()
 }
 "#,
