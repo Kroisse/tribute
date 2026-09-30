@@ -128,7 +128,8 @@ documentation.
 
 Current boundaries relevant to these files:
 
-- List expressions and general collection APIs are unsupported on all targets.
+- List literals, `List::prepend`, and list patterns run natively but have no
+  Wasm lowering; general collection APIs are unsupported on all targets.
 - Inline modules have native execution evidence, but file-module loading,
   package compilation, and separate Tribute-module linking are unsupported.
 - String/Bytes output through `std::io::print_line` is the only current
@@ -142,22 +143,13 @@ Current boundaries relevant to these files:
 - `ability_core.wasm` is a legacy checked-in build artifact. It is not the
   documented output of the current CLI.
 
-### Compile-only examples
+### Checked examples
 
-There are currently no maintained compile-only examples. `--target none` is
-useful for frontend validation, but successful compilation does not establish
-native or Wasm execution support.
-
-### Design-only examples
-
-- `modules_file/` illustrates the planned file-module/package layout. The
-  current CLI accepts one source file and does not load sibling modules, so
-  these files are not compilable as a package.
-
-### Legacy examples
-
-All remaining `.trb` files in this directory are legacy syntax demonstrations
-or milestone artifacts:
+Every other single-file example passes the frontend, which
+[`tests/integration/lang_examples.rs`](../tests/integration/lang_examples.rs)
+checks. They use `std::io` for output and declare `Io` on `main`, and most also
+run natively. They demonstrate individual language features and are smaller
+than the canonical examples above:
 
 - `add.trb`, `basic.trb`, `calc.trb`, `float.trb`,
   `function_visibility.trb`, `functions.trb`, `generics.trb`, `hello.trb`,
@@ -168,10 +160,24 @@ or milestone artifacts:
   `pattern_matching.trb`, `performance_test.trb`, `record-patterns.trb`,
   `result.trb`, `simple_closure.trb`, `simple_function.trb`, and
   `simple_test.trb`
-- `string_interpolation.trb`, `strings/`, `tuples.trb`,
-  `ufcs-qualified.trb`, `ufcs-simple.trb`, `zero-arg-comprehensive.trb`,
+- `tuples.trb`, `ufcs-simple.trb`, `zero-arg-comprehensive.trb`,
   `zero-arg-no-parens.trb`, and `zero-arg-simple.trb`
 
-Some legacy files still compile or run through compatibility helpers; others
-fail current parsing, resolution, type checking, or entrypoint rules. They are
-retained only as historical material and are not supported command examples.
+`--target none` validates the frontend without producing an artifact; a
+successful frontend check does not establish native or Wasm execution support.
+
+### Unimplemented-feature examples
+
+These examples use designed features that the compiler does not implement yet,
+and the frontend check expects their failure:
+
+- `string_interpolation.trb` and `strings/string_interpolation.trb`: string
+  interpolation.
+- `ufcs-qualified.trb`: qualified UFCS (`x.a::b()`).
+
+### Design-only examples
+
+- `modules_file/` illustrates the planned file-module/package layout. The
+  current CLI accepts one source file and does not load sibling modules, and
+  `pkg`, `self`, and `super` paths are not supported yet, so these files are
+  not compilable as a package.
