@@ -516,6 +516,79 @@ fn main() {{
     assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1\n2\n7\n0");
 }
 
+/// Literal patterns match what their type's `==` finds equal: String by
+/// contents regardless of rope shape, Bytes by contents, Float by `oeq`
+/// (`-0.0` matches `0.0`, NaN matches nothing), Rune by code point, and `Nil`
+/// always.
+#[test]
+fn test_native_literal_patterns() {
+    assert_native_output(
+        "literal_patterns.trb",
+        r#"fn s(x: String) -> Nat {
+    case x {
+        "abc" -> 1
+        "" -> 2
+        _ -> 0
+    }
+}
+fn by(x: Bytes) -> Nat {
+    case x {
+        b"ab" -> 1
+        b"" -> 2
+        _ -> 0
+    }
+}
+fn f(x: Float) -> Nat {
+    case x {
+        1.5 -> 1
+        0.0 -> 2
+        _ -> 0
+    }
+}
+// The grammar parses a rune pattern only as a case's first arm.
+fn r(x: Rune) -> Nat {
+    case x {
+        ?a -> 1
+        _ -> case x {
+            ?\n -> 2
+            _ -> 0
+        }
+    }
+}
+fn n(x: Nil) -> Nat {
+    case x {
+        Nil -> 7
+    }
+}
+fn t(x: #(Nil, String)) -> Nat {
+    case x {
+        #(Nil, "a") -> 1
+        #(Nil, _) -> 0
+    }
+}
+fn main() {
+    __tribute_print_nat(s("abc"))
+    __tribute_print_nat(s("ab" <> "c"))
+    __tribute_print_nat(s(""))
+    __tribute_print_nat(s("x"))
+    __tribute_print_nat(by(b"a" <> b"b"))
+    __tribute_print_nat(by(b""))
+    __tribute_print_nat(by(b"abc"))
+    __tribute_print_nat(f(1.5))
+    __tribute_print_nat(f(-0.0))
+    __tribute_print_nat(f(0.0 / 0.0))
+    __tribute_print_nat(r(?a))
+    __tribute_print_nat(r(?\n))
+    __tribute_print_nat(r(?b))
+    __tribute_print_nat(n(Nil))
+    __tribute_print_nat(t(#(Nil, "a")))
+    __tribute_print_nat(t(#(Nil, "b")))
+}
+"#,
+        "1\n1\n2\n0\n1\n2\n0\n1\n2\n0\n1\n2\n0\n7\n1\n0",
+    );
+}
+
 /// A case over an enum spelled through a `use` import or by its short name
 /// inside its module lowers without a fallthrough.
 #[test]

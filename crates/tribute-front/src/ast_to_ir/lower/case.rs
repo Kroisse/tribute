@@ -4,6 +4,8 @@
 //! pattern checks generating boolean conditions and pattern bindings
 //! extracted inside the matched region.
 
+use salsa::Accumulator;
+use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
 use tribute_ir::dialect::list;
 use trunk_ir::Symbol;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
@@ -509,7 +511,8 @@ fn emit_logical_list_pattern_suffix<'db>(
     Some(guarded.result(builder.ir))
 }
 
-/// Emit a literal equality check.
+/// Emit a literal equality check. A literal pattern matches the values its
+/// type's `==` finds equal to the literal.
 fn emit_literal_check<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
@@ -522,49 +525,119 @@ fn emit_literal_check<'db>(
     match lit {
         LiteralPattern::Nat(n) => {
             let value = super::validate_nat_i31(builder.db(), location, *n)?;
-            let const_op = arith::Const::operands()
-                .value(Attribute::Int(value as i128))
-                .results(i32_ty)
-                .build(builder.ir, location);
-            builder.ir.push_op(builder.block, const_op.op_ref());
-            let const_val = const_op.result(builder.ir);
-            let cmp_op = arith::Cmpi::operands(scrutinee, const_val)
-                .predicate(Symbol::new("eq"))
-                .build(builder.ir, location);
-            builder.ir.push_op(builder.block, cmp_op.op_ref());
-            Some(cmp_op.result(builder.ir))
+            let literal = emit_const(builder, location, Attribute::Int(value as i128), i32_ty);
+            Some(emit_cmpi_eq(builder, location, scrutinee, literal))
         }
         LiteralPattern::Int(n) => {
             let value = super::validate_int_i31(builder.db(), location, *n)?;
-            let const_op = arith::Const::operands()
-                .value(Attribute::Int(value as i128))
-                .results(i32_ty)
-                .build(builder.ir, location);
-            builder.ir.push_op(builder.block, const_op.op_ref());
-            let const_val = const_op.result(builder.ir);
-            let cmp_op = arith::Cmpi::operands(scrutinee, const_val)
-                .predicate(Symbol::new("eq"))
-                .build(builder.ir, location);
-            builder.ir.push_op(builder.block, cmp_op.op_ref());
-            Some(cmp_op.result(builder.ir))
+            let literal = emit_const(builder, location, Attribute::Int(value as i128), i32_ty);
+            Some(emit_cmpi_eq(builder, location, scrutinee, literal))
+        }
+        LiteralPattern::Rune(c) => {
+            let literal = emit_const(builder, location, Attribute::Int(*c as i32 as i128), i32_ty);
+            Some(emit_cmpi_eq(builder, location, scrutinee, literal))
         }
         LiteralPattern::Bool(b) => {
-            let const_op = arith::Const::operands()
-                .value(Attribute::Bool(*b))
-                .results(bool_ty)
-                .build(builder.ir, location);
-            builder.ir.push_op(builder.block, const_op.op_ref());
-            let const_val = const_op.result(builder.ir);
-            let cmp_op = arith::Cmpi::operands(scrutinee, const_val)
-                .predicate(Symbol::new("eq"))
+            let literal = emit_const(builder, location, Attribute::Bool(*b), bool_ty);
+            Some(emit_cmpi_eq(builder, location, scrutinee, literal))
+        }
+        LiteralPattern::Float(value) => {
+            let f64_ty = builder.ctx.f64_type(builder.ir);
+            let literal = emit_const(
+                builder,
+                location,
+                Attribute::FloatBits(value.value().to_bits()),
+                f64_ty,
+            );
+            let cmp_op = arith::Cmpf::operands(scrutinee, literal)
+                .predicate(Symbol::new("oeq"))
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, cmp_op.op_ref());
             Some(cmp_op.result(builder.ir))
         }
-        _ => {
-            unreachable!("unsupported literal pattern in IR lowering: {:?}", lit)
+        LiteralPattern::String(text) => {
+            let equality = builder.ctx.literal_equalities().string;
+            let anyref_ty = builder.ctx.anyref_type(builder.ir);
+            let literal = adt::StringConst::operands()
+                .value(text.clone())
+                .results(anyref_ty)
+                .build(builder.ir, location);
+            builder.ir.push_op(builder.block, literal.op_ref());
+            let literal = literal.result(builder.ir);
+            emit_equality_call(builder, location, equality, "String", scrutinee, literal)
         }
+        LiteralPattern::Bytes(bytes) => {
+            let equality = builder.ctx.literal_equalities().bytes;
+            let bytes_ty = builder.ctx.bytes_type(builder.ir);
+            let literal = adt::BytesConst::operands()
+                .value(bytes.clone().into())
+                .results(bytes_ty)
+                .build(builder.ir, location);
+            builder.ir.push_op(builder.block, literal.op_ref());
+            let literal = literal.result(builder.ir);
+            emit_equality_call(builder, location, equality, "Bytes", scrutinee, literal)
+        }
+        // `Nil` is the only value of its type.
+        LiteralPattern::Nil => Some(emit_const(
+            builder,
+            location,
+            Attribute::Bool(true),
+            bool_ty,
+        )),
     }
+}
+
+fn emit_const(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    value: Attribute,
+    ty: TypeRef,
+) -> ValueRef {
+    let const_op = arith::Const::operands()
+        .value(value)
+        .results(ty)
+        .build(builder.ir, location);
+    builder.ir.push_op(builder.block, const_op.op_ref());
+    const_op.result(builder.ir)
+}
+
+fn emit_cmpi_eq(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    scrutinee: ValueRef,
+    literal: ValueRef,
+) -> ValueRef {
+    let cmp_op = arith::Cmpi::operands(scrutinee, literal)
+        .predicate(Symbol::new("eq"))
+        .build(builder.ir, location);
+    builder.ir.push_op(builder.block, cmp_op.op_ref());
+    cmp_op.result(builder.ir)
+}
+
+/// Compare `scrutinee` with `literal` through the prelude's `==` for
+/// `type_name`, which a program without the prelude lacks.
+fn emit_equality_call(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    equality: Option<Symbol>,
+    type_name: &str,
+    scrutinee: ValueRef,
+    literal: ValueRef,
+) -> Option<ValueRef> {
+    let Some(equality) = equality else {
+        Diagnostic::new(
+            format!("{type_name} literal patterns need the prelude's `{type_name}::==`"),
+            location.span,
+            DiagnosticSeverity::Error,
+            CompilationPhase::Lowering,
+        )
+        .accumulate(builder.db());
+        return None;
+    };
+    let equal =
+        super::logical::emit_named_call(builder, location, equality, vec![scrutinee, literal]);
+    let bool_ty = builder.ctx.bool_type(builder.ir);
+    Some(builder.cast_if_needed(location, equal, bool_ty))
 }
 
 /// Logical counterpart to [`bind_pattern_fields`].  Tuple and list extraction

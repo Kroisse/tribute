@@ -2422,7 +2422,9 @@ impl<'db> TypeChecker<'db> {
                 LiteralPattern::Int(_) => ctx.int_type(),
                 LiteralPattern::Float(_) => ctx.float_type(),
                 LiteralPattern::String(_) => ctx.string_type(),
-                LiteralPattern::Unit => ctx.nil_type(),
+                LiteralPattern::Bytes(_) => ctx.bytes_type(),
+                LiteralPattern::Rune(_) => ctx.rune_type(),
+                LiteralPattern::Nil => ctx.nil_type(),
             },
             PatternKind::Variant { ctor, fields } => {
                 let ctor_ty = match ctor {

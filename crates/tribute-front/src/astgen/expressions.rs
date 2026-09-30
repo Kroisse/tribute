@@ -784,7 +784,7 @@ fn lower_argument_list(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Expr<Unr
 /// Returns `Ok(None)` for text the grammar does not produce, and an
 /// [`LiteralError`] relative to `text` for a `\u{…}` escape that is not a
 /// Unicode scalar value.
-fn parse_rune_literal(text: &str) -> Result<Option<char>, LiteralError> {
+pub(super) fn parse_rune_literal(text: &str) -> Result<Option<char>, LiteralError> {
     // Format: ?c, ?\n, ?\xHH, ?\u{H…}
     let Some(body) = text.strip_prefix('?') else {
         return Ok(None);

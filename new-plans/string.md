@@ -54,6 +54,10 @@ bytes.slice(start: Nat, end: Nat) -> Bytes
 // 연결
 bytes1 <> bytes2 -> Bytes   // 새 Bytes 생성
 
+// 비교
+bytes1 == bytes2 -> Bool    // byte 내용 비교
+bytes1 != bytes2 -> Bool
+
 // 변환
 bytes.to_array() -> Array(U8)
 bytes.to_string_utf8() -> Result(String, DecodeError)

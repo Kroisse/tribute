@@ -545,7 +545,7 @@ Type ::= TypePath TypeArgs?
        | FunctionType
        | TupleType
 
-TupleType ::= '#(' TypeList? ')'              // #(Int, String, Float)
+TupleType ::= '#(' TypeList ')'               // #(Int, String, Float)
 
 TypePath ::= PathPrefix? TypeId
 TypeArgs ::= '(' Type (',' Type)* ','? ')'
@@ -574,7 +574,7 @@ Result(Int, String)
 
 #(Int, String)                  // 2-tuple (pair)
 #(Int, String, Float)           // 3-tuple
-Nil                           // unit type (#() 대신 사용)
+Nil                           // unit type (빈 튜플 `#()`은 없다)
 
 fn(Int, Int) -> Int           // 암묵적 effect polymorphic
 fn(Int) ->{} Int              // 순수 함수
@@ -778,7 +778,7 @@ PrimaryExpr ::= Literal
               | ResumeExpr
 
 ListExpr ::= '[' ExprList? ']'
-TupleExpr ::= '#(' ExprList? ')'          // #(1, "hello", 3.14)
+TupleExpr ::= '#(' ExprList ')'           // #(1, "hello", 3.14)
 OperatorFn ::= '(' Operator ')'           // (+), (<>)
              | '(' QualifiedOp ')'        // (Int::+), (String::<>)
 ResumeExpr ::= 'resume' Expression?            // op handler body 전용 (affine, 생략 시 Nil)
@@ -1017,14 +1017,14 @@ Pattern ::= LiteralPattern
 
 AsPattern ::= Pattern 'as' Identifier        // 전체를 바인딩
 
-LiteralPattern ::= Number | StringLit | Rune | 'True' | 'False' | 'Nil'
+LiteralPattern ::= Number | StringLit | BytesLit | Rune | 'True' | 'False' | 'Nil'
 WildcardPattern ::= '_'
 IdentifierPattern ::= Identifier
 VariantPattern ::= TypePath ('(' PatternList? ')' | '{' RecordPatternFields? '}')?
 RecordPattern ::= VariantPattern                // 중괄호 형식; 필드를 이름으로 매칭
 ListPattern ::= '[' PatternList? ']'
               | '[' PatternList ',' '..' Identifier? ']'    // [head, ..tail] or [head, ..]
-TuplePattern ::= '#(' PatternList? ')'
+TuplePattern ::= '#(' PatternList ')'
 
 PatternList ::= Pattern (',' Pattern)* ','?
 RecordPatternFields ::= RecordPatternField (',' RecordPatternField)* (',' '..')? ','?

@@ -563,6 +563,23 @@ pub mod Bytes {
         left.concat(right)
     }
 
+    /// Compare byte sequences by their contents.
+    pub fn (==)(left: Bytes, right: Bytes) -> Bool {
+        let len = left.len()
+        case len == right.len() {
+            True -> __tribute_bytes_range_equal(left, 0, right, 0, len)
+            False -> False
+        }
+    }
+
+    /// Return the logical complement of byte sequence equality.
+    pub fn (!=)(left: Bytes, right: Bytes) -> Bool {
+        case left == right {
+            True -> False
+            False -> True
+        }
+    }
+
     /// Get the byte at the given index.
     /// Returns None if index is out of bounds.
     pub fn get(bytes: Bytes, index: Nat) -> Option(Nat) {

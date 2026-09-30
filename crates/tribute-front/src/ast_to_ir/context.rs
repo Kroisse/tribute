@@ -104,9 +104,19 @@ pub struct IrLoweringCtx<'db> {
     logical_nominal_declarations: HashSet<Symbol>,
     /// Exact intrinsic-directive declaration ID to canonical identity.
     compiler_intrinsics: HashMap<NodeId, Symbol>,
+    /// The `==` functions that `String` and `Bytes` literal patterns call.
+    literal_equalities: LiteralEqualities,
     /// Node types from type checking, keyed by NodeId.
     /// Used to get the effect type of lambda expressions.
     node_types: HashMap<NodeId, crate::ast::Type<'db>>,
+}
+
+/// The functions that compare a scrutinee with a `String` or `Bytes` literal
+/// pattern, by their qualified names.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct LiteralEqualities {
+    pub string: Option<Symbol>,
+    pub bytes: Option<Symbol>,
 }
 
 impl<'db> IrLoweringCtx<'db> {
@@ -144,6 +154,7 @@ impl<'db> IrLoweringCtx<'db> {
             type_map: HashMap::new(),
             logical_nominal_declarations: HashSet::new(),
             compiler_intrinsics: HashMap::new(),
+            literal_equalities: LiteralEqualities::default(),
 
             node_types,
         }
@@ -159,6 +170,15 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn compiler_intrinsic(&self, declaration: NodeId) -> Option<Symbol> {
         self.compiler_intrinsics.get(&declaration).copied()
+    }
+
+    pub(crate) fn with_literal_equalities(mut self, literal_equalities: LiteralEqualities) -> Self {
+        self.literal_equalities = literal_equalities;
+        self
+    }
+
+    pub(crate) fn literal_equalities(&self) -> LiteralEqualities {
+        self.literal_equalities
     }
 
     /// Get the current module path.
