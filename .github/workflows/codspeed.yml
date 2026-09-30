@@ -39,7 +39,7 @@ jobs:
             echo '```text'
             lscpu | grep '^Model name:' || true
             echo "CPU features: $(grep -m1 -oE 'avx512[a-z0-9_]*|avx2|erms|fsrm' /proc/cpuinfo | sort -u | xargs)"
-            ldd --version | head -n 1
+            echo "glibc: $(dpkg-query -W -f='${Version}' libc6)"
             /lib64/ld-linux-x86-64.so.2 --list-tunables \
               | grep -E 'x86_(data_cache_size|shared_cache_size|non_temporal_threshold|rep_movsb_threshold|rep_stosb_threshold)' \
               || true
