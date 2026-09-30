@@ -2,7 +2,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::context::IrContext;
+use crate::context::{BlockList, IrContext};
 use crate::{BlockRef, RegionRef};
 
 /// Block dominance information for one region.
@@ -10,8 +10,8 @@ use crate::{BlockRef, RegionRef};
 pub struct DominatorTree {
     region: RegionRef,
     entry: Option<BlockRef>,
-    predecessors: HashMap<BlockRef, Vec<BlockRef>>,
-    successors: HashMap<BlockRef, Vec<BlockRef>>,
+    predecessors: HashMap<BlockRef, BlockList>,
+    successors: HashMap<BlockRef, BlockList>,
     reachable: HashSet<BlockRef>,
     dominators: HashMap<BlockRef, HashSet<BlockRef>>,
     valid: bool,
@@ -23,10 +23,10 @@ impl DominatorTree {
         let blocks = &ctx.region(region).blocks;
         let block_set: HashSet<_> = blocks.iter().copied().collect();
         let entry = blocks.first().copied();
-        let mut predecessors: HashMap<_, Vec<_>> = blocks
+        let mut predecessors: HashMap<_, BlockList> = blocks
             .iter()
             .copied()
-            .map(|block| (block, Vec::new()))
+            .map(|block| (block, BlockList::new()))
             .collect();
         let mut successors = HashMap::new();
         let mut valid = true;
@@ -36,7 +36,7 @@ impl DominatorTree {
                 .block(block)
                 .ops
                 .last()
-                .map(|&op| ctx.op(op).successors.to_vec())
+                .map(|&op| ctx.op(op).successors.clone())
                 .unwrap_or_default();
             for &successor in &block_successors {
                 if !block_set.contains(&successor) {
@@ -143,11 +143,13 @@ impl DominatorTree {
     }
 
     pub fn predecessors(&self, block: BlockRef) -> &[BlockRef] {
-        self.predecessors.get(&block).map_or(&[], Vec::as_slice)
+        self.predecessors
+            .get(&block)
+            .map_or(&[], BlockList::as_slice)
     }
 
     pub fn successors(&self, block: BlockRef) -> &[BlockRef] {
-        self.successors.get(&block).map_or(&[], Vec::as_slice)
+        self.successors.get(&block).map_or(&[], BlockList::as_slice)
     }
 }
 
@@ -158,14 +160,14 @@ mod tests {
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
 
-    fn function_cfg(ir: &str) -> (IrContext, RegionRef, Vec<BlockRef>) {
+    fn function_cfg(ir: &str) -> (IrContext, RegionRef, BlockList) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         let module_block = module.first_block(&ctx).expect("module body");
         let function =
             clif::Func::from_op(&ctx, ctx.block(module_block).ops[0]).expect("clif.func");
         let region = function.body(&ctx);
-        let blocks = ctx.region(region).blocks.to_vec();
+        let blocks = ctx.region(region).blocks.clone();
         (ctx, region, blocks)
     }
 

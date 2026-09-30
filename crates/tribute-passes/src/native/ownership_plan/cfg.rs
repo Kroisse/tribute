@@ -4,7 +4,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
 use trunk_ir::op_interface::BranchOps;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::{BlockRef, OpRef, RegionRef, ValueRef};
+use trunk_ir::{BlockList, BlockRef, OpRef, RegionRef, ValueRef};
 
 use super::OwnershipPlanError;
 
@@ -14,9 +14,9 @@ use super::OwnershipPlanError;
 /// then use stable block order, successors, and branch argument transfers
 /// without decoding operation layouts independently.
 pub(super) struct ValidatedFlatCfg {
-    blocks: Vec<BlockRef>,
+    blocks: BlockList,
     terminators: HashMap<BlockRef, OpRef>,
-    successors: HashMap<BlockRef, Vec<BlockRef>>,
+    successors: HashMap<BlockRef, BlockList>,
     branches: HashMap<OpRef, Vec<ValueTransfer>>,
 }
 
@@ -28,7 +28,7 @@ pub(super) struct ValueTransfer {
 
 impl ValidatedFlatCfg {
     pub(super) fn build(ctx: &IrContext, body: RegionRef) -> Result<Self, OwnershipPlanError> {
-        let blocks = ctx.region(body).blocks.to_vec();
+        let blocks = ctx.region(body).blocks.clone();
         if blocks.is_empty() {
             return Err(OwnershipPlanError::new("defined function has no blocks"));
         }
@@ -61,7 +61,7 @@ impl ValidatedFlatCfg {
                 ));
             }
 
-            let block_successors = ctx.op(terminator).successors.to_vec();
+            let block_successors = ctx.op(terminator).successors.clone();
             if let Some(interface) = BranchOps::get(ctx, terminator) {
                 let edges = interface.successors(ctx, terminator).map_err(|error| {
                     OwnershipPlanError::new(format!("Branch interface is incomplete: {error}"))

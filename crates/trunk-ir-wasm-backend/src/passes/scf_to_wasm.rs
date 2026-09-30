@@ -12,7 +12,7 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::context::{BlockData, IrContext, RegionData};
+use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::scf;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -336,11 +336,11 @@ fn region_with_ops(
     })
 }
 
-fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> Vec<OpRef> {
+fn take_region_ops(ctx: &mut IrContext, region: RegionRef) -> OpList {
     let [block] = ctx.region(region).blocks.as_slice() else {
         unreachable!("switch regions are preflighted as single-block");
     };
-    let ops = ctx.block(*block).ops.to_vec();
+    let ops = ctx.block(*block).ops.clone();
     for &op in &ops {
         ctx.detach_op(op);
     }
