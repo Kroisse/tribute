@@ -528,8 +528,11 @@ impl FromIterator<(Symbol, Attribute)> for AttributeMap {
 impl Extend<(Symbol, Attribute)> for AttributeMap {
     fn extend<T: IntoIterator<Item = (Symbol, Attribute)>>(&mut self, iter: T) {
         let iter = iter.into_iter();
+        // Repeated keys replace earlier entries, so the iterator length only
+        // bounds the map's size from above. Reserve at most a small map
+        // exactly and let inserts grow anything larger.
         if self.0.capacity() == 0 {
-            self.0.reserve_exact(iter.size_hint().0);
+            self.0.reserve_exact(iter.size_hint().0.min(4));
         }
         for (key, value) in iter {
             self.insert(key, value);
@@ -1228,6 +1231,12 @@ mod tests {
             .map(|key| (Symbol::new(key), Attribute::Unit))
             .collect();
         assert_eq!(collected.0.capacity(), 3);
+
+        let repeated: AttributeMap = (0..100)
+            .map(|_| (Symbol::new("same"), Attribute::Unit))
+            .collect();
+        assert_eq!(repeated.len(), 1);
+        assert!(repeated.0.capacity() <= 4);
     }
 
     #[test]
