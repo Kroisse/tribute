@@ -1719,6 +1719,7 @@ name = "tribute-bench"
 version = "0.1.0"
 dependencies = [
  "codspeed-criterion-compat",
+ "itertools 0.14.0",
  "salsa",
  "serde_json",
  "tempfile",

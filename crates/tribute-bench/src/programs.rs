@@ -6,29 +6,47 @@
 //! handler (quadratic in its length), and a loop through a tail-resumptive
 //! handler. Loop lengths stay within the default native stack.
 
-/// One benchmark program.
+/// One benchmark program. Every program compiles and runs natively.
 pub struct Program {
     pub name: &'static str,
     pub source: &'static str,
     /// Bytes supplied to the program's standard input when it runs.
     pub stdin: &'static [u8],
+    pub wasm: WasmSupport,
 }
+
+/// Whether a program compiles to Wasm.
+#[derive(Clone, Copy, Debug)]
+pub enum WasmSupport {
+    Supported,
+    /// Wasm emission fails for a known reason.
+    Unsupported(&'static str),
+}
+
+const NEXT_TAG: WasmSupport =
+    WasmSupport::Unsupported("handlers need `__tribute_next_tag`, unbound on Wasm (#1185)");
+const READ_LINE: WasmSupport = WasmSupport::Unsupported(
+    "`read_line` does not lower on Wasm (#1215), and its Throw handler needs `__tribute_next_tag` (#1185)",
+);
 
 pub const PROGRAMS: &[Program] = &[
     Program {
         name: "native_calculator",
         source: include_str!("../../../lang-examples/native_calculator.trb"),
         stdin: include_bytes!("../../../tests/fixtures/native_calculator_scripted.stdin"),
+        wasm: READ_LINE,
     },
     Program {
         name: "native_effects",
         source: include_str!("../../../lang-examples/native_effects.trb"),
         stdin: b"",
+        wasm: NEXT_TAG,
     },
     Program {
         name: "wasm_dynamic_output",
         source: include_str!("../../../lang-examples/wasm_dynamic_output.trb"),
         stdin: b"",
+        wasm: WasmSupport::Supported,
     },
     Program {
         name: "closure_capture",
@@ -39,6 +57,7 @@ fn main() -> Nil {
 }
 "#,
         stdin: b"",
+        wasm: WasmSupport::Supported,
     },
     Program {
         name: "tail_resumptive_handler",
@@ -58,6 +77,7 @@ fn main() -> Nil {
 }
 "#,
         stdin: b"",
+        wasm: NEXT_TAG,
     },
     Program {
         name: "state_handler",
@@ -84,6 +104,7 @@ fn main() -> Nil {
 }
 "#,
         stdin: b"",
+        wasm: NEXT_TAG,
     },
     Program {
         name: "fibonacci",
@@ -101,6 +122,7 @@ fn main() ->{Io} Nil {
 }
 "#,
         stdin: b"",
+        wasm: WasmSupport::Supported,
     },
     Program {
         name: "state_loop",
@@ -134,6 +156,7 @@ fn main() ->{Io} Nil {
 }
 "#,
         stdin: b"",
+        wasm: NEXT_TAG,
     },
     Program {
         name: "counter_loop",
@@ -159,5 +182,6 @@ fn main() ->{Io} Nil {
 }
 "#,
         stdin: b"",
+        wasm: NEXT_TAG,
     },
 ];

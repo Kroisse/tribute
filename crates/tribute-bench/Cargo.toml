@@ -8,6 +8,7 @@ description = "Compile-time, runtime, and code size measurements for the Tribute
 publish = false
 
 [dependencies]
+itertools.workspace = true
 salsa.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
