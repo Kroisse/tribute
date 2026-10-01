@@ -105,7 +105,51 @@ impl<'a> ArenaIrBuilder<'a> {
                 results,
                 attrs,
             } => self.build_function_type(dialect, name, inputs, results, attrs),
+            RawType::AdtStruct {
+                name,
+                fields,
+                attrs,
+            } => self.build_adt_struct_type(name, fields, attrs),
         }
+    }
+
+    /// Build `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`. The
+    /// syntax owns the struct and field names, so `name` may not appear in
+    /// either dictionary.
+    fn build_adt_struct_type(
+        &mut self,
+        name: &str,
+        fields: &[(String, RawParam<'_>)],
+        attrs: &RawAttrDict<'_>,
+    ) -> Result<TypeRef, ParseError> {
+        let reserved = |message: String| ParseError { message, offset: 0 };
+        if let Some((key, _)) = attrs.iter().find(|(key, _)| {
+            key == crate::dialect::adt::STRUCT_NAME_ATTR || key == PARAM_ATTRS_ATTR
+        }) {
+            return Err(reserved(format!("`{key}` is reserved by adt.struct")));
+        }
+        let mut built = Vec::with_capacity(fields.len());
+        for (field, param) in fields {
+            if param
+                .attrs
+                .iter()
+                .any(|(key, _)| key == crate::dialect::adt::STRUCT_NAME_ATTR)
+            {
+                return Err(reserved(format!(
+                    "adt.struct field @{field}: `name` is reserved by adt.struct"
+                )));
+            }
+            let ty = self.build_type(&param.ty)?;
+            let field_attrs = self.build_attr_dict(&param.attrs)?;
+            built.push((Symbol::from_dynamic(field), ty, field_attrs));
+        }
+        let attrs = self.build_attr_dict(attrs)?;
+        crate::dialect::adt::try_struct_type(self.ctx, Symbol::from_dynamic(name), built, attrs)
+            .map(|adt_struct| adt_struct.as_type_ref())
+            .map_err(|error| ParseError {
+                message: format!("adt.struct @{name}: {error}"),
+                offset: 0,
+            })
     }
 
     /// Build type parameters together with their attributes.
@@ -1044,6 +1088,70 @@ core.module @test {
     }
 
     #[test]
+    fn test_roundtrip_adt_struct() {
+        let input = r#"core.module @test {
+  !point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>
+  !closure = adt.struct<@"Nested::Closure"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}> {}, @env: core.tuple<core.ptr>), {layout = @closure}>
+  !empty = adt.struct<@Empty()>
+  !nested = adt.struct<@Outer(@inner: adt.struct<@Inner(@a: core.i32), {layout = @closure}> {m = 1})>
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
+        let aliases: std::collections::HashMap<_, _> = ctx
+            .type_aliases()
+            .iter()
+            .map(|&(name, ty)| (name.to_string(), ty))
+            .collect();
+        let point = crate::dialect::adt::Struct::from_type_ref(&ctx, aliases["point"]).unwrap();
+        assert_eq!(point.name(&ctx), Symbol::new("Point"));
+        assert_eq!(
+            point.fields(&ctx).map(|(name, _)| name).collect::<Vec<_>>(),
+            [Symbol::new("x"), Symbol::new("y")]
+        );
+        assert_eq!(point.field_attrs(&ctx, 1).count(), 1);
+        let empty = crate::dialect::adt::Struct::from_type_ref(&ctx, aliases["empty"]).unwrap();
+        assert_eq!(empty.field_count(&ctx), 0);
+        let printed = print_module(&ctx, module);
+        for expected in [
+            "!point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>",
+            "adt.struct<@\"Nested::Closure\"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}>, @env: core.tuple<core.ptr>), {layout = @closure}>",
+            "!empty = adt.struct<@Empty()>",
+            "(@inner: adt.struct<@Inner(@a: core.i32), {layout = @closure}> {m = 1})>",
+        ] {
+            assert!(printed.contains(expected), "{expected}\n{printed}");
+        }
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
+    fn test_adt_struct_reserved_names_are_parse_errors() {
+        for (spelling, expected) in [
+            (
+                "adt.struct<@P(@x: core.i32), {name = @Q}>",
+                "`name` is reserved",
+            ),
+            (
+                "adt.struct<@P(@x: core.i32), {param_attrs = [{}]}>",
+                "`param_attrs` is reserved",
+            ),
+            (
+                "adt.struct<@P(@x: core.i32 {name = @y})>",
+                "`name` is reserved",
+            ),
+            (
+                "adt.struct<@P(@x: core.i32, @x: core.i64)>",
+                "duplicate field name",
+            ),
+            ("adt.struct<@P(), {fields = []}>", "`fields`"),
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            let error = parse_module(&mut ctx, &input).expect_err(spelling);
+            assert!(error.message.contains(expected), "{spelling}: {error}");
+        }
+    }
+
+    #[test]
     fn test_roundtrip_parameter_attributes() {
         let input = r#"core.module @test {
   !pair = core.tuple<core.i32, core.ptr {k = @v}>
@@ -1897,7 +2005,7 @@ core.module @test {
     #[test]
     fn test_roundtrip_type_alias() {
         let input = r#"core.module @test {
-  !marker = adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32]], name = @_Marker}>
+  !marker = adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32)>
 
   func.func @foo(%0: core.array<!marker>) -> core.array<!marker> {
     func.return %0
@@ -2013,7 +2121,7 @@ core.module @test {
     #[test]
     fn test_quoted_type_alias_roundtrip() {
         let input = r#"core.module @test {
-  !"test::MyStruct" = adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @"test::MyStruct"}>
+  !"test::MyStruct" = adt.struct<@"test::MyStruct"(@x: core.i32, @y: core.i32)>
 
   func.func @foo(%0: !"test::MyStruct") -> !"test::MyStruct" {
     func.return %0

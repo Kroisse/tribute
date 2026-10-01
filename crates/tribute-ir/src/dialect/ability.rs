@@ -87,31 +87,19 @@ pub fn operation_payload_type_ref(
     op_name: Symbol,
     fields: impl IntoIterator<Item = trunk_ir::TypeRef>,
 ) -> trunk_ir::TypeRef {
-    use trunk_ir::types::{Attribute, TypeDataBuilder};
-
     let ability_name = ctx.get_type(ability_ref).attrs.get_symbol("name");
     let op_idx = compute_op_idx(ability_name, Some(op_name));
     let fields = fields
         .into_iter()
         .enumerate()
-        .map(|(index, ty)| {
-            Attribute::List(vec![
-                Attribute::Symbol(Symbol::from_dynamic(&format!("arg{index}"))),
-                Attribute::Type(ty),
-            ])
-        })
-        .collect();
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr(
-                "name",
-                Attribute::Symbol(Symbol::from_dynamic(&format!(
-                    "__tribute_ability_payload_{op_idx:08x}"
-                ))),
-            )
-            .attr("fields", Attribute::List(fields))
-            .build(),
+        .map(|(index, ty)| (Symbol::from_dynamic(&format!("arg{index}")), ty));
+    trunk_ir::dialect::adt::struct_type(
+        ctx,
+        Symbol::from_dynamic(&format!("__tribute_ability_payload_{op_idx:08x}")),
+        fields,
+        trunk_ir::types::AttributeMap::new(),
     )
+    .as_type_ref()
 }
 
 /// Compute the stable runtime ability ID for an ability reference type.
@@ -371,28 +359,16 @@ pub fn evidence_runtime_symbols() -> [Symbol; 5] {
 /// return their source result; general CPS dispatch uses the exact resultless
 /// dispatch ABI. Shared lowering installs typed reject closures for missing kinds.
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
-    let fields_attr = Attribute::List(
-        MARKER_FIELDS
-            .into_iter()
-            .map(|spec| {
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new(spec.symbol_name)),
-                    Attribute::Type(spec.type_ref(ctx)),
-                ])
-            })
-            .collect(),
+    let fields: Vec<_> = MARKER_FIELDS
+        .into_iter()
+        .map(|spec| (Symbol::new(spec.symbol_name), spec.type_ref(ctx)))
+        .collect();
+    let mut attrs = trunk_ir::types::AttributeMap::new();
+    attrs.insert(
+        Symbol::new(runtime_layout::LAYOUT_ATTR),
+        Attribute::Symbol(Symbol::new(runtime_layout::EVIDENCE_MARKER)),
     );
-
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("name", Attribute::Symbol(Symbol::new("_Marker")))
-            .attr("fields", fields_attr)
-            .attr(
-                runtime_layout::LAYOUT_ATTR,
-                Attribute::Symbol(Symbol::new(runtime_layout::EVIDENCE_MARKER)),
-            )
-            .build(),
-    )
+    trunk_ir::dialect::adt::struct_type(ctx, Symbol::new("_Marker"), fields, attrs).as_type_ref()
 }
 
 /// Get the canonical Evidence ADT type — `core.array<Marker>` carrying the
@@ -446,7 +422,7 @@ mod tests {
         assert_eq!(ctx.get_type(evidence).params.as_slice(), [marker]);
     }
     use trunk_ir::op_interface::CallableExitOps;
-    use trunk_ir::ops::DialectOp;
+    use trunk_ir::ops::{DialectOp, DialectType};
 
     #[test]
     fn test_marker_adt_type_ref() {
@@ -464,22 +440,14 @@ mod tests {
         assert_eq!(data.attrs.get_symbol("name"), Some(Symbol::new("_Marker")));
 
         // Should have the canonical field layout.
-        let fields = data.attrs.get("fields").unwrap();
-        match fields {
-            Attribute::List(list) => {
-                assert_eq!(list.len(), MARKER_FIELD_COUNT);
-                for (idx, spec) in MARKER_FIELDS.into_iter().enumerate() {
-                    assert_eq!(spec.field.index() as usize, idx);
-                    let Attribute::List(field_attr) = &list[idx] else {
-                        panic!("expected list attribute for field {idx}");
-                    };
-                    assert_eq!(
-                        field_attr.first(),
-                        Some(&Attribute::Symbol(Symbol::new(spec.symbol_name)))
-                    );
-                }
-            }
-            _ => panic!("expected list attribute for fields"),
+        let marker = trunk_ir::dialect::adt::Struct::from_type_ref(&ctx, marker_ty).unwrap();
+        assert_eq!(marker.field_count(&ctx), MARKER_FIELD_COUNT);
+        for (idx, spec) in MARKER_FIELDS.into_iter().enumerate() {
+            assert_eq!(spec.field.index() as usize, idx);
+            assert_eq!(
+                marker.field_name(&ctx, idx),
+                Some(Symbol::new(spec.symbol_name))
+            );
         }
     }
 

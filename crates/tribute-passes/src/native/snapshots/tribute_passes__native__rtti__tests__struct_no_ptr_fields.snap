@@ -3,15 +3,15 @@ source: crates/tribute-passes/src/native/rtti.rs
 expression: output
 ---
 core.module @test {
-  !t0 = adt.struct<{fields = [[@x, core.i32], [@y, core.i32]]}>
-  !t1 = clif.func_sig<(core.ptr) -> core.nil>
+  !Test = adt.struct<@Test(@x: core.i32, @y: core.i32)>
+  !t0 = clif.func_sig<(core.ptr) -> core.nil>
 
-  func.func @create_struct(%0: core.i32, %1: core.i32) -> !t0 {
-      %2 = adt.struct_new %0, %1 {type = !t0} : !t0
+  func.func @create_struct(%0: core.i32, %1: core.i32) -> !Test {
+      %2 = adt.struct_new %0, %1 {type = !Test} : !Test
       func.return %2
   }
-  tribute_rtti.layout {index = 5, managed = [false, false], type = !t0}
-  clif.func {sym_name = @__tribute_release_5, type = !t1} {
+  tribute_rtti.layout {index = 5, managed = [false, false], type = !Test}
+  clif.func {sym_name = @__tribute_release_5, type = !t0} {
     ^bb0(%0: core.ptr):
       %1 = clif.iconst {value = 8} : core.i64
       %2 = clif.isub %0, %1 : core.ptr
@@ -43,7 +43,7 @@ core.module @test {
       clif.brif %14 [^bb4, ^bb3]
 
     ^bb2:
-      %15 = clif.call_indirect %10, %0 {sig = !t1} : core.nil
+      %15 = clif.call_indirect %10, %0 {sig = !t0} : core.nil
       clif.return
 
     ^bb3:

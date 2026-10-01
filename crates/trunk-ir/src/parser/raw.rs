@@ -101,6 +101,12 @@ pub enum RawType<'a> {
         results: Vec<RawParam<'a>>,
         attrs: RawAttrDict<'a>,
     },
+    /// Nominal struct syntax `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`.
+    AdtStruct {
+        name: String,
+        fields: Vec<(String, RawParam<'a>)>,
+        attrs: RawAttrDict<'a>,
+    },
     /// Type alias reference: `!name` or `!"quoted name"`
     Alias(String),
 }
@@ -321,6 +327,10 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     '<'.parse_next(input)?;
     ws.parse_next(input)?;
 
+    if dialect == "adt" && name == "struct" && input.starts_with('@') {
+        return raw_adt_struct_body.parse_next(input);
+    }
+
     if input.starts_with('(') {
         let inputs = raw_param_list.parse_next(input)?;
         ws.parse_next(input)?;
@@ -369,6 +379,35 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
         dialect,
         name,
         params,
+        attrs,
+    })
+}
+
+/// Parse the rest of `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`
+/// after its opening bracket.
+fn raw_adt_struct_body<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
+    let name = symbol_ref.parse_next(input)?;
+    ws.parse_next(input)?;
+    let fields = delimited(
+        ('(', ws),
+        separated(
+            0..,
+            (ws, symbol_ref, ws, ':', ws, raw_param, ws)
+                .map(|(_, field, _, _, _, param, _)| (field, param)),
+            ',',
+        ),
+        (ws, ')'),
+    )
+    .parse_next(input)?;
+    ws.parse_next(input)?;
+    let attrs = opt(preceded((',', ws), raw_attr_dict))
+        .parse_next(input)?
+        .unwrap_or_default();
+    ws.parse_next(input)?;
+    '>'.parse_next(input)?;
+    Ok(RawType::AdtStruct {
+        name,
+        fields,
         attrs,
     })
 }
@@ -855,6 +894,7 @@ mod tests {
                 ..
             } => (dialect, name, params),
             RawType::Function { .. } => panic!("expected Concrete, got Function"),
+            RawType::AdtStruct { .. } => panic!("expected Concrete, got AdtStruct"),
             RawType::Alias(name) => panic!("expected Concrete, got Alias(!{name})"),
         }
     }
@@ -1124,6 +1164,7 @@ mod tests {
                 assert_eq!(attrs[0].0, "tag");
             }
             RawType::Function { .. } => panic!("expected Concrete, got Function"),
+            RawType::AdtStruct { .. } => panic!("expected Concrete, got AdtStruct"),
             RawType::Alias(n) => panic!("expected Concrete, got Alias(!{n})"),
         }
         // A dictionary after the closing bracket is not the type's.

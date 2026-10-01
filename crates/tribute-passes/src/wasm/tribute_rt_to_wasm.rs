@@ -29,7 +29,7 @@ use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{AttributeMap, Location, TypeDataBuilder};
 
 /// Helper to create arena type refs for common types.
 fn i32_type(ctx: &mut IrContext) -> TypeRef {
@@ -40,15 +40,16 @@ fn f64_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "f64").build())
 }
 
-/// Get the BoxedF64 struct type: `adt.struct(f64, name="_BoxedF64")`
+/// Get the BoxedF64 struct type: `adt.struct<@_BoxedF64(@value: core.f64)>`
 fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .param(f64_ty)
-            .attr("name", Attribute::Symbol(Symbol::new("_BoxedF64")))
-            .build(),
+    adt::struct_type(
+        ctx,
+        Symbol::new("_BoxedF64"),
+        [(Symbol::new("value"), f64_ty)],
+        AttributeMap::new(),
     )
+    .as_type_ref()
 }
 
 /// Create i31 unbox operations (ref_cast to i31ref + i31_get_s/u).

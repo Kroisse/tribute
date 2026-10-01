@@ -18,7 +18,7 @@ use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 use trunk_ir_cranelift_backend::passes::cf_to_clif::rebuild_op_as;
 
 use crate::closure_lower::is_closure_struct_type_ref;
@@ -49,30 +49,21 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
     let ptr_ty = core::ptr(ctx).as_type_ref();
-    ctx.intern_type(
-        TypeDataBuilder::new("adt", "struct")
-            .param(i64_ty)
-            .param(ptr_ty)
-            .attr("name", Attribute::Symbol(Symbol::new("_closure")))
-            .attr(
-                "fields",
-                Attribute::List(vec![
-                    Attribute::List(vec![
-                        Attribute::Symbol(Symbol::new("func_ptr")),
-                        Attribute::Type(i64_ty),
-                    ]),
-                    Attribute::List(vec![
-                        Attribute::Symbol(Symbol::new("env")),
-                        Attribute::Type(ptr_ty),
-                    ]),
-                ]),
-            )
-            .attr(
-                tribute_core::runtime_layout::LAYOUT_ATTR,
-                Attribute::Symbol(Symbol::new(tribute_core::runtime_layout::CLOSURE)),
-            )
-            .build(),
+    let mut attrs = AttributeMap::new();
+    attrs.insert(
+        Symbol::new(tribute_core::runtime_layout::LAYOUT_ATTR),
+        Attribute::Symbol(Symbol::new(tribute_core::runtime_layout::CLOSURE)),
+    );
+    adt::struct_type(
+        ctx,
+        Symbol::new("_closure"),
+        [
+            (Symbol::new("func_ptr"), i64_ty),
+            (Symbol::new("env"), ptr_ty),
+        ],
+        attrs,
     )
+    .as_type_ref()
 }
 
 /// Pattern: adapt `_closure` struct operations to the native layout.
@@ -140,8 +131,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !_closure = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}>
-  !Other = adt.struct<{name = @Other, fields = [[@value, tribute_rt.anyref]]}>
+  !_closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref), {layout = @closure}>
+  !Other = adt.struct<@Other(@value: tribute_rt.anyref)>
   tribute_rtti.layout {type = !_closure, index = 32, managed = [false, true]}
   tribute_rtti.layout {type = !Other, index = 33, managed = [true]}
   func.func @make(%table: core.i32, %env: tribute_rt.anyref) -> !_closure {
@@ -198,9 +189,9 @@ mod tests {
   func.func @test_fn() -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
     %1 = mem.null : core.ptr
-    %2 = adt.struct_new %0, %1 {type = adt.struct<core.i32, core.ptr, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : adt.struct<core.i32, core.ptr, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct<core.i32, core.ptr, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct<core.i32, core.ptr, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : core.ptr
+    %2 = adt.struct_new %0, %1 {type = adt.struct<@_closure(@table_idx: core.i32, @env: core.ptr), {layout = @closure}>} : adt.struct<@_closure(@table_idx: core.i32, @env: core.ptr), {layout = @closure}>
+    %3 = adt.struct_get %2 {field = 0, type = adt.struct<@_closure(@table_idx: core.i32, @env: core.ptr), {layout = @closure}>} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = adt.struct<@_closure(@table_idx: core.i32, @env: core.ptr), {layout = @closure}>} : core.ptr
     %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }
@@ -215,9 +206,9 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn(%1: wasm.anyref) -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
-    %2 = adt.struct_new %0, %1 {type = adt.struct<core.i32, wasm.anyref, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : adt.struct<core.i32, wasm.anyref, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct<core.i32, wasm.anyref, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct<core.i32, wasm.anyref, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : wasm.anyref
+    %2 = adt.struct_new %0, %1 {type = adt.struct<@_closure(@table_idx: core.i32, @env: wasm.anyref), {layout = @closure}>} : adt.struct<@_closure(@table_idx: core.i32, @env: wasm.anyref), {layout = @closure}>
+    %3 = adt.struct_get %2 {field = 0, type = adt.struct<@_closure(@table_idx: core.i32, @env: wasm.anyref), {layout = @closure}>} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = adt.struct<@_closure(@table_idx: core.i32, @env: wasm.anyref), {layout = @closure}>} : wasm.anyref
     %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }

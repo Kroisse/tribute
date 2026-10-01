@@ -3,8 +3,8 @@ source: crates/tribute-front/tests/ufcs_method_call.rs
 expression: ir_text
 ---
 core.module @test {
-  !Pair = adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @Pair}>
-  !Triple = adt.struct<{fields = [[@x, core.i32], [@y, core.i32], [@z, core.i32]], name = @Triple}>
+  !Pair = adt.struct<@Pair(@x: core.i32, @y: core.i32)>
+  !Triple = adt.struct<@Triple(@x: core.i32, @y: core.i32, @z: core.i32)>
   !Triple_1 = adt.typeref<{name = @Triple}>
   !Pair_1 = adt.typeref<{name = @Pair}>
   !t0 = tribute_control.func_sig<(!Triple_1) -> core.i32, {tribute.calling_convention = 0}>

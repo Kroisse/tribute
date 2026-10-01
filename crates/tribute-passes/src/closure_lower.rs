@@ -44,35 +44,28 @@ use trunk_ir::rewrite::{
     ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
 pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("name", Attribute::Symbol(Symbol::new("_closure")))
-            .attr(
-                "fields",
-                Attribute::List(vec![
-                    Attribute::List(vec![
-                        Attribute::Symbol(Symbol::new("func_ptr")),
-                        Attribute::Type(i32_ty),
-                    ]),
-                    Attribute::List(vec![
-                        Attribute::Symbol(Symbol::new("env")),
-                        Attribute::Type(anyref_ty),
-                    ]),
-                ]),
-            )
-            .attr(
-                runtime_layout::LAYOUT_ATTR,
-                Attribute::Symbol(Symbol::new(runtime_layout::CLOSURE)),
-            )
-            .build(),
+    let mut attrs = AttributeMap::new();
+    attrs.insert(
+        Symbol::new(runtime_layout::LAYOUT_ATTR),
+        Attribute::Symbol(Symbol::new(runtime_layout::CLOSURE)),
+    );
+    adt::struct_type(
+        ctx,
+        Symbol::new("_closure"),
+        [
+            (Symbol::new("func_ptr"), i32_ty),
+            (Symbol::new("env"), anyref_ty),
+        ],
+        attrs,
     )
+    .as_type_ref()
 }
 
 /// Whether `ty` is a compiler-owned closure storage layout, identified by its
@@ -805,8 +798,8 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Named = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}>
-  !Layout = adt.struct<{name = @Other, fields = [[@code, core.i32]], layout = @closure}>
+  !Named = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref)>
+  !Layout = adt.struct<@Other(@code: core.i32), {layout = @closure}>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| {
@@ -846,7 +839,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>"
+        "core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = @evidence_marker}>, {layout = @evidence}>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {
@@ -1433,7 +1426,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !_closure = adt.struct<core.i32, tribute_rt.anyref, {{name = @_closure}}>
+  !_closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref)>
   !expected = closure.closure<func.func_sig<({evidence}, core.i32, core.i32) -> core.never>, {{tribute.calling_convention = 2}}>
   !actual = closure.closure<func.func_sig<({evidence}, core.i32, core.i1) -> core.never>, {{tribute.calling_convention = 2}}>
   !outer = closure.closure<func.func_sig<({evidence}, core.i32, !expected) -> core.never>, {{tribute.calling_convention = 2}}>

@@ -659,7 +659,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !frame = adt.typeref<{name = @Frame, tribute.cps_continuation_frame_result = core.nil}>
-  !holder = adt.struct<{fields = [[@callback, func.func_sig<(core.ptr) -> !frame>]], name = @Holder}>
+  !holder = adt.struct<@Holder(@callback: func.func_sig<(core.ptr) -> !frame>)>
   func.func @run(%value: !holder) {
     func.return
   }

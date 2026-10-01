@@ -708,7 +708,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<{fields = [[@value, core.i32]], name = @S}>
+  !S = adt.struct<@S(@value: core.i32)>
   !E = adt.enum<{name = @E, variants = [[@Some, [core.i32]]]}>
   !ERef = adt.typeref<{name = @E}>
   !A = core.array<core.i32>
@@ -969,7 +969,7 @@ mod tests {
   !Box = adt.enum<{name = @Box, variants = [[@Next, [!NodeRef]]]}>
   !Node = adt.enum<{name = @Node, variants = [[@Node, []]]}>
   !Data = core.array<core.i8, {layout = @bytes_data}>
-  !Bytes = adt.struct<!Data, core.i32, core.i32, {fields = [[@data, !Data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}>
+  !Bytes = adt.struct<@_Bytes(@data: !Data, @offset: core.i32, @len: core.i32), {layout = @bytes}>
   !String = adt.enum<{name = @String, variants = [[@Leaf, [!Bytes]]]}>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {

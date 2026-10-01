@@ -13,7 +13,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 
 use crate::bytes_intrinsic::{self, BytesIntrinsicError};
 
@@ -40,21 +40,22 @@ pub fn bytes_data_type(ctx: &mut IrContext) -> TypeRef {
 pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
     let data_ty = bytes_data_type(ctx);
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-    let bytes = super::type_converter::make_adt_struct_type(
+    let mut attrs = AttributeMap::new();
+    attrs.insert(
+        Symbol::new(LAYOUT_ATTR),
+        Attribute::Symbol(Symbol::new(BYTES)),
+    );
+    adt::struct_type(
         ctx,
         Symbol::new("_Bytes"),
-        vec![
+        [
             (Symbol::new("data"), data_ty),
             (Symbol::new("offset"), i32_ty),
             (Symbol::new("len"), i32_ty),
         ],
-    );
-    let mut data = ctx.get_type(bytes).clone();
-    data.attrs.insert(
-        Symbol::new(LAYOUT_ATTR),
-        Attribute::Symbol(Symbol::new(BYTES)),
-    );
-    ctx.intern_type(data)
+        attrs,
+    )
+    .as_type_ref()
 }
 
 /// Lower calls to the bytes element read intrinsic to `adt` operations on

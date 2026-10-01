@@ -110,6 +110,9 @@ impl<'a> PrintState<'a> {
         if let Some((inputs, results)) = func_sig_parts(self.ctx, ty) {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
+        if let Some(adt_struct) = crate::dialect::adt::Struct::from_type_ref(self.ctx, ty) {
+            return self.write_adt_struct_type(f, adt_struct);
+        }
         let data = self.ctx.get_type(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
         let inline_param_attrs = data.validate_param_attrs().is_ok();
@@ -173,6 +176,38 @@ impl<'a> PrintState<'a> {
             ],
         )
         .peekable();
+        if attrs.peek().is_some() {
+            f.write_str(", ")?;
+            self.write_attr_dict(f, attrs)?;
+        }
+        f.write_char('>')
+    }
+
+    /// Write `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`.
+    fn write_adt_struct_type(
+        &self,
+        f: &mut dyn Write,
+        adt_struct: crate::dialect::adt::Struct,
+    ) -> fmt::Result {
+        let ctx = self.ctx;
+        f.write_str("adt.struct<")?;
+        write_symbol(f, adt_struct.name(ctx))?;
+        f.write_char('(')?;
+        for (index, (name, ty)) in adt_struct.fields(ctx).enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            write_symbol(f, name)?;
+            f.write_str(": ")?;
+            self.write_type(f, ty)?;
+            let mut attrs = adt_struct.field_attrs(ctx, index).peekable();
+            if attrs.peek().is_some() {
+                f.write_char(' ')?;
+                self.write_attr_dict(f, attrs)?;
+            }
+        }
+        f.write_char(')')?;
+        let mut attrs = adt_struct.extra_attrs(ctx).peekable();
         if attrs.peek().is_some() {
             f.write_str(", ")?;
             self.write_attr_dict(f, attrs)?;
@@ -1518,20 +1553,16 @@ mod tests {
 
     /// Helper: build an `adt.struct` type with given field list and name.
     fn make_adt_struct(ctx: &mut IrContext, name: &str, fields: &[(&str, TypeRef)]) -> TypeRef {
-        let field_list: Vec<Attribute> = fields
+        let fields = fields
             .iter()
-            .map(|(fname, fty)| {
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::from_dynamic(fname)),
-                    Attribute::Type(*fty),
-                ])
-            })
-            .collect();
-        let data = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("fields", Attribute::List(field_list))
-            .attr("name", Attribute::Symbol(Symbol::from_dynamic(name)))
-            .build();
-        ctx.intern_type(data)
+            .map(|(field, ty)| (Symbol::from_dynamic(field), *ty));
+        crate::dialect::adt::struct_type(
+            ctx,
+            Symbol::from_dynamic(name),
+            fields,
+            AttributeMap::new(),
+        )
+        .as_type_ref()
     }
 
     /// Helper: build a module with given functions.
@@ -1808,20 +1839,20 @@ mod tests {
         let input = "\
 core.module @test {
   core.module @inner {
-    func.func @f1(%0: adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}>) -> adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}> {
+    func.func @f1(%0: adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)>) -> adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)> {
     ^bb0:
       func.return %0
     }
-    func.func @f2(%0: adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}>) -> adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}> {
+    func.func @f2(%0: adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)>) -> adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)> {
     ^bb0:
       func.return %0
     }
   }
-  func.func @g1(%0: adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}>) -> adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}> {
+  func.func @g1(%0: adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)>) -> adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)> {
   ^bb0:
     func.return %0
   }
-  func.func @g2(%0: adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}>) -> adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}> {
+  func.func @g2(%0: adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)>) -> adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)> {
   ^bb0:
     func.return %0
   }
@@ -1889,13 +1920,8 @@ core.module @test {
 
         let output = print_module_with_point_types(false);
         assert_eq!(output, print_module_with_point_types(true));
-        assert!(
-            output.contains("!Point = adt.struct<{fields = [[@alpha, core.i32]], name = @Point}>")
-        );
-        assert!(
-            output
-                .contains("!Point_1 = adt.struct<{fields = [[@zebra, core.i32]], name = @Point}>")
-        );
+        assert!(output.contains("!Point = adt.struct<@Point(@alpha: core.i32)>"));
+        assert!(output.contains("!Point_1 = adt.struct<@Point(@zebra: core.i32)>"));
 
         let mut reparsed_ctx = IrContext::new();
         let reparsed =

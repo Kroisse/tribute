@@ -342,7 +342,7 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
 pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 
-    validate_func_sig_types(ctx, &mut errors);
+    validate_type_shapes(ctx, &mut errors);
 
     // The root module is not visited by the body walk, so check its own
     // schema (including a missing body region) first.
@@ -419,7 +419,7 @@ fn report_schema_violations(
     violations.is_empty()
 }
 
-fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     for (ty, data) in ctx.types().iter() {
         if let Err(error) = data.validate_param_attrs() {
             errors.push(ValidationError::Operation {
@@ -428,6 +428,14 @@ fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                     data.dialect, data.name
                 ),
             });
+        }
+        if crate::dialect::adt::Struct::matches(ctx, ty) {
+            if let Err(error) = crate::dialect::adt::Struct::validate(ctx, ty) {
+                errors.push(ValidationError::Operation {
+                    message: format!("type verifier failed for adt.struct ({ty}): {error}"),
+                });
+            }
+            continue;
         }
         if data.dialect != crate::dialect::func::DIALECT_NAME()
             || data.name != crate::dialect::func::FUNC_SIG()
@@ -1403,6 +1411,77 @@ mod tests {
 
     fn empty_module(ctx: &mut IrContext) -> Module {
         crate::parser::parse_test_module(ctx, "core.module @test {}")
+    }
+
+    #[test]
+    fn malformed_adt_struct_types_are_rejected_by_type_validation() {
+        use crate::dialect::adt;
+        use crate::types::{AttributeMap, PARAM_ATTRS_ATTR};
+
+        let mut ctx = IrContext::new();
+        let module = empty_module(&mut ctx);
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let named_field = |name: &str| {
+            let mut attrs = AttributeMap::new();
+            attrs.insert(
+                Symbol::new("name"),
+                Attribute::Symbol(Symbol::from_dynamic(name)),
+            );
+            attrs
+        };
+        let cases = [
+            (
+                "missing `name` symbol",
+                TypeDataBuilder::new("adt", "struct")
+                    .param_with_attrs(i32_ty, named_field("x"))
+                    .build(),
+            ),
+            (
+                "field 1 has no `name` symbol",
+                TypeDataBuilder::new("adt", "struct")
+                    .param_with_attrs(i32_ty, named_field("x"))
+                    .param(i32_ty)
+                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .build(),
+            ),
+            (
+                "duplicate field name @x",
+                TypeDataBuilder::new("adt", "struct")
+                    .param_with_attrs(i32_ty, named_field("x"))
+                    .param_with_attrs(i32_ty, named_field("x"))
+                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .build(),
+            ),
+            (
+                "`fields` is not an `adt.struct` attribute",
+                TypeDataBuilder::new("adt", "struct")
+                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .attr("fields", Attribute::List(vec![]))
+                    .build(),
+            ),
+        ];
+        for (expected, data) in cases {
+            let ty = ctx.intern_type(data);
+            assert!(adt::Struct::from_type_ref(&ctx, ty).is_none(), "{expected}");
+            let result = validate_operation_verifiers(&ctx, module);
+            assert!(
+                operation_error_messages(&result)
+                    .iter()
+                    .any(|message| message.contains("adt.struct") && message.contains(expected)),
+                "{expected}: {result}"
+            );
+        }
+        let valid = adt::struct_type(
+            &mut ctx,
+            Symbol::new("Q"),
+            [(Symbol::new("x"), i32_ty)],
+            AttributeMap::new(),
+        );
+        assert!(
+            ctx.get_type(valid.as_type_ref())
+                .attrs
+                .contains_key(PARAM_ATTRS_ATTR)
+        );
     }
 
     #[test]

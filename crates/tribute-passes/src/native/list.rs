@@ -14,7 +14,7 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{AttributeMap, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
@@ -30,24 +30,16 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
 
 fn node_type(ctx: &mut IrContext, element_ty: TypeRef) -> TypeRef {
     let list_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("name", Attribute::Symbol(Symbol::new("__native_list_node")))
-            .attr(
-                "fields",
-                Attribute::List(vec![
-                    Attribute::List(vec![
-                        Attribute::Symbol(Symbol::new("element")),
-                        Attribute::Type(element_ty),
-                    ]),
-                    Attribute::List(vec![
-                        Attribute::Symbol(Symbol::new("tail")),
-                        Attribute::Type(list_ty),
-                    ]),
-                ]),
-            )
-            .build(),
+    adt::struct_type(
+        ctx,
+        Symbol::new("__native_list_node"),
+        [
+            (Symbol::new("element"), element_ty),
+            (Symbol::new("tail"), list_ty),
+        ],
+        AttributeMap::new(),
     )
+    .as_type_ref()
 }
 
 fn lower_observations(ctx: &mut IrContext, module: Module) {
@@ -258,8 +250,8 @@ mod tests {
         assert!(output.contains("adt.struct_new"), "{output}");
         assert!(output.contains("adt.ref_is_null"), "{output}");
         assert!(output.contains("adt.struct_get"), "{output}");
-        assert!(output.contains("[@element, core.i32]"), "{output}");
-        assert!(output.contains("[@element, tribute_rt.anyref]"), "{output}");
+        assert!(output.contains("@element: core.i32"), "{output}");
+        assert!(output.contains("@element: tribute_rt.anyref"), "{output}");
         assert_eq!(output.matches("{field = 0,").count(), 2, "{output}");
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
@@ -315,8 +307,8 @@ mod tests {
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("adt.ref_null").count(), 4, "{output}");
         assert!(!output.contains("arith.const"), "{output}");
-        assert!(output.contains("[@element, core.i32]"), "{output}");
-        assert!(output.contains("[@element, tribute_rt.anyref]"), "{output}");
+        assert!(output.contains("@element: core.i32"), "{output}");
+        assert!(output.contains("@element: tribute_rt.anyref"), "{output}");
 
         let validation = trunk_ir::validation::validate_all(&ctx, module, &mut Default::default());
         assert!(validation.is_ok(), "{:?}", validation.errors);

@@ -773,16 +773,14 @@ fn gen_dealloc_and_return_with_size(
 /// Build an `adt.struct` type with named fields (for testing and internal use).
 #[cfg(test)]
 pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, TypeRef)]) -> TypeRef {
-    use trunk_ir::types::Attribute as A;
-    let fields_list: Vec<A> = fields
-        .iter()
-        .map(|(name, ty)| A::List(vec![A::Symbol(Symbol::new(name)), A::Type(*ty)]))
-        .collect();
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr(Symbol::new("fields"), A::List(fields_list))
-            .build(),
+    let fields = fields.iter().map(|(name, ty)| (Symbol::new(name), *ty));
+    trunk_ir::dialect::adt::struct_type(
+        ctx,
+        Symbol::new("Test"),
+        fields,
+        trunk_ir::types::AttributeMap::new(),
     )
+    .as_type_ref()
 }
 
 /// Generate release function for an enum type.

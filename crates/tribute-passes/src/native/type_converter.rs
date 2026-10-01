@@ -346,8 +346,8 @@ pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: T
         if data.name == Symbol::new("typeref") {
             return true;
         }
-        // Check for struct or enum types (have "fields" or "variants" attrs)
-        if data.attrs.contains_key("fields") {
+        // Check for struct or enum types
+        if data.name == Symbol::new("struct") {
             return true;
         }
         if data.attrs.contains_key("variants") {
@@ -396,7 +396,7 @@ fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     }
     // struct, enum, typeref, variant instance
     data.name == Symbol::new("typeref")
-        || data.attrs.contains_key("fields")
+        || data.name == Symbol::new("struct")
         || data.attrs.contains_key("variants")
         || data.attrs.get_bool("is_variant") == Some(true)
 }

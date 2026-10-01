@@ -703,26 +703,13 @@ fn build_initial_evidence(
 }
 
 fn root_completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
-    ctx.intern_type(TypeData {
-        dialect: Symbol::new("adt"),
-        name: Symbol::new("struct"),
-        params: smallvec![value_ty],
-        attrs: [
-            (
-                Symbol::new("name"),
-                Attribute::Symbol(Symbol::new(ROOT_COMPLETION_CELL_NAME)),
-            ),
-            (
-                Symbol::new("fields"),
-                Attribute::List(vec![Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new(ROOT_COMPLETION_CELL_VALUE_FIELD)),
-                    Attribute::Type(value_ty),
-                ])]),
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    })
+    adt::struct_type(
+        ctx,
+        Symbol::new(ROOT_COMPLETION_CELL_NAME),
+        [(Symbol::new(ROOT_COMPLETION_CELL_VALUE_FIELD), value_ty)],
+        AttributeMap::new(),
+    )
+    .as_type_ref()
 }
 
 /// Recover semantic R only from authenticated callable and nominal frame metadata.
@@ -854,38 +841,16 @@ fn validate_root_continuation_frame(
     let layout = ctx.type_alias_by_name(name).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
-    let layout_data = ctx.get_type(layout);
-    if layout_data.dialect != Symbol::new("adt")
-        || layout_data.name != Symbol::new("struct")
-        || layout_data.attrs.get_symbol("name") != Some(name)
-        || cps_continuation_frame_result_type(ctx, layout) != expected_provenance
-    {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame layout provenance is malformed",
-        ));
-    }
-    let fields = layout_data.attrs.get("fields").ok_or_else(|| {
-        TargetAbiError::new("target root bridge: worker frame layout lacks fields")
-    })?;
-    let Attribute::List(fields) = fields else {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame layout fields are malformed",
-        ));
-    };
-    let [Attribute::List(done_field), Attribute::List(dispatch_field)] = fields.as_slice() else {
+    let layout_struct = adt::Struct::from_type_ref(ctx, layout)
+        .filter(|layout_struct| layout_struct.name(ctx) == name)
+        .filter(|_| cps_continuation_frame_result_type(ctx, layout) == expected_provenance)
+        .ok_or_else(|| {
+            TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
+        })?;
+    let fields: Vec<_> = layout_struct.fields(ctx).collect();
+    let [(done_name, done), (dispatch_name, dispatch)] = fields.as_slice() else {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame layout must contain done then dispatch",
-        ));
-    };
-    let [Attribute::Symbol(done_name), Attribute::Type(done)] = done_field.as_slice() else {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame done field is malformed",
-        ));
-    };
-    let [Attribute::Symbol(dispatch_name), Attribute::Type(dispatch)] = dispatch_field.as_slice()
-    else {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame dispatch field is malformed",
         ));
     };
     if *done_name != Symbol::new("done") || *dispatch_name != Symbol::new("dispatch") {
@@ -1692,12 +1657,12 @@ mod tests {
             &format!(
                 r#"core.module @test {{
             !Answer = core.{answer_name}
-            !Evidence = core.array<adt.struct<{{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}>, {{layout = @evidence}}>
+            !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {{layout = @evidence_marker}}>, {{layout = @evidence}}>
             !Frame = adt.typeref<{{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer}}>
             !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
-            !{frame_name} = adt.struct<{{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer, fields = [[@done, !Done], [@dispatch, !Dispatch]]}}>
+            !{frame_name} = adt.struct<@{frame_name}(@done: !Done, @dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
                 effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @get, answer_type = !Answer}}
             }}
@@ -1844,7 +1809,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+            !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = @evidence_marker}>, {layout = @evidence}>
             !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = 0}>
             !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = 1}>
             func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
@@ -2105,23 +2070,12 @@ mod tests {
         let frame_layout = ctx
             .type_alias_by_name(frame_name)
             .expect("worker frame must retain its exact nominal layout");
-        let fields = ctx.get_type(frame_layout).attrs.get("fields");
-        let Attribute::List(fields) = fields.expect("frame fields") else {
-            panic!("frame fields must be a list");
-        };
-        let [Attribute::List(done_field), Attribute::List(dispatch_field)] = fields.as_slice()
-        else {
+        let fields: Vec<_> = adt::Struct::from_type_ref(&ctx, frame_layout)
+            .expect("frame layout must be a valid adt.struct")
+            .fields(&ctx)
+            .collect();
+        let [(done_name, done_ty), (dispatch_name, dispatch_ty)] = fields.as_slice() else {
             panic!("frame must have distinct Done and Dispatch fields");
-        };
-        let [Attribute::Symbol(done_name), Attribute::Type(done_ty)] = done_field.as_slice() else {
-            panic!("Done field must retain its exact type");
-        };
-        let [
-            Attribute::Symbol(dispatch_name),
-            Attribute::Type(dispatch_ty),
-        ] = dispatch_field.as_slice()
-        else {
-            panic!("Dispatch field must retain its exact type");
         };
         assert_eq!(*done_name, Symbol::new("done"));
         assert_eq!(*dispatch_name, Symbol::new("dispatch"));
@@ -2238,7 +2192,7 @@ mod tests {
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
-  !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+  !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = @evidence_marker}>, {layout = @evidence}>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
     %nil = core.nil_value : core.nil
     func.return %nil
@@ -2374,12 +2328,8 @@ mod tests {
                 if frame_result { nil } else { i32_ty },
             );
             if malformed_layout {
-                let wrong = ctx.intern_type(
-                    TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                        .attr("name", Attribute::Symbol(frame_name))
-                        .attr("fields", Attribute::List(vec![]))
-                        .build(),
-                );
+                let wrong =
+                    adt::struct_type(&mut ctx, frame_name, [], AttributeMap::new()).as_type_ref();
                 ctx.register_type_alias(frame_name, wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
@@ -2564,7 +2514,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !semantic = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = 0}>
-  !_closure = adt.struct<core.i32, tribute_rt.anyref, {name = @_closure}>
+  !_closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref)>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = 0} {
     func.unreachable
   }

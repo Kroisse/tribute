@@ -2217,20 +2217,8 @@ fn projection_source_matches_layout(
 }
 
 fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<TypeRef> {
-    let data = ctx.get_type(layout);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
-        return None;
-    }
-    let Attribute::List(fields) = data.attrs.get("fields")? else {
-        return None;
-    };
-    let Attribute::List(pair) = fields.get(field as usize)? else {
-        return None;
-    };
-    match pair.as_slice() {
-        [Attribute::Symbol(_), Attribute::Type(field_type)] => Some(*field_type),
-        _ => None,
-    }
+    trunk_ir::dialect::adt::Struct::from_type_ref(ctx, layout)?
+        .field_type(ctx, usize::try_from(field).ok()?)
 }
 
 fn variant_field_type(
@@ -5064,7 +5052,7 @@ mod tests {
     fn managed_reference_metadata_and_return_contracts_fail_closed() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct<{name = @S, fields = []}>
+  !S = adt.struct<@S()>
   !Unnamed = adt.typeref
   !Parameterized = adt.typeref<core.i32, {name = @S}>
   !Missing = adt.typeref<{name = @Missing}>
@@ -5107,7 +5095,7 @@ mod tests {
     fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct<{name = @S, fields = []}>
+  !S = adt.struct<@S()>
   !R = adt.typeref<{name = @S}>
   tribute_control.func @managed(%value: !R) -> !R convention(direct) {
     %null = adt.ref_null {type = !R} : !R
@@ -5147,9 +5135,9 @@ mod tests {
     fn managed_nested_aggregate_in_bodyless_c_external_is_a_trusted_user_boundary() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct<{name = @S, fields = []}>
+  !S = adt.struct<@S()>
   !R = adt.typeref<{name = @S}>
-  !Container = adt.struct<{name = @Container, fields = [[@managed, !R]]}>
+  !Container = adt.struct<@Container(@managed: !R)>
   tribute_control.func @private_helper(%value: !Container) -> core.i32 convention(direct)
     attributes {abi = "C"}
 }"#,
@@ -5176,8 +5164,8 @@ mod tests {
     fn ref_cast_rejects_distinct_nominal_managed_references() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct<{name = @S, fields = []}>
-  !T = adt.struct<{name = @T, fields = []}>
+  !S = adt.struct<@S()>
+  !T = adt.struct<@T()>
   !RS = adt.typeref<{name = @S}>
   !RT = adt.typeref<{name = @T}>
   tribute_control.func @incompatible(%value: !RS) -> !RT convention(direct) {
@@ -5316,7 +5304,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
-  !Tuple = adt.struct<{name = @Tuple, fields = [[@callee, !F]]}>
+  !Tuple = adt.struct<@Tuple(@callee: !F)>
   !TupleRef = adt.typeref<{name = @Tuple}>
   !Choice = adt.enum<{name = @Choice, variants = [[@Some, [!F]]]}>
   !ChoiceRef = adt.typeref<{name = @Choice}>
@@ -5340,7 +5328,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
-  !Tuple = adt.struct<{name = @Tuple, fields = [[@not_callable, core.i32]]}>
+  !Tuple = adt.struct<@Tuple(@not_callable: core.i32)>
   !TupleRef = adt.typeref<{name = @Tuple}>
   !Choice = adt.enum<{name = @Choice, variants = [[@Some, [core.i32]]]}>
   !ChoiceRef = adt.typeref<{name = @Choice}>
@@ -5368,8 +5356,8 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
-  !Canonical = adt.struct<{name = @Tuple, fields = [[@value, core.i32]]}>
-  !Spoofed = adt.struct<{name = @Tuple, fields = [[@callee, !F]]}>
+  !Canonical = adt.struct<@Tuple(@value: core.i32)>
+  !Spoofed = adt.struct<@Tuple(@callee: !F)>
   !TupleRef = adt.typeref<{name = @Tuple}>
   tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 convention(direct) {
     %canonical = adt.struct_new %value {type = !Canonical} : !TupleRef
@@ -5390,7 +5378,7 @@ mod tests {
     fn unreachable_nominal_layout_collision_does_not_affect_validation() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !UnusedStruct = adt.struct<{name = @Unused, fields = [[@value, core.i32]]}>
+  !UnusedStruct = adt.struct<@Unused(@value: core.i32)>
   !UnusedEnum = adt.enum<{name = @Unused, variants = [[@Value, [core.i32]]]}>
   tribute_control.func @caller(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value

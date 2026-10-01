@@ -10,8 +10,9 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::types::TypeData;
 use wasm_encoder::{FieldType, StorageType, ValType};
@@ -108,53 +109,42 @@ fn register_type(
 /// Check retained Marker declarations against the predefined evidence layout.
 /// The runtime layout identifier selects the layout; it does not validate fields.
 fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()> {
-    use trunk_ir::Attribute;
-    let data = ctx.get_type(ty);
     let invalid = || CompilationError::type_error("Marker declaration differs from builtin layout");
-    if data.name != Symbol::new("struct") || !data.params.is_empty() {
+    let Some(marker) = adt::Struct::from_type_ref(ctx, ty) else {
         return Err(invalid());
-    }
-    let Some(fields) = data.attrs.get("fields") else {
+    };
+    if marker.field_count(ctx) == 0 {
         // Existing name-only builtin references carry no layout declaration.
         return Ok(());
-    };
-    let Attribute::List(fields) = fields else {
-        return Err(invalid());
-    };
+    }
     let GcTypeDef::Struct(expected) = &gc_types::builtin_types()[MARKER_IDX as usize] else {
         unreachable!("Marker is a builtin struct")
     };
-    if fields.len() != expected.len() {
+    if marker.field_count(ctx) != expected.len() {
         return Err(invalid());
     }
-    for ((field, expected), role) in fields.iter().zip(expected).zip([
+    for (((name, ty), expected), role) in marker.fields(ctx).zip(expected).zip([
         "ability_id",
         "prompt_tag",
         "tr_dispatch_fn",
         "handler_dispatch",
     ]) {
-        let Attribute::List(parts) = field else {
-            return Err(invalid());
-        };
-        let [Attribute::Symbol(name), Attribute::Type(ty)] = parts.as_slice() else {
-            return Err(invalid());
-        };
-        let field_type = ctx.get_type(*ty);
-        if *name != Symbol::new(role)
+        let field_type = ctx.get_type(ty);
+        if name != Symbol::new(role)
             || !field_type.params.is_empty()
             || !field_type.attrs.is_empty()
-            || !(helpers::is_type(ctx, *ty, "core", "i32")
-                || helpers::is_type(ctx, *ty, "core", "ptr")
-                || helpers::is_type(ctx, *ty, "wasm", "anyref"))
+            || !(helpers::is_type(ctx, ty, "core", "i32")
+                || helpers::is_type(ctx, ty, "core", "ptr")
+                || helpers::is_type(ctx, ty, "wasm", "anyref"))
         {
             return Err(invalid());
         }
         // Marker pointer fields are target-owned GC references, as specified
         // by the builtin layout, even in the retained pre-target declaration.
-        let actual = if helpers::is_type(ctx, *ty, "core", "ptr") {
+        let actual = if helpers::is_type(ctx, ty, "core", "ptr") {
             ValType::Ref(wasm_encoder::RefType::ANYREF)
         } else {
-            helpers::type_to_valtype(ctx, *ty, &HashMap::new())?
+            helpers::type_to_valtype(ctx, ty, &HashMap::new())?
         };
         if StorageType::Val(actual) != expected.element_type {
             return Err(invalid());
@@ -787,7 +777,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = adt.struct<{{name = @_Marker, fields = [[@ability_id, {field_type}], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker}}>
+                        !Marker = adt.struct<@_Marker(@ability_id: {field_type}, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {{layout = @evidence_marker}}>
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable
@@ -811,7 +801,7 @@ mod tests {
             "wasm.anyref",
             "wasm.structref",
             "wasm.arrayref",
-            "adt.struct<{name = @Other}>",
+            "adt.struct<@Other()>",
         ] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(
@@ -843,7 +833,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-            !Marker = adt.struct<{{name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}}>
+            !Marker = adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr)>
             wasm.func @test(%marker: !Marker) -> core.i32 {{
                 %value = wasm.struct_get %marker {{type_idx = {CLOSURE_STRUCT_IDX}, field_idx = 0}} : core.i32
                 wasm.return %value

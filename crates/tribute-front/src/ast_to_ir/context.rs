@@ -10,9 +10,9 @@ use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::core;
+use trunk_ir::dialect::{adt, core};
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 use crate::ast::{
     AbilityId, CallingConvention, CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme,
@@ -707,22 +707,7 @@ impl<'db> IrLoweringCtx<'db> {
         name: Symbol,
         fields: &[(Symbol, TypeRef)],
     ) -> TypeRef {
-        let fields_attr: Vec<Attribute> = fields
-            .iter()
-            .map(|(field_name, field_type)| {
-                Attribute::List(vec![
-                    Attribute::Symbol(*field_name),
-                    Attribute::Type(*field_type),
-                ])
-            })
-            .collect();
-
-        ir.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                .attr("name", Attribute::Symbol(name))
-                .attr("fields", Attribute::List(fields_attr))
-                .build(),
-        )
+        adt::struct_type(ir, name, fields.iter().copied(), AttributeMap::new()).as_type_ref()
     }
 
     /// Create an `adt.enum` type with name and variants.
@@ -980,27 +965,16 @@ mod tests {
         let tuple = AstType::new(&db, TypeKind::Tuple(vec![builtin_list, source_list]));
         ctx.convert_logical_type(&mut ir, tuple);
         let tuple_name = ctx.logical_tuple_name(tuple);
-        let (_, layout) = ir
+        let layout = ir
             .types()
             .iter()
-            .find(|(_, data)| {
-                data.dialect == Symbol::new("adt")
-                    && data.name == Symbol::new("struct")
-                    && data.attrs.get_symbol("name") == Some(tuple_name)
+            .find_map(|(ty, _)| {
+                adt::Struct::from_type_ref(&ir, ty).filter(|layout| layout.name(&ir) == tuple_name)
             })
             .expect("logical tuple layout");
         assert_eq!(
-            layout.attrs.get("fields"),
-            Some(&Attribute::List(vec![
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new("0")),
-                    Attribute::Type(anyref)
-                ]),
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new("1")),
-                    Attribute::Type(nominal_list)
-                ]),
-            ]))
+            layout.fields(&ir).collect::<Vec<_>>(),
+            [(Symbol::new("0"), anyref), (Symbol::new("1"), nominal_list),]
         );
 
         let generated = Symbol::new("Forward::value");
