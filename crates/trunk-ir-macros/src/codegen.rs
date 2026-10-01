@@ -415,12 +415,19 @@ fn gen_map_attr_accessor(
     let rust_ty = attr_rust_type(crate_path, attr.ty);
 
     // A string attribute's text lives in the context's string pool, so the
-    // accessor borrows it from `ctx`.
+    // accessor borrows it from `ctx`, as MLIR's `getName()`. `<name>_ref`
+    // returns the pooled handle, as MLIR's `getNameAttr()`, for copying the
+    // value to another operation without borrowing the context.
     if matches!(attr.ty, AttrType::String) {
+        let handle = format_ident!("{}_ref", attr.name);
         return if attr.optional {
             quote! {
                 pub fn #name<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<&'ctx str> {
                     #attrs.get_str(ctx, #name_str)
+                }
+
+                pub fn #handle(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
+                    #attrs.get_string_ref(#name_str)
                 }
             }
         } else {
@@ -428,6 +435,12 @@ fn gen_map_attr_accessor(
                 pub fn #name<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> &'ctx str {
                     #attrs
                         .get_str(ctx, #name_str)
+                        .expect(concat!("missing attribute: ", #name_str))
+                }
+
+                pub fn #handle(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
+                    #attrs
+                        .get_string_ref(#name_str)
                         .expect(concat!("missing attribute: ", #name_str))
                 }
             }

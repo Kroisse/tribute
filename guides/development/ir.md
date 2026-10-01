@@ -166,6 +166,18 @@ let is_c = ctx.op(op).attributes.get_str(ctx, "abi") == Some("C");
 let value: &str = string_const.value(ctx); // generated accessor
 ```
 
+A generated string accessor returns the text, like MLIR's `getValue()`.
+`<name>_ref` returns the `StringRef`, like `getValueAttr()`; use it to copy the
+value into another operation without borrowing the context or interning
+again:
+
+```rust
+let copy = adt::StringConst::operands()
+    .value(string_const.value_ref(ctx))
+    .results(ty)
+    .build(ctx, loc);
+```
+
 Attributes that embed types (directly or inside `List`/`Dict` values) are
 converted and inspected through the shared traversal instead of matching
 individual variants:

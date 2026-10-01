@@ -226,6 +226,18 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             if verify.is_some() && entity_names(&op).any(|name| name == "verify") {
                 return Err("#[verify] reserves the name `verify` for `Verify::verify`".into());
             }
+            for attr in &op.attrs {
+                if !matches!(attr.ty, AttrType::String) {
+                    continue;
+                }
+                let handle = format!("{}_ref", attr.name);
+                if entity_names(&op).any(|name| name == handle) {
+                    return Err(format!(
+                        "string attribute `{}` reserves the name `{handle}` for its handle accessor",
+                        attr.name
+                    ));
+                }
+            }
             op.verify = verify;
             Ok(DialectItem::Operation(op))
         }

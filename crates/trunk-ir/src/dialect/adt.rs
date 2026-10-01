@@ -441,6 +441,31 @@ mod tests {
     }
 
     #[test]
+    fn string_attribute_accessors_return_text_and_handle() {
+        use crate::ops::DialectOp;
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  %0 = adt.string_const {value = "hi"} : core.ptr
+}"#,
+        );
+        let op = module.ops(&ctx)[0];
+        let string_const = StringConst::from_op(&ctx, op).unwrap();
+        assert_eq!(string_const.value(&ctx), "hi");
+        assert_eq!(string_const.value_ref(&ctx), ctx.lookup_str("hi").unwrap());
+
+        let loc = ctx.op(op).location;
+        let ptr = ctx.op_result_types(op)[0];
+        let copy = StringConst::operands()
+            .value(string_const.value_ref(&ctx))
+            .results(ptr)
+            .build(&mut ctx, loc);
+        assert_eq!(copy.value(&ctx), "hi");
+    }
+
+    #[test]
     fn test_roundtrip_adt_struct() {
         let input = r#"core.module @test {
   !point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>
