@@ -7,7 +7,7 @@
 
 mod matrix;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -31,12 +31,13 @@ impl<'db> TypeChecker<'db> {
     ///
     /// Returns whether the case was proved exhaustive.
     pub(super) fn check_exhaustiveness(
-        &mut self,
+        &self,
+        reported: &mut HashSet<NodeId>,
         scrutinee_ty: Type<'db>,
         arms: &[Arm<TypedRef<'db>>],
         span_node_id: NodeId,
     ) -> bool {
-        let report = self.exhaustiveness_reported.insert(span_node_id);
+        let report = reported.insert(span_node_id);
         if arms.is_empty() {
             if report {
                 self.report_case(

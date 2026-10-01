@@ -20,7 +20,9 @@ use super::super::func_context::FunctionInferenceContext;
 use super::super::solver::TypeSolver;
 #[cfg(test)]
 use super::diagnostics::{format_solve_error, solve_error_context};
-use super::{Mode, TypeChecker};
+use super::finalize::{Finalize, Substitution};
+use super::{FunctionCheck, Mode, TypeChecker};
+use crate::ast::visit::VisitMut;
 
 impl<'db> TypeChecker<'db> {
     /// Type check a function declaration with per-function inference.
@@ -34,9 +36,10 @@ impl<'db> TypeChecker<'db> {
     /// 6. Applies substitution and generalization; the declared signature
     ///    stays the function's scheme
     pub(crate) fn check_func_decl(
-        &mut self,
+        &self,
         func: &FuncDecl<ResolvedRef<'db>>,
-    ) -> FuncDecl<TypedRef<'db>> {
+    ) -> (FuncDecl<TypedRef<'db>>, FunctionCheck<'db>) {
+        let mut checked = FunctionCheck::default();
         // 1. Create a fresh FunctionInferenceContext for this function
         // Use function definition ID for globally unique UniVar IDs
         let func_id = self.func_def_id(func.name);
@@ -147,7 +150,7 @@ impl<'db> TypeChecker<'db> {
         let next_row_var = ctx.next_row_var();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
-        self.local_generalizations = local_generalizations;
+        checked.local_generalizations = local_generalizations;
 
         let mut solver = TypeSolver::new(self.db());
         solver.reserve_row_vars(next_row_var);
@@ -227,14 +230,14 @@ impl<'db> TypeChecker<'db> {
         // Solver aliases can point at a representative created after a local
         // scheme was generalized. Preserve both spellings before collecting
         // body and deferred metadata variables for finalization.
-        for (var, binding) in self.local_generalizations.clone() {
+        for (var, binding) in checked.local_generalizations.clone() {
             let resolved = type_subst.apply_with_rows(
                 self.db(),
                 Type::new(self.db(), TypeKind::UniVar { id: var }),
                 row_subst,
             );
             if let TypeKind::UniVar { id } = resolved.kind(self.db()) {
-                let owner = *self.local_generalizations.entry(*id).or_insert(binding);
+                let owner = *checked.local_generalizations.entry(*id).or_insert(binding);
                 debug_assert_eq!(
                     owner, binding,
                     "solver representative {id:?} aliases local quantifiers of two owners"
@@ -274,11 +277,12 @@ impl<'db> TypeChecker<'db> {
             .filter(|var| !all_univars.contains(var))
             .enumerate()
         {
-            self.local_generalizations
+            checked
+                .local_generalizations
                 .entry(var)
                 .or_insert((func.id, index as u32));
         }
-        all_univars.retain(|id| !self.local_generalizations.contains_key(id));
+        all_univars.retain(|id| !checked.local_generalizations.contains_key(id));
         // Signature variables keep their declared binder indices. Others
         // remain only after a reported error.
         let signature_vars = signature_instance.iter().flat_map(|(_, instance)| {
@@ -403,27 +407,36 @@ impl<'db> TypeChecker<'db> {
             );
         }
 
+        let substitution = Substitution {
+            db: self.db(),
+            type_subst,
+            row_subst,
+            var_to_index: &var_to_index,
+            local_generalizations: &checked.local_generalizations,
+        };
+
         // 6. Materialize the solved node types before rebuilding the body.
         // Post-solve case coverage consults these entries during body substitution.
         for (node_id, ty) in func_node_types {
-            let substituted = self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
-            self.node_types.insert(node_id, substituted);
+            let substituted = substitution.apply(ty);
+            checked.node_types.insert(node_id, substituted);
         }
 
         // 7. Apply substitution and generalization to all TypedRef types in the body.
         let mut body = body;
-        self.apply_subst_to_body(
-            &mut body,
-            type_subst,
-            row_subst,
-            &var_to_index,
-            &deferred_resolutions,
-        );
+        Finalize {
+            checker: self,
+            substitution: &substitution,
+            deferred_resolutions: &deferred_resolutions,
+            node_types: &checked.node_types,
+            exhaustive_cases: &mut checked.exhaustive_cases,
+            exhaustiveness_reported: &mut checked.exhaustiveness_reported,
+        }
+        .visit_expr_mut(&mut body);
 
         for (node, mut instance) in local_instances {
-            instance.callable =
-                self.apply_subst_to_type(instance.callable, type_subst, row_subst, &var_to_index);
-            let map_type = |ty| self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index);
+            instance.callable = substitution.apply(instance.callable);
+            let map_type = |ty| substitution.apply(ty);
             instance.scheme = instance
                 .scheme
                 .to_builder(self.db())
@@ -440,15 +453,14 @@ impl<'db> TypeChecker<'db> {
                     )
                 })
                 .collect();
-            self.local_instances.insert(node, instance);
+            checked.local_instances.insert(node, instance);
         }
         for (node, mut instance) in func_instances {
-            instance.callable =
-                self.apply_subst_to_type(instance.callable, type_subst, row_subst, &var_to_index);
+            instance.callable = substitution.apply(instance.callable);
             instance.type_arguments = instance
                 .type_arguments
                 .into_iter()
-                .map(|ty| self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index))
+                .map(|ty| substitution.apply(ty))
                 .collect();
             instance.row_arguments = instance
                 .row_arguments
@@ -456,67 +468,49 @@ impl<'db> TypeChecker<'db> {
                 .map(|row| {
                     let row = row_subst.apply(self.db(), row);
                     crate::typeck::solver::map_effect_row_type_args(self.db(), row, |ty| {
-                        self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
+                        substitution.apply(ty)
                     })
                 })
                 .collect();
-            self.function_instances.insert(node, instance);
+            checked.function_instances.insert(node, instance);
         }
         for (arm_id, operation) in func_handler_operations {
-            self.handler_operations.insert(
+            checked.handler_operations.insert(
                 arm_id,
                 crate::typeck::InstantiatedHandlerOperation {
                     ability: operation.ability,
                     ability_args: operation
                         .ability_args
                         .into_iter()
-                        .map(|ty| {
-                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
-                        })
+                        .map(|ty| substitution.apply(ty))
                         .collect(),
                     kind: operation.kind,
                     params: operation
                         .params
                         .into_iter()
-                        .map(|ty| {
-                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
-                        })
+                        .map(|ty| substitution.apply(ty))
                         .collect(),
-                    result: self.apply_subst_to_type(
-                        operation.result,
-                        type_subst,
-                        row_subst,
-                        &var_to_index,
-                    ),
+                    result: substitution.apply(operation.result),
                 },
             );
         }
         for (call_id, operation) in func_perform_operations {
-            self.perform_operations.insert(
+            checked.perform_operations.insert(
                 call_id,
                 crate::typeck::InstantiatedPerformOperation {
                     ability: operation.ability,
                     ability_args: operation
                         .ability_args
                         .into_iter()
-                        .map(|ty| {
-                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
-                        })
+                        .map(|ty| substitution.apply(ty))
                         .collect(),
                     kind: operation.kind,
                     params: operation
                         .params
                         .into_iter()
-                        .map(|ty| {
-                            self.apply_subst_to_type(ty, type_subst, row_subst, &var_to_index)
-                        })
+                        .map(|ty| substitution.apply(ty))
                         .collect(),
-                    result: self.apply_subst_to_type(
-                        operation.result,
-                        type_subst,
-                        row_subst,
-                        &var_to_index,
-                    ),
+                    result: substitution.apply(operation.result),
                 },
             );
         }
@@ -526,19 +520,14 @@ impl<'db> TypeChecker<'db> {
             .into_iter()
             .collect::<HashMap<_, _>>();
         for (lambda_id, signature) in func_lambda_signatures {
-            let function_type = self.apply_subst_to_type(
-                signature.function_type,
-                type_subst,
-                row_subst,
-                &var_to_index,
-            );
+            let function_type = substitution.apply(signature.function_type);
             let convention = crate::ast::calling_convention_for_function_type(
                 self.db(),
                 function_type,
                 &ability_conventions,
             )
             .expect("lambda semantic signature must remain a function type");
-            self.lambda_signatures.insert(
+            checked.lambda_signatures.insert(
                 lambda_id,
                 crate::typeck::LambdaSignature {
                     function_type,
@@ -546,7 +535,7 @@ impl<'db> TypeChecker<'db> {
                 },
             );
         }
-        FuncDecl {
+        let decl = FuncDecl {
             id: func.id,
             is_pub: func.is_pub,
             name: func.name,
@@ -555,7 +544,8 @@ impl<'db> TypeChecker<'db> {
             return_ty: func.return_ty.clone(),
             effects: func.effects.clone(),
             body,
-        }
+        };
+        (decl, checked)
     }
 
     /// Resolve deferred method calls after constraint solving.

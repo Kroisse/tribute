@@ -8,55 +8,9 @@ use crate::ast::NodeId;
 use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut};
 use crate::ast::{Expr, ExprKind, FuncDefId, ResolvedRef, Type, TypedRef, UniVarId};
 use crate::typeck::solver::{RowSubst, TypeSubst};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 impl<'db> TypeChecker<'db> {
-    /// Apply substitution and generalization to all types in the body expression.
-    ///
-    /// This ensures that all TypedRef types have UniVars replaced with:
-    /// 1. Their resolved concrete type (from substitution), or
-    /// 2. The corresponding BoundVar (from generalization mapping)
-    ///
-    /// Deferred method calls become direct calls, and case expressions whose
-    /// substituted arms cover their scrutinee are recorded as exhaustive.
-    pub(super) fn apply_subst_to_body(
-        &mut self,
-        body: &mut Expr<TypedRef<'db>>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-        deferred_resolutions: &HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
-    ) {
-        Finalize {
-            checker: self,
-            type_subst,
-            row_subst,
-            var_to_index,
-            deferred_resolutions,
-        }
-        .visit_expr_mut(body);
-    }
-
-    /// Apply substitution and generalization to a type.
-    pub(super) fn apply_subst_to_type(
-        &self,
-        ty: Type<'db>,
-        type_subst: &TypeSubst<'db>,
-        row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-    ) -> Type<'db> {
-        // First apply the substitution to resolve UniVars
-        let substituted = type_subst.apply_with_rows(self.db(), ty, row_subst);
-        // Then apply the generalization mapping to convert remaining UniVars to BoundVars
-        type_subst.apply_generalization_with_local_vars(
-            self.db(),
-            substituted,
-            row_subst,
-            var_to_index,
-            &self.local_generalizations,
-        )
-    }
-
     // =========================================================================
     // UniVar collection from body
     // =========================================================================
@@ -94,19 +48,47 @@ impl<'db> TypeChecker<'db> {
     }
 }
 
+/// One function's solved substitution and binder mapping.
+pub(super) struct Substitution<'a, 'db> {
+    pub(super) db: &'db dyn salsa::Database,
+    pub(super) type_subst: &'a TypeSubst<'db>,
+    pub(super) row_subst: &'a RowSubst<'db>,
+    pub(super) var_to_index: &'a HashMap<UniVarId<'db>, u32>,
+    pub(super) local_generalizations: &'a HashMap<UniVarId<'db>, (NodeId, u32)>,
+}
+
+impl<'db> Substitution<'_, 'db> {
+    /// Resolve `ty` and turn its remaining variables into the function's
+    /// binders: interface variables become `BoundVar`, variables of a local
+    /// generalized scheme become `LocalBoundVar`.
+    pub(super) fn apply(&self, ty: Type<'db>) -> Type<'db> {
+        let substituted = self.type_subst.apply_with_rows(self.db, ty, self.row_subst);
+        self.type_subst.apply_generalization_with_local_vars(
+            self.db,
+            substituted,
+            self.row_subst,
+            self.var_to_index,
+            self.local_generalizations,
+        )
+    }
+}
+
 /// Applies one function's solved substitution to its checked body.
-struct Finalize<'a, 'db> {
-    checker: &'a mut TypeChecker<'db>,
-    type_subst: &'a TypeSubst<'db>,
-    row_subst: &'a RowSubst<'db>,
-    var_to_index: &'a HashMap<UniVarId<'db>, u32>,
-    deferred_resolutions: &'a HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+///
+/// Deferred method calls become direct calls, and case expressions whose
+/// substituted arms cover their scrutinee are recorded as exhaustive.
+pub(super) struct Finalize<'a, 'db> {
+    pub(super) checker: &'a TypeChecker<'db>,
+    pub(super) substitution: &'a Substitution<'a, 'db>,
+    pub(super) deferred_resolutions: &'a HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+    pub(super) node_types: &'a HashMap<NodeId, Type<'db>>,
+    pub(super) exhaustive_cases: &'a mut Vec<NodeId>,
+    pub(super) exhaustiveness_reported: &'a mut HashSet<NodeId>,
 }
 
 impl<'db> Finalize<'_, 'db> {
     fn apply(&self, ty: Type<'db>) -> Type<'db> {
-        self.checker
-            .apply_subst_to_type(ty, self.type_subst, self.row_subst, self.var_to_index)
+        self.substitution.apply(ty)
     }
 }
 
@@ -146,13 +128,16 @@ impl<'db> VisitMut<TypedRef<'db>> for Finalize<'_, 'db> {
                 };
             }
             ExprKind::Case { scrutinee, arms } => {
-                if let Some(scrutinee_ty) = self.checker.node_types.get(&scrutinee.id).copied()
-                    && self
-                        .checker
-                        .check_exhaustiveness(scrutinee_ty, arms, scrutinee.id)
-                    && !self.checker.exhaustive_cases.contains(&expr.id)
+                if let Some(scrutinee_ty) = self.node_types.get(&scrutinee.id).copied()
+                    && self.checker.check_exhaustiveness(
+                        self.exhaustiveness_reported,
+                        scrutinee_ty,
+                        arms,
+                        scrutinee.id,
+                    )
+                    && !self.exhaustive_cases.contains(&expr.id)
                 {
-                    self.checker.exhaustive_cases.push(expr.id);
+                    self.exhaustive_cases.push(expr.id);
                 }
             }
             _ => {}

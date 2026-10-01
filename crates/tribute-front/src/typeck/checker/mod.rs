@@ -78,6 +78,28 @@ pub struct ModuleCheckResult<'db> {
     pub well_known_types: WellKnownTypes<'db>,
 }
 
+/// What checking one module-level function produces: its body's node
+/// metadata, keyed by nodes only that function owns. Function checking only
+/// reads the module environment, so the module merges these results in any
+/// order.
+#[derive(Default)]
+pub(crate) struct FunctionCheck<'db> {
+    pub(super) node_types: HashMap<NodeId, Type<'db>>,
+    pub(super) function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
+    pub(super) local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
+    pub(super) handler_operations:
+        HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    pub(super) perform_operations:
+        HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    pub(super) lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    pub(super) exhaustive_cases: Vec<NodeId>,
+    /// Quantifiers owned by generalized local schemes in this function. They
+    /// remain separate from exported function schemes.
+    pub(super) local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
+    /// Case scrutinees whose exhaustiveness diagnostics were already reported.
+    pub(super) exhaustiveness_reported: HashSet<NodeId>,
+}
+
 /// Type checking mode.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -108,12 +130,7 @@ pub struct TypeChecker<'db> {
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
-    /// Quantifiers owned by generalized local schemes in the function currently
-    /// being finalized. They remain separate from exported function schemes.
-    local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
     exhaustive_cases: Vec<NodeId>,
-    /// Case scrutinees whose exhaustiveness diagnostics were already reported.
-    exhaustiveness_reported: HashSet<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
     signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
@@ -171,9 +188,7 @@ impl<'db> TypeChecker<'db> {
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             lambda_signatures: HashMap::new(),
-            local_generalizations: HashMap::new(),
             exhaustive_cases: Vec::new(),
-            exhaustiveness_reported: HashSet::new(),
             effect_annotation_origins: HashMap::new(),
             signature_row_names: HashMap::new(),
             signature_type_names: HashMap::new(),
@@ -342,7 +357,11 @@ impl<'db> TypeChecker<'db> {
     /// Type check a declaration.
     fn check_decl(&mut self, decl: &Decl<ResolvedRef<'db>>) -> Decl<TypedRef<'db>> {
         match decl {
-            Decl::Function(func) => Decl::Function(self.check_func_decl(func)),
+            Decl::Function(func) => {
+                let (func, checked) = self.check_func_decl(func);
+                self.merge_function(checked);
+                Decl::Function(func)
+            }
             // These declarations contain no expressions to check.
             Decl::ExternFunction(e) => Decl::ExternFunction(e.clone()),
             Decl::Struct(s) => Decl::Struct(s.clone()),
@@ -351,6 +370,17 @@ impl<'db> TypeChecker<'db> {
             Decl::Use(u) => Decl::Use(u.clone()),
             Decl::Module(m) => Decl::Module(self.check_module_decl(m)),
         }
+    }
+
+    /// Merge one function's results into the module's.
+    fn merge_function(&mut self, checked: FunctionCheck<'db>) {
+        self.node_types.extend(checked.node_types);
+        self.function_instances.extend(checked.function_instances);
+        self.local_instances.extend(checked.local_instances);
+        self.handler_operations.extend(checked.handler_operations);
+        self.perform_operations.extend(checked.perform_operations);
+        self.lambda_signatures.extend(checked.lambda_signatures);
+        self.exhaustive_cases.extend(checked.exhaustive_cases);
     }
 
     /// Type check a module declaration.
