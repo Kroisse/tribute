@@ -660,7 +660,7 @@ mod tests {
     fn native_boundary_rejects_semantic_and_shape_matched_values_in_pointer_slots() {
         let error = validation_error(
             r#"core.module @test {
-  !shaped = adt.struct<{fields = [[@field, core.i32]], name = @Impostor}>
+  !shaped = adt.struct<@Impostor(@field: core.i32)>
   clif.func @target(%value: core.ptr) -> core.ptr { clif.return %value }
   clif.func @semantic(%callee: core.ptr, %value: tribute_rt.anyref) -> core.ptr {
     %direct = clif.call %value {callee = @target} : tribute_rt.anyref

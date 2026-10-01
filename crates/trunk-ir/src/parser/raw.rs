@@ -321,6 +321,18 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     '<'.parse_next(input)?;
     ws.parse_next(input)?;
 
+    if let Some(format) = crate::asm_format::lookup_type_asm_format(
+        crate::Symbol::from_dynamic(dialect),
+        crate::Symbol::from_dynamic(name),
+    ) {
+        let checkpoint = *input;
+        match (format.parse_fn)(input, dialect, name) {
+            Ok(ty) => return Ok(ty),
+            Err(winnow::error::ErrMode::Backtrack(_)) => *input = checkpoint,
+            Err(error) => return Err(error),
+        }
+    }
+
     if input.starts_with('(') {
         let inputs = raw_param_list.parse_next(input)?;
         ws.parse_next(input)?;
@@ -374,7 +386,7 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
 }
 
 /// Parse a type parameter with its optional attributes: `type {attrs}`.
-fn raw_param<'a>(input: &mut &'a str) -> ModalResult<RawParam<'a>> {
+pub fn raw_param<'a>(input: &mut &'a str) -> ModalResult<RawParam<'a>> {
     let ty = raw_type.parse_next(input)?;
     let attrs = opt(preceded(ws, raw_attr_dict))
         .parse_next(input)?

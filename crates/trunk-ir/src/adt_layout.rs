@@ -34,6 +34,7 @@
 
 use crate::Symbol;
 use crate::context::IrContext;
+use crate::ops::DialectType;
 use crate::refs::TypeRef;
 use crate::rewrite::type_converter::TypeConverter;
 use crate::types::Attribute;
@@ -113,44 +114,10 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
 
 /// Extract struct fields from an arena TypeRef.
 ///
-/// Returns `None` if the type is not `adt.struct`.
+/// Returns `None` if the type is not a valid `adt.struct`.
 pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, TypeRef)>> {
-    let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("struct") {
-        return None;
-    }
-
-    let fields_attr = data.attrs.get("fields")?;
-    let Attribute::List(fields) = fields_attr else {
-        return None;
-    };
-
-    let mut result = Vec::new();
-    for (i, field) in fields.iter().enumerate() {
-        let Attribute::List(pair) = field else {
-            panic!("get_struct_fields: field[{i}] expected List, got {field:?}");
-        };
-        assert!(
-            pair.len() >= 2,
-            "get_struct_fields: field[{i}] pair too short (len={})",
-            pair.len()
-        );
-        let Attribute::Symbol(name) = &pair[0] else {
-            panic!(
-                "get_struct_fields: field[{i}] name expected Symbol, got {:?}",
-                pair[0]
-            );
-        };
-        let Attribute::Type(field_ty) = &pair[1] else {
-            panic!(
-                "get_struct_fields: field[{i}] type expected Type, got {:?}",
-                pair[1]
-            );
-        };
-        result.push((*name, *field_ty));
-    }
-
-    Some(result)
+    let adt_struct = crate::dialect::adt::Struct::from_type_ref(ctx, ty)?;
+    Some(adt_struct.fields(ctx).collect())
 }
 
 /// Extract enum variants from an arena TypeRef.

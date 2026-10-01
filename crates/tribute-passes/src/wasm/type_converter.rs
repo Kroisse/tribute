@@ -26,11 +26,12 @@ use tribute_ir::dialect::ability::marker_adt_type_ref;
 use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{AttributeMap, Location, TypeDataBuilder};
 
 // =============================================================================
 // Helper: intern a simple type (no params, no attrs)
@@ -49,35 +50,6 @@ fn is_type(ctx: &IrContext, ty: TypeRef, dialect: Symbol, name: Symbol) -> bool 
 }
 
 // =============================================================================
-// ADT struct type constructor helper
-// =============================================================================
-
-pub(crate) fn make_adt_struct_type(
-    ctx: &mut IrContext,
-    name: Symbol,
-    fields: Vec<(Symbol, TypeRef)>,
-) -> TypeRef {
-    let fields_attr = Attribute::List(
-        fields
-            .into_iter()
-            .map(|(field_name, field_type)| {
-                Attribute::List(vec![
-                    Attribute::Symbol(field_name),
-                    Attribute::Type(field_type),
-                ])
-            })
-            .collect(),
-    );
-
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("name", Attribute::Symbol(name))
-            .attr("fields", fields_attr)
-            .build(),
-    )
-}
-
-// =============================================================================
 // ADT type helpers (arena versions)
 // =============================================================================
 
@@ -91,20 +63,18 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
     let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
 
-    let closure = make_adt_struct_type(
+    let mut attrs = AttributeMap::new();
+    attrs.insert(
+        tribute_core::runtime_layout::LAYOUT_ATTR,
+        Symbol::new(tribute_core::runtime_layout::CLOSURE),
+    );
+    adt::struct_type(
         ctx,
-        Symbol::new("_closure"),
-        vec![
-            (Symbol::new("table_idx"), i32_ty),
-            (Symbol::new("env"), anyref_ty),
-        ],
-    );
-    let mut data = ctx.get_type(closure).clone();
-    data.attrs.insert(
-        Symbol::new(tribute_core::runtime_layout::LAYOUT_ATTR),
-        Attribute::Symbol(Symbol::new(tribute_core::runtime_layout::CLOSURE)),
-    );
-    ctx.intern_type(data)
+        "_closure",
+        [("table_idx", i32_ty), ("env", anyref_ty)],
+        attrs,
+    )
+    .as_type_ref()
 }
 
 /// Get the Evidence type of the WASM representation.
@@ -623,6 +593,8 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::ops::DialectType;
+    use trunk_ir::types::Attribute;
 
     #[test]
     fn runtime_layout_identifiers_match_the_wasm_builtin_layouts() {
@@ -665,7 +637,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, wasm.anyref]], layout = @closure}>
+  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = @closure}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}
@@ -757,7 +729,7 @@ mod tests {
         let nested = |ty| Attribute::List(vec![Attribute::List(vec![Attribute::Type(ty)])]);
         ctx.block_mut(block).args[0]
             .attrs
-            .insert(Symbol::new("storage"), nested(source));
+            .insert("storage", nested(source));
         convert_builtin_layouts(&mut ctx, module);
         assert_eq!(
             ctx.block(block).args[0].attrs.get("storage"),
@@ -772,34 +744,23 @@ mod tests {
         let target = closure_adt_type(&mut ctx);
         let generic = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("structref"));
         let mut near = ctx.get_type(shared).clone();
-        near.attrs
-            .insert(Symbol::new("unrelated"), Attribute::Bool(true));
+        near.attrs.insert("unrelated", Attribute::Bool(true));
         let near = ctx.intern_type(near);
         let converter = wasm_type_converter(&mut ctx);
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);
         assert_eq!(converter.convert_type_or_identity(&ctx, near), near);
         assert_eq!(converter.convert_type_or_identity(&ctx, generic), generic);
-        let data = ctx.get_type(target);
-        let Attribute::List(fields) = data.attrs.get("fields").unwrap() else {
-            panic!("fields")
-        };
-        assert!(
-            matches!(&fields[0], Attribute::List(field) if field[0] == Attribute::Symbol(Symbol::new("table_idx")))
-        );
         let anyref = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("anyref"));
         let i32_ty = intern_type(&mut ctx, Symbol::new("core"), Symbol::new("i32"));
         assert_eq!(
-            ctx.get_type(target).attrs.get("fields"),
-            Some(&Attribute::List(vec![
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new("table_idx")),
-                    Attribute::Type(i32_ty)
-                ]),
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new("env")),
-                    Attribute::Type(anyref)
-                ]),
-            ]))
+            adt::Struct::from_type_ref(&ctx, target)
+                .unwrap()
+                .fields(&ctx)
+                .collect::<Vec<_>>(),
+            [
+                (Symbol::new("table_idx"), i32_ty),
+                (Symbol::new("env"), anyref),
+            ]
         );
     }
 }

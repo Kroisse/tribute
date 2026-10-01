@@ -164,7 +164,7 @@ impl<'a> ArenaIrBuilder<'a> {
         let mut attrs = self.build_type_attrs(dialect, name, attrs)?;
         let param_attrs = inputs.iter().chain(results).map(|(_, attrs)| attrs.clone());
         if let Some(value) = param_attrs_attribute(param_attrs) {
-            attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
+            attrs.insert(PARAM_ATTRS_ATTR, value);
         }
         Ok(attrs)
     }
@@ -494,10 +494,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
                 let mut attrs = AttributeMap::new();
                 if !is_default_name {
-                    attrs.insert(
-                        Symbol::new("bind_name"),
-                        Attribute::Symbol(Symbol::from_dynamic(name)),
-                    );
+                    attrs.insert("bind_name", Symbol::from_dynamic(name));
                 }
                 block_arg_data.push(BlockArgData { ty, attrs });
                 arg_names.push(name.to_string());
@@ -643,10 +640,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {
-            attributes.insert(
-                Symbol::new("sym_name"),
-                Attribute::Symbol(Symbol::from_dynamic(name.as_str())),
-            );
+            attributes.insert("sym_name", Symbol::from_dynamic(name.as_str()));
         }
 
         // Handle func-style signature → func.func_sig type
@@ -716,7 +710,7 @@ impl<'a> ArenaIrBuilder<'a> {
                     });
                 }
             } else {
-                attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
+                attributes.insert("type", Attribute::Type(func_ty));
             }
         }
 
@@ -1897,7 +1891,7 @@ core.module @test {
     #[test]
     fn test_roundtrip_type_alias() {
         let input = r#"core.module @test {
-  !marker = adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32]], name = @_Marker}>
+  !marker = adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32)>
 
   func.func @foo(%0: core.array<!marker>) -> core.array<!marker> {
     func.return %0
@@ -2013,7 +2007,7 @@ core.module @test {
     #[test]
     fn test_quoted_type_alias_roundtrip() {
         let input = r#"core.module @test {
-  !"test::MyStruct" = adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @"test::MyStruct"}>
+  !"test::MyStruct" = adt.struct<@"test::MyStruct"(@x: core.i32, @y: core.i32)>
 
   func.func @foo(%0: !"test::MyStruct") -> !"test::MyStruct" {
     func.return %0

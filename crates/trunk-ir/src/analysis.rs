@@ -754,7 +754,7 @@ mod tests {
 
         ctx.op_mut(op)
             .attributes
-            .insert("marker".into(), crate::types::Attribute::Int(7));
+            .insert("marker", crate::types::Attribute::Int(7));
         assert!(analyses.get_cached::<MarkerAnalysis>(&ctx, op).is_none());
         assert!(analyses.cache.is_empty());
         assert!(analyses.dependencies.is_empty());
@@ -832,11 +832,11 @@ mod tests {
         first_ctx
             .op_mut(first_op)
             .attributes
-            .insert("marker".into(), crate::types::Attribute::Int(1));
+            .insert("marker", crate::types::Attribute::Int(1));
         second_ctx
             .op_mut(second_op)
             .attributes
-            .insert("marker".into(), crate::types::Attribute::Int(2));
+            .insert("marker", crate::types::Attribute::Int(2));
         assert_eq!(first_op, second_op);
         assert_eq!(first_ctx.analysis_stamp().1, second_ctx.analysis_stamp().1);
         assert_ne!(first_ctx.analysis_stamp().0, second_ctx.analysis_stamp().0);
@@ -947,7 +947,7 @@ mod tests {
             let before = analyses.get::<MarkerAnalysis>(ctx, op).unwrap();
             ctx.op_mut(op)
                 .attributes
-                .insert("marker".into(), crate::types::Attribute::Int(3));
+                .insert("marker", crate::types::Attribute::Int(3));
             let after = analyses.get::<MarkerAnalysis>(ctx, op).unwrap();
             assert_eq!(before.0, None);
             assert_eq!(after.0, Some(3));
@@ -955,7 +955,7 @@ mod tests {
             let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 ctx.op_mut(op)
                     .attributes
-                    .insert("marker".into(), crate::types::Attribute::Int(4));
+                    .insert("marker", crate::types::Attribute::Int(4));
                 panic!("pass failed after partial mutation");
             }));
             assert!(failed.is_err());

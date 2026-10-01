@@ -1333,8 +1333,8 @@ impl OperationDataBuilder {
         self
     }
 
-    pub fn attr(mut self, key: impl Into<Symbol>, val: Attribute) -> Self {
-        self.attributes.insert(key.into(), val);
+    pub fn attr(mut self, key: impl Into<Symbol>, val: impl Into<Attribute>) -> Self {
+        self.attributes.insert(key, val);
         self
     }
 

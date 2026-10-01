@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/tuple_pattern.rs
 expression: ir_text
 ---
 core.module @test {
-  !__logical_tuple_tuple_4_1_3_3_nat_3_nat_3_nat = adt.struct<{fields = [[@0, core.i32], [@1, core.i32], [@2, core.i32]], name = @__logical_tuple_tuple_4_1_3_3_nat_3_nat_3_nat}>
+  !__logical_tuple_tuple_4_1_3_3_nat_3_nat_3_nat = adt.struct<@__logical_tuple_tuple_4_1_3_3_nat_3_nat_3_nat(@0: core.i32, @1: core.i32, @2: core.i32)>
   !__logical_tuple_tuple_4_1_3_3_nat_3_nat_3_nat_1 = adt.typeref<{name = @__logical_tuple_tuple_4_1_3_3_nat_3_nat_3_nat}>
 
   tribute_control.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)

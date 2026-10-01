@@ -1926,9 +1926,9 @@ fn keep_first(first: First) -> First { first }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     for field in [
-        "!Node = adt.struct<{fields = [[@next, adt.typeref<{name = @Node}>]], name = @Node}>",
-        "!First = adt.struct<{fields = [[@second, adt.typeref<{name = @Second}>]], name = @First}>",
-        "!Second = adt.struct<{fields = [[@first, adt.typeref<{name = @First}>]], name = @Second}>",
+        "!Node = adt.struct<@Node(@next: adt.typeref<{name = @Node}>)>",
+        "!First = adt.struct<@First(@second: adt.typeref<{name = @Second}>)>",
+        "!Second = adt.struct<@Second(@first: adt.typeref<{name = @First}>)>",
     ] {
         assert!(
             ir.contains(field),

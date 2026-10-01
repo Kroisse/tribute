@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/record_field_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !Config = adt.struct<{fields = [[@debug, core.i1], [@verbose, core.i1]], name = @Config}>
+  !Config = adt.struct<@Config(@debug: core.i1, @verbose: core.i1)>
   !Config_1 = adt.typeref<{name = @Config}>
   !t0 = tribute_control.func_sig<(!Config_1) -> core.i1, {tribute.calling_convention = 0}>
 

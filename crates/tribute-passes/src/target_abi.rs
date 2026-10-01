@@ -51,10 +51,7 @@ pub(crate) const CONSUMED: &str = "consumed";
 pub(crate) fn physical_parameter_attrs(convention: CallingConvention) -> AttributeMap {
     let mut attrs = AttributeMap::new();
     if convention == CallingConvention::Cps {
-        attrs.insert(
-            Symbol::new(OWNERSHIP_ATTR),
-            Attribute::Symbol(Symbol::new(CONSUMED)),
-        );
+        attrs.insert(OWNERSHIP_ATTR, Symbol::new(CONSUMED));
     }
     attrs
 }
@@ -273,7 +270,7 @@ pub fn lower_cps_signatures_to_physical(
     for (op, ty) in function_types {
         ctx.op_mut(op)
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(ty));
+            .insert("type", Attribute::Type(ty));
     }
     for (op, index, ty) in result_types {
         ctx.set_op_result_type(op, index, ty);
@@ -461,7 +458,7 @@ pub fn compose_root_entry_bridge(
     let location = ctx.op(worker_op).location;
     ctx.op_mut(worker_op)
         .attributes
-        .insert(Symbol::new("sym_name"), Attribute::Symbol(root_main));
+        .insert("sym_name", root_main);
     for &op in &top_level_ops {
         rewrite_symbol_refs(ctx, op, main, root_main);
     }
@@ -703,26 +700,13 @@ fn build_initial_evidence(
 }
 
 fn root_completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
-    ctx.intern_type(TypeData {
-        dialect: Symbol::new("adt"),
-        name: Symbol::new("struct"),
-        params: smallvec![value_ty],
-        attrs: [
-            (
-                Symbol::new("name"),
-                Attribute::Symbol(Symbol::new(ROOT_COMPLETION_CELL_NAME)),
-            ),
-            (
-                Symbol::new("fields"),
-                Attribute::List(vec![Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new(ROOT_COMPLETION_CELL_VALUE_FIELD)),
-                    Attribute::Type(value_ty),
-                ])]),
-            ),
-        ]
-        .into_iter()
-        .collect(),
-    })
+    adt::struct_type(
+        ctx,
+        ROOT_COMPLETION_CELL_NAME,
+        [(ROOT_COMPLETION_CELL_VALUE_FIELD, value_ty)],
+        AttributeMap::new(),
+    )
+    .as_type_ref()
 }
 
 /// Recover semantic R only from authenticated callable and nominal frame metadata.
@@ -854,38 +838,16 @@ fn validate_root_continuation_frame(
     let layout = ctx.type_alias_by_name(name).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
-    let layout_data = ctx.get_type(layout);
-    if layout_data.dialect != Symbol::new("adt")
-        || layout_data.name != Symbol::new("struct")
-        || layout_data.attrs.get_symbol("name") != Some(name)
-        || cps_continuation_frame_result_type(ctx, layout) != expected_provenance
-    {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame layout provenance is malformed",
-        ));
-    }
-    let fields = layout_data.attrs.get("fields").ok_or_else(|| {
-        TargetAbiError::new("target root bridge: worker frame layout lacks fields")
-    })?;
-    let Attribute::List(fields) = fields else {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame layout fields are malformed",
-        ));
-    };
-    let [Attribute::List(done_field), Attribute::List(dispatch_field)] = fields.as_slice() else {
+    let layout_struct = adt::Struct::from_type_ref(ctx, layout)
+        .filter(|layout_struct| layout_struct.name(ctx) == name)
+        .filter(|_| cps_continuation_frame_result_type(ctx, layout) == expected_provenance)
+        .ok_or_else(|| {
+            TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
+        })?;
+    let fields: Vec<_> = layout_struct.fields(ctx).collect();
+    let [(done_name, done), (dispatch_name, dispatch)] = fields.as_slice() else {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame layout must contain done then dispatch",
-        ));
-    };
-    let [Attribute::Symbol(done_name), Attribute::Type(done)] = done_field.as_slice() else {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame done field is malformed",
-        ));
-    };
-    let [Attribute::Symbol(dispatch_name), Attribute::Type(dispatch)] = dispatch_field.as_slice()
-    else {
-        return Err(TargetAbiError::new(
-            "target root bridge: worker frame dispatch field is malformed",
         ));
     };
     if *done_name != Symbol::new("done") || *dispatch_name != Symbol::new("dispatch") {
@@ -1054,10 +1016,9 @@ fn root_source_result(ctx: &IrContext, op: OpRef) -> Result<Option<TypeRef>, Tar
 }
 
 fn set_root_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.op_mut(op).attributes.insert(
-        Symbol::new(CALLING_CONVENTION_ATTR),
-        Attribute::Int(convention as i128),
-    );
+    ctx.op_mut(op)
+        .attributes
+        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
 }
 
 fn bind_name(name: &str) -> AttributeMap {
@@ -1079,9 +1040,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol)
     }
     for key in [Symbol::new("callee"), Symbol::new("func_ref")] {
         if ctx.op(op).attributes.get_symbol(key) == Some(old) {
-            ctx.op_mut(op)
-                .attributes
-                .insert(key, Attribute::Symbol(new));
+            ctx.op_mut(op).attributes.insert(key, new);
         }
     }
     let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
@@ -1692,12 +1651,12 @@ mod tests {
             &format!(
                 r#"core.module @test {{
             !Answer = core.{answer_name}
-            !Evidence = core.array<adt.struct<{{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}>, {{layout = @evidence}}>
+            !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {{layout = @evidence_marker}}>, {{layout = @evidence}}>
             !Frame = adt.typeref<{{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer}}>
             !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
-            !{frame_name} = adt.struct<{{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer, fields = [[@done, !Done], [@dispatch, !Dispatch]]}}>
+            !{frame_name} = adt.struct<@{frame_name}(@done: !Done, @dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
                 effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @get, answer_type = !Answer}}
             }}
@@ -1766,26 +1725,23 @@ mod tests {
                 1 => {
                     ctx.op_mut(dispatch)
                         .attributes
-                        .insert(Symbol::new("answer_type"), Attribute::Int(0));
+                        .insert("answer_type", Attribute::Int(0));
                 }
                 2 => {
                     let wrong = core::nil(&mut ctx).as_type_ref();
                     ctx.op_mut(dispatch)
                         .attributes
-                        .insert(Symbol::new("answer_type"), Attribute::Type(wrong));
+                        .insert("answer_type", Attribute::Type(wrong));
                 }
                 3..=6 => {
                     let index = if mutation == 3 { 1 } else { 2 };
                     let value = ctx.op_operands(dispatch)[index];
                     let mut ty = ctx.get_type(ctx.value_ty(value)).clone();
                     if mutation == 3 || mutation == 4 {
-                        ty.attrs.insert(
-                            Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
-                            Attribute::Int(9),
-                        );
-                    } else if mutation == 5 {
                         ty.attrs
-                            .insert(Symbol::new(CALLING_CONVENTION_ATTR), Attribute::Int(0));
+                            .insert(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(9));
+                    } else if mutation == 5 {
+                        ty.attrs.insert(CALLING_CONVENTION_ATTR, Attribute::Int(0));
                     } else {
                         let signature = func::FuncSig::from_type_ref(&ctx, ty.params[0]).unwrap();
                         let mut inputs = signature.inputs(&ctx).to_vec();
@@ -1844,7 +1800,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+            !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = @evidence_marker}>, {layout = @evidence}>
             !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = 0}>
             !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = 1}>
             func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
@@ -1974,10 +1930,9 @@ mod tests {
         let body = run.body_if_present(&ctx).unwrap();
         let indirect = ctx.block(ctx.region(body).blocks[0]).ops[0];
         let signature = IndirectCallLikeOps::exact_signature(&ctx, indirect).unwrap();
-        ctx.op_mut(indirect).attributes.insert(
-            Symbol::new("unrelated_callable_metadata"),
-            Attribute::Type(signature),
-        );
+        ctx.op_mut(indirect)
+            .attributes
+            .insert("unrelated_callable_metadata", Attribute::Type(signature));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
@@ -2028,13 +1983,13 @@ mod tests {
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(worker));
+            .insert("type", Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
         ctx.op_mut(main.op_ref())
             .attributes
-            .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
+            .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         compose_root_entry_bridge(&mut ctx, module).unwrap();
@@ -2105,23 +2060,12 @@ mod tests {
         let frame_layout = ctx
             .type_alias_by_name(frame_name)
             .expect("worker frame must retain its exact nominal layout");
-        let fields = ctx.get_type(frame_layout).attrs.get("fields");
-        let Attribute::List(fields) = fields.expect("frame fields") else {
-            panic!("frame fields must be a list");
-        };
-        let [Attribute::List(done_field), Attribute::List(dispatch_field)] = fields.as_slice()
-        else {
+        let fields: Vec<_> = adt::Struct::from_type_ref(&ctx, frame_layout)
+            .expect("frame layout must be a valid adt.struct")
+            .fields(&ctx)
+            .collect();
+        let [(done_name, done_ty), (dispatch_name, dispatch_ty)] = fields.as_slice() else {
             panic!("frame must have distinct Done and Dispatch fields");
-        };
-        let [Attribute::Symbol(done_name), Attribute::Type(done_ty)] = done_field.as_slice() else {
-            panic!("Done field must retain its exact type");
-        };
-        let [
-            Attribute::Symbol(dispatch_name),
-            Attribute::Type(dispatch_ty),
-        ] = dispatch_field.as_slice()
-        else {
-            panic!("Dispatch field must retain its exact type");
         };
         assert_eq!(*done_name, Symbol::new("done"));
         assert_eq!(*dispatch_name, Symbol::new("dispatch"));
@@ -2238,7 +2182,7 @@ mod tests {
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
-  !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+  !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = @evidence_marker}>, {layout = @evidence}>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
     %nil = core.nil_value : core.nil
     func.return %nil
@@ -2374,24 +2318,21 @@ mod tests {
                 if frame_result { nil } else { i32_ty },
             );
             if malformed_layout {
-                let wrong = ctx.intern_type(
-                    TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                        .attr("name", Attribute::Symbol(frame_name))
-                        .attr("fields", Attribute::List(vec![]))
-                        .build(),
-                );
+                let wrong =
+                    adt::struct_type::<Symbol>(&mut ctx, frame_name, [], AttributeMap::new())
+                        .as_type_ref();
                 ctx.register_type_alias(frame_name, wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
             ctx.op_mut(main.op_ref())
                 .attributes
-                .insert(Symbol::new("type"), Attribute::Type(worker));
+                .insert("type", Attribute::Type(worker));
             let entry = ctx.region(main.body(&ctx)).blocks[0];
             ctx.set_block_arg_type(entry, 0, evidence);
             ctx.set_block_arg_type(entry, 1, frame);
             ctx.op_mut(main.op_ref())
                 .attributes
-                .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
+                .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
             let before = print_module(&ctx, module.op());
             let aliases = ctx.type_aliases().to_vec();
@@ -2443,13 +2384,13 @@ mod tests {
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(worker));
+            .insert("type", Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
         ctx.op_mut(main.op_ref())
             .attributes
-            .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
+            .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
         let before = print_module(&ctx, module.op());
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
@@ -2564,7 +2505,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !semantic = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = 0}>
-  !_closure = adt.struct<core.i32, tribute_rt.anyref, {name = @_closure}>
+  !_closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref)>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = 0} {
     func.unreachable
   }
@@ -2724,10 +2665,9 @@ mod tests {
         );
         let external = function(&ctx, module, "external");
         let entry = ctx.region(external.body(&ctx)).blocks[0];
-        ctx.block_mut(entry).args[1].attrs.insert(
-            Symbol::new("bind_name"),
-            Attribute::Symbol(Symbol::new("__env")),
-        );
+        ctx.block_mut(entry).args[1]
+            .attrs
+            .insert("bind_name", Symbol::new("__env"));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
@@ -2747,10 +2687,9 @@ mod tests {
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
                 .build(),
         );
-        ctx.op_mut(module.op()).attributes.insert(
-            Symbol::new("malformed_callable"),
-            Attribute::Type(malformed),
-        );
+        ctx.op_mut(module.op())
+            .attributes
+            .insert("malformed_callable", Attribute::Type(malformed));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
@@ -2775,7 +2714,7 @@ mod tests {
         let resultless = func::func_sig(&mut ctx, [], []).as_type_ref();
         ctx.op_mut(broken.op_ref())
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(resultless));
+            .insert("type", Attribute::Type(resultless));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();

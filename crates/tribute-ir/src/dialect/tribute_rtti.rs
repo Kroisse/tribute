@@ -6,10 +6,10 @@
 //! declarations, and RC header lowering erases them, so none reaches the
 //! backend-ready boundary.
 
+use trunk_ir::TypeRef;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::IrContext;
 use trunk_ir::types::{Attribute, Location};
-use trunk_ir::{Symbol, TypeRef};
 
 #[trunk_ir::dialect]
 mod tribute_rtti {
@@ -113,7 +113,7 @@ impl Layout {
     pub fn set_type(self, ctx: &mut IrContext, ty: TypeRef) {
         ctx.op_mut(self.op_ref())
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(ty));
+            .insert("type", Attribute::Type(ty));
     }
 }
 
@@ -137,7 +137,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<{name = @Pair, fields = [[@left, tribute_rt.anyref], [@right, core.i64]]}>
+  !Pair = adt.struct<@Pair(@left: tribute_rt.anyref, @right: core.i64)>
   !Choice = adt.enum<{name = @Choice, variants = [[@None, []], [@Some, [tribute_rt.anyref]]]}>
   tribute_rtti.layout {type = !Pair, index = 32, managed = [true, false]}
   tribute_rtti.layout {type = !Choice, index = 33, managed = [[], [true]]}
@@ -167,7 +167,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Pair = adt.struct<{name = @Pair, fields = [[@left, tribute_rt.anyref], [@right, core.i64]]}>
+  !Pair = adt.struct<@Pair(@left: tribute_rt.anyref, @right: core.i64)>
   tribute_rtti.layout {type = !Pair, index = 32, managed = [true]}
 }"#,
         );

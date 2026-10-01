@@ -127,7 +127,9 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         if let Some(name) = data.attrs.get_symbol("name") {
             shape.push_str(&format!("<{name}>"));
         }
-        if !data.params.is_empty() {
+        // A struct layout's parameters are its fields; its name is its shape.
+        let is_struct = trunk_ir::dialect::adt::Struct::matches(ctx, ty);
+        if !data.params.is_empty() && !is_struct {
             shape.push_str(&format!(
                 "<{}>",
                 data.params.iter().map(|&ty| type_shape(ctx, ty)).join(", ")

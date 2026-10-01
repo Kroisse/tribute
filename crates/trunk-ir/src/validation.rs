@@ -342,7 +342,7 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
 pub fn validate_operation_verifiers(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 
-    validate_func_sig_types(ctx, &mut errors);
+    validate_type_shapes(ctx, &mut errors);
 
     // The root module is not visited by the body walk, so check its own
     // schema (including a missing body region) first.
@@ -419,7 +419,7 @@ fn report_schema_violations(
     violations.is_empty()
 }
 
-fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
+fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     for (ty, data) in ctx.types().iter() {
         if let Err(error) = data.validate_param_attrs() {
             errors.push(ValidationError::Operation {
@@ -428,6 +428,14 @@ fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                     data.dialect, data.name
                 ),
             });
+        }
+        if crate::dialect::adt::Struct::matches(ctx, ty) {
+            if let Err(error) = crate::dialect::adt::Struct::validate(ctx, ty) {
+                errors.push(ValidationError::Operation {
+                    message: format!("type verifier failed for adt.struct ({ty}): {error}"),
+                });
+            }
+            continue;
         }
         if data.dialect != crate::dialect::func::DIALECT_NAME()
             || data.name != crate::dialect::func::FUNC_SIG()

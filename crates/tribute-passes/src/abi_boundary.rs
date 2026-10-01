@@ -605,10 +605,9 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let entry = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
         let nil = core::nil(&mut ctx).as_type_ref();
-        ctx.block_mut(entry).args[0].attrs.insert(
-            Symbol::new("tribute.root_source_result"),
-            Attribute::Type(nil),
-        );
+        ctx.block_mut(entry).args[0]
+            .attrs
+            .insert("tribute.root_source_result", Attribute::Type(nil));
         assert_eq!(
             verify_boundary_exit(&ctx, module, TargetKind::Native)
                 .into_iter()
@@ -721,7 +720,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !frame = adt.typeref<{name = @Frame, tribute.cps_continuation_frame_result = core.nil}>
-  !holder = adt.struct<{fields = [[@callback, func.func_sig<(core.ptr) -> !frame>]], name = @Holder}>
+  !holder = adt.struct<@Holder(@callback: func.func_sig<(core.ptr) -> !frame>)>
   func.func @run(%value: !holder) {
     func.return
   }

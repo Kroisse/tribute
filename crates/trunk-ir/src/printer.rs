@@ -111,6 +111,11 @@ impl<'a> PrintState<'a> {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.get_type(ty);
+        if let Some(format) = crate::asm_format::lookup_type_asm_format(data.dialect, data.name)
+            && let Some(result) = (format.print_fn)(&mut TypePrintHelper { state: self, f }, ty)
+        {
+            return result;
+        }
         write!(f, "{}.{}", data.dialect, data.name)?;
         let inline_param_attrs = data.validate_param_attrs().is_ok();
         let mut attrs = visible_type_attrs(data, inline_param_attrs, &[]).peekable();
@@ -315,6 +320,55 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
         return None;
     }
     Some((&data.params[..num_inputs], &data.params[num_inputs..]))
+}
+
+// ============================================================================
+// TypePrintHelper — public wrapper for custom type format printers
+// ============================================================================
+
+/// Printer access for custom [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat)
+/// implementations.
+///
+/// Implements `fmt::Write` so `write!(helper, ...)` can be used directly.
+pub struct TypePrintHelper<'a, 'ctx> {
+    state: &'a PrintState<'ctx>,
+    f: &'a mut dyn Write,
+}
+
+impl<'a, 'ctx> TypePrintHelper<'a, 'ctx> {
+    /// Access the IR context.
+    pub fn ctx(&self) -> &'ctx IrContext {
+        self.state.ctx
+    }
+
+    /// Write a nested type using the current alias map.
+    pub fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
+        self.state.write_type(&mut *self.f, ty)
+    }
+
+    /// Write an attribute value.
+    pub fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
+        self.state.write_attribute(&mut *self.f, attr)
+    }
+
+    /// Write `{key = value, ...}`.
+    pub fn write_attr_dict<'b>(
+        &mut self,
+        attrs: impl Iterator<Item = (&'b crate::Symbol, &'b Attribute)>,
+    ) -> fmt::Result {
+        self.state.write_attr_dict(&mut *self.f, attrs)
+    }
+
+    /// Write `@name`, quoting it when needed.
+    pub fn write_symbol(&mut self, symbol: crate::Symbol) -> fmt::Result {
+        write_symbol(&mut *self.f, symbol)
+    }
+}
+
+impl Write for TypePrintHelper<'_, '_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.f.write_str(s)
+    }
 }
 
 // ============================================================================
@@ -1518,20 +1572,16 @@ mod tests {
 
     /// Helper: build an `adt.struct` type with given field list and name.
     fn make_adt_struct(ctx: &mut IrContext, name: &str, fields: &[(&str, TypeRef)]) -> TypeRef {
-        let field_list: Vec<Attribute> = fields
+        let fields = fields
             .iter()
-            .map(|(fname, fty)| {
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::from_dynamic(fname)),
-                    Attribute::Type(*fty),
-                ])
-            })
-            .collect();
-        let data = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("fields", Attribute::List(field_list))
-            .attr("name", Attribute::Symbol(Symbol::from_dynamic(name)))
-            .build();
-        ctx.intern_type(data)
+            .map(|(field, ty)| (Symbol::from_dynamic(field), *ty));
+        crate::dialect::adt::struct_type(
+            ctx,
+            Symbol::from_dynamic(name),
+            fields,
+            AttributeMap::new(),
+        )
+        .as_type_ref()
     }
 
     /// Helper: build a module with given functions.
@@ -1639,32 +1689,6 @@ mod tests {
         assert!(
             !output.contains('!'),
             "No types should be aliased:\n{output}"
-        );
-    }
-
-    #[test]
-    fn test_auto_alias_named_struct() {
-        let mut ctx = IrContext::new();
-        let loc = test_location(&mut ctx);
-        let i32_ty = make_i32_type(&mut ctx);
-
-        // Create a named struct
-        let marker_ty = make_adt_struct(
-            &mut ctx,
-            "_Marker",
-            &[("ability_id", i32_ty), ("prompt_tag", i32_ty)],
-        );
-
-        let f1 = make_identity_func(&mut ctx, loc, "f1", marker_ty, marker_ty);
-        let f2 = make_identity_func(&mut ctx, loc, "f2", marker_ty, marker_ty);
-
-        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
-        let output = print_module(&ctx, module);
-
-        // Should use the name from the `name` attribute
-        assert!(
-            output.contains("!_Marker = adt.struct<"),
-            "Expected !_Marker alias:\n{output}"
         );
     }
 
@@ -1808,20 +1832,20 @@ mod tests {
         let input = "\
 core.module @test {
   core.module @inner {
-    func.func @f1(%0: adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}>) -> adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}> {
+    func.func @f1(%0: adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)>) -> adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)> {
     ^bb0:
       func.return %0
     }
-    func.func @f2(%0: adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}>) -> adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}> {
+    func.func @f2(%0: adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)>) -> adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)> {
     ^bb0:
       func.return %0
     }
   }
-  func.func @g1(%0: adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}>) -> adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}> {
+  func.func @g1(%0: adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)>) -> adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)> {
   ^bb0:
     func.return %0
   }
-  func.func @g2(%0: adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}>) -> adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}> {
+  func.func @g2(%0: adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)>) -> adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)> {
   ^bb0:
     func.return %0
   }
@@ -1889,13 +1913,8 @@ core.module @test {
 
         let output = print_module_with_point_types(false);
         assert_eq!(output, print_module_with_point_types(true));
-        assert!(
-            output.contains("!Point = adt.struct<{fields = [[@alpha, core.i32]], name = @Point}>")
-        );
-        assert!(
-            output
-                .contains("!Point_1 = adt.struct<{fields = [[@zebra, core.i32]], name = @Point}>")
-        );
+        assert!(output.contains("!Point = adt.struct<@Point(@alpha: core.i32)>"));
+        assert!(output.contains("!Point_1 = adt.struct<@Point(@zebra: core.i32)>"));
 
         let mut reparsed_ctx = IrContext::new();
         let reparsed =

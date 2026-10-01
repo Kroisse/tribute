@@ -317,12 +317,6 @@ impl From<String> for Attribute {
     }
 }
 
-impl From<&str> for Attribute {
-    fn from(value: &str) -> Self {
-        Attribute::String(value.to_string())
-    }
-}
-
 impl From<AttributeMap> for Attribute {
     fn from(value: AttributeMap) -> Self {
         Attribute::Dict(value)
@@ -458,7 +452,13 @@ impl AttributeMap {
     }
 
     /// Insert or replace an entry, returning the replaced value.
-    pub fn insert(&mut self, key: Symbol, value: Attribute) -> Option<Attribute> {
+    pub fn insert(
+        &mut self,
+        key: impl Into<Symbol>,
+        value: impl Into<Attribute>,
+    ) -> Option<Attribute> {
+        let key = key.into();
+        let value = value.into();
         if let Some(index) = self.position(key) {
             return Some(std::mem::replace(&mut self.0[index].1, value));
         }
@@ -814,8 +814,8 @@ impl TypeDataBuilder {
         self
     }
 
-    pub fn attr(mut self, key: impl Into<Symbol>, val: Attribute) -> Self {
-        self.attrs.insert(key.into(), val);
+    pub fn attr(mut self, key: impl Into<Symbol>, val: impl Into<Attribute>) -> Self {
+        self.attrs.insert(key, val);
         self
     }
 
@@ -829,7 +829,7 @@ impl TypeDataBuilder {
         let (params, param_attrs): (SmallVec<[TypeRef; 4]>, Vec<_>) =
             self.params.into_iter().unzip();
         if let Some(value) = param_attrs_attribute(param_attrs) {
-            self.attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
+            self.attrs.insert(PARAM_ATTRS_ATTR, value);
         } else {
             let _ = normalize_param_attrs(&mut self.attrs, params.len());
         }
@@ -1239,7 +1239,7 @@ mod tests {
     #[test]
     fn attribute_map_starts_at_exactly_the_entries_it_holds() {
         let mut attrs = AttributeMap::new();
-        attrs.insert(Symbol::new("only"), Attribute::Unit);
+        attrs.insert("only", Attribute::Unit);
         assert_eq!(attrs.0.capacity(), 1);
 
         let collected: AttributeMap = ["a", "b", "c"]
@@ -1286,14 +1286,11 @@ mod tests {
     #[test]
     fn attribute_map_typed_getters_handle_absence_and_integer_range() {
         let mut attrs = AttributeMap::new();
-        attrs.insert(Symbol::new("count"), Attribute::Int(i64::MAX as i128));
-        attrs.insert(Symbol::new("byte"), Attribute::Int(u8::MAX as i128));
-        attrs.insert(Symbol::new("enabled"), Attribute::Bool(true));
-        attrs.insert(Symbol::new("name"), Attribute::String("tribute".to_owned()));
-        attrs.insert(
-            Symbol::new("symbol_name"),
-            Attribute::Symbol(Symbol::new("tribute")),
-        );
+        attrs.insert("count", Attribute::Int(i64::MAX as i128));
+        attrs.insert("byte", Attribute::Int(u8::MAX as i128));
+        attrs.insert("enabled", Attribute::Bool(true));
+        attrs.insert("name", Attribute::String("tribute".to_owned()));
+        attrs.insert("symbol_name", Symbol::new("tribute"));
 
         assert_eq!(attrs.get_i64("count"), Ok(Some(i64::MAX)));
         assert_eq!(attrs.get_i128("count"), Some(i64::MAX as i128));

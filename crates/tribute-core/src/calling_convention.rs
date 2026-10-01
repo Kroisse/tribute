@@ -2,10 +2,10 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, func};
+use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
 
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
 /// Result type carried by a private immutable CPS continuation frame.
@@ -71,10 +71,9 @@ impl TryFrom<u8> for CallingConvention {
 
 /// Attach the logical calling convention to a high-level IR operation.
 pub fn set_calling_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.op_mut(op).attributes.insert(
-        Symbol::new(CALLING_CONVENTION_ATTR),
-        Attribute::Int(convention as i128),
-    );
+    ctx.op_mut(op)
+        .attributes
+        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
 }
 
 /// Read explicitly attached calling-convention metadata.
@@ -127,25 +126,9 @@ pub fn cps_continuation_frame_layout_type(
     done: TypeRef,
     dispatch: TypeRef,
 ) -> TypeRef {
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("name", Attribute::Symbol(name))
-            .attr(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result))
-            .attr(
-                "fields",
-                Attribute::List(vec![
-                    Attribute::List(vec![
-                        Attribute::Symbol(Symbol::new("done")),
-                        Attribute::Type(done),
-                    ]),
-                    Attribute::List(vec![
-                        Attribute::Symbol(Symbol::new("dispatch")),
-                        Attribute::Type(dispatch),
-                    ]),
-                ]),
-            )
-            .build(),
-    )
+    let mut attrs = AttributeMap::new();
+    attrs.insert(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result));
+    adt::struct_type(ctx, name, [("done", done), ("dispatch", dispatch)], attrs).as_type_ref()
 }
 
 /// Strict suffix continuation `Completion<X, R> = (Evidence, ContinuationFrame<R>, X) -> never`.
@@ -376,17 +359,14 @@ mod tests {
             Some(i32_ty)
         );
         assert_eq!(
-            ctx.get_type(layout).attrs.get("fields"),
-            Some(&Attribute::List(vec![
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new("done")),
-                    Attribute::Type(done),
-                ]),
-                Attribute::List(vec![
-                    Attribute::Symbol(Symbol::new("dispatch")),
-                    Attribute::Type(dispatch),
-                ]),
-            ]))
+            adt::Struct::from_type_ref(&ctx, layout)
+                .unwrap()
+                .fields(&ctx)
+                .collect::<Vec<_>>(),
+            [
+                (Symbol::new("done"), done),
+                (Symbol::new("dispatch"), dispatch)
+            ]
         );
 
         for (closure, environment_index, expected) in [

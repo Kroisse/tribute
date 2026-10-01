@@ -1275,6 +1275,10 @@ func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv
 - 이 규칙은 일반 형태와 전용 문법에 똑같이 적용된다. 전용 문법을 가진 타입도
   모든 내용을 `<…>` 안에 둔다. 타입 안의 `(…)`는 함수 입력·결과처럼 위치가 있는
   목록에만 쓴다.
+- 전용 문법은 그 타입을 정의하는 dialect가 type assembly format으로 등록해
+  소유한다. 전용 형식은 일반 형식과 같은 저장 표현으로 읽히며, 전용 형식으로
+  표현할 수 없는 타입(예: 검증에 실패한 타입)은 일반 형식으로 출력한다. 일반
+  형식은 항상 읽을 수 있다.
 - 저장 표현 전용인 예약 type 속성은 textual dictionary에 쓰지 않는다. 매개변수
   속성 list(`param_attrs`)와 함수 타입의 count가 여기에 해당하며, reader는 이를
   거부한다.
@@ -1343,7 +1347,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<{name = @_closure, fields = [...], layout = @closure}>`.
+  `adt.struct<@_closure(@func_ptr: core.ptr, @env: core.ptr), {layout = @closure}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1354,6 +1358,53 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   판별한다. Struct 이름, field 모양, element 타입, erased reference 타입으로
   판별하지 않는다. TrunkIR은 값의 의미를 해석하지 않으며, 의미는 이 속성을 정의하는
   언어 계층과 그 layout을 구현하는 target이 소유한다.
+
+### `adt.struct` nominal layout type
+
+`adt.struct`는 이름 있는 nominal struct layout이다. 이름과 필드 이름을 항상 가지며
+전용 textual 문법을 쓴다.
+
+```text
+adt.struct<@Point(@x: core.i32, @y: core.i32)>
+adt.struct<@Node(@value: core.i32 {k = @v}, @next: adt.typeref<{name = @Node}>)>
+adt.struct<@_closure(@func_ptr: core.ptr, @env: core.ptr), {layout = @closure}>
+adt.struct<@Empty()>
+```
+
+- 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로 둔다. 필드 이름은
+  각 필드의 [매개변수 속성](#타입-매개변수-속성) `name`(symbol)이고, struct 이름은
+  type 속성 `name`(symbol)이다. 필드 하나의 다른 속성은 같은 매개변수 속성
+  dictionary에 함께 둔다.
+- 이름과 모든 필드 이름은 필수이고, 필드 이름은 struct 안에서 겹치지 않는다.
+  매개변수가 없으면 필드가 없는 struct다. 필드 목록을 담는 별도 type 속성은 없다.
+  Type verifier가 이 규칙을 모든 interned `adt.struct`에 적용한다.
+- 필드 속성 안의 `name`과 type 속성의 `name`, `param_attrs`는 전용 문법이
+  소유한다. Textual form의 필드 속성과 type 속성 dictionary에는 쓰지 않는다.
+  `layout` 같은 나머지 type 속성은 `<…>` 안 마지막 원소로 둔다.
+- 필드 타입이 매개변수이므로 일반 타입 순회와 변환은 필드 타입에 그대로 도달한다.
+  필드 수를 유지하는 변환은 필드 이름과 속성을 위치 그대로 둔다.
+- 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다. `adt.struct`는 자기 자신을
+  매개변수로 갖지 않는다.
+
+#### Nominal 수준과 structural 수준
+
+Struct 이름과 필드 이름은 nominal layout을 해석하는 단계까지만 의미를 가진다.
+`adt.typeref`를 같은 이름의 layout으로 해석하는 단계, ownership 계획, ABI 검증,
+frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은 필드
+타입 목록과 순서만 사용한다.
+
+- Native는 nominal 해석이 끝난 뒤 `adt.struct`를 이름 없는 `mem.struct<T...>`로
+  내린다. `mem.struct`는 필드 타입만 갖고 자연 정렬 memory layout을 뜻한다. RTTI,
+  RC header, field offset 계산은 이 타입만 읽으며, field 접근이 `clif.load`와
+  `clif.store`의 offset이 될 때 사라진다. Cranelift에는 aggregate 타입이 없다.
+- Wasm은 nominal 해석을 끝내는 ADT lowering에서 `adt.struct`를 이름 없는
+  `wasm_gc.struct<T...>`로 내린다. 필드 타입이 같은 일반 struct는 같은 GC 타입이다.
+  `ref.test`로 구분해야 하는 variant 타입만 구분용 identity 속성을 가진다.
+  Compiler 소유 layout은 [`layout`](#runtime-layout-식별자)으로 식별한다.
+- 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
+  reference로 끊겨 있다.
+- `adt.enum`은 `variants` 속성으로 variant별 필드를 표현한다. 저수준 struct를 이용한
+  enum 표현은 별도로 정한다.
 
 ### `func.func_sig` function type
 

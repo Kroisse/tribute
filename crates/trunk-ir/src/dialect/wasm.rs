@@ -912,7 +912,7 @@ mod tests {
     fn func_sig_constructor_rejects_reserved_count_attributes() {
         let mut ctx = crate::IrContext::new();
         let mut attrs = crate::AttributeMap::new();
-        attrs.insert(NUM_INPUTS_ATTR.into(), crate::Attribute::Int(0));
+        attrs.insert(NUM_INPUTS_ATTR, crate::Attribute::Int(0));
         let _ = func_sig_with_attrs(&mut ctx, [], [], attrs);
     }
 }

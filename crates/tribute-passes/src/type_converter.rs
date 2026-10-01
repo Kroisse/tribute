@@ -272,7 +272,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-                !Closure = adt.struct<{{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}}>
+                !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref), {{layout = @closure}}>
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
                     func.tail_call_indirect %index, {arg} {{signature = func.func_sig<(!Closure) -> ()>, tribute.calling_convention = 2}}
@@ -364,8 +364,7 @@ mod tests {
         let anyref = ctx.value_ty(value);
         let canonical = crate::closure_lower::closure_struct_type_ref(&mut ctx);
         let mut near = ctx.get_type(canonical).clone();
-        near.attrs
-            .insert(Symbol::new("unrelated"), Attribute::Bool(true));
+        near.attrs.insert("unrelated", Attribute::Bool(true));
         let near = ctx.intern_type(near);
         let tc = generic_type_converter(&mut ctx);
         let location: Location = ctx.op(function.op_ref()).location;

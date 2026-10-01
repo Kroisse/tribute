@@ -39,7 +39,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
-use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap};
 
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
@@ -197,7 +197,7 @@ fn lower_single_lambda(
             .map(|(i, &ty)| (Symbol::from_dynamic(&format!("_{i}")), ty))
             .collect();
         let env_name = Symbol::from_dynamic(&format!("{lifted_name}::env"));
-        Some(make_adt_struct_type(ctx, env_name, &fields))
+        Some(adt::struct_type(ctx, env_name, fields, AttributeMap::new()).as_type_ref())
     };
 
     // === Build the lifted function ===
@@ -229,7 +229,7 @@ fn lower_single_lambda(
     if let Some(convention) = convention {
         set_calling_convention(ctx, func_op.op_ref(), convention);
         ctx.op_mut(func_op.op_ref()).attributes.insert(
-            Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
+            CLOSURE_ENVIRONMENT_INDEX_ATTR,
             Attribute::Int(environment_index as i128),
         );
     }
@@ -459,37 +459,10 @@ impl LambdaNamer {
     }
 }
 
-/// Create an `adt.struct` type with name and fields.
-fn make_adt_struct_type(
-    ctx: &mut IrContext,
-    name: Symbol,
-    fields: &[(Symbol, TypeRef)],
-) -> TypeRef {
-    let fields_attr: Vec<Attribute> = fields
-        .iter()
-        .map(|(field_name, field_type)| {
-            Attribute::List(vec![
-                Attribute::Symbol(*field_name),
-                Attribute::Type(*field_type),
-            ])
-        })
-        .collect();
-
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-            .attr("name", Attribute::Symbol(name))
-            .attr("fields", Attribute::List(fields_attr))
-            .build(),
-    )
-}
-
 /// Create a `bind_name` attribute map for a block argument.
 fn make_bind_name_attrs(name: &str) -> AttributeMap {
     let mut attrs = AttributeMap::new();
-    attrs.insert(
-        Symbol::new("bind_name"),
-        Attribute::Symbol(Symbol::from_dynamic(name)),
-    );
+    attrs.insert("bind_name", Symbol::from_dynamic(name));
     attrs
 }
 
@@ -502,6 +475,7 @@ mod tests {
     use trunk_ir::printer::print_module;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
+    use trunk_ir::types::TypeDataBuilder;
     use trunk_ir::{Attribute, IrContext, OperationDataBuilder, Span};
 
     fn test_ctx() -> (IrContext, Location) {
