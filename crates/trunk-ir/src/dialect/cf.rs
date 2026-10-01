@@ -22,7 +22,7 @@ use crate::op_interface::{
 
 impl BranchModel for Br {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
-        if ctx.op(self.op_ref()).successors.len() != 1 {
+        if ctx.op_successor_count(self.op_ref()) != 1 {
             return Err(ControlFlowInterfaceError::new(
                 "cf.br requires exactly one successor",
             ));
@@ -37,7 +37,7 @@ impl BranchModel for Br {
 impl BranchModel for CondBr {
     fn successors(self, ctx: &IrContext) -> Result<BranchSuccessors, ControlFlowInterfaceError> {
         let op = self.op_ref();
-        if ctx.op_operands(op).len() != 1 || ctx.op(op).successors.len() != 2 {
+        if ctx.op_operands(op).len() != 1 || ctx.op_successor_count(op) != 2 {
             return Err(ControlFlowInterfaceError::new(
                 "cf.cond_br requires one condition and exactly two successors",
             ));

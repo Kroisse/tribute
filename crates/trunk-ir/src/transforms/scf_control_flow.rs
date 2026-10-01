@@ -41,7 +41,7 @@ impl Analysis for StructuredControlAnalysis {
         // Reverse preorder puts every descendant before its owner. Region
         // proofs then read already-computed child facts, never recurse.
         for op in order.into_iter().rev() {
-            for &region in &ir.op(op).regions {
+            for region in ir.op_regions(op) {
                 if analysis.region_is_terminal(ir, region) {
                     analysis.terminal_regions.insert(region);
                 }

@@ -102,12 +102,10 @@ fn entry_block_for_signature_update(
     op: OpRef,
     new_inputs: &[TypeRef],
 ) -> Option<Option<crate::BlockRef>> {
-    let regions = &ctx.op(op).regions;
-    if regions.is_empty() {
+    let Some(body) = ctx.op_region(op, 0) else {
         // Declarations have no entry block whose arguments need updating.
         return Some(None);
-    }
-    let body = regions[0];
+    };
     let blocks = &ctx.region(body).blocks;
     if blocks.is_empty() {
         return new_inputs.is_empty().then_some(None);
@@ -225,7 +223,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
             converted.attrs,
         )
         .as_type_ref();
-        let body = ctx.op(op).regions.first().copied();
+        let body = ctx.op_region(op, 0);
         let sym_name = func_op.sym_name(ctx);
         let loc = ctx.op(op).location;
 
@@ -479,7 +477,7 @@ mod tests {
             let ops = module.ops(&ctx);
             for (index, expected_regions) in [(0, 0), (1, 1)] {
                 let data = ctx.op(ops[index]);
-                assert_eq!(data.regions.len(), expected_regions);
+                assert_eq!(ctx.op_region_count(ops[index]), expected_regions);
                 let func_ty = data.attributes.get_type("type").unwrap();
                 let function = func::FuncSig::from_type_ref(&ctx, func_ty).unwrap();
                 assert_eq!(function.inputs(&ctx), [i64_ty]);

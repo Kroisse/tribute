@@ -183,7 +183,7 @@ impl CallableExitModel for Perform {
         ctx: &trunk_ir::IrContext,
     ) -> Result<(), ControlFlowInterfaceError> {
         let data = ctx.op(self.op_ref());
-        if data.regions.is_empty()
+        if !ctx.op_has_regions(self.op_ref())
             && ctx.op_operands(self.op_ref()).len() >= 3
             && data.attributes.get_type("ability_ref").is_some()
             && data.attributes.get_symbol("op_name").is_some()
@@ -207,8 +207,10 @@ impl CallableExitModel for HandleDispatch {
         ctx: &trunk_ir::IrContext,
     ) -> Result<(), ControlFlowInterfaceError> {
         let data = ctx.op(self.op_ref());
-        if data.regions.len() == 1
-            && ctx.region(data.regions[0]).blocks.len() == 1
+        if ctx.op_region_count(self.op_ref()) == 1
+            && ctx
+                .op_region(self.op_ref(), 0)
+                .is_some_and(|region| ctx.region(region).blocks.len() == 1)
             && ctx.op_operands(self.op_ref()).len() >= 2
             && matches!(
                 data.attributes.get("ability_refs"),

@@ -132,7 +132,7 @@ fn materialize_nested_callable_value_types(
             ctx.op_mut(op).attributes = converted_attributes;
         }
 
-        let regions = ctx.op(op).regions.clone();
+        let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
         for region in regions {
             let blocks = ctx.region(region).blocks.clone();
             for block in blocks {
@@ -182,7 +182,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
             }
 
             // Recurse into nested regions
-            for &nested in ctx.op(op).regions.iter() {
+            for nested in ctx.op_regions(op) {
                 collect_refs_in_region(ctx, nested, refs);
             }
         }
@@ -408,9 +408,9 @@ impl RewritePattern for FuncFuncPattern {
 
         // Generated Func::body() asserts for valid bodyless declarations.
         // A func.func conversion accepts exactly zero or one body region.
-        let body = match ctx.op(op).regions.as_slice() {
-            [] => None,
-            [body] => Some(*body),
+        let body = match ctx.op_region_count(op) {
+            0 => None,
+            1 => ctx.op_region(op, 0),
             _ => return false,
         };
 
@@ -794,7 +794,7 @@ mod tests {
         ctx.op_mut(function)
             .attributes
             .insert(Symbol::new("type"), Attribute::Type(outer));
-        let original_body = ctx.op(function).regions[0];
+        let original_body = ctx.op_region(function, 0).unwrap();
         let original_block = ctx.region(original_body).blocks[0];
         ctx.block_mut(original_block).args[0]
             .attrs
@@ -810,7 +810,7 @@ mod tests {
         let nested_input = signature.inputs(&ctx)[0];
         assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, nested_input).is_some());
         assert!(wasm_dialect::FuncSig::from_type_ref(&ctx, signature.results(&ctx)[0]).is_some());
-        let body = ctx.op(lowered).regions[0];
+        let body = ctx.op_region(lowered, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         assert_eq!(ctx.value_ty(ctx.block_args(block)[0]), nested_input);
         let block_metadata = ctx.block(block).args[0].attrs.get_type("metadata").unwrap();
@@ -856,8 +856,8 @@ mod tests {
         assert_eq!(definition.sym_name(&ctx), Symbol::new("defined"));
         assert_eq!(ctx.op(lowered_ops[0]).location, declaration_location);
         assert_eq!(ctx.op(lowered_ops[1]).location, definition_location);
-        assert!(ctx.op(lowered_ops[0]).regions.is_empty());
-        assert_eq!(ctx.op(lowered_ops[1]).regions.len(), 1);
+        assert!(!ctx.op_has_regions(lowered_ops[0]));
+        assert_eq!(ctx.op_region_count(lowered_ops[1]), 1);
         assert_eq!(
             ctx.op(lowered_ops[0]).attributes.get("custom"),
             Some(&Attribute::Int(7))
@@ -897,13 +897,13 @@ mod tests {
             blocks: Default::default(),
             parent_op: None,
         });
-        ctx.op_mut(invalid).regions.push(extra_region);
+        ctx.push_op_region(invalid, extra_region);
 
         lower(&mut ctx, module, TypeConverter::new());
 
         let invalid = module.ops(&ctx)[0];
         assert!(func::Func::from_op(&ctx, invalid).is_ok());
-        assert_eq!(ctx.op(invalid).regions.len(), 2);
+        assert_eq!(ctx.op_region_count(invalid), 2);
     }
 
     #[test]
@@ -1209,7 +1209,7 @@ mod tests {
         let mut direct = 0;
         let mut indirect = 0;
         for &func in module.ops(&ctx) {
-            for &region in &ctx.op(func).regions {
+            for region in ctx.op_regions(func) {
                 for &block in &ctx.region(region).blocks {
                     for &op in &ctx.block(block).ops {
                         if wasm_dialect::Call::from_op(&ctx, op).is_ok() {

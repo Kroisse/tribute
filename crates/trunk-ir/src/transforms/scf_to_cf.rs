@@ -29,6 +29,7 @@
 //!   %2 = op_after(%1)
 //! ```
 
+use itertools::Itertools;
 use smallvec::SmallVec;
 use std::{collections::HashSet, ops::ControlFlow};
 
@@ -121,7 +122,7 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef, plan: &ScfToCfPlan) {
         if is_scf_control_flow(ctx, op) {
             continue;
         }
-        let regions = ctx.op(op).regions.clone();
+        let regions = ctx.op_regions(op).collect::<crate::RegionList>();
         for region in regions {
             transform_region(ctx, region, plan);
         }
@@ -352,27 +353,26 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
     let [discriminant] = ctx.op_operands(scf_op) else {
         return None;
     };
-    let [body_region] = ctx.op(scf_op).regions.as_slice() else {
+    let Ok(body_region) = ctx.op_regions(scf_op).exactly_one() else {
         return None;
     };
-    let [body_block] = ctx.region(*body_region).blocks.as_slice() else {
+    let [body_block] = ctx.region(body_region).blocks.as_slice() else {
         return None;
     };
 
     let mut cases = Vec::new();
     let mut default_region = None;
     for &arm in &ctx.block(*body_block).ops {
-        let arm_data = ctx.op(arm);
-        let [arm_region] = arm_data.regions.as_slice() else {
+        let Ok(arm_region) = ctx.op_regions(arm).exactly_one() else {
             return None;
         };
-        if ctx.region(*arm_region).blocks.is_empty() {
+        if ctx.region(arm_region).blocks.is_empty() {
             return None;
         }
         if scf::Case::matches(ctx, arm) {
-            cases.push((arm_data.attributes.get("value")?.clone(), *arm_region));
+            cases.push((ctx.op(arm).attributes.get("value")?.clone(), arm_region));
         } else if scf::Default::matches(ctx, arm) {
-            if default_region.replace(*arm_region).is_some() {
+            if default_region.replace(arm_region).is_some() {
                 return None;
             }
         } else {
@@ -687,7 +687,7 @@ fn replace_continue_break(
                 if scf::Loop::matches(ctx, op) {
                     continue;
                 }
-                let regions = ctx.op(op).regions.clone();
+                let regions = ctx.op_regions(op).collect::<crate::RegionList>();
                 for region in regions {
                     let region_blocks = ctx.region(region).blocks.clone();
                     replace_continue_break(ctx, &region_blocks, header, exit, loc);
@@ -795,9 +795,9 @@ mod tests {
             .copied()
             .find(|&op| scf::Switch::matches(ctx, op))
             .expect("switch");
-        let switch_body = ctx.op(switch).regions[0];
+        let switch_body = ctx.op_region(switch, 0).unwrap();
         let arm = ctx.block(ctx.region(switch_body).blocks[0]).ops[0];
-        (switch, ctx.op(arm).regions[0])
+        (switch, ctx.op_region(arm, 0).unwrap())
     }
 
     /// Collect all op names from a region (dialect.name format).
@@ -1072,7 +1072,7 @@ mod tests {
             .unwrap();
 
         assert!(func.body_if_present(&ctx).is_none());
-        assert!(ctx.op(func_op).regions.is_empty());
+        assert!(!ctx.op_has_regions(func_op));
         assert_eq!(crate::printer::print_module(&ctx, module.op()), before);
     }
 
@@ -1552,9 +1552,9 @@ mod tests {
         );
         let (switch, arm) = first_switch_and_arm_region(&ctx, module);
         let unregistered = ctx.block(ctx.region(arm).blocks[0]).ops[0];
-        let switch_body = ctx.op(switch).regions[0];
+        let switch_body = ctx.op_region(switch, 0).unwrap();
         let malformed_wrapper = ctx.block(ctx.region(switch_body).blocks[0]).ops[1];
-        let malformed_region = ctx.op(malformed_wrapper).regions[0];
+        let malformed_region = ctx.op_region(malformed_wrapper, 0).unwrap();
         let malformed = ctx.block(ctx.region(malformed_region).blocks[0]).ops[0];
         let malformed_func_exit_data = OperationDataBuilder::new(
             ctx.op(unregistered).location,
@@ -1612,7 +1612,7 @@ mod tests {
                     ctx.block(candidate)
                         .ops
                         .iter()
-                        .any(|&op| ctx.op(op).successors.contains(&block))
+                        .any(|&op| ctx.op_successors(op).any(|successor| successor == block))
                 }),
                 "terminal lowering left a predecessor-free block: {block}"
             );
@@ -1660,7 +1660,7 @@ mod tests {
                         ctx.block(candidate)
                             .ops
                             .iter()
-                            .any(|&op| ctx.op(op).successors.contains(&block))
+                            .any(|&op| ctx.op_successors(op).any(|successor| successor == block))
                     })
             }),
             "terminal switches must not leave a predecessor-free empty merge block"
@@ -1708,7 +1708,7 @@ mod tests {
             blocks
                 .iter()
                 .flat_map(|&block| ctx.block(block).ops.iter())
-                .filter(|&&op| ctx.op(op).successors.as_slice() == [continuation])
+                .filter(|&&op| ctx.op_successors(op).eq([continuation]))
                 .count(),
             2,
             "both yielding arms must branch to the merge continuation"
@@ -1761,7 +1761,7 @@ mod tests {
             blocks
                 .iter()
                 .flat_map(|&block| ctx.block(block).ops.iter())
-                .filter(|&&op| ctx.op(op).successors.as_slice() == [continuation])
+                .filter(|&&op| ctx.op_successors(op).eq([continuation]))
                 .count(),
             2,
             "both yielding paths must branch to the merge continuation"
@@ -1947,7 +1947,7 @@ mod tests {
         assert!(ctx.block_args(exit).is_empty());
         for &block in blocks {
             for &op in &ctx.block(block).ops {
-                if ctx.op(op).successors.as_slice() == [exit] {
+                if ctx.op_successors(op).eq([exit]) {
                     assert!(
                         ctx.op_operands(op).is_empty(),
                         "{} has operands {:?}",

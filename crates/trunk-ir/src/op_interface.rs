@@ -479,12 +479,12 @@ pub trait CallableExitModel: DialectOp {
                 "CallableExit must not produce SSA results",
             ));
         }
-        if !ctx.op(op).successors.is_empty() {
+        if ctx.op_has_successors(op) {
             return Err(ControlFlowInterfaceError::new(
                 "CallableExit must not have block successors",
             ));
         }
-        if !self.allows_nested_regions(ctx) && !ctx.op(op).regions.is_empty() {
+        if !self.allows_nested_regions(ctx) && ctx.op_has_regions(op) {
             return Err(ControlFlowInterfaceError::new(
                 "CallableExit must not contain nested regions",
             ));

@@ -74,8 +74,9 @@ pub(crate) fn handle_if(
     let result_ty = ctx.op_result_types(op).first().copied();
 
     // Check if we can actually get a result value from the then region
-    let regions = &ctx.op(op).regions;
-    let then_region_result = regions.first().and_then(|r| region_result_value(ctx, *r));
+    let then_region_result = ctx
+        .op_region(op, 0)
+        .and_then(|r| region_result_value(ctx, r));
     let then_has_result_value = then_region_result.is_some();
 
     debug!(
@@ -102,8 +103,8 @@ pub(crate) fn handle_if(
     emit_operands(ctx, operands, emit_ctx, function)?;
     function.instruction(&Instruction::If(block_type));
 
-    let then_region = regions
-        .first()
+    let then_region = ctx
+        .op_region(op, 0)
         .ok_or_else(|| CompilationError::invalid_module("wasm.if missing then region"))?;
 
     // Push If nesting for child regions
@@ -113,28 +114,28 @@ pub(crate) fn handle_if(
     // Emit then branch
     emit_region_ops_nested(
         ctx,
-        *then_region,
+        then_region,
         emit_ctx,
         module_info,
         function,
         &child_nesting,
     )?;
-    if has_result && let Some(value) = region_result_value(ctx, *then_region) {
+    if has_result && let Some(value) = region_result_value(ctx, then_region) {
         emit_value_get(ctx, value, emit_ctx, function)?;
     }
 
     // Emit else branch if present
-    if let Some(else_region) = regions.get(1) {
+    if let Some(else_region) = ctx.op_region(op, 1) {
         function.instruction(&Instruction::Else);
         emit_region_ops_nested(
             ctx,
-            *else_region,
+            else_region,
             emit_ctx,
             module_info,
             function,
             &child_nesting,
         )?;
-        if has_result && let Some(value) = region_result_value(ctx, *else_region) {
+        if has_result && let Some(value) = region_result_value(ctx, else_region) {
             emit_value_get(ctx, value, emit_ctx, function)?;
         }
     } else if has_result {
@@ -192,23 +193,15 @@ pub(crate) fn handle_block(
 
     function.instruction(&Instruction::Block(block_type));
 
-    let regions = &ctx.op(op).regions;
-    let region = regions
-        .first()
+    let region = ctx
+        .op_region(op, 0)
         .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
 
     let mut child_nesting = nesting.to_vec();
     child_nesting.push(NestingKind::Block);
-    emit_region_ops_nested(
-        ctx,
-        *region,
-        emit_ctx,
-        module_info,
-        function,
-        &child_nesting,
-    )?;
+    emit_region_ops_nested(ctx, region, emit_ctx, module_info, function, &child_nesting)?;
 
-    if has_result && let Some(value) = region_result_value(ctx, *region) {
+    if has_result && let Some(value) = region_result_value(ctx, region) {
         emit_value_get(ctx, value, emit_ctx, function)?;
     }
 
@@ -234,14 +227,13 @@ pub(crate) fn handle_loop(
 
     let block_type = compute_block_type(ctx, has_result, result_ty, module_info)?;
 
-    let regions = &ctx.op(op).regions;
-    let region = regions
-        .first()
+    let region = ctx
+        .op_region(op, 0)
         .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
 
     // Collect loop arg locals from the body's block arguments
     let body_block = ctx
-        .region(*region)
+        .region(region)
         .blocks
         .first()
         .ok_or_else(|| CompilationError::invalid_module("wasm.loop body has no block"))?;
@@ -275,16 +267,9 @@ pub(crate) fn handle_loop(
 
     let mut child_nesting = nesting.to_vec();
     child_nesting.push(NestingKind::Loop { arg_locals });
-    emit_region_ops_nested(
-        ctx,
-        *region,
-        emit_ctx,
-        module_info,
-        function,
-        &child_nesting,
-    )?;
+    emit_region_ops_nested(ctx, region, emit_ctx, module_info, function, &child_nesting)?;
 
-    if has_result && let Some(value) = region_result_value(ctx, *region) {
+    if has_result && let Some(value) = region_result_value(ctx, region) {
         emit_value_get(ctx, value, emit_ctx, function)?;
     }
 

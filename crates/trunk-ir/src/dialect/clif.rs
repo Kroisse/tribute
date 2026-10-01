@@ -377,11 +377,9 @@ impl Data {
 
 /// The operations of a data object's relocation region, if it has one.
 fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = crate::OpRef> + '_ {
-    ctx.op(op)
-        .regions
-        .first()
+    ctx.op_region(op, 0)
         .into_iter()
-        .flat_map(|&region| ctx.region(region).blocks.iter())
+        .flat_map(|region| ctx.region(region).blocks.iter())
         .flat_map(|&block| ctx.block(block).ops.iter().copied())
 }
 
@@ -517,7 +515,7 @@ mod tests {
         );
         let functions = module.ops(&ctx);
         let body_op = |index| {
-            let body = ctx.op(functions[index]).regions[0];
+            let body = ctx.op_region(functions[index], 0).unwrap();
             ctx.block(ctx.region(body).blocks[0]).ops[0]
         };
 

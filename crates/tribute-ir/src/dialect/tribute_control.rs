@@ -506,7 +506,7 @@ fn print_func(
     let data = h.ctx().op(op);
     let symbol = data.attributes.get_symbol("sym_name");
     let callable_ty = data.attributes.get_type("type");
-    let region = data.regions.first().copied();
+    let region = h.ctx().op_region(op, 0);
     if !has_concise_func_sig(h.ctx(), callable_ty) {
         return h.print_generic(op, indent);
     }
@@ -676,7 +676,7 @@ fn print_lambda(
     let result = h.ctx().op_results(op).first().copied();
     let result_name = result.map(|value| h.assign_value_name(value));
     let parts = callable_ty.and_then(|ty| func_sig_parts(h.ctx(), ty));
-    let region = h.ctx().op(op).regions.first().copied();
+    let region = h.ctx().op_region(op, 0);
 
     write!(h, "{}", " ".repeat(indent))?;
     if let Some(name) = result_name {
@@ -1188,7 +1188,7 @@ fn collect_region_values(ctx: &IrContext, region: RegionRef, values: &mut HashSe
         values.extend(ctx.block_args(block).iter().copied());
         for op in ctx.block(block).ops.iter().copied() {
             values.extend(ctx.op_results(op).iter().copied());
-            for nested in ctx.op(op).regions.iter().copied() {
+            for nested in ctx.op_regions(op) {
                 collect_region_values(ctx, nested, values);
             }
         }
@@ -1199,7 +1199,7 @@ fn walk_region_ops(ctx: &IrContext, region: RegionRef, callback: &mut impl FnMut
     for block in ctx.region(region).blocks.iter().copied() {
         for op in ctx.block(block).ops.iter().copied() {
             callback(op);
-            for nested in ctx.op(op).regions.iter().copied() {
+            for nested in ctx.op_regions(op) {
                 walk_region_ops(ctx, nested, callback);
             }
         }
@@ -1244,7 +1244,7 @@ fn validate_return_or_yield_shape(ctx: &IrContext, op: OpRef, errors: &mut Vec<V
 
 fn validate_func(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let func = Func::from_op(ctx, op).expect("schema-verified tribute_control.func");
-    if let Some(&body) = ctx.op(op).regions.first() {
+    if let Some(body) = ctx.op_region(op, 0) {
         validate_callable_body(ctx, op, func.r#type(ctx), body, errors);
         validate_func_isolation(ctx, op, body, errors);
     }
@@ -1325,17 +1325,19 @@ fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
 }
 
 fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
-    let [body_region, completion_region, handlers_region] = ctx.op(op).regions.as_slice() else {
-        return;
-    };
-    let Some(body_block) = single_block(ctx, op, *body_region, "body", errors) else {
-        return;
-    };
-    let Some(completion_block) = single_block(ctx, op, *completion_region, "completion", errors)
+    let Some((body_region, completion_region, handlers_region)) =
+        ctx.op_regions(op).collect_tuple()
     else {
         return;
     };
-    let Some(handlers_block) = single_block(ctx, op, *handlers_region, "handlers", errors) else {
+    let Some(body_block) = single_block(ctx, op, body_region, "body", errors) else {
+        return;
+    };
+    let Some(completion_block) = single_block(ctx, op, completion_region, "completion", errors)
+    else {
+        return;
+    };
+    let Some(handlers_block) = single_block(ctx, op, handlers_region, "handlers", errors) else {
         return;
     };
     if !ctx.block_args(body_block).is_empty() {
@@ -1415,7 +1417,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             );
         }
         if let Some(result) = handle_result
-            && let Some(&region) = data.regions.first()
+            && let Some(region) = ctx.op_region(child, 0)
             && let Some(&block) = ctx.region(region).blocks.first()
             && let Some(&yield_op) = ctx.block(block).ops.last()
             && is_control_op(ctx, yield_op, "yield")
@@ -1453,7 +1455,7 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
             format!("kind must be @fn or @op, found @{kind}"),
         );
     }
-    let Some(&body) = ctx.op(op).regions.first() else {
+    let Some(body) = ctx.op_region(op, 0) else {
         return;
     };
     let Some(block) = single_block(ctx, op, body, "body", errors) else {
@@ -1547,10 +1549,7 @@ fn validate_handler(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
     let placed = parent_op(ctx, op).is_some_and(|parent| {
         is_control_op(ctx, parent, "handle")
             && ctx
-                .op(parent)
-                .regions
-                .get(2)
-                .copied()
+                .op_region(parent, 2)
                 .is_some_and(|handlers| parent_region(ctx, op) == Some(handlers))
     });
     if !placed {
@@ -1575,8 +1574,7 @@ fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>)
             true
         } else if is_control_op(ctx, owner, "handle") {
             let region = parent_region(ctx, op);
-            ctx.op(owner).regions.first().copied() == region
-                || ctx.op(owner).regions.get(1).copied() == region
+            ctx.op_region(owner, 0) == region || ctx.op_region(owner, 1) == region
         } else {
             false
         }
@@ -1794,7 +1792,7 @@ fn collect_external_references(
             if is_control_op(ctx, op, "func") {
                 continue;
             }
-            for nested in ctx.op(op).regions.iter().copied() {
+            for nested in ctx.op_regions(op) {
                 collect_external_references(ctx, nested, defined, external);
             }
         }
@@ -1806,7 +1804,7 @@ fn validate_lambda_captures(ctx: &IrContext, body: RegionRef, errors: &mut Vec<V
         if !is_control_op(ctx, op, "lambda") {
             return;
         }
-        let Some(&region) = ctx.op(op).regions.first() else {
+        let Some(region) = ctx.op_region(op, 0) else {
             return;
         };
         let captures = ctx.op_operands(op);
@@ -2007,7 +2005,7 @@ fn collect_reachable_ir_types(ctx: &IrContext, module: OpRef) -> HashSet<TypeRef
         for attribute in ctx.op(op).attributes.values() {
             collect_attribute_types(ctx, attribute, types);
         }
-        for region in ctx.op(op).regions.iter().copied() {
+        for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter().copied() {
                 for argument in ctx.block_args(block) {
                     collect_reachable_type(ctx, ctx.value_ty(*argument), types);
@@ -2018,7 +2016,7 @@ fn collect_reachable_ir_types(ctx: &IrContext, module: OpRef) -> HashSet<TypeRef
 
     let mut types = HashSet::new();
     collect_op_types(ctx, module, &mut types);
-    for region in ctx.op(module).regions.iter().copied() {
+    for region in ctx.op_regions(module) {
         walk_region_ops(ctx, region, &mut |op| collect_op_types(ctx, op, &mut types));
     }
     types
@@ -2286,11 +2284,13 @@ fn callable_block_arg_has_source_contract(
     let value_type = ctx.value_ty(value);
 
     let func_sig_type = if is_control_op(ctx, owner, "func") {
-        (ctx.op(owner).regions.as_slice() == [region])
+        ctx.op_regions(owner)
+            .eq([region])
             .then(|| ctx.op(owner).attributes.get_type("type"))
             .flatten()
     } else if is_control_op(ctx, owner, "lambda") {
-        (ctx.op(owner).regions.as_slice() == [region])
+        ctx.op_regions(owner)
+            .eq([region])
             .then(|| ctx.op_result_types(owner).first().copied())
             .flatten()
     } else {
@@ -2300,7 +2300,7 @@ fn callable_block_arg_has_source_contract(
         return parameters.get(index as usize) == Some(&value_type);
     }
 
-    if is_control_op(ctx, owner, "handler") && ctx.op(owner).regions.as_slice() == [region] {
+    if is_control_op(ctx, owner, "handler") && ctx.op_regions(owner).eq([region]) {
         let data = ctx.op(owner);
         if let (Some(ability), Some(name), Some(kind)) = (
             data.attributes.get_type("ability_ref"),
@@ -2317,13 +2317,13 @@ fn callable_block_arg_has_source_contract(
         }
     }
 
-    let [body_region, completion_region, _] = ctx.op(owner).regions.as_slice() else {
+    let Some((body_region, completion_region, _)) = ctx.op_regions(owner).collect_tuple() else {
         return false;
     };
-    if !is_control_op(ctx, owner, "handle") || completion_region != &region || index != 0 {
+    if !is_control_op(ctx, owner, "handle") || completion_region != region || index != 0 {
         return false;
     }
-    let [body_block] = ctx.region(*body_region).blocks.as_slice() else {
+    let [body_block] = ctx.region(body_region).blocks.as_slice() else {
         return false;
     };
     let Some(body_yield) = ctx.block(*body_block).ops.last().copied() else {
@@ -2390,8 +2390,7 @@ fn verified_callable_declaration(
     function: OpRef,
     registered: &HashMap<Symbol, &CompilerIntrinsicDeclaration>,
 ) -> bool {
-    let data = ctx.op(function);
-    if !data.regions.is_empty() {
+    if ctx.op_has_regions(function) {
         return true;
     }
     let (Some(symbol), Some(identity), Some(func_sig_type)) = (
@@ -2399,7 +2398,7 @@ fn verified_callable_declaration(
         Func::from_op(ctx, function)
             .ok()
             .and_then(|function| function.compiler_intrinsic_identity(ctx)),
-        data.attributes.get_type("type"),
+        ctx.op(function).attributes.get_type("type"),
     ) else {
         return false;
     };
@@ -2436,7 +2435,7 @@ fn validate_callable_origins(
             let intrinsic_identity = Func::from_op(ctx, op)
                 .ok()
                 .and_then(|function| function.compiler_intrinsic_identity(ctx));
-            let bodyless = data.regions.is_empty();
+            let bodyless = !ctx.op_has_regions(op);
             if !bodyless && intrinsic_identity.is_some() {
                 push_op_error(
                     ctx,
@@ -2604,7 +2603,7 @@ fn validate_declaration_uses(
                 ctx.op_result_types(op).first().copied(),
             )
         } else if is_control_op(ctx, op, "handler") {
-            let Some(&region) = ctx.op(op).regions.first() else {
+            let Some(region) = ctx.op_region(op, 0) else {
                 return;
             };
             let Some(&block) = ctx.region(region).blocks.first() else {
@@ -2786,10 +2785,8 @@ fn validate_affine_lambda_carrier(
         for terminal in &terminals {
             if is_control_op(ctx, *terminal, "call_indirect")
                 && !captures.iter().any(|capture| {
-                    ctx.op(*capture)
-                        .regions
-                        .first()
-                        .is_some_and(|region| op_is_within_region(ctx, *terminal, *region))
+                    ctx.op_region(*capture, 0)
+                        .is_some_and(|region| op_is_within_region(ctx, *terminal, region))
                 })
             {
                 push_op_error(
@@ -2861,8 +2858,8 @@ fn validate_token_path(
         );
     }
     for (left, right) in captures.iter().copied().tuple_combinations() {
-        let left_region = ctx.op(left).regions.first().copied();
-        let right_region = ctx.op(right).regions.first().copied();
+        let left_region = ctx.op_region(left, 0);
+        let right_region = ctx.op_region(right, 0);
         let comparable = left_region.is_some_and(|region| op_is_within_region(ctx, right, region))
             || right_region.is_some_and(|region| op_is_within_region(ctx, left, region));
         if !comparable && !ops_are_mutually_exclusive(ctx, left, right) {
@@ -2875,7 +2872,7 @@ fn validate_token_path(
         }
     }
     for capture in &captures {
-        let Some(region) = ctx.op(*capture).regions.first().copied() else {
+        let Some(region) = ctx.op_region(*capture, 0) else {
             continue;
         };
         if !resumes
@@ -2942,7 +2939,7 @@ fn validate_resume_ownership(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
         if !is_control_op(ctx, op, "handler") {
             return;
         }
-        let Some(&region) = ctx.op(op).regions.first() else {
+        let Some(region) = ctx.op_region(op, 0) else {
             return;
         };
         let Some(&block) = ctx.region(region).blocks.first() else {
@@ -2969,7 +2966,7 @@ fn validate_token_placements(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
                 );
             }
         }
-        for region in ctx.op(op).regions.iter().copied() {
+        for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter().copied() {
                 for (index, arg) in ctx.block_args(block).iter().copied().enumerate() {
                     if !ResumeToken::matches(ctx, ctx.value_ty(arg)) {
@@ -3333,7 +3330,7 @@ mod tests {
         let (ctx, module) = parse_fixture(VALID_CONTROL_MODULE);
         let handle = control_op(&ctx, module, "handle");
         let handler = control_op(&ctx, module, "handler");
-        let handler_body = ctx.op(handler).regions[0];
+        let handler_body = ctx.op_region(handler, 0).unwrap();
         let handler_block = ctx.region(handler_body).blocks[0];
         let handler_data = ctx.op(handler);
         let ability_ref = handler_data
@@ -4023,8 +4020,7 @@ mod tests {
             .insert(Symbol::new("type"), Attribute::Type(i32_ty));
         let extra_block = block(&mut ctx, loc, &[]);
         let extra_region = region(&mut ctx, loc, extra_block);
-        ctx.op_mut(bad_func).regions.push(extra_region);
-        ctx.region_mut(extra_region).parent_op = Some(bad_func);
+        ctx.push_op_region(bad_func, extra_region);
 
         let bad_lambda = control_op(&ctx, module, "lambda");
         ctx.set_op_result_type(bad_lambda, 0, i32_ty);
@@ -5294,7 +5290,7 @@ mod tests {
 }"#,
         );
         let handler = control_op(&ctx, module, "handler");
-        let handler_region = ctx.op(handler).regions[0];
+        let handler_region = ctx.op_region(handler, 0).unwrap();
         let handler_block = ctx.region(handler_region).blocks[0];
         let callback_type = ctx.value_ty(ctx.block_args(handler_block)[0]);
         let ability = ctx.op(handler).attributes.get_type("ability_ref").unwrap();

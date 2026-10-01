@@ -61,7 +61,7 @@ fn call_graph_over(ctx: &IrContext, symbols: &SymbolTable) -> CallGraph {
             graph.func_ops.insert(name, op);
         }
         for &op in ops.iter().filter(|&&op| func::Func::matches(ctx, op)) {
-            for &region in &ctx.op(op).regions {
+            for region in ctx.op_regions(op) {
                 collect_calls(ctx, region, name, &mut graph);
             }
         }
@@ -420,7 +420,7 @@ mod tests {
         let old = analyses.require::<CallGraph>(&ctx, module.op());
         assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
 
-        let body = ctx.op(caller).regions[0];
+        let body = ctx.op_region(caller, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let call = ctx.block(block).ops[0];
         ctx.op_mut(call).attributes.insert(

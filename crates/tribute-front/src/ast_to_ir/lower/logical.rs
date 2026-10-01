@@ -780,8 +780,7 @@ fn lower_struct_accessors<'db>(
         });
         let callable = func_sig_type(ir, field_type, [struct_type], CallingConvention::Direct);
         let getter = tribute_control::func_declaration(ir, location, getter_name, callable);
-        ir.op_mut(getter.op_ref()).regions.push(body);
-        ir.region_mut(body).parent_op = Some(getter.op_ref());
+        ir.push_op_region(getter.op_ref(), body);
         ir.push_op(top, getter.op_ref());
     }
 }
@@ -912,8 +911,7 @@ fn lower_function<'db>(
     });
     let name = ctx.qualify_name(function.name);
     let function = tribute_control::func_declaration(ir, location, name, callable);
-    ir.op_mut(function.op_ref()).regions.push(body);
-    ir.region_mut(body).parent_op = Some(function.op_ref());
+    ir.push_op_region(function.op_ref(), body);
     // A root `main` promoted to Cps records its source result; that alone
     // marks the root CPS contract for root bridge composition.
     if let Some(convention) = root_convention

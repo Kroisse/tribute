@@ -521,7 +521,7 @@ mod tests {
             .find(|function| function.sym_name(&ctx) == Symbol::new("definition"))
             .expect("bodied definition");
 
-        assert_eq!(ctx.op(declaration.op_ref()).regions.len(), 0);
+        assert_eq!(ctx.op_region_count(declaration.op_ref()), 0);
         let declaration_type =
             clif::FuncSig::from_type_ref(&ctx, declaration.r#type(&ctx)).unwrap();
         assert_eq!(declaration_type.inputs(&ctx), [refs.core_ptr]);

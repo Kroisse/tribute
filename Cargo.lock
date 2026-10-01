@@ -1781,6 +1781,7 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "insta",
+ "itertools 0.14.0",
  "tracing",
  "tribute-core",
  "tribute-ir",
@@ -1823,6 +1824,7 @@ dependencies = [
  "itertools 0.14.0",
  "lasso",
  "parking_lot",
+ "proptest",
  "rustc-hash",
  "salsa",
  "serde",
@@ -1867,6 +1869,7 @@ name = "trunk-ir-wasm-backend"
 version = "0.1.0"
 dependencies = [
  "derive_more",
+ "itertools 0.14.0",
  "tempfile",
  "tracing",
  "trunk-ir",

@@ -4,6 +4,7 @@
 //! explicit evidence operands. This pass resolves handler prompt identities and
 //! replaces each delimiter body evidence argument with its extended evidence.
 
+use itertools::Itertools;
 use std::error::Error;
 use std::fmt;
 
@@ -127,12 +128,12 @@ fn final_handle_dispatch_shape(
         }
         dispatcher_pairs.push((*ability_ref, pair[0], pair[1]));
     }
-    let [body] = data.regions.as_slice() else {
+    let Ok(body) = ctx.op_regions(op).exactly_one() else {
         return Err(error(
             "final ability.handle_dispatch requires exactly one body region".into(),
         ));
     };
-    let [body_block] = ctx.region(*body).blocks.as_slice() else {
+    let [body_block] = ctx.region(body).blocks.as_slice() else {
         return Err(error(
             "final ability.handle_dispatch body must have exactly one block".into(),
         ));
@@ -176,7 +177,7 @@ pub(crate) fn validate_final_handle_dispatches(
         if ability::HandleDispatch::matches(ctx, op) {
             final_handle_dispatch_shape(ctx, op)?;
         }
-        for region in ctx.op(op).regions.iter().copied() {
+        for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter().copied() {
                 for child in ctx.block(block).ops.iter().copied() {
                     visit(ctx, child)?;
@@ -275,7 +276,7 @@ fn resolve_delimiters(
 
                 ctx.replace_all_uses(shape.body_evidence, current_ev);
             }
-            let regions = ctx.op(op).regions.clone();
+            let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             for region in regions {
                 resolve_delimiters(ctx, module, region)?;
             }
@@ -670,10 +671,10 @@ mod tests {
             .copied()
             .find(|&op| ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new("body")))
             .unwrap();
-        let entry = ctx.region(ctx.op(body).regions[0]).blocks[0];
+        let entry = ctx.region(ctx.op_region(body, 0).unwrap()).blocks[0];
         let outer_evidence = ctx.block_args(entry)[0];
         let delimiter = ctx.block(entry).ops[0];
-        let inner = ctx.region(ctx.op(delimiter).regions[0]).blocks[0];
+        let inner = ctx.region(ctx.op_region(delimiter, 0).unwrap()).blocks[0];
         let tail = ctx.block(inner).ops[0];
         assert_eq!(ctx.op_operands(tail), &[outer_evidence]);
     }

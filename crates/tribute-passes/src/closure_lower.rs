@@ -466,7 +466,7 @@ impl RewritePattern for LowerClosureEnvArena {
 }
 
 fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) -> bool {
-    let Some(&body) = ctx.op(func_op.op_ref()).regions.first() else {
+    let Some(body) = ctx.op_region(func_op.op_ref(), 0) else {
         return true;
     };
     let mut transfers = Vec::new();
@@ -563,7 +563,7 @@ fn rewrite_validated_closures_in_func(
     func_op: func::Func,
     functions: Arc<SymbolTable>,
 ) {
-    if ctx.op(func_op.op_ref()).regions.is_empty() {
+    if !ctx.op_has_regions(func_op.op_ref()) {
         return;
     }
     let applicator = PatternApplicator::new(TypeConverter::new())
@@ -643,7 +643,11 @@ fn rewrite_closure_storage_types(
                 result_updates.push((op, index as u32, converted));
             }
         }
-        for region in physicalizer.ctx.op(op).regions.clone() {
+        for region in physicalizer
+            .ctx
+            .op_regions(op)
+            .collect::<trunk_ir::RegionList>()
+        {
             for block in physicalizer.ctx.region(region).blocks.clone() {
                 let args = physicalizer.ctx.block(block).args.to_vec();
                 for (index, argument) in args.into_iter().enumerate() {

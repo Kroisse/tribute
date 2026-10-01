@@ -105,7 +105,7 @@ fn walk_ops_in_region(
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             callback(ctx, op);
-            for &nested in ctx.op(op).regions.iter() {
+            for nested in ctx.op_regions(op) {
                 walk_ops_in_region(ctx, nested, callback);
             }
         }
@@ -392,7 +392,7 @@ mod tests {
 
     fn string_const_count(ctx: &IrContext, module: Module) -> usize {
         let func = module.ops(ctx)[0];
-        let body = ctx.op(func).regions[0];
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         ctx.block(block)
             .ops
@@ -660,7 +660,7 @@ mod tests {
             .copied()
             .find(|&op| wasm_dialect::Func::from_op(ctx, op).is_ok())
             .expect("wasm.func");
-        let body = ctx.op(func).regions[0];
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         ctx.block(block)
             .ops

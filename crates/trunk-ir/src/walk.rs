@@ -53,7 +53,7 @@ pub fn walk_op<B>(
         ControlFlow::Continue(WalkAction::Skip) => return ControlFlow::Continue(()),
         ControlFlow::Continue(WalkAction::Advance) => {}
     }
-    for &region in &ctx.op(op).regions {
+    for region in ctx.op_regions(op) {
         walk_region(ctx, region, f)?;
     }
     ControlFlow::Continue(())

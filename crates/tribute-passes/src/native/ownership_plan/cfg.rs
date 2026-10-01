@@ -47,21 +47,21 @@ impl ValidatedFlatCfg {
             let Some((&terminator, preceding)) = ops.split_last() else {
                 return Err(OwnershipPlanError::new("function block is empty"));
             };
-            if ops.iter().any(|&op| !ctx.op(op).regions.is_empty()) {
+            if ops.iter().any(|&op| ctx.op_has_regions(op)) {
                 return Err(OwnershipPlanError::new(
                     "unsupported structured or nested control-flow region",
                 ));
             }
             if preceding
                 .iter()
-                .any(|&op| !ctx.op(op).successors.is_empty() || is_native_terminator(ctx, op))
+                .any(|&op| ctx.op_has_successors(op) || is_native_terminator(ctx, op))
             {
                 return Err(OwnershipPlanError::new(
                     "control-flow operation precedes the final block operation",
                 ));
             }
 
-            let block_successors = ctx.op(terminator).successors.clone();
+            let block_successors: BlockList = ctx.op_successors(terminator).collect();
             if let Some(interface) = BranchOps::get(ctx, terminator) {
                 let edges = interface.successors(ctx, terminator).map_err(|error| {
                     OwnershipPlanError::new(format!("Branch interface is incomplete: {error}"))

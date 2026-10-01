@@ -43,6 +43,65 @@ pub type BlockList = SmallVec<[BlockRef; 4]>;
 /// The operations of a block, or a snapshot of them.
 pub type OpList = SmallVec<[OpRef; 4]>;
 
+/// The successors of an operation.
+///
+/// Most operations have none, and branches have one or two, so up to two are
+/// stored inline. Longer lists live in the context's block pool.
+#[derive(Clone)]
+pub(crate) enum SuccessorList {
+    Inline { len: u8, blocks: [BlockRef; 2] },
+    Spilled(EntityList<BlockRef>),
+}
+
+impl Default for SuccessorList {
+    fn default() -> Self {
+        // Slots past `len` are never read.
+        Self::Inline {
+            len: 0,
+            blocks: [BlockRef::new(0); 2],
+        }
+    }
+}
+
+impl SuccessorList {
+    fn from_slice(blocks: &[BlockRef], pool: &mut ListPool<BlockRef>) -> Self {
+        match *blocks {
+            [] => Self::default(),
+            [first] => Self::Inline {
+                len: 1,
+                blocks: [first, first],
+            },
+            [first, second] => Self::Inline {
+                len: 2,
+                blocks: [first, second],
+            },
+            _ => Self::Spilled(EntityList::from_slice(blocks, pool)),
+        }
+    }
+
+    fn as_slice<'a>(&'a self, pool: &'a ListPool<BlockRef>) -> &'a [BlockRef] {
+        match self {
+            Self::Inline { len, blocks } => &blocks[..usize::from(*len)],
+            Self::Spilled(list) => list.as_slice(pool),
+        }
+    }
+
+    fn as_mut_slice<'a>(&'a mut self, pool: &'a mut ListPool<BlockRef>) -> &'a mut [BlockRef] {
+        match self {
+            Self::Inline { len, blocks } => &mut blocks[..usize::from(*len)],
+            Self::Spilled(list) => list.as_mut_slice(pool),
+        }
+    }
+
+    /// Replace the list, returning a spilled list's storage to the pool.
+    fn replace(&mut self, blocks: &[BlockRef], pool: &mut ListPool<BlockRef>) {
+        if let Self::Spilled(list) = self {
+            list.clear(pool);
+        }
+        *self = Self::from_slice(blocks, pool);
+    }
+}
+
 /// Data for a single operation in the arena.
 #[derive(Clone)]
 pub struct OperationData {
@@ -52,8 +111,13 @@ pub struct OperationData {
     pub operands: EntityList<ValueRef>,
     pub results: EntityList<TypeRef>,
     pub attributes: AttributeMap,
-    pub regions: RegionList,
-    pub successors: BlockList,
+    /// Head of the operation's region list, linked through
+    /// `IrContext::next_region`. Read through [`IrContext::op_regions`] and
+    /// change through the context's region methods.
+    pub(crate) first_region: Option<RegionRef>,
+    /// Read through [`IrContext::op_successors`] and change through the
+    /// context's successor methods.
+    pub(crate) successors: SuccessorList,
     pub parent_block: Option<BlockRef>,
 }
 
@@ -120,6 +184,11 @@ pub struct IrContext {
     /// Backing pools for EntityList storage.
     value_pool: ListPool<ValueRef>,
     type_pool: ListPool<TypeRef>,
+    /// Successor lists longer than [`SuccessorList`] keeps inline.
+    block_pool: ListPool<BlockRef>,
+
+    /// The region after each region in its operation's region list.
+    next_region: SecondaryMap<RegionRef, Option<RegionRef>>,
 
     /// Mapping from operation to its result ValueRefs.
     result_values: SecondaryMap<OpRef, EntityList<ValueRef>>,
@@ -188,6 +257,8 @@ impl Clone for IrContext {
             paths: self.paths.clone(),
             value_pool: self.value_pool.clone(),
             type_pool: self.type_pool.clone(),
+            block_pool: self.block_pool.clone(),
+            next_region: self.next_region.clone(),
             result_values: self.result_values.clone(),
             block_arg_values: self.block_arg_values.clone(),
             type_aliases: self.type_aliases.clone(),
@@ -213,6 +284,8 @@ impl IrContext {
             paths: PathInterner::new(),
             value_pool: ListPool::new(),
             type_pool: ListPool::new(),
+            block_pool: ListPool::new(),
+            next_region: SecondaryMap::new(),
             result_values: SecondaryMap::new(),
             block_arg_values: SecondaryMap::new(),
             type_aliases: Vec::new(),
@@ -238,6 +311,8 @@ impl IrContext {
             paths: self.paths.clone(),
             value_pool: self.value_pool.clone(),
             type_pool: self.type_pool.clone(),
+            block_pool: self.block_pool.clone(),
+            next_region: secondary_with_capacity(&self.next_region),
             result_values: secondary_with_capacity(&self.result_values),
             block_arg_values: secondary_with_capacity(&self.block_arg_values),
             type_aliases: self.type_aliases.clone(),
@@ -413,13 +488,14 @@ impl IrContext {
 
         let num_results = data.results.as_slice(&self.type_pool).len();
 
-        let regions: RegionList = data.regions.clone();
+        let first_region = data.first_region;
 
         self.bump_revision();
         let op = self.ops.push(data);
 
         // Back-link owned regions to this operation
-        for &r in &regions {
+        let mut next = first_region;
+        while let Some(r) = next {
             if let Some(existing) = self.regions[r].parent_op {
                 panic!(
                     "create_op: region {r} already belongs to operation {existing}; \
@@ -427,6 +503,7 @@ impl IrContext {
                 );
             }
             self.regions[r].parent_op = Some(op);
+            next = self.next_region[r];
         }
 
         // Register operand uses
@@ -549,6 +626,106 @@ impl IrContext {
     /// Get all result values of an operation.
     pub fn op_results(&self, op: OpRef) -> &[ValueRef] {
         self.result_values[op].as_slice(&self.value_pool)
+    }
+
+    /// The regions of an operation, in order.
+    pub fn op_regions(&self, op: OpRef) -> Regions<'_> {
+        Regions {
+            ctx: self,
+            next: self.ops[op].first_region,
+        }
+    }
+
+    /// The `index`-th region of an operation, if it has that many.
+    pub fn op_region(&self, op: OpRef, index: usize) -> Option<RegionRef> {
+        self.op_regions(op).nth(index)
+    }
+
+    /// Whether an operation has any region, without walking its region list.
+    pub fn op_has_regions(&self, op: OpRef) -> bool {
+        self.ops[op].first_region.is_some()
+    }
+
+    /// The number of regions of an operation.
+    pub fn op_region_count(&self, op: OpRef) -> usize {
+        self.op_regions(op).count()
+    }
+
+    /// Append `region` to an operation's regions and make the operation its
+    /// parent.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `region` already belongs to an operation.
+    pub fn push_op_region(&mut self, op: OpRef, region: RegionRef) {
+        if let Some(existing) = self.regions[region].parent_op {
+            panic!(
+                "push_op_region: region {region} already belongs to operation {existing}; \
+                 cannot reassign to {op}",
+            );
+        }
+        self.bump_revision();
+        self.regions[region].parent_op = Some(op);
+        self.next_region[region] = None;
+        match self.op_regions(op).last() {
+            Some(last) => self.next_region[last] = Some(region),
+            None => self.ops[op].first_region = Some(region),
+        }
+    }
+
+    /// Detach every region from an operation, leaving the regions without a
+    /// parent.
+    pub fn clear_op_regions(&mut self, op: OpRef) {
+        self.bump_revision();
+        let mut next = self.ops[op].first_region.take();
+        while let Some(region) = next {
+            next = self.next_region[region].take();
+            self.regions[region].parent_op = None;
+        }
+    }
+
+    /// The successor blocks of an operation, in order.
+    pub fn op_successors(&self, op: OpRef) -> Successors<'_> {
+        self.ops[op]
+            .successors
+            .as_slice(&self.block_pool)
+            .iter()
+            .copied()
+    }
+
+    /// The `index`-th successor of an operation, if it has that many.
+    pub fn op_successor(&self, op: OpRef, index: usize) -> Option<BlockRef> {
+        self.op_successors(op).nth(index)
+    }
+
+    /// Whether an operation has any successor.
+    pub fn op_has_successors(&self, op: OpRef) -> bool {
+        !self.ops[op]
+            .successors
+            .as_slice(&self.block_pool)
+            .is_empty()
+    }
+
+    /// The number of successors of an operation.
+    pub fn op_successor_count(&self, op: OpRef) -> usize {
+        self.ops[op].successors.as_slice(&self.block_pool).len()
+    }
+
+    /// Replace the `index`-th successor of an operation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the operation has no `index`-th successor.
+    pub fn set_op_successor(&mut self, op: OpRef, index: usize, block: BlockRef) {
+        self.bump_revision();
+        self.ops[op].successors.as_mut_slice(&mut self.block_pool)[index] = block;
+    }
+
+    /// Keep only the first `len` successors of an operation.
+    pub fn truncate_op_successors(&mut self, op: OpRef, len: usize) {
+        self.bump_revision();
+        let kept: BlockList = self.op_successors(op).take(len).collect();
+        self.ops[op].successors.replace(&kept, &mut self.block_pool);
     }
 
     /// Remove an operation and its entire region subtree, clearing all
@@ -844,7 +1021,16 @@ impl IrContext {
         if let Some(parent_op) = self.regions[region].parent_op {
             self.bump_revision();
             self.regions[region].parent_op = None;
-            self.ops[parent_op].regions.retain(|r| *r != region);
+            let after = self.next_region[region].take();
+            if self.ops[parent_op].first_region == Some(region) {
+                self.ops[parent_op].first_region = after;
+            } else {
+                let before = self
+                    .op_regions(parent_op)
+                    .find(|&r| self.next_region[r] == Some(region))
+                    .expect("detach_region: region is not linked from its parent");
+                self.next_region[before] = after;
+            }
         }
     }
 
@@ -898,10 +1084,10 @@ impl IrContext {
         let dialect = data.dialect;
         let name = data.name;
         let attrs = data.attributes.clone();
-        let regions: RegionList = data.regions.clone();
-        let successors: BlockList = data.successors.clone();
         let operands: SmallVec<[ValueRef; 8]> = data.operands.as_slice(&self.value_pool).into();
         let result_types: SmallVec<[TypeRef; 4]> = data.results.as_slice(&self.type_pool).into();
+        let regions: RegionList = self.op_regions(src_op).collect();
+        let successors: BlockList = self.op_successors(src_op).collect();
 
         // Build new operation with remapped operands and successors.
         let mut builder = OperationDataBuilder::new(loc, dialect, name);
@@ -1050,6 +1236,33 @@ impl Default for IrContext {
 }
 
 // ============================================================================
+// Region and successor iterators
+// ============================================================================
+
+/// Iterator over the regions of an operation; see [`IrContext::op_regions`].
+#[derive(Clone)]
+pub struct Regions<'a> {
+    ctx: &'a IrContext,
+    next: Option<RegionRef>,
+}
+
+impl Iterator for Regions<'_> {
+    type Item = RegionRef;
+
+    fn next(&mut self) -> Option<RegionRef> {
+        let region = self.next?;
+        self.next = self.ctx.next_region[region];
+        Some(region)
+    }
+}
+
+impl std::iter::FusedIterator for Regions<'_> {}
+
+/// Iterator over the successors of an operation; see
+/// [`IrContext::op_successors`].
+pub type Successors<'a> = std::iter::Copied<std::slice::Iter<'a, BlockRef>>;
+
+// ============================================================================
 // Helper constructors for OperationData
 // ============================================================================
 
@@ -1064,8 +1277,8 @@ impl OperationData {
             operands: EntityList::new(),
             results: EntityList::new(),
             attributes: AttributeMap::new(),
-            regions: SmallVec::new(),
-            successors: SmallVec::new(),
+            first_region: None,
+            successors: SuccessorList::default(),
             parent_block: None,
         }
     }
@@ -1146,6 +1359,27 @@ impl OperationDataBuilder {
         for ty in self.results {
             results.push(ty, &mut ctx.type_pool);
         }
+        // Link the regions in order. Linking writes their `next_region`
+        // entries, so a region that already belongs to an operation (whose
+        // list would be corrupted) or appears twice (a cycle) is rejected
+        // here rather than in `create_op`.
+        for (index, &region) in self.regions.iter().enumerate() {
+            if let Some(owner) = ctx.regions[region].parent_op {
+                panic!(
+                    "OperationDataBuilder: region {region} already belongs to operation {owner}"
+                );
+            }
+            assert!(
+                !self.regions[..index].contains(&region),
+                "OperationDataBuilder: region {region} appears more than once",
+            );
+        }
+        for pair in self.regions.windows(2) {
+            ctx.next_region[pair[0]] = Some(pair[1]);
+        }
+        if let Some(&last) = self.regions.last() {
+            ctx.next_region[last] = None;
+        }
         OperationData {
             location: self.location,
             dialect: self.dialect,
@@ -1153,19 +1387,22 @@ impl OperationDataBuilder {
             operands,
             results,
             attributes: self.attributes,
-            regions: self.regions,
-            successors: self.successors,
+            first_region: self.regions.first().copied(),
+            successors: SuccessorList::from_slice(&self.successors, &mut ctx.block_pool),
             parent_block: None,
         }
     }
 }
 
 #[cfg(test)]
+mod prop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::location::Span;
     use crate::symbol::Symbol;
-    use smallvec::smallvec;
+    use smallvec::{smallvec, smallvec_inline};
 
     fn test_location(ctx: &mut IrContext) -> Location {
         let path = ctx.intern_path("file:///test.trb");
@@ -1174,6 +1411,172 @@ mod tests {
 
     fn i32_type(ctx: &mut IrContext) -> TypeRef {
         ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
+    }
+
+    fn empty_region(ctx: &mut IrContext, loc: Location) -> RegionRef {
+        ctx.create_region(RegionData {
+            location: loc,
+            blocks: SmallVec::new(),
+            parent_op: None,
+        })
+    }
+
+    fn empty_block(ctx: &mut IrContext, loc: Location) -> BlockRef {
+        ctx.create_block(BlockData {
+            location: loc,
+            args: vec![],
+            ops: SmallVec::new(),
+            parent_region: None,
+        })
+    }
+
+    fn region_ids(ctx: &IrContext, op: OpRef) -> RegionList {
+        ctx.op_regions(op).collect()
+    }
+
+    fn successor_ids(ctx: &IrContext, op: OpRef) -> BlockList {
+        ctx.op_successors(op).collect()
+    }
+
+    #[test]
+    fn region_list_keeps_order_through_push_and_detach() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let [a, b, c] = [(); 3].map(|()| empty_region(&mut ctx, loc));
+        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+            .region(a)
+            .region(b)
+            .build(&mut ctx);
+        let op = ctx.create_op(data);
+        ctx.push_op_region(op, c);
+        assert_eq!(region_ids(&ctx, op), smallvec_inline![a, b, c]);
+        assert_eq!(ctx.op_region_count(op), 3);
+        assert_eq!(ctx.op_region(op, 2), Some(c));
+        assert!(
+            [a, b, c]
+                .iter()
+                .all(|&r| ctx.region(r).parent_op == Some(op))
+        );
+
+        // Detaching from the middle, the head, and the tail keeps the rest linked.
+        ctx.detach_region(b);
+        assert_eq!(region_ids(&ctx, op), smallvec_inline![a, c]);
+        ctx.detach_region(a);
+        assert_eq!(region_ids(&ctx, op), smallvec_inline![c]);
+        ctx.push_op_region(op, b);
+        ctx.detach_region(b);
+        assert_eq!(region_ids(&ctx, op), smallvec_inline![c]);
+        assert_eq!(ctx.region(b).parent_op, None);
+
+        // A detached region can be attached elsewhere.
+        let other = ctx.create_op(OperationData::new(
+            loc,
+            Symbol::new("test"),
+            Symbol::new("op"),
+        ));
+        ctx.push_op_region(other, a);
+        ctx.push_op_region(other, b);
+        assert_eq!(region_ids(&ctx, other), smallvec_inline![a, b]);
+
+        ctx.clear_op_regions(op);
+        assert!(region_ids(&ctx, op).is_empty());
+        assert_eq!(ctx.region(c).parent_op, None);
+        assert_eq!(region_ids(&ctx, other), smallvec_inline![a, b]);
+    }
+
+    #[test]
+    fn cloned_operation_gets_its_own_region_list() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let regions = [(); 3].map(|()| empty_region(&mut ctx, loc));
+        let mut builder = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"));
+        for region in regions {
+            builder = builder.region(region);
+        }
+        let data = builder.build(&mut ctx);
+        let op = ctx.create_op(data);
+        let clone = ctx.clone_op(op, &mut IrMapping::new());
+        assert_eq!(region_ids(&ctx, op)[..], regions);
+        let cloned = region_ids(&ctx, clone);
+        assert_eq!(cloned.len(), 3);
+        assert!(cloned.iter().all(|r| !regions.contains(r)));
+        assert!(
+            cloned
+                .iter()
+                .all(|&r| ctx.region(r).parent_op == Some(clone))
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "appears more than once")]
+    fn builder_rejects_a_repeated_region() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let region = empty_region(&mut ctx, loc);
+        OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+            .region(region)
+            .region(region)
+            .build(&mut ctx);
+    }
+
+    #[test]
+    #[should_panic(expected = "already belongs to operation")]
+    fn builder_rejects_an_owned_region() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let region = empty_region(&mut ctx, loc);
+        let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+            .region(region)
+            .build(&mut ctx);
+        ctx.create_op(data);
+        OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+            .region(region)
+            .build(&mut ctx);
+    }
+
+    #[test]
+    fn successors_spill_past_two_and_shrink_back() {
+        let mut ctx = IrContext::new();
+        let loc = test_location(&mut ctx);
+        let blocks = [(); 4].map(|()| empty_block(&mut ctx, loc));
+        for len in 0..=blocks.len() {
+            let mut builder =
+                OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("br"));
+            for &block in &blocks[..len] {
+                builder = builder.successor(block);
+            }
+            let data = builder.build(&mut ctx);
+            let op = ctx.create_op(data);
+            assert_eq!(successor_ids(&ctx, op)[..], blocks[..len]);
+            assert_eq!(ctx.op_successor_count(op), len);
+            assert_eq!(ctx.op_successors(op).len(), len);
+            assert!(
+                ctx.op_successors(op)
+                    .rev()
+                    .eq(blocks[..len].iter().rev().copied())
+            );
+        }
+
+        let mut builder = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("br"));
+        for block in blocks {
+            builder = builder.successor(block);
+        }
+        let data = builder.build(&mut ctx);
+        let op = ctx.create_op(data);
+        ctx.set_op_successor(op, 3, blocks[0]);
+        assert_eq!(
+            successor_ids(&ctx, op),
+            smallvec_inline![blocks[0], blocks[1], blocks[2], blocks[0]]
+        );
+        let clone = ctx.clone_op(op, &mut IrMapping::new());
+        ctx.truncate_op_successors(op, 1);
+        assert_eq!(successor_ids(&ctx, op), smallvec_inline![blocks[0]]);
+        assert_eq!(
+            successor_ids(&ctx, clone),
+            smallvec_inline![blocks[0], blocks[1], blocks[2], blocks[0]]
+        );
+        ctx.set_op_successor(op, 0, blocks[3]);
+        assert_eq!(successor_ids(&ctx, op), smallvec_inline![blocks[3]]);
     }
 
     #[test]
@@ -1888,9 +2291,9 @@ mod tests {
         assert_eq!(print_module(&clone, module.op()), original_text);
 
         // Redirect the negation to the other constant in the clone only.
-        let func_body = clone.op(module.op()).regions[0];
+        let func_body = clone.op_region(module.op(), 0).unwrap();
         let func_op = clone.block(clone.region(func_body).blocks[0]).ops[0];
-        let entry = clone.region(clone.op(func_op).regions[0]).blocks[0];
+        let entry = clone.region(clone.op_region(func_op, 0).unwrap()).blocks[0];
         let [first, second, ..] = clone.block(entry).ops[..] else {
             panic!("expected two constants");
         };
@@ -1917,7 +2320,7 @@ mod tests {
         let module = parse_test_module(&mut ctx, input);
 
         // Find the first func.func in the module's top-level block
-        let module_region = ctx.op(module.op()).regions[0];
+        let module_region = ctx.op_region(module.op(), 0).unwrap();
         let module_block = ctx.region(module_region).blocks[0];
         let func_op = ctx
             .block(module_block)
@@ -1930,7 +2333,7 @@ mod tests {
             .expect("no func.func found");
 
         // Clone the body region
-        let body_region = ctx.op(func_op).regions[0];
+        let body_region = ctx.op_region(func_op, 0).unwrap();
         let mut mapping = IrMapping::new();
         let cloned_region = ctx.clone_region(body_region, &mut mapping);
 
@@ -1948,7 +2351,7 @@ mod tests {
         let new_func_op = ctx.create_op(new_func);
 
         // Add to module
-        let module_region = ctx.op(module.op()).regions[0];
+        let module_region = ctx.op_region(module.op(), 0).unwrap();
         let module_block = ctx.region(module_region).blocks[0];
         ctx.push_op(module_block, new_func_op);
 

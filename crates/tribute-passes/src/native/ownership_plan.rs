@@ -525,7 +525,7 @@ fn collect_and_validate_managed_layouts(
                 &mut visited_types,
             );
         }
-        for region in ctx.op(op).regions.iter().copied() {
+        for region in ctx.op_regions(op) {
             for block in ctx.region(region).blocks.iter().copied() {
                 for &argument in ctx.block_args(block) {
                     collect_reachable_type_contract(

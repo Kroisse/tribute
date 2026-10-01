@@ -45,7 +45,7 @@ impl RewriteScope for func::Func {
     type Regions = std::option::IntoIter<RegionRef>;
 
     fn regions(self, ctx: &IrContext) -> Self::Regions {
-        ctx.op(self.op_ref()).regions.first().copied().into_iter()
+        ctx.op_region(self.op_ref(), 0).into_iter()
     }
 
     fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
@@ -57,7 +57,7 @@ impl RewriteScope for wasm::Func {
     type Regions = std::option::IntoIter<RegionRef>;
 
     fn regions(self, ctx: &IrContext) -> Self::Regions {
-        ctx.op(self.op_ref()).regions.first().copied().into_iter()
+        ctx.op_region(self.op_ref(), 0).into_iter()
     }
 
     fn module_first_block(self, _ctx: &IrContext) -> Option<BlockRef> {
@@ -321,7 +321,7 @@ impl PatternApplicator {
             }
 
             // First, recurse into nested regions
-            let regions = ctx.op(op).regions.clone();
+            let regions = ctx.op_regions(op).collect::<crate::RegionList>();
             for region in regions {
                 changes += self.visit_region(ctx, region, module_first_block);
             }
@@ -537,7 +537,7 @@ mod tests {
     }
 
     fn first_nested_op(ctx: &IrContext, op: OpRef) -> OpRef {
-        let region = ctx.op(op).regions[0];
+        let region = ctx.op_region(op, 0).unwrap();
         let block = ctx.region(region).blocks[0];
         ctx.block(block).ops[0]
     }

@@ -34,7 +34,7 @@ pub(crate) fn collect_call_indirect_types(
     ) -> CompilationResult<()> {
         for &block in &ctx.region(region).blocks {
             for &op in &ctx.block(block).ops {
-                for &nested in &ctx.op(op).regions {
+                for nested in ctx.op_regions(op) {
                     collect_from_region(ctx, nested, type_idx_by_type, next_type_idx, new_types)?;
                 }
                 let signature = if wasm_dialect::ReturnCallIndirect::matches(ctx, op) {
@@ -83,7 +83,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symb
         for &block_ref in &ctx.region(region_ref).blocks {
             for &op in &ctx.block(block_ref).ops {
                 // Recursively process nested regions
-                for &nested in &ctx.op(op).regions {
+                for nested in ctx.op_regions(op) {
                     collect_from_region(ctx, nested, ref_funcs);
                 }
 
@@ -107,7 +107,7 @@ pub(crate) fn has_call_indirect(ctx: &IrContext, module: Module) -> bool {
         for &block_ref in &ctx.region(region_ref).blocks {
             for &op in &ctx.block(block_ref).ops {
                 // Check nested regions first
-                for &nested in &ctx.op(op).regions {
+                for nested in ctx.op_regions(op) {
                     if check_region(ctx, nested) {
                         return true;
                     }

@@ -463,17 +463,19 @@ impl OpSchema {
         }
 
         let expected_regions = self.region_count();
-        if !expected_regions.contains(data.regions.len()) {
+        let regions = ctx.op_region_count(op);
+        if !expected_regions.contains(regions) {
             violations.push(SchemaViolation::RegionCount {
                 expected: expected_regions,
-                actual: data.regions.len(),
+                actual: regions,
             });
         }
 
-        if data.successors.len() != self.successors.len() {
+        let successors = ctx.op_successor_count(op);
+        if successors != self.successors.len() {
             violations.push(SchemaViolation::SuccessorCount {
                 expected: self.successors.len(),
-                actual: data.successors.len(),
+                actual: successors,
             });
         }
 

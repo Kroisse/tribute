@@ -746,7 +746,7 @@ mod tests {
         lower(&mut ctx, module, TypeConverter::new());
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op(func).regions[0];
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let remaining_adt_ops = ctx
             .block(block)
@@ -832,7 +832,7 @@ mod tests {
         lower(&mut ctx, module, TypeConverter::new());
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op(func).regions[0];
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let variant_types: Vec<_> = ctx
             .block(block)
@@ -932,7 +932,7 @@ mod tests {
         lower(&mut ctx, module, TypeConverter::new());
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op(func).regions[0];
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let function_args = ctx.block_args(block).to_vec();
         let remaining_variant_gets = ctx
@@ -985,7 +985,7 @@ mod tests {
         lower(&mut ctx, module, TypeConverter::new());
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op(func).regions[0];
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let lowered_result_types: Vec<_> = ctx
             .block(block)

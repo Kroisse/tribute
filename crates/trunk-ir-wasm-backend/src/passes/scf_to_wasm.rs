@@ -11,6 +11,8 @@ use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use itertools::Itertools;
+
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockData, IrContext, OpList, RegionData};
 use trunk_ir::dialect::core;
@@ -224,10 +226,10 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
     let [discriminant] = ctx.op_operands(op) else {
         return None;
     };
-    let [switch_body] = ctx.op(op).regions.as_slice() else {
+    let Ok(switch_body) = ctx.op_regions(op).exactly_one() else {
         return None;
     };
-    let [body_block] = ctx.region(*switch_body).blocks.as_slice() else {
+    let [body_block] = ctx.region(switch_body).blocks.as_slice() else {
         return None;
     };
     if !ctx.block_args(*body_block).is_empty() {
@@ -240,19 +242,19 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
         if !ctx.op_results(arm).is_empty() || !ctx.op_operands(arm).is_empty() {
             return None;
         }
-        let [body] = ctx.op(arm).regions.as_slice() else {
+        let Ok(body) = ctx.op_regions(arm).exactly_one() else {
             return None;
         };
-        let [entry] = ctx.region(*body).blocks.as_slice() else {
+        let [entry] = ctx.region(body).blocks.as_slice() else {
             return None;
         };
         if !ctx.block_args(*entry).is_empty() {
             return None;
         }
         if scf::Case::matches(ctx, arm) {
-            cases.push((ctx.op(arm).attributes.get("value")?.clone(), *body));
+            cases.push((ctx.op(arm).attributes.get("value")?.clone(), body));
         } else if scf::Default::matches(ctx, arm) {
-            if default.replace(*body).is_some() {
+            if default.replace(body).is_some() {
                 return None;
             }
         } else {
@@ -303,7 +305,7 @@ fn find_nonlowerable_switch(ctx: &IrContext, op: OpRef) -> Option<(OpRef, Switch
     {
         return Some((op, reason));
     }
-    for region in ctx.op(op).regions.iter().copied() {
+    for region in ctx.op_regions(op) {
         for block in ctx.region(region).blocks.iter().copied() {
             for nested in ctx.block(block).ops.iter().copied() {
                 if let Some(rejected) = find_nonlowerable_switch(ctx, nested) {
@@ -1150,7 +1152,7 @@ mod tests {
                         !(ctx.get_type(ty).dialect == "core" && ctx.get_type(ty).name == "never")
                     );
                 }
-                for &region in &data.regions {
+                for region in ctx.op_regions(op) {
                     for &block in &ctx.region(region).blocks {
                         for &arg in ctx.block_args(block) {
                             let ty = ctx.get_type(ctx.value_ty(arg));
@@ -1287,7 +1289,7 @@ mod tests {
                 )),
             );
             let function = module.ops(&ctx)[0];
-            let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
+            let block = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
             let original = ctx.block(block).ops[0];
             let result_types = ctx.op_result_types(original).to_vec();
             assert!(

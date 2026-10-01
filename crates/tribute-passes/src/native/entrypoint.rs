@@ -64,10 +64,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
         "entrypoint: root `main` must have no hidden parameters after the entry bridge"
     );
     let body = ctx
-        .op(main.op_ref())
-        .regions
-        .first()
-        .copied()
+        .op_region(main.op_ref(), 0)
         .expect("entrypoint: root `main` must be a definition");
     let blocks = ctx.region(body).blocks.clone();
     let entry = *blocks

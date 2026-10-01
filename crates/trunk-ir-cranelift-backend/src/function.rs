@@ -425,8 +425,7 @@ impl<'a> FunctionTranslator<'a> {
 
         // === Control Flow ===
         if clif::Jump::from_op(ctx, op).is_ok() {
-            let op_data = ctx.op(op);
-            let ir_dest = op_data.successors[0];
+            let ir_dest = clif::Jump::from_op(ctx, op).unwrap().dest(ctx);
             let cl_dest = self.lookup_block(ir_dest)?;
             let operands = ctx.op_operands(op);
             let args: Vec<cl_ir::BlockArg> = self
@@ -448,9 +447,9 @@ impl<'a> FunctionTranslator<'a> {
         if clif::Brif::from_op(ctx, op).is_ok() {
             let operands = ctx.op_operands(op);
             let cond = self.lookup(operands[0])?;
-            let op_data = ctx.op(op);
-            let cl_then = self.lookup_block(op_data.successors[0])?;
-            let cl_else = self.lookup_block(op_data.successors[1])?;
+            let brif = clif::Brif::from_op(ctx, op).unwrap();
+            let cl_then = self.lookup_block(brif.then_dest(ctx))?;
+            let cl_else = self.lookup_block(brif.else_dest(ctx))?;
             self.builder.ins().brif(cond, cl_then, &[], cl_else, &[]);
             return Ok(());
         }

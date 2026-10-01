@@ -278,8 +278,7 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
                 .ok()
                 .flatten();
             let evidence_index = usize::from(environment_index == Some(0));
-            let body = *ctx.op(parent).regions.first()?;
-            let entry = *ctx.region(body).blocks.first()?;
+            let entry = *ctx.region(ctx.op_region(parent, 0)?).blocks.first()?;
             let &evidence = ctx.block_args(entry).get(evidence_index)?;
             return ability::is_evidence_type_ref(ctx, ctx.value_ty(evidence)).then_some(evidence);
         }

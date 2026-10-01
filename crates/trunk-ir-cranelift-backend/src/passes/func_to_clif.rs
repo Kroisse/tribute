@@ -544,13 +544,13 @@ mod tests {
                 ctx.op_mut(op).attributes.remove("type");
             }
             let before = print_module(&ctx, module.op());
-            let regions = ctx.op(op).regions.clone();
+            let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             PatternApplicator::new(TypeConverter::new())
                 .add_pattern(super::FuncFuncPattern)
                 .apply_partial(&mut ctx, module);
             assert_eq!(print_module(&ctx, module.op()), before);
             assert_eq!(module.ops(&ctx)[0], op);
-            assert_eq!(ctx.op(op).regions, regions);
+            assert!(ctx.op_regions(op).eq(regions));
         }
     }
 
@@ -816,7 +816,7 @@ mod tests {
 }"#,
         );
         let caller = module.ops(&ctx)[0];
-        let entry = ctx.region(ctx.op(caller).regions[0]).blocks[0];
+        let entry = ctx.region(ctx.op_region(caller, 0).unwrap()).blocks[0];
         let evidence_ty = ctx.value_ty(ctx.block_args(entry)[1]);
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();

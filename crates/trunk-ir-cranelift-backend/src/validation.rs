@@ -100,7 +100,7 @@ fn collect_clif_function_signatures(
                     ));
                 }
             }
-            for &nested in &ctx.op(op).regions {
+            for nested in ctx.op_regions(op) {
                 collect_clif_function_signatures(ctx, nested, functions, errors);
             }
         }
@@ -286,7 +286,7 @@ fn validate_clif_region(
                     } else {
                         owner
                     };
-                    for &nested in &data.regions {
+                    for nested in ctx.op_regions(op) {
                         validate_clif_region(ctx, nested, nested_owner, functions, errors);
                     }
                     continue;
@@ -319,7 +319,7 @@ fn validate_clif_region(
             }
             if clif::Func::matches(ctx, op) {
                 let function = validate_clif_function(ctx, op, errors);
-                for &body in &ctx.op(op).regions {
+                for body in ctx.op_regions(op) {
                     validate_clif_region(ctx, body, function, functions, errors);
                 }
                 continue;
@@ -399,7 +399,7 @@ fn validate_clif_region(
                 check_tail_call_conv(ctx, op, caller, signature, errors);
             }
 
-            for &nested in &ctx.op(op).regions {
+            for nested in ctx.op_regions(op) {
                 validate_clif_region(ctx, nested, owner, functions, errors);
             }
         }

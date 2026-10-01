@@ -286,7 +286,7 @@ mod tests {
                 ),
             );
             let function = ctx.block(module.first_block(&ctx).unwrap()).ops[0];
-            let region = ctx.op(function).regions[0];
+            let region = ctx.op_region(function, 0).unwrap();
             let block = ctx.region(region).blocks[0];
             let old = ctx.block(block).ops[0];
             let loc = ctx.op(old).location;

@@ -657,7 +657,7 @@ pub fn remove_indirect_call_signature(attributes: &mut crate::AttributeMap) {
 impl Func {
     /// Return the function body when this declaration has one.
     pub fn body_if_present(&self, ctx: &crate::IrContext) -> Option<crate::RegionRef> {
-        ctx.op(self.op_ref()).regions.first().copied()
+        ctx.op_region(self.op_ref(), 0)
     }
 }
 
@@ -703,13 +703,12 @@ fn print_func(
 
     // Extract region ref and func type info before mutable operations
     let region = {
-        let data = h.ctx().op(op);
+        let regions = h.ctx().op_region_count(op);
         assert!(
-            data.regions.len() <= 1,
-            "print_func: expected at most one region, found {}",
-            data.regions.len(),
+            regions <= 1,
+            "print_func: expected at most one region, found {regions}",
         );
-        data.regions.first().copied()
+        h.ctx().op_region(op, 0)
     };
 
     // Extract the validated input/result lists from the func.func_sig type attribute.
