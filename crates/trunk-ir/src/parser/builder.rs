@@ -26,8 +26,9 @@ use crate::rewrite::Module;
 use crate::types::*;
 use crate::{BlockArgData, BlockData, RegionData};
 
-fn types_of(params: Vec<(TypeRef, AttributeMap)>) -> Vec<TypeRef> {
-    params.into_iter().map(|(ty, _)| ty).collect()
+/// The types of `params`, without their attributes.
+fn param_types(params: &[(TypeRef, AttributeMap)]) -> impl ExactSizeIterator<Item = TypeRef> + '_ {
+    params.iter().map(|&(ty, _)| ty)
 }
 
 // ============================================================================
@@ -94,11 +95,11 @@ impl<'a> ArenaIrBuilder<'a> {
                 let dialect = Symbol::from_dynamic(dialect);
                 let name = Symbol::from_dynamic(name);
                 let params = self.build_params(params)?;
-                let attrs = self.build_type_attrs(dialect, name, attrs, &params)?;
+                let attrs = self.build_type_attrs(dialect, name, attrs)?;
 
                 let mut builder = TypeDataBuilder::new(dialect, name);
-                for (ty, _) in params {
-                    builder = builder.param(ty);
+                for (ty, param_attrs) in params {
+                    builder = builder.param_with_attrs(ty, param_attrs);
                 }
                 for (k, v) in attrs {
                     builder = builder.attr(k, v);
@@ -137,17 +138,15 @@ impl<'a> ArenaIrBuilder<'a> {
             .collect()
     }
 
-    /// Build a type's attributes and store the attributes written on its
-    /// parameters, `params`, in canonical [`PARAM_ATTRS_ATTR`] form.
+    /// Build a type's own attributes.
     ///
-    /// The textual form writes parameter attributes only inline, so an explicit
-    /// [`PARAM_ATTRS_ATTR`] key is rejected.
+    /// The textual form writes parameter attributes only inline, after each
+    /// parameter, so an explicit [`PARAM_ATTRS_ATTR`] key is rejected.
     fn build_type_attrs(
         &mut self,
         dialect: Symbol,
         name: Symbol,
         attrs: &RawAttrDict<'_>,
-        params: &[(TypeRef, AttributeMap)],
     ) -> Result<AttributeMap, ParseError> {
         if attrs.iter().any(|(key, _)| key == PARAM_ATTRS_ATTR) {
             return Err(ParseError {
@@ -157,13 +156,11 @@ impl<'a> ArenaIrBuilder<'a> {
                 offset: 0,
             });
         }
-        let mut attrs = self.build_attr_dict(attrs)?;
-        if let Some(value) = param_attrs_attribute(params.iter().map(|(_, attrs)| attrs.clone())) {
-            attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
-        }
-        Ok(attrs)
+        self.build_attr_dict(attrs)
     }
 
+    /// Build a function type's attributes, storing the attributes written on
+    /// its inputs and results in canonical [`PARAM_ATTRS_ATTR`] form.
     fn build_function_type_attrs(
         &mut self,
         dialect: Symbol,
@@ -172,8 +169,12 @@ impl<'a> ArenaIrBuilder<'a> {
         inputs: &[(TypeRef, AttributeMap)],
         results: &[(TypeRef, AttributeMap)],
     ) -> Result<AttributeMap, ParseError> {
-        let params: Vec<_> = inputs.iter().chain(results).cloned().collect();
-        self.build_type_attrs(dialect, name, attrs, &params)
+        let mut attrs = self.build_type_attrs(dialect, name, attrs)?;
+        let param_attrs = inputs.iter().chain(results).map(|(_, attrs)| attrs.clone());
+        if let Some(value) = param_attrs_attribute(param_attrs) {
+            attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
+        }
+        Ok(attrs)
     }
 
     fn build_function_type(
@@ -222,7 +223,7 @@ impl<'a> ArenaIrBuilder<'a> {
             &inputs,
             &results,
         )?;
-        let (inputs, results) = (types_of(inputs), types_of(results));
+        let (inputs, results) = (param_types(&inputs), param_types(&results));
         Ok(
             crate::dialect::wasm::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -256,7 +257,7 @@ impl<'a> ArenaIrBuilder<'a> {
             &inputs,
             &results,
         )?;
-        let (inputs, results) = (types_of(inputs), types_of(results));
+        let (inputs, results) = (param_types(&inputs), param_types(&results));
         Ok(
             crate::dialect::clif::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -300,7 +301,7 @@ impl<'a> ArenaIrBuilder<'a> {
             &inputs,
             &results,
         )?;
-        let (inputs, results) = (types_of(inputs), types_of(results));
+        let (inputs, results) = (param_types(&inputs), param_types(&results));
         Ok(
             crate::dialect::func::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -337,7 +338,7 @@ impl<'a> ArenaIrBuilder<'a> {
             &inputs,
             &results,
         )?;
-        let (inputs, results) = (types_of(inputs), types_of(results));
+        let (inputs, results) = (param_types(&inputs), param_types(&results));
         let num_inputs = u32::try_from(inputs.len()).map_err(|_| ParseError {
             message: format!("{dialect}.{name} input count exceeds u32"),
             offset: 0,

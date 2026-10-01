@@ -665,12 +665,26 @@ pub enum ParamAttrsError {
 
 /// The canonical [`PARAM_ATTRS_ATTR`] value for `entries`, or `None` when every
 /// entry is empty and the key must be omitted.
+///
+/// Leading empty entries are only counted, so a type whose parameters carry no
+/// attributes allocates nothing here.
 pub fn param_attrs_attribute(entries: impl IntoIterator<Item = AttributeMap>) -> Option<Attribute> {
-    let entries: Vec<_> = entries.into_iter().collect();
-    entries
-        .iter()
-        .any(|entry| !entry.is_empty())
-        .then(|| Attribute::List(entries.into_iter().map(Attribute::Dict).collect()))
+    let mut entries = entries.into_iter();
+    let mut leading_empty = 0;
+    let first = loop {
+        let entry = entries.next()?;
+        if !entry.is_empty() {
+            break entry;
+        }
+        leading_empty += 1;
+    };
+    let mut list = Vec::with_capacity(leading_empty + 1 + entries.size_hint().0);
+    list.extend(
+        std::iter::repeat_with(|| Attribute::Dict(AttributeMap::new())).take(leading_empty),
+    );
+    list.push(Attribute::Dict(first));
+    list.extend(entries.map(Attribute::Dict));
+    Some(Attribute::List(list))
 }
 
 /// Data for a single interned type.
