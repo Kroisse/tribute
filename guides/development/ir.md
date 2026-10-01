@@ -212,3 +212,26 @@ Matching uses typed wrappers (see [code conventions](conventions.md) for
 if let Ok(func) = func::Func::from_op(&ctx, op) { ... }
 if func::Call::matches(&ctx, op) { ... }
 ```
+
+An operation's regions and successors are read through the context, not
+through `OperationData`: `ctx.op_regions(op)` and `ctx.op_successors(op)`
+iterate `RegionRef`/`BlockRef`, `ctx.op_region(op, i)` and
+`ctx.op_successor(op, i)` index them, and `op_region_count` /
+`op_successor_count` give their lengths. Change them through the context's
+methods (`push_op_region`, `clear_op_regions`, `detach_region`,
+`set_op_successor`, `truncate_op_successors`), which keep region parent
+links consistent. Prefer a typed accessor such as `func.body(ctx)` when the
+operation's wrapper declares the region.
+
+When a loop must mutate the IR while walking such a list, collect a snapshot
+into the list's `SmallVec` alias rather than a `Vec`. These lists rarely
+exceed four entries, so the alias does not allocate:
+
+```rust
+let regions: RegionList = ctx.op_regions(op).collect();
+let successors: BlockList = ctx.op_successors(op).collect();
+let ops: OpList = ctx.block(block).ops.clone();
+for region in regions {
+    rewrite_region(ctx, region);
+}
+```
