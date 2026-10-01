@@ -41,6 +41,22 @@ fn lambda_argument_to_an_unannotated_parameter_is_reported(db: &salsa::DatabaseI
     );
 }
 
+/// A lambda argument to a parameter of a non-function type is checked again
+/// after the mismatch is constrained. Its `let`s keep the schemes of their
+/// first visit, so the mismatch is reported, not a type checker panic.
+#[salsa_test]
+fn lambda_argument_to_a_non_function_parameter_is_reported(db: &salsa::DatabaseImpl) {
+    assert_eq!(
+        errors(
+            db,
+            "fn beta(f: Int) -> Nil { Nil }\n\n\
+             fn main() -> Nil {\n    beta(fn(y) {\n        let bar = fn(z) { y }\n        \
+             let qux = bar\n    })\n}\n"
+        ),
+        ["type error at call site in function 'main': expected `Int`, found `fn(_) -> Nil`"],
+    );
+}
+
 #[salsa_test]
 fn signature_type_variables_are_rigid(db: &salsa::DatabaseImpl) {
     assert_eq!(
