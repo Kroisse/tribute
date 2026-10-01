@@ -484,7 +484,7 @@ fn collect_primitive_boxes(ctx: &IrContext, region: RegionRef, used: &mut [bool;
             } else if tribute_rt::BoxFloat::from_op(ctx, op).is_ok() {
                 used[3] = true;
             }
-            for &nested in &ctx.op(op).regions {
+            for nested in ctx.op_regions(op).map(|h| h.id()) {
                 collect_primitive_boxes(ctx, nested, used);
             }
         }

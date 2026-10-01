@@ -92,7 +92,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         ControlFlow::Continue(WalkAction::Advance)
     });
     for declaration in declarations {
-        if !ctx.op(declaration).regions.is_empty() || referenced.contains(&declaration) {
+        if ctx.op_region_count(declaration) != 0 || referenced.contains(&declaration) {
             ctx.op_mut(declaration)
                 .attributes
                 .remove(COMPILER_INTRINSIC_ATTR);
@@ -320,7 +320,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         // External declarations have no body region and must remain
         // untouched. `Func::body` asserts that the region exists.
-        let Some(old_body) = ctx.op(op).regions.first().copied() else {
+        let Some(old_body) = ctx.op_region(op, 0).map(|h| h.id()) else {
             return false;
         };
 

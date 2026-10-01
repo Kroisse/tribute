@@ -346,7 +346,7 @@ fn collect_clif_data(ctx: &IrContext, module: Module) -> Vec<clif::Data> {
                 if let Ok(declared) = clif::Data::from_op(ctx, op) {
                     data.push(declared);
                 } else if trunk_ir::dialect::core::Module::matches(ctx, op) {
-                    for &nested in &ctx.op(op).regions {
+                    for nested in ctx.op_regions(op).map(|h| h.id()) {
                         collect(ctx, nested, data);
                     }
                 }
@@ -380,8 +380,8 @@ fn collect_clif_funcs_from_region(ctx: &IrContext, region: RegionRef, funcs: &mu
             } else {
                 let op_data = ctx.op(op);
                 if op_data.dialect == Symbol::new("core") && op_data.name == Symbol::new("module") {
-                    for &nested_region in &op_data.regions {
-                        collect_clif_funcs_from_region(ctx, nested_region, funcs);
+                    for nested_region in ctx.op_regions(op) {
+                        collect_clif_funcs_from_region(ctx, nested_region.id(), funcs);
                     }
                 }
             }
@@ -540,9 +540,9 @@ mod tests {
         let extra = ctx.create_region(trunk_ir::RegionData {
             location: ctx.op(op).location,
             blocks: Default::default(),
-            parent_op: Some(op),
+            parent_op: None,
         });
-        ctx.op_mut(op).regions.push(extra);
+        ctx.push_op_region(op, extra);
         let error = emit_module_to_native(&ctx, module).expect_err("multiple bodies");
         assert!(
             error

@@ -308,9 +308,8 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
 
 /// Check if all operations in a function body are in wasm dialect
 fn check_function_body(ctx: &IrContext, func_op: OpRef) {
-    let regions = &ctx.op(func_op).regions;
-    if let Some(&body_region) = regions.first() {
-        for &block in ctx.region(body_region).blocks.iter() {
+    if let Some(body_region) = ctx.op_region(func_op, 0) {
+        for &block in body_region.blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
                 let dialect = ctx.op(op).dialect;
                 if dialect != Symbol::new("wasm") {
@@ -550,7 +549,7 @@ mod tests {
         trunk_ir_wasm_backend::passes::adt_to_wasm::lower(&mut ctx, module, tc);
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op(func).regions[0];
+        let body = ctx.op_region(func, 0).unwrap().id();
         let block = ctx.region(body).blocks[0];
         let operations = ctx.block(block).ops.clone();
         let struct_new = operations

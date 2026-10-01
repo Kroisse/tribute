@@ -168,7 +168,7 @@ fn check_operands_in_region(
                 }
             }
             // Propagate the extended visible set into nested regions.
-            for &nested_region in &ctx.op(op).regions {
+            for nested_region in ctx.op_regions(op).map(|h| h.id()) {
                 check_operands_in_region(ctx, nested_region, &visible, function_name, errors);
             }
         }
@@ -265,7 +265,7 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
         for &result in ctx.op_results(op) {
             checked_values.insert(result);
         }
-        for &region in &ctx.op(op).regions {
+        for region in ctx.op_regions(op).map(|h| h.id()) {
             for &block in &ctx.region(region).blocks {
                 for &arg in ctx.block_args(block) {
                     checked_values.insert(arg);
@@ -452,7 +452,7 @@ fn validate_func_shapes(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationE
             ));
             return;
         };
-        if let Some(&region) = ctx.op(op).regions.first() {
+        if let Some(region) = ctx.op_region(op, 0).map(|h| h.id()) {
             if let Some(&entry) = ctx.region(region).blocks.first() {
                 check_value_types(
                     ctx,
@@ -983,7 +983,7 @@ fn validate_region_branch_terminator_interface(
             "RegionBranchTerminator must be resultless",
         ));
     }
-    if !ctx.op(op).successors.is_empty() {
+    if ctx.op_successor_count(op) != 0 {
         errors.push(operation_verifier_error(
             ctx,
             op,
@@ -2294,7 +2294,7 @@ mod tests {
 }"#,
         );
         let function = module.ops(&ctx)[0];
-        let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
+        let block = ctx.region(ctx.op_region(function, 0).unwrap().id()).blocks[0];
         let first = ctx.block(block).ops[0];
         let second = ctx.block(block).ops[1];
         assert!(validate_use_chains(&ctx, module).is_ok());
@@ -2325,7 +2325,7 @@ mod tests {
 }"#,
                 );
                 let function = module.ops(&ctx)[0];
-                let block = ctx.region(ctx.op(function).regions[0]).blocks[0];
+                let block = ctx.region(ctx.op_region(function, 0).unwrap().id()).blocks[0];
                 let value = if use_argument {
                     ctx.block_args(block)[0]
                 } else {
@@ -3170,7 +3170,7 @@ mod tests {
                 .successor_operands(&ctx, continue_op, RegionSuccessor::Parent)
                 .is_err()
         );
-        let unrelated_region = ctx.op(case).regions[0];
+        let unrelated_region = ctx.op_region(case, 0).unwrap().id();
         assert!(
             RegionBranchTerminatorOps::get(&ctx, continue_op)
                 .unwrap()
@@ -3384,7 +3384,7 @@ mod tests {
                 .successors(&ctx, switches[0], RegionBranchPoint::Parent)
                 .is_err()
         );
-        let second_switch_body = ctx.op(switches[1]).regions[0];
+        let second_switch_body = ctx.op_region(switches[1], 0).unwrap().id();
         ctx.region_mut(second_switch_body).blocks.clear();
         assert!(
             RegionBranchOps::get(&ctx, switches[1])

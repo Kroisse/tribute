@@ -52,7 +52,7 @@ impl SymbolTable {
                 if core::Module::matches(ctx, op) {
                     let mut nested = path.to_vec();
                     nested.extend(ctx.op(op).attributes.get_symbol(SYM_NAME));
-                    for &region in &ctx.op(op).regions {
+                    for region in ctx.op_regions(op).map(|h| h.id()) {
                         self.collect_region(ctx, region, &nested);
                     }
                 } else {
@@ -64,7 +64,7 @@ impl SymbolTable {
                     }
                     // Only modules contribute path components, as in
                     // `qualified_name`.
-                    for &region in &ctx.op(op).regions {
+                    for region in ctx.op_regions(op).map(|h| h.id()) {
                         self.collect_region(ctx, region, path);
                     }
                 }

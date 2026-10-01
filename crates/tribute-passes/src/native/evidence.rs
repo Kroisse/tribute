@@ -51,7 +51,7 @@ fn try_lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) -
         return Ok(());
     }
     lower_effect_abi_to_native(ctx, func_op)?;
-    let Some(body) = ctx.op(func_op.op_ref()).regions.first().copied() else {
+    let Some(body) = ctx.op_region(func_op.op_ref(), 0).map(|h| h.id()) else {
         return Ok(());
     };
     rewrite_evidence_ops_in_region(ctx, body)?;
@@ -443,7 +443,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
         if func::Func::from_op(ctx, op).is_ok() {
             continue;
         }
-        let regions = ctx.op(op).regions.clone();
+        let regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
         for region in regions {
             rewrite_evidence_ops_in_region(ctx, region)?;
         }
@@ -544,7 +544,7 @@ mod tests {
             ),
         ] {
             let function = func_by_name_recursive(&ctx, module, name);
-            assert!(ctx.op(function.op_ref()).regions.is_empty());
+            assert!(ctx.op_region_count(function.op_ref()) == 0);
             assert_eq!(
                 ctx.op(function.op_ref()).attributes.get_str("abi"),
                 Some("C")
@@ -606,13 +606,13 @@ mod tests {
 }"#,
         );
         let external = func_by_name_recursive(&ctx, module, "external");
-        assert!(ctx.op(external.op_ref()).regions.is_empty());
+        assert!(ctx.op_region_count(external.op_ref()) == 0);
         let before = print_module(&ctx, module.op());
 
         lower_evidence_to_native_func(&mut ctx, external);
 
         let external_after = func_by_name_recursive(&ctx, module, "external");
-        assert!(ctx.op(external_after.op_ref()).regions.is_empty());
+        assert!(ctx.op_region_count(external_after.op_ref()) == 0);
         assert_eq!(print_module(&ctx, module.op()), before);
 
         let selected = func_by_name_recursive(&ctx, module, "selected");

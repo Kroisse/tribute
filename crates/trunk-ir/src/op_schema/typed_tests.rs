@@ -297,7 +297,7 @@ fn fluent_builders_group_inputs_by_kind() {
         .regions(then_region, None)
         .build(&mut ctx, loc);
     assert!(ctx.op_result_types(declared.op_ref()).is_empty());
-    assert_eq!(ctx.op(declared.op_ref()).regions.len(), 1);
+    assert_eq!(ctx.op_region_count(declared.op_ref()), 1);
     assert!(ctx.op(declared.op_ref()).attributes.get("label").is_none());
 
     let then_region = empty_region(&mut ctx, loc);

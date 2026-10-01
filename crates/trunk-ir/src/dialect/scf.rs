@@ -73,7 +73,7 @@ fn immediate_region_owner(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 impl If {
     fn validate_region_shape(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
         let op = self.op_ref();
-        if ctx.op_operands(op).len() != 1 || ctx.op(op).regions.len() != 2 {
+        if ctx.op_operands(op).len() != 1 || ctx.op_region_count(op) != 2 {
             return Err(ControlFlowInterfaceError::new(
                 "scf.if requires one condition and exactly two regions",
             ));
@@ -129,7 +129,7 @@ impl RegionBranchModel for If {
 
 impl Loop {
     fn validate_region_shape(self, ctx: &IrContext) -> Result<(), ControlFlowInterfaceError> {
-        if ctx.op(self.op_ref()).regions.len() != 1 {
+        if ctx.op_region_count(self.op_ref()) != 1 {
             return Err(ControlFlowInterfaceError::new(
                 "scf.loop requires exactly one body region",
             ));
@@ -194,7 +194,7 @@ impl Switch {
         ctx: &IrContext,
     ) -> Result<Vec<crate::refs::RegionRef>, ControlFlowInterfaceError> {
         let op = self.op_ref();
-        if ctx.op_operands(op).len() != 1 || ctx.op(op).regions.len() != 1 {
+        if ctx.op_operands(op).len() != 1 || ctx.op_region_count(op) != 1 {
             return Err(ControlFlowInterfaceError::new(
                 "scf.switch requires one discriminant and exactly one body region",
             ));
@@ -298,7 +298,7 @@ trait SwitchArmModel: DialectOp {
         self,
         ctx: &IrContext,
     ) -> Result<crate::refs::RegionRef, ControlFlowInterfaceError> {
-        if ctx.op(self.op_ref()).regions.len() != 1 {
+        if ctx.op_region_count(self.op_ref()) != 1 {
             return Err(ControlFlowInterfaceError::new(
                 "scf.case/default requires exactly one body region",
             ));

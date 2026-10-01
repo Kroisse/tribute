@@ -218,7 +218,11 @@ pub fn lower_cps_signatures_to_physical(
             }
         }
 
-        let regions = converter.ctx.op(op).regions.clone();
+        let regions = converter
+            .ctx
+            .op_regions(op)
+            .map(|h| h.id())
+            .collect::<Vec<_>>();
         for region in regions {
             let block_count = converter.ctx.region(region).blocks.len();
             for block_index in 0..block_count {
@@ -352,7 +356,7 @@ fn validate_root_entry(
         expected_results,
         phase,
     )?;
-    if ctx.op(worker_op).regions.is_empty() {
+    if ctx.op_region_count(worker_op) == 0 {
         return Err(TargetAbiError::new(
             "target root bridge: root worker must be a definition",
         ));
@@ -410,7 +414,7 @@ pub fn compose_root_entry_bridge(
             "target root bridge: reserved root symbol collision",
         ));
     }
-    if ctx.op(worker_op).regions.is_empty() {
+    if ctx.op_region_count(worker_op) == 0 {
         return Err(TargetAbiError::new(
             "target root bridge: root `main` must be a definition",
         ));
@@ -1069,7 +1073,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol)
                 .insert(key, Attribute::Symbol(new));
         }
     }
-    let regions = ctx.op(op).regions.clone();
+    let regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
     for region in regions {
         let blocks = ctx.region(region).blocks.clone();
         for block in blocks {
@@ -1378,7 +1382,7 @@ fn environment_index(
         validate_environment_slot(params, anyref, index)?;
     }
 
-    let Some(&region) = ctx.op(function).regions.first() else {
+    let Some(region) = ctx.op_region(function, 0).map(|h| h.id()) else {
         return Ok(declared);
     };
     let Some(&entry) = ctx.region(region).blocks.first() else {

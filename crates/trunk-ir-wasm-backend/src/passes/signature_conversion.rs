@@ -43,7 +43,7 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
             converted.attrs,
         )
         .as_type_ref();
-        let body = ctx.op(op).regions.first().copied();
+        let body = ctx.op_region(op, 0).map(|h| h.id());
         let sym_name = wasm_func.sym_name(ctx);
         let loc = ctx.op(op).location;
 
@@ -280,7 +280,7 @@ mod tests {
         assert!(result.reached_fixpoint);
         let ops = module.ops(&ctx);
         for (op, results) in ops.iter().take(3).zip([vec![], vec![i64], vec![i64, i64]]) {
-            assert!(ctx.op(*op).regions.is_empty());
+            assert!(ctx.op_region_count(*op) == 0);
             let converted = wasm::FuncSig::from_type_ref(
                 &ctx,
                 ctx.op(*op).attributes.get_type("type").unwrap(),

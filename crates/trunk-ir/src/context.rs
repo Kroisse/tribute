@@ -52,8 +52,12 @@ pub struct OperationData {
     pub operands: EntityList<ValueRef>,
     pub results: EntityList<TypeRef>,
     pub attributes: AttributeMap,
-    pub regions: RegionList,
-    pub successors: BlockList,
+    /// Read through [`IrContext::op_regions`] and change through the
+    /// context's region methods.
+    pub(crate) regions: RegionList,
+    /// Read through [`IrContext::op_successors`] and change through the
+    /// context's successor methods.
+    pub(crate) successors: BlockList,
     pub parent_block: Option<BlockRef>,
 }
 
@@ -549,6 +553,85 @@ impl IrContext {
     /// Get all result values of an operation.
     pub fn op_results(&self, op: OpRef) -> &[ValueRef] {
         self.result_values[op].as_slice(&self.value_pool)
+    }
+
+    /// The regions of an operation, in order.
+    pub fn op_regions(&self, op: OpRef) -> Regions<'_> {
+        Regions {
+            ctx: self,
+            iter: self.ops[op].regions.iter(),
+        }
+    }
+
+    /// The `index`-th region of an operation, if it has that many.
+    pub fn op_region(&self, op: OpRef, index: usize) -> Option<RegionHandle<'_>> {
+        self.op_regions(op).nth(index)
+    }
+
+    /// The number of regions of an operation.
+    pub fn op_region_count(&self, op: OpRef) -> usize {
+        self.ops[op].regions.len()
+    }
+
+    /// Append `region` to an operation's regions and make the operation its
+    /// parent.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `region` already belongs to an operation.
+    pub fn push_op_region(&mut self, op: OpRef, region: RegionRef) {
+        if let Some(existing) = self.regions[region].parent_op {
+            panic!(
+                "push_op_region: region {region} already belongs to operation {existing}; \
+                 cannot reassign to {op}",
+            );
+        }
+        self.bump_revision();
+        self.regions[region].parent_op = Some(op);
+        self.ops[op].regions.push(region);
+    }
+
+    /// Detach every region from an operation, leaving the regions without a
+    /// parent.
+    pub fn clear_op_regions(&mut self, op: OpRef) {
+        self.bump_revision();
+        for region in std::mem::take(&mut self.ops[op].regions) {
+            self.regions[region].parent_op = None;
+        }
+    }
+
+    /// The successor blocks of an operation, in order.
+    pub fn op_successors(&self, op: OpRef) -> Successors<'_> {
+        Successors {
+            ctx: self,
+            iter: self.ops[op].successors.iter(),
+        }
+    }
+
+    /// The `index`-th successor of an operation, if it has that many.
+    pub fn op_successor(&self, op: OpRef, index: usize) -> Option<BlockHandle<'_>> {
+        self.op_successors(op).nth(index)
+    }
+
+    /// The number of successors of an operation.
+    pub fn op_successor_count(&self, op: OpRef) -> usize {
+        self.ops[op].successors.len()
+    }
+
+    /// Replace the `index`-th successor of an operation.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the operation has no `index`-th successor.
+    pub fn set_op_successor(&mut self, op: OpRef, index: usize, block: BlockRef) {
+        self.bump_revision();
+        self.ops[op].successors[index] = block;
+    }
+
+    /// Keep only the first `len` successors of an operation.
+    pub fn truncate_op_successors(&mut self, op: OpRef, len: usize) {
+        self.bump_revision();
+        self.ops[op].successors.truncate(len);
     }
 
     /// Remove an operation and its entire region subtree, clearing all
@@ -1048,6 +1131,132 @@ impl Default for IrContext {
         Self::new()
     }
 }
+
+// ============================================================================
+// Entity handles
+// ============================================================================
+
+macro_rules! entity_handle {
+    ($(#[$meta:meta])* $handle:ident, $id:ty, $data:ty, $arena:ident) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy)]
+        pub struct $handle<'a> {
+            ctx: &'a IrContext,
+            id: $id,
+        }
+
+        impl<'a> $handle<'a> {
+            /// The entity this handle refers to.
+            pub fn id(self) -> $id {
+                self.id
+            }
+
+            /// The entity's data, borrowed for the context's lifetime.
+            pub fn data(self) -> &'a $data {
+                &self.ctx.$arena[self.id]
+            }
+        }
+
+        impl std::ops::Deref for $handle<'_> {
+            type Target = $data;
+
+            fn deref(&self) -> &$data {
+                self.data()
+            }
+        }
+
+        impl From<$handle<'_>> for $id {
+            fn from(handle: $handle<'_>) -> $id {
+                handle.id
+            }
+        }
+
+        impl PartialEq for $handle<'_> {
+            fn eq(&self, other: &Self) -> bool {
+                std::ptr::eq(self.ctx, other.ctx) && self.id == other.id
+            }
+        }
+
+        impl Eq for $handle<'_> {}
+
+        impl std::fmt::Debug for $handle<'_> {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                std::fmt::Debug::fmt(&self.id, f)
+            }
+        }
+    };
+}
+
+entity_handle!(
+    /// A region together with the context that owns it.
+    RegionHandle,
+    RegionRef,
+    RegionData,
+    regions
+);
+
+entity_handle!(
+    /// A block together with the context that owns it.
+    BlockHandle,
+    BlockRef,
+    BlockData,
+    blocks
+);
+
+/// Iterator over the regions of an operation; see [`IrContext::op_regions`].
+#[derive(Clone)]
+pub struct Regions<'a> {
+    ctx: &'a IrContext,
+    iter: std::slice::Iter<'a, RegionRef>,
+}
+
+impl<'a> Iterator for Regions<'a> {
+    type Item = RegionHandle<'a>;
+
+    fn next(&mut self) -> Option<RegionHandle<'a>> {
+        let id = *self.iter.next()?;
+        Some(RegionHandle { ctx: self.ctx, id })
+    }
+}
+
+impl std::iter::FusedIterator for Regions<'_> {}
+
+/// Iterator over the successors of an operation; see
+/// [`IrContext::op_successors`].
+#[derive(Clone)]
+pub struct Successors<'a> {
+    ctx: &'a IrContext,
+    iter: std::slice::Iter<'a, BlockRef>,
+}
+
+impl<'a> Iterator for Successors<'a> {
+    type Item = BlockHandle<'a>;
+
+    fn next(&mut self) -> Option<BlockHandle<'a>> {
+        let id = *self.iter.next()?;
+        Some(BlockHandle { ctx: self.ctx, id })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.iter.size_hint()
+    }
+
+    fn nth(&mut self, n: usize) -> Option<BlockHandle<'a>> {
+        let id = *self.iter.nth(n)?;
+        Some(BlockHandle { ctx: self.ctx, id })
+    }
+}
+
+impl<'a> DoubleEndedIterator for Successors<'a> {
+    fn next_back(&mut self) -> Option<BlockHandle<'a>> {
+        let id = *self.iter.next_back()?;
+        Some(BlockHandle { ctx: self.ctx, id })
+    }
+}
+
+impl ExactSizeIterator for Successors<'_> {}
+
+impl std::iter::FusedIterator for Successors<'_> {}
 
 // ============================================================================
 // Helper constructors for OperationData

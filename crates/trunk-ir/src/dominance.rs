@@ -36,7 +36,11 @@ impl DominatorTree {
                 .block(block)
                 .ops
                 .last()
-                .map(|&op| ctx.op(op).successors.clone())
+                .map(|&op| {
+                    ctx.op_successors(op)
+                        .map(|h| h.id())
+                        .collect::<crate::BlockList>()
+                })
                 .unwrap_or_default();
             for &successor in &block_successors {
                 if !block_set.contains(&successor) {

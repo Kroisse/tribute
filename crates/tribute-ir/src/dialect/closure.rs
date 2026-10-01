@@ -51,10 +51,7 @@ fn print_closure_lambda(
     write!(h, "{indent_str}{name} = closure.lambda")?;
 
     // Extract region ref
-    let region = {
-        let data = h.ctx().op(op);
-        data.regions[0]
-    };
+    let region = h.ctx().op_region(op, 0).unwrap().id();
 
     // "(%param: type, ...)" — entry block args (formal parameters)
     let entry_args: Vec<_> = {

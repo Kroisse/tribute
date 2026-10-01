@@ -655,7 +655,7 @@ mod tests {
 
     impl Analysis for CrossTargetDependent {
         fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            let body = ctx.ir().op(target).regions[0];
+            let body = ctx.ir().op_region(target, 0).unwrap().id();
             let block = ctx.ir().region(body).blocks[0];
             let prerequisite_target = ctx.ir().block(block).ops[0];
             let _ = ctx.get::<CrossTargetPrerequisite>(prerequisite_target)?;
@@ -686,7 +686,7 @@ mod tests {
 
     impl Analysis for ChoiceDependent {
         fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
-            let body = ctx.ir().op(target).regions[0];
+            let body = ctx.ir().op_region(target, 0).unwrap().id();
             let block = ctx.ir().region(body).blocks[0];
             let first_child = ctx.ir().block(block).ops[0];
             if ctx.ir().op(first_child).attributes.get_symbol("sym_name")
@@ -1088,7 +1088,7 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(&mut ctx, input).op();
-        let body = ctx.op(module).regions[0];
+        let body = ctx.op_region(module, 0).unwrap().id();
         let block = ctx.region(body).blocks[0];
         let empty_module = ctx.block(block).ops[0];
         let mut analyses = AnalysisCache::new();
@@ -1220,7 +1220,7 @@ mod tests {
             "core.module @outer { core.module @first {} core.module @second {} }",
         )
         .op();
-        let body = ctx.op(outer).regions[0];
+        let body = ctx.op_region(outer, 0).unwrap().id();
         let block = ctx.region(body).blocks[0];
         let first = ctx.block(block).ops[0];
         let second = ctx.block(block).ops[1];
@@ -1279,7 +1279,7 @@ mod tests {
             "core.module @outer { core.module @inner {} core.module @unrelated {} }",
         )
         .op();
-        let body = ctx.op(outer).regions[0];
+        let body = ctx.op_region(outer, 0).unwrap().id();
         let block = ctx.region(body).blocks[0];
         let inner = ctx.block(block).ops[0];
         let unrelated = ctx.block(block).ops[1];

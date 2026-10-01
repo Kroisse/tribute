@@ -114,7 +114,7 @@ fn collect_lambdas_in_op(ctx: &IrContext, op: OpRef, result: &mut Vec<OpRef>) {
         result.push(op);
         return;
     }
-    for &region in ctx.op(op).regions.iter() {
+    for region in ctx.op_regions(op).map(|h| h.id()) {
         for &block in ctx.region(region).blocks.iter() {
             for &child_op in ctx.block(block).ops.iter() {
                 collect_lambdas_in_op(ctx, child_op, result);

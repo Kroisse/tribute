@@ -465,9 +465,12 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
             RegionOrSuccessor::Region { name, .. } => {
                 let name_ident = format_ident!("{name}");
                 let idx = region_idx;
+                let missing = format!("missing region `{name}`");
                 methods.push(quote! {
                     pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::RegionRef {
-                        ctx.op(self.0).regions[#idx]
+                        ctx.op_region(self.0, #idx)
+                            .expect(#missing)
+                            .id()
                     }
                 });
                 region_idx += 1;
@@ -475,9 +478,12 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
             RegionOrSuccessor::Successor(name) => {
                 let name_ident = format_ident!("{name}");
                 let idx = succ_idx;
+                let missing = format!("missing successor `{name}`");
                 methods.push(quote! {
                     pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::BlockRef {
-                        ctx.op(self.0).successors[#idx]
+                        ctx.op_successor(self.0, #idx)
+                            .expect(#missing)
+                            .id()
                     }
                 });
                 succ_idx += 1;

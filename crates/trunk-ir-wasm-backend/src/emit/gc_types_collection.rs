@@ -393,22 +393,22 @@ pub(crate) fn collect_gc_types(
 
                     // Recurse into nested core.module operations
                     if dialect == core_dialect && name == module_name {
-                        for &nested_region in op_data.regions.iter() {
-                            collect_ops_from_region(ctx, nested_region, ops);
+                        for nested_region in ctx.op_regions(op) {
+                            collect_ops_from_region(ctx, nested_region.id(), ops);
                         }
                         continue;
                     }
 
                     // Visit wasm.func body (recursively including nested regions)
                     if dialect == wasm_dialect && name == func_name {
-                        if let Some(&func_region) = op_data.regions.first() {
-                            collect_all_ops_recursive(ctx, func_region, ops);
+                        if let Some(func_region) = ctx.op_region(op, 0) {
+                            collect_all_ops_recursive(ctx, func_region.id(), ops);
                         }
                     } else {
                         ops.push(op);
                         // Also visit nested regions for control flow ops
-                        for &nested_region in op_data.regions.iter() {
-                            collect_all_ops_recursive(ctx, nested_region, ops);
+                        for nested_region in ctx.op_regions(op) {
+                            collect_all_ops_recursive(ctx, nested_region.id(), ops);
                         }
                     }
                 }
@@ -418,7 +418,7 @@ pub(crate) fn collect_gc_types(
             for &block in ctx.region(region).blocks.iter() {
                 for &op in ctx.block(block).ops.iter() {
                     ops.push(op);
-                    for &nested_region in ctx.op(op).regions.iter() {
+                    for nested_region in ctx.op_regions(op).map(|h| h.id()) {
                         collect_all_ops_recursive(ctx, nested_region, ops);
                     }
                 }

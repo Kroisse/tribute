@@ -98,8 +98,8 @@ fn validate_operation(
     validate_direct_callable_contracts(ctx, op, symbols, errors);
 
     // Recursively validate nested regions
-    for &region in &op_data.regions {
-        validate_region(ctx, region, depth + 1, symbols, errors);
+    for region in ctx.op_regions(op) {
+        validate_region(ctx, region.id(), depth + 1, symbols, errors);
     }
 }
 

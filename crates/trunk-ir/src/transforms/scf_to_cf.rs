@@ -121,7 +121,7 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef, plan: &ScfToCfPlan) {
         if is_scf_control_flow(ctx, op) {
             continue;
         }
-        let regions = ctx.op(op).regions.clone();
+        let regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
         for region in regions {
             transform_region(ctx, region, plan);
         }
@@ -687,7 +687,7 @@ fn replace_continue_break(
                 if scf::Loop::matches(ctx, op) {
                     continue;
                 }
-                let regions = ctx.op(op).regions.clone();
+                let regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
                 for region in regions {
                     let region_blocks = ctx.region(region).blocks.clone();
                     replace_continue_break(ctx, &region_blocks, header, exit, loc);
@@ -795,9 +795,9 @@ mod tests {
             .copied()
             .find(|&op| scf::Switch::matches(ctx, op))
             .expect("switch");
-        let switch_body = ctx.op(switch).regions[0];
+        let switch_body = ctx.op_region(switch, 0).unwrap().id();
         let arm = ctx.block(ctx.region(switch_body).blocks[0]).ops[0];
-        (switch, ctx.op(arm).regions[0])
+        (switch, ctx.op_region(arm, 0).unwrap().id())
     }
 
     /// Collect all op names from a region (dialect.name format).
@@ -1072,7 +1072,7 @@ mod tests {
             .unwrap();
 
         assert!(func.body_if_present(&ctx).is_none());
-        assert!(ctx.op(func_op).regions.is_empty());
+        assert!(ctx.op_region_count(func_op) == 0);
         assert_eq!(crate::printer::print_module(&ctx, module.op()), before);
     }
 
@@ -1552,9 +1552,9 @@ mod tests {
         );
         let (switch, arm) = first_switch_and_arm_region(&ctx, module);
         let unregistered = ctx.block(ctx.region(arm).blocks[0]).ops[0];
-        let switch_body = ctx.op(switch).regions[0];
+        let switch_body = ctx.op_region(switch, 0).unwrap().id();
         let malformed_wrapper = ctx.block(ctx.region(switch_body).blocks[0]).ops[1];
-        let malformed_region = ctx.op(malformed_wrapper).regions[0];
+        let malformed_region = ctx.op_region(malformed_wrapper, 0).unwrap().id();
         let malformed = ctx.block(ctx.region(malformed_region).blocks[0]).ops[0];
         let malformed_func_exit_data = OperationDataBuilder::new(
             ctx.op(unregistered).location,

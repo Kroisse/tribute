@@ -234,7 +234,7 @@ fn region_op_count(ctx: &IrContext, region: RegionRef) -> usize {
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
             total += 1;
-            for &r in &ctx.op(op).regions {
+            for r in ctx.op_regions(op).map(|h| h.id()) {
                 total += region_op_count(ctx, r);
             }
         }
@@ -254,7 +254,7 @@ fn should_inline(
     let Some(&callee_op) = graph.func_ops.get(&callee) else {
         return false;
     };
-    if ctx.op(callee_op).regions.is_empty() {
+    if ctx.op_region_count(callee_op) == 0 {
         return false;
     }
     // Skip extern/ABI functions: they are externally callable and the body
@@ -544,7 +544,7 @@ mod mechanics {
         use crate::walk::{WalkAction, walk_region};
         use std::ops::ControlFlow;
         let mut calls = Vec::new();
-        let body = ctx.op(func_op).regions[0];
+        let body = ctx.op_region(func_op, 0).unwrap().id();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
                 calls.push(op);
@@ -593,7 +593,7 @@ mod mechanics {
         inline_single_call(&mut ctx, call_op, helper).expect("inline should succeed");
 
         // Walk caller body, confirm no func.call remains, arith.const present.
-        let body = ctx.op(caller).regions[0];
+        let body = ctx.op_region(caller, 0).unwrap().id();
         let (has_call, has_const) = scan_body(&ctx, body);
         assert!(!has_call, "call should be gone after inlining");
         assert!(has_const, "inlined constant should be present");
@@ -653,7 +653,7 @@ mod mechanics {
         let call_op = find_call_in(&ctx, caller);
         inline_single_call(&mut ctx, call_op, helper).expect("inline should succeed");
 
-        let body = ctx.op(caller).regions[0];
+        let body = ctx.op_region(caller, 0).unwrap().id();
         let (has_call, _) = scan_body(&ctx, body);
         assert!(!has_call);
     }
@@ -708,10 +708,16 @@ mod mechanics {
 
         // After building the func we need to add the then/else blocks into the body region.
         // They were created but not attached. Let's add them now.
-        let body = ctx.op(helper).regions[0];
+        let body = ctx.op_region(helper, 0).unwrap().id();
         let entry_block = ctx.region(body).blocks[0];
-        let then_b = ctx.op(ctx.block(entry_block).ops[0]).successors[0];
-        let else_b = ctx.op(ctx.block(entry_block).ops[0]).successors[1];
+        let then_b = ctx
+            .op_successor(ctx.block(entry_block).ops[0], 0)
+            .unwrap()
+            .id();
+        let else_b = ctx
+            .op_successor(ctx.block(entry_block).ops[0], 1)
+            .unwrap()
+            .id();
         ctx.region_mut(body).blocks.push(then_b);
         ctx.region_mut(body).blocks.push(else_b);
         ctx.block_mut(then_b).parent_region = Some(body);
@@ -769,7 +775,7 @@ mod mechanics {
         let call_op = find_call_in(&ctx, caller);
         inline_single_call(&mut ctx, call_op, helper).expect("inline should succeed");
 
-        let body = ctx.op(caller).regions[0];
+        let body = ctx.op_region(caller, 0).unwrap().id();
         let (has_call, has_const) = scan_body(&ctx, body);
         assert!(!has_call);
         assert!(has_const, "inlined constant should be present");
@@ -938,7 +944,7 @@ mod pass {
         use std::ops::ControlFlow;
         let target = Symbol::from_dynamic(callee);
         let mut count = 0;
-        let body = ctx.op(func_op).regions[0];
+        let body = ctx.op_region(func_op, 0).unwrap().id();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op)
                 && ctx.op(op).attributes.get_symbol("callee") == Some(target)
@@ -1014,7 +1020,7 @@ mod pass {
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
         assert_eq!(count_calls_to(&ctx, main, "inner::helper"), 0);
-        let body = ctx.op(main).regions[0];
+        let body = ctx.op_region(main, 0).unwrap().id();
         let consts: Vec<_> = ctx
             .block(ctx.region(body).blocks[0])
             .ops
@@ -1332,7 +1338,7 @@ mod pass {
                 .get(&Symbol::new(name))
                 .copied()
                 .unwrap_or_else(|| panic!("{name} must be in the graph"));
-            let body = ctx.op(f).regions[0];
+            let body = ctx.op_region(f, 0).unwrap().id();
             let mut calls = 0usize;
             let _ = crate::walk::walk_region::<()>(&ctx, body, &mut |op| {
                 if func::Call::matches(&ctx, op) || func::TailCall::matches(&ctx, op) {
@@ -1451,7 +1457,7 @@ mod pass {
             .get(&Symbol::new("main"))
             .copied()
             .expect("main must be in the graph");
-        let body = ctx.op(main_op).regions[0];
+        let body = ctx.op_region(main_op, 0).unwrap().id();
         let (has_call, has_add) = scan_main_body(&ctx, body);
         assert!(!has_call, "main should not contain any calls after run");
         assert!(

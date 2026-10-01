@@ -291,8 +291,8 @@ impl<'a> Verifier<'a> {
         for &ty in ctx.op_result_types(op) {
             self.check_type(ty, Some(op), &format!("{op_name} result"));
         }
-        for &region in &data.regions {
-            for &block in &ctx.region(region).blocks {
+        for region in ctx.op_regions(op) {
+            for &block in &region.blocks {
                 for argument in &ctx.block(block).args {
                     let context = format!("{op_name} block argument");
                     self.check_type(argument.ty, Some(op), &context);
@@ -629,7 +629,7 @@ mod tests {
 }"#,
         );
         let function = module.ops(&ctx)[0];
-        let entry = ctx.region(ctx.op(function).regions[0]).blocks[0];
+        let entry = ctx.region(ctx.op_region(function, 0).unwrap().id()).blocks[0];
         let nil = core::nil(&mut ctx).as_type_ref();
         ctx.block_mut(entry).args[0].attrs.insert(
             Symbol::new("tribute.root_source_result"),

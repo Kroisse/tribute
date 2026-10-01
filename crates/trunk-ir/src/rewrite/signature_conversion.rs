@@ -225,7 +225,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
             converted.attrs,
         )
         .as_type_ref();
-        let body = ctx.op(op).regions.first().copied();
+        let body = ctx.op_region(op, 0).map(|h| h.id());
         let sym_name = func_op.sym_name(ctx);
         let loc = ctx.op(op).location;
 

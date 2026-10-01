@@ -432,8 +432,8 @@ pub(super) fn captures(
             for op in &ir.block(*block).ops {
                 defined.extend(ir.op_results(*op));
                 uses.extend(ir.op_operands(*op));
-                for nested in &ir.op(*op).regions {
-                    collect(ir, *nested, defined, uses);
+                for nested in ir.op_regions(*op) {
+                    collect(ir, nested.id(), defined, uses);
                 }
             }
         }

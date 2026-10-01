@@ -4,6 +4,7 @@
 //! `ability` surface. It does not run closure extraction, evidence lowering,
 //! or target-specific conversion.
 
+use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
@@ -183,7 +184,7 @@ fn check_op_types(
     for attribute in ctx.op(op).attributes.values() {
         walk_attribute_types(ctx, attribute, boundary, &mut seen, &mut errors);
     }
-    for region in ctx.op(op).regions.iter().copied() {
+    for region in ctx.op_regions(op).map(|h| h.id()) {
         for block in ctx.region(region).blocks.iter().copied() {
             for arg in ctx.block_args(block) {
                 walk_type(ctx, ctx.value_ty(*arg), boundary, &mut seen, &mut errors);
@@ -305,7 +306,7 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
                 }
             }
         }
-        for region in ctx.op(op).regions.iter().copied() {
+        for region in ctx.op_regions(op).map(|h| h.id()) {
             for block in ctx.region(region).blocks.iter().copied() {
                 for child in ctx.block(block).ops.iter().copied() {
                     visit(ctx, child, failures);
@@ -445,8 +446,8 @@ fn verify_physical_callable_graph(
                 message: "dynamic Cps transfers must use func.tail_call_indirect".into(),
             });
         }
-        for region in data.regions.iter().copied() {
-            for block in ctx.region(region).blocks.iter().copied() {
+        for region in ctx.op_regions(op) {
+            for block in region.blocks.iter().copied() {
                 for child in ctx.block(block).ops.iter().copied() {
                     visit(ctx, child, signatures, failures);
                 }
@@ -485,7 +486,7 @@ fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<Bound
 
     fn visit(ctx: &IrContext, op: OpRef, failures: &mut Vec<BoundaryFailure>) {
         let data = ctx.op(op);
-        if !data.successors.is_empty() {
+        if ctx.op_successor_count(op) != 0 {
             failures.push(failure(
                 ctx,
                 op,
@@ -495,7 +496,7 @@ fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<Bound
         if data.dialect == Symbol::new("scf") && data.name == Symbol::new("switch") {
             if ctx.op_operands(op).len() != 1
                 || !ctx.op_result_types(op).is_empty()
-                || data.regions.len() != 1
+                || ctx.op_region_count(op) != 1
             {
                 failures.push(failure(
                     ctx,
@@ -503,7 +504,7 @@ fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<Bound
                     "scf.switch requires one discriminant, no results, and one body region",
                 ));
             } else {
-                let blocks = &ctx.region(data.regions[0]).blocks;
+                let blocks = &ctx.op_region(op, 0).unwrap().data().blocks;
                 if let [body] = blocks.as_slice() {
                     for arm in ctx.block(*body).ops.iter().copied() {
                         let arm_data = ctx.op(arm);
@@ -522,8 +523,8 @@ fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<Bound
                         if is_case && !arm_data.attributes.contains_key("value") {
                             failures.push(failure(ctx, arm, "scf.case requires a value attribute"));
                         }
-                        if let [region] = arm_data.regions.as_slice() {
-                            if ctx.region(*region).blocks.len() != 1 {
+                        if let Ok(region) = ctx.op_regions(arm).exactly_one() {
+                            if region.blocks.len() != 1 {
                                 failures.push(failure(
                                     ctx,
                                     arm,
@@ -547,8 +548,8 @@ fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<Bound
                 }
             }
         }
-        for region in data.regions.iter().copied() {
-            for block in ctx.region(region).blocks.iter().copied() {
+        for region in ctx.op_regions(op) {
+            for block in region.blocks.iter().copied() {
                 for child in ctx.block(block).ops.iter().copied() {
                     visit(ctx, child, failures);
                 }
@@ -1353,8 +1354,8 @@ impl<'a> Converter<'a> {
             .collect();
         let result_types: Vec<_> = self.ctx.op_result_types(source).to_vec();
         let attrs = data.attributes.clone();
-        let regions = data.regions.clone();
-        let successors = data.successors.clone();
+        let regions: Vec<_> = self.ctx.op_regions(source).map(|h| h.id()).collect();
+        let successors: Vec<_> = self.ctx.op_successors(source).map(|h| h.id()).collect();
         if !successors.is_empty() {
             return Err(self.malformed_source(
                 source,
@@ -1500,7 +1501,7 @@ impl<'a> Converter<'a> {
     }
 
     fn contains_tribute_control(&self, op: OpRef) -> bool {
-        self.ctx.op(op).regions.iter().copied().any(|region| {
+        self.ctx.op_regions(op).map(|h| h.id()).any(|region| {
             self.ctx.region(region).blocks.iter().copied().any(|block| {
                 self.ctx.block(block).ops.iter().copied().any(|child| {
                     self.ctx.op(child).dialect == Symbol::new("tribute_control")
@@ -1557,7 +1558,11 @@ impl<'a> Converter<'a> {
         }
 
         let mut converted_regions = Vec::new();
-        let source_regions = self.ctx.op(source).regions.clone();
+        let source_regions = self
+            .ctx
+            .op_regions(source)
+            .map(|h| h.id())
+            .collect::<Vec<_>>();
         for source_region in source_regions {
             let source_blocks = self.ctx.region(source_region).blocks.clone();
             let [source_block] = source_blocks.as_slice() else {
@@ -1697,7 +1702,7 @@ impl<'a> Converter<'a> {
         };
         self.ctx.push_op(block, continuation_op);
 
-        let [source_body] = self.ctx.op(source).regions.as_slice() else {
+        let Ok(source_body) = self.ctx.op_regions(source).exactly_one() else {
             return Err(TributeControlToCpsError::one(
                 POST_CPS_BOUNDARY,
                 Some(source),
@@ -1705,7 +1710,7 @@ impl<'a> Converter<'a> {
                 "scf.switch requires exactly one body region",
             ));
         };
-        let source_body_blocks = self.ctx.region(*source_body).blocks.clone();
+        let source_body_blocks = source_body.blocks.clone();
         let [source_body_block] = source_body_blocks.as_slice() else {
             return Err(TributeControlToCpsError::one(
                 POST_CPS_BOUNDARY,
@@ -1731,9 +1736,8 @@ impl<'a> Converter<'a> {
                     "scf.switch body may contain only scf.case and scf.default",
                 ));
             }
-            let case_regions = &case_data.regions;
             let case_value = case_data.attributes.get("value").cloned();
-            let [source_region] = case_regions.as_slice() else {
+            let Ok(source_region) = self.ctx.op_regions(case).exactly_one() else {
                 return Err(TributeControlToCpsError::one(
                     POST_CPS_BOUNDARY,
                     Some(case),
@@ -1741,7 +1745,7 @@ impl<'a> Converter<'a> {
                     "scf switch arm requires exactly one region",
                 ));
             };
-            let source_case_blocks = &self.ctx.region(*source_region).blocks;
+            let source_case_blocks = &source_region.data().blocks;
             let [source_case_block] = source_case_blocks.as_slice() else {
                 return Err(TributeControlToCpsError::one(
                     POST_CPS_BOUNDARY,
@@ -1918,7 +1922,7 @@ impl<'a> Converter<'a> {
         let frame = self.frame_types(result).reference;
         let abi = CallableAbi::new(convention, source_param_types.clone(), result);
         let params = abi.lowered_params(evidence, frame);
-        let body_source = self.ctx.op(source).regions[0];
+        let body_source = self.ctx.op_region(source, 0).unwrap().id();
         let entry_source = self.ctx.region(body_source).blocks[0];
         let block = self.make_block(location, &params);
         let mut body_mapping = mapping.clone();
@@ -2864,7 +2868,7 @@ impl<'a> Converter<'a> {
             .attributes
             .get_type("operation_result_type")
             .unwrap();
-        let source_region = self.ctx.op(source).regions[0];
+        let source_region = self.ctx.op_region(source, 0).unwrap().id();
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_args = self.ctx.block_args(source_block).to_vec();
         let has_resume_token = source_args.last().is_some_and(|arg| {
@@ -3135,12 +3139,11 @@ impl<'a> Converter<'a> {
         let handle_frame =
             self.frame_for_suffix(block, location, handle_answer, flow, after_handle)?;
 
-        let regions = &self.ctx.op(source).regions;
-        let [body_source, completion_source, handlers_region] = regions.as_slice() else {
+        let Some((body_source, completion_source, handlers_region)) =
+            self.ctx.op_regions(source).map(|h| h.id()).collect_tuple()
+        else {
             unreachable!("pre-CPS validation checked handle regions");
         };
-        let (body_source, completion_source, handlers_region) =
-            (*body_source, *completion_source, *handlers_region);
         let handlers_block = self.ctx.region(handlers_region).blocks[0];
         let mut handler_arms = Vec::new();
         let source_handlers = self.ctx.block(handlers_block).ops.clone();
@@ -3582,7 +3585,7 @@ impl<'a> Converter<'a> {
             .current_func(qualified)
             .expect("validated function is present in the callable graph");
         let physical_type = self.physical_function_type(logical_type);
-        if self.ctx.op(source).regions.is_empty() {
+        if self.ctx.op_region_count(source) == 0 {
             let mut builder =
                 OperationDataBuilder::new(location, Symbol::new("func"), Symbol::new("func"))
                     .attr("sym_name", Attribute::Symbol(symbol))
@@ -3598,7 +3601,7 @@ impl<'a> Converter<'a> {
             return Ok(declaration);
         }
 
-        let source_region = self.ctx.op(source).regions[0];
+        let source_region = self.ctx.op_region(source, 0).unwrap().id();
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_result = self.convert_type(info.source_result);
         let source_params: Vec<_> = info
@@ -3666,7 +3669,7 @@ fn collect_defined_values(ctx: &IrContext, region: RegionRef, defined: &mut Hash
         defined.extend(ctx.block_args(block).iter().copied());
         for op in ctx.block(block).ops.iter().copied() {
             defined.extend(ctx.op_results(op).iter().copied());
-            for nested in ctx.op(op).regions.iter().copied() {
+            for nested in ctx.op_regions(op).map(|h| h.id()) {
                 collect_defined_values(ctx, nested, defined);
             }
         }
@@ -3687,7 +3690,7 @@ fn collect_external_in_order(
                     external.push(operand);
                 }
             }
-            for nested in ctx.op(op).regions.iter().copied() {
+            for nested in ctx.op_regions(op).map(|h| h.id()) {
                 collect_external_in_order(ctx, nested, defined, seen, external);
             }
         }
@@ -3837,12 +3840,10 @@ pub fn tribute_control_to_cps(
     ctx.detach_region(new_region);
     ctx.remove_op(candidate.op());
     ctx.detach_region(source_region);
-    ctx.op_mut(module.op()).regions.push(new_region);
-    ctx.region_mut(new_region).parent_op = Some(module.op());
+    ctx.push_op_region(module.op(), new_region);
     if let Err(error) = verify_tribute_control_post_cps(ctx, module, analyses) {
         ctx.detach_region(new_region);
-        ctx.op_mut(module.op()).regions.push(source_region);
-        ctx.region_mut(source_region).parent_op = Some(module.op());
+        ctx.push_op_region(module.op(), source_region);
         for (name, ty) in &source_aliases {
             ctx.register_type_alias(*name, *ty);
         }
@@ -4032,7 +4033,7 @@ mod tests {
             lambdas.push(op);
             return;
         }
-        for &region in &ctx.op(op).regions {
+        for region in ctx.op_regions(op).map(|h| h.id()) {
             for &block in &ctx.region(region).blocks {
                 for &child in &ctx.block(block).ops {
                     collect_lambdas(ctx, child, lambdas);
@@ -4047,7 +4048,7 @@ mod tests {
         {
             tails.push(op);
         }
-        for &region in &ctx.op(op).regions {
+        for region in ctx.op_regions(op).map(|h| h.id()) {
             for &block in &ctx.region(region).blocks {
                 for &child in &ctx.block(block).ops {
                     collect_cps_tail_calls(ctx, child, tails);
@@ -4188,7 +4189,7 @@ mod tests {
             {
                 transfers.push(op);
             }
-            for region in ctx.op(op).regions.iter().copied() {
+            for region in ctx.op_regions(op).map(|h| h.id()) {
                 for block in ctx.region(region).blocks.iter().copied() {
                     for child in ctx.block(block).ops.iter().copied() {
                         visit(ctx, child, transfers);
@@ -5085,7 +5086,7 @@ mod tests {
                     if tribute_control::Handler::matches(ctx, op) {
                         *found = ctx.op(op).attributes.get_type("ability_ref");
                     }
-                    for nested in ctx.op(op).regions.iter().copied() {
+                    for nested in ctx.op_regions(op).map(|h| h.id()) {
                         find_ability(ctx, nested, found);
                     }
                 }
@@ -5120,7 +5121,7 @@ mod tests {
             if let Ok(perform) = ability::Perform::from_op(ctx, op) {
                 *found = Some(perform.resume(ctx));
             }
-            for region in ctx.op(op).regions.iter().copied() {
+            for region in ctx.op_regions(op).map(|h| h.id()) {
                 for block in ctx.region(region).blocks.iter().copied() {
                     for child in ctx.block(block).ops.iter().copied() {
                         find_perform_resume(ctx, child, found);
@@ -5183,7 +5184,7 @@ mod tests {
                 assert!(ctx.op_results(op).is_empty(), "struct_set mutates in place");
                 *consumed_set = Some(set.r#ref(ctx));
             }
-            for region in ctx.op(op).regions.iter().copied() {
+            for region in ctx.op_regions(op).map(|h| h.id()) {
                 for block in ctx.region(region).blocks.iter().copied() {
                     for child in ctx.block(block).ops.iter().copied() {
                         find_one_shot_state_ops(ctx, child, consumed_get, consumed_set);
@@ -5278,7 +5279,7 @@ mod tests {
             if ability::HandleDispatch::matches(ctx, op) {
                 found.push(op);
             }
-            for region in ctx.op(op).regions.iter().copied() {
+            for region in ctx.op_regions(op).map(|h| h.id()) {
                 for block in ctx.region(region).blocks.iter().copied() {
                     for child in ctx.block(block).ops.iter().copied() {
                         collect_delimiters(ctx, child, found);
@@ -6113,7 +6114,7 @@ mod tests {
                     "expected one ability.perform"
                 );
             }
-            for region in ctx.op(op).regions.iter().copied() {
+            for region in ctx.op_regions(op).map(|h| h.id()) {
                 for block in ctx.region(region).blocks.iter().copied() {
                     for child in ctx.block(block).ops.iter().copied() {
                         find_perform(ctx, child, found);
@@ -6150,7 +6151,7 @@ mod tests {
         };
         assert!(closure::Lambda::matches(&ctx, reject));
         assert!(ctx.op_operands(reject).is_empty());
-        let body = ctx.op(reject).regions[0];
+        let body = ctx.op_region(reject, 0).unwrap().id();
         let body = ctx.region(body).blocks[0];
         assert!(func::Unreachable::matches(&ctx, ctx.block(body).ops[0]));
         crate::lower_ability_perform::lower_ability_perform(&mut ctx, module);
@@ -6165,7 +6166,7 @@ mod tests {
                     "expected one effect.dispatch_cps"
                 );
             }
-            for region in ctx.op(op).regions.iter().copied() {
+            for region in ctx.op_regions(op).map(|h| h.id()) {
                 for block in ctx.region(region).blocks.iter().copied() {
                     for child in ctx.block(block).ops.iter().copied() {
                         find_dispatch_cps(ctx, child, found);
@@ -6249,7 +6250,7 @@ mod tests {
             if func::CallIndirect::matches(ctx, op) {
                 calls.push(op);
             }
-            for region in ctx.op(op).regions.iter().copied() {
+            for region in ctx.op_regions(op).map(|h| h.id()) {
                 for block in ctx.region(region).blocks.iter().copied() {
                     for child in ctx.block(block).ops.iter().copied() {
                         collect_indirect_calls(ctx, child, calls);

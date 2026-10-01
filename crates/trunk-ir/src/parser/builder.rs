@@ -1643,10 +1643,10 @@ core.module @test {
             let mut ctx = IrContext::new();
             let module = parse_module(&mut ctx, &input).unwrap();
             let function = ctx
-                .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+                .block(ctx.region(ctx.op_region(module, 0).unwrap().id()).blocks[0])
                 .ops[0];
             assert_eq!(
-                ctx.op(function).regions.len(),
+                ctx.op_region_count(function),
                 1,
                 "empty body must not become a declaration"
             );
@@ -1655,9 +1655,13 @@ core.module @test {
             let mut reparsed = IrContext::new();
             let module2 = parse_module(&mut reparsed, &printed).unwrap();
             let function2 = reparsed
-                .block(reparsed.region(reparsed.op(module2).regions[0]).blocks[0])
+                .block(
+                    reparsed
+                        .region(reparsed.op_region(module2, 0).unwrap().id())
+                        .blocks[0],
+                )
                 .ops[0];
-            assert_eq!(reparsed.op(function2).regions.len(), 1);
+            assert_eq!(reparsed.op_region_count(function2), 1);
             assert_eq!(printed.contains("effect = core.nil"), !attrs.is_empty());
         }
     }
@@ -1698,7 +1702,7 @@ core.module @test {
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("generic func assembly should parse");
         let function = ctx
-            .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+            .block(ctx.region(ctx.op_region(module, 0).unwrap().id()).blocks[0])
             .ops[0];
         assert_eq!(
             ctx.op(function).attributes.get_symbol("sym_name"),
@@ -1718,7 +1722,7 @@ core.module @test {
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("explicit assembly should parse");
         let function = ctx
-            .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+            .block(ctx.region(ctx.op_region(module, 0).unwrap().id()).blocks[0])
             .ops[0];
         let signature = ctx.op(function).attributes.get_type("type").unwrap();
         assert!(func::FuncSig::from_type_ref(&ctx, signature).is_some());
@@ -1743,7 +1747,7 @@ core.module @test {
         assert!(clif::FuncSig::from_type_ref(&ctx, contract).is_some());
         assert!(func::FuncSig::from_type_ref(&ctx, contract).is_none());
         let function = ctx
-            .block(ctx.region(ctx.op(module).regions[0]).blocks[0])
+            .block(ctx.region(ctx.op_region(module, 0).unwrap().id()).blocks[0])
             .ops[0];
         let signature = ctx.op(function).attributes.get_type("type").unwrap();
         assert!(clif::FuncSig::from_type_ref(&ctx, signature).is_some());

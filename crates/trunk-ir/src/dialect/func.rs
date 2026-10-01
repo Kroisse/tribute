@@ -657,7 +657,7 @@ pub fn remove_indirect_call_signature(attributes: &mut crate::AttributeMap) {
 impl Func {
     /// Return the function body when this declaration has one.
     pub fn body_if_present(&self, ctx: &crate::IrContext) -> Option<crate::RegionRef> {
-        ctx.op(self.op_ref()).regions.first().copied()
+        ctx.op_region(self.op_ref(), 0).map(|h| h.id())
     }
 }
 

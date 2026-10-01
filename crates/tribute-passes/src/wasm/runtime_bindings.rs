@@ -37,8 +37,7 @@ pub fn provides(name: Symbol) -> bool {
 
 /// Whether `op` is a bodyless `abi = "C"` declaration.
 pub fn is_c_declaration(ctx: &IrContext, op: OpRef) -> bool {
-    let data = ctx.op(op);
-    data.regions.is_empty() && data.attributes.get_str("abi") == Some("C")
+    ctx.op_region_count(op) == 0 && ctx.op(op).attributes.get_str("abi") == Some("C")
 }
 
 /// The C link name of the declaration `callee` resolves to, if it is a
