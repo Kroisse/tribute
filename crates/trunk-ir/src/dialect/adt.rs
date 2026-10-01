@@ -423,3 +423,145 @@ fn parse_struct_type<'a>(
         attrs,
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::{parse_module, parse_test_module};
+    use crate::printer::print_module;
+    use crate::rewrite::Module;
+    use crate::validation::validate_operation_verifiers;
+
+    /// Print `module`, parse the output, and check that it prints the same.
+    fn assert_roundtrip(ctx: &IrContext, module: crate::refs::OpRef) {
+        let printed = print_module(ctx, module);
+        let mut reparsed = IrContext::new();
+        let module = parse_module(&mut reparsed, &printed).expect("printed IR must parse");
+        assert_eq!(printed, print_module(&reparsed, module));
+    }
+
+    #[test]
+    fn test_roundtrip_adt_struct() {
+        let input = r#"core.module @test {
+  !point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>
+  !closure = adt.struct<@"Nested::Closure"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}> {}, @env: core.tuple<core.ptr>), {layout = @closure}>
+  !empty = adt.struct<@Empty()>
+  !nested = adt.struct<@Outer(@inner: adt.struct<@Inner(@a: core.i32), {layout = @closure}> {m = 1})>
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
+        let aliases: std::collections::HashMap<_, _> = ctx
+            .type_aliases()
+            .iter()
+            .map(|&(name, ty)| (name.to_string(), ty))
+            .collect();
+        let point = Struct::from_type_ref(&ctx, aliases["point"]).unwrap();
+        assert_eq!(point.name(&ctx), Symbol::new("Point"));
+        assert_eq!(
+            point.fields(&ctx).map(|(name, _)| name).collect::<Vec<_>>(),
+            [Symbol::new("x"), Symbol::new("y")]
+        );
+        assert_eq!(point.field_attrs(&ctx, 1).count(), 1);
+        let empty = Struct::from_type_ref(&ctx, aliases["empty"]).unwrap();
+        assert_eq!(empty.field_count(&ctx), 0);
+        let printed = print_module(&ctx, module);
+        for expected in [
+            "!point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>",
+            "adt.struct<@\"Nested::Closure\"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}>, @env: core.tuple<core.ptr>), {layout = @closure}>",
+            "!empty = adt.struct<@Empty()>",
+            "(@inner: adt.struct<@Inner(@a: core.i32), {layout = @closure}> {m = 1})>",
+        ] {
+            assert!(printed.contains(expected), "{expected}\n{printed}");
+        }
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
+    fn test_adt_struct_reserved_names_are_parse_errors() {
+        for spelling in [
+            "adt.struct<@P(@x: core.i32), {name = @Q}>",
+            "adt.struct<@P(@x: core.i32), {param_attrs = [{}]}>",
+            "adt.struct<@P(@x: core.i32 {name = @y})>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            parse_module(&mut ctx, &input).expect_err(spelling);
+        }
+    }
+
+    #[test]
+    fn test_malformed_adt_struct_parses_but_fails_validation() {
+        for spelling in [
+            "adt.struct<@P(@x: core.i32, @x: core.i64)>",
+            "adt.struct<@P(), {fields = []}>",
+            "adt.struct<core.i32, {name = @P}>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            let module = parse_module(&mut ctx, &input).expect(spelling);
+            let alias = ctx.type_aliases()[0].1;
+            assert!(Struct::from_type_ref(&ctx, alias).is_none(), "{spelling}");
+            let result = validate_operation_verifiers(&ctx, Module::new(&ctx, module).unwrap());
+            assert!(!result.is_ok(), "{spelling}");
+        }
+    }
+
+    #[test]
+    fn malformed_adt_struct_types_are_rejected_by_type_validation() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, "core.module @test {}");
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let named_field = |name: &str| {
+            let mut attrs = AttributeMap::new();
+            attrs.insert("name", Symbol::from_dynamic(name));
+            attrs
+        };
+        let cases = [
+            (
+                "missing `name` symbol",
+                TypeDataBuilder::new("adt", "struct")
+                    .param_with_attrs(i32_ty, named_field("x"))
+                    .build(),
+            ),
+            (
+                "field 1 has no `name` symbol",
+                TypeDataBuilder::new("adt", "struct")
+                    .param_with_attrs(i32_ty, named_field("x"))
+                    .param(i32_ty)
+                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .build(),
+            ),
+            (
+                "duplicate field name @x",
+                TypeDataBuilder::new("adt", "struct")
+                    .param_with_attrs(i32_ty, named_field("x"))
+                    .param_with_attrs(i32_ty, named_field("x"))
+                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .build(),
+            ),
+            (
+                "`fields` is not an `adt.struct` attribute",
+                TypeDataBuilder::new("adt", "struct")
+                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .attr("fields", Attribute::List(vec![]))
+                    .build(),
+            ),
+        ];
+        for (expected, data) in cases {
+            let ty = ctx.intern_type(data);
+            assert!(Struct::from_type_ref(&ctx, ty).is_none(), "{expected}");
+            let result = validate_operation_verifiers(&ctx, module);
+            let text = result.to_string();
+            assert!(
+                text.contains("adt.struct") && text.contains(expected),
+                "{expected}: {text}"
+            );
+        }
+        let valid = struct_type(&mut ctx, "Q", [("x", i32_ty)], AttributeMap::new());
+        assert!(
+            ctx.get_type(valid.as_type_ref())
+                .attrs
+                .contains_key(PARAM_ATTRS_ATTR)
+        );
+    }
+}

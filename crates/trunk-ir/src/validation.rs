@@ -1414,69 +1414,6 @@ mod tests {
     }
 
     #[test]
-    fn malformed_adt_struct_types_are_rejected_by_type_validation() {
-        use crate::dialect::adt;
-        use crate::types::{AttributeMap, PARAM_ATTRS_ATTR};
-
-        let mut ctx = IrContext::new();
-        let module = empty_module(&mut ctx);
-        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let named_field = |name: &str| {
-            let mut attrs = AttributeMap::new();
-            attrs.insert("name", Symbol::from_dynamic(name));
-            attrs
-        };
-        let cases = [
-            (
-                "missing `name` symbol",
-                TypeDataBuilder::new("adt", "struct")
-                    .param_with_attrs(i32_ty, named_field("x"))
-                    .build(),
-            ),
-            (
-                "field 1 has no `name` symbol",
-                TypeDataBuilder::new("adt", "struct")
-                    .param_with_attrs(i32_ty, named_field("x"))
-                    .param(i32_ty)
-                    .attr("name", Attribute::Symbol(Symbol::new("P")))
-                    .build(),
-            ),
-            (
-                "duplicate field name @x",
-                TypeDataBuilder::new("adt", "struct")
-                    .param_with_attrs(i32_ty, named_field("x"))
-                    .param_with_attrs(i32_ty, named_field("x"))
-                    .attr("name", Attribute::Symbol(Symbol::new("P")))
-                    .build(),
-            ),
-            (
-                "`fields` is not an `adt.struct` attribute",
-                TypeDataBuilder::new("adt", "struct")
-                    .attr("name", Attribute::Symbol(Symbol::new("P")))
-                    .attr("fields", Attribute::List(vec![]))
-                    .build(),
-            ),
-        ];
-        for (expected, data) in cases {
-            let ty = ctx.intern_type(data);
-            assert!(adt::Struct::from_type_ref(&ctx, ty).is_none(), "{expected}");
-            let result = validate_operation_verifiers(&ctx, module);
-            assert!(
-                operation_error_messages(&result)
-                    .iter()
-                    .any(|message| message.contains("adt.struct") && message.contains(expected)),
-                "{expected}: {result}"
-            );
-        }
-        let valid = adt::struct_type(&mut ctx, "Q", [("x", i32_ty)], AttributeMap::new());
-        assert!(
-            ctx.get_type(valid.as_type_ref())
-                .attrs
-                .contains_key(PARAM_ATTRS_ATTR)
-        );
-    }
-
-    #[test]
     fn malformed_func_sig_counts_are_rejected_by_typed_and_whole_ir_validation() {
         let cases = [
             (
