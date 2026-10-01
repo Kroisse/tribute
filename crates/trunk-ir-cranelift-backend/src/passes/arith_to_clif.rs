@@ -304,7 +304,7 @@ impl RewritePattern for ArithCmpPattern {
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let lhs = cmpi.lhs(ctx);
             let rhs = cmpi.rhs(ctx);
-            let cond = cmpi.predicate_attr(ctx);
+            let cond = cmpi.predicate_string_ref(ctx);
             let cmp_op = clif::Icmp::operands(lhs, rhs)
                 .cond(cond)
                 .results(i8_ty)
@@ -330,7 +330,7 @@ impl RewritePattern for ArithCmpPattern {
                 "ole" => "le".into(),
                 "ogt" => "gt".into(),
                 "oge" => "ge".into(),
-                _ => cmpf.predicate_attr(ctx).into(),
+                _ => cmpf.predicate_string_ref(ctx).into(),
             };
             let cmp_op = clif::Fcmp::operands(lhs, rhs)
                 .cond(cond)
