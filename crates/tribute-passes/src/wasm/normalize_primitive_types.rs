@@ -307,8 +307,8 @@ impl RewritePattern for NormalizeOpResultPattern {
         // Create a replacement op with updated result types.
         let loc = ctx.op(op).location;
         let operands: Vec<_> = ctx.op_operands(op).to_vec();
-        let regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
-        let successors = ctx.op_successors(op).map(|h| h.id()).collect::<Vec<_>>();
+        let regions = ctx.op_regions(op).collect::<Vec<_>>();
+        let successors = ctx.op_successors(op).collect::<Vec<_>>();
         let attributes = ctx.op(op).attributes.clone();
 
         // Detach regions so they can be reused

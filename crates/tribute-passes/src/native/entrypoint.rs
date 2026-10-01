@@ -65,8 +65,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
     );
     let body = ctx
         .op_region(main.op_ref(), 0)
-        .expect("entrypoint: root `main` must be a definition")
-        .id();
+        .expect("entrypoint: root `main` must be a definition");
     let blocks = ctx.region(body).blocks.clone();
     let entry = *blocks
         .first()

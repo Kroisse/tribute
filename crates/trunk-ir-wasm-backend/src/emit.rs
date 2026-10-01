@@ -564,7 +564,7 @@ fn collect_wasm_ops_from_region(
 
             if dialect == core_dialect && name == module_name {
                 for nested_region in ctx.op_regions(op) {
-                    collect_wasm_ops_from_region(ctx, nested_region.id(), info)?;
+                    collect_wasm_ops_from_region(ctx, nested_region, info)?;
                 }
                 continue;
             }
@@ -768,7 +768,7 @@ fn assign_locals_in_region(
 
         for &op in &ctx.block(block_ref).ops {
             // Process nested regions FIRST
-            let nested_regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
+            let nested_regions = ctx.op_regions(op).collect::<Vec<_>>();
             for &nested in &nested_regions {
                 assign_locals_in_region(ctx, nested, param_count, locals, emit_ctx, module_info)?;
             }

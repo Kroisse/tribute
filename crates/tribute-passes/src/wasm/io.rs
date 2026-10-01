@@ -51,7 +51,7 @@ fn walk_ops(ctx: &IrContext, region: RegionRef, callback: &mut impl FnMut(&IrCon
     for &block in &ctx.region(region).blocks {
         for &op in &ctx.block(block).ops {
             callback(ctx, op);
-            for nested in ctx.op_regions(op).map(|h| h.id()) {
+            for nested in ctx.op_regions(op) {
                 walk_ops(ctx, nested, callback);
             }
         }

@@ -99,7 +99,7 @@ fn validate_operation(
 
     // Recursively validate nested regions
     for region in ctx.op_regions(op) {
-        validate_region(ctx, region.id(), depth + 1, symbols, errors);
+        validate_region(ctx, region, depth + 1, symbols, errors);
     }
 }
 

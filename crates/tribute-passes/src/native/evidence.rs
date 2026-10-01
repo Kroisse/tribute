@@ -51,7 +51,7 @@ fn try_lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) -
         return Ok(());
     }
     lower_effect_abi_to_native(ctx, func_op)?;
-    let Some(body) = ctx.op_region(func_op.op_ref(), 0).map(|h| h.id()) else {
+    let Some(body) = ctx.op_region(func_op.op_ref(), 0) else {
         return Ok(());
     };
     rewrite_evidence_ops_in_region(ctx, body)?;
@@ -443,7 +443,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
         if func::Func::from_op(ctx, op).is_ok() {
             continue;
         }
-        let regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
+        let regions = ctx.op_regions(op).collect::<Vec<_>>();
         for region in regions {
             rewrite_evidence_ops_in_region(ctx, region)?;
         }

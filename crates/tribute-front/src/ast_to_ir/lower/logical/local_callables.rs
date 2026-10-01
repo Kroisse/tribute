@@ -433,7 +433,7 @@ pub(super) fn captures(
                 defined.extend(ir.op_results(*op));
                 uses.extend(ir.op_operands(*op));
                 for nested in ir.op_regions(*op) {
-                    collect(ir, nested.id(), defined, uses);
+                    collect(ir, nested, defined, uses);
                 }
             }
         }

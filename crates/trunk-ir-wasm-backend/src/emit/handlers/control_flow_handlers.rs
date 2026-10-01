@@ -76,7 +76,7 @@ pub(crate) fn handle_if(
     // Check if we can actually get a result value from the then region
     let then_region_result = ctx
         .op_region(op, 0)
-        .and_then(|r| region_result_value(ctx, r.id()));
+        .and_then(|r| region_result_value(ctx, r));
     let then_has_result_value = then_region_result.is_some();
 
     debug!(
@@ -105,7 +105,6 @@ pub(crate) fn handle_if(
 
     let then_region = ctx
         .op_region(op, 0)
-        .map(|r| r.id())
         .ok_or_else(|| CompilationError::invalid_module("wasm.if missing then region"))?;
 
     // Push If nesting for child regions
@@ -126,7 +125,7 @@ pub(crate) fn handle_if(
     }
 
     // Emit else branch if present
-    if let Some(else_region) = ctx.op_region(op, 1).map(|r| r.id()) {
+    if let Some(else_region) = ctx.op_region(op, 1) {
         function.instruction(&Instruction::Else);
         emit_region_ops_nested(
             ctx,
@@ -196,7 +195,6 @@ pub(crate) fn handle_block(
 
     let region = ctx
         .op_region(op, 0)
-        .map(|r| r.id())
         .ok_or_else(|| CompilationError::invalid_module("wasm.block missing body region"))?;
 
     let mut child_nesting = nesting.to_vec();
@@ -231,7 +229,6 @@ pub(crate) fn handle_loop(
 
     let region = ctx
         .op_region(op, 0)
-        .map(|r| r.id())
         .ok_or_else(|| CompilationError::invalid_module("wasm.loop missing body region"))?;
 
     // Collect loop arg locals from the body's block arguments

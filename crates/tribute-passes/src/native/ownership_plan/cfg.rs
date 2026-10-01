@@ -61,8 +61,7 @@ impl ValidatedFlatCfg {
                 ));
             }
 
-            let block_successors: BlockList =
-                ctx.op_successors(terminator).map(|h| h.id()).collect();
+            let block_successors: BlockList = ctx.op_successors(terminator).collect();
             if let Some(interface) = BranchOps::get(ctx, terminator) {
                 let edges = interface.successors(ctx, terminator).map_err(|error| {
                     OwnershipPlanError::new(format!("Branch interface is incomplete: {error}"))

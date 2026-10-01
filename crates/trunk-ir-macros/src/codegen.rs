@@ -470,7 +470,6 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
                     pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::RegionRef {
                         ctx.op_region(self.0, #idx)
                             .expect(#missing)
-                            .id()
                     }
                 });
                 region_idx += 1;
@@ -483,7 +482,6 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
                     pub fn #name_ident(&self, ctx: &#crate_path::IrContext) -> #crate_path::BlockRef {
                         ctx.op_successor(self.0, #idx)
                             .expect(#missing)
-                            .id()
                     }
                 });
                 succ_idx += 1;

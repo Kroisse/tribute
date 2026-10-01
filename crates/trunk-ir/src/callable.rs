@@ -31,14 +31,12 @@ pub fn classify_callable_body(
     let mut regions = ctx.op_regions(op);
     match (regions.next(), regions.next()) {
         (None, _) => Ok(CallableBody::Declaration),
-        (Some(region), None) => region
+        (Some(region), None) => ctx
+            .region(region)
             .blocks
             .first()
             .copied()
-            .map(|entry| CallableBody::Definition {
-                region: region.id(),
-                entry,
-            })
+            .map(|entry| CallableBody::Definition { region, entry })
             .ok_or(CallableBodyError::MissingEntryBlock),
         (Some(_), Some(_)) => Err(CallableBodyError::MultipleBodyRegions),
     }

@@ -43,7 +43,7 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
             converted.attrs,
         )
         .as_type_ref();
-        let body = ctx.op_region(op, 0).map(|h| h.id());
+        let body = ctx.op_region(op, 0);
         let sym_name = wasm_func.sym_name(ctx);
         let loc = ctx.op(op).location;
 

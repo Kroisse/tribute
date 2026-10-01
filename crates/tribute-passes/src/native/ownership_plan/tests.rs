@@ -175,7 +175,7 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
         parent_op: None,
     });
     ctx.push_op_region(op, extra);
-    let before = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
+    let before = ctx.op_regions(op).collect::<Vec<_>>();
     let error = production_plan(&ctx, module).expect_err("multiple bodies");
     assert!(
         error
@@ -183,7 +183,7 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
             .contains("func.func @extra: has more than one body region"),
         "{error}"
     );
-    assert!(ctx.op_regions(op).map(|h| h.id()).eq(before));
+    assert!(ctx.op_regions(op).eq(before));
 }
 
 #[test]
@@ -285,8 +285,7 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
 
     let load_op = ctx
         .op_region(elided.function(Symbol::new("load")).unwrap().operation(), 0)
-        .unwrap()
-        .id();
+        .unwrap();
     let load = ctx.op_result(ctx.block(ctx.region(load_op).blocks[0]).ops[0], 0);
     let projection = ctx.block(ctx.region(load_op).blocks[0]).ops[0];
     let preserved_load = preserved.function(Symbol::new("load")).unwrap();
@@ -597,7 +596,7 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
 }"#,
     );
     let function = plan.function(Symbol::new("load")).unwrap();
-    let body = ctx.op_region(function.operation(), 0).unwrap().id();
+    let body = ctx.op_region(function.operation(), 0).unwrap();
     let block = ctx.region(body).blocks[0];
     let box_layout = ctx.type_alias_by_name(Symbol::new("Box")).unwrap();
     let mut owner = None;
@@ -1109,7 +1108,7 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
 }"#,
     );
     let function = plan.function(Symbol::new("load")).unwrap();
-    let body = ctx.op_region(function.operation(), 0).unwrap().id();
+    let body = ctx.op_region(function.operation(), 0).unwrap();
     let [entry, next] = ctx.region(body).blocks.as_slice() else {
         panic!("two-block fixture")
     };
@@ -1174,8 +1173,7 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
         .unwrap();
     let body = ctx
         .op_region(plan.functions[tail_index].operation, 0)
-        .unwrap()
-        .id();
+        .unwrap();
     let block = ctx.region(body).blocks[0];
     let tail_op = *ctx.block(block).ops.last().unwrap();
     let action_index = plan.functions[tail_index]
@@ -1284,7 +1282,7 @@ fn semantic_closure_values_are_managed_by_the_typed_contract() {
 }"#,
     );
     let function = plan.function(Symbol::new("identity")).unwrap();
-    let body = ctx.op_region(function.operation(), 0).unwrap().id();
+    let body = ctx.op_region(function.operation(), 0).unwrap();
     let entry = ctx.region(body).blocks[0];
     assert!(plan.is_managed_type(&ctx, ctx.value_ty(ctx.block_args(entry)[0])));
     assert_eq!(function.entries(), [EntryOwnership::Retained]);
@@ -1842,7 +1840,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     assert!(stale_bitmap.validate_against(&ctx, module).is_err());
 
     let function = &plan.functions[0];
-    let body = ctx.op_region(function.operation, 0).unwrap().id();
+    let body = ctx.op_region(function.operation, 0).unwrap();
     let entry = ctx.region(body).blocks[0];
     let raw = ctx.block_args(entry)[2];
     let mut unmanaged_action = plan.clone();
@@ -1862,7 +1860,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     assert!(stale_anchor.validate_against(&ctx, module).is_err());
 
     let other = plan.function(Symbol::new("other")).unwrap();
-    let other_body = ctx.op_region(other.operation, 0).unwrap().id();
+    let other_body = ctx.op_region(other.operation, 0).unwrap();
     let other_entry = ctx.region(other_body).blocks[0];
     let mut stale_value = plan.clone();
     stale_value.functions[0].actions[0].value = ctx.block_args(other_entry)[0];

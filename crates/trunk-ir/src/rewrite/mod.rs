@@ -53,7 +53,7 @@ impl Module {
 
     /// Get the module's body region.
     pub fn body(self, ctx: &IrContext) -> Option<super::refs::RegionRef> {
-        ctx.op_region(self.0, 0).map(|h| h.id())
+        ctx.op_region(self.0, 0)
     }
 
     /// The top-level operations in the module's first block.

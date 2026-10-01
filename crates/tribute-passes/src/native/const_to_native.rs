@@ -107,7 +107,7 @@ fn walk_ops_in_region(
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             callback(ctx, op);
-            for nested in ctx.op_regions(op).map(|h| h.id()) {
+            for nested in ctx.op_regions(op) {
                 walk_ops_in_region(ctx, nested, callback);
             }
         }

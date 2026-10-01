@@ -145,7 +145,7 @@ fn collect_op(
     }
 
     let nested_inside_element = inside_element_segment || wasm_dialect::Elem::matches(ctx, op);
-    for nested in ctx.op_regions(op).map(|h| h.id()) {
+    for nested in ctx.op_regions(op) {
         collect_region(ctx, nested, nested_inside_element, references)?;
     }
     Ok(())
@@ -404,7 +404,7 @@ mod tests {
         let body = module.body(&ctx).unwrap();
         let main_block = ctx.region(body).blocks[0];
         let main = ctx.block(main_block).ops[1];
-        let inner = ctx.region(ctx.op_region(main, 0).unwrap().id()).blocks[0];
+        let inner = ctx.region(ctx.op_region(main, 0).unwrap()).blocks[0];
         let call = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Call::matches(&ctx, call));
         ctx.op_mut(call).attributes.remove("callee");
@@ -431,7 +431,7 @@ mod tests {
         let body = module.body(&ctx).unwrap();
         let main_block = ctx.region(body).blocks[0];
         let main = ctx.block(main_block).ops[0];
-        let inner = ctx.region(ctx.op_region(main, 0).unwrap().id()).blocks[0];
+        let inner = ctx.region(ctx.op_region(main, 0).unwrap()).blocks[0];
         let ret = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Return::matches(&ctx, ret));
         ctx.op_mut(ret).attributes.insert(

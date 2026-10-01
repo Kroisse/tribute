@@ -229,7 +229,7 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
     let Ok(switch_body) = ctx.op_regions(op).exactly_one() else {
         return None;
     };
-    let [body_block] = switch_body.blocks.as_slice() else {
+    let [body_block] = ctx.region(switch_body).blocks.as_slice() else {
         return None;
     };
     if !ctx.block_args(*body_block).is_empty() {
@@ -245,16 +245,16 @@ fn switch_shape(ctx: &IrContext, op: OpRef) -> Option<ScfSwitchShape> {
         let Ok(body) = ctx.op_regions(arm).exactly_one() else {
             return None;
         };
-        let [entry] = body.blocks.as_slice() else {
+        let [entry] = ctx.region(body).blocks.as_slice() else {
             return None;
         };
         if !ctx.block_args(*entry).is_empty() {
             return None;
         }
         if scf::Case::matches(ctx, arm) {
-            cases.push((ctx.op(arm).attributes.get("value")?.clone(), body.id()));
+            cases.push((ctx.op(arm).attributes.get("value")?.clone(), body));
         } else if scf::Default::matches(ctx, arm) {
-            if default.replace(body.id()).is_some() {
+            if default.replace(body).is_some() {
                 return None;
             }
         } else {
@@ -305,7 +305,7 @@ fn find_nonlowerable_switch(ctx: &IrContext, op: OpRef) -> Option<(OpRef, Switch
     {
         return Some((op, reason));
     }
-    for region in ctx.op_regions(op).map(|h| h.id()) {
+    for region in ctx.op_regions(op) {
         for block in ctx.region(region).blocks.iter().copied() {
             for nested in ctx.block(block).ops.iter().copied() {
                 if let Some(rejected) = find_nonlowerable_switch(ctx, nested) {
@@ -1153,7 +1153,7 @@ mod tests {
                     );
                 }
                 for region in ctx.op_regions(op) {
-                    for &block in &region.blocks {
+                    for &block in &ctx.region(region).blocks {
                         for &arg in ctx.block_args(block) {
                             let ty = ctx.get_type(ctx.value_ty(arg));
                             assert!(!(ty.dialect == "core" && ty.name == "never"));
@@ -1289,7 +1289,7 @@ mod tests {
                 )),
             );
             let function = module.ops(&ctx)[0];
-            let block = ctx.region(ctx.op_region(function, 0).unwrap().id()).blocks[0];
+            let block = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
             let original = ctx.block(block).ops[0];
             let result_types = ctx.op_result_types(original).to_vec();
             assert!(

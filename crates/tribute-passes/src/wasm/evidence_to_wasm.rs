@@ -154,7 +154,7 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> (bool, bool,
                 needs.0 |= effect::DispatchCps::matches(ctx, op);
                 needs.1 |= effect::DispatchTail::matches(ctx, op);
                 needs.2 |= effect::Extend::matches(ctx, op);
-                for nested in ctx.op_regions(op).map(|h| h.id()) {
+                for nested in ctx.op_regions(op) {
                     visit(ctx, nested, needs);
                 }
             }

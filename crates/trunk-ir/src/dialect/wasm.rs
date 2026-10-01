@@ -781,7 +781,7 @@ mod tests {
         );
         let functions = module.ops(&ctx);
         let body_op = |index| {
-            let body = ctx.op_region(functions[index], 0).unwrap().id();
+            let body = ctx.op_region(functions[index], 0).unwrap();
             ctx.block(ctx.region(body).blocks[0]).ops[0]
         };
         let ordinary = body_op(0);

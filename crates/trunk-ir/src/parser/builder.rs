@@ -1643,7 +1643,7 @@ core.module @test {
             let mut ctx = IrContext::new();
             let module = parse_module(&mut ctx, &input).unwrap();
             let function = ctx
-                .block(ctx.region(ctx.op_region(module, 0).unwrap().id()).blocks[0])
+                .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
                 .ops[0];
             assert_eq!(
                 ctx.op_region_count(function),
@@ -1657,7 +1657,7 @@ core.module @test {
             let function2 = reparsed
                 .block(
                     reparsed
-                        .region(reparsed.op_region(module2, 0).unwrap().id())
+                        .region(reparsed.op_region(module2, 0).unwrap())
                         .blocks[0],
                 )
                 .ops[0];
@@ -1702,7 +1702,7 @@ core.module @test {
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("generic func assembly should parse");
         let function = ctx
-            .block(ctx.region(ctx.op_region(module, 0).unwrap().id()).blocks[0])
+            .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
         assert_eq!(
             ctx.op(function).attributes.get_symbol("sym_name"),
@@ -1722,7 +1722,7 @@ core.module @test {
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("explicit assembly should parse");
         let function = ctx
-            .block(ctx.region(ctx.op_region(module, 0).unwrap().id()).blocks[0])
+            .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
         let signature = ctx.op(function).attributes.get_type("type").unwrap();
         assert!(func::FuncSig::from_type_ref(&ctx, signature).is_some());
@@ -1747,7 +1747,7 @@ core.module @test {
         assert!(clif::FuncSig::from_type_ref(&ctx, contract).is_some());
         assert!(func::FuncSig::from_type_ref(&ctx, contract).is_none());
         let function = ctx
-            .block(ctx.region(ctx.op_region(module, 0).unwrap().id()).blocks[0])
+            .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
         let signature = ctx.op(function).attributes.get_type("type").unwrap();
         assert!(clif::FuncSig::from_type_ref(&ctx, signature).is_some());

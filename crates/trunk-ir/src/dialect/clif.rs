@@ -379,7 +379,7 @@ impl Data {
 fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = crate::OpRef> + '_ {
     ctx.op_region(op, 0)
         .into_iter()
-        .flat_map(|region| region.data().blocks.iter())
+        .flat_map(|region| ctx.region(region).blocks.iter())
         .flat_map(|&block| ctx.block(block).ops.iter().copied())
 }
 
@@ -515,7 +515,7 @@ mod tests {
         );
         let functions = module.ops(&ctx);
         let body_op = |index| {
-            let body = ctx.op_region(functions[index], 0).unwrap().id();
+            let body = ctx.op_region(functions[index], 0).unwrap();
             ctx.block(ctx.region(body).blocks[0]).ops[0]
         };
 

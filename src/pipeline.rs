@@ -2610,7 +2610,7 @@ fn main() -> Nil {
             |ctx: &mut IrContext, module: core_dialect::Module, _analyses: &mut AnalysisCache| {
                 let module_block = ctx.region(module.body(ctx)).blocks[0];
                 let func_op = ctx.block(module_block).ops[0];
-                let func_region = ctx.op_region(func_op, 0).unwrap().id();
+                let func_region = ctx.op_region(func_op, 0).unwrap();
                 let func_block = ctx.region(func_region).blocks[0];
                 let add_op = ctx
                     .block(func_block)
@@ -2669,7 +2669,7 @@ fn main() -> Nil {
             |ctx: &mut IrContext, module: core_dialect::Module, _analyses: &mut AnalysisCache| {
                 let module_block = ctx.region(module.body(ctx)).blocks[0];
                 let func_op = ctx.block(module_block).ops[0];
-                let func_block = ctx.region(ctx.op_region(func_op, 0).unwrap().id()).blocks[0];
+                let func_block = ctx.region(ctx.op_region(func_op, 0).unwrap()).blocks[0];
                 let add_op = ctx.block(func_block).ops[0];
                 // Retype the result without touching use-chains, so only the
                 // `T` binding of `arith.addi` is violated.

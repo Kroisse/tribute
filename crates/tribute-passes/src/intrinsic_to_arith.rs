@@ -320,7 +320,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         // External declarations have no body region and must remain
         // untouched. `Func::body` asserts that the region exists.
-        let Some(old_body) = ctx.op_region(op, 0).map(|h| h.id()) else {
+        let Some(old_body) = ctx.op_region(op, 0) else {
             return false;
         };
 

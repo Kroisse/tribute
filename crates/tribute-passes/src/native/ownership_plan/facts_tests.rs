@@ -279,7 +279,7 @@ fn facts_record_exact_alias_roots_and_projection_owners() {
             projection = Some(ctx.op_result(candidate, 0));
         }
     });
-    let body = ctx.op_region(op, 0).unwrap().id();
+    let body = ctx.op_region(op, 0).unwrap();
     let root = ctx.block_args(ctx.region(body).blocks[0])[0];
     let [first, second] = casts.as_slice() else {
         panic!("expected two casts");

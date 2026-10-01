@@ -29,7 +29,7 @@ fn optimize_region(ctx: &mut IrContext, region: RegionRef) {
 
         let ops = ctx.block(block).ops.clone();
         for op in ops {
-            let nested_regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
+            let nested_regions = ctx.op_regions(op).collect::<Vec<_>>();
             for nested in nested_regions {
                 optimize_region(ctx, nested);
             }

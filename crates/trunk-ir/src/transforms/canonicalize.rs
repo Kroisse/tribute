@@ -211,7 +211,7 @@ fn apply_splice(
     // the dead branch entirely.
     // Erasing ops mutates these child lists, so iterate snapshots. Cloning
     // keeps them inline for the usual few children.
-    let regions = ctx.op_regions(op).map(|h| h.id()).collect::<Vec<_>>();
+    let regions = ctx.op_regions(op).collect::<Vec<_>>();
     for region in regions {
         let blocks = ctx.region(region).blocks.clone();
         for block in blocks {

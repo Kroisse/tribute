@@ -106,7 +106,7 @@ fn entry_block_for_signature_update(
         // Declarations have no entry block whose arguments need updating.
         return Some(None);
     };
-    let blocks = &body.data().blocks;
+    let blocks = &ctx.region(body).blocks;
     if blocks.is_empty() {
         return new_inputs.is_empty().then_some(None);
     }
@@ -223,7 +223,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
             converted.attrs,
         )
         .as_type_ref();
-        let body = ctx.op_region(op, 0).map(|h| h.id());
+        let body = ctx.op_region(op, 0);
         let sym_name = func_op.sym_name(ctx);
         let loc = ctx.op(op).location;
 

@@ -84,7 +84,7 @@ fn collect_typed_ops(ctx: &IrContext, region: RegionRef, types: &mut Vec<TypeRef
             } else if let Ok(op) = wasm_gc::RefTest::from_op(ctx, op) {
                 push(op.target_type(ctx));
             }
-            for nested in ctx.op_regions(op).map(|h| h.id()) {
+            for nested in ctx.op_regions(op) {
                 collect_typed_ops(ctx, nested, types);
             }
         }
@@ -296,7 +296,7 @@ mod tests {
         lower(&mut ctx, module);
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op_region(func, 0).unwrap().id();
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let indices: Vec<u32> = ctx
             .block(block)
@@ -331,7 +331,7 @@ mod tests {
         lower(&mut ctx, module);
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op_region(func, 0).unwrap().id();
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let op = ctx
             .block(block)
@@ -397,7 +397,7 @@ mod tests {
         lower(&mut ctx, module);
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op_region(func, 0).unwrap().id();
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let indices: Vec<Option<u32>> = ctx
             .block(block)
@@ -444,7 +444,7 @@ mod tests {
         lower(&mut ctx, module);
 
         let func = module.ops(&ctx)[0];
-        let body = ctx.op_region(func, 0).unwrap().id();
+        let body = ctx.op_region(func, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let ops = &ctx.block(block).ops;
         assert!(

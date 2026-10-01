@@ -210,7 +210,7 @@ impl CallableExitModel for HandleDispatch {
         if ctx.op_region_count(self.op_ref()) == 1
             && ctx
                 .op_region(self.op_ref(), 0)
-                .is_some_and(|region| region.blocks.len() == 1)
+                .is_some_and(|region| ctx.region(region).blocks.len() == 1)
             && ctx.op_operands(self.op_ref()).len() >= 2
             && matches!(
                 data.attributes.get("ability_refs"),
