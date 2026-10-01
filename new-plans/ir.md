@@ -1401,7 +1401,7 @@ two reserved attributes and preserves every other type attribute; textual type
 attribute dictionaries may not specify either reserved key.
 
 함수 타입의 textual spelling은 `func.func_sig<(inputs...) -> result>`만 사용한다.
-Reader는 어떤 형태의 `core.func` 타입도 거부한다. Production code는 검증된
+Production code는 검증된
 `func::func_sig` API로 함수 타입을 만들며, 직접 `TypeData`를 만드는 코드는
 malformed-type verifier test에 한정한다.
 

@@ -429,15 +429,6 @@ fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 ),
             });
         }
-        if data.dialect == crate::dialect::core::DIALECT_NAME() && data.name == Symbol::new("func")
-        {
-            errors.push(ValidationError::Operation {
-                message: format!(
-                    "type verifier rejected retired core.func identity ({ty}); use func.func_sig"
-                ),
-            });
-            continue;
-        }
         if data.dialect != crate::dialect::func::DIALECT_NAME()
             || data.name != crate::dialect::func::FUNC_SIG()
         {
@@ -1508,27 +1499,6 @@ mod tests {
                     "{case}: {result}"
                 );
             }
-        }
-    }
-
-    #[test]
-    fn retired_raw_core_func_identity_is_rejected_by_whole_ir_validation() {
-        let mut ctx = IrContext::new();
-        let module = empty_module(&mut ctx);
-        let legacy = ctx.intern_type(TypeDataBuilder::new("core", "func").build());
-
-        assert!(func::FuncSig::from_type_ref(&ctx, legacy).is_none());
-        for result in [
-            validate_operation_verifiers(&ctx, module),
-            validate_all(&ctx, module, &mut Default::default()),
-        ] {
-            let messages = operation_error_messages(&result);
-            assert!(
-                messages
-                    .iter()
-                    .any(|message| message.contains("retired core.func identity")),
-                "{result}"
-            );
         }
     }
 

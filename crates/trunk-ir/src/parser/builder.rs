@@ -78,14 +78,6 @@ impl<'a> ArenaIrBuilder<'a> {
                     message: format!("undefined type alias '!{name}'"),
                     offset: 0,
                 }),
-            RawType::Concrete { dialect, name, .. } | RawType::Function { dialect, name, .. }
-                if *dialect == "core" && *name == "func" =>
-            {
-                Err(ParseError {
-                    message: "unsupported core.func type; use func.func_sig".to_string(),
-                    offset: 0,
-                })
-            }
             RawType::Concrete {
                 dialect,
                 name,
@@ -1779,18 +1771,6 @@ core.module @test {
             error.message.contains("reserved by clif.func_sig"),
             "{error}"
         );
-    }
-
-    #[test]
-    fn unsupported_core_func_spellings_are_rejected() {
-        for spelling in [
-            "core.func<core.i64, core.i32>",
-            "core.func<(core.i32) -> core.i64>",
-        ] {
-            let mut ctx = IrContext::new();
-            let input = format!("core.module @test {{ !bad = {spelling} }}");
-            parse_module(&mut ctx, &input).expect_err("only func.func_sig is supported");
-        }
     }
 
     #[test]
