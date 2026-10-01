@@ -15,19 +15,16 @@ pub struct Program {
     pub wasm: WasmSupport,
 }
 
-/// Whether a program compiles to Wasm.
+/// Whether a program compiles to Wasm and runs successfully there.
 #[derive(Clone, Copy, Debug)]
 pub enum WasmSupport {
     Supported,
-    /// Wasm emission fails for a known reason.
+    /// Wasm emission or execution fails for a known reason.
     Unsupported(&'static str),
 }
 
-const NEXT_TAG: WasmSupport =
-    WasmSupport::Unsupported("handlers need `__tribute_next_tag`, unbound on Wasm (#1185)");
-const READ_LINE: WasmSupport = WasmSupport::Unsupported(
-    "`read_line` does not lower on Wasm (#1215), and its Throw handler needs `__tribute_next_tag` (#1185)",
-);
+const READ_LINE: WasmSupport =
+    WasmSupport::Unsupported("`read_line` does not lower on Wasm (#1215)");
 
 pub const PROGRAMS: &[Program] = &[
     Program {
@@ -40,7 +37,7 @@ pub const PROGRAMS: &[Program] = &[
         name: "native_effects",
         source: include_str!("../../../lang-examples/native_effects.trb"),
         stdin: b"",
-        wasm: NEXT_TAG,
+        wasm: WasmSupport::Supported,
     },
     Program {
         name: "wasm_dynamic_output",
@@ -77,7 +74,7 @@ fn main() -> Nil {
 }
 "#,
         stdin: b"",
-        wasm: NEXT_TAG,
+        wasm: WasmSupport::Supported,
     },
     Program {
         name: "state_handler",
@@ -104,7 +101,7 @@ fn main() -> Nil {
 }
 "#,
         stdin: b"",
-        wasm: NEXT_TAG,
+        wasm: WasmSupport::Supported,
     },
     Program {
         name: "fibonacci",
@@ -156,7 +153,9 @@ fn main() ->{Io} Nil {
 }
 "#,
         stdin: b"",
-        wasm: NEXT_TAG,
+        wasm: WasmSupport::Unsupported(
+            "handlers that reinstall themselves lose state updates on Wasm (#1220)",
+        ),
     },
     Program {
         name: "counter_loop",
@@ -182,6 +181,6 @@ fn main() ->{Io} Nil {
 }
 "#,
         stdin: b"",
-        wasm: NEXT_TAG,
+        wasm: WasmSupport::Unsupported("50000 iterations exhaust the default Wasm stack (#1145)"),
     },
 ];

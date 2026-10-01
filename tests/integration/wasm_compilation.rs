@@ -559,8 +559,7 @@ fn main() ->{std::io::Io} Nil { std::io::print_line(classify(1)) }
 }
 
 #[salsa_test]
-#[ignore = "source-level Wasm handler path has no __tribute_next_tag body or import binding"]
-fn test_compile_tail_dispatch_ability(db: &salsa::DatabaseImpl) {
+fn test_execute_tail_dispatch_ability(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability Console {
     fn read() -> Int
@@ -594,14 +593,17 @@ fn main() ->{std::io::Io} Nil {
         source,
         "Should compile tail-dispatch ability through wasm effect ABI lowering",
     );
-    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-        .validate_all(binary)
-        .expect("compiled source must produce a valid Wasm binary");
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok\n");
 }
 
 #[salsa_test]
-#[ignore = "source-level Wasm handler path has no __tribute_next_tag body or import binding"]
-fn test_compile_cps_dispatch_ability(db: &salsa::DatabaseImpl) {
+fn test_execute_cps_dispatch_ability(db: &salsa::DatabaseImpl) {
     let code = r#"
 ability State(s) {
     op get() -> s
@@ -635,9 +637,61 @@ fn main() ->{std::io::Io} Nil {
         source,
         "Should compile CPS ability dispatch through wasm effect ABI lowering",
     );
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok\n");
+}
+
+const BYTES_SLICES: &str = r#"
+fn main() ->{std::io::Io} Nil {
+    let bytes = b"<hello world>"
+    let inner = bytes.slice_or_panic(1, 12)
+    std::io::print_line(String::from_bytes(inner.slice_or_panic(6, 11) <> b" " <> inner.slice_or_panic(0, 5)))
+    std::io::print_line(String::from_bytes(bytes.slice_or_panic(3, 3)))
+}
+"#;
+
+#[salsa_test]
+fn test_execute_bytes_slice_or_panic_shares_the_backing_array(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(db, "bytes_slice.trb", BYTES_SLICES);
+    let binary = expect_wasm_compilation_success(db, source, "Should compile bytes slices");
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"world hello\n\n");
+}
+
+#[salsa_test]
+fn test_execute_bytes_slice_or_panic_traps_out_of_range(db: &salsa::DatabaseImpl) {
+    for (name, range) in [("past_end", "(1, 14)"), ("reversed", "(5, 4)")] {
+        let code = BYTES_SLICES.replace("(1, 12)", range);
+        let source = SourceCst::from_source_str(db, &format!("bytes_slice_{name}.trb"), &code);
+        let binary = expect_wasm_compilation_success(db, source, "Should compile bytes slices");
+        let output = run_validated_wasm(binary);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{name} must trap");
+        assert!(stderr.contains("unreachable"), "{name}: {stderr}");
+    }
+}
+
+fn run_validated_wasm(binary: &[u8]) -> std::process::Output {
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(binary)
         .expect("compiled source must produce a valid Wasm binary");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(binary).expect("write Wasm module");
+    Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime")
 }
 
 #[test]
