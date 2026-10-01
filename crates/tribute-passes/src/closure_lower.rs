@@ -507,13 +507,15 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
 
 /// Lower every already-prepared function body in a module to closure storage.
 ///
-/// The worklist is refreshed after each function so functions introduced by an
-/// earlier transformation are lowered once as well. Processing each function
-/// operation at most once keeps this traversal bounded without relying on
-/// function names or target-specific pipeline ordering.
+/// Each batch discovers the functions not yet lowered, validates all of them
+/// before rewriting any body, and then lowers the whole batch against one
+/// symbol table. The module is rescanned after each batch so functions
+/// introduced by an earlier transformation are lowered once as well.
+/// Processing each function operation at most once keeps this traversal
+/// bounded without relying on function names or target-specific pipeline
+/// ordering.
 pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunResult {
     let mut lowered = HashSet::new();
-    let mut worklist = Vec::new();
 
     loop {
         let mut discovered = Vec::new();
@@ -525,21 +527,19 @@ pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunRe
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
+        if discovered.is_empty() {
+            break;
+        }
         // Rebuilt per batch so functions introduced by lowering resolve too.
         let functions = Arc::new(SymbolTable::collect(ctx, module));
 
-        // Validate the initial module as a whole before rewriting any body.
-        // Later batches include newly generated functions and follow the same gate.
+        // Validate the batch as a whole before rewriting any body.
         for &function in &discovered {
             validate_closure_transfers(ctx, function)?;
         }
-        worklist.extend(discovered);
-
-        let Some(func_op) = worklist.pop() else {
-            break;
-        };
-
-        rewrite_validated_closures_in_func(ctx, func_op, functions);
+        for func_op in discovered.into_iter().rev() {
+            rewrite_validated_closures_in_func(ctx, func_op, functions.clone());
+        }
     }
     Ok(())
 }
