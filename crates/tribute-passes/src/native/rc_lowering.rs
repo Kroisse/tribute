@@ -18,7 +18,7 @@
 //!   %hdr_sz  = clif.iconst(8) : core.i64
 //!   %rc_addr = clif.isub(ptr, %hdr_sz) : core.ptr
 //!   %one     = clif.iconst(1) : core.i32
-//!   %old_rc  = clif.atomic_rmw(%rc_addr, %one, op=@add, offset=0) : core.i32
+//!   %old_rc  = clif.atomic_rmw(%rc_addr, %one, bin_op="add", offset=0) : core.i32
 //!   clif.jump(^skip_block)
 //!
 //! ^skip_block:
@@ -37,7 +37,7 @@
 //!   %hdr_sz     = clif.iconst(8) : core.i64
 //!   %rc_addr    = clif.isub(ptr, %hdr_sz) : core.ptr
 //!   %one        = clif.iconst(1) : core.i32
-//!   %old_rc     = clif.atomic_rmw(%rc_addr, %one, op=@sub, offset=0) : core.i32
+//!   %old_rc     = clif.atomic_rmw(%rc_addr, %one, bin_op="sub", offset=0) : core.i32
 //!   %is_last    = clif.icmp(%old_rc, %one, eq) : core.i8
 //!   clif.brif(%is_last, ^free_block, ^skip_block)
 //!
@@ -361,7 +361,7 @@ fn gen_retain_rc_ops(
         .build(ctx, loc);
     ctx.push_op(block, one.op_ref());
     let _old_rc = clif::AtomicRmw::operands(rc_addr.result(ctx), one.result(ctx))
-        .op("add")
+        .bin_op("add")
         .offset(0)
         .results(i32_ty)
         .build(ctx, loc);
@@ -399,7 +399,7 @@ fn gen_release_decrement(
         .build(ctx, loc);
     ctx.push_op(block, one.op_ref());
     let old_rc = clif::AtomicRmw::operands(rc_addr.result(ctx), one.result(ctx))
-        .op("sub")
+        .bin_op("sub")
         .offset(0)
         .results(i32_ty)
         .build(ctx, loc);

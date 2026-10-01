@@ -171,13 +171,13 @@ an owned `String`, or a `StringRef`. The builder interns text when it creates
 the operation, so `.predicate("slt")` needs no context.
 
 A generated string accessor returns the text, like MLIR's `getValue()`.
-`<name>_string_ref` returns the `StringRef`; use it to copy the
+`<name>_ref` returns the `StringRef`; use it to copy the
 value into another operation without borrowing the context or interning
 again:
 
 ```rust
 let copy = adt::StringConst::operands()
-    .value(string_const.value_string_ref(ctx))
+    .value(string_const.value_ref(ctx))
     .results(ty)
     .build(ctx, loc);
 ```

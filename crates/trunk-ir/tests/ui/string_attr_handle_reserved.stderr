@@ -1,5 +1,5 @@
-error: string attribute `name` reserves the name `name_ref` for its handle accessor
- --> tests/ui/string_attr_handle_name_taken.rs:2:5
+error: string attribute `op` would generate `op_ref`, which is reserved for the operation wrapper's own method; rename the attribute
+ --> tests/ui/string_attr_handle_reserved.rs:2:5
   |
 2 |     #[trunk_ir::dialect]
   |     ^^^^^^^^^^^^^^^^^^^^

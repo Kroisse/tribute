@@ -519,7 +519,7 @@ impl<'a> FunctionTranslator<'a> {
                 // `iadd_imm` behaviour and the signed `i32` offset this dialect carries.
                 addr = self.builder.ins().iadd_imm_s(addr, i64::from(offset));
             }
-            let rmw_op = parse_atomic_rmw_op(armw.op(ctx))?;
+            let rmw_op = parse_atomic_rmw_op(armw.bin_op(ctx))?;
             let val =
                 self.builder
                     .ins()

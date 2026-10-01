@@ -226,11 +226,24 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
             if verify.is_some() && entity_names(&op).any(|name| name == "verify") {
                 return Err("#[verify] reserves the name `verify` for `Verify::verify`".into());
             }
+            for name in entity_names(&op) {
+                if RESERVED_WRAPPER_NAMES.contains(&name) {
+                    return Err(format!(
+                        "`{name}` is reserved for the operation wrapper's own method"
+                    ));
+                }
+            }
             for attr in &op.attrs {
                 if !matches!(attr.ty, AttrType::String) {
                     continue;
                 }
-                let handle = format!("{}_string_ref", attr.name);
+                let handle = format!("{}_ref", attr.name);
+                if RESERVED_WRAPPER_NAMES.contains(&handle.as_str()) {
+                    return Err(format!(
+                        "string attribute `{}` would generate `{handle}`, which is reserved for the operation wrapper's own method; rename the attribute",
+                        attr.name
+                    ));
+                }
                 if entity_names(&op).any(|name| name == handle) {
                     return Err(format!(
                         "string attribute `{}` reserves the name `{handle}` for its handle accessor",
@@ -261,6 +274,10 @@ enum OuterAttr {
     RestResults,
     Verify(proc_macro2::Span),
 }
+
+/// Methods every operation wrapper defines itself; an entity accessor must not
+/// take one of these names.
+const RESERVED_WRAPPER_NAMES: &[&str] = &["op_ref", "from_op", "matches", "operands"];
 
 /// Names of an operation's entities, each of which becomes an accessor.
 fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {

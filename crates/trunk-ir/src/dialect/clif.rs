@@ -111,7 +111,7 @@ mod clif {
     fn store(offset: Attr<i32>, value: Value<_>, addr: Value<_>) {}
 
     fn atomic_rmw(
-        op: Attr<String>,
+        bin_op: Attr<String>,
         offset: Attr<i32>,
         addr: Value<_>,
         value: Value<_>,
