@@ -418,6 +418,34 @@ impl RewritePattern for ArithCmpPattern {
                     .results(result_ty)
                     .build(ctx, loc)
                     .op_ref(),
+                ("i64", "ult") => wasm_dialect::I64LtU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "ule") => wasm_dialect::I32LeU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "ule") => wasm_dialect::I64LeU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "ugt") => wasm_dialect::I32GtU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "ugt") => wasm_dialect::I64GtU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i32", "uge") => wasm_dialect::I32GeU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
+                ("i64", "uge") => wasm_dialect::I64GeU::operands(lhs, rhs)
+                    .results(result_ty)
+                    .build(ctx, loc)
+                    .op_ref(),
                 _ => return false,
             };
             rewriter.replace_op(new_op);
@@ -1075,15 +1103,22 @@ core.module @test {
     }
 
     #[test]
-    fn lowers_i32_unsigned_less_than() {
+    fn lowers_unsigned_comparisons() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"
 core.module @test {
-  func.func @compare(%0: core.i32, %1: core.i32) -> core.i1 {
-    %2 = arith.cmpi %0, %1 {predicate = @ult} : core.i1
-    func.return %2
+  func.func @compare(%a: core.i32, %b: core.i32, %c: core.i64, %d: core.i64) {
+    %0 = arith.cmpi %a, %b {predicate = @ult} : core.i1
+    %1 = arith.cmpi %a, %b {predicate = @ule} : core.i1
+    %2 = arith.cmpi %a, %b {predicate = @ugt} : core.i1
+    %3 = arith.cmpi %a, %b {predicate = @uge} : core.i1
+    %4 = arith.cmpi %c, %d {predicate = @ult} : core.i1
+    %5 = arith.cmpi %c, %d {predicate = @ule} : core.i1
+    %6 = arith.cmpi %c, %d {predicate = @ugt} : core.i1
+    %7 = arith.cmpi %c, %d {predicate = @uge} : core.i1
+    func.return
   }
 }
 "#,
@@ -1092,13 +1127,18 @@ core.module @test {
         lower(&mut ctx, module, TypeConverter::new());
 
         let output = print_module(&ctx, module.op());
-        assert!(
-            output.contains("wasm.i32_lt_u"),
-            "i32 ult should lower to wasm.i32_lt_u:\n{output}"
-        );
-        assert!(
-            !output.contains("arith.cmpi"),
-            "i32 ult should not remain as arith.cmpi:\n{output}"
-        );
+        assert!(!output.contains("arith.cmpi"), "{output}");
+        for expected in [
+            "wasm.i32_lt_u",
+            "wasm.i32_le_u",
+            "wasm.i32_gt_u",
+            "wasm.i32_ge_u",
+            "wasm.i64_lt_u",
+            "wasm.i64_le_u",
+            "wasm.i64_gt_u",
+            "wasm.i64_ge_u",
+        ] {
+            assert!(output.contains(expected), "missing {expected}:\n{output}");
+        }
     }
 }
