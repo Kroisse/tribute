@@ -849,6 +849,18 @@ impl<'db> TypeChecker<'db> {
                 .iter()
                 .filter(|effect| !removal.source.effects(db).contains(effect))
                 .collect_vec();
+            // Every handled label is named in the source, but an unresolved
+            // ability argument leaves which instance it removes open.
+            if removed.is_empty() {
+                messages.push(format!(
+                    "function '{}' handles {} from {} without its signature determining \
+                     which effect instance that is",
+                    func.name,
+                    removal.removed.effects(db).iter().format(", "),
+                    row_name(removal.source.rest(db)),
+                ));
+                continue;
+            }
             messages.push(format!(
                 "function '{}' handles {} from {} without declaring {} there; \
                  add {} to that effect row",
