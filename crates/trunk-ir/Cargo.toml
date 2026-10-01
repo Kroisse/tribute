@@ -17,7 +17,6 @@ hashbrown.workspace = true
 inventory.workspace = true
 itertools.workspace = true
 lasso.workspace = true
-parking_lot.workspace = true
 salsa = { workspace = true, optional = true }
 rustc-hash.workspace = true
 serde.workspace = true

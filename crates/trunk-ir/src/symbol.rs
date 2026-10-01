@@ -6,8 +6,7 @@ use std::borrow::Cow;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lasso::{Rodeo, Spur};
-use parking_lot::RwLock;
+use lasso::{Spur, ThreadedRodeo};
 use smallvec::SmallVec;
 
 // ============================================================================
@@ -15,13 +14,15 @@ use smallvec::SmallVec;
 // ============================================================================
 
 /// Global string interner for symbols.
-static INTERNER: LazyLock<RwLock<Interner>> =
-    LazyLock::new(|| RwLock::new(Interner::with_hasher(Default::default())));
+///
+/// The interner is never cleared, so every interned string lives for the rest
+/// of the process. That is what lets `Symbol::as_str` return `&'static str`.
+static INTERNER: LazyLock<Interner> = LazyLock::new(|| Interner::with_hasher(Default::default()));
 
 /// Interned names are compiler-generated or come from the program being
 /// compiled, so the lookup hash needs no HashDoS resistance. `Symbol::new`
 /// runs on every typed operation match, which makes the hasher a hot path.
-type Interner = Rodeo<Spur, rustc_hash::FxBuildHasher>;
+type Interner = ThreadedRodeo<Spur, rustc_hash::FxBuildHasher>;
 
 /// Interned symbol for efficient comparison of names (functions, variables, fields, etc.)
 ///
@@ -37,7 +38,7 @@ impl std::hash::Hash for Symbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
         // Hash the string content, not the internal Spur index,
         // so the result is stable regardless of interning order.
-        self.with_str(|s| s.hash(state));
+        self.as_str().hash(state);
     }
 }
 
@@ -52,63 +53,48 @@ impl Ord for Symbol {
         if self.0 == other.0 {
             return std::cmp::Ordering::Equal;
         }
-        let interner = INTERNER.read_recursive();
-        let a = interner.resolve(&self.0);
-        let b = interner.resolve(&other.0);
-        a.cmp(b)
+        self.as_str().cmp(other.as_str())
     }
 }
 
 impl std::fmt::Debug for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.with_str(|s| write!(f, "Symbol({:?})", s))
+        write!(f, "Symbol({:?})", self.as_str())
     }
 }
 
 impl Symbol {
     /// Intern a static string and return its symbol. Prefer this over `from_dynamic` when possible.
     pub fn new(text: &'static str) -> Self {
-        Self::get_or_else(text, |rodeo| rodeo.get_or_intern_static(text))
+        Symbol(INTERNER.get_or_intern_static(text))
     }
 
     /// Intern a string and return its symbol. Prefer `new` if the text is static.
     pub fn from_dynamic(text: &str) -> Self {
-        Self::get_or_else(text, |rodeo| rodeo.get_or_intern(text))
+        Symbol(INTERNER.get_or_intern(text))
     }
 
     /// Look up an already-interned string without interning it when absent.
     pub fn lookup(text: &str) -> Option<Self> {
-        INTERNER.read_recursive().get(text).map(Self)
+        INTERNER.get(text).map(Self)
     }
 
-    fn get_or_else(text: &str, f: impl for<'r> FnOnce(&'r mut Interner) -> Spur) -> Self {
-        let mut lock = INTERNER.upgradable_read();
-        Symbol(if let Some(spur) = lock.get(text) {
-            spur
-        } else {
-            lock.with_upgraded(f)
-        })
-    }
-
-    /// Access the symbol's text with zero-copy.
-    ///
-    /// Uses `read_recursive()` to allow nested Symbol operations (Display, ==, to_string)
-    /// within the closure without risk of deadlock.
-    ///
-    /// This is useful for optimization: when you need to work with the symbol's text
-    /// without allocating a String, use this method. For example:
+    /// The symbol's text.
     ///
     /// ```
     /// use trunk_ir::Symbol;
     /// let symbol = Symbol::new("something");
-    /// // Avoid: symbol.to_string() == "something"
-    /// // Prefer:
-    /// assert!(symbol.with_str(|s| s == "something"));
+    /// assert_eq!(symbol.as_str(), "something");
     /// ```
+    pub fn as_str(self) -> &'static str {
+        INTERNER.resolve(&self.0)
+    }
+
+    /// Access the symbol's text through a closure.
+    ///
+    /// Equivalent to `f(self.as_str())`; prefer `as_str` in new code.
     pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
-        let interner = INTERNER.read_recursive();
-        let text = interner.resolve(&self.0);
-        f(text)
+        f(self.as_str())
     }
 }
 
@@ -154,32 +140,31 @@ macro_rules! symbols {
 // Convenient comparison with &str
 impl PartialEq<str> for Symbol {
     fn eq(&self, other: &str) -> bool {
-        self.with_str(|s| s == other)
+        self.as_str() == other
     }
 }
 
 impl PartialEq<&str> for Symbol {
     fn eq(&self, other: &&str) -> bool {
-        self.with_str(|s| s == *other)
+        self.as_str() == *other
     }
 }
 
 impl PartialEq<Symbol> for str {
     fn eq(&self, other: &Symbol) -> bool {
-        other.with_str(|s| s == self)
+        self == other.as_str()
     }
 }
 
 impl PartialEq<Symbol> for &str {
     fn eq(&self, other: &Symbol) -> bool {
-        other.with_str(|s| s == *self)
+        *self == other.as_str()
     }
 }
 
-// For Display (uses with_str for zero-copy)
 impl std::fmt::Display for Symbol {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.with_str(|s| write!(f, "{}", s))
+        f.write_str(self.as_str())
     }
 }
 

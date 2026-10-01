@@ -23,7 +23,7 @@ insta = { version = "1.48", features = ["yaml"] }
 itertools = "0.14"
 itoa = "1"
 inventory = "0.3"
-lasso = "0.7"
+lasso = { version = "0.7", features = ["multi-threaded"] }
 libc = "0.2"
 lsp-server = "0.10"
 lsp-types = "0.97"
