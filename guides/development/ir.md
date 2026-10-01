@@ -56,7 +56,7 @@ fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 fn i32_add(lhs: Value<I32>, rhs: Value<I32>) -> Value<I32> {}
 
 fn cmpi<T: IntegerLike>(
-    predicate: Attr<Symbol>,
+    predicate: Attr<String>,
     lhs: Value<T>,
     rhs: Value<T>,
 ) -> Value<I1> {}
