@@ -65,7 +65,7 @@ header access uses `ptr - 8`.
 
 ```text
 [-8] refcount: u32   — reference count (1 on allocation)
-[-4] rtti_idx: u32   — runtime type info index
+[-4] rtti_idx: u32   — runtime type descriptor index
 [ 0] payload...      — first field (naturally aligned)
 ```
 
@@ -535,6 +535,11 @@ non-transferred values before `func.tail_call` or
 
 ## RTTI Table
 
+RTTI index는 [runtime 타입 descriptor](runtime-types.md)의 번호다. Index는 layout이
+아니라 descriptor마다 정해지므로, 같은 layout을 쓰는 두 소스 타입은 서로 다른 index를
+가지며 release 함수는 공유할 수 있다. Table 항목은 release 함수와 함께 값 출력에
+필요한 descriptor 레코드를 담는다. 아래 서술은 그중 release 함수 부분이다.
+
 RTTI table은 RTTI index마다 포인터 폭의 칸 하나를 두고, release 함수가 있는 index의
 칸에 그 함수의 주소를 담는다. 빈 칸은 null이며 얕은 해제를 뜻한다. Native RTTI
 생성은 table을 함수 재배치가 달린 `clif.data`로, table을 통해 해제를 디스패치하는
@@ -551,7 +556,7 @@ __tribute_rtti_table: [release_fn_or_null; max_index + 1]
 | ---- | ---- |
 | `0` | release 함수 없음, 얕은 해제. Runtime이 할당하는 `Bytes`도 이 번호를 쓴다. |
 | `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`의 고정 크기 release |
-| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 `tribute_rtti.layout` |
+| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 소스 타입별 descriptor |
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과
 `__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석하며, runtime과

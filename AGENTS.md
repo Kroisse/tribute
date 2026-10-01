@@ -18,6 +18,7 @@ Key design docs:
 - `new-plans/ir.md`
 - `new-plans/implementation.md`
 - `new-plans/cranelift-backend.md`
+- `new-plans/runtime-types.md`
 
 ## Working Rules
 
