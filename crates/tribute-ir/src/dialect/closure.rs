@@ -43,15 +43,16 @@ fn print_closure_lambda(
     use std::fmt::Write;
     use trunk_ir::ops::DialectType;
 
+    let Some(region) = h.ctx().op_region(op, 0) else {
+        return h.print_generic(op, indent);
+    };
+
     let indent_str = " ".repeat(indent);
 
     // Assign result name
     let results = h.ctx().op_results(op);
     let name = h.assign_value_name(results[0]);
     write!(h, "{indent_str}{name} = closure.lambda")?;
-
-    // Extract region ref
-    let region = h.ctx().op_region(op, 0).unwrap();
 
     // "(%param: type, ...)" — entry block args (formal parameters)
     let entry_args: Vec<_> = {

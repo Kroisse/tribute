@@ -225,6 +225,11 @@ methods (`push_op_region`, `clear_op_regions`, `detach_region`,
 links consistent. Prefer a typed accessor such as `func.body(ctx)` when the
 operation's wrapper declares the region.
 
+`op_region` and `op_successor` return `Option`. Outside tests, do not
+`unwrap()` them: propagate a missing entry with `?` or `ok_or_else` into the
+function's error, fall back as a printer does to generic output, or use
+`expect` with a message that names the violated contract.
+
 When a loop must mutate the IR while walking such a list, collect a snapshot
 into the list's `SmallVec` alias rather than a `Vec`. These lists rarely
 exceed four entries, so the alias does not allocate:

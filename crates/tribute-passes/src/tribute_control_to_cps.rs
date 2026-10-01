@@ -494,17 +494,12 @@ fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<Bound
             ));
         }
         if data.dialect == Symbol::new("scf") && data.name == Symbol::new("switch") {
-            if ctx.op_operands(op).len() != 1
-                || !ctx.op_result_types(op).is_empty()
-                || ctx.op_region_count(op) != 1
-            {
-                failures.push(failure(
-                    ctx,
-                    op,
-                    "scf.switch requires one discriminant, no results, and one body region",
-                ));
-            } else {
-                let blocks = &ctx.region(ctx.op_region(op, 0).unwrap()).blocks;
+            let body_region =
+                ctx.op_regions(op).exactly_one().ok().filter(|_| {
+                    ctx.op_operands(op).len() == 1 && ctx.op_result_types(op).is_empty()
+                });
+            if let Some(body_region) = body_region {
+                let blocks = &ctx.region(body_region).blocks;
                 if let [body] = blocks.as_slice() {
                     for arm in ctx.block(*body).ops.iter().copied() {
                         let arm_data = ctx.op(arm);
@@ -546,6 +541,12 @@ fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<Bound
                         "scf.switch body region requires exactly one block",
                     ));
                 }
+            } else {
+                failures.push(failure(
+                    ctx,
+                    op,
+                    "scf.switch requires one discriminant, no results, and one body region",
+                ));
             }
         }
         for region in ctx.op_regions(op) {
@@ -1921,7 +1922,9 @@ impl<'a> Converter<'a> {
         let frame = self.frame_types(result).reference;
         let abi = CallableAbi::new(convention, source_param_types.clone(), result);
         let params = abi.lowered_params(evidence, frame);
-        let body_source = self.ctx.op_region(source, 0).unwrap();
+        let body_source = self.ctx.op_region(source, 0).ok_or_else(|| {
+            self.malformed_source(source, "tribute_control.lambda requires a body region")
+        })?;
         let entry_source = self.ctx.region(body_source).blocks[0];
         let block = self.make_block(location, &params);
         let mut body_mapping = mapping.clone();
@@ -2867,7 +2870,9 @@ impl<'a> Converter<'a> {
             .attributes
             .get_type("operation_result_type")
             .unwrap();
-        let source_region = self.ctx.op_region(source, 0).unwrap();
+        let source_region = self.ctx.op_region(source, 0).ok_or_else(|| {
+            self.malformed_source(source, "tribute_control.handler requires a body region")
+        })?;
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_args = self.ctx.block_args(source_block).to_vec();
         let has_resume_token = source_args.last().is_some_and(|arg| {
@@ -3600,7 +3605,12 @@ impl<'a> Converter<'a> {
             return Ok(declaration);
         }
 
-        let source_region = self.ctx.op_region(source, 0).unwrap();
+        let source_region = self.ctx.op_region(source, 0).ok_or_else(|| {
+            self.malformed_source(
+                source,
+                "tribute_control.func definition requires a body region",
+            )
+        })?;
         let source_block = self.ctx.region(source_region).blocks[0];
         let source_result = self.convert_type(info.source_result);
         let source_params: Vec<_> = info
