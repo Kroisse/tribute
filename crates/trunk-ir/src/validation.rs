@@ -62,6 +62,9 @@ pub enum ValidationError {
     /// An operation-level verifier error was found.
     #[display("{message}")]
     Operation { message: String },
+    /// An operation's region list and its regions' parent links disagree.
+    #[display("{message}")]
+    RegionLink { message: String },
 }
 
 impl fmt::Debug for ValidationError {
@@ -218,14 +221,20 @@ fn validate_functions_in_region(
 
                 // Check operands with visibility-based scoping.
                 // No values from outside the function body are visible.
-                for &func_region in &data.regions {
-                    check_operands_in_region(ctx, func_region, &HashSet::new(), &fn_name, errors);
+                for func_region in ctx.op_regions(op) {
+                    check_operands_in_region(
+                        ctx,
+                        func_region.id(),
+                        &HashSet::new(),
+                        &fn_name,
+                        errors,
+                    );
                 }
             }
 
             // Recurse into nested regions (e.g., nested core.module)
-            for &nested_region in &data.regions {
-                validate_functions_in_region(ctx, nested_region, errors);
+            for nested_region in ctx.op_regions(op) {
+                validate_functions_in_region(ctx, nested_region.id(), errors);
             }
         }
     }
@@ -240,6 +249,9 @@ fn validate_functions_in_region(
 /// Checks two directions:
 /// 1. For every operand of every op, there must be a corresponding entry in `uses(operand)`.
 /// 2. For every use in the use-chain, the referenced op's operand must point back.
+///
+/// It also checks that every region in an operation's region list names that
+/// operation as its parent; both are linked by the context's region methods.
 pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult {
     let mut errors = Vec::new();
 
@@ -265,8 +277,21 @@ pub fn validate_use_chains(ctx: &IrContext, module: Module) -> ValidationResult 
         for &result in ctx.op_results(op) {
             checked_values.insert(result);
         }
-        for region in ctx.op_regions(op).map(|h| h.id()) {
-            for &block in &ctx.region(region).blocks {
+        for region in ctx.op_regions(op) {
+            if region.parent_op != Some(op) {
+                let data = ctx.op(op);
+                errors.push(ValidationError::RegionLink {
+                    message: format!(
+                        "{}.{} ({:?}) lists {:?}, whose parent is {:?}",
+                        data.dialect,
+                        data.name,
+                        op,
+                        region.id(),
+                        region.parent_op,
+                    ),
+                });
+            }
+            for &block in &region.blocks {
                 for &arg in ctx.block_args(block) {
                     checked_values.insert(arg);
                 }
@@ -795,7 +820,7 @@ fn validate_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
             return;
         }
     };
-    let raw_successors = &ctx.op(op).successors;
+    let raw_successors = ctx.op_successors(op);
     if successors.as_slice().len() != raw_successors.len() {
         errors.push(operation_verifier_error(
             ctx,
@@ -812,8 +837,11 @@ fn validate_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
         .op(op)
         .parent_block
         .and_then(|block| ctx.block(block).parent_region);
-    for (index, (edge, &raw_successor)) in
-        successors.as_slice().iter().zip(raw_successors).enumerate()
+    for (index, (edge, raw_successor)) in successors
+        .as_slice()
+        .iter()
+        .zip(raw_successors.map(|b| b.id()))
+        .enumerate()
     {
         if edge.block != raw_successor {
             errors.push(operation_verifier_error(
@@ -1082,10 +1110,10 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
     }
 
     // The schema guarantees one condition operand and two regions.
-    for (region_name, &region) in [
-        ("then_region", &data.regions[0]),
-        ("else_region", &data.regions[1]),
-    ] {
+    for (region_name, region) in ["then_region", "else_region"]
+        .into_iter()
+        .zip(ctx.op_regions(op).map(|region| region.id()))
+    {
         let blocks = &ctx.region(region).blocks;
         let [block] = blocks.as_slice() else {
             errors.push(operation_verifier_error(
@@ -1255,8 +1283,8 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| "<unnamed>".to_string());
 
-            for &func_region in &data.regions {
-                check_call_arity_in_region(ctx, func_region, &signatures, &fn_name);
+            for func_region in ctx.op_regions(op) {
+                check_call_arity_in_region(ctx, func_region.id(), &signatures, &fn_name);
             }
         }
     }
@@ -3356,21 +3384,22 @@ mod tests {
                 .is_err()
         );
 
-        ctx.op_mut(branch).successors.clear();
+        ctx.truncate_op_successors(branch, 0);
         assert!(
             BranchOps::get(&ctx, branch)
                 .unwrap()
                 .successors(&ctx, branch)
                 .is_err()
         );
-        ctx.op_mut(cond_branch).successors.pop();
+        let count = ctx.op_successor_count(cond_branch);
+        ctx.truncate_op_successors(cond_branch, count - 1);
         assert!(
             BranchOps::get(&ctx, cond_branch)
                 .unwrap()
                 .successors(&ctx, cond_branch)
                 .is_err()
         );
-        ctx.op_mut(loop_op).regions.clear();
+        ctx.clear_op_regions(loop_op);
         assert!(
             RegionBranchOps::get(&ctx, loop_op)
                 .unwrap()
@@ -3392,7 +3421,7 @@ mod tests {
                 .successors(&ctx, switches[1], RegionBranchPoint::Parent)
                 .is_err()
         );
-        ctx.op_mut(case).regions.clear();
+        ctx.clear_op_regions(case);
         assert!(
             RegionBranchOps::get(&ctx, case)
                 .unwrap()

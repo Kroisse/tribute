@@ -703,13 +703,12 @@ fn print_func(
 
     // Extract region ref and func type info before mutable operations
     let region = {
-        let data = h.ctx().op(op);
+        let regions = h.ctx().op_region_count(op);
         assert!(
-            data.regions.len() <= 1,
-            "print_func: expected at most one region, found {}",
-            data.regions.len(),
+            regions <= 1,
+            "print_func: expected at most one region, found {regions}",
         );
-        data.regions.first().copied()
+        h.ctx().op_region(op, 0).map(|region| region.id())
     };
 
     // Extract the validated input/result lists from the func.func_sig type attribute.

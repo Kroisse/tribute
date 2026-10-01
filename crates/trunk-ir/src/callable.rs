@@ -28,16 +28,19 @@ pub fn classify_callable_body(
     ctx: &IrContext,
     op: OpRef,
 ) -> Result<CallableBody, CallableBodyError> {
-    match ctx.op(op).regions.as_slice() {
-        [] => Ok(CallableBody::Declaration),
-        &[region] => ctx
-            .region(region)
+    let mut regions = ctx.op_regions(op);
+    match (regions.next(), regions.next()) {
+        (None, _) => Ok(CallableBody::Declaration),
+        (Some(region), None) => region
             .blocks
             .first()
             .copied()
-            .map(|entry| CallableBody::Definition { region, entry })
+            .map(|entry| CallableBody::Definition {
+                region: region.id(),
+                entry,
+            })
             .ok_or(CallableBodyError::MissingEntryBlock),
-        _ => Err(CallableBodyError::MultipleBodyRegions),
+        (Some(_), Some(_)) => Err(CallableBodyError::MultipleBodyRegions),
     }
 }
 
@@ -63,9 +66,9 @@ mod tests {
         let region = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![],
-            parent_op: Some(op),
+            parent_op: None,
         });
-        ctx.op_mut(op).regions.push(region);
+        ctx.push_op_region(op, region);
         assert_eq!(
             classify_callable_body(&ctx, op),
             Err(CallableBodyError::MissingEntryBlock)
@@ -93,9 +96,9 @@ mod tests {
         let extra = ctx.create_region(RegionData {
             location: loc,
             blocks: smallvec![],
-            parent_op: Some(op),
+            parent_op: None,
         });
-        ctx.op_mut(op).regions.push(extra);
+        ctx.push_op_region(op, extra);
         assert_eq!(
             classify_callable_body(&ctx, op),
             Err(CallableBodyError::MultipleBodyRegions)

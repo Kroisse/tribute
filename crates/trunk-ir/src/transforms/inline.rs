@@ -128,11 +128,9 @@ fn splice_callee_body_before(
 
     // Callee body & entry block (must be single-block).
     let callee_body = ctx
-        .op(callee_func_op)
-        .regions
-        .first()
-        .copied()
-        .ok_or(InlineError::CalleeHasNoBody)?;
+        .op_region(callee_func_op, 0)
+        .ok_or(InlineError::CalleeHasNoBody)?
+        .id();
     let callee_blocks = &ctx.region(callee_body).blocks;
     if callee_blocks.len() > 1 {
         return Err(InlineError::MultiBlockCallee);
@@ -222,10 +220,8 @@ impl Default for InlineConfig {
 
 /// Count all ops in a `func.func`'s body (recursively through nested regions).
 fn op_count(ctx: &IrContext, func_op: OpRef) -> usize {
-    ctx.op(func_op)
-        .regions
-        .iter()
-        .map(|&r| region_op_count(ctx, r))
+    ctx.op_regions(func_op)
+        .map(|r| region_op_count(ctx, r.id()))
         .sum()
 }
 

@@ -546,8 +546,8 @@ fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, 
         }
 
         // Block args in regions
-        for &region in &data.regions {
-            for &block in &ctx.region(region).blocks {
+        for region in ctx.op_regions(op) {
+            for &block in &region.blocks {
                 for arg in &ctx.block(block).args {
                     *counts.entry(arg.ty).or_default() += 1;
                 }
@@ -797,10 +797,10 @@ fn print_generic_op(
     }
 
     // Successors
-    let successors = &state.ctx.op(op).successors;
-    if !successors.is_empty() {
+    let successors = state.ctx.op_successors(op);
+    if successors.len() != 0 {
         f.write_str(" [")?;
-        for (i, &b) in successors.iter().enumerate() {
+        for (i, b) in successors.map(|b| b.id()).enumerate() {
             if i > 0 {
                 f.write_str(", ")?;
             }
@@ -836,8 +836,7 @@ fn print_generic_op(
     }
 
     // Regions
-    let regions = &state.ctx.op(op).regions;
-    for &region in regions.iter() {
+    for region in state.ctx.op_regions(op).map(|region| region.id()) {
         f.write_str(" {\n")?;
         print_region(state, f, region, indent + 2)?;
         write!(f, "{indent_str}}}")?;
@@ -943,13 +942,12 @@ fn print_module_op(
         f.write_char('}')?;
     }
 
-    let regions = &data.regions;
+    let regions = state.ctx.op_region_count(op);
     assert!(
-        regions.len() <= 1,
-        "print_module_op: expected at most one region, found {}",
-        regions.len(),
+        regions <= 1,
+        "print_module_op: expected at most one region, found {regions}",
     );
-    if let Some(&region) = regions.first() {
+    if let Some(region) = state.ctx.op_region(op, 0).map(|region| region.id()) {
         f.write_str(" {\n")?;
 
         let inner_indent = format!("{}  ", indent_str);

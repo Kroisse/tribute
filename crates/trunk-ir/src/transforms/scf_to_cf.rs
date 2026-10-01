@@ -29,6 +29,7 @@
 //!   %2 = op_after(%1)
 //! ```
 
+use itertools::Itertools;
 use smallvec::SmallVec;
 use std::{collections::HashSet, ops::ControlFlow};
 
@@ -352,27 +353,29 @@ fn switch_arms(ctx: &IrContext, scf_op: OpRef) -> Option<SwitchArms> {
     let [discriminant] = ctx.op_operands(scf_op) else {
         return None;
     };
-    let [body_region] = ctx.op(scf_op).regions.as_slice() else {
+    let Ok(body_region) = ctx.op_regions(scf_op).exactly_one() else {
         return None;
     };
-    let [body_block] = ctx.region(*body_region).blocks.as_slice() else {
+    let [body_block] = body_region.data().blocks.as_slice() else {
         return None;
     };
 
     let mut cases = Vec::new();
     let mut default_region = None;
     for &arm in &ctx.block(*body_block).ops {
-        let arm_data = ctx.op(arm);
-        let [arm_region] = arm_data.regions.as_slice() else {
+        let Ok(arm_region) = ctx.op_regions(arm).exactly_one() else {
             return None;
         };
-        if ctx.region(*arm_region).blocks.is_empty() {
+        if arm_region.blocks.is_empty() {
             return None;
         }
         if scf::Case::matches(ctx, arm) {
-            cases.push((arm_data.attributes.get("value")?.clone(), *arm_region));
+            cases.push((
+                ctx.op(arm).attributes.get("value")?.clone(),
+                arm_region.id(),
+            ));
         } else if scf::Default::matches(ctx, arm) {
-            if default_region.replace(*arm_region).is_some() {
+            if default_region.replace(arm_region.id()).is_some() {
                 return None;
             }
         } else {
@@ -1609,10 +1612,10 @@ mod tests {
             );
             assert!(
                 blocks.iter().any(|&candidate| {
-                    ctx.block(candidate)
-                        .ops
-                        .iter()
-                        .any(|&op| ctx.op(op).successors.contains(&block))
+                    ctx.block(candidate).ops.iter().any(|&op| {
+                        ctx.op_successors(op)
+                            .any(|successor| successor.id() == block)
+                    })
                 }),
                 "terminal lowering left a predecessor-free block: {block}"
             );
@@ -1657,10 +1660,10 @@ mod tests {
             blocks.iter().skip(1).all(|&block| {
                 !ctx.block(block).ops.is_empty()
                     && blocks.iter().any(|&candidate| {
-                        ctx.block(candidate)
-                            .ops
-                            .iter()
-                            .any(|&op| ctx.op(op).successors.contains(&block))
+                        ctx.block(candidate).ops.iter().any(|&op| {
+                            ctx.op_successors(op)
+                                .any(|successor| successor.id() == block)
+                        })
                     })
             }),
             "terminal switches must not leave a predecessor-free empty merge block"
@@ -1708,7 +1711,7 @@ mod tests {
             blocks
                 .iter()
                 .flat_map(|&block| ctx.block(block).ops.iter())
-                .filter(|&&op| ctx.op(op).successors.as_slice() == [continuation])
+                .filter(|&&op| ctx.op_successors(op).map(|b| b.id()).eq([continuation]))
                 .count(),
             2,
             "both yielding arms must branch to the merge continuation"
@@ -1761,7 +1764,7 @@ mod tests {
             blocks
                 .iter()
                 .flat_map(|&block| ctx.block(block).ops.iter())
-                .filter(|&&op| ctx.op(op).successors.as_slice() == [continuation])
+                .filter(|&&op| ctx.op_successors(op).map(|b| b.id()).eq([continuation]))
                 .count(),
             2,
             "both yielding paths must branch to the merge continuation"
@@ -1947,7 +1950,7 @@ mod tests {
         assert!(ctx.block_args(exit).is_empty());
         for &block in blocks {
             for &op in &ctx.block(block).ops {
-                if ctx.op(op).successors.as_slice() == [exit] {
+                if ctx.op_successors(op).map(|b| b.id()).eq([exit]) {
                     assert!(
                         ctx.op_operands(op).is_empty(),
                         "{} has operands {:?}",

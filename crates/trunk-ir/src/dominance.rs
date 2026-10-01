@@ -285,7 +285,7 @@ mod tests {
         let first_entry = ctx.region(first_region).blocks[0];
         let second_entry = ctx.region(second.body(&ctx)).blocks[0];
         let jump = *ctx.block(first_entry).ops.last().expect("jump");
-        ctx.op_mut(jump).successors[0] = second_entry;
+        ctx.set_op_successor(jump, 0, second_entry);
 
         let dominance = DominatorTree::compute(&ctx, first_region);
         assert!(!dominance.is_valid());

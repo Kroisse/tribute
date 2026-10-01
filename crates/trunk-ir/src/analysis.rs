@@ -1070,9 +1070,9 @@ mod tests {
         let body = ctx.create_region(crate::context::RegionData {
             location,
             blocks: smallvec::smallvec![block],
-            parent_op: Some(op),
+            parent_op: None,
         });
-        ctx.op_mut(op).regions.push(body);
+        ctx.push_op_region(op, body);
 
         let first_success = analyses.get::<NonEmptyModuleAnalysis>(&ctx, op).unwrap();
         let second_success = analyses.get::<NonEmptyModuleAnalysis>(&ctx, op).unwrap();

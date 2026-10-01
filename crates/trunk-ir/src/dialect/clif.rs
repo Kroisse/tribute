@@ -377,11 +377,9 @@ impl Data {
 
 /// The operations of a data object's relocation region, if it has one.
 fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = crate::OpRef> + '_ {
-    ctx.op(op)
-        .regions
-        .first()
+    ctx.op_region(op, 0)
         .into_iter()
-        .flat_map(|&region| ctx.region(region).blocks.iter())
+        .flat_map(|region| region.data().blocks.iter())
         .flat_map(|&block| ctx.block(block).ops.iter().copied())
 }
 
