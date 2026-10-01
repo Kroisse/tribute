@@ -1062,8 +1062,11 @@ impl Default for PathInterner {
 
 /// Handle to a string in an `IrContext`'s string pool.
 ///
-/// Equal handles from one pool denote equal text. A handle has no meaning
-/// outside the context that created it and that context's clones.
+/// Equal handles from one pool denote equal text. Like the context's other
+/// handles (`TypeRef`, `OpRef`, ...), a handle is valid only in the context
+/// that created it: cloning a context copies the pool, so a handle created
+/// before the clone is valid in both copies, and one created afterwards only in
+/// the copy that created it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StringRef(lasso::Spur);
 
