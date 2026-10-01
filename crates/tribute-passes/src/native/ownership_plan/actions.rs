@@ -504,18 +504,19 @@ impl ActionPlanner<'_> {
                 return Err(OwnershipPlanError::new("indirect call arity is malformed"));
             }
             validate_call_contract(self.ir, op, signature, args, self.managed_layouts)?;
+            // The exact signature states the callee's entry contract; an
+            // unmarked managed input has the retained callable contract.
             signature
                 .inputs(self.ir)
                 .iter()
-                .map(|&ty| {
-                    if is_typed_managed_reference(self.ir, ty, self.managed_layouts) {
-                        if tail {
-                            EntryOwnership::Consumed
-                        } else {
-                            EntryOwnership::Retained
-                        }
-                    } else {
+                .zip(consumed_inputs(self.ir, signature)?)
+                .map(|(&ty, consumed)| {
+                    if !is_typed_managed_reference(self.ir, ty, self.managed_layouts) {
                         EntryOwnership::Plain
+                    } else if consumed {
+                        EntryOwnership::Consumed
+                    } else {
+                        EntryOwnership::Retained
                     }
                 })
                 .collect::<Vec<_>>()

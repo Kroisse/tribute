@@ -1417,3 +1417,41 @@ fn main() -> Nil {
 "#;
     assert_native_output("use_import_throw.trb", code, "42");
 }
+
+/// One managed value supplied to two consumed parameters of a CPS callee,
+/// through an ordinary call and a proper tail call, supplies one ownership
+/// unit per parameter.
+#[test]
+fn test_cps_consumed_parameters_receive_one_unit_each() {
+    let output = common::compile_and_run_native_asan(
+        "cps_consumed_duplicate_arguments.trb",
+        r#"
+use abilities::Throw
+use std::io::{Io, print_line}
+
+fn both(left: String, right: String) ->{Throw(String)} String {
+    left <> right
+}
+
+fn twice(message: String) ->{Throw(String)} String {
+    let joined = both(message, message)
+    both(joined, joined)
+}
+
+fn main() ->{Io} Nil {
+    let text = "ab"
+    print_line(handle twice(text) {
+        do value { value }
+        op Throw::throw(message) { message }
+    })
+    print_line(text)
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "stderr={}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), "abababab\nab\n");
+}
