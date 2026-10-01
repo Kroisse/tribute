@@ -70,7 +70,8 @@ pub enum ConversionError {
     /// Operation name doesn't match expected dialect.operation.
     WrongOperation {
         expected: &'static str,
-        actual: String,
+        actual_dialect: crate::Symbol,
+        actual_name: crate::Symbol,
     },
     /// Missing required attribute.
     MissingAttribute(&'static str),
