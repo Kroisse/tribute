@@ -681,6 +681,41 @@ fn test_execute_bytes_slice_or_panic_traps_out_of_range(db: &salsa::DatabaseImpl
     }
 }
 
+#[salsa_test]
+fn test_execute_nat_comparisons_and_bytes_slice_clamping(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "nat_comparisons.trb",
+        r#"
+fn bit(value: Bool) -> String {
+    case value {
+        True -> "1"
+        False -> "0"
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(bit(3 > 2) <> bit(2 > 3) <> bit(2 >= 2) <> bit(1 >= 2))
+    std::io::print_line(bit(1 < 2) <> bit(2 < 1) <> bit(2 <= 2) <> bit(3 <= 2))
+    let bytes = b"<hello>"
+    std::io::print_line(
+        bit(bytes.slice(1, 6) == b"hello")
+            <> bit(bytes.slice(1, 100) == b"hello>")
+            <> bit(bytes.slice(9, 3) == b"")
+    )
+}
+"#,
+    );
+    let binary = expect_wasm_compilation_success(db, source, "Should compile Nat comparisons");
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"1010\n1010\n111\n");
+}
+
 fn run_validated_wasm(binary: &[u8]) -> std::process::Output {
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(binary)
