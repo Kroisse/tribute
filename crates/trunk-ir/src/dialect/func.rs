@@ -862,7 +862,7 @@ fn parse_func<'a>(
 }
 
 inventory::submit! {
-    crate::op_interface::OpAsmFormat::new::<Func>(print_func, parse_func)
+    crate::asm_format::OpAsmFormat::new::<Func>(print_func, parse_func)
 }
 
 impl crate::op_interface::CallableOwnerModel for Func {

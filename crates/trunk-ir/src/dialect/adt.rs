@@ -1,7 +1,7 @@
 //! Arena-based adt dialect.
 
 // === Type alias hint registration ===
-inventory::submit!(crate::op_interface::TypeAliasHint {
+inventory::submit!(crate::asm_format::TypeAliasHint {
     dialect: "adt",
     suggest: |ctx, ty| { ctx.get_type(ty).attrs.get_symbol("name") },
 });
