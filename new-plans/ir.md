@@ -1166,7 +1166,9 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   [rc.md](rc.md#proper-tail-ownership-transfer)) 중 callable 계약이 요구하는
   것은 exact physical signature의 일부로 표현한다. 그래서 직접 정의와
   exact indirect signature 모두에서 같은 계약을 읽을 수 있다. 인코딩은 signature의
-  [타입 매개변수 속성](#타입-매개변수-속성)이다.
+  [타입 매개변수 속성](#타입-매개변수-속성) `tribute.ownership = @consumed`이며,
+  경계가 물리 CPS callable의 모든 입력에 붙인다. 표시가 없는 managed 매개변수는
+  retained 계약을 가진다.
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 명시적
   [runtime layout 식별자](#runtime-layout-식별자)로 구별한다. Struct 이름, field
   모양, `arrayref` 같은 erased heap 형상을 provenance로 쓰지 않는다.
@@ -1203,8 +1205,8 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 출구 이후에도 보존하는 것:
 
 - 기계 호출 규약, exact signature, 외부 바인딩(`abi`)
-- Typed managed layout, 명시적 layout 식별자, ownership/RTTI 입력과 `tribute.type.string`
-  같은 타입 식별 metadata
+- Typed managed layout, 명시적 layout 식별자, ownership/RTTI 입력(매개변수 속성
+  `tribute.ownership` 포함)과 `tribute.type.string` 같은 타입 식별 metadata
 - Location과 `tribute.definition.*` 같은 실행에 관여하지 않는 source/debug 정보
 
 경계 이후 pass는 금지된 metadata를 조회하거나 다시 만들지 않는다. 이름, 포인터 형태,
@@ -1278,8 +1280,10 @@ parameter와 같은 용법). 함수 signature에서는 input과 result 타입이
 - TrunkIR은 key의 의미를 해석하지 않는다. 의미는 key를 정의하는 dialect나 언어
   계층이 소유한다.
 - 속성은 그것이 설명하는 매개변수를 따라간다. 매개변수를 끼우거나 빼며 타입을
-  다시 만드는 pass는 이 list도 같은 위치에서 고친다. 새로 끼운 매개변수는 `{}`를
-  가지고, 빠지거나 다른 의미의 값으로 대체된 매개변수의 속성은 버린다. 예를 들어
+  다시 만드는 pass는 이 list도 같은 위치에서 고친다. 새로 끼운 매개변수는 끼우는
+  계층의 계약이 정한 속성을 가지며, 계약이 없으면 `{}`다. 예를 들어 경계 안에서
+  물리 CPS callable에 끼운 환경은 다른 입력과 같은 ownership 계약을 가진다. 빠지거나
+  다른 의미의 값으로 대체된 매개변수의 속성은 버린다. 예를 들어
   CPS 규약은 source result를 논리 `core.never`로 대체하고 물리 signature에서
   없애므로 그 result의 속성도 사라진다. 같은 개수를 유지하는 변환은 위치를 그대로
   두고, 속성 안의 type만 변환한다.

@@ -41,7 +41,7 @@ use trunk_ir::rewrite::{
     ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::symbol_table::SymbolTable;
-use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op, walk_region};
 
 /// Create the unified closure struct type in arena: `{ table_idx: i32, env: anyref }`.
@@ -384,7 +384,13 @@ fn exact_physical_call_contract(
         return None;
     }
     let signature = callable.rebuild(ctx, |inputs, _| {
-        inputs.insert(environment_index, (environment, AttributeMap::new()));
+        inputs.insert(
+            environment_index,
+            (
+                environment,
+                crate::target_abi::physical_parameter_attrs(convention),
+            ),
+        );
     });
     Some(PhysicalCallContract {
         environment_index,

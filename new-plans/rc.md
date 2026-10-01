@@ -379,10 +379,16 @@ Each RC-managed physical parameter has one exact entry mode:
   entry retain, and the callee must eventually release, return, or proper-tail
   transfer that unit.
 
-Physically empty CPS callables use `consumed` for every parameter selected by
-the typed managed-reference contract. Unmanaged parameters have no RC action.
-This is a native callable contract, not a conclusion inferred from a converted
-type, name, operand position, body shape, or calling-convention integer alone.
+Physically empty CPS callables use `consumed` for their parameters. The
+representation/ABI boundary records this in the exact physical signature as the
+per-parameter attribute `tribute.ownership = @consumed` on every input, because
+it physicalizes the CPS convention and owns that decision. The marker is inert
+on a parameter the typed managed-reference contract does not select: unmanaged
+parameters have no RC action. Only `consumed` is encoded; a managed parameter
+without the marker has the `retained` callable contract, and `borrowed` is an
+optimization of module-local direct calls, never part of a signature. This is a
+native callable contract, not a conclusion inferred from a converted type, name,
+operand position, body shape, or calling-convention integer alone.
 
 An ordinary call to a retained parameter performs no caller-side RC operation:
 the caller keeps its own unit live across the call while the callee acquires

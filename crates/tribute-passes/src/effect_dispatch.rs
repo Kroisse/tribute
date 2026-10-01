@@ -7,7 +7,10 @@
 //! `func.call_indirect` or a proper-tail `func.tail_call_indirect`. Only how
 //! evidence runtime values are typed differs per target; callers supply those.
 
+use tribute_core::CallingConvention;
 use tribute_ir::dialect::ability::{self, compute_op_idx};
+
+use crate::target_abi::physical_parameter_attrs;
 use tribute_ir::dialect::{closure, effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -15,7 +18,7 @@ use trunk_ir::dialect::{adt, arith, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, TypeConverter};
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
 pub(crate) fn i32_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
@@ -140,7 +143,8 @@ pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let i32_ty = i32_type(ctx);
-    func::func_sig(
+    let contract = physical_parameter_attrs(CallingConvention::Cps);
+    func::func_sig_with_param_attrs(
         ctx,
         [
             evidence_ty,
@@ -150,8 +154,10 @@ pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
             i32_ty,
             i32_ty,
             anyref_ty,
-        ],
+        ]
+        .map(|ty| (ty, contract.clone())),
         [],
+        AttributeMap::new(),
     )
     .with_call_conv(ctx, func::CallConv::Tail)
     .as_type_ref()

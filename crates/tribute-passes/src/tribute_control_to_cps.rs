@@ -5702,18 +5702,22 @@ mod tests {
         );
         assert!(logical.result_attrs(&ctx).all(AttributeMap::is_empty));
 
-        // The physical Cps callable has no result. Its definition, the function
-        // reference, and the indirect call all agree on one exact type.
+        // The physical Cps callable has no result and consumes every input,
+        // including the hidden ones. Its definition, the function reference,
+        // and the indirect call all agree on one exact type.
         crate::lower_closure_lambda::lower_closure_lambda(&mut ctx, module);
         crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let physical = adapter_type(&ctx);
+        let consumed = || crate::target_abi::physical_parameter_attrs(CallingConvention::Cps);
+        let mut marked_consumed = marked;
+        marked_consumed.extend(consumed());
         assert_eq!(
             physical
                 .inputs_with_attrs(&ctx)
                 .map(|(_, attrs)| attrs.clone())
                 .collect::<Vec<_>>(),
-            [empty(), empty(), empty(), marked]
+            [consumed(), consumed(), consumed(), marked_consumed]
         );
         assert!(physical.results(&ctx).is_empty());
         let mut references = Vec::new();

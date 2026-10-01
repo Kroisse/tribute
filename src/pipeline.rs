@@ -2166,6 +2166,70 @@ fn main() -> Nil {
         }
     }
 
+    /// Every physical tail signature at the boundary exit states that the
+    /// callee consumes each input: definitions, function references, and
+    /// indirect calls, including the bridge and dispatch signatures the
+    /// boundary builds itself.
+    fn assert_tail_signatures_consume_every_input(
+        db: &crate::TributeDatabaseImpl,
+        target: tribute_passes::abi_boundary::TargetKind,
+    ) {
+        use trunk_ir::Symbol;
+        use trunk_ir::op_interface::IndirectCallLikeOps;
+        let consumed = |ctx: &IrContext, signature: func_dialect::FuncSig| {
+            signature
+                .input_attrs(ctx)
+                .all(|attrs| attrs.get_symbol("tribute.ownership") == Some(Symbol::new("consumed")))
+        };
+        let mut tail_signatures = 0;
+        for (path, text) in BOUNDARY_EXIT_PROGRAMS {
+            let source = source_from_str(path, text);
+            let (mut ctx, module) = run_shared_pipeline(db, source)
+                .expect("shared pipeline must succeed")
+                .unwrap_or_else(|| panic!("{path} must lower"));
+            run_target_to_boundary_exit(&mut ctx, module, target)
+                .unwrap_or_else(|error| panic!("{path}: target boundary failed: {error}"));
+            let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+                let signature = if let Ok(function) = func_dialect::Func::from_op(&ctx, op) {
+                    Some(function.r#type(&ctx))
+                } else if func_dialect::Constant::matches(&ctx, op) {
+                    ctx.op_result_types(op).first().copied()
+                } else {
+                    IndirectCallLikeOps::exact_signature(&ctx, op)
+                };
+                if let Some(signature) =
+                    signature.and_then(|ty| func_dialect::FuncSig::from_type_ref(&ctx, ty))
+                    && signature.call_conv(&ctx) == Some(func_dialect::CallConv::Tail)
+                {
+                    tail_signatures += 1;
+                    assert!(
+                        consumed(&ctx, signature),
+                        "{path}: {target:?} tail signature lacks the consumed contract: {}",
+                        trunk_ir::printer::print_type(&ctx, signature.as_type_ref())
+                    );
+                }
+                ControlFlow::Continue(WalkAction::Advance)
+            });
+        }
+        assert!(tail_signatures > 0, "no physical tail signature observed");
+    }
+
+    #[salsa_test]
+    fn native_tail_signatures_consume_every_input(db: &crate::TributeDatabaseImpl) {
+        assert_tail_signatures_consume_every_input(
+            db,
+            tribute_passes::abi_boundary::TargetKind::Native,
+        );
+    }
+
+    #[salsa_test]
+    fn wasm_tail_signatures_consume_every_input(db: &crate::TributeDatabaseImpl) {
+        assert_tail_signatures_consume_every_input(
+            db,
+            tribute_passes::abi_boundary::TargetKind::Wasm,
+        );
+    }
+
     #[salsa_test]
     fn native_boundary_exit_round_trips_through_text(db: &crate::TributeDatabaseImpl) {
         assert_boundary_exit_round_trips(db, tribute_passes::abi_boundary::TargetKind::Native);

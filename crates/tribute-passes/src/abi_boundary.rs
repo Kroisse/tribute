@@ -35,13 +35,15 @@ const FORBIDDEN_ATTRIBUTES: &[&str] = &[
 /// Prefix of language-specific attributes, which must be classified.
 const LANGUAGE_ATTRIBUTE_PREFIX: &str = "tribute.";
 
-/// Language-specific metadata the boundary preserves: source/debug positions
-/// and type identity metadata. A new key must be classified explicitly.
+/// Language-specific metadata the boundary preserves: source/debug positions,
+/// type identity metadata, and the physical parameter ownership contract. A
+/// new key must be classified explicitly.
 const PRESERVED_ATTRIBUTES: &[&str] = &[
     "tribute.definition.source",
     "tribute.definition.start",
     "tribute.definition.end",
     "tribute.type.string",
+    crate::target_abi::OWNERSHIP_ATTR,
 ];
 
 /// Whether `name` is language-specific metadata the boundary preserves.
@@ -861,6 +863,20 @@ mod tests {
             [ViolationKind::UnclassifiedAttribute(
                 "tribute.definition.convention".to_owned()
             )]
+        );
+    }
+
+    #[test]
+    fn the_physical_ownership_contract_is_preserved() {
+        assert_eq!(
+            kinds(
+                r#"core.module @test {
+  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref) -> ()> {call_conv = @tail, param_attrs = [{tribute.ownership = @consumed}]}} {
+    func.unreachable
+  }
+}"#
+            ),
+            []
         );
     }
 
