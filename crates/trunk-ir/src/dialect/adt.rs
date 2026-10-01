@@ -477,6 +477,30 @@ mod tests {
     }
 
     #[test]
+    fn repeated_struct_is_aliased_by_its_name() {
+        let input = r#"core.module @test {
+  func.func @f1(%x: adt.struct<@_Marker(@a: core.i32)>) -> adt.struct<@_Marker(@a: core.i32)> {
+    func.return %x
+  }
+  func.func @f2(%x: adt.struct<@_Marker(@a: core.i32)>) -> adt.struct<@_Marker(@a: core.i32)> {
+    func.return %x
+  }
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("struct types should parse");
+        let printed = print_module(&ctx, module);
+        assert!(
+            printed.contains("!_Marker = adt.struct<@_Marker(@a: core.i32)>"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("func.func @f1(%0: !_Marker) -> !_Marker"),
+            "{printed}"
+        );
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
     fn test_adt_struct_reserved_names_are_parse_errors() {
         for spelling in [
             "adt.struct<@P(@x: core.i32), {name = @Q}>",

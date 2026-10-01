@@ -1693,32 +1693,6 @@ mod tests {
     }
 
     #[test]
-    fn test_auto_alias_named_struct() {
-        let mut ctx = IrContext::new();
-        let loc = test_location(&mut ctx);
-        let i32_ty = make_i32_type(&mut ctx);
-
-        // Create a named struct
-        let marker_ty = make_adt_struct(
-            &mut ctx,
-            "_Marker",
-            &[("ability_id", i32_ty), ("prompt_tag", i32_ty)],
-        );
-
-        let f1 = make_identity_func(&mut ctx, loc, "f1", marker_ty, marker_ty);
-        let f2 = make_identity_func(&mut ctx, loc, "f2", marker_ty, marker_ty);
-
-        let module = make_module_with_funcs(&mut ctx, loc, vec![f1, f2]);
-        let output = print_module(&ctx, module);
-
-        // Should use the name from the `name` attribute
-        assert!(
-            output.contains("!_Marker = adt.struct<"),
-            "Expected !_Marker alias:\n{output}"
-        );
-    }
-
-    #[test]
     fn test_auto_alias_manual_priority() {
         let mut ctx = IrContext::new();
         let loc = test_location(&mut ctx);
