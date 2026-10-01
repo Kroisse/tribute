@@ -191,6 +191,11 @@ let rebuilt = sig.rebuild(ctx, |inputs, _| {
 });
 ```
 
+An inserted parameter carries whatever its inserting layer's contract assigns.
+Inside the representation/ABI boundary, a parameter inserted into a physical
+callable takes `target_abi::physical_parameter_attrs(convention)`, so it has
+the same ownership contract as the callable's other inputs.
+
 Operations are created with their builders:
 
 ```rust

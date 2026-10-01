@@ -37,6 +37,28 @@ const ROOT_UNHANDLED_SYMBOL: &str = "__tribute_unhandled";
 const ROOT_COMPLETION_CELL_NAME: &str = "__tribute_completion_cell";
 const ROOT_COMPLETION_CELL_VALUE_FIELD: &str = "value";
 
+/// Per-parameter attribute recording a physical callable's entry ownership
+/// contract; see `new-plans/rc.md` (proper-tail ownership transfer).
+pub(crate) const OWNERSHIP_ATTR: &str = "tribute.ownership";
+/// The [`OWNERSHIP_ATTR`] value: the caller supplies one ownership unit.
+pub(crate) const CONSUMED: &str = "consumed";
+
+/// The parameter attributes this boundary assigns to every input of a
+/// physical callable with `convention`.
+///
+/// A physical Cps callable consumes every parameter; the marker is inert on
+/// unmanaged ones. Other conventions carry no ownership contract.
+pub(crate) fn physical_parameter_attrs(convention: CallingConvention) -> AttributeMap {
+    let mut attrs = AttributeMap::new();
+    if convention == CallingConvention::Cps {
+        attrs.insert(
+            Symbol::new(OWNERSHIP_ATTR),
+            Attribute::Symbol(Symbol::new(CONSUMED)),
+        );
+    }
+    attrs
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct TargetAbiError(String);
 
@@ -494,9 +516,15 @@ fn build_cps_root_call(
 
     let cell_ty = root_completion_cell_type(ctx, source_result);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let done_function_ty = func::func_sig(ctx, [anyref_ty, source_result], [])
-        .with_call_conv(ctx, func::CallConv::Tail)
-        .as_type_ref();
+    let contract = physical_parameter_attrs(CallingConvention::Cps);
+    let done_function_ty = func::func_sig_with_param_attrs(
+        ctx,
+        [(anyref_ty, contract.clone()), (source_result, contract)],
+        [],
+        AttributeMap::new(),
+    )
+    .with_call_conv(ctx, func::CallConv::Tail)
+    .as_type_ref();
     let done_entry = ctx.create_block(BlockData {
         location,
         args: vec![
@@ -979,7 +1007,10 @@ fn dispatch_entry_function_type(
     })?;
     Ok(callable
         .rebuild(ctx, |inputs, _| {
-            inputs.insert(1, (anyref, AttributeMap::new()));
+            inputs.insert(
+                1,
+                (anyref, physical_parameter_attrs(CallingConvention::Cps)),
+            );
         })
         .as_type_ref())
 }
@@ -1453,7 +1484,10 @@ impl<'a> PhysicalTypeConverter<'a> {
             .inputs_with_attrs(self.ctx)
             .map(|(ty, attrs)| (ty, attrs.clone()))
             .collect();
-        let inputs = self.convert_params(inputs)?;
+        let mut inputs = self.convert_params(inputs)?;
+        for (_, attrs) in &mut inputs {
+            attrs.extend(physical_parameter_attrs(convention));
+        }
         // A physical Cps callable has no result, so the logical result's
         // parameter attributes are dropped with it.
         let results = if convention == CallingConvention::Cps {
@@ -1889,13 +1923,13 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                "signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> ()> {call_conv = @tail}"
+                "signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> ()> {call_conv = @tail, param_attrs = [{tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}]}"
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "closure.closure(func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> ()> {call_conv = @tail})"
+                "closure.closure(func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> ()> {call_conv = @tail, param_attrs = [{tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}]})"
             ),
             "{printed}"
         );
