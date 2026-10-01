@@ -56,6 +56,15 @@ pub(crate) struct HandleContext<'db> {
 /// Scoping: Bindings are stored in a stack of scopes. When entering a new
 /// scope (e.g., lambda body, case arm), push_scope() creates a new scope.
 /// When exiting, pop_scope() removes it. Lookups search from innermost to
+/// One name bound by a generalized `let` pattern.
+#[derive(Clone, Debug)]
+pub(crate) struct LetSchemeBinding<'db> {
+    pub name: Symbol,
+    pub local_id: Option<LocalId>,
+    pub scope: NodeId,
+    pub scheme: TypeScheme<'db>,
+}
+
 /// outermost scope.
 pub struct FunctionInferenceContext<'a, 'db> {
     db: &'db dyn salsa::Database,
@@ -92,6 +101,10 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// These are distinct from the enclosing function scheme's binders when
     /// the solved typed body and callable metadata are materialized.
     local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
+
+    /// The schemes each generalized `let` pattern bound on its first visit,
+    /// rebound unchanged when inference and conversion revisit it.
+    let_schemes: HashMap<NodeId, Vec<LetSchemeBinding<'db>>>,
 
     /// The solved function type selected for each direct call callee.
     function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
@@ -210,6 +223,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             checked_record_shapes: HashSet::new(),
             constructor_reference_types: HashMap::new(),
             local_generalizations: HashMap::new(),
+            let_schemes: HashMap::new(),
             function_instances: HashMap::new(),
             quantified_local_reference_types: HashMap::new(),
             local_binding_owners: HashMap::new(),
@@ -517,6 +531,21 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
                 "local quantifier {var:?} is owned by two let patterns"
             );
         }
+    }
+
+    /// Record the schemes a `let` pattern bound when it was generalized.
+    /// The first visit decides; a revisit must not generalize again.
+    pub(crate) fn record_let_schemes(
+        &mut self,
+        pattern: NodeId,
+        bindings: Vec<LetSchemeBinding<'db>>,
+    ) {
+        self.let_schemes.entry(pattern).or_insert(bindings);
+    }
+
+    /// The schemes `pattern` bound on its first visit, if it was generalized.
+    pub(crate) fn let_schemes(&self, pattern: NodeId) -> Option<Vec<LetSchemeBinding<'db>>> {
+        self.let_schemes.get(&pattern).cloned()
     }
 
     pub fn take_local_generalizations(&mut self) -> HashMap<UniVarId<'db>, (NodeId, u32)> {

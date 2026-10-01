@@ -17,7 +17,7 @@ use crate::ast::{
 };
 
 use super::super::constraint::ConstraintOriginKind;
-use super::super::func_context::FunctionInferenceContext;
+use super::super::func_context::{FunctionInferenceContext, LetSchemeBinding};
 use super::super::solver::{RowSubst, TypeSolver, TypeSubst};
 use super::super::subst;
 use super::{Mode, TypeChecker};
@@ -111,6 +111,15 @@ impl<'db> TypeChecker<'db> {
         expr: &Expr<ResolvedRef<'db>>,
         mode: Mode<'db>,
     ) -> Expr<TypedRef<'db>> {
+        // An error type carries no expectation: it stands in for a type that
+        // was already reported missing or invalid, so the expression is
+        // inferred on its own.
+        let mode = match mode {
+            Mode::Check(expected) if matches!(expected.kind(self.db()), TypeKind::Error) => {
+                Mode::Infer
+            }
+            mode => mode,
+        };
         let lambda_expected = match mode {
             Mode::Infer => None,
             Mode::Check(expected) => Some(expected),
@@ -2161,6 +2170,26 @@ impl<'db> TypeChecker<'db> {
         value_ty: Type<'db>,
         evaluation_effect: EffectRow<'db>,
     ) {
+        // A revisited `let` keeps the schemes of its first visit. Solving
+        // again can fail once an unrelated error has been constrained, and a
+        // monomorphic rebinding would then alias the quantifiers that
+        // already-checked uses instantiated.
+        if let Some(bindings) = ctx.let_schemes(pattern.id) {
+            for LetSchemeBinding {
+                name,
+                local_id,
+                scope,
+                scheme,
+            } in bindings
+            {
+                if let Some(local_id) = local_id {
+                    ctx.bind_local_scheme(local_id, scheme);
+                    ctx.record_local_binding_owner(local_id, scope);
+                }
+                ctx.bind_local_scheme_by_name(name, scheme);
+            }
+            return;
+        }
         let mut solver = TypeSolver::new(self.db());
         solver.reserve_row_vars(ctx.next_row_var());
         for method in ctx.deferred_methods() {
@@ -2227,6 +2256,7 @@ impl<'db> TypeChecker<'db> {
         // variable shared by several names (`let f as g = ...`) must have a
         // single owner.
         let mut let_quantifiers = HashMap::new();
+        let mut let_schemes = Vec::new();
         for PatternBinding {
             name,
             local_id,
@@ -2293,7 +2323,14 @@ impl<'db> TypeChecker<'db> {
                 ctx.record_local_binding_owner(local_id, scope);
             }
             ctx.bind_local_scheme_by_name(name, scheme);
+            let_schemes.push(LetSchemeBinding {
+                name,
+                local_id,
+                scope,
+                scheme,
+            });
         }
+        ctx.record_let_schemes(pattern.id, let_schemes);
         if !let_quantifiers.is_empty() {
             ctx.record_local_generalization(pattern.id, let_quantifiers);
         }
