@@ -967,7 +967,7 @@ fn lower_extern<'db>(
             .compiler_intrinsics
             .sort_by_key(|declaration| (declaration.symbol, declaration.identity));
     }
-    let abi = ir.string_attr(&decl.abi.to_string());
+    let abi = decl.abi.with_str(|abi| ir.string_attr(abi));
     ir.op_mut(function.op_ref())
         .attributes
         .insert(Symbol::new("abi"), abi);

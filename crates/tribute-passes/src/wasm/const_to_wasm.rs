@@ -266,10 +266,8 @@ impl RewritePattern for StringConstPattern {
             return false;
         };
 
-        let value_str = string_const.value(ctx);
-        let content = value_str.as_bytes().to_vec();
-
-        let Some((data_idx, len)) = lookup_segment(&self.segments, &content) else {
+        let content = string_const.value(ctx).as_bytes();
+        let Some((data_idx, len)) = lookup_segment(&self.segments, content) else {
             return false;
         };
         let Some(string_enum_ty) = self.string_enum_ty else {

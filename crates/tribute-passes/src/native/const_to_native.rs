@@ -427,10 +427,9 @@ impl RewritePattern for StringConstNativePattern {
             return false;
         };
 
-        let value_str = string_const.value(ctx);
-        let content = value_str.as_bytes().to_vec();
-
-        let Some(data_sym) = self.content_to_symbol.get(&content).copied() else {
+        let content = string_const.value(ctx).as_bytes();
+        let content_len = content.len() as u64;
+        let Some(data_sym) = self.content_to_symbol.get(content).copied() else {
             return false;
         };
 
@@ -446,7 +445,7 @@ impl RewritePattern for StringConstNativePattern {
             ctx,
             loc,
             data_sym,
-            content.len() as u64,
+            content_len,
             self.ptr_ty,
             self.i64_ty,
             self.i32_ty,
