@@ -51,7 +51,7 @@ pub(crate) const CONSUMED: &str = "consumed";
 pub(crate) fn physical_parameter_attrs(convention: CallingConvention) -> AttributeMap {
     let mut attrs = AttributeMap::new();
     if convention == CallingConvention::Cps {
-        attrs.insert(OWNERSHIP_ATTR, Attribute::Symbol(Symbol::new(CONSUMED)));
+        attrs.insert(OWNERSHIP_ATTR, Symbol::new(CONSUMED));
     }
     attrs
 }
@@ -458,7 +458,7 @@ pub fn compose_root_entry_bridge(
     let location = ctx.op(worker_op).location;
     ctx.op_mut(worker_op)
         .attributes
-        .insert("sym_name", Attribute::Symbol(root_main));
+        .insert("sym_name", root_main);
     for &op in &top_level_ops {
         rewrite_symbol_refs(ctx, op, main, root_main);
     }
@@ -702,8 +702,8 @@ fn build_initial_evidence(
 fn root_completion_cell_type(ctx: &mut IrContext, value_ty: TypeRef) -> TypeRef {
     adt::struct_type(
         ctx,
-        Symbol::new(ROOT_COMPLETION_CELL_NAME),
-        [(Symbol::new(ROOT_COMPLETION_CELL_VALUE_FIELD), value_ty)],
+        ROOT_COMPLETION_CELL_NAME,
+        [(ROOT_COMPLETION_CELL_VALUE_FIELD, value_ty)],
         AttributeMap::new(),
     )
     .as_type_ref()
@@ -1040,9 +1040,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol)
     }
     for key in [Symbol::new("callee"), Symbol::new("func_ref")] {
         if ctx.op(op).attributes.get_symbol(key) == Some(old) {
-            ctx.op_mut(op)
-                .attributes
-                .insert(key, Attribute::Symbol(new));
+            ctx.op_mut(op).attributes.insert(key, new);
         }
     }
     let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
@@ -2321,7 +2319,8 @@ mod tests {
             );
             if malformed_layout {
                 let wrong =
-                    adt::struct_type(&mut ctx, frame_name, [], AttributeMap::new()).as_type_ref();
+                    adt::struct_type::<Symbol>(&mut ctx, frame_name, [], AttributeMap::new())
+                        .as_type_ref();
                 ctx.register_type_alias(frame_name, wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
@@ -2668,7 +2667,7 @@ mod tests {
         let entry = ctx.region(external.body(&ctx)).blocks[0];
         ctx.block_mut(entry).args[1]
             .attrs
-            .insert("bind_name", Attribute::Symbol(Symbol::new("__env")));
+            .insert("bind_name", Symbol::new("__env"));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();

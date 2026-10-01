@@ -462,7 +462,7 @@ impl LambdaNamer {
 /// Create a `bind_name` attribute map for a block argument.
 fn make_bind_name_attrs(name: &str) -> AttributeMap {
     let mut attrs = AttributeMap::new();
-    attrs.insert("bind_name", Attribute::Symbol(Symbol::from_dynamic(name)));
+    attrs.insert("bind_name", Symbol::from_dynamic(name));
     attrs
 }
 

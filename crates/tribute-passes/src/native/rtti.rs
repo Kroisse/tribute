@@ -774,13 +774,8 @@ fn gen_dealloc_and_return_with_size(
 #[cfg(test)]
 pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, TypeRef)]) -> TypeRef {
     let fields = fields.iter().map(|(name, ty)| (Symbol::new(name), *ty));
-    trunk_ir::dialect::adt::struct_type(
-        ctx,
-        Symbol::new("Test"),
-        fields,
-        trunk_ir::types::AttributeMap::new(),
-    )
-    .as_type_ref()
+    trunk_ir::dialect::adt::struct_type(ctx, "Test", fields, trunk_ir::types::AttributeMap::new())
+        .as_type_ref()
 }
 
 /// Generate release function for an enum type.

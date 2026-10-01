@@ -41,15 +41,11 @@ pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
     let data_ty = bytes_data_type(ctx);
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     let mut attrs = AttributeMap::new();
-    attrs.insert(LAYOUT_ATTR, Attribute::Symbol(Symbol::new(BYTES)));
+    attrs.insert(LAYOUT_ATTR, Symbol::new(BYTES));
     adt::struct_type(
         ctx,
-        Symbol::new("_Bytes"),
-        [
-            (Symbol::new("data"), data_ty),
-            (Symbol::new("offset"), i32_ty),
-            (Symbol::new("len"), i32_ty),
-        ],
+        "_Bytes",
+        [("data", data_ty), ("offset", i32_ty), ("len", i32_ty)],
         attrs,
     )
     .as_type_ref()

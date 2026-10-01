@@ -20,7 +20,6 @@
 //! - `tribute_rt.anyref` -> `wasm.anyref`
 
 use tribute_ir::dialect::tribute_rt;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -43,13 +42,7 @@ fn f64_type(ctx: &mut IrContext) -> TypeRef {
 /// Get the BoxedF64 struct type: `adt.struct<@_BoxedF64(@value: core.f64)>`
 fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
-    adt::struct_type(
-        ctx,
-        Symbol::new("_BoxedF64"),
-        [(Symbol::new("value"), f64_ty)],
-        AttributeMap::new(),
-    )
-    .as_type_ref()
+    adt::struct_type(ctx, "_BoxedF64", [("value", f64_ty)], AttributeMap::new()).as_type_ref()
 }
 
 /// Create i31 unbox operations (ref_cast to i31ref + i31_get_s/u).

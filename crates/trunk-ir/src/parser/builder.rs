@@ -538,7 +538,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
                 let mut attrs = AttributeMap::new();
                 if !is_default_name {
-                    attrs.insert("bind_name", Attribute::Symbol(Symbol::from_dynamic(name)));
+                    attrs.insert("bind_name", Symbol::from_dynamic(name));
                 }
                 block_arg_data.push(BlockArgData { ty, attrs });
                 arg_names.push(name.to_string());
@@ -684,10 +684,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {
-            attributes.insert(
-                "sym_name",
-                Attribute::Symbol(Symbol::from_dynamic(name.as_str())),
-            );
+            attributes.insert("sym_name", Symbol::from_dynamic(name.as_str()));
         }
 
         // Handle func-style signature → func.func_sig type

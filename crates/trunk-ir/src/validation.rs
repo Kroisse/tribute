@@ -1423,7 +1423,7 @@ mod tests {
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let named_field = |name: &str| {
             let mut attrs = AttributeMap::new();
-            attrs.insert("name", Attribute::Symbol(Symbol::from_dynamic(name)));
+            attrs.insert("name", Symbol::from_dynamic(name));
             attrs
         };
         let cases = [
@@ -1468,12 +1468,7 @@ mod tests {
                 "{expected}: {result}"
             );
         }
-        let valid = adt::struct_type(
-            &mut ctx,
-            Symbol::new("Q"),
-            [(Symbol::new("x"), i32_ty)],
-            AttributeMap::new(),
-        );
+        let valid = adt::struct_type(&mut ctx, "Q", [("x", i32_ty)], AttributeMap::new());
         assert!(
             ctx.get_type(valid.as_type_ref())
                 .attrs

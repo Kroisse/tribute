@@ -128,16 +128,7 @@ pub fn cps_continuation_frame_layout_type(
 ) -> TypeRef {
     let mut attrs = AttributeMap::new();
     attrs.insert(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result));
-    adt::struct_type(
-        ctx,
-        name,
-        [
-            (Symbol::new("done"), done),
-            (Symbol::new("dispatch"), dispatch),
-        ],
-        attrs,
-    )
-    .as_type_ref()
+    adt::struct_type(ctx, name, [("done", done), ("dispatch", dispatch)], attrs).as_type_ref()
 }
 
 /// Strict suffix continuation `Completion<X, R> = (Evidence, ContinuationFrame<R>, X) -> never`.

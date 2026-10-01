@@ -317,12 +317,6 @@ impl From<String> for Attribute {
     }
 }
 
-impl From<&str> for Attribute {
-    fn from(value: &str) -> Self {
-        Attribute::String(value.to_string())
-    }
-}
-
 impl From<AttributeMap> for Attribute {
     fn from(value: AttributeMap) -> Self {
         Attribute::Dict(value)
@@ -458,8 +452,13 @@ impl AttributeMap {
     }
 
     /// Insert or replace an entry, returning the replaced value.
-    pub fn insert(&mut self, key: impl Into<Symbol>, value: Attribute) -> Option<Attribute> {
+    pub fn insert(
+        &mut self,
+        key: impl Into<Symbol>,
+        value: impl Into<Attribute>,
+    ) -> Option<Attribute> {
         let key = key.into();
+        let value = value.into();
         if let Some(index) = self.position(key) {
             return Some(std::mem::replace(&mut self.0[index].1, value));
         }
@@ -815,8 +814,8 @@ impl TypeDataBuilder {
         self
     }
 
-    pub fn attr(mut self, key: impl Into<Symbol>, val: Attribute) -> Self {
-        self.attrs.insert(key.into(), val);
+    pub fn attr(mut self, key: impl Into<Symbol>, val: impl Into<Attribute>) -> Self {
+        self.attrs.insert(key, val);
         self
     }
 
@@ -1291,7 +1290,7 @@ mod tests {
         attrs.insert("byte", Attribute::Int(u8::MAX as i128));
         attrs.insert("enabled", Attribute::Bool(true));
         attrs.insert("name", Attribute::String("tribute".to_owned()));
-        attrs.insert("symbol_name", Attribute::Symbol(Symbol::new("tribute")));
+        attrs.insert("symbol_name", Symbol::new("tribute"));
 
         assert_eq!(attrs.get_i64("count"), Ok(Some(i64::MAX)));
         assert_eq!(attrs.get_i128("count"), Some(i64::MAX as i128));

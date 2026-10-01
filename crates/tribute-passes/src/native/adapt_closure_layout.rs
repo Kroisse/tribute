@@ -52,15 +52,12 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     let mut attrs = AttributeMap::new();
     attrs.insert(
         tribute_core::runtime_layout::LAYOUT_ATTR,
-        Attribute::Symbol(Symbol::new(tribute_core::runtime_layout::CLOSURE)),
+        Symbol::new(tribute_core::runtime_layout::CLOSURE),
     );
     adt::struct_type(
         ctx,
-        Symbol::new("_closure"),
-        [
-            (Symbol::new("func_ptr"), i64_ty),
-            (Symbol::new("env"), ptr_ty),
-        ],
+        "_closure",
+        [("func_ptr", i64_ty), ("env", ptr_ty)],
         attrs,
     )
     .as_type_ref()

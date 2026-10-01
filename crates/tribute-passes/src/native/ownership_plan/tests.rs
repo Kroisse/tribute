@@ -1743,8 +1743,8 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
     let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
     let stale = trunk_ir::dialect::adt::struct_type(
         &mut ctx,
-        Symbol::new("R"),
-        [(Symbol::new("x"), i64_ty)],
+        "R",
+        [("x", i64_ty)],
         trunk_ir::types::AttributeMap::new(),
     )
     .as_type_ref();

@@ -241,10 +241,10 @@ impl From<Struct> for TypeRef {
 /// Construct an `adt.struct` named `name` with `fields` in declaration order.
 ///
 /// `attrs` holds the remaining type attributes, such as `layout`.
-pub fn struct_type(
+pub fn struct_type<N: Into<Symbol>>(
     ctx: &mut IrContext,
-    name: Symbol,
-    fields: impl IntoIterator<Item = (Symbol, TypeRef)>,
+    name: impl Into<Symbol>,
+    fields: impl IntoIterator<Item = (N, TypeRef)>,
     attrs: AttributeMap,
 ) -> Struct {
     struct_type_with_field_attrs(
@@ -262,10 +262,10 @@ pub fn struct_type(
 /// # Panics
 ///
 /// If the result is not a valid `adt.struct`; see [`try_struct_type`].
-pub fn struct_type_with_field_attrs(
+pub fn struct_type_with_field_attrs<N: Into<Symbol>>(
     ctx: &mut IrContext,
-    name: Symbol,
-    fields: impl IntoIterator<Item = (Symbol, TypeRef, AttributeMap)>,
+    name: impl Into<Symbol>,
+    fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
     attrs: AttributeMap,
 ) -> Struct {
     try_struct_type(ctx, name, fields, attrs).unwrap_or_else(|error| panic!("adt.struct: {error}"))
@@ -276,19 +276,29 @@ pub fn struct_type_with_field_attrs(
 ///
 /// A `name` in `attrs` or in a field's attributes is replaced by `name` or the
 /// field's name, so a caller may pass a source struct's attributes unchanged.
-pub fn try_struct_type(
+pub fn try_struct_type<N: Into<Symbol>>(
+    ctx: &mut IrContext,
+    name: impl Into<Symbol>,
+    fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
+    attrs: AttributeMap,
+) -> Result<Struct, StructTypeError> {
+    let mut builder = TypeDataBuilder::new("adt", "struct");
+    for (field, ty, mut field_attrs) in fields {
+        field_attrs.insert(STRUCT_NAME_ATTR, field.into());
+        builder = builder.param_with_attrs(ty, field_attrs);
+    }
+    finish_struct_type(ctx, name.into(), builder, attrs)
+}
+
+/// The non-generic rest of [`try_struct_type`], once the fields are added.
+fn finish_struct_type(
     ctx: &mut IrContext,
     name: Symbol,
-    fields: impl IntoIterator<Item = (Symbol, TypeRef, AttributeMap)>,
+    mut builder: TypeDataBuilder,
     mut attrs: AttributeMap,
 ) -> Result<Struct, StructTypeError> {
     attrs.remove(PARAM_ATTRS_ATTR);
-    attrs.insert(STRUCT_NAME_ATTR, Attribute::Symbol(name));
-    let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"));
-    for (field, ty, mut field_attrs) in fields {
-        field_attrs.insert(STRUCT_NAME_ATTR, Attribute::Symbol(field));
-        builder = builder.param_with_attrs(ty, field_attrs);
-    }
+    attrs.insert(STRUCT_NAME_ATTR, name);
     for (key, value) in attrs {
         builder = builder.attr(key, value);
     }
@@ -304,6 +314,5 @@ pub fn try_struct_type(
         }
         seen.push(field);
     }
-    let ty = ctx.intern_type(data);
-    Ok(Struct(ty))
+    Ok(Struct(ctx.intern_type(data)))
 }

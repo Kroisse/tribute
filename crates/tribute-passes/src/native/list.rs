@@ -3,7 +3,6 @@
 use std::ops::ControlFlow;
 
 use tribute_ir::dialect::list;
-use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext};
 use trunk_ir::dialect::{adt, cf, func};
 use trunk_ir::ops::DialectOp;
@@ -32,11 +31,8 @@ fn node_type(ctx: &mut IrContext, element_ty: TypeRef) -> TypeRef {
     let list_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
     adt::struct_type(
         ctx,
-        Symbol::new("__native_list_node"),
-        [
-            (Symbol::new("element"), element_ty),
-            (Symbol::new("tail"), list_ty),
-        ],
+        "__native_list_node",
+        [("element", element_ty), ("tail", list_ty)],
         AttributeMap::new(),
     )
     .as_type_ref()

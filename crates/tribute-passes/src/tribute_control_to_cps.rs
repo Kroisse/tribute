@@ -2154,7 +2154,7 @@ impl<'a> Converter<'a> {
         set_calling_convention(self.ctx, adapter.op_ref(), result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
-        let empty_env_ty = adt::struct_type(
+        let empty_env_ty = adt::struct_type::<Symbol>(
             self.ctx,
             Symbol::from_dynamic(&format!("{adapter_symbol}::env")),
             [],
@@ -2582,7 +2582,7 @@ impl<'a> Converter<'a> {
         let state_type = adt::struct_type(
             self.ctx,
             state_name,
-            [(Symbol::new("consumed"), i1_type)],
+            [("consumed", i1_type)],
             AttributeMap::new(),
         )
         .as_type_ref();

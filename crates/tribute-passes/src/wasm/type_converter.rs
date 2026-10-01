@@ -31,7 +31,7 @@ use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::type_converter::{MaterializeResult, TypeConverter};
-use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::types::{AttributeMap, Location, TypeDataBuilder};
 
 // =============================================================================
 // Helper: intern a simple type (no params, no attrs)
@@ -66,15 +66,12 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     let mut attrs = AttributeMap::new();
     attrs.insert(
         tribute_core::runtime_layout::LAYOUT_ATTR,
-        Attribute::Symbol(Symbol::new(tribute_core::runtime_layout::CLOSURE)),
+        Symbol::new(tribute_core::runtime_layout::CLOSURE),
     );
     adt::struct_type(
         ctx,
-        Symbol::new("_closure"),
-        [
-            (Symbol::new("table_idx"), i32_ty),
-            (Symbol::new("env"), anyref_ty),
-        ],
+        "_closure",
+        [("table_idx", i32_ty), ("env", anyref_ty)],
         attrs,
     )
     .as_type_ref()
@@ -597,6 +594,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
 mod tests {
     use super::*;
     use trunk_ir::ops::DialectType;
+    use trunk_ir::types::Attribute;
 
     #[test]
     fn runtime_layout_identifiers_match_the_wasm_builtin_layouts() {
