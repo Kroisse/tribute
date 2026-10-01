@@ -2,12 +2,12 @@
 source: tests/integration/active_pipeline_goldens.rs
 expression: "pipeline_contract_summary(&ir_text, false)"
 ---
-bump: Some(Cps) (core.array<adt.struct<_Marker><core.i32, core.i32, core.ptr, core.ptr>>, Frame<core.i32>) -> (core.never)
+bump: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> (core.never)
   effect.dispatch_cps operands=4 results=0: 1
-main: Some(Cps) (core.array<adt.struct<_Marker><core.i32, core.i32, core.ptr, core.ptr>>, Frame<core.nil>) -> (core.never)
+main: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.nil>) -> (core.never)
   func.call operands=2 results=1: 1
   func.tail_call operands=2 results=0: 1
-run_state: Some(Cps) (core.array<adt.struct<_Marker><core.i32, core.i32, core.ptr, core.ptr>>, Frame<core.i32>) -> (core.never)
+run_state: Some(Cps) (core.array<adt.struct<_Marker>>, Frame<core.i32>) -> (core.never)
   effect.extend operands=4 results=1: 1
   func.call operands=0 results=1: 1
   func.call operands=2 results=1: 3

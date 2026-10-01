@@ -113,10 +113,6 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
     let Some(marker) = adt::Struct::from_type_ref(ctx, ty) else {
         return Err(invalid());
     };
-    if marker.field_count(ctx) == 0 {
-        // Existing name-only builtin references carry no layout declaration.
-        return Ok(());
-    }
     let GcTypeDef::Struct(expected) = &gc_types::builtin_types()[MARKER_IDX as usize] else {
         unreachable!("Marker is a builtin struct")
     };
