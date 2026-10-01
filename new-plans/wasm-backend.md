@@ -357,9 +357,14 @@ user-defined type은 그 뒤에 배치된다:
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
 verifier는 closure 3, marker 4, evidence 5, user-defined type 6+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
-Index 1은 `@bytes_data`, index 3-5는 `@closure`, `@evidence_marker`, `@evidence`
-[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. Index 2는
-명목 타입 `core.bytes` 또는 Wasm type 변환이 그것을 바꾼 `@bytes` layout struct다.
+Index 1은 `@bytes_data`, index 2는 `@bytes`, index 3-5는 `@closure`,
+`@evidence_marker`, `@evidence`
+[runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. 경계 출구의
+명목 타입 `core.bytes`는 Wasm lowering의 첫 단계에서 `@bytes` layout struct로
+바뀐다. 이 변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant
+payload, signature처럼 다른 타입 안에 들어 있는 `core.bytes`까지 구조적으로 바꾼다.
+이후 단계가 만드는 bytes 값도 `@bytes` struct 타입을 가지므로, 그 뒤의 Wasm IR과
+backend에는 `core.bytes`가 나타나지 않는다.
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 원소가 `core.i8`인 배열도 `@bytes_data`가 없으면 bytes 배열이 아니다.
 `_closure` environment와 Marker의 dispatch closure field는 일반 reference
@@ -419,8 +424,8 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 
 | 값 타입 | 슬롯 | 판정 |
 | --- | --- | --- |
-| builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 (`core.bytes`와 `@bytes` struct) | 허용 |
-| builtin 레이아웃 인덱스를 갖는 struct (`core.bytes`, closure, marker 등) | `structref`, `anyref` | 허용 |
+| builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 | 허용 |
+| builtin 레이아웃 인덱스를 갖는 struct (`@bytes`, closure, marker 등) | `structref`, `anyref` | 허용 |
 | `adt.typeref` | `structref`, `anyref` | 허용 |
 | `base_enum`을 가진 concrete variant instance | `structref`, `anyref` | 허용 |
 | builtin 배열 레이아웃 (Bytes backing array, Evidence array) | `arrayref`, `anyref` | 허용 |

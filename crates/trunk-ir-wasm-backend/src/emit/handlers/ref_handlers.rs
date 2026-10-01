@@ -139,7 +139,8 @@ mod tests {
         let mut ctx = IrContext::new();
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let anyref_ty = ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
-        let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
+        let bytes_ty =
+            crate::emit::helpers::intern_layout_key(&mut ctx, crate::gc_types::BYTES_LAYOUT);
         let null = wasm_dialect::RefNull::operands()
             .heap_type(Symbol::new("anyref"))
             .type_idx(None)

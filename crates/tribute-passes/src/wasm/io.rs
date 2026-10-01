@@ -208,7 +208,7 @@ impl RewritePattern for WritePattern {
 
 fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     let i32_ty = simple_type(ctx, "core", "i32");
-    let bytes_ty = core::bytes(ctx).as_type_ref();
+    let bytes_ty = super::bytes::bytes_struct_type(ctx);
     let nil_ty = core::nil(ctx).as_type_ref();
     let body = ctx.create_block(BlockData {
         location: loc,

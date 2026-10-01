@@ -580,9 +580,11 @@ mod tests {
   !Closure = adt.struct() {fields = [], layout = @closure, name = @_closure}
   !Marker = adt.struct() {fields = [], layout = @evidence_marker, name = @_Marker}
   !Evidence = core.array(!Marker) {layout = @evidence}
+  !Data = core.array(core.i8) {layout = @bytes_data}
+  !Bytes = adt.struct(!Data, core.i32, core.i32) {fields = [[@data, !Data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
-  wasm.func @caller(%leaf: !Leaf, %bytes: core.bytes, %typeref: adt.typeref, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
+  wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %typeref: adt.typeref, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
     wasm.call %leaf {callee = @byRef}
     wasm.call %bytes {callee = @byRef}
     wasm.call %typeref {callee = @byRef}
@@ -607,8 +609,10 @@ mod tests {
   !Marker = adt.struct() {fields = [], layout = @evidence_marker, name = @_Marker}
   !Evidence = core.array(!Marker) {layout = @evidence}
   !Array = core.array(core.i32)
+  !Data = core.array(core.i8) {layout = @bytes_data}
+  !Bytes = adt.struct(!Data, core.i32, core.i32) {fields = [[@data, !Data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
-  wasm.func @caller(%bytes: core.bytes, %evidence: !Evidence, %array: !Array, %erased: adt.struct) -> core.nil {
+  wasm.func @caller(%bytes: !Bytes, %evidence: !Evidence, %array: !Array, %erased: adt.struct) -> core.nil {
     wasm.call %bytes {callee = @byAny}
     wasm.call %evidence {callee = @byAny}
     wasm.call %array {callee = @byAny}
@@ -653,7 +657,7 @@ mod tests {
             ("wasm.arrayref", "wasm.structref"),
             ("wasm.funcref", "wasm.structref"),
             ("wasm.i31ref", "wasm.structref"),
-            ("core.bytes", "wasm.arrayref"),
+            ("!Bytes", "wasm.arrayref"),
             ("wasm.structref", "wasm.arrayref"),
             ("!Leaf", "wasm.arrayref"),
         ] {
@@ -666,6 +670,8 @@ mod tests {
   !Leaf = adt.enum() {{base_enum = !String, is_variant = true, variant_tag = @Leaf}}
   !TagOnly = adt.enum() {{is_variant = true, variant_tag = @Leaf}}
   !Unregistered = adt.struct() {{fields = [[@value, core.i32]], name = @Unregistered}}
+  !Data = core.array(core.i8) {{layout = @bytes_data}}
+  !Bytes = adt.struct(!Data, core.i32, core.i32) {{fields = [[@data, !Data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}}
   wasm.func @callee(%value: {parameter_ty}) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
     wasm.call %value {{callee = @callee}}

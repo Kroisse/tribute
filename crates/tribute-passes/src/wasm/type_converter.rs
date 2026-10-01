@@ -140,10 +140,6 @@ fn is_variant_instance_type(ctx: &IrContext, ty: TypeRef) -> bool {
 /// This includes `wasm.structref`, `wasm.anyref`, ADT struct/typeref types,
 /// and variant instance types.
 fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
-    if is_type(ctx, ty, Symbol::new("core"), Symbol::new("bytes")) {
-        return true;
-    }
-
     // wasm.structref or wasm.anyref
     if is_type(ctx, ty, Symbol::new("wasm"), Symbol::new("structref"))
         || is_type(ctx, ty, Symbol::new("wasm"), Symbol::new("anyref"))
@@ -259,15 +255,20 @@ fn unbox_via_i31(
 // Main entry point
 // =============================================================================
 
-/// Keep exact compiler-owned closure storage consistent across ADT layouts,
-/// aliases, signatures, attributes, and SSA types before target instructions.
-pub(crate) fn convert_canonical_closure_storage(
-    ctx: &mut IrContext,
-    module: trunk_ir::rewrite::Module,
-) {
-    let source = crate::closure_lower::closure_struct_type_ref(ctx);
-    let target = closure_adt_type(ctx);
-    crate::closure_lower::convert_canonical_closure_storage(ctx, module, source, target);
+/// Replace the shared closure storage and `core.bytes` with their Wasm layout
+/// structs everywhere they occur, including inside ADT layouts, aliases,
+/// signatures, and attributes, before target instructions.
+pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
+    let shared_closure = crate::closure_lower::closure_struct_type_ref(ctx);
+    let closure = closure_adt_type(ctx);
+    let bytes = super::bytes::bytes_struct_type(ctx);
+    crate::closure_lower::substitute_module_types(ctx, module, move |ctx, ty| {
+        if ty == shared_closure {
+            Some(closure)
+        } else {
+            is_type(ctx, ty, Symbol::new("core"), Symbol::new("bytes")).then_some(bytes)
+        }
+    });
 }
 
 /// Create a TypeConverter configured for WASM backend type conversions.
@@ -287,7 +288,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
     let shared_closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let evidence_ty = evidence_wasm_type(ctx);
     let marker_ty = marker_adt_type_ref(ctx);
-    let bytes_ty = super::bytes::bytes_struct_type(ctx);
     let bytes_data_ty = super::bytes::bytes_data_type(ctx);
 
     let mut tc = TypeConverter::new();
@@ -389,12 +389,6 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         } else {
             None
         }
-    });
-
-    // `core.bytes` is the Wasm bytes layout struct, the view the bytes
-    // intrinsic lowering reads.
-    tc.add_conversion(move |ctx, ty| {
-        is_type(ctx, ty, Symbol::new("core"), Symbol::new("bytes")).then_some(bytes_ty)
     });
 
     // The bytes backing array keeps its layout identifier rather than
@@ -764,7 +758,7 @@ mod tests {
         ctx.block_mut(block).args[0]
             .attrs
             .insert(Symbol::new("storage"), nested(source));
-        convert_canonical_closure_storage(&mut ctx, module);
+        convert_builtin_layouts(&mut ctx, module);
         assert_eq!(
             ctx.block(block).args[0].attrs.get("storage"),
             Some(&nested(target))

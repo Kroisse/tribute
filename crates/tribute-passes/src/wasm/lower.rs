@@ -110,9 +110,9 @@ pub fn lower_to_wasm(
 fn wasm_lowering_passes() -> PassManager {
     let mut pm = PassManager::new();
     pm.add_pass(pass_fn(
-        "convert-closure-storage",
+        "convert-builtin-layouts",
         |ctx, m: core::Module, _| {
-            super::type_converter::convert_canonical_closure_storage(ctx, m.into());
+            super::type_converter::convert_builtin_layouts(ctx, m.into());
             Ok(())
         },
     ))

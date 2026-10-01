@@ -23,7 +23,6 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::Attribute;
-use trunk_ir::types::TypeDataBuilder;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum ConstValidationError {
@@ -279,7 +278,7 @@ impl RewritePattern for StringConstPattern {
         };
 
         let location = ctx.op(op).location;
-        let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
+        let bytes_ty = super::bytes::bytes_struct_type(ctx);
         let bytes = wasm_dialect::BytesFromData::operands()
             .data_idx(data_idx)
             .offset(0)
@@ -333,7 +332,7 @@ impl RewritePattern for BytesConstPattern {
         };
 
         let location = ctx.op(op).location;
-        let bytes_ty = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
+        let bytes_ty = super::bytes::bytes_struct_type(ctx);
 
         // Create wasm.bytes_from_data operation
         let new_op = wasm_dialect::BytesFromData::operands()
@@ -356,6 +355,7 @@ impl RewritePattern for BytesConstPattern {
 mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir::types::TypeDataBuilder;
 
     fn type_alias(ctx: &IrContext, name: &str) -> trunk_ir::TypeRef {
         ctx.type_aliases()

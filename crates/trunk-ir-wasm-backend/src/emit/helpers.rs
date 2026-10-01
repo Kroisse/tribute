@@ -240,7 +240,7 @@ pub(crate) fn type_to_valtype(
         Ok(ValType::F32)
     } else if is_type(ctx, ty, "core", "f64") {
         Ok(ValType::F64)
-    } else if is_type(ctx, ty, "core", "bytes") || has_layout(ctx, ty, BYTES_LAYOUT) {
+    } else if has_layout(ctx, ty, BYTES_LAYOUT) {
         // A Bytes value always exists; its struct is never null.
         Ok(ValType::Ref(RefType {
             nullable: false,

@@ -15,7 +15,7 @@ use crate::emit::helpers::is_type;
 /// without a runtime cast.
 ///
 /// Registration follows the same structure the rest of the backend uses: builtin
-/// layouts at their reserved indices (`core.bytes`, `_closure`,
+/// layouts at their reserved indices (`@bytes`, `_closure`,
 /// `_Marker`, ...) and the ADT types that
 /// `emit::gc_types_collection::normalize_type_for_gc` physicalizes as the
 /// abstract struct supertype (`adt.typeref` and concrete variant instances
@@ -55,9 +55,7 @@ pub fn is_wasm_physical_argument_assignable(
         return true;
     }
 
-    // Two spellings of one builtin layout, such as `core.bytes` and the
-    // `@bytes` layout struct Wasm type conversion maps it to, are the same
-    // concrete GC type.
+    // Two spellings of one builtin layout are the same concrete GC type.
     let builtin = |ty| crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty);
     if builtin(argument).is_some_and(|index| builtin(parameter) == Some(index)) {
         return true;
@@ -135,10 +133,10 @@ mod tests {
   !data = core.array(core.i8) {layout = @bytes_data}
   !bytes = adt.struct(!data, core.i32, core.i32) {fields = [[@data, !data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}
   !closure = adt.struct(core.i32, wasm.anyref) {fields = [[@table_idx, core.i32], [@env, wasm.anyref]], layout = @closure, name = @_closure}
+  !view = adt.struct(!data, core.i32, core.i32) {fields = [[@data, !data], [@start, core.i32], [@count, core.i32]], layout = @bytes, name = @BytesView}
   !plain = core.array(core.i8)
 }"#,
         );
-        let core_bytes = ctx.intern_type(trunk_ir::TypeDataBuilder::new("core", "bytes").build());
         let alias = |name: &'static str| {
             ctx.type_alias_by_name(Symbol::new(name))
                 .expect("fixture alias")
@@ -146,17 +144,17 @@ mod tests {
 
         assert!(is_wasm_physical_argument_assignable(
             &ctx,
-            core_bytes,
+            alias("view"),
             alias("bytes")
         ));
         assert!(is_wasm_physical_argument_assignable(
             &ctx,
             alias("bytes"),
-            core_bytes
+            alias("view")
         ));
         assert!(!is_wasm_physical_argument_assignable(
             &ctx,
-            core_bytes,
+            alias("bytes"),
             alias("closure")
         ));
         assert!(!is_wasm_physical_argument_assignable(
