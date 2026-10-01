@@ -204,6 +204,14 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
         return helpers::intern_layout_key(ctx, crate::gc_types::CLOSURE_LAYOUT);
     }
 
+    // `core.bytes` and the bytes layout struct it converts to are the same
+    // builtin bytes struct.
+    if helpers::is_type(ctx, ty, "core", "bytes")
+        || helpers::has_layout(ctx, ty, crate::gc_types::BYTES_LAYOUT)
+    {
+        return helpers::intern_layout_key(ctx, crate::gc_types::BYTES_LAYOUT);
+    }
+
     // Recursive ADT references and concrete variants share the physical WasmGC
     // struct supertype. Keeping either logical representation here would make
     // equivalent field descriptions depend on visitation order.
@@ -976,6 +984,30 @@ wasm.return
             record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, second)
                 .expect("second equivalent field records");
             assert_eq!(builder.fields, vec![Some(structref)]);
+        }
+    }
+
+    #[test]
+    fn record_struct_field_canonicalizes_bytes_and_its_layout_struct() {
+        let mut ctx = IrContext::new();
+        let bytes = ctx.intern_type(TypeDataBuilder::new("core", "bytes").build());
+        let layout_struct = ctx.intern_type(
+            TypeDataBuilder::new("adt", "struct")
+                .attr("name", Attribute::Symbol(Symbol::new("_Bytes")))
+                .attr(
+                    trunk_ir::types::LAYOUT_ATTR,
+                    Attribute::Symbol(Symbol::new(crate::gc_types::BYTES_LAYOUT)),
+                )
+                .build(),
+        );
+
+        for (first, second) in [(bytes, layout_struct), (layout_struct, bytes)] {
+            let mut builder = GcTypeBuilder::new();
+            record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, first)
+                .expect("first bytes field records");
+            record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, second)
+                .expect("second bytes field records");
+            assert_eq!(builder.fields.len(), 1);
         }
     }
 
