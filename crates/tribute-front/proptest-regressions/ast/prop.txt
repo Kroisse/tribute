@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 0d98bcf213f8cf3595a8ae1d54ab5ee9b019baab585051e60721a9ea438de6d6 # shrinks to module = Module { id: NodeId(7021460579487784223), name: None, decls: [Function(FuncDecl { id: NodeId(6472735538662127870), is_pub: false, name: Symbol("main"), type_params: [], params: [], return_ty: None, effects: None, body: Expr { id: NodeId(12589787153639051819), kind: NatLit(0) } })] }
+cc 104467c70968740bc93ee4d09e70fcbace4b5f0f03584daf531da588543f1120 # shrinks to a lambda revisited against the error type of an unannotated parameter (#1227)

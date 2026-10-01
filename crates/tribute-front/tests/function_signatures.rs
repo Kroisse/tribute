@@ -25,6 +25,22 @@ fn parameter_and_return_types_are_required(db: &salsa::DatabaseImpl) {
     );
 }
 
+/// An argument lambda checked against the error type of an unannotated
+/// parameter keeps its parameter types when revisited, so a capturing `let`
+/// closure rebound by another `let` is reported, not a type checker panic.
+#[salsa_test]
+fn lambda_argument_to_an_unannotated_parameter_is_reported(db: &salsa::DatabaseImpl) {
+    assert_eq!(
+        errors(
+            db,
+            "fn beta(f) -> Nil { Nil }\n\n\
+             fn main() -> Nil {\n    beta(fn(y) {\n        let bar = fn(z) { y }\n        \
+             let qux = bar\n    })\n}\n"
+        ),
+        ["function `beta` needs a type annotation for parameter `f`"],
+    );
+}
+
 #[salsa_test]
 fn signature_type_variables_are_rigid(db: &salsa::DatabaseImpl) {
     assert_eq!(
