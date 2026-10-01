@@ -110,7 +110,7 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
 /// Get the Evidence type of the WASM representation.
 ///
 /// Evidence keeps its runtime layout identifier through Wasm lowering: it is
-/// the canonical `core.array(Marker)` evidence layout, which emission maps to
+/// the canonical `core.array<Marker>` evidence layout, which emission maps to
 /// the builtin evidence array, and never an erased `wasm.arrayref`.
 pub fn evidence_wasm_type(ctx: &mut IrContext) -> TypeRef {
     tribute_ir::dialect::ability::evidence_adt_type_ref(ctx)
@@ -382,7 +382,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
         }
     });
 
-    // Convert evidence ADT type (core.array(Marker)) -> wasm.arrayref
+    // Convert evidence ADT type (core.array<Marker>) -> wasm.arrayref
     tc.add_conversion(move |ctx, ty| {
         if is_evidence_type_ref(ctx, ty) {
             Some(evidence_ty)
@@ -665,7 +665,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, wasm.anyref]], layout = @closure}
+  !Closure = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, wasm.anyref]], layout = @closure}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}

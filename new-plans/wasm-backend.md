@@ -409,7 +409,7 @@ Wasm에는 `i8`과 `i16` 값 타입이 없다. `core.i8`과 `core.i16` 값은 `i
 - 상위 비트가 결과에 영향을 주는 연산(`cmpi`, `divsi`/`divui`, `remsi`/`remui`,
   `shr`/`shru`, `sitofp`/`uitofp`)은 좁은 정수에서 낮추지 않는다. 이 연산은
   target 변환 경계에서 거부된다.
-- Packed 배열(`core.array(core.i8)`, `core.array(core.i16)`)의 원소 읽기는
+- Packed 배열(`core.array<core.i8>`, `core.array<core.i16>`)의 원소 읽기는
   `array.get_u`로 낮춘다. 상위 비트를 정하지 않으므로 `array.get_s`도 맞지만 하나로
   고정한다. 쓰기는 `array.set`이 하위 비트만 저장한다.
 

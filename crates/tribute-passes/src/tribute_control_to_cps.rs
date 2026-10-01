@@ -4119,9 +4119,9 @@ mod tests {
     #[test]
     fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
         let input = r#"core.module @test {
-  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
-  !evidence = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 1}
-  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 1}>
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 2}>
   tribute_control.func @direct(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -4221,8 +4221,8 @@ mod tests {
     #[test]
     fn source_data_indirect_calls_carry_their_exact_signature() {
         let input = r#"core.module @test {
-  !direct = tribute_control.func_sig<(core.i32, core.i32) -> core.i32> {tribute.calling_convention = 0}
-  !evidence = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 1}
+  !direct = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 1}>
   tribute_control.func @add(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %left
   }
@@ -4353,8 +4353,8 @@ mod tests {
     #[test]
     fn textual_nested_attribute_types_convert_atomically() {
         let input = r#"core.module @test {
-  !callback = tribute_control.func_sig<(core.i32) -> core.i32> {metadata = [core.array(core.i32), [7, @Callback]], tribute.calling_convention = 0}
-  !record = adt.struct() {fields = [[@callback, !callback]], name = @CallbackRecord}
+  !callback = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = [core.array<core.i32>, [7, @Callback]], tribute.calling_convention = 0}>
+  !record = adt.struct<{fields = [[@callback, !callback]], name = @CallbackRecord}>
   tribute_control.func @identity(%value: !record) -> !record convention(direct) {
     tribute_control.return %value
   }
@@ -4364,11 +4364,11 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("name = @CallbackRecord"));
         assert!(
-            printed.contains("closure.closure(func.func_sig<(core.i32) -> core.i32> {metadata"),
+            printed.contains("closure.closure<func.func_sig<(core.i32) -> core.i32, {metadata"),
             "{printed}"
         );
         assert!(
-            printed.contains("metadata = [core.array(core.i32), [7, @Callback]]"),
+            printed.contains("metadata = [core.array<core.i32>, [7, @Callback]]"),
             "{printed}"
         );
         assert!(!printed.contains("tribute_control."));
@@ -4382,9 +4382,9 @@ mod tests {
     #[test]
     fn source_signature_metadata_roundtrips_before_conversion() {
         let source = r#"core.module @test {
-  !inner = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
-  !outer = tribute_control.func_sig<() -> core.i32> {metadata = [[!inner, @function]], tribute.calling_convention = 0}
-  !lambda = tribute_control.func_sig<() -> core.i32> {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}
+  !inner = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]], tribute.calling_convention = 0}>
+  !lambda = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}>
   tribute_control.func {sym_name = @outer, type = !outer} {
     %lambda = tribute_control.lambda : !lambda {
       %inner = arith.const {value = 1} : core.i32
@@ -4397,11 +4397,11 @@ mod tests {
         let (ctx, module) = parse(source);
         let printed_source = print_module(&ctx, module.op());
         assert!(
-            printed_source.contains("!outer = tribute_control.func_sig<() -> core.i32> {metadata = [[!inner, @function]], tribute.calling_convention = 0}"),
+            printed_source.contains("!outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]], tribute.calling_convention = 0}>"),
             "{printed_source}"
         );
         assert!(
-            printed_source.contains("!lambda = tribute_control.func_sig<() -> core.i32> {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}"),
+            printed_source.contains("!lambda = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}>"),
             "{printed_source}"
         );
         let (mut ctx, module) = parse(&printed_source);
@@ -4549,8 +4549,8 @@ mod tests {
     #[test]
     fn raw_malformed_source_signature_storage_fails_before_conversion() {
         let input = r#"core.module @test {
-  tribute_control.func {sym_name = @broken, type = tribute_control.func_sig(core.i32) {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}}
-  %lambda = tribute_control.lambda : tribute_control.func_sig(core.i32) {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}
+  tribute_control.func {sym_name = @broken, type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>}
+  %lambda = tribute_control.lambda : tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>
 }"#;
         let (mut ctx, module) = parse(input);
         let before = print_module(&ctx, module.op());
@@ -4758,7 +4758,7 @@ mod tests {
     #[test]
     fn post_candidate_failure_restores_alias_maps_and_canonical_ir() {
         let input = r#"core.module @candidate {
-  !callback = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
+  !callback = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
   func.func @broken(%value: core.i32) -> core.i32 {
     func.return %value
   }
@@ -4828,7 +4828,7 @@ mod tests {
         );
 
         let malformed_delimiter = r#"core.module @test {
-  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
+  !evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
   func.func @broken() -> core.never attributes {tribute.calling_convention = 2} {
     ability.handle_dispatch {ability_refs = []} {
       ^body(%inner: !evidence):
@@ -4845,7 +4845,7 @@ mod tests {
     #[test]
     fn post_boundary_rejects_recursively_nested_control_types() {
         let input = r#"core.module @test {
-  !nested = core.tuple(closure.closure(func.func_sig<(tribute_control.resume_token(core.i32, core.i32)) -> core.i32>))
+  !nested = core.tuple<closure.closure<func.func_sig<(tribute_control.resume_token<core.i32, core.i32>) -> core.i32>>>
 }"#;
         let (ctx, module) = parse(input);
         let error =
@@ -4856,7 +4856,7 @@ mod tests {
     #[test]
     fn pre_boundary_rejects_recursively_nested_physical_signatures() {
         let input = r#"core.module @test {
-  !nested = core.tuple(func.func_sig<(core.i32) -> core.i32>)
+  !nested = core.tuple<func.func_sig<(core.i32) -> core.i32>>
 }"#;
         let (ctx, module) = parse(input);
         let error = verify_tribute_control_pre_cps(&ctx, module, &[], &[], &mut Default::default())
@@ -4932,7 +4932,7 @@ mod tests {
             ),
             (
                 r#"core.module @test {
-  func.func @caller(%callee: closure.closure(func.func_sig<(core.i32) -> core.never>), %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @caller(%callee: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     func.tail_call_indirect %callee, %value
   }
 }"#,
@@ -4961,7 +4961,7 @@ mod tests {
             ),
             (
                 r#"core.module @test {
-  func.func @caller(%callee: closure.closure(func.func_sig<(core.i32) -> core.never>), %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
+  func.func @caller(%callee: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %result = func.call_indirect %callee, %value {tribute.calling_convention = 2} : core.never
     func.unreachable
   }
@@ -4980,11 +4980,11 @@ mod tests {
     #[test]
     fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
         let dispatcher_input = r#"core.module @test {
-  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
-  !tr = closure.closure(func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>)
-  !general = closure.closure(func.func_sig<(!evidence, tribute_rt.anyref, core.i32, tribute_rt.anyref) -> core.never>)
+  !evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+  !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
+  !general = closure.closure<func.func_sig<(!evidence, tribute_rt.anyref, core.i32, tribute_rt.anyref) -> core.never>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = @State}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -5001,7 +5001,7 @@ mod tests {
         );
 
         let wrong_abi_input = r#"core.module @test {
-  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
+  !evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = 1} {
       func.unreachable
@@ -5009,7 +5009,7 @@ mod tests {
     %general = closure.lambda(%inner: !evidence) -> core.never {tribute.calling_convention = 2} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = @State}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -5026,7 +5026,7 @@ mod tests {
         assert!(text.contains("general dispatcher has the wrong"), "{text}");
 
         let wrong_metadata_input = r#"core.module @test {
-  !evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
+  !evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 0} {
       func.unreachable
@@ -5034,7 +5034,7 @@ mod tests {
     %general = closure.lambda(%inner: !evidence, %continuation: tribute_rt.anyref, %op_idx: core.i32, %payload: tribute_rt.anyref) -> core.never {tribute.calling_convention = 1} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref() {name = @State}]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = @State}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -5072,14 +5072,14 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
-        ^arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+        ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
       }
@@ -5221,19 +5221,19 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
-        ^get(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+        ^get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
       }
-      tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @set, operation_result_type = core.i32} {
-        ^set(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @set, operation_result_type = core.i32} {
+        ^set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %fallback = arith.const {value = 9} : core.i32
           tribute_control.yield %fallback
       }
@@ -5344,7 +5344,7 @@ mod tests {
   tribute_control.func @branch(%input: core.i32) -> core.i32 convention(cps) {
     %condition = arith.const {value = true} : core.i1
     %selected = scf.if %condition : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
       scf.yield %performed
     } {
       %fallback = arith.const {value = 7} : core.i32
@@ -5413,10 +5413,10 @@ mod tests {
       tribute_control.return %selected
     }
     scf.if %condition {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
       scf.yield
     } {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @set, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @set, operation_kind = @op} : core.i32
       scf.yield
     }
     tribute_control.return %input
@@ -5590,7 +5590,7 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
     %left, %right = scf.if %condition : core.i32, core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
       scf.yield %performed, %input
     } {
       scf.yield %input, %input
@@ -5644,7 +5644,7 @@ mod tests {
     #[test]
     fn stronger_func_ref_builds_a_cps_adapter_without_a_null_environment() {
         let input = r#"core.module @test {
-  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 2}>
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -5670,7 +5670,7 @@ mod tests {
     #[test]
     fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
         let input = r#"core.module @test {
-  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2, param_attrs = [{k = @v}, {r = @x}]}
+  !cps = tribute_control.func_sig<(core.i32 {k = @v}) -> core.i32 {r = @x}, {tribute.calling_convention = 2}>
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -5755,9 +5755,9 @@ mod tests {
     #[test]
     fn func_ref_adapters_cover_every_legal_convention_strengthening() {
         let input = r#"core.module @test {
-  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
-  !evidence = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 1}
-  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 1}>
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 2}>
   tribute_control.func @direct(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -5794,7 +5794,7 @@ mod tests {
     #[test]
     fn weaker_func_ref_adapter_is_rejected_before_mutation() {
         let input = r#"core.module @test {
-  !evidence = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 1}
+  !evidence = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 1}>
   tribute_control.func @cps(%value: core.i32) -> core.i32 convention(cps) {
     tribute_control.return %value
   }
@@ -5820,8 +5820,8 @@ mod tests {
     #[test]
     fn raw_callable_convention_cast_is_rejected_before_mutation() {
         let input = r#"core.module @test {
-  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
-  !cps = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 2}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !cps = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 2}>
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -5849,8 +5849,8 @@ mod tests {
     #[test]
     fn func_ref_cast_cannot_hide_a_convention_change_behind_source_erasure() {
         let input = r#"core.module @test {
-  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
-  !cps_erased = tribute_control.func_sig<(tribute_rt.anyref) -> core.i32> {tribute.calling_convention = 2}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !cps_erased = tribute_control.func_sig<(tribute_rt.anyref) -> core.i32, {tribute.calling_convention = 2}>
   tribute_control.func @id(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }
@@ -5882,8 +5882,8 @@ mod tests {
     #[test]
     fn direct_lambda_cast_cannot_hide_a_convention_change_behind_source_erasure() {
         let input = r#"core.module @test {
-  !direct = tribute_control.func_sig<(core.i32) -> core.i32> {tribute.calling_convention = 0}
-  !cps_erased = tribute_control.func_sig<(tribute_rt.anyref) -> core.i32> {tribute.calling_convention = 2}
+  !direct = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
+  !cps_erased = tribute_control.func_sig<(tribute_rt.anyref) -> core.i32, {tribute.calling_convention = 2}>
   tribute_control.func @apply(%callback: !cps_erased, %value: tribute_rt.anyref) -> core.i32 convention(cps) {
     %result = tribute_control.call_indirect %callback, %value : core.i32
     tribute_control.return %result
@@ -5914,8 +5914,8 @@ mod tests {
     #[test]
     fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
         let input = r#"core.module @test {
-  !S = adt.struct() {name = @S, fields = []}
-  !R = adt.typeref() {name = @S}
+  !S = adt.struct<{name = @S, fields = []}>
+  !R = adt.typeref<{name = @S}>
   tribute_control.func @broken(%raw: core.ptr) -> !R convention(direct) {
     %middle = core.unrealized_conversion_cast %raw : core.i64
     %managed = core.unrealized_conversion_cast %middle : !R
@@ -5969,26 +5969,26 @@ mod tests {
   tribute_control.func @nested_same(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
         tribute_control.yield %performed
       } {
         ^inner_completion(%value: core.i32):
           tribute_control.yield %value
       } {
-        tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
-          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.yield %resumed
         }
       }
-      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
       tribute_control.yield %performed
     } {
       ^outer_completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
-        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
       }
@@ -6015,26 +6015,26 @@ mod tests {
   tribute_control.func @nested_cross(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @Console}, op_name = @read, operation_kind = @op} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read, operation_kind = @op} : core.i32
         tribute_control.yield %performed
       } {
         ^inner_completion(%value: core.i32):
           tribute_control.yield %value
       } {
-        tribute_control.handler {ability_ref = core.ability_ref() {name = @Console}, kind = @op, op_name = @read, operation_result_type = core.i32} {
-          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+        tribute_control.handler {ability_ref = core.ability_ref<{name = @Console}>, kind = @op, op_name = @read, operation_result_type = core.i32} {
+          ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.yield %resumed
         }
       }
-      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
       tribute_control.yield %performed
     } {
       ^outer_completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref() {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
-        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token(core.i32, core.i32)):
+      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+        ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
       }
@@ -6059,14 +6059,14 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @abortable(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %never = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @Abort}, op_name = @abort, operation_kind = @op} : core.never
+      %never = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @Abort}>, op_name = @abort, operation_kind = @op} : core.never
       %unreachable_suffix = arith.const {value = 99} : core.i32
       tribute_control.yield %unreachable_suffix
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref() {name = @Abort}, kind = @op, op_name = @abort, operation_result_type = core.never} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = @Abort}>, kind = @op, op_name = @abort, operation_result_type = core.never} {
         ^arm(%argument: core.i32):
           %fallback = arith.const {value = 7} : core.i32
           tribute_control.yield %fallback
@@ -6202,13 +6202,13 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @read(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %value = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @Reader}, op_name = @read, operation_kind = @fn} : core.i32
+      %value = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @Reader}>, op_name = @read, operation_kind = @fn} : core.i32
       tribute_control.yield %value
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref() {name = @Reader}, kind = @fn, op_name = @read, operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = @Reader}>, kind = @fn, op_name = @read, operation_result_type = core.i32} {
         ^arm(%argument: core.i32):
           tribute_control.yield %argument
       }
@@ -6292,7 +6292,7 @@ mod tests {
     %choice = arith.const {value = 0} : core.i32
     scf.switch %choice {
       scf.case {value = 0} {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref() {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
         scf.yield
       }
       scf.default {

@@ -140,8 +140,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}
-  !Other = adt.struct() {name = @Other, fields = [[@value, tribute_rt.anyref]]}
+  !_closure = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}>
+  !Other = adt.struct<{name = @Other, fields = [[@value, tribute_rt.anyref]]}>
   tribute_rtti.layout {type = !_closure, index = 32, managed = [false, true]}
   tribute_rtti.layout {type = !Other, index = 33, managed = [true]}
   func.func @make(%table: core.i32, %env: tribute_rt.anyref) -> !_closure {
@@ -198,9 +198,9 @@ mod tests {
   func.func @test_fn() -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
     %1 = mem.null : core.ptr
-    %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env], layout = @closure}
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, core.ptr) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : core.ptr
+    %2 = adt.struct_new %0, %1 {type = adt.struct<core.i32, core.ptr, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : adt.struct<core.i32, core.ptr, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>
+    %3 = adt.struct_get %2 {field = 0, type = adt.struct<core.i32, core.ptr, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = adt.struct<core.i32, core.ptr, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : core.ptr
     %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }
@@ -215,9 +215,9 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn(%1: wasm.anyref) -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
-    %2 = adt.struct_new %0, %1 {type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env], layout = @closure}
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct(core.i32, wasm.anyref) {name = @_closure, fields = [@table_idx, @env], layout = @closure}} : wasm.anyref
+    %2 = adt.struct_new %0, %1 {type = adt.struct<core.i32, wasm.anyref, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : adt.struct<core.i32, wasm.anyref, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>
+    %3 = adt.struct_get %2 {field = 0, type = adt.struct<core.i32, wasm.anyref, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = adt.struct<core.i32, wasm.anyref, {name = @_closure, fields = [@table_idx, @env], layout = @closure}>} : wasm.anyref
     %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }

@@ -395,7 +395,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     )
 }
 
-/// Get the canonical Evidence ADT type — `core.array(Marker)` carrying the
+/// Get the canonical Evidence ADT type — `core.array<Marker>` carrying the
 /// evidence runtime layout identifier.
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);

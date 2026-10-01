@@ -1135,10 +1135,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @transfer(%table_index: core.i32, %value: core.i32) attributes {type = func.func_sig<(core.i32, core.i32) -> ()> {call_conv = @tail}} {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> ()> {call_conv = @tail}}
+  func.func @transfer(%table_index: core.i32, %value: core.i32) attributes {type = func.func_sig<(core.i32, core.i32) -> (), {call_conv = @tail}>} {
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = @tail}>}
   }
-  func.func @nested(%callee: func.func_sig<(core.i32) -> ()> {call_conv = @tail}) {
+  func.func @nested(%callee: func.func_sig<(core.i32) -> (), {call_conv = @tail}>) {
     func.return
   }
 }"#,

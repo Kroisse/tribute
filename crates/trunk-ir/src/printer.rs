@@ -112,30 +112,25 @@ impl<'a> PrintState<'a> {
         }
         let data = self.ctx.get_type(ty);
         write!(f, "{}.{}", data.dialect, data.name)?;
-        if !data.params.is_empty() {
-            f.write_char('(')?;
-            for (i, &param) in data.params.iter().enumerate() {
-                if i > 0 {
-                    f.write_str(", ")?;
-                }
-                self.write_type(f, param)?;
-            }
-            f.write_char(')')?;
-        } else if !data.attrs.is_empty() {
-            f.write_str("()")?;
+        let inline_param_attrs = data.validate_param_attrs().is_ok();
+        let mut attrs = visible_type_attrs(data, inline_param_attrs, &[]).peekable();
+        if data.params.is_empty() && attrs.peek().is_none() {
+            return Ok(());
         }
-        if !data.attrs.is_empty() {
-            f.write_str(" {")?;
-            for (i, (key, val)) in data.attrs.iter().enumerate() {
-                if i > 0 {
-                    f.write_str(", ")?;
-                }
-                write!(f, "{} = ", key)?;
-                self.write_attribute(f, val)?;
+        f.write_char('<')?;
+        for (index, &param) in data.params.iter().enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
             }
-            f.write_char('}')?;
+            self.write_param(f, data, inline_param_attrs, index, param)?;
         }
-        Ok(())
+        if attrs.peek().is_some() {
+            if !data.params.is_empty() {
+                f.write_str(", ")?;
+            }
+            self.write_attr_dict(f, attrs)?;
+        }
+        f.write_char('>')
     }
 
     fn write_func_sig_type(
@@ -146,42 +141,79 @@ impl<'a> PrintState<'a> {
         results: &[TypeRef],
     ) -> fmt::Result {
         let data = self.ctx.get_type(ty);
+        let inline_param_attrs = data.validate_param_attrs().is_ok();
         write!(f, "{}.{}<(", data.dialect, data.name)?;
         for (index, &input) in inputs.iter().enumerate() {
             if index > 0 {
                 f.write_str(", ")?;
             }
-            self.write_type(f, input)?;
+            self.write_param(f, data, inline_param_attrs, index, input)?;
         }
         f.write_str(") -> ")?;
+        let first_result = inputs.len();
         if results.len() == 1 {
-            self.write_type(f, results[0])?;
+            self.write_param(f, data, inline_param_attrs, first_result, results[0])?;
         } else {
             f.write_char('(')?;
             for (index, &result) in results.iter().enumerate() {
                 if index > 0 {
                     f.write_str(", ")?;
                 }
-                self.write_type(f, result)?;
+                self.write_param(f, data, inline_param_attrs, first_result + index, result)?;
             }
             f.write_char(')')?;
         }
-        f.write_char('>')?;
 
-        let mut visible = data.attrs.iter().filter(|(key, _)| {
-            **key != crate::Symbol::new(crate::dialect::func::NUM_INPUTS_ATTR)
-                && **key != crate::Symbol::new(crate::dialect::func::NUM_RESULTS_ATTR)
-        });
-        if let Some((key, value)) = visible.next() {
-            write!(f, " {{{key} = ")?;
-            self.write_attribute(f, value)?;
-            for (key, value) in visible {
-                write!(f, ", {key} = ")?;
-                self.write_attribute(f, value)?;
-            }
-            f.write_char('}')?;
+        let mut attrs = visible_type_attrs(
+            data,
+            inline_param_attrs,
+            &[
+                crate::dialect::func::NUM_INPUTS_ATTR,
+                crate::dialect::func::NUM_RESULTS_ATTR,
+            ],
+        )
+        .peekable();
+        if attrs.peek().is_some() {
+            f.write_str(", ")?;
+            self.write_attr_dict(f, attrs)?;
+        }
+        f.write_char('>')
+    }
+
+    /// Write type parameter `index` of `data`, followed by its attributes when
+    /// they are printed inline.
+    fn write_param(
+        &self,
+        f: &mut dyn Write,
+        data: &TypeData,
+        inline_param_attrs: bool,
+        index: usize,
+        param: TypeRef,
+    ) -> fmt::Result {
+        self.write_type(f, param)?;
+        let attrs = data.param_attrs(index);
+        if inline_param_attrs && !attrs.is_empty() {
+            f.write_char(' ')?;
+            self.write_attr_dict(f, attrs.iter())?;
         }
         Ok(())
+    }
+
+    fn write_attr_dict<'b>(
+        &self,
+        f: &mut dyn Write,
+        attrs: impl Iterator<Item = (&'b crate::Symbol, &'b Attribute)>,
+    ) -> fmt::Result {
+        f.write_char('{')?;
+        for (index, (key, value)) in attrs.enumerate() {
+            if index > 0 {
+                f.write_str(", ")?;
+            }
+            write_attribute_key(f, *key)?;
+            f.write_str(" = ")?;
+            self.write_attribute(f, value)?;
+        }
+        f.write_char('}')
     }
 
     fn write_attribute(&self, f: &mut dyn Write, attr: &Attribute) -> fmt::Result {
@@ -220,18 +252,7 @@ impl<'a> PrintState<'a> {
                 }
                 f.write_char(']')
             }
-            Attribute::Dict(dict) => {
-                f.write_char('{')?;
-                for (i, (key, value)) in dict.iter().enumerate() {
-                    if i > 0 {
-                        f.write_str(", ")?;
-                    }
-                    write_attribute_key(f, *key)?;
-                    f.write_str(" = ")?;
-                    self.write_attribute(f, value)?;
-                }
-                f.write_char('}')
-            }
+            Attribute::Dict(dict) => self.write_attr_dict(f, dict.iter()),
             Attribute::Location(loc) => {
                 let path_str = self.ctx.paths().get(loc.path);
                 f.write_str("loc(\"")?;
@@ -240,6 +261,23 @@ impl<'a> PrintState<'a> {
             }
         }
     }
+}
+
+/// The type attributes printed in a type's attribute dictionary: all of them
+/// except `hidden` and, when they are printed inline after each parameter, the
+/// parameter attributes. Malformed parameter attributes stay in the dictionary
+/// so the printed form shows them.
+fn visible_type_attrs<'b>(
+    data: &'b TypeData,
+    inline_param_attrs: bool,
+    hidden: &'b [&'static str],
+) -> impl Iterator<Item = (&'b crate::Symbol, &'b Attribute)> {
+    data.attrs.iter().filter(move |(key, _)| {
+        !(inline_param_attrs && **key == crate::Symbol::new(PARAM_ATTRS_ATTR))
+            && !hidden
+                .iter()
+                .any(|hidden| **key == crate::Symbol::new(hidden))
+    })
 }
 
 /// Return the delimiter-sliced storage only for a complete `*.func_sig` shape.
@@ -1051,7 +1089,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
         let tuple_ty = crate::dialect::core::tuple(&mut ctx, [i32_ty, i32_ty]).as_type_ref();
-        assert_eq!(print_type(&ctx, tuple_ty), "core.tuple(core.i32, core.i32)");
+        assert_eq!(print_type(&ctx, tuple_ty), "core.tuple<core.i32, core.i32>");
     }
 
     #[test]
@@ -1061,7 +1099,7 @@ mod tests {
             let input = format!(
                 "core.module @m {{
                 !scalar = core.i32
-                !callable = func.func_sig<(!scalar) -> {result}> {{nested = [!scalar]}}
+                !callable = func.func_sig<(!scalar) -> {result}, {{nested = [!scalar]}}>
                 func.func @f(%x: !callable) {{ func.return }}
             }}"
             );
@@ -1070,12 +1108,12 @@ mod tests {
             let expanded_result = if result == "()" { "()" } else { "core.i32" };
             assert_eq!(
                 print_type(&ctx, callable),
-                format!("func.func_sig<(core.i32) -> {expanded_result}> {{nested = [core.i32]}}")
+                format!("func.func_sig<(core.i32) -> {expanded_result}, {{nested = [core.i32]}}>")
             );
             let printed = print_module(&ctx, module);
             assert!(
                 printed.contains(&format!(
-                    "func.func_sig<(!scalar) -> {result}> {{nested = [!scalar]}}"
+                    "func.func_sig<(!scalar) -> {result}, {{nested = [!scalar]}}>"
                 )),
                 "{printed}"
             );
@@ -1119,7 +1157,7 @@ mod tests {
         );
         assert_eq!(
             print_type(&ctx, foreign),
-            "foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}"
+            "foreign.func_sig<core.i32, {num_inputs = 2, num_results = 1}>"
         );
 
         // Shared signatures have a stricter one-result contract, so raw
@@ -1133,7 +1171,7 @@ mod tests {
         );
         assert_eq!(
             print_type(&ctx, shared),
-            "func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}"
+            "func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 2}>"
         );
     }
 
@@ -1572,7 +1610,7 @@ mod tests {
 
         // The struct type should be auto-aliased with its name
         assert!(
-            output.contains("!Point = adt.struct()"),
+            output.contains("!Point = adt.struct<"),
             "Expected auto alias !Point in:\n{output}"
         );
         // The functions should reference the alias
@@ -1625,7 +1663,7 @@ mod tests {
 
         // Should use the name from the `name` attribute
         assert!(
-            output.contains("!_Marker = adt.struct()"),
+            output.contains("!_Marker = adt.struct<"),
             "Expected !_Marker alias:\n{output}"
         );
     }
@@ -1649,7 +1687,7 @@ mod tests {
 
         // Should use the manual alias, not auto-generate one
         assert!(
-            output.contains("!my_point = adt.struct()"),
+            output.contains("!my_point = adt.struct<"),
             "Expected manual alias:\n{output}"
         );
         assert!(
@@ -1770,20 +1808,20 @@ mod tests {
         let input = "\
 core.module @test {
   core.module @inner {
-    func.func @f1(%0: adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}) -> adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly} {
+    func.func @f1(%0: adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}>) -> adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}> {
     ^bb0:
       func.return %0
     }
-    func.func @f2(%0: adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}) -> adt.struct() {fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly} {
+    func.func @f2(%0: adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}>) -> adt.struct<{fields = [[@a, core.i32], [@b, core.i32]], name = @InnerOnly}> {
     ^bb0:
       func.return %0
     }
   }
-  func.func @g1(%0: adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}) -> adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly} {
+  func.func @g1(%0: adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}>) -> adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}> {
   ^bb0:
     func.return %0
   }
-  func.func @g2(%0: adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}) -> adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly} {
+  func.func @g2(%0: adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}>) -> adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @OuterOnly}> {
   ^bb0:
     func.return %0
   }
@@ -1852,11 +1890,11 @@ core.module @test {
         let output = print_module_with_point_types(false);
         assert_eq!(output, print_module_with_point_types(true));
         assert!(
-            output.contains("!Point = adt.struct() {fields = [[@alpha, core.i32]], name = @Point}")
+            output.contains("!Point = adt.struct<{fields = [[@alpha, core.i32]], name = @Point}>")
         );
         assert!(
             output
-                .contains("!Point_1 = adt.struct() {fields = [[@zebra, core.i32]], name = @Point}")
+                .contains("!Point_1 = adt.struct<{fields = [[@zebra, core.i32]], name = @Point}>")
         );
 
         let mut reparsed_ctx = IrContext::new();

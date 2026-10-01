@@ -687,8 +687,8 @@ mod tests {
         let _module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !E = adt.enum() {name = @E, variants = []}
-  !ERef = adt.typeref() {name = @E}
+  !E = adt.enum<{name = @E, variants = []}>
+  !ERef = adt.typeref<{name = @E}>
 }"#,
         );
         let enum_ty = ctx
@@ -708,10 +708,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct() {fields = [[@value, core.i32]], name = @S}
-  !E = adt.enum() {name = @E, variants = [[@Some, [core.i32]]]}
-  !ERef = adt.typeref() {name = @E}
-  !A = core.array(core.i32)
+  !S = adt.struct<{fields = [[@value, core.i32]], name = @S}>
+  !E = adt.enum<{name = @E, variants = [[@Some, [core.i32]]]}>
+  !ERef = adt.typeref<{name = @E}>
+  !A = core.array<core.i32>
 
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
@@ -790,7 +790,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func @read(%bytes: core.array(core.i8), %words: core.array(core.i32)) -> core.nil {
+  wasm.func @read(%bytes: core.array<core.i8>, %words: core.array<core.i32>) -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
     %byte = adt.array_get %bytes, %zero : core.i8
     %word = adt.array_get %words, %zero : core.i32
@@ -812,8 +812,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ListRef = adt.typeref() {name = @List}
-  !List = adt.enum() {name = @List, variants = [[@Empty, []], [@Cons, [core.i32, !ListRef]]]}
+  !ListRef = adt.typeref<{name = @List}>
+  !List = adt.enum<{name = @List, variants = [[@Empty, []], [@Cons, [core.i32, !ListRef]]]}>
 
   wasm.func @main(%input: !ListRef) -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
@@ -909,10 +909,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ARef = adt.typeref() {name = @A}
-  !BRef = adt.typeref() {name = @B}
-  !A = adt.enum() {name = @A, variants = [[@Some, [core.i32]], [@Other, [core.i32]]]}
-  !B = adt.enum() {name = @B, variants = [[@Some, [core.i32]]]}
+  !ARef = adt.typeref<{name = @A}>
+  !BRef = adt.typeref<{name = @B}>
+  !A = adt.enum<{name = @A, variants = [[@Some, [core.i32]], [@Other, [core.i32]]]}>
+  !B = adt.enum<{name = @B, variants = [[@Some, [core.i32]]]}>
 
   wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef) -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
@@ -961,16 +961,16 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ERef = adt.typeref() {name = @E}
-  !BoxRef = adt.typeref() {name = @Box}
-  !NodeRef = adt.typeref() {name = @Node}
-  !StringRef = adt.typeref() {name = @String}
-  !E = adt.enum() {name = @E, variants = [[@Some, [core.i32]]]}
-  !Box = adt.enum() {name = @Box, variants = [[@Next, [!NodeRef]]]}
-  !Node = adt.enum() {name = @Node, variants = [[@Node, []]]}
-  !Data = core.array(core.i8) {layout = @bytes_data}
-  !Bytes = adt.struct(!Data, core.i32, core.i32) {fields = [[@data, !Data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}
-  !String = adt.enum() {name = @String, variants = [[@Leaf, [!Bytes]]]}
+  !ERef = adt.typeref<{name = @E}>
+  !BoxRef = adt.typeref<{name = @Box}>
+  !NodeRef = adt.typeref<{name = @Node}>
+  !StringRef = adt.typeref<{name = @String}>
+  !E = adt.enum<{name = @E, variants = [[@Some, [core.i32]]]}>
+  !Box = adt.enum<{name = @Box, variants = [[@Next, [!NodeRef]]]}>
+  !Node = adt.enum<{name = @Node, variants = [[@Node, []]]}>
+  !Data = core.array<core.i8, {layout = @bytes_data}>
+  !Bytes = adt.struct<!Data, core.i32, core.i32, {fields = [[@data, !Data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}>
+  !String = adt.enum<{name = @String, variants = [[@Leaf, [!Bytes]]]}>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
     %valid = adt.variant_get %e {type = !E, tag = @Some, field = 0} : core.i32

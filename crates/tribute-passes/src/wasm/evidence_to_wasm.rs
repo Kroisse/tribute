@@ -1248,8 +1248,8 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
-    const TYPES: &str = r#"  !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
-  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}"#;
+    const TYPES: &str = r#"  !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+  !Closure = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}>"#;
 
     fn module_text(body: &str) -> String {
         format!("core.module @test {{\n{TYPES}\n{body}\n}}")
@@ -1279,16 +1279,16 @@ mod tests {
     }
 
     const TAIL: &str = r#"  func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : tribute_rt.anyref
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read} : tribute_rt.anyref
     func.return %result
   }"#;
 
     const CPS: &str = r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, answer_type = core.i32}
   }"#;
 
     const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure, %handler: !Closure) -> !Evidence {
-    %extended = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref() {name = @State}} : !Evidence
+    %extended = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref<{name = @State}>} : !Evidence
     func.return %extended
   }"#;
 
@@ -1351,7 +1351,7 @@ mod tests {
             &mut ctx,
             &module_text(
                 r#"  func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
-    %bad = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32} : core.i32
+    %bad = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, answer_type = core.i32} : core.i32
   }"#,
             ),
         );

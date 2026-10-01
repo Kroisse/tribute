@@ -394,7 +394,7 @@ target-independent 직접형 경계다. Dialect identifier는 정확히
 않는다.
 
 논리 callable type은
-`tribute_control.func_sig<(Params...) -> Result> {tribute.calling_convention = N}`이다.
+`tribute_control.func_sig<(Params...) -> Result, {tribute.calling_convention = N}>`이다.
 It uses flat `[inputs..., results...]` storage with mandatory `num_inputs` and
 `num_results` u32 delimiters; its source-owned validated API requires exactly
 one result. `Result`와 `Params`는 source-logical type이며 기존 code `Direct = 0`,
@@ -1246,6 +1246,37 @@ opaque nominal builtin whose shared construction and sequence-view observations
 use `list.*`; target-specific passes choose and eliminate its private
 representation.
 
+### 타입 textual form
+
+타입은 스스로 끝을 표시한다(self-delimiting). 타입이 소유하는 매개변수와 속성은
+모두 qualified name 바로 뒤의 `<…>` 안에 쓰고, 짝이 맞는 `>`에서 타입이 끝난다.
+그 뒤에 오는 `{…}`는 타입에 속하지 않는다. Operation 속성, region, 또는 바깥
+타입에서 이 타입이 매개변수일 때의 매개변수 속성이다.
+
+```text
+core.i32
+core.tuple<core.i32, core.ptr {k = @v}>
+core.ref<core.i32, {nullable = true}>
+adt.typeref<{name = @Point}>
+func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv = @tail}>
+```
+
+- 매개변수도 속성도 없는 타입은 이름만 쓴다.
+- 일반 형태 `dialect.name<원소, ...>`의 원소는 매개변수이거나 type 속성
+  dictionary다. `{`로 시작하는 원소가 type 속성이며, 마지막에 한 번만 올 수 있다.
+  매개변수 바로 뒤의 dictionary는 그 매개변수의
+  [매개변수 속성](#타입-매개변수-속성)이다.
+- `<` 바로 다음이 `(`이면 함수 형태다:
+  `<(inputs...) -> results[, {type 속성}]>`. 입력과 결과도 각각 매개변수 속성을
+  가질 수 있다. 결과 목록 규칙은
+  [`func.func_sig`](#funcfunc_sig-function-type)를 따른다.
+- 이 규칙은 일반 형태와 전용 문법에 똑같이 적용된다. 전용 문법을 가진 타입도
+  모든 내용을 `<…>` 안에 둔다. 타입 안의 `(…)`는 함수 입력·결과처럼 위치가 있는
+  목록에만 쓴다.
+- 저장 표현 전용인 예약 type 속성은 textual dictionary에 쓰지 않는다. 매개변수
+  속성 list(`param_attrs`)와 함수 타입의 count가 여기에 해당하며, reader는 이를
+  거부한다.
+
 ### Attribute 값
 
 Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
@@ -1273,11 +1304,12 @@ parameter와 같은 용법). 함수 signature에서는 input과 result 타입이
 - 모든 dictionary가 비어 있으면 key를 생략한다. 이것이 유일한 canonical 형태이므로
   매개변수 속성이 없는 타입은 하나의 identity를 가진다. 속성이 다른 두 타입은 서로
   다른 identity를 가진다.
-- Textual form은 일반 type 속성과 같다:
-  `core.tuple(core.i32, core.ptr) {param_attrs = [{}, {k = @v}]}`.
-  Reader는 모두 빈 값을 생략된 것으로 정규화하고, list가 아니거나 dictionary가
-  아닌 원소, 길이 불일치를 오류로 보고한다. Type verifier도 모든 interned type에
-  같은 규칙을 적용한다.
+- Textual form에서는 각 매개변수 바로 뒤에 dictionary로 쓴다:
+  `core.tuple<core.i32, core.ptr {k = @v}>`. Printer는 `param_attrs` key를
+  출력하지 않고 reader는 이 key를 거부하므로, 매개변수 속성의 textual form은 이것
+  하나뿐이다. 빈 dictionary(`core.i32 {}`)는 속성이 없는 것으로 읽는다.
+- Type verifier는 모든 interned type에 같은 규칙을 적용한다. List가 아닌 값,
+  dictionary가 아닌 원소, 길이 불일치, 모두 빈 list는 오류다.
 - TrunkIR은 key의 의미를 해석하지 않는다. 의미는 key를 정의하는 dialect나 언어
   계층이 소유한다.
 - 속성은 그것이 설명하는 매개변수를 따라간다. 매개변수를 끼우거나 빼며 타입을
@@ -1303,13 +1335,13 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 | `@evidence_marker` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure |
 | `@evidence` | evidence `core.array` | ability id 순으로 정렬된 marker 배열 |
 | `@bytes` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
-| `@bytes_data` | Wasm bytes backing `core.array(core.i8)` | `Bytes`가 가리키는 byte 배열 |
+| `@bytes_data` | Wasm bytes backing `core.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
 
 - 속성은 저장 layout만 나타낸다. 의미 분류를 physical 이름으로 복제하지 않으며,
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct() {name = @_closure, fields = [...], layout = @closure}`.
+  `adt.struct<{name = @_closure, fields = [...], layout = @closure}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1335,6 +1367,14 @@ func.func_sig<(Evidence, Frame, core.i32) -> core.never>
 
 The input list is always parenthesized. An empty result list is printed as
 `()`, while the single supported result is printed without parentheses.
+Following the [self-delimiting type form](#타입-textual-form), each input or
+result may carry its parameter attributes, and the remaining type attributes
+come last inside the brackets:
+
+```text
+func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>
+```
+
 TrunkIR recognizes a parenthesized multi-result list so it can diagnose it, but
 currently rejects more than one result.
 
@@ -1361,7 +1401,7 @@ two reserved attributes and preserves every other type attribute; textual type
 attribute dictionaries may not specify either reserved key.
 
 함수 타입의 textual spelling은 `func.func_sig<(inputs...) -> result>`만 사용한다.
-Reader는 `core.func(Return, Params...)`를 거부한다. Production code는 검증된
+Production code는 검증된
 `func::func_sig` API로 함수 타입을 만들며, 직접 `TypeData`를 만드는 코드는
 malformed-type verifier test에 한정한다.
 

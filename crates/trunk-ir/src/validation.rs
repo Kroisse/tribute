@@ -429,15 +429,6 @@ fn validate_func_sig_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 ),
             });
         }
-        if data.dialect == crate::dialect::core::DIALECT_NAME() && data.name == Symbol::new("func")
-        {
-            errors.push(ValidationError::Operation {
-                message: format!(
-                    "type verifier rejected retired core.func identity ({ty}); use func.func_sig"
-                ),
-            });
-            continue;
-        }
         if data.dialect != crate::dialect::func::DIALECT_NAME()
             || data.name != crate::dialect::func::FUNC_SIG()
         {
@@ -1511,27 +1502,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn retired_raw_core_func_identity_is_rejected_by_whole_ir_validation() {
-        let mut ctx = IrContext::new();
-        let module = empty_module(&mut ctx);
-        let legacy = ctx.intern_type(TypeDataBuilder::new("core", "func").build());
-
-        assert!(func::FuncSig::from_type_ref(&ctx, legacy).is_none());
-        for result in [
-            validate_operation_verifiers(&ctx, module),
-            validate_all(&ctx, module, &mut Default::default()),
-        ] {
-            let messages = operation_error_messages(&result);
-            assert!(
-                messages
-                    .iter()
-                    .any(|message| message.contains("retired core.func identity")),
-                "{result}"
-            );
-        }
-    }
-
     fn operations_named(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> Vec<OpRef> {
         let mut operations = Vec::new();
         let dialect = Symbol::from_dynamic(dialect);
@@ -2465,7 +2435,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_typed_cps_transfer_passes() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure(func.func_sig<(core.i32) -> core.never>), %value: core.i32) -> core.never {
+  func.func @main(%k: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.never>}
   }
 }"#;
@@ -2478,7 +2448,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure(func.func_sig<(core.i32) -> core.i32>), %value: core.i1) -> core.never {
+  func.func @main(%k: closure.closure<func.func_sig<(core.i32) -> core.i32>>, %value: core.i1) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#;
@@ -2498,7 +2468,7 @@ mod tests {
         let input = r#"core.module @test {
   !never = func.func_sig<() -> core.never>
   !unary = func.func_sig<(core.i32) -> core.never>
-  func.func @result(%k: closure.closure(!never)) -> core.never {
+  func.func @result(%k: closure.closure<!never>) -> core.never {
     %bad = func.tail_call_indirect %k {signature = !never} : core.i32
   }
   func.func @not_last(%k: !never) -> core.never {
@@ -2511,7 +2481,7 @@ mod tests {
   func.func @unsigned(%k: !never) -> core.never {
     func.tail_call_indirect %k
   }
-  func.func @bad_closure(%k: closure.closure()) -> core.never {
+  func.func @bad_closure(%k: closure.closure) -> core.never {
     func.tail_call_indirect %k {signature = !never}
   }
   func.func @mismatched(%k: !unary) -> core.never {
@@ -2523,7 +2493,7 @@ mod tests {
   func.func @direct_function(%k: !never) -> core.never {
     func.tail_call_indirect %k {signature = !never}
   }
-  func.func @arity(%k: closure.closure(!unary)) -> core.never {
+  func.func @arity(%k: closure.closure<!unary>) -> core.never {
     func.tail_call_indirect %k {signature = !unary}
   }
 }"#;

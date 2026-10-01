@@ -184,11 +184,11 @@ fn main() -> Nil { }
         .lines()
         .find_map(|line| {
             let (alias, definition) = line.trim().split_once(" = ")?;
-            (definition == "adt.typeref() {name = @String}").then_some(alias)
+            (definition == "adt.typeref<{name = @String}>").then_some(alias)
         })
         .expect("nominal String reference");
     assert!(
-        run.contains(&format!("resume_token({string_ref}, core.i32)")),
+        run.contains(&format!("resume_token<{string_ref}, core.i32>")),
         "handler token must retain its exact input and answer types:\n{run}"
     );
     assert_in_order(
@@ -476,7 +476,7 @@ pub mod Nested {
         "field access must call the matching logical accessor:\n{read}"
     );
     assert!(
-        ir_text.contains("tribute_control.func_sig<(core.i32) -> core.i32>")
+        ir_text.contains("tribute_control.func_sig<(core.i32) -> core.i32, {")
             && !ir_text.contains("func.func_sig"),
         "nested callable fields must remain source-logical:\n{ir_text}"
     );
@@ -527,7 +527,7 @@ fn main() -> Nil { }
     );
     let phantom_ir = run_ast_pipeline_with_ir(db, phantom);
     assert!(
-        phantom_ir.contains("core.ability_ref(core.i1) {name = @Phantom}"),
+        phantom_ir.contains("core.ability_ref<core.i1, {name = @Phantom}>"),
         "perform must retain the phantom ability argument from its typed effect:\n{phantom_ir}"
     );
     let conflicting = SourceCst::from_source_str(
@@ -1574,8 +1574,8 @@ fn from_list(callback: fn(Int) ->{e} Int) ->{e} Int {
     );
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
-    assert!(ir.contains("tribute_control.func_sig<(core.i32) -> core.i32>"));
-    assert!(ir.contains("tribute_control.func_sig<(core.i1) -> core.i1>"));
+    assert!(ir.contains("tribute_control.func_sig<(core.i32) -> core.i32, {"));
+    assert!(ir.contains("tribute_control.func_sig<(core.i1) -> core.i1, {"));
     let tuple_layout = |function: &str| {
         logical_function(&ir, function)
             .split("adt.struct_new")
@@ -1638,7 +1638,7 @@ fn inspect(choice: Choice, fallback: fn(Int) ->{e} Int) -> fn(Int) ->{e} Int {
     let accessor = checked_logical_function(&ir, "Holder::callback");
     assert!(
         accessor.contains("-> !t")
-            && ir.contains("= tribute_control.func_sig<(core.i32) -> core.i32>"),
+            && ir.contains("= tribute_control.func_sig<(core.i32) -> core.i32, {"),
         "generated accessor must retain its callable field type:\n{accessor}"
     );
     let inspect = checked_logical_function(&ir, "inspect");
@@ -1676,7 +1676,7 @@ fn first_or(values: List(fn(Int) ->{e} Int), fallback: fn(Int) ->{e} Int) -> fn(
         first_or.contains("list.is_empty")
             && first_or.contains("list.head")
             && first_or.contains("list.tail")
-            && ir.contains("tribute_control.func_sig<(core.i32) -> core.i32>"),
+            && ir.contains("tribute_control.func_sig<(core.i32) -> core.i32, {"),
         "callable list pattern extraction must retain its logical element type:\n{first_or}"
     );
     assert!(!first_or.contains("func.func_sig"));
@@ -1926,9 +1926,9 @@ fn keep_first(first: First) -> First { first }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     for field in [
-        "!Node = adt.struct() {fields = [[@next, adt.typeref() {name = @Node}]], name = @Node}",
-        "!First = adt.struct() {fields = [[@second, adt.typeref() {name = @Second}]], name = @First}",
-        "!Second = adt.struct() {fields = [[@first, adt.typeref() {name = @First}]], name = @Second}",
+        "!Node = adt.struct<{fields = [[@next, adt.typeref<{name = @Node}>]], name = @Node}>",
+        "!First = adt.struct<{fields = [[@second, adt.typeref<{name = @Second}>]], name = @First}>",
+        "!Second = adt.struct<{fields = [[@first, adt.typeref<{name = @First}>]], name = @Second}>",
     ] {
         assert!(
             ir.contains(field),

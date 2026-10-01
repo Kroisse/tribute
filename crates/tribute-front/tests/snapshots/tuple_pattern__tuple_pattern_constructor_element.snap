@@ -3,10 +3,10 @@ source: crates/tribute-front/tests/tuple_pattern.rs
 expression: ir_text
 ---
 core.module @test {
-  !Item = adt.enum() {name = @Item, variants = [[@Number, [core.i32]], [@Empty, []]]}
-  !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat = adt.struct() {fields = [[@0, adt.typeref() {name = @Item}], [@1, core.i32]], name = @__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat}
-  !Item_1 = adt.typeref() {name = @Item}
-  !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat_1 = adt.typeref() {name = @__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat}
+  !Item = adt.enum<{name = @Item, variants = [[@Number, [core.i32]], [@Empty, []]]}>
+  !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat = adt.struct<{fields = [[@0, adt.typeref<{name = @Item}>], [@1, core.i32]], name = @__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat}>
+  !Item_1 = adt.typeref<{name = @Item}>
+  !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat_1 = adt.typeref<{name = @__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat}>
 
   tribute_control.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @first(%0: !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat_1) -> core.i32 convention(direct) {

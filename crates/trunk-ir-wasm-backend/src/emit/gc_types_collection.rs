@@ -732,8 +732,8 @@ mod tests {
                         &mut ctx,
                         &format!(
                             r#"core.module @test {{
-                        !A = adt.typeref() {{name = @A}}
-                        !B = adt.typeref() {{name = @B}}
+                        !A = adt.typeref<{{name = @A}}>
+                        !B = adt.typeref<{{name = @B}}>
                         wasm.func @make_a() {{
                             %x = wasm.i32_const {{value = 0}} : core.i32
                             %a = wasm.struct_new %x {{type_idx = {a}}} : !A
@@ -778,7 +778,7 @@ mod tests {
                 let mut ctx = IrContext::new();
                 let producer = if evidence {
                     format!(
-                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : core.array(!Marker) {{layout = @evidence}}"
+                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : core.array<!Marker, {{layout = @evidence}}>"
                     )
                 } else {
                     format!(
@@ -787,7 +787,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = adt.struct() {{name = @_Marker, fields = [[@ability_id, {field_type}], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker}}
+                        !Marker = adt.struct<{{name = @_Marker, fields = [[@ability_id, {field_type}], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker}}>
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable
@@ -811,7 +811,7 @@ mod tests {
             "wasm.anyref",
             "wasm.structref",
             "wasm.arrayref",
-            "adt.struct() {name = @Other}",
+            "adt.struct<{name = @Other}>",
         ] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(
@@ -843,7 +843,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-            !Marker = adt.struct() {{name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}}
+            !Marker = adt.struct<{{name = @_Marker, fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]]}}>
             wasm.func @test(%marker: !Marker) -> core.i32 {{
                 %value = wasm.struct_get %marker {{type_idx = {CLOSURE_STRUCT_IDX}, field_idx = 0}} : core.i32
                 wasm.return %value
@@ -886,7 +886,7 @@ wasm.return
                         &mut ctx,
                         &format!(
                             "core.module @test {{
-!Cell = adt.typeref() {{name = @Cell}}
+!Cell = adt.typeref<{{name = @Cell}}>
 {functions}
 }}"
                         ),

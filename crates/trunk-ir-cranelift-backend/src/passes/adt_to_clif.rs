@@ -456,7 +456,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = clif.iconst {value = 0} : core.ptr
-    %1 = adt.struct_get %0 {field = 1, type = adt.struct(core.i32, core.i32) {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}} : core.i32
+    %1 = adt.struct_get %0 {field = 1, type = adt.struct<core.i32, core.i32, {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}>} : core.i32
     func.return %1
   }
 }"#,
@@ -471,7 +471,7 @@ mod tests {
   func.func @test_fn() -> core.nil {
     %0 = clif.iconst {value = 0} : core.ptr
     %1 = clif.iconst {value = 42} : core.i32
-    adt.struct_set %0, %1 {field = 0, type = adt.struct(core.i32, core.i32) {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}}
+    adt.struct_set %0, %1 {field = 0, type = adt.struct<core.i32, core.i32, {fields = [[@x, core.i32], [@y, core.i32]], name = @Point}>}
     func.return
   }
 }"#,
@@ -484,7 +484,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = adt.ref_null {type = adt.struct() {name = @Env, fields = [@x]}} : core.ptr
+    %0 = adt.ref_null {type = adt.struct<{name = @Env, fields = [@x]}>} : core.ptr
     func.return %0
   }
 }"#,
@@ -498,7 +498,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
     %0 = clif.iconst {value = 100} : core.ptr
-    %1 = adt.ref_cast %0 {type = adt.struct() {name = @Env, fields = [@x]}} : core.ptr
+    %1 = adt.ref_cast %0 {type = adt.struct<{name = @Env, fields = [@x]}>} : core.ptr
     func.return %1
   }
 }"#,
@@ -536,7 +536,7 @@ mod tests {
     }
 
     const VARIANT_IS_ENUM: &str =
-        "adt.enum() {name = @Choice, variants = [[@None, []], [@Some, [core.i32]]]}";
+        "adt.enum<{name = @Choice, variants = [[@None, []], [@Some, [core.i32]]]}>";
 
     #[test]
     fn test_variant_is_widens_icmp_to_result_type() {

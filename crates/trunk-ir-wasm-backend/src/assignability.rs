@@ -130,11 +130,11 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = core.array(core.i8) {layout = @bytes_data}
-  !bytes = adt.struct(!data, core.i32, core.i32) {fields = [[@data, !data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}
-  !closure = adt.struct(core.i32, wasm.anyref) {fields = [[@table_idx, core.i32], [@env, wasm.anyref]], layout = @closure, name = @_closure}
-  !view = adt.struct(!data, core.i32, core.i32) {fields = [[@data, !data], [@start, core.i32], [@count, core.i32]], layout = @bytes, name = @BytesView}
-  !plain = core.array(core.i8)
+  !data = core.array<core.i8, {layout = @bytes_data}>
+  !bytes = adt.struct<!data, core.i32, core.i32, {fields = [[@data, !data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}>
+  !closure = adt.struct<core.i32, wasm.anyref, {fields = [[@table_idx, core.i32], [@env, wasm.anyref]], layout = @closure, name = @_closure}>
+  !view = adt.struct<!data, core.i32, core.i32, {fields = [[@data, !data], [@start, core.i32], [@count, core.i32]], layout = @bytes, name = @BytesView}>
+  !plain = core.array<core.i8>
 }"#,
         );
         let alias = |name: &'static str| {

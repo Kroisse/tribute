@@ -1692,14 +1692,14 @@ mod tests {
             &format!(
                 r#"core.module @test {{
             !Answer = core.{answer_name}
-            !Evidence = core.array(adt.struct() {{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}) {{layout = @evidence}}
-            !Frame = adt.typeref() {{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer}}
-            !Done = closure.closure(func.func_sig<(!Answer) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}
-            !Resume = closure.closure(func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}
-            !Dispatch = closure.closure(func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}
-            !{frame_name} = adt.struct() {{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer, fields = [[@done, !Done], [@dispatch, !Dispatch]]}}
+            !Evidence = core.array<adt.struct<{{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}>, {{layout = @evidence}}>
+            !Frame = adt.typeref<{{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer}}>
+            !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
+            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
+            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
+            !{frame_name} = adt.struct<{{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer, fields = [[@done, !Done], [@dispatch, !Dispatch]]}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
-                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get, answer_type = !Answer}}
+                effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @get, answer_type = !Answer}}
             }}
         }}"#
             ),
@@ -1844,9 +1844,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
-            !direct_closure = closure.closure(func.func_sig<() -> ()>) {tribute.calling_convention = 0}
-            !evidence_closure = closure.closure(func.func_sig<(!Evidence) -> ()>) {tribute.calling_convention = 1}
+            !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+            !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = 0}>
+            !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = 1}>
             func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
             func.func @evidence(%ev: !Evidence) attributes {tribute.calling_convention = 1} { func.return }
             func.func @unit() -> core.nil attributes {tribute.calling_convention = 0} {
@@ -1917,7 +1917,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !cps = closure.closure(func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.never>) {tribute.calling_convention = 2}
+  !cps = closure.closure<func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.never>, {tribute.calling_convention = 2}>
   func.func @direct() -> core.never attributes {tribute.calling_convention = 0} { func.unreachable }
   func.func @evidence() -> core.never attributes {tribute.calling_convention = 1} { func.unreachable }
   func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
@@ -1947,13 +1947,13 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                "signature = func.func_sig<(core.i32, tribute_rt.anyref, core.i32, core.i32, core.i32) -> ()> {call_conv = @tail, param_attrs = [{tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}]}"
+                "signature = func.func_sig<(core.i32 {tribute.ownership = @consumed}, tribute_rt.anyref {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>"
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "closure.closure(func.func_sig<(core.i32, core.i32, core.i32, core.i32) -> ()> {call_conv = @tail, param_attrs = [{tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}, {tribute.ownership = @consumed}]})"
+                "closure.closure<func.func_sig<(core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>"
             ),
             "{printed}"
         );
@@ -2238,7 +2238,7 @@ mod tests {
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
-  !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
+  !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
     %nil = core.nil_value : core.nil
     func.return %nil
@@ -2510,7 +2510,7 @@ mod tests {
             ),
             (
                 r#"core.module @test {
-  !ambiguous = closure.closure(func.func_sig<() -> core.never>)
+  !ambiguous = closure.closure<func.func_sig<() -> core.never>>
 }"#,
                 "no exact convention metadata",
             ),
@@ -2532,7 +2532,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !callback = closure.closure(func.func_sig<() -> core.i32>) {tribute.calling_convention = 0}
+  !callback = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = 0}>
   func.func @run(%callback: !callback) -> core.i32 attributes {tribute.calling_convention = 0} {
     %result = func.call_indirect %callback {signature = func.func_sig<() -> core.i32>, tribute.calling_convention = 0} : core.i32
     func.return %result
@@ -2563,8 +2563,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !semantic = closure.closure(func.func_sig<() -> core.i32>) {tribute.calling_convention = 0}
-  !_closure = adt.struct(core.i32, tribute_rt.anyref) {name = @_closure}
+  !semantic = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = 0}>
+  !_closure = adt.struct<core.i32, tribute_rt.anyref, {name = @_closure}>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = 0} {
     func.unreachable
   }
@@ -2612,7 +2612,7 @@ mod tests {
         assert!(
             printed.contains("func.func @defined")
                 && printed.matches("func.constant").count() == 2
-                && printed.contains("!t0 = func.func_sig<(core.i32, core.i32) -> ()>")
+                && printed.contains("!t0 = func.func_sig<(core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>")
                 && printed.matches(": !t0").count() == 2,
             "{printed}"
         );
@@ -2649,9 +2649,14 @@ mod tests {
             assert_eq!(signature.inputs(&ctx)[0], anyref);
         }
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains(": func.func_sig<() -> ()>"), "{printed}");
         assert!(
-            printed.contains(": func.func_sig<(core.i32) -> ()>"),
+            printed.contains(": func.func_sig<() -> (), {call_conv = @tail}>"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains(
+                ": func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>"
+            ),
             "{printed}"
         );
     }

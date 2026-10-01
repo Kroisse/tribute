@@ -436,7 +436,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}
+  !String = adt.enum<{name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}>
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -483,8 +483,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !PreludeString = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}
-  !UserString = adt.enum() {name = @"user::String", variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}
+  !PreludeString = adt.enum<{name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}>
+  !UserString = adt.enum<{name = @"user::String", variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}>
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return
@@ -507,7 +507,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}
+  !String = adt.enum<{name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [wasm.anyref, wasm.anyref, core.i32]]]}>
   wasm.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : wasm.anyref
     wasm.return

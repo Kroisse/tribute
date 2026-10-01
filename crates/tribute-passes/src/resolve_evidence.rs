@@ -390,8 +390,8 @@ mod tests {
     fn final_dispatch_fixture(operation: &str) -> String {
         format!(
             r#"core.module @test {{
-  !marker = adt.struct() {{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}
-  !evidence = core.array(!marker) {{layout = @evidence}}
+  !marker = adt.struct<{{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}>
+  !evidence = core.array<!marker, {{layout = @evidence}}>
   func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %handler: core.ptr, %tr2: core.ptr, %handler2: core.ptr) -> core.never {{
     {operation}
   }}
@@ -402,7 +402,7 @@ mod tests {
     #[test]
     fn final_handle_dispatch_extends_each_ability_pair_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref() {name = @State}, core.ability_ref() {name = @Console}]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref<{name = @State}>, core.ability_ref<{name = @Console}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -450,7 +450,7 @@ mod tests {
     fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
         let input = final_dispatch_fixture(
             r#"%fresh = effect.fresh_prompt_tag : core.i32
-    ability.handle_dispatch %ev, %fresh, %tr, %handler {ability_refs = [core.ability_ref() {name = @State}]} {
+    ability.handle_dispatch %ev, %fresh, %tr, %handler {ability_refs = [core.ability_ref<{name = @State}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -629,7 +629,7 @@ mod tests {
         let input = final_dispatch_fixture(
             r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^body(%inner: !evidence):
-        effect.dispatch_cps %inner, %tr, %handler, %tr2 {ability_ref = core.ability_ref() {name = @State}, op_name = @get}
+        effect.dispatch_cps %inner, %tr, %handler, %tr2 {ability_ref = core.ability_ref<{name = @State}>, op_name = @get}
     }"#,
         );
         let mut ctx = IrContext::new();
@@ -640,8 +640,8 @@ mod tests {
     #[test]
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
-  !marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}
-  !evidence = core.array(!marker) {layout = @evidence}
+  !marker = adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>
+  !evidence = core.array<!marker, {layout = @evidence}>
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
   func.func @body(%ev: !evidence, %prompt: core.i32) -> core.never {

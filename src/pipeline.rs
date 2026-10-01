@@ -1715,13 +1715,13 @@ mod tests {
     fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
         let source = r#"core.module @test {
-            !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
-            !Frame = adt.typeref() {name = @__tribute_continuation_frame_root_nil, tribute.cps_continuation_frame_result = core.nil}
-            !Done = closure.closure(func.func_sig<(core.nil) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
-            !Resume = closure.closure(func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
-            !Dispatch = closure.closure(func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 1}
-            !__tribute_continuation_frame_root_nil = adt.struct() {name = @__tribute_continuation_frame_root_nil, tribute.cps_continuation_frame_result = core.nil, fields = [[@done, !Done], [@dispatch, !Dispatch]]}
-            !Payload = adt.struct() {name = @__tribute_ability_payload_7590c57e, fields = []}
+            !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+            !Frame = adt.typeref<{name = @__tribute_continuation_frame_root_nil, tribute.cps_continuation_frame_result = core.nil}>
+            !Done = closure.closure<func.func_sig<(core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+            !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+            !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
+            !__tribute_continuation_frame_root_nil = adt.struct<{name = @__tribute_continuation_frame_root_nil, tribute.cps_continuation_frame_result = core.nil, fields = [[@done, !Done], [@dispatch, !Dispatch]]}>
+            !Payload = adt.struct<{name = @__tribute_ability_payload_7590c57e, fields = []}>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = 2, tribute.root_source_result = core.nil} {
                 BODY
             }
@@ -1806,7 +1806,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-                func.func @__tribute_evidence_lookup(%ev: core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}, %id: core.i32) -> core.i32 attributes {abi = "C"}
+                func.func @__tribute_evidence_lookup(%ev: core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>, %id: core.i32) -> core.i32 attributes {abi = "C"}
             }"#,
         );
         tribute_passes::wasm::evidence_to_wasm::bind_wasm_evidence_runtime(&mut ctx, module);
@@ -1827,7 +1827,7 @@ mod tests {
             %resume = adt.ref_null {type = !Resume} : !Resume
             %product = adt.struct_new {type = !Payload} : !Payload
             %payload = core.unrealized_conversion_cast %product : tribute_rt.anyref
-            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.nil}
+            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, answer_type = core.nil}
         "#,
         );
         run_wasm_target_pipeline(&mut ctx, module).unwrap();
@@ -2431,7 +2431,7 @@ fn main() -> Nil {
         use std::os::unix::process::ExitStatusExt;
 
         let input = r#"core.module @one_shot {
-  !state = adt.struct() {fields = [[@consumed, core.i1]], name = @OneShotState}
+  !state = adt.struct<{fields = [[@consumed, core.i1]], name = @OneShotState}>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
     %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
@@ -2486,7 +2486,7 @@ fn main() -> Nil {
     func.unreachable
   }}
 
-  func.func @done(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {done_call_conv}}} {{
+  func.func @done(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (){done_call_conv}>}} {{
     %expected = arith.const {{value = 3}} : core.i32
     %ok = arith.cmpi %value, %expected {{predicate = @eq}} : core.i1
     scf.if %ok {{
@@ -2498,14 +2498,14 @@ fn main() -> Nil {
     func.return
   }}
 
-  func.func @step(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {{call_conv = @tail}}}} {{
+  func.func @step(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
-    %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> ()> {reference_call_conv}
-    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> ()> {{call_conv = @tail}}}}
+    %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> (){reference_call_conv}>
+    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}}
   }}
 
-  func.func @start(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {{call_conv = @tail}}}} {{
+  func.func @start(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
     func.tail_call %next {{callee = @step}}
@@ -2526,7 +2526,7 @@ fn main() -> Nil {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            &physical_tail_chain_module("{call_conv = @tail}", "{call_conv = @tail}"),
+            &physical_tail_chain_module(", {call_conv = @tail}", ", {call_conv = @tail}"),
         );
         let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verified.is_ok(), "{verified}");
@@ -2571,7 +2571,7 @@ fn main() -> Nil {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            &physical_tail_chain_module("", "{call_conv = @tail}"),
+            &physical_tail_chain_module("", ", {call_conv = @tail}"),
         );
         let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verified.is_ok(), "{verified}");
