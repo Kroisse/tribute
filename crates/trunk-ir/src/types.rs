@@ -462,6 +462,11 @@ impl AttributeMap {
         if let Some(index) = self.position(key) {
             return Some(std::mem::replace(&mut self.0[index].1, value));
         }
+        // Most maps hold one or two entries. A `Vec`'s first push reserves
+        // four, so start a map at exactly one and let later inserts grow it.
+        if self.0.capacity() == 0 {
+            self.0.reserve_exact(1);
+        }
         let index = self.0.partition_point(|(existing, _)| *existing < key);
         self.0.insert(index, (key, value));
         None
@@ -522,6 +527,10 @@ impl FromIterator<(Symbol, Attribute)> for AttributeMap {
 
 impl Extend<(Symbol, Attribute)> for AttributeMap {
     fn extend<T: IntoIterator<Item = (Symbol, Attribute)>>(&mut self, iter: T) {
+        let iter = iter.into_iter();
+        if self.0.capacity() == 0 {
+            self.0.reserve_exact(iter.size_hint().0);
+        }
         for (key, value) in iter {
             self.insert(key, value);
         }
@@ -1206,6 +1215,19 @@ mod tests {
             format!("{forward:?}"),
             r#"{Symbol("alpha"): Int(2), Symbol("mid"): Int(3), Symbol("zeta"): Int(1)}"#
         );
+    }
+
+    #[test]
+    fn attribute_map_starts_at_exactly_the_entries_it_holds() {
+        let mut attrs = AttributeMap::new();
+        attrs.insert(Symbol::new("only"), Attribute::Unit);
+        assert_eq!(attrs.0.capacity(), 1);
+
+        let collected: AttributeMap = ["a", "b", "c"]
+            .into_iter()
+            .map(|key| (Symbol::new(key), Attribute::Unit))
+            .collect();
+        assert_eq!(collected.0.capacity(), 3);
     }
 
     #[test]
