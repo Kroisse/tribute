@@ -38,8 +38,8 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 - 소스 enum의 각 variant마다 하나. 같은 enum의 variant descriptor는 같은 enum
   descriptor를 가리킨다.
 - Compiler가 할당하는 값마다 하나. Boxing된 `Bool`, `Nat`, `Int`, `Float`, runtime이
-  할당하는 `Bytes`, compiler 소유 layout(closure, evidence marker 등)이 여기에
-  속한다.
+  할당하는 `Bytes`, compiler 소유 layout(closure 등)이 여기에 속한다. Native
+  evidence처럼 RC 객체로 할당하지 않는 unmanaged 값은 descriptor를 갖지 않는다.
 
 이름만 다르고 모양이 같은 두 struct는 같은 layout을 쓰고 서로 다른 descriptor를
 가진다. 같은 소스 타입을 서로 다른 layout으로 표현하는 일은 없다.
@@ -90,9 +90,9 @@ Native RC 객체의 header가 descriptor를 가리킨다.
 [ 0] payload...
 ```
 
-- Header의 index 칸은 [RC header](rc.md#object-header)의 RTTI index다. 이 번호는
-  descriptor table의 index이며, table 항목은 해제 함수와 출력에 필요한 descriptor
-  레코드를 함께 담는다.
+- Header의 index 칸은 [RC header](rc.md#object-header)의 RTTI index다. 같은 번호로
+  release 함수 table과 descriptor table을 찾는다. 번호 배정과 두 table의 모양은
+  [RTTI table](rc.md#rtti-table)이 정한다.
 - Structural layout(`mem.struct`)의 필드 타입은 managed 참조와 unmanaged 포인터를
   구분한다. Managed 참조는 `tribute_rt.anyref`, unmanaged 포인터는 `core.ptr`로
   둔다. 둘의 크기와 정렬은 같지만 해제 동작이 다르기 때문이다.
@@ -126,7 +126,8 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 
 ## 불변 조건
 
-- Runtime에 할당되는 모든 값은 descriptor를 가진다.
+- Runtime에 할당되는 모든 값은 descriptor를 가진다. Native에서는 RC header를 가진
+  모든 객체, Wasm에서는 모든 사용자 struct와 variant 객체와 builtin layout 값이다.
 - Descriptor의 필드 종류와 layout 필드의 물리 표현은 일치한다. Managed 참조
   필드는 managed 참조 표현을, scalar 필드는 해당 폭의 scalar 표현을 쓴다.
 - Descriptor 번호는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. 따로

@@ -537,8 +537,17 @@ non-transferred values before `func.tail_call` or
 
 RTTI index는 [runtime 타입 descriptor](runtime-types.md)의 번호다. Index는 layout이
 아니라 descriptor마다 정해지므로, 같은 layout을 쓰는 두 소스 타입은 서로 다른 index를
-가지며 release 함수는 공유할 수 있다. Table 항목은 release 함수와 함께 값 출력에
-필요한 descriptor 레코드를 담는다. 아래 서술은 그중 release 함수 부분이다.
+가지며 release 함수는 공유할 수 있다.
+
+같은 index로 두 table을 찾는다. 아래의 RTTI table은 release 함수만 담는다. Descriptor
+table `__tribute_type_descriptors`는 index마다 포인터 폭의 칸 하나를 두고 그 index의
+descriptor 레코드(kind, 이름, 소속, 필드 이름과 필드 종류)의 주소를 담는다. 값 출력은
+객체 header의 RTTI index로 descriptor table을 읽으며 RTTI table을 거치지 않는다. 두
+table의 길이는 같고, 모든 index는 descriptor 칸을 채운다.
+
+```text
+__tribute_type_descriptors: [descriptor_record_ptr; max_index + 1]
+```
 
 RTTI table은 RTTI index마다 포인터 폭의 칸 하나를 두고, release 함수가 있는 index의
 칸에 그 함수의 주소를 담는다. 빈 칸은 null이며 얕은 해제를 뜻한다. Native RTTI
@@ -554,9 +563,16 @@ __tribute_rtti_table: [release_fn_or_null; max_index + 1]
 
 | Index | 의미 |
 | ---- | ---- |
-| `0` | release 함수 없음, 얕은 해제. Runtime이 할당하는 `Bytes`도 이 번호를 쓴다. |
-| `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`의 고정 크기 release |
-| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 소스 타입별 descriptor |
+| `0` | Runtime이 할당하는 `Bytes`. Release 함수 없음, 얕은 해제. |
+| `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`. 고정 크기 release |
+| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 descriptor |
+
+예약 범위는 compiler가 생성하는 할당 operation 없이 runtime이나 boxing lowering이
+만드는 값에만 쓴다. 할당 operation으로 만드는 값은 모두 예약 범위 다음 번호를 받는다.
+소스 struct와 variant뿐 아니라 closure layout처럼 compiler가 소유한 layout의 할당도
+여기에 속하며, 그 descriptor는 compiler 소유 이름과 필드 종류를 가진다. Evidence처럼
+RC header 없이 unmanaged로 다루는 값은 RC 객체가 아니므로 RTTI index와 descriptor를
+갖지 않는다.
 
 RTTI index는 전체 프로그램 컴파일을 전제로 한 프로그램 내부 번호다. Table과
 `__tribute_deep_release`는 그 프로그램의 모듈 안에서만 index를 해석하며, runtime과
