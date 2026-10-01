@@ -135,7 +135,7 @@ impl RewritePattern for LowerClosureNewArena {
             .r#type(struct_ty)
             .results(struct_ty)
             .build(ctx, loc);
-        // %closure = core.unrealized_conversion_cast %pack : closure.closure(...)
+        // %closure = core.unrealized_conversion_cast %pack : closure.closure<...>
         let cast = core::UnrealizedConversionCast::operands(struct_new_op.result(ctx))
             .results(result_ty)
             .build(ctx, loc);

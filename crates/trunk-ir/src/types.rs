@@ -637,7 +637,9 @@ impl<'a> IntoIterator for &'a mut AttributeMap {
 ///
 /// The value is a list of `Attribute::Dict` whose length equals `params.len()`.
 /// The key is absent when every dictionary would be empty, so a type without
-/// per-parameter attributes keeps a single identity.
+/// per-parameter attributes keeps a single identity. The textual form never
+/// spells this key: it writes each dictionary after its parameter, as in
+/// `core.tuple<core.i32, core.ptr {k = @v}>`.
 pub const PARAM_ATTRS_ATTR: &str = "param_attrs";
 
 /// Reserved type attribute naming a compiler-owned runtime storage layout.

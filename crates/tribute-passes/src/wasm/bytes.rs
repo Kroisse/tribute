@@ -24,7 +24,7 @@ pub const OFFSET_FIELD: u32 = 1;
 /// Field index of the length in the bytes struct.
 pub const LEN_FIELD: u32 = 2;
 
-/// The bytes backing array: `core.array(core.i8) {layout = @bytes_data}`.
+/// The bytes backing array: `core.array<core.i8, {layout = @bytes_data}>`.
 pub fn bytes_data_type(ctx: &mut IrContext) -> TypeRef {
     let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
     ctx.intern_type(

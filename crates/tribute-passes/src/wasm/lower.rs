@@ -145,7 +145,7 @@ fn wasm_lowering_passes() -> PassManager {
         trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, m.into(), tc);
         Ok(())
     }))
-    // Convert wasm.func signature types (e.g., core.array(Marker) →
+    // Convert wasm.func signature types (e.g., core.array<Marker> →
     // wasm.arrayref). Runs after func_to_wasm creates the wasm.func operations
     // and before emission reads their type attributes.
     .add_pass(pass_fn(
