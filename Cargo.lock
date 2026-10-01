@@ -1824,6 +1824,7 @@ dependencies = [
  "itertools 0.14.0",
  "lasso",
  "parking_lot",
+ "proptest",
  "rustc-hash",
  "salsa",
  "serde",

@@ -28,5 +28,6 @@ winnow.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+proptest.workspace = true
 salsa.workspace = true
 trybuild.workspace = true
