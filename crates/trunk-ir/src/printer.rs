@@ -651,7 +651,7 @@ fn generate_auto_aliases(
             continue;
         }
         let complexity = ctx.types().complexity(ty);
-        let has_hint = crate::op_interface::suggest_type_alias_name(ctx, ty).is_some();
+        let has_hint = crate::asm_format::suggest_type_alias_name(ctx, ty).is_some();
         // Types with a dialect-provided name hint (e.g. named structs) are
         // alias-eligible when used often enough. Types without a hint need
         // sufficient complexity to justify a fallback name like t0, t1.
@@ -700,7 +700,7 @@ fn choose_alias_name(
     used_names: &HashSet<String>,
     next_num: &mut usize,
 ) -> String {
-    if let Some(sym) = crate::op_interface::suggest_type_alias_name(ctx, ty) {
+    if let Some(sym) = crate::asm_format::suggest_type_alias_name(ctx, ty) {
         let base = sym.with_str(|s| s.to_string());
         if !used_names.contains(&base) {
             return base;
@@ -820,7 +820,7 @@ fn print_operation(
     }
 
     // Check custom assembly format registry
-    if let Some(fmt) = crate::op_interface::lookup_asm_format(dialect, name) {
+    if let Some(fmt) = crate::asm_format::lookup_asm_format(dialect, name) {
         let mut helper = OpPrintHelper { state, f };
         return (fmt.print_fn)(&mut helper, op, indent);
     }

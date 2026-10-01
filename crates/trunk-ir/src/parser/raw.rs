@@ -671,7 +671,7 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
     let generic_custom_shape =
         input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
     // Check custom assembly format registry
-    if let Some(fmt) = crate::op_interface::lookup_asm_format(
+    if let Some(fmt) = crate::asm_format::lookup_asm_format(
         crate::Symbol::from_dynamic(dialect),
         crate::Symbol::from_dynamic(op_name),
     )

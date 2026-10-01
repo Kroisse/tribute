@@ -655,7 +655,7 @@ fn parse_func<'a>(
 }
 
 inventory::submit! {
-    trunk_ir::op_interface::OpAsmFormat::new::<Func>(print_func, parse_func)
+    trunk_ir::asm_format::OpAsmFormat::new::<Func>(print_func, parse_func)
 }
 
 // === Custom assembly: tribute_control.lambda ===
@@ -790,7 +790,7 @@ fn parse_lambda<'a>(
 }
 
 inventory::submit! {
-    trunk_ir::op_interface::OpAsmFormat::new::<Lambda>(print_lambda, parse_lambda)
+    trunk_ir::asm_format::OpAsmFormat::new::<Lambda>(print_lambda, parse_lambda)
 }
 
 // === Explicit Tribute validation entry point ===
