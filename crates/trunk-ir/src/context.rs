@@ -641,6 +641,11 @@ impl IrContext {
         self.op_regions(op).nth(index)
     }
 
+    /// Whether an operation has any region, without walking its region list.
+    pub fn op_has_regions(&self, op: OpRef) -> bool {
+        self.ops[op].first_region.is_some()
+    }
+
     /// The number of regions of an operation.
     pub fn op_region_count(&self, op: OpRef) -> usize {
         self.op_regions(op).count()
@@ -691,6 +696,14 @@ impl IrContext {
     /// The `index`-th successor of an operation, if it has that many.
     pub fn op_successor(&self, op: OpRef, index: usize) -> Option<BlockRef> {
         self.op_successors(op).nth(index)
+    }
+
+    /// Whether an operation has any successor.
+    pub fn op_has_successors(&self, op: OpRef) -> bool {
+        !self.ops[op]
+            .successors
+            .as_slice(&self.block_pool)
+            .is_empty()
     }
 
     /// The number of successors of an operation.
@@ -1380,6 +1393,9 @@ impl OperationDataBuilder {
         }
     }
 }
+
+#[cfg(test)]
+mod prop_tests;
 
 #[cfg(test)]
 mod tests {

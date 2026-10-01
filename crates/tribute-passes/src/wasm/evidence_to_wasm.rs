@@ -323,7 +323,7 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
     for op in module.ops_snapshot(ctx) {
         let data = ctx.op(op);
         let is_function = wasm_dialect::Func::matches(ctx, op) || func::Func::matches(ctx, op);
-        if !is_function || ctx.op_region_count(op) != 0 {
+        if !is_function || ctx.op_has_regions(op) {
             continue;
         }
         let Some(name) = data.attributes.get_symbol("sym_name") else {
@@ -1403,7 +1403,7 @@ mod tests {
         let mut functions = Vec::new();
         for &op in module.ops(&ctx) {
             let function = wasm_dialect::Func::from_op(&ctx, op).expect("bound wasm.func");
-            assert!(ctx.op_region_count(op) != 0, "helpers must have bodies");
+            assert!(ctx.op_has_regions(op), "helpers must have bodies");
             functions.push(function.sym_name(&ctx).to_string());
         }
         functions.sort();

@@ -92,7 +92,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         ControlFlow::Continue(WalkAction::Advance)
     });
     for declaration in declarations {
-        if ctx.op_region_count(declaration) != 0 || referenced.contains(&declaration) {
+        if ctx.op_has_regions(declaration) || referenced.contains(&declaration) {
             ctx.op_mut(declaration)
                 .attributes
                 .remove(COMPILER_INTRINSIC_ATTR);

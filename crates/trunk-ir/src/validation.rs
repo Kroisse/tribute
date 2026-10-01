@@ -999,7 +999,7 @@ fn validate_region_branch_terminator_interface(
             "RegionBranchTerminator must be resultless",
         ));
     }
-    if ctx.op_successor_count(op) != 0 {
+    if ctx.op_has_successors(op) {
         errors.push(operation_verifier_error(
             ctx,
             op,

@@ -563,7 +563,7 @@ fn rewrite_validated_closures_in_func(
     func_op: func::Func,
     functions: Arc<SymbolTable>,
 ) {
-    if ctx.op_region_count(func_op.op_ref()) == 0 {
+    if !ctx.op_has_regions(func_op.op_ref()) {
         return;
     }
     let applicator = PatternApplicator::new(TypeConverter::new())

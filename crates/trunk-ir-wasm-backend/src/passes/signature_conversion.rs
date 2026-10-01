@@ -280,7 +280,7 @@ mod tests {
         assert!(result.reached_fixpoint);
         let ops = module.ops(&ctx);
         for (op, results) in ops.iter().take(3).zip([vec![], vec![i64], vec![i64, i64]]) {
-            assert!(ctx.op_region_count(*op) == 0);
+            assert!(!ctx.op_has_regions(*op));
             let converted = wasm::FuncSig::from_type_ref(
                 &ctx,
                 ctx.op(*op).attributes.get_type("type").unwrap(),

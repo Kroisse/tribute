@@ -217,7 +217,9 @@ An operation's regions and successors are read through the context, not
 through `OperationData`: `ctx.op_regions(op)` and `ctx.op_successors(op)`
 iterate `RegionRef`/`BlockRef`, `ctx.op_region(op, i)` and
 `ctx.op_successor(op, i)` index them, and `op_region_count` /
-`op_successor_count` give their lengths. Change them through the context's
+`op_successor_count` give their lengths. Ask `op_has_regions` /
+`op_has_successors` whether a list is empty: the region list is linked, so
+counting it walks every region. Change them through the context's
 methods (`push_op_region`, `clear_op_regions`, `detach_region`,
 `set_op_successor`, `truncate_op_successors`), which keep region parent
 links consistent. Prefer a typed accessor such as `func.body(ctx)` when the

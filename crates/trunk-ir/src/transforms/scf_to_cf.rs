@@ -1072,7 +1072,7 @@ mod tests {
             .unwrap();
 
         assert!(func.body_if_present(&ctx).is_none());
-        assert!(ctx.op_region_count(func_op) == 0);
+        assert!(!ctx.op_has_regions(func_op));
         assert_eq!(crate::printer::print_module(&ctx, module.op()), before);
     }
 

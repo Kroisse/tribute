@@ -183,7 +183,7 @@ impl CallableExitModel for Perform {
         ctx: &trunk_ir::IrContext,
     ) -> Result<(), ControlFlowInterfaceError> {
         let data = ctx.op(self.op_ref());
-        if ctx.op_region_count(self.op_ref()) == 0
+        if !ctx.op_has_regions(self.op_ref())
             && ctx.op_operands(self.op_ref()).len() >= 3
             && data.attributes.get_type("ability_ref").is_some()
             && data.attributes.get_symbol("op_name").is_some()

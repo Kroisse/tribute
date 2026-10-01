@@ -47,14 +47,14 @@ impl ValidatedFlatCfg {
             let Some((&terminator, preceding)) = ops.split_last() else {
                 return Err(OwnershipPlanError::new("function block is empty"));
             };
-            if ops.iter().any(|&op| ctx.op_region_count(op) != 0) {
+            if ops.iter().any(|&op| ctx.op_has_regions(op)) {
                 return Err(OwnershipPlanError::new(
                     "unsupported structured or nested control-flow region",
                 ));
             }
             if preceding
                 .iter()
-                .any(|&op| ctx.op_successor_count(op) != 0 || is_native_terminator(ctx, op))
+                .any(|&op| ctx.op_has_successors(op) || is_native_terminator(ctx, op))
             {
                 return Err(OwnershipPlanError::new(
                     "control-flow operation precedes the final block operation",

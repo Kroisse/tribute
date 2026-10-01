@@ -856,7 +856,7 @@ mod tests {
         assert_eq!(definition.sym_name(&ctx), Symbol::new("defined"));
         assert_eq!(ctx.op(lowered_ops[0]).location, declaration_location);
         assert_eq!(ctx.op(lowered_ops[1]).location, definition_location);
-        assert!(ctx.op_region_count(lowered_ops[0]) == 0);
+        assert!(!ctx.op_has_regions(lowered_ops[0]));
         assert_eq!(ctx.op_region_count(lowered_ops[1]), 1);
         assert_eq!(
             ctx.op(lowered_ops[0]).attributes.get("custom"),

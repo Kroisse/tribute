@@ -75,7 +75,7 @@ fn eliminate_one_pair(ctx: &mut IrContext, block: BlockRef) -> bool {
 fn is_barrier_for(ctx: &IrContext, op: OpRef, ptr: ValueRef, retained: ValueRef) -> bool {
     // Captures by nested regions are not represented as ordinary operands on
     // the containing op, so do not move RC operations across region boundaries.
-    if ctx.op_region_count(op) != 0 {
+    if ctx.op_has_regions(op) {
         return true;
     }
 

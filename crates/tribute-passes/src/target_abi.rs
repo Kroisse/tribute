@@ -355,7 +355,7 @@ fn validate_root_entry(
         expected_results,
         phase,
     )?;
-    if ctx.op_region_count(worker_op) == 0 {
+    if !ctx.op_has_regions(worker_op) {
         return Err(TargetAbiError::new(
             "target root bridge: root worker must be a definition",
         ));
@@ -413,7 +413,7 @@ pub fn compose_root_entry_bridge(
             "target root bridge: reserved root symbol collision",
         ));
     }
-    if ctx.op_region_count(worker_op) == 0 {
+    if !ctx.op_has_regions(worker_op) {
         return Err(TargetAbiError::new(
             "target root bridge: root `main` must be a definition",
         ));

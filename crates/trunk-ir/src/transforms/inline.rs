@@ -249,7 +249,7 @@ fn should_inline(
     let Some(&callee_op) = graph.func_ops.get(&callee) else {
         return false;
     };
-    if ctx.op_region_count(callee_op) == 0 {
+    if !ctx.op_has_regions(callee_op) {
         return false;
     }
     // Skip extern/ABI functions: they are externally callable and the body

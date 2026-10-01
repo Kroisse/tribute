@@ -2390,7 +2390,7 @@ fn verified_callable_declaration(
     function: OpRef,
     registered: &HashMap<Symbol, &CompilerIntrinsicDeclaration>,
 ) -> bool {
-    if ctx.op_region_count(function) != 0 {
+    if ctx.op_has_regions(function) {
         return true;
     }
     let (Some(symbol), Some(identity), Some(func_sig_type)) = (
@@ -2435,7 +2435,7 @@ fn validate_callable_origins(
             let intrinsic_identity = Func::from_op(ctx, op)
                 .ok()
                 .and_then(|function| function.compiler_intrinsic_identity(ctx));
-            let bodyless = ctx.op_region_count(op) == 0;
+            let bodyless = !ctx.op_has_regions(op);
             if !bodyless && intrinsic_identity.is_some() {
                 push_op_error(
                     ctx,

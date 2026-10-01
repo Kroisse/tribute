@@ -486,7 +486,7 @@ fn verify_source_conversion_shapes(ctx: &IrContext, module: Module) -> Vec<Bound
 
     fn visit(ctx: &IrContext, op: OpRef, failures: &mut Vec<BoundaryFailure>) {
         let data = ctx.op(op);
-        if ctx.op_successor_count(op) != 0 {
+        if ctx.op_has_successors(op) {
             failures.push(failure(
                 ctx,
                 op,
@@ -3584,7 +3584,7 @@ impl<'a> Converter<'a> {
             .current_func(qualified)
             .expect("validated function is present in the callable graph");
         let physical_type = self.physical_function_type(logical_type);
-        if self.ctx.op_region_count(source) == 0 {
+        if !self.ctx.op_has_regions(source) {
             let mut builder =
                 OperationDataBuilder::new(location, Symbol::new("func"), Symbol::new("func"))
                     .attr("sym_name", Attribute::Symbol(symbol))

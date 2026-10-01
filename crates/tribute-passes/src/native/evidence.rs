@@ -544,7 +544,7 @@ mod tests {
             ),
         ] {
             let function = func_by_name_recursive(&ctx, module, name);
-            assert!(ctx.op_region_count(function.op_ref()) == 0);
+            assert!(!ctx.op_has_regions(function.op_ref()));
             assert_eq!(
                 ctx.op(function.op_ref()).attributes.get_str("abi"),
                 Some("C")
@@ -606,13 +606,13 @@ mod tests {
 }"#,
         );
         let external = func_by_name_recursive(&ctx, module, "external");
-        assert!(ctx.op_region_count(external.op_ref()) == 0);
+        assert!(!ctx.op_has_regions(external.op_ref()));
         let before = print_module(&ctx, module.op());
 
         lower_evidence_to_native_func(&mut ctx, external);
 
         let external_after = func_by_name_recursive(&ctx, module, "external");
-        assert!(ctx.op_region_count(external_after.op_ref()) == 0);
+        assert!(!ctx.op_has_regions(external_after.op_ref()));
         assert_eq!(print_module(&ctx, module.op()), before);
 
         let selected = func_by_name_recursive(&ctx, module, "selected");
