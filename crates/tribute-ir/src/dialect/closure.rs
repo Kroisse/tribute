@@ -245,7 +245,7 @@ fn parse_closure_lambda<'a>(
 }
 
 inventory::submit! {
-    trunk_ir::op_interface::OpAsmFormat::new::<Lambda>(print_closure_lambda, parse_closure_lambda)
+    trunk_ir::asm_format::OpAsmFormat::new::<Lambda>(print_closure_lambda, parse_closure_lambda)
 }
 
 impl trunk_ir::op_interface::CallableOwnerModel for Lambda {

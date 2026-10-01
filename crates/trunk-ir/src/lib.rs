@@ -25,6 +25,9 @@ pub mod location;
 // === Operation interface (purity, isolation) ===
 pub mod op_interface;
 
+// === Textual assembly format hooks ===
+pub mod asm_format;
+
 // === Operation and type utilities ===
 pub mod op_def;
 pub mod op_schema;
