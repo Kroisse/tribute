@@ -122,7 +122,7 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef, plan: &ScfToCfPlan) {
         if is_scf_control_flow(ctx, op) {
             continue;
         }
-        let regions = ctx.op_regions(op).collect::<Vec<_>>();
+        let regions = ctx.op_regions(op).collect::<crate::RegionList>();
         for region in regions {
             transform_region(ctx, region, plan);
         }
@@ -687,7 +687,7 @@ fn replace_continue_break(
                 if scf::Loop::matches(ctx, op) {
                     continue;
                 }
-                let regions = ctx.op_regions(op).collect::<Vec<_>>();
+                let regions = ctx.op_regions(op).collect::<crate::RegionList>();
                 for region in regions {
                     let region_blocks = ctx.region(region).blocks.clone();
                     replace_continue_break(ctx, &region_blocks, header, exit, loc);

@@ -132,7 +132,7 @@ fn materialize_nested_callable_value_types(
             ctx.op_mut(op).attributes = converted_attributes;
         }
 
-        let regions = ctx.op_regions(op).collect::<Vec<_>>();
+        let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
         for region in regions {
             let blocks = ctx.region(region).blocks.clone();
             for block in blocks {

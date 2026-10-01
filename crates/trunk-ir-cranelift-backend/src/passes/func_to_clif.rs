@@ -544,7 +544,7 @@ mod tests {
                 ctx.op_mut(op).attributes.remove("type");
             }
             let before = print_module(&ctx, module.op());
-            let regions = ctx.op_regions(op).collect::<Vec<_>>();
+            let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             PatternApplicator::new(TypeConverter::new())
                 .add_pattern(super::FuncFuncPattern)
                 .apply_partial(&mut ctx, module);

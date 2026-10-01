@@ -443,7 +443,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
         if func::Func::from_op(ctx, op).is_ok() {
             continue;
         }
-        let regions = ctx.op_regions(op).collect::<Vec<_>>();
+        let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
         for region in regions {
             rewrite_evidence_ops_in_region(ctx, region)?;
         }

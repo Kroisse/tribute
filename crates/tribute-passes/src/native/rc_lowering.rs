@@ -74,7 +74,7 @@ pub fn lower_rc(ctx: &mut IrContext, module: Module) {
 
     for op in module_ops {
         if let Ok(_func_op) = clif::Func::from_op(ctx, op) {
-            let regions = ctx.op_regions(op).collect::<Vec<_>>();
+            let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             for region in regions {
                 lower_rc_in_region(ctx, region);
             }
@@ -95,7 +95,7 @@ fn lower_rc_in_region(ctx: &mut IrContext, region: RegionRef) {
         // (need to re-read ops since block may have been modified)
         let ops = ctx.block(block).ops.clone();
         for op in ops {
-            let nested = ctx.op_regions(op).collect::<Vec<_>>();
+            let nested = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             for nested_region in nested {
                 lower_rc_in_region(ctx, nested_region);
             }
@@ -111,7 +111,7 @@ fn lower_rc_in_region(ctx: &mut IrContext, region: RegionRef) {
         }
         let ops = ctx.block(*block).ops.clone();
         for op in ops {
-            let nested = ctx.op_regions(op).collect::<Vec<_>>();
+            let nested = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             for nested_region in nested {
                 lower_rc_in_region(ctx, nested_region);
             }

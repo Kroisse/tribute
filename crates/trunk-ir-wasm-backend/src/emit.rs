@@ -768,7 +768,7 @@ fn assign_locals_in_region(
 
         for &op in &ctx.block(block_ref).ops {
             // Process nested regions FIRST
-            let nested_regions = ctx.op_regions(op).collect::<Vec<_>>();
+            let nested_regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             for &nested in &nested_regions {
                 assign_locals_in_region(ctx, nested, param_count, locals, emit_ctx, module_info)?;
             }

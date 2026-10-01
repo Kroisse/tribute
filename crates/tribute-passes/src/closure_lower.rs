@@ -643,7 +643,11 @@ fn rewrite_closure_storage_types(
                 result_updates.push((op, index as u32, converted));
             }
         }
-        for region in physicalizer.ctx.op_regions(op).collect::<Vec<_>>() {
+        for region in physicalizer
+            .ctx
+            .op_regions(op)
+            .collect::<trunk_ir::RegionList>()
+        {
             for block in physicalizer.ctx.region(region).blocks.clone() {
                 let args = physicalizer.ctx.block(block).args.to_vec();
                 for (index, argument) in args.into_iter().enumerate() {

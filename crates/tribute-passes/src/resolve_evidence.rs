@@ -276,7 +276,7 @@ fn resolve_delimiters(
 
                 ctx.replace_all_uses(shape.body_evidence, current_ev);
             }
-            let regions = ctx.op_regions(op).collect::<Vec<_>>();
+            let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             for region in regions {
                 resolve_delimiters(ctx, module, region)?;
             }

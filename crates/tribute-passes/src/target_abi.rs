@@ -218,7 +218,10 @@ pub fn lower_cps_signatures_to_physical(
             }
         }
 
-        let regions = converter.ctx.op_regions(op).collect::<Vec<_>>();
+        let regions = converter
+            .ctx
+            .op_regions(op)
+            .collect::<trunk_ir::RegionList>();
         for region in regions {
             let block_count = converter.ctx.region(region).blocks.len();
             for block_index in 0..block_count {
@@ -1069,7 +1072,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol)
                 .insert(key, Attribute::Symbol(new));
         }
     }
-    let regions = ctx.op_regions(op).collect::<Vec<_>>();
+    let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
     for region in regions {
         let blocks = ctx.region(region).blocks.clone();
         for block in blocks {

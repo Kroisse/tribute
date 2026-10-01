@@ -118,7 +118,7 @@ fn sweep_block(ctx: &mut IrContext, block: BlockRef, config: &DceConfig) -> usiz
     if config.recursive {
         let ops = ctx.block(block).ops.clone();
         for op in ops {
-            let regions = ctx.op_regions(op).collect::<Vec<_>>();
+            let regions = ctx.op_regions(op).collect::<crate::RegionList>();
             for region in regions {
                 removed += sweep_region(ctx, region, config);
             }

@@ -1354,8 +1354,8 @@ impl<'a> Converter<'a> {
             .collect();
         let result_types: Vec<_> = self.ctx.op_result_types(source).to_vec();
         let attrs = data.attributes.clone();
-        let regions: Vec<_> = self.ctx.op_regions(source).collect();
-        let successors: Vec<_> = self.ctx.op_successors(source).collect();
+        let regions: trunk_ir::RegionList = self.ctx.op_regions(source).collect();
+        let successors: trunk_ir::BlockList = self.ctx.op_successors(source).collect();
         if !successors.is_empty() {
             return Err(self.malformed_source(
                 source,
@@ -1558,7 +1558,10 @@ impl<'a> Converter<'a> {
         }
 
         let mut converted_regions = Vec::new();
-        let source_regions = self.ctx.op_regions(source).collect::<Vec<_>>();
+        let source_regions = self
+            .ctx
+            .op_regions(source)
+            .collect::<trunk_ir::RegionList>();
         for source_region in source_regions {
             let source_blocks = self.ctx.region(source_region).blocks.clone();
             let [source_block] = source_blocks.as_slice() else {

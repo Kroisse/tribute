@@ -321,7 +321,7 @@ impl PatternApplicator {
             }
 
             // First, recurse into nested regions
-            let regions = ctx.op_regions(op).collect::<Vec<_>>();
+            let regions = ctx.op_regions(op).collect::<crate::RegionList>();
             for region in regions {
                 changes += self.visit_region(ctx, region, module_first_block);
             }
