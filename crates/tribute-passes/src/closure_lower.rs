@@ -600,29 +600,24 @@ fn rewrite_validated_closures_in_func(
 /// identities and are removed.
 pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
     let closure_struct = closure_struct_type_ref(ctx);
-    rewrite_closure_storage_types(ctx, module, None, closure_struct);
+    substitute_module_types(ctx, module, move |ctx, ty| {
+        closure::Closure::matches(ctx, ty).then_some(closure_struct)
+    });
 }
 
-/// Convert only the exact canonical storage identity through the existing
-/// recursive closure type surfaces; target ownership remains at the caller.
-pub(crate) fn convert_canonical_closure_storage(
+/// Replace every type `substitute` maps, wherever it occurs in `module`:
+/// aliases, nested type parameters and attributes, type-bearing operation
+/// attributes, results, and block arguments. The plan is complete before any
+/// update applies. Casts that the replacement turns into identities are
+/// removed.
+pub(crate) fn substitute_module_types(
     ctx: &mut IrContext,
     module: Module,
-    source: TypeRef,
-    target: TypeRef,
-) {
-    rewrite_closure_storage_types(ctx, module, Some(source), target);
-}
-
-fn rewrite_closure_storage_types(
-    ctx: &mut IrContext,
-    module: Module,
-    source_storage: Option<TypeRef>,
-    closure_struct: TypeRef,
+    substitute: impl Fn(&IrContext, TypeRef) -> Option<TypeRef>,
 ) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
-    let mut physicalizer = ClosureTypePhysicalizer::new(ctx, closure_struct, source_storage);
+    let mut physicalizer = TypeSubstitution::new(ctx, substitute);
     let mut alias_updates = Vec::new();
     let mut attribute_updates = Vec::new();
     let mut result_updates = Vec::new();
@@ -712,35 +707,26 @@ fn erase_identity_casts(ctx: &mut IrContext, module: Module) {
     }
 }
 
-struct ClosureTypePhysicalizer<'a> {
+struct TypeSubstitution<'a, F> {
     ctx: &'a mut IrContext,
-    closure_struct: TypeRef,
-    source_storage: Option<TypeRef>,
+    substitute: F,
     cache: HashMap<TypeRef, TypeRef>,
     visiting: HashSet<TypeRef>,
 }
 
-impl<'a> ClosureTypePhysicalizer<'a> {
-    fn new(
-        ctx: &'a mut IrContext,
-        closure_struct: TypeRef,
-        source_storage: Option<TypeRef>,
-    ) -> Self {
+impl<'a, F: Fn(&IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> {
+    fn new(ctx: &'a mut IrContext, substitute: F) -> Self {
         Self {
             ctx,
-            closure_struct,
-            source_storage,
+            substitute,
             cache: HashMap::new(),
             visiting: HashSet::new(),
         }
     }
 
     fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
-        if self.source_storage.map_or_else(
-            || closure::Closure::matches(self.ctx, ty),
-            |source| ty == source,
-        ) {
-            return self.closure_struct;
+        if let Some(replacement) = (self.substitute)(self.ctx, ty) {
+            return replacement;
         }
         if let Some(&converted) = self.cache.get(&ty) {
             return converted;

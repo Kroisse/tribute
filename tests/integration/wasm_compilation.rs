@@ -716,6 +716,37 @@ fn main() ->{std::io::Io} Nil {
     assert_eq!(output.stdout, b"1010\n1010\n111\n");
 }
 
+#[salsa_test]
+fn test_execute_string_from_case_produced_bytes(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "case_bytes.trb",
+        r#"
+fn pick(x: Bytes, y: Bytes, f: Bool) -> Bytes {
+    case f {
+        True -> x
+        False -> y
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(String::from_bytes(pick(b"ab", b"cd", True)))
+    std::io::print_line(String::from_bytes(pick(b"ab", b"cd", False)))
+    std::io::print_line(String::from_bytes(b"<hello>".slice(1, 3)))
+    std::io::print_line(String::from_bytes(b"<hello>".slice(2, 100)))
+}
+"#,
+    );
+    let binary = expect_wasm_compilation_success(db, source, "Should compile case-produced Bytes");
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ab\ncd\nhe\nello>\n");
+}
+
 fn run_validated_wasm(binary: &[u8]) -> std::process::Output {
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(binary)

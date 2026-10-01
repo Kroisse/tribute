@@ -355,7 +355,7 @@ impl RewritePattern for BytesConcatPattern {
 
         let location = ctx.op(op).location;
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let bytes_ty = core::bytes(ctx).as_type_ref();
+        let bytes_ty = super::bytes::bytes_struct_type(ctx);
         let array_ref_ty = super::bytes::bytes_data_type(ctx);
 
         // Extract fields from left and right Bytes structs
@@ -456,7 +456,7 @@ impl RewritePattern for BytesSliceOrPanicPattern {
             return false;
         };
         let location = ctx.op(op).location;
-        let bytes_ty = core::bytes(ctx).as_type_ref();
+        let bytes_ty = super::bytes::bytes_struct_type(ctx);
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let nil_ty = core::nil(ctx).as_type_ref();
 

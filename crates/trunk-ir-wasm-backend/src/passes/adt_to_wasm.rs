@@ -396,13 +396,11 @@ impl RewritePattern for VariantGetPattern {
         };
         let declared_field_ty = physical_variant_field_type(ctx, declared_field_ty);
         let requested_result_ty = physical_variant_field_type(ctx, variant_get.result_ty(ctx));
-        // String::Leaf has the canonical core.bytes layout even though frontend
+        // String::Leaf has the canonical bytes layout even though frontend
         // pattern extraction is temporarily erased to wasm.anyref. All other
         // variant_get results must agree with their declared enum field type.
-        let declared_is_bytes = {
-            let data = ctx.get_type(declared_field_ty);
-            data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
-        };
+        let declared_is_bytes =
+            helpers::has_layout(ctx, declared_field_ty, crate::gc_types::BYTES_LAYOUT);
         let is_bytes_anyref_erasure =
             declared_is_bytes && helpers::is_type(ctx, requested_result_ty, "wasm", "anyref");
         if requested_result_ty != declared_field_ty && !is_bytes_anyref_erasure {
@@ -970,7 +968,9 @@ mod tests {
   !E = adt.enum() {name = @E, variants = [[@Some, [core.i32]]]}
   !Box = adt.enum() {name = @Box, variants = [[@Next, [!NodeRef]]]}
   !Node = adt.enum() {name = @Node, variants = [[@Node, []]]}
-  !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]]]}
+  !Data = core.array(core.i8) {layout = @bytes_data}
+  !Bytes = adt.struct(!Data, core.i32, core.i32) {fields = [[@data, !Data], [@offset, core.i32], [@len, core.i32]], layout = @bytes, name = @_Bytes}
+  !String = adt.enum() {name = @String, variants = [[@Leaf, [!Bytes]]]}
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
     %valid = adt.variant_get %e {type = !E, tag = @Some, field = 0} : core.i32
@@ -999,10 +999,11 @@ mod tests {
             let data = ctx.get_type(ty);
             data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
         }));
-        assert!(lowered_result_types.iter().any(|&ty| {
-            let data = ctx.get_type(ty);
-            data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
-        }));
+        assert!(lowered_result_types.iter().any(|&ty| helpers::has_layout(
+            &ctx,
+            ty,
+            crate::gc_types::BYTES_LAYOUT
+        )));
         assert!(lowered_result_types.iter().any(|&ty| {
             let data = ctx.get_type(ty);
             data.dialect == Symbol::new("wasm") && data.name == Symbol::new("structref")
