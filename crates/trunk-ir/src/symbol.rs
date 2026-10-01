@@ -3,10 +3,13 @@
 //! These types are Salsa-independent core primitives used throughout the IR.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::sync::LazyLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use lasso::{Spur, ThreadedRodeo};
+use std::num::NonZeroU32;
+
+use parking_lot::RwLock;
 use smallvec::SmallVec;
 
 // ============================================================================
@@ -17,22 +20,52 @@ use smallvec::SmallVec;
 ///
 /// The interner is never cleared, so every interned string lives for the rest
 /// of the process. That is what lets `Symbol::as_str` return `&'static str`.
-static INTERNER: LazyLock<Interner> = LazyLock::new(|| Interner::with_hasher(Default::default()));
+static INTERNER: LazyLock<Interner> = LazyLock::new(Interner::default);
 
-/// Interned names are compiler-generated or come from the program being
-/// compiled, so the lookup hash needs no HashDoS resistance. `Symbol::new`
-/// runs on every typed operation match, which makes the hasher a hot path.
-type Interner = ThreadedRodeo<Spur, rustc_hash::FxBuildHasher>;
+#[derive(Default)]
+struct Interner {
+    /// Text to symbol. Interned names are compiler-generated or come from
+    /// the program being compiled, so the lookup hash needs no HashDoS
+    /// resistance. `Symbol::new` runs on every typed operation match, which
+    /// makes the hasher a hot path.
+    ids: RwLock<HashMap<&'static str, Symbol, rustc_hash::FxBuildHasher>>,
+    /// Symbol to text, indexed by `Symbol::index`. Append-only, so resolving
+    /// a symbol takes no lock.
+    strings: boxcar::Vec<&'static str>,
+}
+
+impl Interner {
+    fn intern(&self, text: &str, store: impl FnOnce() -> &'static str) -> Symbol {
+        if let Some(&symbol) = self.ids.read().get(text) {
+            return symbol;
+        }
+        let mut ids = self.ids.write();
+        if let Some(&symbol) = ids.get(text) {
+            return symbol;
+        }
+        let text = store();
+        // Pushing under the write lock keeps indices dense and in step with `ids`.
+        let index = self.strings.push(text);
+        let symbol = Symbol(
+            u32::try_from(index + 1)
+                .ok()
+                .and_then(NonZeroU32::new)
+                .expect("symbol interner overflow"),
+        );
+        ids.insert(text, symbol);
+        symbol
+    }
+}
 
 /// Interned symbol for efficient comparison of names (functions, variables, fields, etc.)
 ///
-/// Uses lasso for string interning with 4-byte Spur keys.
+/// A 4-byte index into a process-global interner.
 ///
 /// Ordering is based on the underlying string content (not interning order),
 /// so that key-ordered collections such as `AttributeMap` iterate deterministically.
 #[derive(Clone, Copy, PartialEq, Eq)]
 #[cfg_attr(feature = "salsa", derive(salsa::SalsaValue))]
-pub struct Symbol(Spur);
+pub struct Symbol(NonZeroU32);
 
 impl std::hash::Hash for Symbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
@@ -66,17 +99,17 @@ impl std::fmt::Debug for Symbol {
 impl Symbol {
     /// Intern a static string and return its symbol. Prefer this over `from_dynamic` when possible.
     pub fn new(text: &'static str) -> Self {
-        Symbol(INTERNER.get_or_intern_static(text))
+        INTERNER.intern(text, || text)
     }
 
     /// Intern a string and return its symbol. Prefer `new` if the text is static.
     pub fn from_dynamic(text: &str) -> Self {
-        Symbol(INTERNER.get_or_intern(text))
+        INTERNER.intern(text, || Box::leak(text.into()))
     }
 
     /// Look up an already-interned string without interning it when absent.
     pub fn lookup(text: &str) -> Option<Self> {
-        INTERNER.get(text).map(Self)
+        INTERNER.ids.read().get(text).copied()
     }
 
     /// The symbol's text.
@@ -87,7 +120,8 @@ impl Symbol {
     /// assert_eq!(symbol.as_str(), "something");
     /// ```
     pub fn as_str(self) -> &'static str {
-        INTERNER.resolve(&self.0)
+        let index = self.0.get() as usize - 1;
+        INTERNER.strings[index]
     }
 
     /// Access the symbol's text through a closure.
