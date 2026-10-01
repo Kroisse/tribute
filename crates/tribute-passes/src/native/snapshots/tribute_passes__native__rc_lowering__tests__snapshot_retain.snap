@@ -7,14 +7,14 @@ core.module @test {
   clif.func {sym_name = @f, type = clif.func_sig<(core.ptr) -> core.ptr>} {
     ^bb0(%0: core.ptr):
       %1 = clif.iconst {value = 0} : core.ptr
-      %2 = clif.icmp %0, %1 {cond = @eq} : core.i8
+      %2 = clif.icmp %0, %1 {cond = "eq"} : core.i8
       clif.brif %2 [^bb2, ^bb1]
 
     ^bb1:
       %3 = clif.iconst {value = 8} : core.i64
       %4 = clif.isub %0, %3 : core.ptr
       %5 = clif.iconst {value = 1} : core.i32
-      %6 = clif.atomic_rmw %4, %5 {offset = 0, op = @add} : core.i32
+      %6 = clif.atomic_rmw %4, %5 {offset = 0, op = "add"} : core.i32
       clif.jump [^bb2]
 
     ^bb2:

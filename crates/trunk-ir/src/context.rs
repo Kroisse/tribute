@@ -386,6 +386,15 @@ impl IrContext {
         self.strings.intern(text)
     }
 
+    /// The pooled handle for a builder's string argument.
+    pub fn intern_string_arg(&mut self, arg: StringArg) -> StringRef {
+        match arg {
+            StringArg::Ref(r) => r,
+            StringArg::Static(text) => self.intern_str(text),
+            StringArg::Owned(text) => self.intern_str(&text),
+        }
+    }
+
     /// Find a pooled string without interning it.
     pub fn lookup_str(&self, text: &str) -> Option<StringRef> {
         self.strings.lookup(text)

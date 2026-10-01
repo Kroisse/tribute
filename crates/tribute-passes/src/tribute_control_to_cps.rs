@@ -2478,7 +2478,7 @@ impl<'a> Converter<'a> {
         for arm in arms.iter().filter(|arm| arm.kind == Symbol::new("op")) {
             let case_block = self.make_block(location, &[]);
             let same_prompt = arith::Cmpi::operands(args[2], local_prompt)
-                .predicate(Symbol::new("eq"))
+                .predicate("eq")
                 .build(self.ctx, location);
             self.ctx.push_op(case_block, same_prompt.op_ref());
 

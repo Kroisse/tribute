@@ -378,7 +378,9 @@ fn shared_pipeline_float_comparison_predicates(db: &salsa::DatabaseImpl) {
     let ir_text = shared_pipeline_ir(db, "float_comparisons.trb", FLOAT_COMPARISON_SOURCE);
     assert_shared_cps_contract(&ir_text);
     insta::assert_snapshot!(pipeline_contract_summary(&ir_text, false));
-    for predicate in ["@oeq", "@une", "@olt", "@ole", "@ogt", "@oge"] {
+    for predicate in [
+        "\"oeq\"", "\"une\"", "\"olt\"", "\"ole\"", "\"ogt\"", "\"oge\"",
+    ] {
         assert!(
             ir_text.contains(predicate),
             "missing {predicate}:\n{ir_text}"

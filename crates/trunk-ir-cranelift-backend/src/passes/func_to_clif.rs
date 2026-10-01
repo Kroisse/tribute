@@ -435,9 +435,7 @@ impl RewritePattern for FuncUnreachablePattern {
             return false;
         }
         let loc = ctx.op(op).location;
-        let new_op = clif::Trap::operands()
-            .code(Symbol::new("unreachable"))
-            .build(ctx, loc);
+        let new_op = clif::Trap::operands().code("unreachable").build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
     }

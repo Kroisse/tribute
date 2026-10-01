@@ -41,12 +41,12 @@ core.module @test {
       %9 = clif.iadd %8, %7 : core.ptr
       %10 = clif.load %9 {offset = 0} : core.ptr
       %11 = clif.iconst {value = 0} : core.ptr
-      %12 = clif.icmp %10, %11 {cond = @eq} : core.i8
+      %12 = clif.icmp %10, %11 {cond = "eq"} : core.i8
       clif.brif %12 [^bb1, ^bb2]
 
     ^bb1:
       %13 = clif.iconst {value = 0} : core.i64
-      %14 = clif.icmp %1, %13 {cond = @eq} : core.i8
+      %14 = clif.icmp %1, %13 {cond = "eq"} : core.i8
       clif.brif %14 [^bb4, ^bb3]
 
     ^bb2:
@@ -58,6 +58,6 @@ core.module @test {
       clif.return
 
     ^bb4:
-      clif.trap {code = @unresolved_dynamic_release}
+      clif.trap {code = "unresolved_dynamic_release"}
   }
 }

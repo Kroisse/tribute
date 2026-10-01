@@ -25,9 +25,9 @@ pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
 }
 
 /// Parse a condition symbol into a Cranelift integer condition code.
-fn parse_int_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::IntCC> {
+fn parse_int_cc(s: &str) -> CompilationResult<cl_ir::condcodes::IntCC> {
     use cl_ir::condcodes::IntCC;
-    sym.with_str(|s| match s {
+    match s {
         "eq" => Ok(IntCC::Equal),
         "ne" => Ok(IntCC::NotEqual),
         "slt" => Ok(IntCC::SignedLessThan),
@@ -41,12 +41,12 @@ fn parse_int_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::IntCC> {
         other => Err(CompilationError::codegen(format!(
             "unknown integer comparison condition: {other}"
         ))),
-    })
+    }
 }
 
 /// Parse a symbol into a Cranelift atomic RMW operation.
-fn parse_atomic_rmw_op(sym: Symbol) -> CompilationResult<cl_ir::AtomicRmwOp> {
-    sym.with_str(|s| match s {
+fn parse_atomic_rmw_op(s: &str) -> CompilationResult<cl_ir::AtomicRmwOp> {
+    match s {
         "add" => Ok(cl_ir::AtomicRmwOp::Add),
         "sub" => Ok(cl_ir::AtomicRmwOp::Sub),
         "and" => Ok(cl_ir::AtomicRmwOp::And),
@@ -61,13 +61,13 @@ fn parse_atomic_rmw_op(sym: Symbol) -> CompilationResult<cl_ir::AtomicRmwOp> {
         other => Err(CompilationError::codegen(format!(
             "unknown atomic RMW operation: {other}"
         ))),
-    })
+    }
 }
 
 /// Parse a condition symbol into a Cranelift float condition code.
-fn parse_float_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::FloatCC> {
+fn parse_float_cc(s: &str) -> CompilationResult<cl_ir::condcodes::FloatCC> {
     use cl_ir::condcodes::FloatCC;
-    sym.with_str(|s| match s {
+    match s {
         "eq" => Ok(FloatCC::Equal),
         "ne" => Ok(FloatCC::NotEqual),
         "lt" => Ok(FloatCC::LessThan),
@@ -77,7 +77,7 @@ fn parse_float_cc(sym: Symbol) -> CompilationResult<cl_ir::condcodes::FloatCC> {
         other => Err(CompilationError::codegen(format!(
             "unknown float comparison condition: {other}"
         ))),
-    })
+    }
 }
 
 /// Translate a TrunkIR type to a Cranelift IR type.

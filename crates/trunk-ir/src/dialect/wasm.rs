@@ -75,8 +75,8 @@ mod wasm {
     }
 
     fn import_func(
-        module: Attr<Symbol>,
-        name: Attr<Symbol>,
+        module: Attr<String>,
+        name: Attr<String>,
         sym_name: Attr<Symbol>,
         r#type: Attr<Type>,
     ) {
@@ -90,14 +90,14 @@ mod wasm {
 
     fn data(offset: Attr<u32>, bytes: Attr<Bytes>, passive: Attr<bool>) {}
 
-    fn table(reftype: Attr<Symbol>, min: Attr<u32>, max: Option<Attr<u32>>) {}
+    fn table(reftype: Attr<String>, min: Attr<u32>, max: Option<Attr<u32>>) {}
 
     fn elem(table: Option<Attr<u32>>, offset: Option<Attr<u32>>) {
         #[region(funcs)]
         {}
     }
 
-    fn global(valtype: Attr<Symbol>, mutable: Attr<bool>, init: Attr<_>) {}
+    fn global(valtype: Attr<String>, mutable: Attr<bool>, init: Attr<_>) {}
 
     fn global_get(index: Attr<u32>) -> Value<_> {}
 
@@ -244,7 +244,7 @@ mod wasm {
     }
 
     // References
-    fn ref_null(heap_type: Attr<Symbol>, type_idx: Option<Attr<u32>>) -> Value<_> {}
+    fn ref_null(heap_type: Attr<String>, type_idx: Option<Attr<u32>>) -> Value<_> {}
 
     fn ref_func(func_name: Attr<Symbol>) -> Value<_> {}
 

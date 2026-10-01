@@ -270,7 +270,7 @@ mod tests {
 
         // wasm.table has required min and optional max
         let table_op = super::wasm::Table::operands()
-            .reftype(Symbol::new("funcref"))
+            .reftype("funcref")
             .min(10)
             .max(Some(100))
             .build(&mut ctx, loc);
@@ -290,7 +290,7 @@ mod tests {
         let loc = dummy_location();
 
         let table_op = super::wasm::Table::operands()
-            .reftype(Symbol::new("funcref"))
+            .reftype("funcref")
             .min(5)
             .max(None)
             .build(&mut ctx, loc);

@@ -549,7 +549,7 @@ fn emit_literal_check<'db>(
                 f64_ty,
             );
             let cmp_op = arith::Cmpf::operands(scrutinee, literal)
-                .predicate(Symbol::new("oeq"))
+                .predicate("oeq")
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, cmp_op.op_ref());
             Some(cmp_op.result(builder.ir))
@@ -608,7 +608,7 @@ fn emit_cmpi_eq(
     literal: ValueRef,
 ) -> ValueRef {
     let cmp_op = arith::Cmpi::operands(scrutinee, literal)
-        .predicate(Symbol::new("eq"))
+        .predicate("eq")
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, cmp_op.op_ref());
     cmp_op.result(builder.ir)

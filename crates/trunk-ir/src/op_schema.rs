@@ -849,7 +849,7 @@ mod tests {
         assert!(matches!(schema.results, ResultSchema::Fixed(["result"])));
         assert_eq!(schema.attributes.len(), 1);
         assert_eq!(schema.attributes[0].name, "predicate");
-        assert_eq!(schema.attributes[0].kind, AttributeKind::Symbol);
+        assert_eq!(schema.attributes[0].kind, AttributeKind::String);
         assert!(!schema.attributes[0].optional);
 
         let call = &func::CallIndirect::DEF.schema;
@@ -893,14 +893,14 @@ mod tests {
         let text = schema_errors(
             r#"core.module @m {
   func.func @f(%a: core.f64, %b: core.f64) {
-    %c = arith.cmpf %a, %b {predicate = "olt"} : core.i1
+    %c = arith.cmpf %a, %b {predicate = @olt} : core.i1
     %d = arith.cmpf %a : core.i1
     func.return
   }
 }"#,
         );
         assert!(
-            text.contains("arith.cmpf (op0): attribute `predicate` must be a Symbol attribute"),
+            text.contains("arith.cmpf (op0): attribute `predicate` must be a String attribute"),
             "{text}"
         );
         assert!(text.contains("expected 2 operand(s), found 1"), "{text}");

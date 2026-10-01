@@ -1083,7 +1083,7 @@ core.module @test {
             &mut ctx,
             r#"core.module @test {
   func.func @read(%a: core.i8, %b: core.i8, %p: core.i1) {
-    %lt = arith.cmpi %a, %b {predicate = @ult} : core.i1
+    %lt = arith.cmpi %a, %b {predicate = "ult"} : core.i1
     %q = arith.divui %a, %b : core.i8
     %r = arith.remsi %a, %b : core.i8
     %s = arith.shru %a, %b : core.i8
@@ -1110,14 +1110,14 @@ core.module @test {
             r#"
 core.module @test {
   func.func @compare(%a: core.i32, %b: core.i32, %c: core.i64, %d: core.i64) {
-    %0 = arith.cmpi %a, %b {predicate = @ult} : core.i1
-    %1 = arith.cmpi %a, %b {predicate = @ule} : core.i1
-    %2 = arith.cmpi %a, %b {predicate = @ugt} : core.i1
-    %3 = arith.cmpi %a, %b {predicate = @uge} : core.i1
-    %4 = arith.cmpi %c, %d {predicate = @ult} : core.i1
-    %5 = arith.cmpi %c, %d {predicate = @ule} : core.i1
-    %6 = arith.cmpi %c, %d {predicate = @ugt} : core.i1
-    %7 = arith.cmpi %c, %d {predicate = @uge} : core.i1
+    %0 = arith.cmpi %a, %b {predicate = "ult"} : core.i1
+    %1 = arith.cmpi %a, %b {predicate = "ule"} : core.i1
+    %2 = arith.cmpi %a, %b {predicate = "ugt"} : core.i1
+    %3 = arith.cmpi %a, %b {predicate = "uge"} : core.i1
+    %4 = arith.cmpi %c, %d {predicate = "ult"} : core.i1
+    %5 = arith.cmpi %c, %d {predicate = "ule"} : core.i1
+    %6 = arith.cmpi %c, %d {predicate = "ugt"} : core.i1
+    %7 = arith.cmpi %c, %d {predicate = "uge"} : core.i1
     func.return
   }
 }

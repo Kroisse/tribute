@@ -181,7 +181,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
                 .build(ctx, loc);
             ctx.push_op(current_block, null_val.op_ref());
             let is_null = clif::Icmp::operands(ptr, null_val.result(ctx))
-                .cond(Symbol::new("eq"))
+                .cond("eq")
                 .results(i8_ty)
                 .build(ctx, loc);
             ctx.push_op(current_block, is_null.op_ref());
@@ -262,7 +262,7 @@ fn lower_rc_in_block(ctx: &mut IrContext, region: RegionRef, block: BlockRef) {
                 .build(ctx, loc);
             ctx.push_op(current_block, null_val.op_ref());
             let is_null = clif::Icmp::operands(ptr, null_val.result(ctx))
-                .cond(Symbol::new("eq"))
+                .cond("eq")
                 .results(i8_ty)
                 .build(ctx, loc);
             ctx.push_op(current_block, is_null.op_ref());
@@ -361,7 +361,7 @@ fn gen_retain_rc_ops(
         .build(ctx, loc);
     ctx.push_op(block, one.op_ref());
     let _old_rc = clif::AtomicRmw::operands(rc_addr.result(ctx), one.result(ctx))
-        .op(Symbol::new("add"))
+        .op("add")
         .offset(0)
         .results(i32_ty)
         .build(ctx, loc);
@@ -399,7 +399,7 @@ fn gen_release_decrement(
         .build(ctx, loc);
     ctx.push_op(block, one.op_ref());
     let old_rc = clif::AtomicRmw::operands(rc_addr.result(ctx), one.result(ctx))
-        .op(Symbol::new("sub"))
+        .op("sub")
         .offset(0)
         .results(i32_ty)
         .build(ctx, loc);
@@ -407,7 +407,7 @@ fn gen_release_decrement(
 
     // is_last = (old_rc == 1) means refcount was 1 before decrement, now 0
     let is_last = clif::Icmp::operands(old_rc.result(ctx), one.result(ctx))
-        .cond(Symbol::new("eq"))
+        .cond("eq")
         .results(i8_ty)
         .build(ctx, loc);
     ctx.push_op(block, is_last.op_ref());

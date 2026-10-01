@@ -318,8 +318,8 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
         let type_index = next_type_index;
         next_type_index += 1;
         import_section.import(
-            &import_def.module.to_string(),
-            &import_def.name.to_string(),
+            &import_def.module,
+            &import_def.name,
             EntityType::Function(type_index),
         );
     }
@@ -1153,7 +1153,7 @@ mod tests {
         parse_test_module(
             ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @target} : wasm.funcref
   }
@@ -1172,7 +1172,7 @@ mod tests {
         parse_test_module(
             ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @target} : wasm.funcref
   }
@@ -1229,7 +1229,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 8, max = 8}
+  wasm.table {reftype = "funcref", min = 8, max = 8}
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @f7} : wasm.funcref
     wasm.ref_func {func_name = @f6} : wasm.funcref
@@ -1359,7 +1359,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @pair} : wasm.funcref
   }
@@ -1389,7 +1389,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (wasm.funcref, core.i32)>} {
     ^entry(%index: core.i32):
       %ignored = wasm.call_indirect %index {signature = wasm.func_sig<() -> wasm.anyref>} : wasm.anyref
@@ -1479,7 +1479,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32, %value: wasm.structref) -> core.i32 {
     %result = wasm.call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.i32>, table = 0, type_idx = 0} : core.i32
     wasm.return %result
@@ -1508,7 +1508,7 @@ mod tests {
 
     #[test]
     fn nil_value_producers_consume_their_stack_result_before_control_flow() {
-        for producer in ["wasm.nop", "wasm.ref_null {heap_type = @none}"] {
+        for producer in ["wasm.nop", "wasm.ref_null {heap_type = \"none\"}"] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
@@ -1559,7 +1559,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32) -> wasm.func_sig<() -> core.nil> {
     %result = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> wasm.funcref>} : wasm.funcref
     wasm.return %result
@@ -1584,7 +1584,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.func @caller(%table_index: core.i32) -> wasm.funcref {
     %ignored = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> wasm.anyref>, table = 0, type_idx = 0} : wasm.anyref
     %result = wasm.nop : wasm.funcref
@@ -1626,8 +1626,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
-  wasm.global {valtype = @i32, mutable = true, init = 0}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
+  wasm.global {valtype = "i32", mutable = true, init = 0}
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @add_two} : wasm.funcref
   }
@@ -1722,7 +1722,7 @@ mod tests {
         );
         invoke(
             r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @pair} : wasm.funcref
   }

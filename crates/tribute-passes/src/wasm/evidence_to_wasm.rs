@@ -385,7 +385,7 @@ fn add_tag_counter(ctx: &mut IrContext, module: Module, location: Location) -> u
         .filter(|&&op| wasm_dialect::Global::matches(ctx, op))
         .count() as u32;
     let global = wasm_dialect::Global::operands()
-        .valtype(Symbol::new("i32"))
+        .valtype("i32")
         .mutable(true)
         .init(Attribute::Int(0))
         .build(ctx, location);
@@ -1425,7 +1425,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.global {valtype = @i32, mutable = false, init = 7}
+  wasm.global {valtype = "i32", mutable = false, init = 7}
   func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
 }"#,
         );
@@ -1435,7 +1435,7 @@ mod tests {
         assert_eq!(
             print_module(&ctx, module.op()),
             r#"core.module @test {
-  wasm.global {init = 7, mutable = false, valtype = @i32}
+  wasm.global {init = 7, mutable = false, valtype = "i32"}
   wasm.func {sym_name = @__tribute_next_tag, type = wasm.func_sig<() -> core.i32>} {
       %0 = wasm.global_get {index = 1} : core.i32
       %1 = wasm.i32_const {value = 1} : core.i32
@@ -1443,7 +1443,7 @@ mod tests {
       wasm.global_set %2 {index = 1}
       wasm.return %0
   }
-  wasm.global {init = 0, mutable = true, valtype = @i32}
+  wasm.global {init = 0, mutable = true, valtype = "i32"}
 }
 "#
         );

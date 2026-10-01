@@ -230,7 +230,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 if !matches!(attr.ty, AttrType::String) {
                     continue;
                 }
-                let handle = format!("{}_ref", attr.name);
+                let handle = format!("{}_attr", attr.name);
                 if entity_names(&op).any(|name| name == handle) {
                     return Err(format!(
                         "string attribute `{}` reserves the name `{handle}` for its handle accessor",

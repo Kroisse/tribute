@@ -415,11 +415,11 @@ fn gen_map_attr_accessor(
     let rust_ty = attr_rust_type(crate_path, attr.ty);
 
     // A string attribute's text lives in the context's string pool, so the
-    // accessor borrows it from `ctx`, as MLIR's `getName()`. `<name>_ref`
+    // accessor borrows it from `ctx`, as MLIR's `getName()`. `<name>_attr`
     // returns the pooled handle, as MLIR's `getNameAttr()`, for copying the
     // value to another operation without borrowing the context.
     if matches!(attr.ty, AttrType::String) {
-        let handle = format_ident!("{}_ref", attr.name);
+        let handle = format_ident!("{}_attr", attr.name);
         return if attr.optional {
             quote! {
                 pub fn #name<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<&'ctx str> {
@@ -574,7 +574,7 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             let attrs = op.attrs.iter().map(|attr| {
                 let name = &attr.name;
                 let field = format_ident!("attr_{}", attr.name);
-                quote!((#name, self.#field.as_ref()))
+                quote!((#name, #field.as_ref()))
             });
             pre_stmts.push(quote! {
                 let __results = <#sname as #crate_path::ops::DialectOp>::DEF
@@ -610,15 +610,51 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         });
     }
 
-    // Attributes, one setter each.
+    // Attributes, one setter each. `build` first turns every set attribute
+    // into an `Attribute` local; a string attribute is interned there.
+    let mut attr_locals = Vec::new();
     for attr in &op.attrs {
         let name = &attr.raw_ident;
         let name_str = &attr.name;
         let field = format_ident!("attr_{}", attr.name);
         let rust_ty = attr_rust_type(crate_path, attr.ty);
         let conv = attr_to_attr(crate_path, attr.ty, quote!(value));
-        fields.push(quote!(#field: Option<#crate_path::Attribute>));
         field_inits.push(quote!(#field: None,));
+        if matches!(attr.ty, AttrType::String) {
+            fields.push(quote!(#field: Option<#crate_path::StringArg>));
+            attr_locals.push(quote! {
+                let #field = self.#field.map(|value| {
+                    #crate_path::Attribute::String(ctx.intern_string_arg(value))
+                });
+            });
+            methods.push(quote! {
+                pub fn #name(mut self, value: impl Into<#crate_path::StringArg>) -> Self {
+                    self.#field = Some(value.into());
+                    self
+                }
+            });
+        } else {
+            fields.push(quote!(#field: Option<#crate_path::Attribute>));
+            attr_locals.push(quote!(let #field = self.#field;));
+        }
+        if matches!(attr.ty, AttrType::String) {
+            if attr.optional {
+                build_stmts.push(quote! {
+                    if let Some(value) = #field {
+                        __builder = __builder.attr(#crate_path::Symbol::new(#name_str), value);
+                    }
+                });
+            } else {
+                let missing = format!("{full_name}: missing attribute `{name_str}`");
+                build_stmts.push(quote! {
+                    __builder = __builder.attr(
+                        #crate_path::Symbol::new(#name_str),
+                        #field.expect(#missing),
+                    );
+                });
+            }
+            continue;
+        }
         if attr.optional {
             methods.push(quote! {
                 pub fn #name(mut self, value: impl Into<Option<#rust_ty>>) -> Self {
@@ -627,7 +663,7 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
                 }
             });
             build_stmts.push(quote! {
-                if let Some(value) = self.#field {
+                if let Some(value) = #field {
                     __builder = __builder.attr(#crate_path::Symbol::new(#name_str), value);
                 }
             });
@@ -642,7 +678,7 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             build_stmts.push(quote! {
                 __builder = __builder.attr(
                     #crate_path::Symbol::new(#name_str),
-                    self.#field.expect(#missing),
+                    #field.expect(#missing),
                 );
             });
         }
@@ -761,6 +797,7 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
                 ctx: &mut #crate_path::IrContext,
                 location: #crate_path::Location,
             ) -> #sname {
+                #(#attr_locals)*
                 #(#pre_stmts)*
                 let mut __builder = #crate_path::OperationDataBuilder::new(
                     location,

@@ -19,7 +19,7 @@ mod test_typed {
         fn add<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 
         fn cmp<T: IntegerLike>(
-            predicate: Attr<Symbol>,
+            predicate: Attr<String>,
             lhs: Value<T>,
             rhs: Value<T>,
         ) -> Value<impl BoolLike> {
@@ -44,7 +44,7 @@ mod test_typed {
 
         fn pack<T>(elements: Values<(T, T, impl IntegerLike)>) -> Value<_> {}
 
-        fn select(cond: Value<impl BoolLike>, label: Option<Attr<Symbol>>) -> Option<Value<_>> {
+        fn select(cond: Value<impl BoolLike>, label: Option<Attr<String>>) -> Option<Value<_>> {
             #[region(then_region)]
             {}
             #[region(else_region?)]
@@ -129,7 +129,7 @@ fn typed_schema_records_variables_and_constraints() {
         panic!("expected an anonymous result bound");
     };
     assert_eq!(bounds[0].name, "BoolLike");
-    assert_eq!(cmp.attributes[0].kind, AttributeKind::Symbol);
+    assert_eq!(cmp.attributes[0].kind, AttributeKind::String);
 
     let first = &test_typed::First::DEF.schema;
     assert_eq!(first.type_vars[0].bounds[0].name, "test_typed.pair");
@@ -275,11 +275,11 @@ fn fluent_builders_group_inputs_by_kind() {
     assert_eq!(add.result_ty(&ctx), i32_ty);
 
     let cmp = test_typed::Cmp::operands(a, b)
-        .predicate(Symbol::new("slt"))
+        .predicate("slt")
         .results(i1_ty)
         .build(&mut ctx, loc);
     assert_eq!(cmp.predicate(&ctx), Symbol::new("slt"));
-    assert!(print_op(&ctx, cmp.op_ref()).contains("predicate = @slt"));
+    assert!(print_op(&ctx, cmp.op_ref()).contains("predicate = \"slt\""));
 
     let call = test_typed::Call::operands(callee, [a])
         .sig(sig)
@@ -303,11 +303,11 @@ fn fluent_builders_group_inputs_by_kind() {
     let then_region = empty_region(&mut ctx, loc);
     let else_region = empty_region(&mut ctx, loc);
     let labeled = test_typed::Select::operands(cond)
-        .label(Symbol::new("l"))
+        .label("l")
         .results(i32_ty)
         .regions(then_region, else_region)
         .build(&mut ctx, loc);
-    assert_eq!(labeled.label(&ctx), Some(Symbol::new("l")));
+    assert_eq!(labeled.label(&ctx), Some("l"));
     assert_eq!(labeled.result_ty(&ctx), i32_ty);
 
     let marker = test_typed::Marker::operands()
@@ -360,7 +360,7 @@ fn fluent_builder_rejects_missing_results() {
     let i32_ty = scalar(&mut ctx, "i32");
     let args = block_args(&mut ctx, loc, &[i32_ty, i32_ty]);
     test_typed::Cmp::operands(args[0], args[1])
-        .predicate(Symbol::new("slt"))
+        .predicate("slt")
         .build(&mut ctx, loc);
 }
 

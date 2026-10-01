@@ -454,12 +454,12 @@ mod tests {
         let op = module.ops(&ctx)[0];
         let string_const = StringConst::from_op(&ctx, op).unwrap();
         assert_eq!(string_const.value(&ctx), "hi");
-        assert_eq!(string_const.value_ref(&ctx), ctx.lookup_str("hi").unwrap());
+        assert_eq!(string_const.value_attr(&ctx), ctx.lookup_str("hi").unwrap());
 
         let loc = ctx.op(op).location;
         let ptr = ctx.op_result_types(op)[0];
         let copy = StringConst::operands()
-            .value(string_const.value_ref(&ctx))
+            .value(string_const.value_attr(&ctx))
             .results(ptr)
             .build(&mut ctx, loc);
         assert_eq!(copy.value(&ctx), "hi");

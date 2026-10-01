@@ -11,7 +11,6 @@
 //! - `arith.{sitofp,uitofp,fptosi,fptoui}` -> `clif.fcvt_{from,to}_{sint,uint}`
 //! - `arith.{extf,truncf}` -> `clif.{fpromote,fdemote}`
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::clif;
@@ -23,6 +22,7 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::{StringArg, Symbol};
 
 /// Lower arith dialect to clif dialect.
 pub fn lower(
@@ -304,7 +304,7 @@ impl RewritePattern for ArithCmpPattern {
         if let Ok(cmpi) = arith::Cmpi::from_op(ctx, op) {
             let lhs = cmpi.lhs(ctx);
             let rhs = cmpi.rhs(ctx);
-            let cond = cmpi.predicate(ctx);
+            let cond = cmpi.predicate_attr(ctx);
             let cmp_op = clif::Icmp::operands(lhs, rhs)
                 .cond(cond)
                 .results(i8_ty)
@@ -322,17 +322,15 @@ impl RewritePattern for ArithCmpPattern {
         } else if let Ok(cmpf) = arith::Cmpf::from_op(ctx, op) {
             let lhs = cmpf.lhs(ctx);
             let rhs = cmpf.rhs(ctx);
-            let predicate = cmpf.predicate(ctx);
             // Map arith float predicates to clif conditions
-            let cond_str = predicate.to_string();
-            let cond = match cond_str.as_str() {
-                "oeq" => Symbol::new("eq"),
-                "une" => Symbol::new("ne"),
-                "olt" => Symbol::new("lt"),
-                "ole" => Symbol::new("le"),
-                "ogt" => Symbol::new("gt"),
-                "oge" => Symbol::new("ge"),
-                _ => predicate,
+            let cond: StringArg = match cmpf.predicate(ctx) {
+                "oeq" => "eq".into(),
+                "une" => "ne".into(),
+                "olt" => "lt".into(),
+                "ole" => "le".into(),
+                "ogt" => "gt".into(),
+                "oge" => "ge".into(),
+                _ => cmpf.predicate_attr(ctx).into(),
             };
             let cmp_op = clif::Fcmp::operands(lhs, rhs)
                 .cond(cond)

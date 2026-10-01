@@ -131,8 +131,8 @@ fn declare_host_resources(
     let mut preamble = Vec::new();
     if import.is_none() {
         let import = wasm_dialect::ImportFunc::operands()
-            .module(Symbol::new(WASI_MODULE))
-            .name(Symbol::new(FD_WRITE))
+            .module(WASI_MODULE)
+            .name(FD_WRITE)
             .sym_name(Symbol::new(FD_WRITE))
             .r#type(import_ty)
             .build(ctx, loc);
@@ -710,7 +710,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.import_func {module = @wasi_snapshot_preview1, name = @fd_write, sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}
+  wasm.import_func {module = "wasi_snapshot_preview1", name = "fd_write", sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}
   wasm.memory {min = 0, max = 0, shared = false, memory64 = false}
   func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {
     %write = tribute_io.write %bytes, %newline : core.nil
@@ -732,9 +732,9 @@ mod tests {
     #[test]
     fn lowering_rejects_a_conflicting_fd_write_import() {
         for import in [
-            "wasm.import_func {module = @env, name = @fd_write, sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
-            "wasm.import_func {module = @wasi_snapshot_preview1, name = @fd_read, sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
-            "wasm.import_func {module = @wasi_snapshot_preview1, name = @fd_write, sym_name = @fd_write, type = wasm.func_sig<(core.i32) -> core.i32>}",
+            "wasm.import_func {module = \"env\", name = \"fd_write\", sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
+            "wasm.import_func {module = \"wasi_snapshot_preview1\", name = \"fd_read\", sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
+            "wasm.import_func {module = \"wasi_snapshot_preview1\", name = \"fd_write\", sym_name = @fd_write, type = wasm.func_sig<(core.i32) -> core.i32>}",
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
