@@ -15,7 +15,13 @@ use smallvec::SmallVec;
 // ============================================================================
 
 /// Global string interner for symbols.
-static INTERNER: LazyLock<RwLock<Rodeo>> = LazyLock::new(|| RwLock::new(Rodeo::default()));
+static INTERNER: LazyLock<RwLock<Interner>> =
+    LazyLock::new(|| RwLock::new(Interner::with_hasher(Default::default())));
+
+/// Interned names are compiler-generated or come from the program being
+/// compiled, so the lookup hash needs no HashDoS resistance. `Symbol::new`
+/// runs on every typed operation match, which makes the hasher a hot path.
+type Interner = Rodeo<Spur, rustc_hash::FxBuildHasher>;
 
 /// Interned symbol for efficient comparison of names (functions, variables, fields, etc.)
 ///
@@ -75,7 +81,7 @@ impl Symbol {
         INTERNER.read_recursive().get(text).map(Self)
     }
 
-    fn get_or_else(text: &str, f: impl for<'r> FnOnce(&'r mut Rodeo) -> Spur) -> Self {
+    fn get_or_else(text: &str, f: impl for<'r> FnOnce(&'r mut Interner) -> Spur) -> Self {
         let mut lock = INTERNER.upgradable_read();
         Symbol(if let Some(spur) = lock.get(text) {
             spur
