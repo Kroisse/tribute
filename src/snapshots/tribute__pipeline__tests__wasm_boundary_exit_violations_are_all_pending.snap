@@ -4,6 +4,4 @@ expression: observed
 ---
 [
     "forbidden attribute tribute.calling_convention",
-    "unsatisfiable runtime binding __tribute_bytes_slice_or_panic",
-    "unsatisfiable runtime binding __tribute_next_tag",
 ]

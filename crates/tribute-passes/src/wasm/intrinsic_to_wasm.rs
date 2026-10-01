@@ -1,9 +1,9 @@
 //! Bind the `extern "C"` bytes helpers to WasmGC operations past the
 //! representation/ABI boundary.
 //!
-//! `__tribute_bytes_len`, `__tribute_bytes_range_equal`, and
-//! `__tribute_bytes_concat` become struct/array operations on the bytes
-//! layout. The bytes element read intrinsic is lowered inside the boundary by
+//! `__tribute_bytes_len`, `__tribute_bytes_range_equal`,
+//! `__tribute_bytes_concat`, and `__tribute_bytes_slice_or_panic` become
+//! struct/array operations on the bytes layout. The bytes element read intrinsic is lowered inside the boundary by
 //! `wasm/bytes.rs`.
 
 use std::rc::Rc;
@@ -81,6 +81,8 @@ pub const BYTES_LEN: &str = "__tribute_bytes_len";
 pub const BYTES_CONCAT: &str = "__tribute_bytes_concat";
 /// C link name of the bytes range comparison helper.
 pub const BYTES_RANGE_EQUAL: &str = "__tribute_bytes_range_equal";
+/// C link name of the bounds-checked bytes slicing helper.
+pub const BYTES_SLICE_OR_PANIC: &str = "__tribute_bytes_slice_or_panic";
 
 /// Bind calls to the `extern "C"` bytes helpers to WasmGC operations.
 pub fn lower(ctx: &mut IrContext, module: Module) {
@@ -88,7 +90,8 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
     let applicator = PatternApplicator::new(TypeConverter::new())
         .add_pattern(BytesLenPattern(Rc::clone(&symbols)))
         .add_pattern(BytesRangeEqualPattern(Rc::clone(&symbols)))
-        .add_pattern(BytesConcatPattern(symbols));
+        .add_pattern(BytesConcatPattern(Rc::clone(&symbols)))
+        .add_pattern(BytesSliceOrPanicPattern(symbols));
 
     applicator.apply_partial(ctx, module);
 }
@@ -430,4 +433,85 @@ impl RewritePattern for BytesConcatPattern {
     fn name(&self) -> &'static str {
         "BytesConcatPattern"
     }
+}
+
+/// Pattern for `__tribute_bytes_slice_or_panic(bytes, start, end)`: trap
+/// unless `start <= end <= bytes.len`, then share the backing array in a new
+/// Bytes struct.
+struct BytesSliceOrPanicPattern(Rc<SymbolTable>);
+
+impl RewritePattern for BytesSliceOrPanicPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        if !calls_c_helper(ctx, &self.0, op, BYTES_SLICE_OR_PANIC) {
+            return false;
+        }
+
+        let operands = ctx.op_operands(op).to_vec();
+        let [bytes, start, end] = operands[..] else {
+            return false;
+        };
+        let location = ctx.op(op).location;
+        let bytes_ty = core::bytes(ctx).as_type_ref();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let nil_ty = core::nil(ctx).as_type_ref();
+
+        let (fields, field_ops) = extract_bytes_fields(ctx, location, bytes);
+        let reversed = wasm_dialect::I32GtU::operands(start, end)
+            .results(i32_ty)
+            .build(ctx, location);
+        let past_len = wasm_dialect::I32GtU::operands(end, fields.len)
+            .results(i32_ty)
+            .build(ctx, location);
+        let out_of_range =
+            wasm_dialect::I32Or::operands(reversed.result(ctx), past_len.result(ctx))
+                .results(i32_ty)
+                .build(ctx, location);
+        let trap = trap_region(ctx, location);
+        let ok = empty_region(ctx, location);
+        let check = wasm_dialect::If::operands(out_of_range.result(ctx))
+            .results([nil_ty])
+            .regions(trap, ok)
+            .build(ctx, location);
+        let offset = wasm_dialect::I32Add::operands(fields.offset, start).build(ctx, location);
+        let len = wasm_dialect::I32Sub::operands(end, start)
+            .results(i32_ty)
+            .build(ctx, location);
+        let slice = wasm_dialect::StructNew::operands(vec![
+            fields.data,
+            offset.result(ctx),
+            len.result(ctx),
+        ])
+        .type_idx(BYTES_STRUCT_IDX)
+        .results(bytes_ty)
+        .build(ctx, location);
+
+        for field_op in field_ops {
+            rewriter.insert_op(field_op);
+        }
+        for checked in [reversed.op_ref(), past_len.op_ref(), out_of_range.op_ref()] {
+            rewriter.insert_op(checked);
+        }
+        rewriter.insert_op(check.op_ref());
+        rewriter.insert_op(offset.op_ref());
+        rewriter.insert_op(len.op_ref());
+        rewriter.replace_op(slice.op_ref());
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "BytesSliceOrPanicPattern"
+    }
+}
+
+fn trap_region(ctx: &mut IrContext, location: trunk_ir::types::Location) -> trunk_ir::RegionRef {
+    let region = empty_region(ctx, location);
+    let block = ctx.region(region).blocks[0];
+    let unreachable = wasm_dialect::Unreachable::operands().build(ctx, location);
+    ctx.push_op(block, unreachable.op_ref());
+    region
 }

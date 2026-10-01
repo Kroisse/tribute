@@ -93,7 +93,7 @@ fn test_salsa_database_examples(db: &salsa::DatabaseImpl) {
     let examples = vec![
         (
             "hello.trb",
-            r#"fn main() -> Nil { print_line("Hello, World!") }"#,
+            r#"fn main() ->{std::io::Io} Nil { std::io::print_line("Hello, World!") }"#,
             vec!["main"],
         ),
         (
@@ -337,7 +337,7 @@ fn test_salsa_multiple_functions(db: &salsa::DatabaseImpl) {
     let text = r#"
 fn add(a: Nat, b: Nat) -> Nat { a + b }
 fn multiply(a: Nat, b: Nat) -> Nat { a * b }
-fn main() -> Nil { print_line("test") }
+fn main() ->{std::io::Io} Nil { std::io::print_line("test") }
 "#;
     let tree = parser.parse(text, None).expect("tree");
     let source = SourceCst::from_path(db, "multi.trb", text.into(), Some(tree));

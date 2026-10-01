@@ -151,9 +151,6 @@ pub enum PendingViolation {
     /// An attribute that has not been classified yet.
     #[display("unclassified attribute {_0}")]
     Unclassified(&'static str),
-    /// A C helper the target does not bind yet.
-    #[display("unsatisfiable runtime binding {_0}")]
-    UnboundHelper(&'static str),
 }
 
 impl PendingViolation {
@@ -170,9 +167,6 @@ impl PendingViolation {
             (Self::Unclassified(expected), ViolationKind::UnclassifiedAttribute(name)) => {
                 name == expected
             }
-            (Self::UnboundHelper(expected), ViolationKind::UnsatisfiableRuntimeBinding(name)) => {
-                name == expected
-            }
             _ => false,
         }
     }
@@ -180,20 +174,12 @@ impl PendingViolation {
 
 /// Violations still present at the exit of `target`'s boundary.
 pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViolation] {
-    const NATIVE: &[PendingViolation] = &[
+    const PENDING: &[PendingViolation] = &[
         // Read past the exit by native ownership planning.
         PendingViolation::Attribute("tribute.calling_convention"),
     ];
-    const WASM: &[PendingViolation] = &[
-        NATIVE[0],
-        // C helpers the Wasm target has no implementation of yet; emission
-        // rejects programs that reach them.
-        PendingViolation::UnboundHelper("__tribute_next_tag"),
-        PendingViolation::UnboundHelper("__tribute_bytes_slice_or_panic"),
-    ];
     match target {
-        TargetKind::Native => NATIVE,
-        TargetKind::Wasm => WASM,
+        TargetKind::Native | TargetKind::Wasm => PENDING,
     }
 }
 
@@ -483,15 +469,15 @@ mod tests {
     const RUNTIME_BINDINGS: &str = r#"core.module @test {
   func.func @__tribute_evidence_lookup(%ev: core.ptr, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @__tribute_bytes_len(%bytes: core.bytes) -> core.i32 attributes {abi = "C"}
-  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
+  func.func @__tribute_unbound_helper(%bytes: core.bytes) -> core.nil attributes {abi = "C"}
   func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @unused_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @main(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
-    %tag = func.call {callee = @__tribute_next_tag} : core.i32
-    %id = func.call %tag {callee = @user_bridge} : core.i32
-    %marker = func.call %ev, %id {callee = @__tribute_evidence_lookup} : core.i32
+    %printed = func.call %bytes {callee = @__tribute_unbound_helper} : core.nil
     %len = func.call %bytes {callee = @__tribute_bytes_len} : core.i32
-    func.return %len
+    %id = func.call %len {callee = @user_bridge} : core.i32
+    %marker = func.call %ev, %id {callee = @__tribute_evidence_lookup} : core.i32
+    func.return %marker
   }
 }"#;
 
@@ -509,7 +495,7 @@ mod tests {
         assert_eq!(
             runtime_binding_violations(TargetKind::Wasm),
             [
-                ViolationKind::UnsatisfiableRuntimeBinding("__tribute_next_tag".to_owned()),
+                ViolationKind::UnsatisfiableRuntimeBinding("__tribute_unbound_helper".to_owned()),
                 ViolationKind::UnsatisfiableRuntimeBinding("user_bridge".to_owned()),
             ]
         );

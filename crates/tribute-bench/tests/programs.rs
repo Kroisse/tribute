@@ -43,11 +43,12 @@ fn wasm_support_matches_each_program() {
     let failures: Vec<String> = PROGRAMS
         .iter()
         .filter_map(|program| {
-            let result = match (program.wasm, stages::emitted(program, TargetKind::Wasm)) {
-                (WasmSupport::Supported, Ok(bytes)) => run_wasm(&bytes, &dir, program.name),
-                (WasmSupport::Supported, Err(error)) => Err(error),
-                (WasmSupport::Unsupported(reason), Ok(_)) => Err(format!(
-                    "now compiles to Wasm; mark it supported (expected failure: {reason})"
+            let outcome = stages::emitted(program, TargetKind::Wasm)
+                .and_then(|bytes| run_wasm(&bytes, &dir, program.name));
+            let result = match (program.wasm, outcome) {
+                (WasmSupport::Supported, outcome) => outcome,
+                (WasmSupport::Unsupported(reason), Ok(())) => Err(format!(
+                    "now runs on Wasm; mark it supported (expected failure: {reason})"
                 )),
                 (WasmSupport::Unsupported(_), Err(_)) => Ok(()),
             };

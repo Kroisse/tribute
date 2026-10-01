@@ -12,18 +12,22 @@ use trunk_ir::context::IrContext;
 use trunk_ir::refs::OpRef;
 use trunk_ir::symbol_table::SymbolTable;
 
-use super::intrinsic_to_wasm::{BYTES_CONCAT, BYTES_LEN, BYTES_RANGE_EQUAL};
+use super::evidence_to_wasm::NEXT_TAG;
+use super::intrinsic_to_wasm::{BYTES_CONCAT, BYTES_LEN, BYTES_RANGE_EQUAL, BYTES_SLICE_OR_PANIC};
 
-/// Every C helper with a Wasm implementation: the evidence helpers
-/// `evidence_to_wasm` binds and the bytes helpers `intrinsic_to_wasm` binds.
+/// Every C helper with a Wasm implementation: the evidence and prompt tag
+/// helpers `evidence_to_wasm` binds and the bytes helpers `intrinsic_to_wasm`
+/// binds.
 pub const PROVIDED: &[&str] = &[
     evidence_abi::LOOKUP,
     evidence_abi::LOOKUP_TR,
     evidence_abi::LOOKUP_HANDLER,
     evidence_abi::EXTEND,
+    NEXT_TAG,
     BYTES_LEN,
     BYTES_CONCAT,
     BYTES_RANGE_EQUAL,
+    BYTES_SLICE_OR_PANIC,
 ];
 
 /// Whether the Wasm target binds the C helper named `name`.

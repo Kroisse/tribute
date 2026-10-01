@@ -1359,7 +1359,9 @@ fn test_native_print_line() {
     let output = compile_and_run_native(
         "print_line.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line("Hello, World!")
 }
 "#,
@@ -1381,7 +1383,9 @@ fn test_native_string_escape_sequences() {
     let output = compile_and_run_native(
         "string_escape.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line("a\tb\nc")
 }
 "#,
@@ -1402,7 +1406,9 @@ fn test_native_string_escape_hex() {
     let output = compile_and_run_native(
         "string_escape_hex.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line("\x41\x42\x43")
 }
 "#,
@@ -1422,7 +1428,9 @@ fn test_native_block_string_literal_strips_indentation() {
     let output = compile_and_run_native(
         "block_string_literal.trb",
         r##"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line(s#"
         SELECT *
           FROM t\tx
@@ -1446,7 +1454,9 @@ fn test_native_string_escape_unicode() {
     let output = compile_and_run_native(
         "string_escape_unicode.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line("\u{41}\u{E9}\u{1F600}")
 }
 "#,
@@ -1466,7 +1476,9 @@ fn test_native_numeric_literal_separators_exponents_and_suffixes() {
     let output = compile_and_run_native(
         "numeric_literal_forms.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line(Int::to_string(1_000i + 2e3i + +0xFF))
     print_line(Int::to_string(-1e3 + +0b1010_1010))
 }
@@ -1487,7 +1499,9 @@ fn test_native_print_line_empty() {
     let output = compile_and_run_native(
         "print_line_empty.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line("")
 }
 "#,
@@ -1510,7 +1524,9 @@ fn test_native_print_line_multiple() {
     let output = compile_and_run_native(
         "print_line_multi.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line("Hello")
     print_line("World")
 }
@@ -1830,11 +1846,13 @@ fn test_native_string_as_function_arg() {
     let output = compile_and_run_native(
         "string_arg.trb",
         r#"
-fn greet(name: String) -> Nil {
+use std::io::{Io, print_line}
+
+fn greet(name: String) ->{Io} Nil {
     print_line(name)
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     greet("Tribute")
 }
 "#,
@@ -1857,7 +1875,9 @@ fn test_native_string_dedup_rodata() {
     let output = compile_and_run_native(
         "string_dedup.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     print_line("echo")
     print_line("echo")
 }
@@ -2059,7 +2079,9 @@ fn test_native_bytes_literal_basic() {
     let output = compile_and_run_native(
         "bytes_lit_basic.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let bs = b"hello"
     print_line(String::from_bytes(bs))
 }
@@ -2080,7 +2102,9 @@ fn test_native_bytes_literal_empty() {
     let output = compile_and_run_native(
         "bytes_lit_empty.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let bs = b""
     print_line(String::from_bytes(bs))
 }
@@ -2101,7 +2125,9 @@ fn test_native_bytes_literal_escape_sequences() {
     let output = compile_and_run_native(
         "bytes_lit_escape.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let bs = b"a\tb\nc"
     print_line(String::from_bytes(bs))
 }
@@ -2123,7 +2149,9 @@ fn test_native_bytes_literal_raw() {
     let output = compile_and_run_native(
         "bytes_lit_raw.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let bs = rb"\n\t"
     print_line(String::from_bytes(bs))
 }
@@ -2158,7 +2186,9 @@ fn test_native_bytes_literal_concat() {
     let output = compile_and_run_native(
         "bytes_lit_concat.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     let a = b"Hello, "
     let b = b"World!"
     print_line(String::from_bytes(a <> b))
@@ -2239,7 +2269,9 @@ fn test_native_bytes_slice_or_panic() {
     assert_native_output(
         "bytes_slice_or_panic.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print, print_line}
+
+fn main() ->{Io} Nil {
     let bs = b"hello world"
     let sl = bs.slice_or_panic(0, 5)
     print(String::from_bytes(sl))
@@ -2254,7 +2286,9 @@ fn test_native_bytes_slice_safe() {
     assert_native_output(
         "bytes_slice_safe.trb",
         r#"
-fn main() -> Nil {
+use std::io::{Io, print, print_line}
+
+fn main() ->{Io} Nil {
     let bs = b"hello world"
     let sl = bs.slice(6, 11)
     print(String::from_bytes(sl))

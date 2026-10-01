@@ -37,7 +37,8 @@ tribute-passes/           # tribute-ir 의존
 ├── wasm/lower.rs         # Wasm lowering pipeline orchestration
 ├── wasm/evidence_to_wasm.rs
 │                         # 경계 안: effect.* → helper 호출 + call/tail_call
-│                         # 출구 뒤: helper 선언을 GC 배열 구현으로 바인딩
+│                         # 출구 뒤: helper 선언을 GC 배열 구현과
+│                         #          prompt tag 카운터로 바인딩
 ├── wasm/tribute_rt_to_wasm.rs
 ├── wasm/const_to_wasm.rs
 ├── wasm/bytes.rs         # bytes layout 타입과 경계 안 bytes 읽기 intrinsic lowering
@@ -196,14 +197,16 @@ carrier가 아니다.
 ### Fresh prompt 바인딩
 
 새 handler delimiter의 prompt 생성은 `__tribute_next_tag` 호출을 요구한다.
-Wasm backend는 이 allocator의 import나 구현을 합성하지 않는다. Fresh prompt를
-요구하는 module에는 정확한 target signature의 명시적 import 또는 함수 본문이
-필요하다. 바인딩이 없으면
+Wasm target은 경계 출구 뒤에 이 C helper 선언을 함수 본문으로 바인딩한다. 본문은
+module-level mutable `i32` global 하나를 카운터로 쓰며, 현재 값을 반환하고 1을
+더해 저장한다. 따라서 tag는 native runtime과 같이 0부터 호출 순서대로 발급된다.
+카운터 global은 기존 global 뒤에 추가하므로 기존 global index를 바꾸지 않는다.
+Wasm target이 구현을 제공하지 않는 C helper를 참조하면
 [representation/ABI 경계](ir.md#representationabi-경계)의 출구 검증이 모듈을
 거부한다. 아래의 bodyless 선언 규칙은 경계를 우회한 입력에 대한 emission의 마지막
 방어선이다.
-따라서 shared/native handler 실행 지원만으로 Wasm source handler 지원을 판정하지
-않는다.
+Wasm source handler 지원은 shared/native handler 실행 지원이 아니라 Wasm 실행
+증거로 판정한다.
 
 ### Tail-resumptive dispatch의 함수 시그니처
 

@@ -40,7 +40,7 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::smallvec::smallvec;
-use trunk_ir::types::{Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
 use crate::effect_dispatch;
@@ -49,6 +49,8 @@ use crate::effect_dispatch;
 const FIND_MARKER: &str = "__tribute_evidence_find_marker";
 /// Internal Wasm runtime helper: sorted marker insertion.
 const INSERT_MARKER: &str = "__tribute_evidence_insert_marker";
+/// C link name of the helper that allocates a fresh prompt tag.
+pub const NEXT_TAG: &str = "__tribute_next_tag";
 
 // =============================================================================
 // Boundary: effect lowering
@@ -343,6 +345,8 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         } else if name == Symbol::new(evidence_abi::EXTEND) {
             needs_insert = true;
             Helper::Extend
+        } else if name == Symbol::new(NEXT_TAG) {
+            Helper::NextTag(add_tag_counter(ctx, module, location))
         } else {
             continue;
         };
@@ -369,6 +373,27 @@ enum Helper {
     MarkerField(MarkerField),
     /// Build a marker from its fields and insert it.
     Extend,
+    /// Return the tag counter global at this index and increment it.
+    NextTag(u32),
+}
+
+/// Append a mutable `i32` tag counter global, returning its index.
+fn add_tag_counter(ctx: &mut IrContext, module: Module, location: Location) -> u32 {
+    let index = module
+        .ops(ctx)
+        .iter()
+        .filter(|&&op| wasm_dialect::Global::matches(ctx, op))
+        .count() as u32;
+    let global = wasm_dialect::Global::operands()
+        .valtype(Symbol::new("i32"))
+        .mutable(true)
+        .init(Attribute::Int(0))
+        .build(ctx, location);
+    let block = module
+        .first_block(ctx)
+        .expect("a module with declarations has a body block");
+    ctx.push_op(block, global.op_ref());
+    index
 }
 
 /// Build a helper implementation with the declaration's (converted)
@@ -385,12 +410,12 @@ fn build_helper(
         (sig.inputs(ctx).to_vec(), sig.results(ctx).to_vec())
     } else {
         let sig = func::FuncSig::from_type_ref(ctx, signature)
-            .expect("evidence helper declaration must have a function signature");
+            .expect("runtime helper declaration must have a function signature");
         (sig.inputs(ctx).to_vec(), sig.results(ctx).to_vec())
     };
     let result_ty = *results
         .first()
-        .expect("evidence helper declaration must have one result");
+        .expect("runtime helper declaration must have one result");
     let block = ctx.create_block(BlockData {
         location,
         args: inputs
@@ -432,6 +457,26 @@ fn build_helper(
                 .build(ctx, location);
             ctx.push_op(block, call.op_ref());
             call.results(ctx)[0]
+        }
+        Helper::NextTag(global) => {
+            let current = wasm_dialect::GlobalGet::operands()
+                .index(global)
+                .results(result_ty)
+                .build(ctx, location);
+            ctx.push_op(block, current.op_ref());
+            let one = wasm_dialect::I32Const::operands()
+                .value(1)
+                .results(result_ty)
+                .build(ctx, location);
+            ctx.push_op(block, one.op_ref());
+            let next = wasm_dialect::I32Add::operands(current.result(ctx), one.result(ctx))
+                .build(ctx, location);
+            ctx.push_op(block, next.op_ref());
+            let set = wasm_dialect::GlobalSet::operands(next.result(ctx))
+                .index(global)
+                .build(ctx, location);
+            ctx.push_op(block, set.op_ref());
+            current.result(ctx)
         }
     };
     let ret = wasm_dialect::Return::operands(vec![returned]).build(ctx, location);
@@ -1371,6 +1416,36 @@ mod tests {
                 "__tribute_evidence_lookup",
                 "__tribute_evidence_lookup_tr",
             ]
+        );
+    }
+
+    #[test]
+    fn next_tag_counts_in_a_global_appended_after_existing_ones() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  wasm.global {valtype = @i32, mutable = false, init = 7}
+  func.func @__tribute_next_tag() -> core.i32 attributes {abi = "C"}
+}"#,
+        );
+
+        bind_wasm_evidence_runtime(&mut ctx, module);
+
+        assert_eq!(
+            print_module(&ctx, module.op()),
+            r#"core.module @test {
+  wasm.global {init = 7, mutable = false, valtype = @i32}
+  wasm.func {sym_name = @__tribute_next_tag, type = wasm.func_sig<() -> core.i32>} {
+      %0 = wasm.global_get {index = 1} : core.i32
+      %1 = wasm.i32_const {value = 1} : core.i32
+      %2 = wasm.i32_add %0, %1 : core.i32
+      wasm.global_set %2 {index = 1}
+      wasm.return %0
+  }
+  wasm.global {init = 0, mutable = true, valtype = @i32}
+}
+"#
         );
     }
 
