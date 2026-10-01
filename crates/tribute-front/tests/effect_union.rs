@@ -142,27 +142,37 @@ fn main() ->{} Nil {
     assert!(errors.is_empty(), "{errors:?}");
 }
 
+/// A handler removes only what the signature names in the handled row, so
+/// the declared scheme needs no retained removal and every call checks
+/// against it alone.
 #[salsa_test]
-fn handler_removal_survives_a_scheme_and_independent_calls(db: &salsa::DatabaseImpl) {
-    for (callback, valid) in [("ping", true), ("pure", true), ("other", false)] {
+fn handler_removal_is_declared_by_the_signature(db: &salsa::DatabaseImpl) {
+    const ABILITIES: &str = r#"
+ability Ping { op ping() -> Nil }
+ability Other { op other() -> Nil }
+fn ping() ->{Ping} Nil { Ping::ping() }
+fn pure() ->{} Nil { Nil }
+fn other() ->{Other} Nil { Other::other() }
+"#;
+    // A function value's row must match the parameter's exactly, so the
+    // callbacks without `Ping` are lambdas.
+    for (callback, valid) in [
+        ("ping", true),
+        ("fn() { pure() }", true),
+        ("fn() { other() }", false),
+    ] {
         let source = SourceCst::from_source_str(
             db,
             "removal_scheme.trb",
             &format!(
-                r#"
-ability Ping {{ op ping() -> Nil }}
-ability Other {{ op other() -> Nil }}
-fn ping() ->{{Ping}} Nil {{ Ping::ping() }}
-fn pure() ->{{}} Nil {{ Nil }}
-fn other() ->{{Other}} Nil {{ Other::other() }}
-fn handled(comp: fn() ->{{e}} Nil) ->{{}} Nil {{
+                r#"{ABILITIES}
+fn handled(comp: fn() ->{{e, Ping}} Nil) ->{{e}} Nil {{
     handle comp() {{
         do value {{ value }}
         op Ping::ping() {{ resume Nil }}
     }}
 }}
-fn main() ->{{}} Nil {{ handled(ping)
-handled({callback}) }}
+fn main() ->{{}} Nil {{ handled({callback}) }}
 "#
             ),
         );
@@ -175,8 +185,35 @@ handled({callback}) }}
             .find(|(name, _)| *name == trunk_ir::Symbol::new("handled"))
             .unwrap()
             .1;
-        assert!(!scheme.row_removals(db).is_empty());
+        assert!(scheme.row_removals(db).is_empty());
     }
+
+    let undeclared = SourceCst::from_source_str(
+        db,
+        "removal_undeclared.trb",
+        &format!(
+            r#"{ABILITIES}
+fn handled(comp: fn() ->{{e}} Nil) ->{{}} Nil {{
+    handle comp() {{
+        do value {{ value }}
+        op Ping::ping() {{ resume Nil }}
+    }}
+}}
+"#
+        ),
+    );
+    let _ = checked(db, undeclared);
+    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, undeclared)
+        .into_iter()
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect();
+    assert_eq!(
+        errors,
+        [
+            "function 'handled' handles Ping from effect variable `e` without declaring it there; \
+             add it to that effect row"
+        ],
+    );
 }
 
 #[salsa_test]

@@ -774,6 +774,34 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             .iter()
             .map(|_| self.fresh_row_var())
             .collect();
+        self.instantiate_scheme_with(scheme, types, rows)
+    }
+
+    /// Instantiate the checked function's own signature. Its row variables
+    /// keep their declared identities, so the body's finalized types name the
+    /// declared scheme's rows; fresh rows are allocated above them.
+    pub(crate) fn instantiate_own_signature(
+        &mut self,
+        scheme: TypeScheme<'db>,
+    ) -> subst::SchemeInstance<'db> {
+        let rows = scheme.effect_params(self.db).to_vec();
+        if let Some(max) = rows.iter().map(|var| var.id).max() {
+            self.reserve_row_vars(max + 1);
+        }
+        let types = scheme
+            .type_params(self.db)
+            .iter()
+            .map(|_| self.fresh_type_var())
+            .collect();
+        self.instantiate_scheme_with(scheme, types, rows)
+    }
+
+    fn instantiate_scheme_with(
+        &mut self,
+        scheme: TypeScheme<'db>,
+        types: Vec<Type<'db>>,
+        rows: Vec<EffectVar>,
+    ) -> subst::SchemeInstance<'db> {
         let instance = subst::instantiate_with_arguments(self.db, scheme, types, rows);
         for union in &instance.row_unions {
             self.constraints

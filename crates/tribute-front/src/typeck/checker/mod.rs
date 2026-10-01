@@ -8,7 +8,8 @@
 //! The type checker uses a two-level context system:
 //!
 //! - `ModuleTypeEnv`: Module-level type information (function signatures, constructors, type defs).
-//!   Declaration collection initializes it; function checking publishes solved schemes.
+//!   Declaration collection initializes it; function checking only reads it, since each
+//!   module-level function's declared signature is its final scheme.
 //!
 //! - `FunctionInferenceContext`: Per-function type inference state (local variables, constraints,
 //!   type variable counters). Each function gets its own context, ensuring type inference is
@@ -42,12 +43,6 @@ use super::{
     DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
 };
 use crate::ast::CallingConvention;
-
-struct FunctionRebinding<'db> {
-    scheme: TypeScheme<'db>,
-    types: Vec<Option<usize>>,
-    rows: Vec<Option<usize>>,
-}
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -107,7 +102,6 @@ pub struct TypeChecker<'db> {
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
-    function_rebindings: HashMap<(FuncDefId<'db>, TypeScheme<'db>), FunctionRebinding<'db>>,
     function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
     local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
     /// Exact handler operation instances collected from each checked function.
@@ -174,7 +168,6 @@ impl<'db> TypeChecker<'db> {
             node_types: HashMap::new(),
             function_instances: HashMap::new(),
             local_instances: HashMap::new(),
-            function_rebindings: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             lambda_signatures: HashMap::new(),
@@ -292,58 +285,10 @@ impl<'db> TypeChecker<'db> {
         // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
         let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
         node_types.sort_by_key(|(id, _)| *id);
-        let db = self.env.db();
         let mut function_instances: Vec<_> = self.function_instances.into_iter().collect();
         function_instances.sort_by_key(|(id, _)| *id);
         let mut local_instances: Vec<_> = self.local_instances.into_iter().collect();
         local_instances.sort_by_key(|(id, _)| *id);
-        let mut next_row = function_instances
-            .iter()
-            .flat_map(|(_, instance)| {
-                crate::ast::collect_effect_vars(db, instance.callable)
-                    .into_iter()
-                    .chain(instance.row_arguments.iter().filter_map(|row| row.rest(db)))
-            })
-            .map(|var| var.id)
-            .max()
-            .unwrap_or(0)
-            + 1;
-        for (_, instance) in &mut function_instances {
-            if let Some(FunctionRebinding {
-                scheme,
-                types,
-                rows,
-            }) = self
-                .function_rebindings
-                .get(&(instance.function, instance.scheme))
-            {
-                instance.type_arguments = types
-                    .iter()
-                    .map(|source| {
-                        source
-                            .and_then(|index| instance.type_arguments.get(index).copied())
-                            .unwrap_or_else(|| Type::new(db, crate::ast::TypeKind::Error))
-                    })
-                    .collect();
-                let old_rows = &instance.row_arguments;
-                instance.row_arguments = rows
-                    .iter()
-                    .map(|source| {
-                        source
-                            .and_then(|source| old_rows.get(source).copied())
-                            .unwrap_or_else(|| {
-                                let row = crate::ast::EffectRow::open(
-                                    db,
-                                    crate::ast::EffectVar { id: next_row },
-                                );
-                                next_row += 1;
-                                row
-                            })
-                    })
-                    .collect();
-                instance.scheme = *scheme;
-            }
-        }
         let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
         handler_operations.sort_by_key(|(id, _)| *id);
         let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();

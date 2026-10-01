@@ -263,7 +263,7 @@ impl<'db> TypeSolver<'db> {
             .collect()
     }
 
-    pub(super) fn normalize_row(&self, row: EffectRow<'db>) -> EffectRow<'db> {
+    pub(crate) fn normalize_row(&self, row: EffectRow<'db>) -> EffectRow<'db> {
         let row = self.row_subst.apply(self.db, row);
         map_effect_row_type_args(self.db, row, |ty| {
             self.type_subst
@@ -292,6 +292,101 @@ impl<'db> TypeSolver<'db> {
             }
         }
         first_error.map_or(Ok(()), Err)
+    }
+
+    /// Discharge the relations a function body left over its signature rows.
+    ///
+    /// The signature rows are rigid, so a relation that only defines a
+    /// body-local row from them has one solution:
+    ///
+    /// - Removing labels the source row names explicitly leaves its tail
+    ///   untouched, since a row holds each label once.
+    /// - Joining rows whose tails a declared union covers yields that
+    ///   union's result.
+    ///
+    /// Relations that would constrain the signature rows themselves remain
+    /// pending for the caller to report.
+    pub(crate) fn settle_signature_relations(
+        &mut self,
+        declared_unions: &[crate::ast::RowUnion<'db>],
+    ) -> Result<(), LocatedSolveError<'db>> {
+        let declared: Vec<_> = declared_unions
+            .iter()
+            .filter_map(|union| {
+                let result = self.normalize_row(union.result).rest(self.db)?;
+                let sources = union
+                    .sources
+                    .iter()
+                    .filter_map(|row| self.normalize_row(*row).rest(self.db))
+                    .collect::<Vec<_>>();
+                Some((result, sources))
+            })
+            .collect();
+        loop {
+            let before = self.pending_row_unions.len() + self.pending_row_removals.len();
+            for (removal, origin) in std::mem::take(&mut self.pending_row_removals) {
+                let mut normalized = removal.clone();
+                normalized.for_each_row_mut(|row| *row = self.normalize_row(*row));
+                let source_effects = normalized.source.effects(self.db);
+                match normalized.source.rest(self.db) {
+                    Some(tail)
+                        if normalized
+                            .removed
+                            .effects(self.db)
+                            .iter()
+                            .all(|effect| source_effects.contains(effect)) =>
+                    {
+                        let remaining: Vec<_> = source_effects
+                            .iter()
+                            .filter(|effect| !normalized.removed.effects(self.db).contains(effect))
+                            .cloned()
+                            .collect();
+                        let row = EffectRow::new(self.db, remaining, Some(tail));
+                        self.unify_rows(normalized.result, row)
+                            .map_err(|error| LocatedSolveError { error, origin })?;
+                    }
+                    _ => self.pending_row_removals.push((removal, origin)),
+                }
+            }
+            for (union, origin) in std::mem::take(&mut self.pending_row_unions) {
+                let mut normalized = union.clone();
+                normalized.for_each_row_mut(|row| *row = self.normalize_row(*row));
+                let mut known = Vec::new();
+                let mut tails = Vec::new();
+                for source in &normalized.sources {
+                    for effect in source.effects(self.db) {
+                        if !known.contains(effect) {
+                            known.push(effect.clone());
+                        }
+                    }
+                    if let Some(tail) = source.rest(self.db)
+                        && !tails.contains(&tail)
+                    {
+                        tails.push(tail);
+                    }
+                }
+                let cover = declared.iter().find(|(result, sources)| {
+                    let covered = tails
+                        .iter()
+                        .all(|tail| tail == result || sources.contains(tail));
+                    let complete =
+                        tails.contains(result) || sources.iter().all(|row| tails.contains(row));
+                    tails.len() > 1 && covered && complete
+                });
+                match cover {
+                    Some((result, _)) => {
+                        let row = EffectRow::new(self.db, known, Some(*result));
+                        self.unify_rows(normalized.result, row)
+                            .map_err(|error| LocatedSolveError { error, origin })?;
+                    }
+                    _ => self.pending_row_unions.push((union, origin)),
+                }
+            }
+            self.settle_row_unions()?;
+            if self.pending_row_unions.len() + self.pending_row_removals.len() == before {
+                return Ok(());
+            }
+        }
     }
 
     pub fn add_row_removals(&mut self, removals: Vec<crate::ast::RowRemoval<'db>>) {
@@ -742,6 +837,21 @@ impl<'db> TypeSolver<'db> {
 
                 let (only_r1, only_r2) =
                     self.compute_effect_split_with_unify(effects1, effects2)?;
+
+                // A signature row stays the common tail when the other side
+                // adds no labels to it.
+                let rigid1 = self.rigid_rows.contains(&v1);
+                let rigid2 = self.rigid_rows.contains(&v2);
+                if rigid1 && !rigid2 && only_r2.is_empty() {
+                    let row = EffectRow::new(self.db, only_r1, Some(v1));
+                    self.row_subst.insert(v2.id, row);
+                    return Ok(());
+                }
+                if rigid2 && !rigid1 && only_r1.is_empty() {
+                    let row = EffectRow::new(self.db, only_r2, Some(v2));
+                    self.row_subst.insert(v1.id, row);
+                    return Ok(());
+                }
 
                 // Create a fresh row variable for the common tail
                 let v3 = self.fresh_row_var();

@@ -13,7 +13,6 @@ use trunk_ir::Symbol;
 
 use crate::ast::{
     ExprKind, FuncDecl, FuncDefId, ResolvedRef, Type, TypeKind, TypeScheme, TypedRef, UniVarId,
-    collect_effect_vars,
 };
 
 use super::super::constraint::{ConstraintOriginKind, ConstraintSet};
@@ -31,8 +30,9 @@ impl<'db> TypeChecker<'db> {
     /// 2. Binds parameters using the registered type scheme
     /// 3. Checks the function body, generating constraints
     /// 4. Solves constraints for this function only
-    /// 5. Applies substitution and generalization
-    /// 6. Updates the function's type scheme in ModuleTypeEnv
+    /// 5. Settles the body's relations against the rigid signature rows
+    /// 6. Applies substitution and generalization; the declared signature
+    ///    stays the function's scheme
     pub(crate) fn check_func_decl(
         &mut self,
         func: &FuncDecl<ResolvedRef<'db>>,
@@ -151,6 +151,9 @@ impl<'db> TypeChecker<'db> {
 
         let mut solver = TypeSolver::new(self.db());
         solver.reserve_row_vars(next_row_var);
+        if let Some((scheme, _)) = &signature_instance {
+            solver.set_rigid_rows(scheme.effect_params(self.db()).iter().copied());
+        }
         for method in &deferred_methods {
             solver.defer_producer(method.node_id, method.result_ty, method.arg_types.clone());
         }
@@ -166,6 +169,7 @@ impl<'db> TypeChecker<'db> {
             );
         }
         if let Err(error) = solver.finalize_relations() {
+            solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
                 diagnostic_func_name,
@@ -184,12 +188,32 @@ impl<'db> TypeChecker<'db> {
             &mut func_instances,
         );
         if let Err(error) = solver.finalize_relations() {
+            solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
                 diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
+        }
+
+        // Relations over the rigid signature rows that only define body-local
+        // rows have one solution; the rest must be declared.
+        if let Some((scheme, instance)) = &signature_instance {
+            if !solve_failed
+                && let Err(error) = solver.settle_signature_relations(&instance.row_unions)
+            {
+                solve_failed = true;
+                self.report_solve_error(
+                    diagnostic_func_id,
+                    diagnostic_func_name,
+                    diagnostic_effects.as_deref(),
+                    error,
+                );
+            }
+            // The declared rows name the function's row parameters in every
+            // finalized type, whichever alias the solver chose for them.
+            solver.make_row_representatives(scheme.effect_params(self.db()).iter().copied());
         }
 
         // 5. Apply substitution and generalization
@@ -238,9 +262,8 @@ impl<'db> TypeChecker<'db> {
         );
         let retained_unions = solver.row_unions_for_type(inferred_func_ty);
         let retained_removals = solver.row_removals_for_type(inferred_func_ty);
-        let (union_univars, union_effect_vars) = solver.row_union_variables(&retained_unions);
-        let (removal_univars, removal_effect_vars) =
-            solver.row_removal_variables(&retained_removals);
+        let (union_univars, _) = solver.row_union_variables(&retained_unions);
+        let (removal_univars, _) = solver.row_removal_variables(&retained_removals);
         for var in union_univars.into_iter().chain(removal_univars) {
             if !all_univars.contains(&var) {
                 all_univars.push(var);
@@ -256,15 +279,29 @@ impl<'db> TypeChecker<'db> {
                 .or_insert((func.id, index as u32));
         }
         all_univars.retain(|id| !self.local_generalizations.contains_key(id));
-        let var_to_index: HashMap<UniVarId<'db>, u32> = all_univars
-            .into_iter()
-            .enumerate()
-            .map(|(index, id)| (id, index as u32))
-            .collect();
+        // Signature variables keep their declared binder indices. Others
+        // remain only after a reported error.
+        let signature_vars = signature_instance.iter().flat_map(|(_, instance)| {
+            instance.type_args.iter().filter_map(|ty| {
+                match type_subst
+                    .apply_with_rows(self.db(), *ty, row_subst)
+                    .kind(self.db())
+                {
+                    TypeKind::UniVar { id } => Some(*id),
+                    _ => None,
+                }
+            })
+        });
+        let mut var_to_index: HashMap<UniVarId<'db>, u32> = HashMap::new();
+        for id in signature_vars.chain(all_univars) {
+            let next = var_to_index.len() as u32;
+            var_to_index.entry(id).or_insert(next);
+        }
 
         // Apply substitution and generalization to the function type.
         let substituted_ty = type_subst.apply_with_rows(self.db(), inferred_func_ty, row_subst);
 
+        let mut reported_error = reported_undeclared;
         // Validate that root `main` returns Nil.
         if is_root_main
             && let TypeKind::Func { result, .. } = substituted_ty.kind(self.db())
@@ -281,7 +318,11 @@ impl<'db> TypeChecker<'db> {
 
         if let Some(declared) = declared_effect {
             if func.effects.is_some() {
-                self.report_duplicate_effect(func, func_id, row_subst.apply(self.db(), declared));
+                reported_error |= self.report_duplicate_effect(
+                    func,
+                    func_id,
+                    row_subst.apply(self.db(), declared),
+                );
             }
             if !solve_failed
                 && !reported_undeclared
@@ -291,6 +332,7 @@ impl<'db> TypeChecker<'db> {
                 // The body may perform only the concrete effects the signature
                 // declares; the declared tail stands for the caller's effects.
                 self.report_undeclared_effects(func, is_root_main, &undeclared);
+                reported_error = true;
             }
 
             // Root `main` may leave only the ambient `Io` unhandled.
@@ -315,9 +357,10 @@ impl<'db> TypeChecker<'db> {
             }
         }
 
-        if !solve_failed && let Some((scheme, instance)) = &signature_instance {
-            self.report_signature_rigidity(func, func_id, *scheme, instance, type_subst, row_subst);
-            self.report_undeclared_row_unions(
+        if !solve_failed && let Some(signature @ (scheme, instance)) = &signature_instance {
+            reported_error |= self
+                .report_signature_rigidity(func, func_id, *scheme, instance, type_subst, row_subst);
+            reported_error |= self.report_undeclared_row_unions(
                 func,
                 func_id,
                 *scheme,
@@ -325,6 +368,16 @@ impl<'db> TypeChecker<'db> {
                 &retained_unions,
                 row_subst,
             );
+            if !reported_error {
+                reported_error |= self.report_undeclared_relations(
+                    func,
+                    func_id,
+                    signature,
+                    &solver,
+                    &retained_unions,
+                    &retained_removals,
+                );
+            }
         }
 
         let generalized =
@@ -335,55 +388,20 @@ impl<'db> TypeChecker<'db> {
             .map(|_| crate::ast::TypeParam::anonymous())
             .collect();
 
-        let mut effect_params = collect_effect_vars(self.db(), generalized);
-        for var in union_effect_vars.into_iter().chain(removal_effect_vars) {
-            if !effect_params.contains(&var) {
-                effect_params.push(var);
-            }
-        }
-        let unions = retained_unions
-            .iter()
-            .map(|union| solver.generalize_row_union(union, &var_to_index))
-            .collect();
-        let new_scheme = TypeScheme::builder(type_params, effect_params, generalized)
-            .row_unions(unions)
-            .row_removals(
-                retained_removals
-                    .iter()
-                    .map(|r| solver.generalize_row_removal(r, &var_to_index))
-                    .collect(),
-            )
-            .build(self.db());
-        if let Some((source_scheme, instance)) = signature_instance {
-            let mut types = vec![None; new_scheme.type_params(self.db()).len()];
-            for (source_index, ty) in instance.type_args.iter().enumerate() {
-                let ty = type_subst.apply_with_rows(self.db(), *ty, row_subst);
-                if let TypeKind::UniVar { id } = ty.kind(self.db())
-                    && let Some(index) = var_to_index.get(id)
-                {
-                    types[*index as usize] = Some(source_index);
-                }
-            }
-            let rows = new_scheme
-                .effect_params(self.db())
-                .iter()
-                .map(|target| {
-                    instance.row_args.iter().position(|row| {
-                        row_subst.apply(self.db(), *row).rest(self.db()) == Some(*target)
-                    })
-                })
-                .collect();
-            self.function_rebindings.insert(
-                (func_id, source_scheme),
-                super::FunctionRebinding {
-                    scheme: new_scheme,
-                    types,
-                    rows,
-                },
+        // The declared signature is the function's final scheme; checking the
+        // body never republishes it.
+        if let Some((declared, _)) = &signature_instance {
+            debug_assert!(
+                solve_failed
+                    || reported_error
+                    || (declared.body(self.db()) == generalized
+                        && declared.type_params(self.db()) == type_params),
+                "checked type of `{}` differs from its declaration:\n  declared: {:?}\n  checked:  {:?}",
+                func.name,
+                declared,
+                generalized,
             );
         }
-        // Update the function's type scheme with the generalized version
-        self.env.register_function(func_id, new_scheme);
 
         // 6. Materialize the solved node types before rebuilding the body.
         // Post-solve case coverage consults these entries during body substitution.
@@ -733,14 +751,14 @@ impl<'db> TypeChecker<'db> {
         instance: &crate::typeck::subst::SchemeInstance<'db>,
         retained: &[crate::ast::RowUnion<'db>],
         row_subst: &crate::typeck::solver::RowSubst<'db>,
-    ) {
+    ) -> bool {
         let db = self.db();
         let tail = |row: &crate::ast::EffectRow<'db>| row_subst.apply(db, *row).rest(db);
         let Some(own) = (match instance.ty.kind(db) {
             TypeKind::Func { effect, .. } => tail(effect),
             _ => None,
         }) else {
-            return;
+            return false;
         };
 
         // Rows the signature itself puts into the function's effects.
@@ -801,6 +819,78 @@ impl<'db> TypeChecker<'db> {
             )
             .accumulate(db);
         }
+        !reported.is_empty()
+    }
+
+    /// Report relations the body leaves over the signature rows that the
+    /// signature does not declare. Such a relation would restrict every
+    /// caller, so the signature must state it.
+    fn report_undeclared_relations(
+        &self,
+        func: &FuncDecl<ResolvedRef<'db>>,
+        func_id: FuncDefId<'db>,
+        (scheme, instance): &(TypeScheme<'db>, crate::typeck::subst::SchemeInstance<'db>),
+        solver: &TypeSolver<'db>,
+        unions: &[crate::ast::RowUnion<'db>],
+        removals: &[crate::ast::RowRemoval<'db>],
+    ) -> bool {
+        let db = self.db();
+        let scheme = *scheme;
+        let row_name = |var: Option<crate::ast::EffectVar>| match var
+            .and_then(|var| scheme.effect_params(db).iter().position(|p| *p == var))
+        {
+            Some(index) => self.signature_row_name(func_id, scheme, index),
+            None => "an inferred effect row".to_owned(),
+        };
+        let mut messages = Vec::new();
+        let declared: Vec<_> = instance
+            .row_unions
+            .iter()
+            .map(|union| {
+                let mut union = union.clone();
+                union.for_each_row_mut(|row| *row = solver.normalize_row(*row));
+                union
+            })
+            .collect();
+        for removal in removals {
+            let removed = removal
+                .removed
+                .effects(db)
+                .iter()
+                .filter(|effect| !removal.source.effects(db).contains(effect))
+                .collect_vec();
+            messages.push(format!(
+                "function '{}' handles {} from {} without declaring {} there; \
+                 add {} to that effect row",
+                func.name,
+                removed.iter().format(", "),
+                row_name(removal.source.rest(db)),
+                if removed.len() == 1 { "it" } else { "them" },
+                if removed.len() == 1 { "it" } else { "them" },
+            ));
+        }
+        for union in unions.iter().filter(|union| !declared.contains(union)) {
+            messages.push(format!(
+                "function '{}' joins {} into an effect row its signature does not declare",
+                func.name,
+                union
+                    .sources
+                    .iter()
+                    .map(|row| row_name(row.rest(db)))
+                    .unique()
+                    .format(" and "),
+            ));
+        }
+        for message in messages.iter().unique() {
+            Diagnostic::new(
+                message.clone(),
+                self.get_span(func.id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(db);
+        }
+        !messages.is_empty()
     }
 
     /// How diagnostics name the signature's `index`-th effect parameter.
@@ -828,13 +918,13 @@ impl<'db> TypeChecker<'db> {
         func: &FuncDecl<ResolvedRef<'db>>,
         func_id: FuncDefId<'db>,
         resolved_declared: crate::ast::EffectRow<'db>,
-    ) {
+    ) -> bool {
         let Some(duplicate) = self
             .effect_annotation_origins
             .get(&func_id)
             .and_then(|origins| origins.find_duplicate(self.db(), resolved_declared))
         else {
-            return;
+            return false;
         };
         Diagnostic::builder(
             format!(
@@ -852,6 +942,7 @@ impl<'db> TypeChecker<'db> {
         )
         .build()
         .accumulate(self.db());
+        true
     }
 
     /// Report signature variables that the body made more specific.
@@ -868,9 +959,11 @@ impl<'db> TypeChecker<'db> {
         instance: &crate::typeck::subst::SchemeInstance<'db>,
         type_subst: &crate::typeck::solver::TypeSubst<'db>,
         row_subst: &crate::typeck::solver::RowSubst<'db>,
-    ) {
+    ) -> bool {
         let db = self.db();
+        let reported = std::cell::Cell::new(false);
         let report = |message: String| {
+            reported.set(true);
             Diagnostic::new(
                 message,
                 self.get_span(func.id),
@@ -965,6 +1058,7 @@ impl<'db> TypeChecker<'db> {
                 ));
             }
         }
+        reported.get()
     }
 
     /// Get function signature from the registered scheme.
@@ -983,7 +1077,7 @@ impl<'db> TypeChecker<'db> {
         Option<(TypeScheme<'db>, crate::typeck::subst::SchemeInstance<'db>)>,
     ) {
         if let Some(scheme) = self.env.lookup_function(func_id) {
-            let instance = ctx.instantiate_scheme_details(scheme);
+            let instance = ctx.instantiate_own_signature(scheme);
             let func_ty = instance.ty;
             if let TypeKind::Func { params, result, .. } = func_ty.kind(self.db()) {
                 return (params.clone(), *result, func_ty, Some((scheme, instance)));

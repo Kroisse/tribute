@@ -88,6 +88,9 @@ pub struct TypeSolver<'db> {
     )>,
     /// Results whose producer signature has not yet been resolved.
     pending_producers: Vec<PendingProducer<'db>>,
+    /// Row variables of the checked function's signature. Unification keeps
+    /// them as the representative of an alias instead of renaming them.
+    rigid_rows: Vec<EffectVar>,
 }
 
 struct PendingProducer<'db> {
@@ -108,7 +111,13 @@ impl<'db> TypeSolver<'db> {
             pending_row_unions: Vec::new(),
             pending_row_removals: Vec::new(),
             pending_producers: Vec::new(),
+            rigid_rows: Vec::new(),
         }
+    }
+
+    /// Declare the checked function's signature rows.
+    pub(crate) fn set_rigid_rows(&mut self, rows: impl IntoIterator<Item = EffectVar>) {
+        self.rigid_rows = rows.into_iter().collect();
     }
 
     /// Get the type substitution.
@@ -119,6 +128,13 @@ impl<'db> TypeSolver<'db> {
     /// Get the row substitution.
     pub fn row_subst(&self) -> &RowSubst<'db> {
         &self.row_subst
+    }
+
+    /// Make each `var` the representative of the bare open row it resolved to.
+    pub(crate) fn make_row_representatives(&mut self, vars: impl IntoIterator<Item = EffectVar>) {
+        for var in vars {
+            self.row_subst.make_representative(self.db, var);
+        }
     }
 
     pub(crate) fn next_row_var(&self) -> u64 {
