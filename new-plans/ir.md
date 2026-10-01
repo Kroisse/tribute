@@ -1219,7 +1219,8 @@ arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의�
 `tribute.*` 속성은 분류되지 않은 metadata로 보고한다. 새 언어 전용 속성은 금지 또는
 보존 중 하나로 분류된 뒤에만 출구를 넘을 수 있다. 입력과 결과 타입이 같은
 unrealized cast, 대상 함수의 signature와 다른 타입의 `func.constant`도 위반으로
-보고한다.
+보고한다. 위반이 하나라도 있으면 target dialect lowering에 들어가기 전에 컴파일이
+실패한다. 이 검증은 build 구성과 관계없이 항상 수행한다.
 
 #### Unrealized cast
 

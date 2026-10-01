@@ -62,6 +62,7 @@
 //! collected at the end of compilation.
 
 use crate::SourceCst;
+use itertools::Itertools;
 use ropey::Rope;
 use salsa::Accumulator;
 use tree_sitter::Parser;
@@ -1018,8 +1019,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
     debug_validate_value_integrity(ctx, m, "after evidence_to_wasm");
 
     run_cleanup_passes(ctx, m, &mut analyses);
-    debug_observe_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Wasm);
-    Ok(())
+    enforce_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Wasm)
 }
 
 /// Run the native target pipeline: lowering + evidence_to_native + cleanup.
@@ -1052,8 +1052,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     debug_validate_value_integrity(ctx, m, "after evidence_to_native");
 
     run_cleanup_passes(ctx, m, &mut analyses);
-    debug_observe_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Native);
-    Ok(())
+    enforce_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Native)
 }
 
 /// Run `target`'s pipeline from the shared middle-end output to the
@@ -1098,21 +1097,23 @@ pub fn emit_from_boundary_exit(
     }
 }
 
-/// Debug-only check of the representation/ABI boundary exit.
-///
-/// Violations that later boundary work is known to remove are expected; any
-/// other violation is reported without failing compilation.
-fn debug_observe_boundary_exit(
+/// Reject a module whose representation/ABI boundary exit violates the
+/// contract.
+fn enforce_boundary_exit(
     ctx: &IrContext,
     m: Module,
     target: tribute_passes::abi_boundary::TargetKind,
-) {
-    if !cfg!(debug_assertions) {
-        return;
+) -> Result<(), DumpIrError> {
+    let violations = tribute_passes::abi_boundary::verify_boundary_exit(ctx, m, target);
+    if violations.is_empty() {
+        return Ok(());
     }
-    for violation in tribute_passes::abi_boundary::unexpected_boundary_violations(ctx, m, target) {
-        tracing::warn!(?target, "representation/ABI boundary exit: {violation}");
-    }
+    Err(DumpIrError {
+        message: format!(
+            "{target:?} representation/ABI boundary exit violations: {}",
+            violations.iter().format("; ")
+        ),
+    })
 }
 
 /// Enter the sole target-side closure storage boundary. Exact ABI validation
@@ -2041,72 +2042,63 @@ fn main() -> Nil {
         ),
     ];
 
-    /// Violation kinds observed at `target`'s boundary exit for every program.
-    fn observed_boundary_exit_kinds(
+    /// Every program reaches `target`'s boundary exit, whose enforcement
+    /// rejects any violation.
+    fn assert_boundary_exit_programs_meet_the_contract(
         db: &crate::TributeDatabaseImpl,
         target: tribute_passes::abi_boundary::TargetKind,
-    ) -> std::collections::BTreeSet<tribute_passes::abi_boundary::ViolationKind> {
-        use tribute_passes::abi_boundary::{TargetKind, verify_boundary_exit};
-        let mut kinds = std::collections::BTreeSet::new();
+    ) {
         for (path, text) in BOUNDARY_EXIT_PROGRAMS {
             let source = source_from_str(path, text);
             let (mut ctx, module) = run_shared_pipeline(db, source)
                 .expect("shared pipeline must succeed")
                 .unwrap_or_else(|| panic!("{path} must lower"));
-            match target {
-                TargetKind::Native => run_native_target_pipeline(&mut ctx, module),
-                TargetKind::Wasm => run_wasm_target_pipeline(&mut ctx, module),
-            }
-            .unwrap_or_else(|error| panic!("{path}: target boundary failed: {error}"));
-            kinds.extend(
-                verify_boundary_exit(&ctx, module, target)
-                    .into_iter()
-                    .map(|violation| violation.kind),
+            run_target_to_boundary_exit(&mut ctx, module, target)
+                .unwrap_or_else(|error| panic!("{path}: target boundary failed: {error}"));
+        }
+    }
+
+    #[salsa_test]
+    fn native_boundary_exit_programs_meet_the_contract(db: &crate::TributeDatabaseImpl) {
+        assert_boundary_exit_programs_meet_the_contract(
+            db,
+            tribute_passes::abi_boundary::TargetKind::Native,
+        );
+    }
+
+    #[salsa_test]
+    fn wasm_boundary_exit_programs_meet_the_contract(db: &crate::TributeDatabaseImpl) {
+        assert_boundary_exit_programs_meet_the_contract(
+            db,
+            tribute_passes::abi_boundary::TargetKind::Wasm,
+        );
+    }
+
+    #[test]
+    fn boundary_exit_enforcement_rejects_any_violation() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @main() -> core.nil attributes {tribute.calling_convention = 0} {
+    %nil = core.nil_value : core.nil
+    func.return %nil
+  }
+}"#,
+        );
+        for target in [
+            tribute_passes::abi_boundary::TargetKind::Native,
+            tribute_passes::abi_boundary::TargetKind::Wasm,
+        ] {
+            let error = enforce_boundary_exit(&ctx, module, target)
+                .expect_err("a forbidden attribute must fail the boundary exit");
+            assert!(
+                error
+                    .to_string()
+                    .contains("forbidden attribute tribute.calling_convention"),
+                "{error}"
             );
         }
-        kinds
-    }
-
-    fn assert_boundary_exit_is_observed(
-        db: &crate::TributeDatabaseImpl,
-        target: tribute_passes::abi_boundary::TargetKind,
-    ) -> Vec<String> {
-        use tribute_passes::abi_boundary::pending_boundary_violations;
-        let observed = observed_boundary_exit_kinds(db, target);
-        let pending = pending_boundary_violations(target);
-        let unexpected: Vec<_> = observed
-            .iter()
-            .filter(|kind| !pending.iter().any(|entry| entry.covers(kind)))
-            .map(ToString::to_string)
-            .collect();
-        assert!(
-            unexpected.is_empty(),
-            "{target:?} boundary exit has violations outside the pending list: {unexpected:#?}"
-        );
-        let stale: Vec<_> = pending
-            .iter()
-            .filter(|entry| !observed.iter().any(|kind| entry.covers(kind)))
-            .map(ToString::to_string)
-            .collect();
-        assert!(
-            stale.is_empty(),
-            "{target:?} pending boundary violations are no longer observed; remove them: {stale:#?}"
-        );
-        observed.iter().map(ToString::to_string).collect()
-    }
-
-    #[salsa_test]
-    fn native_boundary_exit_violations_are_all_pending(db: &crate::TributeDatabaseImpl) {
-        let observed =
-            assert_boundary_exit_is_observed(db, tribute_passes::abi_boundary::TargetKind::Native);
-        insta::assert_debug_snapshot!(observed);
-    }
-
-    #[salsa_test]
-    fn wasm_boundary_exit_violations_are_all_pending(db: &crate::TributeDatabaseImpl) {
-        let observed =
-            assert_boundary_exit_is_observed(db, tribute_passes::abi_boundary::TargetKind::Wasm);
-        insta::assert_debug_snapshot!(observed);
     }
 
     /// Print `module` and parse the text into a fresh context.
@@ -2157,7 +2149,8 @@ fn main() -> Nil {
                     round_trip == direct,
                     "{path}: the round-tripped IR must emit the same binary"
                 ),
-                // Programs that still reach pending work fail either way.
+                // A program the target cannot emit yet, such as `read_line` on
+                // Wasm, fails either way.
                 (Err(_), Err(_)) => {}
                 (direct, round_trip) => panic!(
                     "{path}: emission outcome changed through text: direct {:?}, round trip {:?}",
@@ -3686,17 +3679,14 @@ fn main() -> Nil {
         );
         let errors = compile_to_wasm_binary(db, source)
             .expect_err("C ABI alone must not create a Wasm import");
-        // Reaching emission proves shared lowering accepted the managed FFI
-        // signature, without running the shared pipeline again just to check it.
+        // Reaching the boundary exit proves shared lowering accepted the
+        // managed FFI signature, without running the shared pipeline again
+        // just to check it.
         assert_eq!(errors.len(), 1, "{errors:?}");
         assert_eq!(errors[0].phase, CompilationPhase::Lowering);
         let message = &errors[0].inner.message;
         assert!(
-            message.starts_with("WebAssembly compilation failed:"),
-            "{message}"
-        );
-        assert!(
-            message.contains("bodyless declaration @user_bridge has no import binding and no body"),
+            message.contains("unsatisfiable runtime binding user_bridge"),
             "{message}"
         );
     }
@@ -3859,10 +3849,8 @@ fn main() -> Nil { }
     }
 
     #[salsa_test]
-    fn wasm_lowering_carries_only_preserved_or_pending_language_metadata(db: &salsa::DatabaseImpl) {
-        use tribute_passes::abi_boundary::{
-            TargetKind, ViolationKind, is_preserved_attribute, pending_boundary_violations,
-        };
+    fn wasm_lowering_carries_only_preserved_language_metadata(db: &salsa::DatabaseImpl) {
+        use tribute_passes::abi_boundary::is_preserved_attribute;
 
         let source = source_from_str(
             "wasm_dynamic_output.trb",
@@ -3881,10 +3869,7 @@ fn main() -> Nil { }
         let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
             for name in ctx.op(op).attributes.keys() {
                 let name = name.to_string();
-                let pending = pending_boundary_violations(TargetKind::Wasm)
-                    .iter()
-                    .any(|entry| entry.covers(&ViolationKind::ForbiddenAttribute(name.clone())));
-                if name.starts_with("tribute.") && !is_preserved_attribute(&name) && !pending {
+                if name.starts_with("tribute.") && !is_preserved_attribute(&name) {
                     unexpected.insert(format!("{}.{} {name}", ctx.op(op).dialect, ctx.op(op).name));
                 }
             }
