@@ -384,8 +384,10 @@ the typed managed-reference contract. Unmanaged parameters have no RC action.
 This is a native callable contract, not a conclusion inferred from a converted
 type, name, operand position, body shape, or calling-convention integer alone.
 
-An ordinary call to a consumed parameter acquires a new unit with `retain`
-immediately before the call, leaving the caller's existing unit live. A
+An ordinary call to a retained parameter performs no caller-side RC operation:
+the caller keeps its own unit live across the call while the callee acquires
+its own. An ordinary call to a consumed parameter acquires a new unit with
+`retain` immediately before the call, leaving the caller's existing unit live. A
 non-returning proper-tail call transfers the caller's existing unit without a
 caller-side release. When the caller only borrows the value, it first retains
 once to create the transferred unit. If the same underlying value is supplied
