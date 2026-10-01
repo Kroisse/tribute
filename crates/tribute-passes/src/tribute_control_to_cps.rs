@@ -4528,7 +4528,7 @@ mod tests {
             let function = module.ops(&ctx)[0];
             ctx.op_mut(function)
                 .attributes
-                .insert(Symbol::new("type"), Attribute::Type(malformed));
+                .insert("type", Attribute::Type(malformed));
 
             let before = print_module(&ctx, module.op());
             let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())

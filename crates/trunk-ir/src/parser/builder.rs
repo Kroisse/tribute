@@ -208,7 +208,7 @@ impl<'a> ArenaIrBuilder<'a> {
         let mut attrs = self.build_type_attrs(dialect, name, attrs)?;
         let param_attrs = inputs.iter().chain(results).map(|(_, attrs)| attrs.clone());
         if let Some(value) = param_attrs_attribute(param_attrs) {
-            attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
+            attrs.insert(PARAM_ATTRS_ATTR, value);
         }
         Ok(attrs)
     }
@@ -538,10 +538,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
                 let mut attrs = AttributeMap::new();
                 if !is_default_name {
-                    attrs.insert(
-                        Symbol::new("bind_name"),
-                        Attribute::Symbol(Symbol::from_dynamic(name)),
-                    );
+                    attrs.insert("bind_name", Attribute::Symbol(Symbol::from_dynamic(name)));
                 }
                 block_arg_data.push(BlockArgData { ty, attrs });
                 arg_names.push(name.to_string());
@@ -688,7 +685,7 @@ impl<'a> ArenaIrBuilder<'a> {
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {
             attributes.insert(
-                Symbol::new("sym_name"),
+                "sym_name",
                 Attribute::Symbol(Symbol::from_dynamic(name.as_str())),
             );
         }
@@ -760,7 +757,7 @@ impl<'a> ArenaIrBuilder<'a> {
                     });
                 }
             } else {
-                attributes.insert(Symbol::new("type"), Attribute::Type(func_ty));
+                attributes.insert("type", Attribute::Type(func_ty));
             }
         }
 

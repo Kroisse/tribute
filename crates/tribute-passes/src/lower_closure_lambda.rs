@@ -229,7 +229,7 @@ fn lower_single_lambda(
     if let Some(convention) = convention {
         set_calling_convention(ctx, func_op.op_ref(), convention);
         ctx.op_mut(func_op.op_ref()).attributes.insert(
-            Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
+            CLOSURE_ENVIRONMENT_INDEX_ATTR,
             Attribute::Int(environment_index as i128),
         );
     }
@@ -462,10 +462,7 @@ impl LambdaNamer {
 /// Create a `bind_name` attribute map for a block argument.
 fn make_bind_name_attrs(name: &str) -> AttributeMap {
     let mut attrs = AttributeMap::new();
-    attrs.insert(
-        Symbol::new("bind_name"),
-        Attribute::Symbol(Symbol::from_dynamic(name)),
-    );
+    attrs.insert("bind_name", Attribute::Symbol(Symbol::from_dynamic(name)));
     attrs
 }
 

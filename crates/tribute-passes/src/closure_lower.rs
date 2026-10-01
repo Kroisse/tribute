@@ -53,7 +53,7 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
     attrs.insert(
-        Symbol::new(runtime_layout::LAYOUT_ATTR),
+        runtime_layout::LAYOUT_ATTR,
         Attribute::Symbol(Symbol::new(runtime_layout::CLOSURE)),
     );
     adt::struct_type(

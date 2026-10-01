@@ -6,10 +6,10 @@
 //! declarations, and RC header lowering erases them, so none reaches the
 //! backend-ready boundary.
 
+use trunk_ir::TypeRef;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::IrContext;
 use trunk_ir::types::{Attribute, Location};
-use trunk_ir::{Symbol, TypeRef};
 
 #[trunk_ir::dialect]
 mod tribute_rtti {
@@ -113,7 +113,7 @@ impl Layout {
     pub fn set_type(self, ctx: &mut IrContext, ty: TypeRef) {
         ctx.op_mut(self.op_ref())
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(ty));
+            .insert("type", Attribute::Type(ty));
     }
 }
 

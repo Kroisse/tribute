@@ -283,10 +283,10 @@ pub fn try_struct_type(
     mut attrs: AttributeMap,
 ) -> Result<Struct, StructTypeError> {
     attrs.remove(PARAM_ATTRS_ATTR);
-    attrs.insert(Symbol::new(STRUCT_NAME_ATTR), Attribute::Symbol(name));
+    attrs.insert(STRUCT_NAME_ATTR, Attribute::Symbol(name));
     let mut builder = TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"));
     for (field, ty, mut field_attrs) in fields {
-        field_attrs.insert(Symbol::new(STRUCT_NAME_ATTR), Attribute::Symbol(field));
+        field_attrs.insert(STRUCT_NAME_ATTR, Attribute::Symbol(field));
         builder = builder.param_with_attrs(ty, field_attrs);
     }
     for (key, value) in attrs {

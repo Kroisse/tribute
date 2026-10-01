@@ -65,7 +65,7 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
 
     let mut attrs = AttributeMap::new();
     attrs.insert(
-        Symbol::new(tribute_core::runtime_layout::LAYOUT_ATTR),
+        tribute_core::runtime_layout::LAYOUT_ATTR,
         Attribute::Symbol(Symbol::new(tribute_core::runtime_layout::CLOSURE)),
     );
     adt::struct_type(
@@ -731,7 +731,7 @@ mod tests {
         let nested = |ty| Attribute::List(vec![Attribute::List(vec![Attribute::Type(ty)])]);
         ctx.block_mut(block).args[0]
             .attrs
-            .insert(Symbol::new("storage"), nested(source));
+            .insert("storage", nested(source));
         convert_builtin_layouts(&mut ctx, module);
         assert_eq!(
             ctx.block(block).args[0].attrs.get("storage"),
@@ -746,8 +746,7 @@ mod tests {
         let target = closure_adt_type(&mut ctx);
         let generic = intern_type(&mut ctx, Symbol::new("wasm"), Symbol::new("structref"));
         let mut near = ctx.get_type(shared).clone();
-        near.attrs
-            .insert(Symbol::new("unrelated"), Attribute::Bool(true));
+        near.attrs.insert("unrelated", Attribute::Bool(true));
         let near = ctx.intern_type(near);
         let converter = wasm_type_converter(&mut ctx);
         assert_eq!(converter.convert_type_or_identity(&ctx, shared), target);

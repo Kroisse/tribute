@@ -365,7 +365,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
         .collect();
     let mut attrs = trunk_ir::types::AttributeMap::new();
     attrs.insert(
-        Symbol::new(runtime_layout::LAYOUT_ATTR),
+        runtime_layout::LAYOUT_ATTR,
         Attribute::Symbol(Symbol::new(runtime_layout::EVIDENCE_MARKER)),
     );
     trunk_ir::dialect::adt::struct_type(ctx, Symbol::new("_Marker"), fields, attrs).as_type_ref()

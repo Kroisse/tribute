@@ -3801,10 +3801,10 @@ mod tests {
         let malformed_func = control_op(&ctx, module, "func");
         ctx.op_mut(malformed_func)
             .attributes
-            .insert(Symbol::new("sym_name"), Attribute::Int(1));
+            .insert("sym_name", Attribute::Int(1));
         ctx.op_mut(malformed_func)
             .attributes
-            .insert(Symbol::new("type"), Attribute::Int(2));
+            .insert("type", Attribute::Int(2));
 
         let result = validate_local(&ctx, module);
         assert_op_diagnostics(
@@ -4005,7 +4005,7 @@ mod tests {
         // body. Mutate only those parser-enforced fields.
         ctx.op_mut(bad_func)
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(i32_ty));
+            .insert("type", Attribute::Type(i32_ty));
         let extra_block = block(&mut ctx, loc, &[]);
         let extra_region = region(&mut ctx, loc, extra_block);
         ctx.push_op_region(bad_func, extra_region);

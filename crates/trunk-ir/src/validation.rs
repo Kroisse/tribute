@@ -1423,10 +1423,7 @@ mod tests {
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let named_field = |name: &str| {
             let mut attrs = AttributeMap::new();
-            attrs.insert(
-                Symbol::new("name"),
-                Attribute::Symbol(Symbol::from_dynamic(name)),
-            );
+            attrs.insert("name", Attribute::Symbol(Symbol::from_dynamic(name)));
             attrs
         };
         let cases = [

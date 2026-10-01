@@ -1967,7 +1967,7 @@ fn rtti_identity_never_falls_back_to_same_name_or_shape() {
     for &candidate in &candidates {
         ctx.op_mut(allocation)
             .attributes
-            .insert(Symbol::new("type"), trunk_ir::Attribute::Type(candidate));
+            .insert("type", trunk_ir::Attribute::Type(candidate));
         assert!(plan.validate_against(&ctx, module).is_err());
         assert!(
             crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter).is_err(),

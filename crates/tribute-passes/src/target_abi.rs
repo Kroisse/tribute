@@ -51,10 +51,7 @@ pub(crate) const CONSUMED: &str = "consumed";
 pub(crate) fn physical_parameter_attrs(convention: CallingConvention) -> AttributeMap {
     let mut attrs = AttributeMap::new();
     if convention == CallingConvention::Cps {
-        attrs.insert(
-            Symbol::new(OWNERSHIP_ATTR),
-            Attribute::Symbol(Symbol::new(CONSUMED)),
-        );
+        attrs.insert(OWNERSHIP_ATTR, Attribute::Symbol(Symbol::new(CONSUMED)));
     }
     attrs
 }
@@ -273,7 +270,7 @@ pub fn lower_cps_signatures_to_physical(
     for (op, ty) in function_types {
         ctx.op_mut(op)
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(ty));
+            .insert("type", Attribute::Type(ty));
     }
     for (op, index, ty) in result_types {
         ctx.set_op_result_type(op, index, ty);
@@ -461,7 +458,7 @@ pub fn compose_root_entry_bridge(
     let location = ctx.op(worker_op).location;
     ctx.op_mut(worker_op)
         .attributes
-        .insert(Symbol::new("sym_name"), Attribute::Symbol(root_main));
+        .insert("sym_name", Attribute::Symbol(root_main));
     for &op in &top_level_ops {
         rewrite_symbol_refs(ctx, op, main, root_main);
     }
@@ -1019,10 +1016,9 @@ fn root_source_result(ctx: &IrContext, op: OpRef) -> Result<Option<TypeRef>, Tar
 }
 
 fn set_root_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.op_mut(op).attributes.insert(
-        Symbol::new(CALLING_CONVENTION_ATTR),
-        Attribute::Int(convention as i128),
-    );
+    ctx.op_mut(op)
+        .attributes
+        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
 }
 
 fn bind_name(name: &str) -> AttributeMap {
@@ -1731,26 +1727,23 @@ mod tests {
                 1 => {
                     ctx.op_mut(dispatch)
                         .attributes
-                        .insert(Symbol::new("answer_type"), Attribute::Int(0));
+                        .insert("answer_type", Attribute::Int(0));
                 }
                 2 => {
                     let wrong = core::nil(&mut ctx).as_type_ref();
                     ctx.op_mut(dispatch)
                         .attributes
-                        .insert(Symbol::new("answer_type"), Attribute::Type(wrong));
+                        .insert("answer_type", Attribute::Type(wrong));
                 }
                 3..=6 => {
                     let index = if mutation == 3 { 1 } else { 2 };
                     let value = ctx.op_operands(dispatch)[index];
                     let mut ty = ctx.get_type(ctx.value_ty(value)).clone();
                     if mutation == 3 || mutation == 4 {
-                        ty.attrs.insert(
-                            Symbol::new(CLOSURE_ENVIRONMENT_INDEX_ATTR),
-                            Attribute::Int(9),
-                        );
-                    } else if mutation == 5 {
                         ty.attrs
-                            .insert(Symbol::new(CALLING_CONVENTION_ATTR), Attribute::Int(0));
+                            .insert(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(9));
+                    } else if mutation == 5 {
+                        ty.attrs.insert(CALLING_CONVENTION_ATTR, Attribute::Int(0));
                     } else {
                         let signature = func::FuncSig::from_type_ref(&ctx, ty.params[0]).unwrap();
                         let mut inputs = signature.inputs(&ctx).to_vec();
@@ -1939,10 +1932,9 @@ mod tests {
         let body = run.body_if_present(&ctx).unwrap();
         let indirect = ctx.block(ctx.region(body).blocks[0]).ops[0];
         let signature = IndirectCallLikeOps::exact_signature(&ctx, indirect).unwrap();
-        ctx.op_mut(indirect).attributes.insert(
-            Symbol::new("unrelated_callable_metadata"),
-            Attribute::Type(signature),
-        );
+        ctx.op_mut(indirect)
+            .attributes
+            .insert("unrelated_callable_metadata", Attribute::Type(signature));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
@@ -1993,13 +1985,13 @@ mod tests {
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(worker));
+            .insert("type", Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
         ctx.op_mut(main.op_ref())
             .attributes
-            .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
+            .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
         lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         compose_root_entry_bridge(&mut ctx, module).unwrap();
@@ -2335,13 +2327,13 @@ mod tests {
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
             ctx.op_mut(main.op_ref())
                 .attributes
-                .insert(Symbol::new("type"), Attribute::Type(worker));
+                .insert("type", Attribute::Type(worker));
             let entry = ctx.region(main.body(&ctx)).blocks[0];
             ctx.set_block_arg_type(entry, 0, evidence);
             ctx.set_block_arg_type(entry, 1, frame);
             ctx.op_mut(main.op_ref())
                 .attributes
-                .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
+                .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
             let before = print_module(&ctx, module.op());
             let aliases = ctx.type_aliases().to_vec();
@@ -2393,13 +2385,13 @@ mod tests {
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(worker));
+            .insert("type", Attribute::Type(worker));
         let entry = ctx.region(main.body(&ctx)).blocks[0];
         ctx.set_block_arg_type(entry, 0, evidence);
         ctx.set_block_arg_type(entry, 1, frame);
         ctx.op_mut(main.op_ref())
             .attributes
-            .insert(Symbol::new(ROOT_SOURCE_RESULT_ATTR), Attribute::Type(nil));
+            .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
         let before = print_module(&ctx, module.op());
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
@@ -2674,10 +2666,9 @@ mod tests {
         );
         let external = function(&ctx, module, "external");
         let entry = ctx.region(external.body(&ctx)).blocks[0];
-        ctx.block_mut(entry).args[1].attrs.insert(
-            Symbol::new("bind_name"),
-            Attribute::Symbol(Symbol::new("__env")),
-        );
+        ctx.block_mut(entry).args[1]
+            .attrs
+            .insert("bind_name", Attribute::Symbol(Symbol::new("__env")));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
@@ -2697,10 +2688,9 @@ mod tests {
             trunk_ir::types::TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
                 .build(),
         );
-        ctx.op_mut(module.op()).attributes.insert(
-            Symbol::new("malformed_callable"),
-            Attribute::Type(malformed),
-        );
+        ctx.op_mut(module.op())
+            .attributes
+            .insert("malformed_callable", Attribute::Type(malformed));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
@@ -2725,7 +2715,7 @@ mod tests {
         let resultless = func::func_sig(&mut ctx, [], []).as_type_ref();
         ctx.op_mut(broken.op_ref())
             .attributes
-            .insert(Symbol::new("type"), Attribute::Type(resultless));
+            .insert("type", Attribute::Type(resultless));
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();

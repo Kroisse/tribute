@@ -51,7 +51,7 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
     attrs.insert(
-        Symbol::new(tribute_core::runtime_layout::LAYOUT_ATTR),
+        tribute_core::runtime_layout::LAYOUT_ATTR,
         Attribute::Symbol(Symbol::new(tribute_core::runtime_layout::CLOSURE)),
     );
     adt::struct_type(
@@ -86,7 +86,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
             let new_op = rebuild_op_as(ctx, op, Symbol::new("adt"), Symbol::new("struct_new"));
             ctx.op_mut(new_op)
                 .attributes
-                .insert(Symbol::new("type"), Attribute::Type(native_ty));
+                .insert("type", Attribute::Type(native_ty));
             if !ctx.op_result_types(new_op).is_empty() {
                 ctx.set_op_result_type(new_op, 0, native_ty);
             }
@@ -103,7 +103,7 @@ impl RewritePattern for ClosureStructAdaptPattern {
             let new_op = rebuild_op_as(ctx, op, Symbol::new("adt"), Symbol::new("struct_get"));
             ctx.op_mut(new_op)
                 .attributes
-                .insert(Symbol::new("type"), Attribute::Type(native_ty));
+                .insert("type", Attribute::Type(native_ty));
             if field_idx == 0 {
                 let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
                 ctx.set_op_result_type(new_op, 0, i64_ty);

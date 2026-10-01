@@ -572,10 +572,9 @@ mod tests {
         let function = module.ops(&ctx)[0];
         let entry = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
         let nil = core::nil(&mut ctx).as_type_ref();
-        ctx.block_mut(entry).args[0].attrs.insert(
-            Symbol::new("tribute.root_source_result"),
-            Attribute::Type(nil),
-        );
+        ctx.block_mut(entry).args[0]
+            .attrs
+            .insert("tribute.root_source_result", Attribute::Type(nil));
         assert_eq!(
             verify_boundary_exit(&ctx, module, TargetKind::Native)
                 .into_iter()

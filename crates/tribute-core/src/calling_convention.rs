@@ -71,10 +71,9 @@ impl TryFrom<u8> for CallingConvention {
 
 /// Attach the logical calling convention to a high-level IR operation.
 pub fn set_calling_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConvention) {
-    ctx.op_mut(op).attributes.insert(
-        Symbol::new(CALLING_CONVENTION_ATTR),
-        Attribute::Int(convention as i128),
-    );
+    ctx.op_mut(op)
+        .attributes
+        .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
 }
 
 /// Read explicitly attached calling-convention metadata.
@@ -128,10 +127,7 @@ pub fn cps_continuation_frame_layout_type(
     dispatch: TypeRef,
 ) -> TypeRef {
     let mut attrs = AttributeMap::new();
-    attrs.insert(
-        Symbol::new(CPS_CONTINUATION_FRAME_RESULT_ATTR),
-        Attribute::Type(result),
-    );
+    attrs.insert(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result));
     adt::struct_type(
         ctx,
         name,
