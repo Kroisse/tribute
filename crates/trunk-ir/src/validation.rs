@@ -1431,7 +1431,7 @@ mod tests {
             (
                 "wrong num_inputs type",
                 TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
-                    .attr(func::NUM_INPUTS_ATTR, Attribute::String("zero".to_string()))
+                    .attr(func::NUM_INPUTS_ATTR, Attribute::Bool(false))
                     .attr(func::NUM_RESULTS_ATTR, Attribute::Int(0)),
                 "`num_inputs` must be a u32",
             ),
@@ -1439,10 +1439,7 @@ mod tests {
                 "wrong num_results type",
                 TypeDataBuilder::new(Symbol::new("func"), Symbol::new("func_sig"))
                     .attr(func::NUM_INPUTS_ATTR, Attribute::Int(0))
-                    .attr(
-                        func::NUM_RESULTS_ATTR,
-                        Attribute::String("zero".to_string()),
-                    ),
+                    .attr(func::NUM_RESULTS_ATTR, Attribute::Bool(false)),
                 "`num_results` must be a u32",
             ),
             (

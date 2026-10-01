@@ -156,7 +156,7 @@ pub(crate) fn extract_export_func(
     ctx: &IrContext,
     export_op: wasm_dialect::ExportFunc,
 ) -> CompilationResult<ExportDef> {
-    let name = export_op.name(ctx);
+    let name = export_op.name(ctx).to_owned();
     let func = export_op.func(ctx);
     Ok(ExportDef {
         name,
@@ -169,7 +169,7 @@ pub(crate) fn extract_export_memory(
     ctx: &IrContext,
     export_op: wasm_dialect::ExportMemory,
 ) -> CompilationResult<ExportDef> {
-    let name = export_op.name(ctx);
+    let name = export_op.name(ctx).to_owned();
     let index = export_op.index(ctx);
     Ok(ExportDef {
         name,

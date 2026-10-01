@@ -82,7 +82,7 @@ impl ConstCollector {
 
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
-                if let Some(s) = data.attributes.get_str("value") {
+                if let Some(s) = data.attributes.get_str(ctx, "value") {
                     self.has_string_consts = true;
                     self.collect_content(s.as_bytes().to_vec());
                 }
@@ -266,10 +266,8 @@ impl RewritePattern for StringConstPattern {
             return false;
         };
 
-        let value_str = string_const.value(ctx);
-        let content = value_str.into_bytes();
-
-        let Some((data_idx, len)) = lookup_segment(&self.segments, &content) else {
+        let content = string_const.value(ctx).as_bytes();
+        let Some((data_idx, len)) = lookup_segment(&self.segments, content) else {
             return false;
         };
         let Some(string_enum_ty) = self.string_enum_ty else {

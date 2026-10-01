@@ -59,7 +59,7 @@ fn extract_metadata(ctx: &IrContext, module: Module) -> (Vec<Symbol>, Vec<(Symbo
         for &op in &ctx.block(block_ref).ops {
             if let Ok(export_op) = wasm_dialect::ExportFunc::from_op(ctx, op) {
                 let name = export_op.name(ctx);
-                exports.push(Symbol::from_dynamic(&name));
+                exports.push(Symbol::from_dynamic(name));
             } else if let Ok(import_op) = wasm_dialect::ImportFunc::from_op(ctx, op) {
                 let module_name = import_op.module(ctx);
                 let func_name = import_op.name(ctx);

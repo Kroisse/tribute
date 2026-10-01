@@ -95,6 +95,6 @@ pub use rewrite::Module;
 pub use types::{
     Attribute, AttributeIntoIter, AttributeIter, AttributeIterMut, AttributeKey, AttributeKeys,
     AttributeMap, AttributeText, AttributeValues, AttributeValuesMut, IntegerOutOfRange, Location,
-    PathInterner, TypeData, TypeDataBuilder, TypeInterner,
+    PathInterner, StringPool, StringRef, TypeData, TypeDataBuilder, TypeInterner,
 };
 pub use walk::WalkAction;

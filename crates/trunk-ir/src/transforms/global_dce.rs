@@ -436,7 +436,7 @@ mod tests {
         // Create wasm.export_func op
         let export_data =
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("export_func"))
-                .attr("name", Attribute::String("my_export".to_owned()))
+                .attr("name", ctx.string_attr("my_export"))
                 .attr("func", Attribute::Symbol(Symbol::new("exported_func")))
                 .build(&mut ctx);
         let export_op = ctx.create_op(export_data);
@@ -469,7 +469,7 @@ mod tests {
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr("sym_name", Attribute::Symbol(Symbol::new("extern_fn")))
             .attr("type", Attribute::Type(fn_ty))
-            .attr("abi", Attribute::String("C".to_owned()))
+            .attr("abi", ctx.string_attr("C"))
             .region(body)
             .build(&mut ctx);
         let extern_op = ctx.create_op(extern_data);
@@ -515,7 +515,7 @@ mod tests {
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr("sym_name", Attribute::Symbol(Symbol::new("extern_fn")))
             .attr("type", Attribute::Type(fn_ty))
-            .attr("abi", Attribute::String("C".to_owned()))
+            .attr("abi", ctx.string_attr("C"))
             .region(body)
             .build(&mut ctx);
         let extern_op = ctx.create_op(extern_data);

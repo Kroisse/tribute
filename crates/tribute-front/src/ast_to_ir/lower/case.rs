@@ -557,8 +557,9 @@ fn emit_literal_check<'db>(
         LiteralPattern::String(text) => {
             let equality = builder.ctx.literal_equalities().string;
             let anyref_ty = builder.ctx.anyref_type(builder.ir);
+            let text = builder.ir.intern_str(text);
             let literal = adt::StringConst::operands()
-                .value(text.clone())
+                .value(text)
                 .results(anyref_ty)
                 .build(builder.ir, location);
             builder.ir.push_op(builder.block, literal.op_ref());

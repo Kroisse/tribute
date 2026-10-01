@@ -916,7 +916,8 @@ mod tests {
     fn attribute_kinds_check_value_domains() {
         assert!(AttributeKind::U32.accepts(&Attribute::Int(7)));
         assert!(!AttributeKind::U32.accepts(&Attribute::Int(-1)));
-        assert!(!AttributeKind::Symbol.accepts(&Attribute::String("x".into())));
+        let mut ctx = crate::IrContext::new();
+        assert!(!AttributeKind::Symbol.accepts(&ctx.string_attr("x")));
         assert!(AttributeKind::Any.accepts(&Attribute::Unit));
     }
 }

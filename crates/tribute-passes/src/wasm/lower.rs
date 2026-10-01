@@ -275,7 +275,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         .collect();
                     let sym_name = data
                         .attributes
-                        .get_text("sym_name")
+                        .get_text(ctx, "sym_name")
                         .map(|text| text.to_string())
                         .unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
@@ -297,7 +297,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                     .collect();
                 let sym_name = data
                     .attributes
-                    .get_text("sym_name")
+                    .get_text(ctx, "sym_name")
                     .map(|text| text.to_string())
                     .unwrap_or_default();
                 tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
@@ -470,8 +470,9 @@ impl WasmLowerer {
         location: Location,
     ) {
         if self.memory_plan.has_memory && !self.memory_plan.has_exported_memory {
+            let name = ctx.intern_str("memory");
             let op = wasm_dialect::ExportMemory::operands()
-                .name("memory".into())
+                .name(name)
                 .index(0)
                 .build(ctx, location);
             ctx.push_op(module_block, op.op_ref());
@@ -485,8 +486,9 @@ impl WasmLowerer {
                 self.main_exports.main_param_types.is_empty(),
                 "Wasm entrypoint: root `main` must have no hidden parameters after the entry bridge"
             );
+            let name = ctx.intern_str("_start");
             let export_op = wasm_dialect::ExportFunc::operands()
-                .name("_start".into())
+                .name(name)
                 .func(Symbol::new("main"))
                 .build(ctx, location);
             ctx.push_op(module_block, export_op.op_ref());
@@ -628,7 +630,7 @@ mod tests {
             .filter_map(|op| wasm_dialect::ExportFunc::from_op(&ctx, op).ok())
             .map(|export| (export.name(&ctx), export.func(&ctx)))
             .collect();
-        assert_eq!(exports, [("_start".to_owned(), Symbol::new("main"))]);
+        assert_eq!(exports, [("_start", Symbol::new("main"))]);
         assert!(
             module
                 .ops(&ctx)
@@ -777,8 +779,9 @@ mod tests {
             .shared(false)
             .memory64(false)
             .build(&mut ctx, location);
+        let name = ctx.intern_str("memory");
         let export_memory = wasm_dialect::ExportMemory::operands()
-            .name("memory".into())
+            .name(name)
             .index(0)
             .build(&mut ctx, location);
         for op in [memory.op_ref(), export_memory.op_ref()] {

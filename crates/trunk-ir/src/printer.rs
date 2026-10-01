@@ -237,7 +237,7 @@ impl<'a> PrintState<'a> {
             }
             Attribute::String(s) => {
                 f.write_char('"')?;
-                write_escaped_string(f, s)?;
+                write_escaped_string(f, self.ctx.str(*s))?;
                 f.write_char('"')
             }
             Attribute::Bytes(bytes) => {
@@ -669,7 +669,7 @@ fn generate_auto_aliases(
         if existing.contains_key(&ty) {
             continue;
         }
-        let complexity = ctx.types().complexity(ty);
+        let complexity = ctx.types().complexity(ty, ctx.strings());
         let has_hint = crate::asm_format::suggest_type_alias_name(ctx, ty).is_some();
         // Types with a dialect-provided name hint (e.g. named structs) are
         // alias-eligible when used often enough. Types without a hint need
@@ -1493,7 +1493,8 @@ mod tests {
 
     #[test]
     fn test_print_attribute_types() {
-        let ctx = IrContext::new();
+        let mut ctx = IrContext::new();
+        let hello = ctx.string_attr("hello\nworld");
         let mut out = String::new();
 
         // Bool
@@ -1512,12 +1513,7 @@ mod tests {
 
         // String
         out.clear();
-        write_attribute(
-            &ctx,
-            &mut out,
-            &Attribute::String("hello\nworld".to_owned()),
-        )
-        .unwrap();
+        write_attribute(&ctx, &mut out, &hello).unwrap();
         assert_eq!(out, r#""hello\nworld""#);
 
         // Symbol

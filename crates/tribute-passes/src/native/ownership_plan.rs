@@ -872,7 +872,7 @@ fn bodyless_c_entry_contract(
     op: OpRef,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Option<Vec<EntryOwnership>>, OwnershipPlanError> {
-    if ctx.op(op).attributes.get_str("abi") != Some("C") {
+    if ctx.op(op).attributes.get_str(ctx, "abi") != Some("C") {
         return Ok(None);
     }
     let signature = ctx
@@ -972,7 +972,7 @@ fn validate_bodyless_signature(
         .get_type("type")
         .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
         .ok_or_else(|| OwnershipPlanError::new("bodyless function lacks exact signature"))?;
-    if ctx.op(op).attributes.get_str("abi") == Some("C") {
+    if ctx.op(op).attributes.get_str(ctx, "abi") == Some("C") {
         return Ok(signature);
     }
     if signature

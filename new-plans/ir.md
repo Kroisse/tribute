@@ -1288,6 +1288,14 @@ func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv
 Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
 정수, 부동소수점, 문자열, bytes, symbol, type, location, list, dictionary.
 
+문자열 값은 그 속성을 가진 `IrContext`의 문자열 pool에 uniquing되며, 속성은 pool
+handle만 담는다(MLIR에서 `StringAttr`가 `MLIRContext`에 uniquing되는 것과 같다).
+같은 context 안에서 같은 내용의 문자열은 같은 handle을 가지므로 속성의 identity와
+hash는 내용으로 정해진다. 문자열 값을 만들고 읽는 일은 context를 거친다. Handle은
+다른 arena 참조(type, operation 등)와 마찬가지로 그것을 만든 context 안에서만 유효하다.
+Context를 복제하면 pool도 복사되므로, 복제 전에 만든 handle은 양쪽에서 유효하고 복제
+뒤에 만든 handle은 만든 쪽에서만 유효하다. Pool은 context와 함께 해제된다.
+
 Dictionary(`Attribute::Dict`)는 symbol key에서 속성 값으로의 map이다. Key는 정렬된
 순서로 보관·출력되며, identity와 hash는 삽입 순서가 아니라 key-value 내용으로
 정해진다. Textual form은 값 위치의 `{key = value, ...}`이고, 빈 dictionary는 `{}`다.

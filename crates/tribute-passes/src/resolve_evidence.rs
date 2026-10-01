@@ -217,7 +217,7 @@ fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
                     Attribute::Symbol(Symbol::new("__tribute_next_tag")),
                 )
                 .attr("type", Attribute::Type(func_ty))
-                .attr("abi", Attribute::String("C".to_owned()))
+                .attr("abi", ctx.string_attr("C"))
                 .build(ctx);
         let func_op = ctx.create_op(data);
         let first_op = ctx.block(module_block).ops.first().copied();
@@ -482,7 +482,7 @@ mod tests {
             trunk_ir::callable::classify_callable_body(&ctx, next_tag),
             Ok(trunk_ir::callable::CallableBody::Declaration)
         );
-        assert_eq!(ctx.op(next_tag).attributes.get_str("abi"), Some("C"));
+        assert_eq!(ctx.op(next_tag).attributes.get_str(&ctx, "abi"), Some("C"));
         assert_eq!(resolved.matches("func.call").count(), 1, "{resolved}");
     }
 

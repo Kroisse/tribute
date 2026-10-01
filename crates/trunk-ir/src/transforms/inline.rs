@@ -1179,7 +1179,7 @@ mod pass {
         let helper_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr("sym_name", Attribute::Symbol(Symbol::new("helper")))
             .attr("type", Attribute::Type(fn_ty))
-            .attr("abi", Attribute::String("C".to_owned()))
+            .attr("abi", ctx.string_attr("C"))
             .region(body)
             .build(&mut ctx);
         let helper = ctx.create_op(helper_data);

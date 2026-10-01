@@ -180,6 +180,8 @@ pub struct IrContext {
     /// Type and path interners.
     types: TypeInterner,
     paths: PathInterner,
+    /// Pool for string attribute values.
+    strings: StringPool,
 
     /// Backing pools for EntityList storage.
     value_pool: ListPool<ValueRef>,
@@ -255,6 +257,7 @@ impl Clone for IrContext {
             uses: self.uses.clone(),
             types: self.types.clone(),
             paths: self.paths.clone(),
+            strings: self.strings.clone(),
             value_pool: self.value_pool.clone(),
             type_pool: self.type_pool.clone(),
             block_pool: self.block_pool.clone(),
@@ -282,6 +285,7 @@ impl IrContext {
             uses: SecondaryMap::new(),
             types: TypeInterner::new(),
             paths: PathInterner::new(),
+            strings: StringPool::new(),
             value_pool: ListPool::new(),
             type_pool: ListPool::new(),
             block_pool: ListPool::new(),
@@ -309,6 +313,7 @@ impl IrContext {
             uses: secondary_with_capacity(&self.uses),
             types: self.types.clone(),
             paths: self.paths.clone(),
+            strings: self.strings.clone(),
             value_pool: self.value_pool.clone(),
             type_pool: self.type_pool.clone(),
             block_pool: self.block_pool.clone(),
@@ -367,6 +372,35 @@ impl IrContext {
     ///
     /// A path already interned is found without allocating; a new path is
     /// copied into the interner once.
+    /// The pool holding string attribute values.
+    pub fn strings(&self) -> &StringPool {
+        &self.strings
+    }
+
+    /// Intern a string attribute value, advancing the revision only for a new entry.
+    pub fn intern_str(&mut self, text: &str) -> StringRef {
+        if let Some(existing) = self.strings.lookup(text) {
+            return existing;
+        }
+        advance_revision(&mut self.revision);
+        self.strings.intern(text)
+    }
+
+    /// Find a pooled string without interning it.
+    pub fn lookup_str(&self, text: &str) -> Option<StringRef> {
+        self.strings.lookup(text)
+    }
+
+    /// The text of a pooled string.
+    pub fn str(&self, r: StringRef) -> &str {
+        self.strings.get(r)
+    }
+
+    /// A string attribute holding `text`.
+    pub fn string_attr(&mut self, text: &str) -> Attribute {
+        Attribute::String(self.intern_str(text))
+    }
+
     pub fn intern_path(&mut self, path: &str) -> PathRef {
         match self.paths.entry(path) {
             InternEntry::Occupied(existing) => existing,
