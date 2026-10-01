@@ -111,6 +111,15 @@ impl<'db> TypeChecker<'db> {
         expr: &Expr<ResolvedRef<'db>>,
         mode: Mode<'db>,
     ) -> Expr<TypedRef<'db>> {
+        // An error type carries no expectation: it stands in for a type that
+        // was already reported missing or invalid, so the expression is
+        // inferred on its own.
+        let mode = match mode {
+            Mode::Check(expected) if matches!(expected.kind(self.db()), TypeKind::Error) => {
+                Mode::Infer
+            }
+            mode => mode,
+        };
         let lambda_expected = match mode {
             Mode::Infer => None,
             Mode::Check(expected) => Some(expected),
