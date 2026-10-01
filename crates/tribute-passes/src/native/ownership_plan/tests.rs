@@ -175,7 +175,7 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
         parent_op: None,
     });
     ctx.push_op_region(op, extra);
-    let before = ctx.op_regions(op).collect::<Vec<_>>();
+    let before: trunk_ir::RegionList = ctx.op_regions(op).collect();
     let error = production_plan(&ctx, module).expect_err("multiple bodies");
     assert!(
         error

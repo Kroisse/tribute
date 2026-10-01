@@ -1386,7 +1386,7 @@ mod tests {
     use super::*;
     use crate::location::Span;
     use crate::symbol::Symbol;
-    use smallvec::smallvec;
+    use smallvec::{smallvec, smallvec_inline};
 
     fn test_location(ctx: &mut IrContext) -> Location {
         let path = ctx.intern_path("file:///test.trb");
@@ -1414,11 +1414,11 @@ mod tests {
         })
     }
 
-    fn region_ids(ctx: &IrContext, op: OpRef) -> Vec<RegionRef> {
+    fn region_ids(ctx: &IrContext, op: OpRef) -> RegionList {
         ctx.op_regions(op).collect()
     }
 
-    fn successor_ids(ctx: &IrContext, op: OpRef) -> Vec<BlockRef> {
+    fn successor_ids(ctx: &IrContext, op: OpRef) -> BlockList {
         ctx.op_successors(op).collect()
     }
 
@@ -1433,7 +1433,7 @@ mod tests {
             .build(&mut ctx);
         let op = ctx.create_op(data);
         ctx.push_op_region(op, c);
-        assert_eq!(region_ids(&ctx, op), [a, b, c]);
+        assert_eq!(region_ids(&ctx, op), smallvec_inline![a, b, c]);
         assert_eq!(ctx.op_region_count(op), 3);
         assert_eq!(ctx.op_region(op, 2), Some(c));
         assert!(
@@ -1444,12 +1444,12 @@ mod tests {
 
         // Detaching from the middle, the head, and the tail keeps the rest linked.
         ctx.detach_region(b);
-        assert_eq!(region_ids(&ctx, op), [a, c]);
+        assert_eq!(region_ids(&ctx, op), smallvec_inline![a, c]);
         ctx.detach_region(a);
-        assert_eq!(region_ids(&ctx, op), [c]);
+        assert_eq!(region_ids(&ctx, op), smallvec_inline![c]);
         ctx.push_op_region(op, b);
         ctx.detach_region(b);
-        assert_eq!(region_ids(&ctx, op), [c]);
+        assert_eq!(region_ids(&ctx, op), smallvec_inline![c]);
         assert_eq!(ctx.region(b).parent_op, None);
 
         // A detached region can be attached elsewhere.
@@ -1460,12 +1460,12 @@ mod tests {
         ));
         ctx.push_op_region(other, a);
         ctx.push_op_region(other, b);
-        assert_eq!(region_ids(&ctx, other), [a, b]);
+        assert_eq!(region_ids(&ctx, other), smallvec_inline![a, b]);
 
         ctx.clear_op_regions(op);
-        assert_eq!(region_ids(&ctx, op), []);
+        assert!(region_ids(&ctx, op).is_empty());
         assert_eq!(ctx.region(c).parent_op, None);
-        assert_eq!(region_ids(&ctx, other), [a, b]);
+        assert_eq!(region_ids(&ctx, other), smallvec_inline![a, b]);
     }
 
     #[test]
@@ -1480,7 +1480,7 @@ mod tests {
         let data = builder.build(&mut ctx);
         let op = ctx.create_op(data);
         let clone = ctx.clone_op(op, &mut IrMapping::new());
-        assert_eq!(region_ids(&ctx, op), regions);
+        assert_eq!(region_ids(&ctx, op)[..], regions);
         let cloned = region_ids(&ctx, clone);
         assert_eq!(cloned.len(), 3);
         assert!(cloned.iter().all(|r| !regions.contains(r)));
@@ -1531,12 +1531,13 @@ mod tests {
             }
             let data = builder.build(&mut ctx);
             let op = ctx.create_op(data);
-            assert_eq!(successor_ids(&ctx, op), blocks[..len]);
+            assert_eq!(successor_ids(&ctx, op)[..], blocks[..len]);
             assert_eq!(ctx.op_successor_count(op), len);
             assert_eq!(ctx.op_successors(op).len(), len);
-            assert_eq!(
-                ctx.op_successors(op).rev().collect::<Vec<_>>(),
-                blocks[..len].iter().rev().copied().collect::<Vec<_>>(),
+            assert!(
+                ctx.op_successors(op)
+                    .rev()
+                    .eq(blocks[..len].iter().rev().copied())
             );
         }
 
@@ -1549,17 +1550,17 @@ mod tests {
         ctx.set_op_successor(op, 3, blocks[0]);
         assert_eq!(
             successor_ids(&ctx, op),
-            [blocks[0], blocks[1], blocks[2], blocks[0]]
+            smallvec_inline![blocks[0], blocks[1], blocks[2], blocks[0]]
         );
         let clone = ctx.clone_op(op, &mut IrMapping::new());
         ctx.truncate_op_successors(op, 1);
-        assert_eq!(successor_ids(&ctx, op), [blocks[0]]);
+        assert_eq!(successor_ids(&ctx, op), smallvec_inline![blocks[0]]);
         assert_eq!(
             successor_ids(&ctx, clone),
-            [blocks[0], blocks[1], blocks[2], blocks[0]]
+            smallvec_inline![blocks[0], blocks[1], blocks[2], blocks[0]]
         );
         ctx.set_op_successor(op, 0, blocks[3]);
-        assert_eq!(successor_ids(&ctx, op), [blocks[3]]);
+        assert_eq!(successor_ids(&ctx, op), smallvec_inline![blocks[3]]);
     }
 
     #[test]

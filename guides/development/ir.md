@@ -235,3 +235,12 @@ for region in regions {
     rewrite_region(ctx, region);
 }
 ```
+
+Tests compare such a list with a `smallvec_inline!` literal, or compare its
+slice with an array, instead of collecting into a `Vec`:
+
+```rust
+let regions: RegionList = ctx.op_regions(op).collect();
+assert_eq!(regions, smallvec_inline![body, completion]);
+assert_eq!(regions[..], [body, completion]);
+```
