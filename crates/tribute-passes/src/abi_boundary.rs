@@ -97,6 +97,12 @@ pub enum ViolationKind {
     /// A function definition or indirect call without an exact signature.
     #[display("missing exact callable signature")]
     MissingExactSignature,
+    /// A proper-tail signature input without the consumed ownership contract.
+    #[display("tail signature input without the consumed ownership contract")]
+    UnconsumedTailInput,
+    /// A parameter ownership contract other than `@consumed`.
+    #[display("unknown ownership contract {_0}")]
+    UnknownOwnership(String),
     /// A referenced C declaration that the target does not bind.
     #[display("unsatisfiable runtime binding {_0}")]
     UnsatisfiableRuntimeBinding(String),
@@ -361,6 +367,9 @@ impl<'a> Verifier<'a> {
         {
             found.push((ViolationKind::NeverCallableResult, String::new()));
         }
+        if let Some(signature) = func::FuncSig::from_type_ref(ctx, ty) {
+            found.extend(ownership_violations(ctx, signature));
+        }
         for (name, value) in data.attrs.iter() {
             let location = format!(" type attribute {name}");
             if let Some(kind) = classify_attribute_name(*name) {
@@ -376,6 +385,30 @@ impl<'a> Verifier<'a> {
         self.type_violations.insert(ty, found.clone());
         found
     }
+}
+
+/// Violations of the parameter ownership contract `signature` states.
+fn ownership_violations(ctx: &IrContext, signature: func::FuncSig) -> Vec<TypeViolation> {
+    let ownership = Symbol::new(crate::target_abi::OWNERSHIP_ATTR);
+    let consumed = Symbol::new(crate::target_abi::CONSUMED);
+    let tail = signature.call_conv(ctx) == Some(func::CallConv::Tail);
+    let mut found = Vec::new();
+    for (index, attrs) in signature.input_attrs(ctx).enumerate() {
+        let location = format!(" input {index}");
+        match attrs.get(ownership) {
+            Some(Attribute::Symbol(mode)) if *mode == consumed => {}
+            Some(Attribute::Symbol(mode)) => {
+                found.push((ViolationKind::UnknownOwnership(mode.to_string()), location))
+            }
+            Some(other) => found.push((
+                ViolationKind::UnknownOwnership(format!("{other:?}")),
+                location,
+            )),
+            None if tail => found.push((ViolationKind::UnconsumedTailInput, location)),
+            None => {}
+        }
+    }
+    found
 }
 
 /// The violation a language-specific attribute name represents, if any.
@@ -454,12 +487,12 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>, tribute.definition.source = @here} {
+  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>, tribute.definition.source = @here} {
     func.return
   }
-  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
-    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = @tail}>}
+  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>
+    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>}
   }
 }"#,
         );
@@ -625,30 +658,59 @@ mod tests {
 
     #[test]
     fn reference_calling_convention_must_match_its_target() {
-        let module = |definition: &str, reference: &str| {
-            format!(
-                r#"core.module @test {{
-  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (){definition}>}} {{
+        let tail =
+            "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>";
+        let platform = "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> ()>";
+        assert_eq!(
+            kinds(&reference_module(tail, platform)),
+            [ViolationKind::ReferenceSignatureMismatch]
+        );
+        assert_eq!(
+            kinds(&reference_module(platform, tail)),
+            [ViolationKind::ReferenceSignatureMismatch]
+        );
+        assert_eq!(kinds(&reference_module(tail, tail)), []);
+    }
+
+    /// A module whose `@target` has signature `definition` and is referenced
+    /// at type `reference`.
+    fn reference_module(definition: &str, reference: &str) -> String {
+        format!(
+            r#"core.module @test {{
+  func.func @target(%value: core.i32) attributes {{type = {definition}}} {{
     func.return
   }}
   func.func @caller() {{
-    %reference = func.constant {{func_ref = @target}} : func.func_sig<(core.i32) -> (){reference}>
+    %reference = func.constant {{func_ref = @target}} : {reference}
     func.return
   }}
 }}"#
-            )
-        };
+        )
+    }
+
+    #[test]
+    fn the_ownership_contract_must_be_complete_and_known() {
+        let unmarked_tail = "func.func_sig<(core.i32) -> (), {call_conv = @tail}>";
         assert_eq!(
-            kinds(&module(", {call_conv = @tail}", "")),
-            [ViolationKind::ReferenceSignatureMismatch]
+            kinds(&reference_module(unmarked_tail, unmarked_tail)),
+            [
+                ViolationKind::UnconsumedTailInput,
+                ViolationKind::UnconsumedTailInput,
+            ]
         );
+        let borrowed = "func.func_sig<(core.i32 {tribute.ownership = @borrowed}) -> ()>";
         assert_eq!(
-            kinds(&module("", ", {call_conv = @tail}")),
-            [ViolationKind::ReferenceSignatureMismatch]
+            kinds(&reference_module(borrowed, borrowed)),
+            [
+                ViolationKind::UnknownOwnership("borrowed".to_owned()),
+                ViolationKind::UnknownOwnership("borrowed".to_owned()),
+            ]
         );
+        let consumed = "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> ()>";
+        let unmarked = "func.func_sig<(core.i32) -> ()>";
         assert_eq!(
-            kinds(&module(", {call_conv = @tail}", ", {call_conv = @tail}")),
-            []
+            kinds(&reference_module(consumed, unmarked)),
+            [ViolationKind::ReferenceSignatureMismatch]
         );
     }
 
