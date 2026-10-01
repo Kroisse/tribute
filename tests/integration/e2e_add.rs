@@ -478,10 +478,12 @@ fn assert_indirect_signature(ctx: &IrContext, owner: func::Func, call: OpRef) {
         assert!(ctx.op_results(call).is_empty());
         let owner_signature = func::FuncSig::from_type_ref(ctx, owner.r#type(ctx)).unwrap();
         assert_eq!(signature.results(ctx), owner_signature.results(ctx));
-        assert_eq!(
-            tribute_core::get_calling_convention(ctx, call),
-            Some(tribute_core::CallingConvention::Cps)
-        );
+        // A transfer through a convention-proven closure keeps its convention
+        // until closure lowering consumes it.
+        let callee_ty = ctx.value_ty(operands[0]);
+        let expected = tribute_core::get_physical_closure_convention(ctx, callee_ty)
+            .map(|_| tribute_core::CallingConvention::Cps);
+        assert_eq!(tribute_core::get_calling_convention(ctx, call), expected);
     } else {
         assert_eq!(ctx.op_result_types(call), signature.results(ctx));
     }

@@ -176,11 +176,7 @@ impl PendingViolation {
 
 /// Violations still present at the exit of `target`'s boundary.
 pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViolation] {
-    const PENDING: &[PendingViolation] = &[
-        // No pass after the exit reads it any longer; the boundary does not
-        // strip it yet.
-        PendingViolation::Attribute("tribute.calling_convention"),
-    ];
+    const PENDING: &[PendingViolation] = &[];
     match target {
         TargetKind::Native | TargetKind::Wasm => PENDING,
     }

@@ -147,16 +147,16 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx))
             .expect("exact callable signature");
         let convention = get_calling_convention(&ctx, op);
-        if convention == Some(CallingConvention::Cps) {
+        if native {
+            // The boundary consumes the semantic convention; a proper tail
+            // transfer is what represents CPS past its exit.
+            assert_eq!(convention, None, "convention crossed the boundary exit");
+        } else if convention == Some(CallingConvention::Cps) {
             cps_functions += 1;
             let results = signature.results(&ctx);
             assert!(
-                if native {
-                    results.is_empty()
-                } else {
-                    results.len() == 1 && type_shape(&ctx, results[0]) == "core.never"
-                },
-                "CPS functions must have logical Never or empty physical results"
+                results.len() == 1 && type_shape(&ctx, results[0]) == "core.never",
+                "CPS functions must have logical Never results"
             );
         }
         let name = function.sym_name(&ctx).to_string();
@@ -205,6 +205,9 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
                     data.name.to_string().as_str(),
                     "tail_call" | "tail_call_indirect"
                 ) {
+                    if native {
+                        cps_functions += 1;
+                    }
                     assert!(
                         ctx.op_result_types(nested).is_empty(),
                         "tail transfer has SSA results"
@@ -221,10 +224,15 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
             }
             ControlFlow::Continue(WalkAction::Advance)
         });
+        let convention = if native {
+            String::new()
+        } else {
+            format!("{convention:?} ")
+        };
         summary.insert(
             name,
             format!(
-                "{convention:?} ({inputs}) -> ({results})\n{}",
+                "{convention}({inputs}) -> ({results})\n{}",
                 transfers
                     .iter()
                     .map(|(shape, count)| format!("  {shape}: {count}"))

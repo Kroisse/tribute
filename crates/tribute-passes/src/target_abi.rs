@@ -201,6 +201,22 @@ pub fn lower_cps_signatures_to_physical(
             func::remove_indirect_call_signature(&mut converted_attributes);
             indirect_signatures.push((op, signature));
         }
+        // Transfers were validated against their callee above. Closure
+        // lowering still reads the convention of a closure transfer; no later
+        // pass reads any other transfer's.
+        if is_transfer(converter.ctx, op)
+            && converter
+                .ctx
+                .op(op)
+                .attributes
+                .contains_key(CALLING_CONVENTION_ATTR)
+            && IndirectCallLikeOps::callee(converter.ctx, op).is_none_or(|callee| {
+                crate::closure_lower::physical_closure_type_for_callee(converter.ctx, callee)
+                    .is_none()
+            })
+        {
+            consumed_attributes.push((op, Symbol::new(CALLING_CONVENTION_ATTR)));
+        }
         let op_attributes: Vec<_> = converted_attributes
             .iter()
             .map(|(name, value)| (*name, value.clone()))
@@ -468,9 +484,6 @@ pub fn compose_root_entry_bridge(
                 .callee(root_main)
                 .results([nil_ty])
                 .build(ctx, location);
-            if let Some(convention) = convention {
-                set_root_convention(ctx, call.op_ref(), convention);
-            }
             ctx.push_op(entry, call.op_ref());
             ctx.op_results(call.op_ref())[0]
         }
@@ -655,7 +668,6 @@ fn build_cps_root_call(
         .callee(worker)
         .results([])
         .build(ctx, location);
-    set_root_convention(ctx, worker_call.op_ref(), CallingConvention::Cps);
     ctx.push_op(entry, worker_call.op_ref());
     let completed = adt::StructGet::operands(cell_new.result(ctx))
         .r#type(cell_ty)
@@ -1272,6 +1284,13 @@ fn validate_transfers(
     Ok(())
 }
 
+fn is_transfer(ctx: &IrContext, op: OpRef) -> bool {
+    func::Call::matches(ctx, op)
+        || func::TailCall::matches(ctx, op)
+        || func::CallIndirect::matches(ctx, op)
+        || func::TailCallIndirect::matches(ctx, op)
+}
+
 fn operands_match(ctx: &IrContext, operands: &[ValueRef], params: &[TypeRef]) -> bool {
     operands.len() == params.len()
         && operands
@@ -1856,11 +1875,13 @@ mod tests {
             .into_iter()
             .filter(|&op| op != cps.op_ref())
             .map(|op| {
-                (
-                    op,
-                    ctx.op(op).attributes.clone(),
-                    ctx.op_result_types(op).to_vec(),
-                )
+                // Physicalization consumes the convention of every transfer
+                // it validates against a non-closure callee.
+                let mut attributes = ctx.op(op).attributes.clone();
+                if is_transfer(&ctx, op) {
+                    attributes.remove(CALLING_CONVENTION_ATTR);
+                }
+                (op, attributes, ctx.op_result_types(op).to_vec())
             })
             .collect();
         let aliases = ctx.type_aliases().to_vec();
@@ -2211,10 +2232,9 @@ mod tests {
             .expect("entry bridge must call the root worker");
         assert_eq!(call.callee(ctx), Symbol::new(ROOT_MAIN_SYMBOL));
         assert_eq!(ctx.op_operands(call.op_ref()), [empty.result(ctx)]);
-        assert_eq!(
-            get_calling_convention(ctx, call.op_ref()),
-            Some(CallingConvention::EvidenceDirect)
-        );
+        // The bridge reads the worker's convention and does not record it on
+        // the call it builds.
+        assert_eq!(get_calling_convention(ctx, call.op_ref()), None);
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
@@ -2504,6 +2524,37 @@ mod tests {
             assert!(error.to_string().contains(expected), "{error}");
             assert_eq!(print_module(&ctx, module.op()), before);
         }
+    }
+
+    #[test]
+    fn closure_transfer_convention_is_left_for_closure_lowering() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !callback = closure.closure(func.func_sig<() -> core.i32>) {tribute.calling_convention = 0}
+  func.func @run(%callback: !callback) -> core.i32 attributes {tribute.calling_convention = 0} {
+    %result = func.call_indirect %callback {signature = func.func_sig<() -> core.i32>, tribute.calling_convention = 0} : core.i32
+    func.return %result
+  }
+}"#,
+        );
+
+        lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
+
+        let run = function(&ctx, module, "run");
+        assert_eq!(
+            get_calling_convention(&ctx, run.op_ref()),
+            Some(CallingConvention::Direct)
+        );
+        let call = collect_ops(&ctx, run.op_ref())
+            .into_iter()
+            .find(|&op| func::CallIndirect::matches(&ctx, op))
+            .unwrap();
+        assert_eq!(
+            get_calling_convention(&ctx, call),
+            Some(CallingConvention::Direct)
+        );
     }
 
     #[test]

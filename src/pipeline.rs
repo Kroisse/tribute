@@ -1765,9 +1765,11 @@ mod tests {
                     (function.sym_name(&ctx) == Symbol::from_dynamic(name)).then_some(function)
                 })
                 .expect("root bridge function remains present");
+            // The convention is consumed inside the boundary; the empty
+            // physical result list is what identifies a Cps callable here.
             assert_eq!(
                 tribute_core::get_calling_convention(&ctx, function.op_ref()),
-                Some(tribute_core::CallingConvention::Cps)
+                None
             );
             assert!(
                 func_dialect::FuncSig::from_type_ref(&ctx, function.r#type(&ctx))
@@ -2392,7 +2394,7 @@ fn main() -> Nil {
         assert!(clif::ReturnCallIndirect::matches(&ctx, call));
         assert_eq!(
             ctx.op(call).attributes.get("tribute.calling_convention"),
-            Some(&trunk_ir::Attribute::Int(2))
+            None
         );
         let trunk_ir::refs::ValueDef::OpResult(environment_load, 0) =
             ctx.value_def(*continuation_environment)
