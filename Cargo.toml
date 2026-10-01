@@ -79,6 +79,7 @@ clap.workspace = true
 crossbeam-channel.workspace = true
 derive_more.workspace = true
 fluent-uri.workspace = true
+itertools.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true
 parking_lot.workspace = true
@@ -102,7 +103,6 @@ trunk-ir-wasm-backend.workspace = true
 [dev-dependencies]
 wasmparser.workspace = true
 insta.workspace = true
-itertools.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde.workspace = true
 

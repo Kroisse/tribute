@@ -3,8 +3,7 @@
 //! The boundary exit contract (`new-plans/ir.md`, "Representation/ABI 경계")
 //! forbids upper-level control operations, types, and semantic metadata past
 //! the point where target dialect lowering begins. This module reports every
-//! violation of that contract; the pipeline observes the report against a list
-//! of violations that later boundary work is known to remove.
+//! violation of that contract, and the pipeline rejects a module with any.
 
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
@@ -139,60 +138,6 @@ pub fn verify_boundary_exit(
     }
     verifier.check_runtime_bindings(&ops, &functions, target);
     verifier.violations
-}
-
-/// A violation class that later boundary work is known to remove.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, derive_more::Display)]
-pub enum PendingViolation {
-    /// An operation `dialect.name`.
-    #[display("forbidden op {_0}.{_1}")]
-    Op(&'static str, &'static str),
-    /// A forbidden attribute.
-    #[display("forbidden attribute {_0}")]
-    Attribute(&'static str),
-    /// An attribute that has not been classified yet.
-    #[display("unclassified attribute {_0}")]
-    Unclassified(&'static str),
-}
-
-impl PendingViolation {
-    /// Whether this pending entry covers `kind`.
-    pub fn covers(self, kind: &ViolationKind) -> bool {
-        match (self, kind) {
-            (
-                Self::Op(expected_dialect, expected_name),
-                ViolationKind::ForbiddenOp { dialect, name },
-            ) => dialect == expected_dialect && name == expected_name,
-            (Self::Attribute(expected), ViolationKind::ForbiddenAttribute(name)) => {
-                name == expected
-            }
-            (Self::Unclassified(expected), ViolationKind::UnclassifiedAttribute(name)) => {
-                name == expected
-            }
-            _ => false,
-        }
-    }
-}
-
-/// Violations still present at the exit of `target`'s boundary.
-pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViolation] {
-    const PENDING: &[PendingViolation] = &[];
-    match target {
-        TargetKind::Native | TargetKind::Wasm => PENDING,
-    }
-}
-
-/// Violations of `target`'s boundary exit that no pending entry covers.
-pub fn unexpected_boundary_violations(
-    ctx: &IrContext,
-    module: Module,
-    target: TargetKind,
-) -> Vec<BoundaryViolation> {
-    let pending = pending_boundary_violations(target);
-    verify_boundary_exit(ctx, module, target)
-        .into_iter()
-        .filter(|violation| !pending.iter().any(|entry| entry.covers(&violation.kind)))
-        .collect()
 }
 
 /// A violation found inside a type, relative to the site that uses the type.
@@ -898,23 +843,5 @@ mod tests {
             .collect();
         assert_eq!(sites.len(), 2, "{sites:?}");
         assert_ne!(sites[0], sites[1]);
-    }
-
-    #[test]
-    fn pending_entries_cover_only_their_own_kind() {
-        let pending = PendingViolation::Op("effect", "extend");
-        assert!(pending.covers(&ViolationKind::ForbiddenOp {
-            dialect: "effect".to_owned(),
-            name: "extend".to_owned(),
-        }));
-        assert!(!pending.covers(&ViolationKind::ForbiddenOp {
-            dialect: "effect".to_owned(),
-            name: "fresh_prompt_tag".to_owned(),
-        }));
-        assert!(
-            !PendingViolation::Attribute("tribute.calling_convention").covers(
-                &ViolationKind::UnclassifiedAttribute("tribute.calling_convention".to_owned())
-            )
-        );
     }
 }
