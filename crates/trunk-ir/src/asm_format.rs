@@ -10,7 +10,7 @@ use std::fmt;
 use std::sync::LazyLock;
 
 use crate::Symbol;
-use crate::ops::DialectOp;
+use crate::ops::{DialectOp, DialectType};
 use crate::{IrContext, OpRef, TypeRef};
 
 // =============================================================================
@@ -88,25 +88,114 @@ impl OpAsmFormat {
 
 inventory::collect!(OpAsmFormat);
 
-/// Global registry mapping (dialect, op_name) → OpAsmFormat, lazily built from inventory.
-static ASM_FORMAT_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpAsmFormat>> =
-    LazyLock::new(|| {
-        let mut map = HashMap::new();
-        for fmt in inventory::iter::<OpAsmFormat> {
-            let dialect = Symbol::from_dynamic(fmt.dialect);
-            let op_name = Symbol::from_dynamic(fmt.op_name);
-            if map.contains_key(&(dialect, op_name)) {
-                panic!(
-                    "duplicate OpAsmFormat registration for '{}.{}'",
-                    fmt.dialect, fmt.op_name
-                );
-            }
-            map.insert((dialect, op_name), fmt);
-        }
-        map
-    });
+impl Registered for OpAsmFormat {
+    const KIND: &'static str = "OpAsmFormat";
+
+    fn key(&self) -> (&'static str, &'static str) {
+        (self.dialect, self.op_name)
+    }
+}
+
+static OP_ASM_FORMATS: LazyLock<Registry<OpAsmFormat>> = LazyLock::new(Registry::collect);
 
 /// Look up a registered custom assembly format for the given operation.
 pub fn lookup_asm_format(dialect: Symbol, op_name: Symbol) -> Option<&'static OpAsmFormat> {
-    ASM_FORMAT_REGISTRY.get(&(dialect, op_name)).copied()
+    OP_ASM_FORMATS.get(dialect, op_name)
+}
+
+// =============================================================================
+// TypeAsmFormat — custom assembly format for types (print + parse)
+// =============================================================================
+
+/// Custom assembly format for a type — bundles print + parse.
+///
+/// A dialect registers [`TypeAsmFormat::new`] via `inventory::submit!` to own
+/// its type's textual syntax. Like every type, the custom form is
+/// self-delimiting: it is written inside `dialect.name<...>`.
+pub struct TypeAsmFormat {
+    dialect: &'static str,
+    type_name: &'static str,
+    /// Custom printer. Writes the whole type, including `dialect.name<` and
+    /// the closing `>`, or returns `None` to leave a type it cannot represent,
+    /// such as a malformed one, to generic printing.
+    pub print_fn: TypePrintFn,
+    /// Custom parser. Called after `dialect.name<` is consumed; it consumes the
+    /// closing `>`. A backtrack falls back to the generic form.
+    pub parse_fn: TypeParseFn,
+}
+
+/// Custom printer of a [`TypeAsmFormat`].
+pub type TypePrintFn =
+    fn(&mut crate::printer::TypePrintHelper<'_, '_>, TypeRef) -> Option<fmt::Result>;
+
+/// Custom parser of a [`TypeAsmFormat`].
+///
+/// It returns the type in generic raw form, so the parser builds it like any
+/// other type.
+pub type TypeParseFn = for<'a> fn(
+    input: &mut &'a str,
+    dialect: &'a str,
+    name: &'a str,
+) -> winnow::ModalResult<crate::parser::raw::RawType<'a>>;
+
+impl TypeAsmFormat {
+    /// Custom assembly format for the type wrapped by `T`.
+    pub const fn new<T: DialectType>(print_fn: TypePrintFn, parse_fn: TypeParseFn) -> Self {
+        Self {
+            dialect: T::DIALECT_NAME,
+            type_name: T::TYPE_NAME,
+            print_fn,
+            parse_fn,
+        }
+    }
+}
+
+inventory::collect!(TypeAsmFormat);
+
+impl Registered for TypeAsmFormat {
+    const KIND: &'static str = "TypeAsmFormat";
+
+    fn key(&self) -> (&'static str, &'static str) {
+        (self.dialect, self.type_name)
+    }
+}
+
+static TYPE_ASM_FORMATS: LazyLock<Registry<TypeAsmFormat>> = LazyLock::new(Registry::collect);
+
+/// Look up a registered custom assembly format for the given type.
+pub fn lookup_type_asm_format(dialect: Symbol, name: Symbol) -> Option<&'static TypeAsmFormat> {
+    TYPE_ASM_FORMATS.get(dialect, name)
+}
+
+// =============================================================================
+// Registry shared by the format kinds
+// =============================================================================
+
+/// A format registered for one `(dialect, name)`.
+trait Registered: inventory::Collect {
+    /// The format kind, for duplicate-registration diagnostics.
+    const KIND: &'static str;
+
+    fn key(&self) -> (&'static str, &'static str);
+}
+
+/// Formats of one kind by `(dialect, name)`, built once from `inventory`.
+struct Registry<F: 'static>(HashMap<(Symbol, Symbol), &'static F>);
+
+impl<F: Registered> Registry<F> {
+    fn collect() -> Self {
+        let mut map = HashMap::new();
+        for format in inventory::iter::<F> {
+            let (dialect, name) = format.key();
+            let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(name));
+            if map.insert(key, format).is_some() {
+                panic!("duplicate {} registration for '{dialect}.{name}'", F::KIND);
+            }
+        }
+        Self(map)
+    }
+
+    fn get(&self, dialect: Symbol, name: Symbol) -> Option<&'static F> {
+        self.0.get(&(dialect, name)).copied()
+    }
 }

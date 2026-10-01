@@ -101,12 +101,6 @@ pub enum RawType<'a> {
         results: Vec<RawParam<'a>>,
         attrs: RawAttrDict<'a>,
     },
-    /// Nominal struct syntax `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`.
-    AdtStruct {
-        name: String,
-        fields: Vec<(String, RawParam<'a>)>,
-        attrs: RawAttrDict<'a>,
-    },
     /// Type alias reference: `!name` or `!"quoted name"`
     Alias(String),
 }
@@ -327,8 +321,16 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     '<'.parse_next(input)?;
     ws.parse_next(input)?;
 
-    if dialect == "adt" && name == "struct" && input.starts_with('@') {
-        return raw_adt_struct_body.parse_next(input);
+    if let Some(format) = crate::asm_format::lookup_type_asm_format(
+        crate::Symbol::from_dynamic(dialect),
+        crate::Symbol::from_dynamic(name),
+    ) {
+        let checkpoint = *input;
+        match (format.parse_fn)(input, dialect, name) {
+            Ok(ty) => return Ok(ty),
+            Err(winnow::error::ErrMode::Backtrack(_)) => *input = checkpoint,
+            Err(error) => return Err(error),
+        }
     }
 
     if input.starts_with('(') {
@@ -383,37 +385,8 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     })
 }
 
-/// Parse the rest of `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`
-/// after its opening bracket.
-fn raw_adt_struct_body<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
-    let name = symbol_ref.parse_next(input)?;
-    ws.parse_next(input)?;
-    let fields = delimited(
-        ('(', ws),
-        separated(
-            0..,
-            (ws, symbol_ref, ws, ':', ws, raw_param, ws)
-                .map(|(_, field, _, _, _, param, _)| (field, param)),
-            ',',
-        ),
-        (ws, ')'),
-    )
-    .parse_next(input)?;
-    ws.parse_next(input)?;
-    let attrs = opt(preceded((',', ws), raw_attr_dict))
-        .parse_next(input)?
-        .unwrap_or_default();
-    ws.parse_next(input)?;
-    '>'.parse_next(input)?;
-    Ok(RawType::AdtStruct {
-        name,
-        fields,
-        attrs,
-    })
-}
-
 /// Parse a type parameter with its optional attributes: `type {attrs}`.
-fn raw_param<'a>(input: &mut &'a str) -> ModalResult<RawParam<'a>> {
+pub fn raw_param<'a>(input: &mut &'a str) -> ModalResult<RawParam<'a>> {
     let ty = raw_type.parse_next(input)?;
     let attrs = opt(preceded(ws, raw_attr_dict))
         .parse_next(input)?
@@ -894,7 +867,6 @@ mod tests {
                 ..
             } => (dialect, name, params),
             RawType::Function { .. } => panic!("expected Concrete, got Function"),
-            RawType::AdtStruct { .. } => panic!("expected Concrete, got AdtStruct"),
             RawType::Alias(name) => panic!("expected Concrete, got Alias(!{name})"),
         }
     }
@@ -1164,7 +1136,6 @@ mod tests {
                 assert_eq!(attrs[0].0, "tag");
             }
             RawType::Function { .. } => panic!("expected Concrete, got Function"),
-            RawType::AdtStruct { .. } => panic!("expected Concrete, got AdtStruct"),
             RawType::Alias(n) => panic!("expected Concrete, got Alias(!{n})"),
         }
         // A dictionary after the closing bracket is not the type's.

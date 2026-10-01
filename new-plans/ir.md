@@ -1275,6 +1275,10 @@ func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv
 - 이 규칙은 일반 형태와 전용 문법에 똑같이 적용된다. 전용 문법을 가진 타입도
   모든 내용을 `<…>` 안에 둔다. 타입 안의 `(…)`는 함수 입력·결과처럼 위치가 있는
   목록에만 쓴다.
+- 전용 문법은 그 타입을 정의하는 dialect가 type assembly format으로 등록해
+  소유한다. 전용 형식은 일반 형식과 같은 저장 표현으로 읽히며, 전용 형식으로
+  표현할 수 없는 타입(예: 검증에 실패한 타입)은 일반 형식으로 출력한다. 일반
+  형식은 항상 읽을 수 있다.
 - 저장 표현 전용인 예약 type 속성은 textual dictionary에 쓰지 않는다. 매개변수
   속성 list(`param_attrs`)와 함수 타입의 count가 여기에 해당하며, reader는 이를
   거부한다.

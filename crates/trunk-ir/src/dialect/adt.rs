@@ -316,3 +316,110 @@ fn finish_struct_type(
     }
     Ok(Struct(ctx.intern_type(data)))
 }
+
+// === Textual syntax: `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>` ===
+
+inventory::submit! {
+    crate::asm_format::TypeAsmFormat::new::<Struct>(print_struct_type, parse_struct_type)
+}
+
+fn print_struct_type(
+    h: &mut crate::printer::TypePrintHelper<'_, '_>,
+    ty: TypeRef,
+) -> Option<std::fmt::Result> {
+    let adt_struct = Struct::from_type_ref(h.ctx(), ty)?;
+    Some(write_struct_type(h, adt_struct))
+}
+
+fn write_struct_type(
+    h: &mut crate::printer::TypePrintHelper<'_, '_>,
+    adt_struct: Struct,
+) -> std::fmt::Result {
+    use std::fmt::Write;
+
+    let ctx = h.ctx();
+    h.write_str("adt.struct<")?;
+    h.write_symbol(adt_struct.name(ctx))?;
+    h.write_char('(')?;
+    for (index, (name, ty)) in adt_struct.fields(ctx).enumerate() {
+        if index > 0 {
+            h.write_str(", ")?;
+        }
+        h.write_symbol(name)?;
+        h.write_str(": ")?;
+        h.write_type(ty)?;
+        let mut attrs = adt_struct.field_attrs(ctx, index).peekable();
+        if attrs.peek().is_some() {
+            h.write_char(' ')?;
+            h.write_attr_dict(attrs)?;
+        }
+    }
+    h.write_char(')')?;
+    let mut attrs = adt_struct.extra_attrs(ctx).peekable();
+    if attrs.peek().is_some() {
+        h.write_str(", ")?;
+        h.write_attr_dict(attrs)?;
+    }
+    h.write_char('>')
+}
+
+/// Parse the rest of `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`
+/// after its opening bracket into the generic form: each field's name becomes
+/// its parameter's `name` attribute, and the struct's name the type's.
+///
+/// The syntax owns both names, so `name` may not appear in either dictionary.
+/// Anything else, including a generic spelling, backtracks to generic parsing.
+fn parse_struct_type<'a>(
+    input: &mut &'a str,
+    dialect: &'a str,
+    name: &'a str,
+) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
+    use crate::parser::raw::{
+        RawAttribute, RawParam, RawType, raw_attr_dict, raw_param, symbol_ref, ws,
+    };
+    use winnow::combinator::{delimited, opt, preceded, separated};
+    use winnow::prelude::*;
+
+    let backtrack = || winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new());
+    let struct_name = symbol_ref.parse_next(input)?;
+    ws.parse_next(input)?;
+    let fields: Vec<(String, RawParam<'a>)> = delimited(
+        ('(', ws),
+        separated(
+            0..,
+            (ws, symbol_ref, ws, ':', ws, raw_param, ws)
+                .map(|(_, field, _, _, _, param, _)| (field, param)),
+            ',',
+        ),
+        (ws, ')'),
+    )
+    .parse_next(input)?;
+    ws.parse_next(input)?;
+    let mut attrs = opt(preceded((',', ws), raw_attr_dict))
+        .parse_next(input)?
+        .unwrap_or_default();
+    ws.parse_next(input)?;
+    '>'.parse_next(input)?;
+
+    let is_name = |key: &str| key == STRUCT_NAME_ATTR;
+    if attrs.iter().any(|(key, _)| is_name(key)) {
+        return Err(backtrack());
+    }
+    attrs.push((STRUCT_NAME_ATTR.into(), RawAttribute::Symbol(struct_name)));
+    let mut params = Vec::with_capacity(fields.len());
+    for (field, mut param) in fields {
+        if param.attrs.iter().any(|(key, _)| is_name(key)) {
+            return Err(backtrack());
+        }
+        param
+            .attrs
+            .push((STRUCT_NAME_ATTR.into(), RawAttribute::Symbol(field)));
+        params.push(param);
+    }
+    Ok(RawType::Concrete {
+        dialect,
+        name,
+        params,
+        attrs,
+    })
+}

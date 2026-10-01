@@ -110,10 +110,12 @@ impl<'a> PrintState<'a> {
         if let Some((inputs, results)) = func_sig_parts(self.ctx, ty) {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
-        if let Some(adt_struct) = crate::dialect::adt::Struct::from_type_ref(self.ctx, ty) {
-            return self.write_adt_struct_type(f, adt_struct);
-        }
         let data = self.ctx.get_type(ty);
+        if let Some(format) = crate::asm_format::lookup_type_asm_format(data.dialect, data.name)
+            && let Some(result) = (format.print_fn)(&mut TypePrintHelper { state: self, f }, ty)
+        {
+            return result;
+        }
         write!(f, "{}.{}", data.dialect, data.name)?;
         let inline_param_attrs = data.validate_param_attrs().is_ok();
         let mut attrs = visible_type_attrs(data, inline_param_attrs, &[]).peekable();
@@ -176,38 +178,6 @@ impl<'a> PrintState<'a> {
             ],
         )
         .peekable();
-        if attrs.peek().is_some() {
-            f.write_str(", ")?;
-            self.write_attr_dict(f, attrs)?;
-        }
-        f.write_char('>')
-    }
-
-    /// Write `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`.
-    fn write_adt_struct_type(
-        &self,
-        f: &mut dyn Write,
-        adt_struct: crate::dialect::adt::Struct,
-    ) -> fmt::Result {
-        let ctx = self.ctx;
-        f.write_str("adt.struct<")?;
-        write_symbol(f, adt_struct.name(ctx))?;
-        f.write_char('(')?;
-        for (index, (name, ty)) in adt_struct.fields(ctx).enumerate() {
-            if index > 0 {
-                f.write_str(", ")?;
-            }
-            write_symbol(f, name)?;
-            f.write_str(": ")?;
-            self.write_type(f, ty)?;
-            let mut attrs = adt_struct.field_attrs(ctx, index).peekable();
-            if attrs.peek().is_some() {
-                f.write_char(' ')?;
-                self.write_attr_dict(f, attrs)?;
-            }
-        }
-        f.write_char(')')?;
-        let mut attrs = adt_struct.extra_attrs(ctx).peekable();
         if attrs.peek().is_some() {
             f.write_str(", ")?;
             self.write_attr_dict(f, attrs)?;
@@ -350,6 +320,55 @@ fn func_sig_parts(ctx: &IrContext, ty: TypeRef) -> Option<(&[TypeRef], &[TypeRef
         return None;
     }
     Some((&data.params[..num_inputs], &data.params[num_inputs..]))
+}
+
+// ============================================================================
+// TypePrintHelper — public wrapper for custom type format printers
+// ============================================================================
+
+/// Printer access for custom [`TypeAsmFormat`](crate::asm_format::TypeAsmFormat)
+/// implementations.
+///
+/// Implements `fmt::Write` so `write!(helper, ...)` can be used directly.
+pub struct TypePrintHelper<'a, 'ctx> {
+    state: &'a PrintState<'ctx>,
+    f: &'a mut dyn Write,
+}
+
+impl<'a, 'ctx> TypePrintHelper<'a, 'ctx> {
+    /// Access the IR context.
+    pub fn ctx(&self) -> &'ctx IrContext {
+        self.state.ctx
+    }
+
+    /// Write a nested type using the current alias map.
+    pub fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
+        self.state.write_type(&mut *self.f, ty)
+    }
+
+    /// Write an attribute value.
+    pub fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
+        self.state.write_attribute(&mut *self.f, attr)
+    }
+
+    /// Write `{key = value, ...}`.
+    pub fn write_attr_dict<'b>(
+        &mut self,
+        attrs: impl Iterator<Item = (&'b crate::Symbol, &'b Attribute)>,
+    ) -> fmt::Result {
+        self.state.write_attr_dict(&mut *self.f, attrs)
+    }
+
+    /// Write `@name`, quoting it when needed.
+    pub fn write_symbol(&mut self, symbol: crate::Symbol) -> fmt::Result {
+        write_symbol(&mut *self.f, symbol)
+    }
+}
+
+impl Write for TypePrintHelper<'_, '_> {
+    fn write_str(&mut self, s: &str) -> fmt::Result {
+        self.f.write_str(s)
+    }
 }
 
 // ============================================================================

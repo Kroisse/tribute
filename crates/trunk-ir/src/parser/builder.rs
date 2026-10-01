@@ -105,51 +105,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 results,
                 attrs,
             } => self.build_function_type(dialect, name, inputs, results, attrs),
-            RawType::AdtStruct {
-                name,
-                fields,
-                attrs,
-            } => self.build_adt_struct_type(name, fields, attrs),
         }
-    }
-
-    /// Build `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`. The
-    /// syntax owns the struct and field names, so `name` may not appear in
-    /// either dictionary.
-    fn build_adt_struct_type(
-        &mut self,
-        name: &str,
-        fields: &[(String, RawParam<'_>)],
-        attrs: &RawAttrDict<'_>,
-    ) -> Result<TypeRef, ParseError> {
-        let reserved = |message: String| ParseError { message, offset: 0 };
-        if let Some((key, _)) = attrs.iter().find(|(key, _)| {
-            key == crate::dialect::adt::STRUCT_NAME_ATTR || key == PARAM_ATTRS_ATTR
-        }) {
-            return Err(reserved(format!("`{key}` is reserved by adt.struct")));
-        }
-        let mut built = Vec::with_capacity(fields.len());
-        for (field, param) in fields {
-            if param
-                .attrs
-                .iter()
-                .any(|(key, _)| key == crate::dialect::adt::STRUCT_NAME_ATTR)
-            {
-                return Err(reserved(format!(
-                    "adt.struct field @{field}: `name` is reserved by adt.struct"
-                )));
-            }
-            let ty = self.build_type(&param.ty)?;
-            let field_attrs = self.build_attr_dict(&param.attrs)?;
-            built.push((Symbol::from_dynamic(field), ty, field_attrs));
-        }
-        let attrs = self.build_attr_dict(attrs)?;
-        crate::dialect::adt::try_struct_type(self.ctx, Symbol::from_dynamic(name), built, attrs)
-            .map(|adt_struct| adt_struct.as_type_ref())
-            .map_err(|error| ParseError {
-                message: format!("adt.struct @{name}: {error}"),
-                offset: 0,
-            })
     }
 
     /// Build type parameters together with their attributes.
@@ -1119,29 +1075,37 @@ core.module @test {
 
     #[test]
     fn test_adt_struct_reserved_names_are_parse_errors() {
-        for (spelling, expected) in [
-            (
-                "adt.struct<@P(@x: core.i32), {name = @Q}>",
-                "`name` is reserved",
-            ),
-            (
-                "adt.struct<@P(@x: core.i32), {param_attrs = [{}]}>",
-                "`param_attrs` is reserved",
-            ),
-            (
-                "adt.struct<@P(@x: core.i32 {name = @y})>",
-                "`name` is reserved",
-            ),
-            (
-                "adt.struct<@P(@x: core.i32, @x: core.i64)>",
-                "duplicate field name",
-            ),
-            ("adt.struct<@P(), {fields = []}>", "`fields`"),
+        for spelling in [
+            "adt.struct<@P(@x: core.i32), {name = @Q}>",
+            "adt.struct<@P(@x: core.i32), {param_attrs = [{}]}>",
+            "adt.struct<@P(@x: core.i32 {name = @y})>",
         ] {
             let mut ctx = IrContext::new();
             let input = format!("core.module @test {{ !bad = {spelling} }}");
-            let error = parse_module(&mut ctx, &input).expect_err(spelling);
-            assert!(error.message.contains(expected), "{spelling}: {error}");
+            parse_module(&mut ctx, &input).expect_err(spelling);
+        }
+    }
+
+    #[test]
+    fn test_malformed_adt_struct_parses_but_fails_validation() {
+        for spelling in [
+            "adt.struct<@P(@x: core.i32, @x: core.i64)>",
+            "adt.struct<@P(), {fields = []}>",
+            "adt.struct<core.i32, {name = @P}>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            let module = parse_module(&mut ctx, &input).expect(spelling);
+            let alias = ctx.type_aliases()[0].1;
+            assert!(
+                crate::dialect::adt::Struct::from_type_ref(&ctx, alias).is_none(),
+                "{spelling}"
+            );
+            let result = crate::validation::validate_operation_verifiers(
+                &ctx,
+                crate::rewrite::Module::new(&ctx, module).unwrap(),
+            );
+            assert!(!result.is_ok(), "{spelling}");
         }
     }
 
