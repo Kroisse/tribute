@@ -275,10 +275,19 @@ Continuation frame 타입의 `tribute.cps_continuation_frame_result`를 지우�
 입력이다. Root bridge 합성은 이렇게 물리화된 frame을 검증하며 frame answer
 provenance가 남아 있으면 거부한다. 물리화 이후에 합성되는 함수는 이 속성들을 기록하지 않는다.
 
+`tribute.calling_convention`도 operation 종류마다 마지막으로 읽는 단계가 소비하며,
+경계 출구에서 일괄로 지우지 않는다. 물리화는 직접 `func.call`/`func.tail_call`과
+callee가 convention-proven closure가 아닌 indirect transfer의 convention을 callee
+계약과 대조한 뒤 지운다. Root bridge 합성은 source `main`의 convention을 읽어
+wrapper 입력을 만들고, 자신이 만드는 호출에는 이 속성을 기록하지 않는다. Closure
+lowering은 closure transfer의 convention과 그것을 감싼 `func.func`의 convention으로
+caller·callee 계약을 검증하고 각 함수를 낮춘 뒤 둘 다 지운다. 낮춘 target 호출에는
+이 속성을 복사하지 않는다.
+
 [Representation/ABI 경계](ir.md#representationabi-경계)의 출구 검증은 `Cps`
 worker, continuation, `done_k`, handler-dispatch의 result vector가 비어 있고 모든
-CPS transfer가 `func.tail_call` 또는 `func.tail_call_indirect`로 끝나는지 검사한 뒤
-의미적 convention을 소비한다. 출구 이후의 backend-ready 검증은 exact signature,
+CPS transfer가 `func.tail_call` 또는 `func.tail_call_indirect`로 끝나는지 검사한다.
+이때 의미적 convention은 이미 소비되어 남아 있지 않다. 출구 이후의 backend-ready 검증은 exact signature,
 `call_conv`, proper-tail operation만으로 같은 성질을 검사한다.
 `Step`, trampoline, CPS control-result 역할의 `anyref`와
 `__tribute_cps_control` private enum은 거부한다. Boxed source value, erased effect
