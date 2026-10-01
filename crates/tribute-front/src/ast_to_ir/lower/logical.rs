@@ -967,9 +967,10 @@ fn lower_extern<'db>(
             .compiler_intrinsics
             .sort_by_key(|declaration| (declaration.symbol, declaration.identity));
     }
+    let abi = ir.string_attr(&decl.abi.to_string());
     ir.op_mut(function.op_ref())
         .attributes
-        .insert(Symbol::new("abi"), Attribute::String(decl.abi.to_string()));
+        .insert(Symbol::new("abi"), abi);
     ir.push_op(top, function.op_ref());
 }
 
@@ -1211,6 +1212,7 @@ fn lower_expr<'db>(
         }
         ExprKind::StringLit(value) => {
             let ty = builder.ctx.anyref_type(builder.ir);
+            let value = builder.ir.intern_str(&value);
             let value = adt::StringConst::operands()
                 .value(value)
                 .results(ty)

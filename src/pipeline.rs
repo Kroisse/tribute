@@ -3760,7 +3760,10 @@ mod Nested {
             module.ops(&ctx).iter().copied().find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
                 (function.sym_name(&ctx) == trunk_ir::Symbol::new(name)).then(|| {
-                    assert_eq!(ctx.op(op).attributes.get_str("abi"), Some("intrinsic"));
+                    assert_eq!(
+                        ctx.op(op).attributes.get_str(&ctx, "abi"),
+                        Some("intrinsic")
+                    );
                     ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
                 })
             })

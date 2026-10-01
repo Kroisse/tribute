@@ -9,6 +9,7 @@ use hashbrown::{HashTable, hash_table};
 use smallvec::SmallVec;
 
 use super::refs::{PathRef, TypeRef};
+use crate::IrContext;
 use crate::location::Span;
 use crate::symbol::Symbol;
 
@@ -43,7 +44,8 @@ pub enum Attribute {
     Int(i128),
     /// Float constant stored as raw bits.
     FloatBits(u64),
-    String(String),
+    /// String uniqued in the owning context's string pool.
+    String(StringRef),
     Bytes(SmallVec<[u8; 16]>),
     Type(TypeRef),
     /// Single interned symbol.
@@ -75,7 +77,7 @@ impl fmt::Display for IntegerOutOfRange {
 
 impl std::error::Error for IntegerOutOfRange {}
 
-/// Text stored either directly or as an interned symbol attribute.
+/// Text of a string attribute or of an interned symbol attribute.
 #[derive(Clone, Copy, Debug)]
 pub enum AttributeText<'a> {
     String(&'a str),
@@ -150,10 +152,18 @@ impl Attribute {
         }
     }
 
-    /// Extract the inner string slice if this is `Attribute::String`.
-    pub fn as_str(&self) -> Option<&str> {
+    /// Extract the inner string handle if this is `Attribute::String`.
+    pub fn as_string_ref(&self) -> Option<StringRef> {
         match self {
-            Attribute::String(s) => Some(s),
+            Attribute::String(s) => Some(*s),
+            _ => None,
+        }
+    }
+
+    /// Extract the text if this is `Attribute::String`.
+    pub fn as_str<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
+        match self {
+            Attribute::String(s) => Some(ctx.str(*s)),
             _ => None,
         }
     }
@@ -237,7 +247,7 @@ impl Attribute {
     }
 
     /// Estimate the complexity of this attribute for alias generation heuristics.
-    pub fn complexity(&self) -> usize {
+    pub fn complexity(&self, strings: &StringPool) -> usize {
         match self {
             Attribute::Unit => 4,
             Attribute::Bool(_) => 5,
@@ -250,16 +260,19 @@ impl Attribute {
                 }
             }
             Attribute::FloatBits(_) => 8,
-            Attribute::String(s) => s.len() + 2,
+            Attribute::String(s) => strings.get(*s).len() + 2,
             Attribute::Bytes(b) => b.len() * 4 + 7,
             Attribute::Symbol(sym) => sym.with_str(|s| s.len()) + 1,
             Attribute::Type(_) => 10, // rough estimate; actual depends on type
             Attribute::List(list) => {
-                list.iter().map(Attribute::complexity).sum::<usize>() + list.len() * 2
+                list.iter()
+                    .map(|item| item.complexity(strings))
+                    .sum::<usize>()
+                    + list.len() * 2
             }
             Attribute::Dict(dict) => {
                 dict.iter()
-                    .map(|(key, value)| key.with_str(|s| s.len()) + 3 + value.complexity())
+                    .map(|(key, value)| key.with_str(|s| s.len()) + 3 + value.complexity(strings))
                     .sum::<usize>()
                     + dict.len() * 2
                     + 2
@@ -311,8 +324,8 @@ impl From<Symbol> for Attribute {
     }
 }
 
-impl From<String> for Attribute {
-    fn from(value: String) -> Self {
+impl From<StringRef> for Attribute {
+    fn from(value: StringRef) -> Self {
         Attribute::String(value)
     }
 }
@@ -413,8 +426,13 @@ impl AttributeMap {
         self.get_integer(key, "u8", u8::try_from)
     }
 
-    pub fn get_str(&self, key: impl AttributeKey) -> Option<&str> {
-        self.get(key).and_then(Attribute::as_str)
+    pub fn get_string_ref(&self, key: impl AttributeKey) -> Option<StringRef> {
+        self.get(key).and_then(Attribute::as_string_ref)
+    }
+
+    /// The text of a string attribute, resolved through the owning context.
+    pub fn get_str<'a>(&self, ctx: &'a IrContext, key: impl AttributeKey) -> Option<&'a str> {
+        self.get_string_ref(key).map(|s| ctx.str(s))
     }
 
     pub fn get_symbol(&self, key: impl AttributeKey) -> Option<Symbol> {
@@ -425,9 +443,13 @@ impl AttributeMap {
         self.get(key).and_then(Attribute::as_type)
     }
 
-    pub fn get_text(&self, key: impl AttributeKey) -> Option<AttributeText<'_>> {
+    pub fn get_text<'a>(
+        &self,
+        ctx: &'a IrContext,
+        key: impl AttributeKey,
+    ) -> Option<AttributeText<'a>> {
         match self.get(key)? {
-            Attribute::String(text) => Some(AttributeText::String(text)),
+            Attribute::String(text) => Some(AttributeText::String(ctx.str(*text))),
             Attribute::Symbol(symbol) => Some(AttributeText::Symbol(*symbol)),
             _ => None,
         }
@@ -968,15 +990,15 @@ impl TypeInterner {
     }
 
     /// Estimate the complexity of a type for alias generation heuristics.
-    pub fn complexity(&self, ty: TypeRef) -> usize {
+    pub fn complexity(&self, ty: TypeRef, strings: &StringPool) -> usize {
         let data = self.get(ty);
         let mut size = data.dialect.with_str(|s| s.len()) + 1 + data.name.with_str(|s| s.len());
         for &param in &data.params {
-            size += self.complexity(param) + 2; // ", " separator
+            size += self.complexity(param, strings) + 2; // ", " separator
         }
         for (key, val) in &data.attrs {
             size += key.with_str(|s| s.len()) + 3; // "key = "
-            size += val.complexity();
+            size += val.complexity(strings);
         }
         size
     }
@@ -1029,6 +1051,50 @@ impl PathInterner {
 }
 
 impl Default for PathInterner {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+// ============================================================================
+// StringPool
+// ============================================================================
+
+/// Handle to a string in an `IrContext`'s string pool.
+///
+/// Equal handles from one pool denote equal text. A handle has no meaning
+/// outside the context that created it and that context's clones.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct StringRef(lasso::Spur);
+
+/// Deduplicating pool for string attribute values, owned by an `IrContext`.
+///
+/// Strings are stored in an arena and freed with the pool.
+#[derive(Clone)]
+pub struct StringPool(lasso::Rodeo<lasso::Spur, rustc_hash::FxBuildHasher>);
+
+impl StringPool {
+    pub fn new() -> Self {
+        Self(lasso::Rodeo::with_hasher(Default::default()))
+    }
+
+    /// Intern `text`, returning the existing handle if it is already pooled.
+    pub fn intern(&mut self, text: &str) -> StringRef {
+        StringRef(self.0.get_or_intern(text))
+    }
+
+    /// Find an existing string without changing the pool.
+    pub fn lookup(&self, text: &str) -> Option<StringRef> {
+        self.0.get(text).map(StringRef)
+    }
+
+    /// The text of a pooled string.
+    pub fn get(&self, r: StringRef) -> &str {
+        self.0.resolve(&r.0)
+    }
+}
+
+impl Default for StringPool {
     fn default() -> Self {
         Self::new()
     }
@@ -1285,18 +1351,19 @@ mod tests {
 
     #[test]
     fn attribute_map_typed_getters_handle_absence_and_integer_range() {
+        let mut ctx = IrContext::new();
         let mut attrs = AttributeMap::new();
         attrs.insert("count", Attribute::Int(i64::MAX as i128));
         attrs.insert("byte", Attribute::Int(u8::MAX as i128));
         attrs.insert("enabled", Attribute::Bool(true));
-        attrs.insert("name", Attribute::String("tribute".to_owned()));
+        attrs.insert("name", ctx.string_attr("tribute"));
         attrs.insert("symbol_name", Symbol::new("tribute"));
 
         assert_eq!(attrs.get_i64("count"), Ok(Some(i64::MAX)));
         assert_eq!(attrs.get_i128("count"), Some(i64::MAX as i128));
         assert_eq!(attrs.get_u8("byte"), Ok(Some(u8::MAX)));
         assert_eq!(attrs.get_bool("enabled"), Some(true));
-        assert_eq!(attrs.get_str("name"), Some("tribute"));
+        assert_eq!(attrs.get_str(&ctx, "name"), Some("tribute"));
         assert_eq!(attrs.get_i32("missing"), Ok(None));
         assert_eq!(
             attrs.get_i32("count"),
@@ -1314,12 +1381,12 @@ mod tests {
         );
         assert_eq!(attrs.get_u32("enabled"), Ok(None));
 
-        let string_text = attrs.get_text("name").expect("string text");
-        let symbol_text = attrs.get_text("symbol_name").expect("symbol text");
+        let string_text = attrs.get_text(&ctx, "name").expect("string text");
+        let symbol_text = attrs.get_text(&ctx, "symbol_name").expect("symbol text");
         assert_eq!(string_text, "tribute");
         assert_eq!(symbol_text, "tribute");
         assert_eq!(string_text, symbol_text);
-        assert_eq!(attrs.get_text("enabled"), None);
+        assert_eq!(attrs.get_text(&ctx, "enabled"), None);
     }
 
     #[test]

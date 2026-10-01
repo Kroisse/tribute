@@ -83,7 +83,7 @@ impl ConstCollector {
 
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
-                if let Some(s) = data.attributes.get_str("value") {
+                if let Some(s) = data.attributes.get_str(ctx, "value") {
                     let bytes = s.as_bytes().to_vec();
                     self.intern(bytes);
                     self.has_string_consts = true;
@@ -428,7 +428,7 @@ impl RewritePattern for StringConstNativePattern {
         };
 
         let value_str = string_const.value(ctx);
-        let content = value_str.into_bytes();
+        let content = value_str.as_bytes().to_vec();
 
         let Some(data_sym) = self.content_to_symbol.get(&content).copied() else {
             return false;

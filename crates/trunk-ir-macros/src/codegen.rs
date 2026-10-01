@@ -414,6 +414,26 @@ fn gen_map_attr_accessor(
     let name_str = &attr.name;
     let rust_ty = attr_rust_type(crate_path, attr.ty);
 
+    // A string attribute's text lives in the context's string pool, so the
+    // accessor borrows it from `ctx`.
+    if matches!(attr.ty, AttrType::String) {
+        return if attr.optional {
+            quote! {
+                pub fn #name<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<&'ctx str> {
+                    #attrs.get_str(ctx, #name_str)
+                }
+            }
+        } else {
+            quote! {
+                pub fn #name<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> &'ctx str {
+                    #attrs
+                        .get_str(ctx, #name_str)
+                        .expect(concat!("missing attribute: ", #name_str))
+                }
+            }
+        };
+    }
+
     if let Some(lookup) = typed_attr_lookup(attr.ty, &attrs, name_str) {
         return if attr.optional {
             quote! {
@@ -1127,7 +1147,7 @@ fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         AttrType::F32 => quote!(f32),
         AttrType::F64 => quote!(f64),
         AttrType::Type => quote!(#crate_path::TypeRef),
-        AttrType::String => quote!(::std::string::String),
+        AttrType::String => quote!(#crate_path::StringRef),
         AttrType::Symbol | AttrType::QualifiedName => quote!(#crate_path::Symbol),
         AttrType::Bytes => quote!(#crate_path::smallvec::SmallVec<[u8; 16]>),
     }
@@ -1197,9 +1217,7 @@ fn typed_attr_lookup(ty: AttrType, attrs: &TokenStream, name: &str) -> Option<To
                 .expect(concat!("attribute out of range: ", #name))
         )),
         AttrType::Type => Some(quote!(#attrs.get_type(#name))),
-        AttrType::String => Some(quote!(
-            #attrs.get_str(#name).map(::std::borrow::ToOwned::to_owned)
-        )),
+        AttrType::String => Some(quote!(#attrs.get_string_ref(#name))),
         AttrType::Symbol | AttrType::QualifiedName => Some(quote!(#attrs.get_symbol(#name))),
         AttrType::Any | AttrType::F32 | AttrType::F64 | AttrType::Bytes => None,
     }
@@ -1262,7 +1280,7 @@ fn attr_from_attr(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         },
         AttrType::String => quote! {
             match attr {
-                #crate_path::Attribute::String(v) => v.clone(),
+                #crate_path::Attribute::String(v) => *v,
                 _ => panic!("expected String attribute"),
             }
         },

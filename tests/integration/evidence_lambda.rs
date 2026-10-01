@@ -453,7 +453,7 @@ fn main() -> Nil { }
             Ok(CallableBody::Declaration)
         );
         assert_eq!(
-            ctx.op(function.op_ref()).attributes.get_str("abi"),
+            ctx.op(function.op_ref()).attributes.get_str(&ctx, "abi"),
             Some("C")
         );
         let signature = func::FuncSig::from_type_ref(&ctx, function.r#type(&ctx)).unwrap();

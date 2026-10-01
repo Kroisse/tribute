@@ -2461,10 +2461,7 @@ fn validate_callable_origins(
                     }
                     (None, None) => false,
                 };
-                let trusted_c_ffi = matches!(
-                    data.attributes.get("abi"),
-                    Some(Attribute::String(abi)) if abi == "C"
-                );
+                let trusted_c_ffi = data.attributes.get_str(ctx, "abi") == Some("C");
                 if !exact_intrinsic
                     && !trusted_c_ffi
                     && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())
@@ -3467,7 +3464,7 @@ mod tests {
                 .param(i32_ty)
                 .attr(
                     trunk_ir::dialect::func::NUM_INPUTS_ATTR,
-                    Attribute::String("bad".into()),
+                    ctx.string_attr("bad"),
                 )
                 .attr(trunk_ir::dialect::func::NUM_RESULTS_ATTR, Attribute::Int(1))
                 .attr(CALLING_CONVENTION_ATTR, Attribute::Int(0))

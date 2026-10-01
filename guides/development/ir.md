@@ -155,6 +155,17 @@ let nil_ty = core::nil(ctx).as_type_ref();
 let func_ty = func::func_sig(ctx, params, [return_ty]).as_type_ref();
 ```
 
+String attribute values live in the context's string pool; an attribute
+holds only a `StringRef`. Create and read them through the context, and do
+not carry a `StringRef` to another context:
+
+```rust
+let abi = ctx.string_attr("C");
+attrs.insert("abi", abi);
+let is_c = ctx.op(op).attributes.get_str(ctx, "abi") == Some("C");
+let value: &str = string_const.value(ctx); // generated accessor
+```
+
 Attributes that embed types (directly or inside `List`/`Dict` values) are
 converted and inspected through the shared traversal instead of matching
 individual variants:

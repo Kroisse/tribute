@@ -365,7 +365,7 @@ impl<'a> ArenaIrBuilder<'a> {
             RawAttribute::Bool(b) => Attribute::Bool(*b),
             RawAttribute::Int(n) => Attribute::Int(*n),
             RawAttribute::Float(f) => Attribute::FloatBits(f.to_bits()),
-            RawAttribute::String(s) => Attribute::String(s.clone()),
+            RawAttribute::String(s) => self.ctx.string_attr(s),
             RawAttribute::Symbol(s) => Attribute::Symbol(Symbol::from_dynamic(s.as_str())),
             RawAttribute::Type(t) => Attribute::Type(self.build_type(t)?),
             RawAttribute::List(items) => {

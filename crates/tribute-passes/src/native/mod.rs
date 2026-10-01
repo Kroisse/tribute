@@ -51,7 +51,7 @@ pub(crate) fn build_extern_func(
     let data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
         .attr("sym_name", Attribute::Symbol(Symbol::from_dynamic(name)))
         .attr("type", Attribute::Type(func_ty))
-        .attr("abi", Attribute::String("C".to_owned()))
+        .attr("abi", ctx.string_attr("C"))
         .build(ctx);
     ctx.create_op(data)
 }
@@ -78,7 +78,7 @@ mod tests {
             classify_callable_body(&ctx, op),
             Ok(CallableBody::Declaration)
         );
-        assert_eq!(ctx.op(op).attributes.get_str("abi"), Some("C"));
+        assert_eq!(ctx.op(op).attributes.get_str(&ctx, "abi"), Some("C"));
         let signature =
             func::FuncSig::from_type_ref(&ctx, ctx.op(op).attributes.get_type("type").unwrap())
                 .unwrap();

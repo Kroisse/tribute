@@ -77,10 +77,7 @@ impl Pass for LowerListIntrinsics {
                         // signature intact for a specialized generic intrinsic;
                         // this target-neutral lowering only needs its callable
                         // arity and must not recreate trust from the symbol.
-                        && matches!(
-                            ctx.op(op).attributes.get("abi"),
-                            Some(trunk_ir::Attribute::String(abi)) if abi == "intrinsic"
-                        )
+                        && ctx.op(op).attributes.get_str(ctx, "abi") == Some("intrinsic")
                 }
             {
                 intrinsic_declarations.eligible.insert(name);
