@@ -524,8 +524,6 @@ extern "C" fn __tribute_bytes_range_equal(
     len: Nat,
 ) -> Bool
 extern "C" fn __tribute_bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat) -> Bytes
-extern "C" fn __tribute_bytes_print(bytes: Bytes) -> Nil
-extern "C" fn __tribute_print_newline() -> Nil
 
 // =============================================================================
 // Bytes module
@@ -697,18 +695,4 @@ pub mod std {
             }
         }
     }
-}
-
-// Legacy target-specific helpers remain available until the native and Wasm
-// backends lower the shared I/O boundary.
-
-/// Print a string to standard output (no trailing newline).
-fn print(message: String) -> Nil {
-    __tribute_bytes_print(message.to_bytes())
-}
-
-/// Print a line to standard output.
-fn print_line(message: String) -> Nil {
-    __tribute_bytes_print(message.to_bytes())
-    __tribute_print_newline()
 }

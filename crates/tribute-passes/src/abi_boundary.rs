@@ -469,11 +469,11 @@ mod tests {
     const RUNTIME_BINDINGS: &str = r#"core.module @test {
   func.func @__tribute_evidence_lookup(%ev: core.ptr, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @__tribute_bytes_len(%bytes: core.bytes) -> core.i32 attributes {abi = "C"}
-  func.func @__tribute_bytes_print(%bytes: core.bytes) -> core.nil attributes {abi = "C"}
+  func.func @__tribute_unbound_helper(%bytes: core.bytes) -> core.nil attributes {abi = "C"}
   func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @unused_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @main(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
-    %printed = func.call %bytes {callee = @__tribute_bytes_print} : core.nil
+    %printed = func.call %bytes {callee = @__tribute_unbound_helper} : core.nil
     %len = func.call %bytes {callee = @__tribute_bytes_len} : core.i32
     %id = func.call %len {callee = @user_bridge} : core.i32
     %marker = func.call %ev, %id {callee = @__tribute_evidence_lookup} : core.i32
@@ -495,7 +495,7 @@ mod tests {
         assert_eq!(
             runtime_binding_violations(TargetKind::Wasm),
             [
-                ViolationKind::UnsatisfiableRuntimeBinding("__tribute_bytes_print".to_owned()),
+                ViolationKind::UnsatisfiableRuntimeBinding("__tribute_unbound_helper".to_owned()),
                 ViolationKind::UnsatisfiableRuntimeBinding("user_bridge".to_owned()),
             ]
         );

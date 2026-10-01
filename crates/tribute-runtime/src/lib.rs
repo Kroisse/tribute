@@ -177,41 +177,6 @@ pub extern "C" fn __tribute_print_float(value: f64) {
     }
 }
 
-/// Print raw bytes to stdout (no newline appended).
-///
-/// Used by the String rope implementation to output leaf byte sequences.
-/// The caller is responsible for traversing the rope and calling this for
-/// each `Leaf(bytes)` node.
-///
-/// Signature: `(ptr: *const u8, len: u64) -> ()`
-///
-/// # Safety
-///
-/// `ptr` must point to a valid byte buffer of at least `len` bytes,
-/// or be null when `len` is 0.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_print_bytes(ptr: *const u8, len: u64) {
-    if ptr.is_null() || len == 0 {
-        return;
-    }
-    let Ok(len) = usize::try_from(len) else {
-        return;
-    };
-    unsafe {
-        write(1, ptr, len);
-    }
-}
-
-/// Print a newline character to stdout.
-///
-/// Used by `print_line` after traversing and printing a String rope.
-///
-/// Signature: `() -> ()`
-#[unsafe(no_mangle)]
-pub extern "C" fn __tribute_print_newline() {
-    write_stdout_all(b"\n");
-}
-
 // =============================================================================
 // Bytes support
 // =============================================================================
@@ -224,22 +189,6 @@ pub extern "C" fn __tribute_print_newline() {
 pub struct TributeBytes {
     pub ptr: *const u8,
     pub len: u64,
-}
-
-/// Print the contents of a Bytes value to stdout (no trailing newline).
-///
-/// Signature: `(bytes: ptr) -> ()`
-///
-/// # Safety
-///
-/// `bytes` must be a valid pointer to a `TributeBytes` payload.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn __tribute_bytes_print(bytes: *const TributeBytes) {
-    let b = unsafe { &*bytes };
-    if b.len > 0 && !b.ptr.is_null() {
-        let bytes = unsafe { core::slice::from_raw_parts(b.ptr, b.len as usize) };
-        write_stdout_all(bytes);
-    }
 }
 
 fn write_stdout_all(bytes: &[u8]) {
@@ -349,9 +298,12 @@ impl StdinBuffer {
 /// `bytes` must point to a valid [`TributeBytes`] payload.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __tribute_io_write(bytes: *const TributeBytes, newline: u32) {
-    unsafe { __tribute_bytes_print(bytes) };
+    let b = unsafe { &*bytes };
+    if b.len > 0 && !b.ptr.is_null() {
+        write_stdout_all(unsafe { core::slice::from_raw_parts(b.ptr, b.len as usize) });
+    }
     if newline == 1 {
-        __tribute_print_newline();
+        write_stdout_all(b"\n");
     }
 }
 
