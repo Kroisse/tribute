@@ -81,10 +81,10 @@ exact handler form with its observable result asserted.
 | Canonical calculator REPL | **compile-only** | **native-run** | **not-yet-verified** | [`native_calculator.trb`](../lang-examples/native_calculator.trb) is compiled through the public CLI and its exact scripted and EOF stdout fixtures are asserted by [`canonical_calculator.rs`](../tests/canonical_calculator.rs). That product test also executes NUL-leading valid UTF-8 malformed input and invalid UTF-8, requiring a clean exit and exactly one input-failure line. The scripted session runs under AddressSanitizer locally and in the Ubuntu `canonical-native` CI matrix. Its exact source opens with empty LSP diagnostics and has `Int::parse` hover plus imported `Io` completion protocol evidence in [`lsp/server.rs`](../src/lsp/server.rs). No Wasm calculator execution claim is made. |
 
 The current **wasm-run** language-level claims in this table are String/Bytes
-output through `std::io::print_line`, byte-wise String equality,
-`Bytes::slice_or_panic`, and the `fn` and one-shot `op` handler forms named
-above. That
-evidence does not establish general WasmGC parity with native.
+output through `std::io::print_line`, byte-wise String equality, `Nat`
+ordering comparisons, `Bytes::slice_or_panic`, `Bytes::slice` clamping, and the
+`fn` and one-shot `op` handler forms named above. That evidence does not
+establish general WasmGC parity with native.
 
 ## Diagnostics, LSP, and Compilation Boundaries
 
