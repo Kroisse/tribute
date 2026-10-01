@@ -177,7 +177,8 @@ impl PendingViolation {
 /// Violations still present at the exit of `target`'s boundary.
 pub fn pending_boundary_violations(target: TargetKind) -> &'static [PendingViolation] {
     const PENDING: &[PendingViolation] = &[
-        // Read past the exit by native ownership planning.
+        // No pass after the exit reads it any longer; the boundary does not
+        // strip it yet.
         PendingViolation::Attribute("tribute.calling_convention"),
     ];
     match target {

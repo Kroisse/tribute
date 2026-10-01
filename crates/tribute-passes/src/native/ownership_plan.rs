@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
 
-use tribute_core::{CallingConvention, get_calling_convention};
 use tribute_ir::dialect::closure;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::analysis::AnalysisCache;
@@ -20,6 +19,8 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::transforms::call_graph::{CallGraph, recursive_functions};
 use trunk_ir::walk::{WalkAction, walk_op};
+
+use crate::target_abi::{CONSUMED, OWNERSHIP_ATTR};
 use trunk_ir::{BlockRef, OpRef, RegionRef, Symbol, TypeRef, ValueDef, ValueRef};
 
 mod actions;
@@ -805,13 +806,28 @@ fn compute_entry_contracts(
             CallableBody::Definition { entry, .. } => entry,
         };
         let ineligible = recursive.contains(&symbol) || ctx.op(op).attributes.contains_key("abi");
+        let signature = ctx
+            .op(op)
+            .attributes
+            .get_type("type")
+            .and_then(|ty| func::FuncSig::from_type_ref(ctx, ty))
+            .ok_or_else(|| OwnershipPlanError::new("function definition lacks exact signature"))?;
+        let consumed = consumed_inputs(ctx, signature)?;
+        if consumed.len() != ctx.block_args(entry).len() {
+            return Err(OwnershipPlanError::new(
+                "function entry arity differs from its exact signature",
+            ));
+        }
         summaries.insert(
             symbol,
             ctx.block_args(entry)
                 .iter()
-                .map(|&parameter| {
+                .zip(consumed)
+                .map(|(&parameter, consumed)| {
                     if !is_managed_value(ctx, parameter, managed_layouts) {
                         EntryOwnership::Plain
+                    } else if consumed {
+                        EntryOwnership::Consumed
                     } else if ineligible || !elide_proven_borrowed_parameters {
                         EntryOwnership::Retained
                     } else {
@@ -843,18 +859,6 @@ fn compute_entry_contracts(
         }
         if !changed {
             break;
-        }
-    }
-
-    for (&symbol, &op) in definitions {
-        if is_defined_physical_cps_function(ctx, op)
-            && let Some(entries) = summaries.get_mut(&symbol)
-        {
-            for entry in entries {
-                if *entry != EntryOwnership::Plain {
-                    *entry = EntryOwnership::Consumed;
-                }
-            }
         }
     }
     Ok(summaries)
@@ -892,25 +896,25 @@ fn bodyless_c_entry_contract(
     ))
 }
 
-fn is_defined_physical_cps_function(ctx: &IrContext, op: OpRef) -> bool {
-    if get_calling_convention(ctx, op) != Some(CallingConvention::Cps)
-        || ctx.op(op).attributes.contains_key("abi")
-    {
-        return false;
-    }
-    let Some(signature) = ctx.op(op).attributes.get_type("type") else {
-        return false;
-    };
-    func::FuncSig::from_type_ref(ctx, signature).is_some_and(|callable| {
-        if callable.results(ctx).is_empty() {
-            return true;
-        }
-        let Some(result) = callable.single_result(ctx) else {
-            return false;
-        };
-        let result = ctx.get_type(result);
-        result.dialect == Symbol::new("core") && result.name == Symbol::new("never")
-    })
+/// Which inputs of `signature` carry the `consumed` entry contract that the
+/// representation/ABI boundary records in the exact physical signature.
+///
+/// The marker is inert on unmanaged inputs; callers combine it with the typed
+/// managed-reference contract. Any other ownership value is rejected.
+fn consumed_inputs(
+    ctx: &IrContext,
+    signature: func::FuncSig,
+) -> Result<Vec<bool>, OwnershipPlanError> {
+    signature
+        .input_attrs(ctx)
+        .map(|attrs| match attrs.get(OWNERSHIP_ATTR) {
+            None => Ok(false),
+            Some(value) if value.as_symbol() == Some(Symbol::new(CONSUMED)) => Ok(true),
+            Some(_) => Err(OwnershipPlanError::new(format!(
+                "unknown {OWNERSHIP_ATTR} parameter contract"
+            ))),
+        })
+        .collect()
 }
 
 fn value_is_borrowed(
