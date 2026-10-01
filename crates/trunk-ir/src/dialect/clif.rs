@@ -594,13 +594,13 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !scalar = core.i32
-  !callable = clif.func_sig<(!scalar) -> (!scalar, !scalar)> {nested = [!scalar]}
+  !callable = clif.func_sig<(!scalar) -> (!scalar, !scalar), {nested = [!scalar]}>
 }"#,
         );
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                "!callable = clif.func_sig<(!scalar) -> (!scalar, !scalar)> {nested = [!scalar]}"
+                "!callable = clif.func_sig<(!scalar) -> (!scalar, !scalar), {nested = [!scalar]}>"
             ),
             "{printed}"
         );

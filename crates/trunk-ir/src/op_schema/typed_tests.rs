@@ -455,7 +455,7 @@ fn verifier_reports_binding_mismatches() {
 fn verifier_reports_projection_and_list_mismatches() {
     let text = verify_errors(
         r#"core.module @m {
-  func.func @f(%p: test_typed.pair(core.i64, core.i1), %callee: core.ptr, %x: core.i1) {
+  func.func @f(%p: test_typed.pair<core.i64, core.i1>, %callee: core.ptr, %x: core.i1) {
     %a = test_typed.first %p : core.i1
     %b = test_typed.call %callee, %x {sig = func.func_sig<(core.i32) -> core.i1>} : core.i1
     %c = test_typed.call %callee, %x {sig = core.i32} : core.i1

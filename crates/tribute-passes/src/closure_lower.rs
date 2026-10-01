@@ -805,8 +805,8 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Named = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}
-  !Layout = adt.struct() {name = @Other, fields = [[@code, core.i32]], layout = @closure}
+  !Named = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]]}>
+  !Layout = adt.struct<{name = @Other, fields = [[@code, core.i32]], layout = @closure}>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| {
@@ -846,7 +846,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}"
+        "core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {
@@ -855,7 +855,7 @@ mod tests {
             ctx,
             &format!(
                 r#"core.module @test {{
-  !closure = closure.closure(func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>) {{tribute.calling_convention = 1, tribute.closure_environment_index = 1}}
+  !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>, {{tribute.calling_convention = 1, tribute.closure_environment_index = 1}}>
 
   func.func @callee(%ev: {ev_ty}, %env: tribute_rt.anyref, %arg: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.return %arg
@@ -928,7 +928,7 @@ mod tests {
             ctx,
             &format!(
                 r#"core.module @test {{
-  !closure = closure.closure(func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>) {{tribute.calling_convention = 1, tribute.closure_environment_index = 1}}
+  !closure = closure.closure<func.func_sig<({ev_ty}, tribute_rt.anyref) -> tribute_rt.anyref>, {{tribute.calling_convention = 1, tribute.closure_environment_index = 1}}>
 
   func.func @callee(%ev: {ev_ty}, %env: tribute_rt.anyref, %arg: tribute_rt.anyref) -> tribute_rt.anyref {{
       func.return %arg
@@ -1033,7 +1033,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            !Cps = closure.closure(func.func_sig<(core.i32) -> core.never>) {tribute.calling_convention = 2, tribute.closure_environment_index = 0}
+            !Cps = closure.closure<func.func_sig<(core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
             func.func @invalid(%callee: !Cps, %value: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
                 func.tail_call_indirect %callee, %value
             }
@@ -1079,7 +1079,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-            !Callback = closure.closure(func.func_sig<() -> {signature_results}>) {{tribute.calling_convention = 0, tribute.closure_environment_index = 0}}
+            !Callback = closure.closure<func.func_sig<() -> {signature_results}>, {{tribute.calling_convention = 0, tribute.closure_environment_index = 0}}>
             func.func @invalid(%callee: !Callback) -> core.i32 {{
                 {call}
                 %zero = arith.constant {{value = 0}} : core.i32
@@ -1146,8 +1146,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !closure = closure.closure(func.func_sig<(core.i32) -> core.i32>) {tribute.calling_convention = 0}
-  !nested = core.tuple(!closure)
+  !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>, {tribute.calling_convention = 0}>
+  !nested = core.tuple<!closure>
   func.func @run(%callback: !closure) -> !nested {
     %environment = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %created = closure.new %environment {func_ref = @callback} : !closure
@@ -1179,7 +1179,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("!closure = adt.struct"), "{printed}");
         assert!(
-            printed.contains("!nested = core.tuple(!closure)"),
+            printed.contains("!nested = core.tuple<!closure>"),
             "{printed}"
         );
     }
@@ -1191,7 +1191,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !cps = closure.closure(func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>) {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}
+  !cps = closure.closure<func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
   func.func @run(%callee: !cps, %evidence: {ev}, %done: core.i32, %dispatch: core.i32, %value: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
     func.tail_call_indirect %callee, %evidence, %done, %dispatch, %value {{tribute.calling_convention = 2, signature = func.func_sig<({ev}, core.i32, core.i32, core.i32) -> core.never>}}
   }}
@@ -1258,7 +1258,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !cps = closure.closure(func.func_sig<({evidence}, core.i32) -> core.never>) {{tribute.calling_convention = 2}}
+  !cps = closure.closure<func.func_sig<({evidence}, core.i32) -> core.never>, {{tribute.calling_convention = 2}}>
   func.func @callee(%evidence: {evidence}, %env: tribute_rt.anyref, %done: core.i32) -> core.never attributes {{tribute.calling_convention = 2}} {{
     func.unreachable
   }}
@@ -1383,7 +1383,7 @@ mod tests {
         let source = |reference: &str| {
             format!(
                 r#"core.module @test {{
-  !closure = closure.closure(func.func_sig<(core.i32) -> core.i32>) {{tribute.calling_convention = 0}}
+  !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>, {{tribute.calling_convention = 0}}>
   core.module @left {{
     func.func @helper(%env: tribute_rt.anyref, %value: core.i32) -> core.i32 {{
       func.return %value
@@ -1433,10 +1433,10 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !_closure = adt.struct(core.i32, tribute_rt.anyref) {{name = @_closure}}
-  !expected = closure.closure(func.func_sig<({evidence}, core.i32, core.i32) -> core.never>) {{tribute.calling_convention = 2}}
-  !actual = closure.closure(func.func_sig<({evidence}, core.i32, core.i1) -> core.never>) {{tribute.calling_convention = 2}}
-  !outer = closure.closure(func.func_sig<({evidence}, core.i32, !expected) -> core.never>) {{tribute.calling_convention = 2}}
+  !_closure = adt.struct<core.i32, tribute_rt.anyref, {{name = @_closure}}>
+  !expected = closure.closure<func.func_sig<({evidence}, core.i32, core.i32) -> core.never>, {{tribute.calling_convention = 2}}>
+  !actual = closure.closure<func.func_sig<({evidence}, core.i32, core.i1) -> core.never>, {{tribute.calling_convention = 2}}>
+  !outer = closure.closure<func.func_sig<({evidence}, core.i32, !expected) -> core.never>, {{tribute.calling_convention = 2}}>
 
   func.func @actual_fn(%evidence: {evidence}, %done: core.i32, %value: core.i1) -> core.never attributes {{tribute.calling_convention = 2}} {{
     func.unreachable

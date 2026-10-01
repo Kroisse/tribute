@@ -3,8 +3,8 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.func_sig<() -> core.i32> {tribute.calling_convention = 2}
-  !t1 = tribute_control.func_sig<(!t0) -> core.i32> {tribute.calling_convention = 2}
+  !t0 = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 2}>
+  !t1 = tribute_control.func_sig<(!t0) -> core.i32, {tribute.calling_convention = 2}>
 
   tribute_control.func @run_with_state(%0: !t0) -> core.i32 convention(cps) {
       %1 = tribute_control.handle : core.i32 {
@@ -14,8 +14,8 @@ core.module @test {
         ^bb2(%3: core.i32):
           tribute_control.yield %3
       } {
-          tribute_control.handler {ability_ref = core.ability_ref(core.i32) {name = @State}, kind = @op, op_name = @get, operation_result_type = core.i32} {
-            ^bb4(%4: tribute_control.resume_token(core.i32, core.i32)):
+          tribute_control.handler {ability_ref = core.ability_ref<core.i32, {name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+            ^bb4(%4: tribute_control.resume_token<core.i32, core.i32>):
               %5 = arith.const {value = 99} : core.i32
               %6 = tribute_control.resume %4, %5 : core.i32
               tribute_control.yield %6
@@ -30,7 +30,7 @@ core.module @test {
   tribute_control.func @main() -> core.i32 convention(cps) attributes {tribute.root_source_result = core.i32} {
       %0 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
           %1 = tribute_control.lambda() -> core.i32 convention(cps) captures [] {
-              %2 = tribute_control.perform {ability_ref = core.ability_ref(core.i32) {name = @State}, op_name = @get, operation_kind = @op} : core.i32
+              %2 = tribute_control.perform {ability_ref = core.ability_ref<core.i32, {name = @State}>, op_name = @get, operation_kind = @op} : core.i32
               tribute_control.return %2
           }
           %3 = tribute_control.call %1 {callee = @run_with_state} : core.i32

@@ -1005,8 +1005,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @select(%cond: core.i1, %value: core.array(core.i32)) -> core.array(core.i32) {
-    %result = scf.if %cond : core.array(core.i32) {
+  func.func @select(%cond: core.i1, %value: core.array<core.i32>) -> core.array<core.i32> {
+    %result = scf.if %cond : core.array<core.i32> {
       scf.yield %value
     } {
       scf.yield %value
@@ -1036,9 +1036,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @carry(%init: core.array(core.i32)) -> core.nil {
+  func.func @carry(%init: core.array<core.i32>) -> core.nil {
     scf.loop %init : core.nil {
-      ^header(%iter: core.array(core.i32)):
+      ^header(%iter: core.array<core.i32>):
         scf.continue %iter
     }
     func.return
@@ -1059,7 +1059,7 @@ mod tests {
             "the created wasm.loop body argument must declare the converted type: {output}"
         );
         assert!(
-            output.contains("core.array(core.i32)"),
+            output.contains("core.array<core.i32>"),
             "operand types must keep their producer spelling: {output}"
         );
     }

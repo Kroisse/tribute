@@ -175,7 +175,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%k: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = ability.perform %k {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+    %result = ability.perform %k {ability_ref = core.ability_ref<{name = @State}>, op_name = @get} : tribute_rt.anyref
     func.return %result
   }
 }"#,
@@ -212,8 +212,8 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !marker = adt.struct() {{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}
-  !evidence = core.array(!marker) {{layout = @evidence}}
+  !marker = adt.struct<{{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}}>
+  !evidence = core.array<!marker, {{layout = @evidence}}>
   func.func @run(%ev: !evidence) -> core.never {{
     {operation}
   }}

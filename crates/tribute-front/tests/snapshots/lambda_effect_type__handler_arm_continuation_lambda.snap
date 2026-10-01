@@ -3,8 +3,8 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = tribute_control.func_sig<() -> tribute_rt.anyref> {tribute.calling_convention = 2}
-  !t1 = core.ability_ref(tribute_rt.anyref) {name = @State}
+  !t0 = tribute_control.func_sig<() -> tribute_rt.anyref, {tribute.calling_convention = 2}>
+  !t1 = core.ability_ref<tribute_rt.anyref, {name = @State}>
 
   tribute_control.func @run_state(%0: !t0, %1: tribute_rt.anyref) -> tribute_rt.anyref convention(cps) {
       %2 = tribute_control.handle : tribute_rt.anyref {
@@ -15,7 +15,7 @@ core.module @test {
           tribute_control.yield %4
       } {
           tribute_control.handler {ability_ref = !t1, kind = @op, op_name = @get, operation_result_type = tribute_rt.anyref} {
-            ^bb4(%5: tribute_control.resume_token(tribute_rt.anyref, tribute_rt.anyref)):
+            ^bb4(%5: tribute_control.resume_token<tribute_rt.anyref, tribute_rt.anyref>):
               %6 = tribute_control.lambda() -> tribute_rt.anyref convention(cps) captures [%1, %5] {
                   %7 = tribute_control.resume %5, %1 : tribute_rt.anyref
                   tribute_control.return %7
@@ -24,7 +24,7 @@ core.module @test {
               tribute_control.yield %8
           }
           tribute_control.handler {ability_ref = !t1, kind = @op, op_name = @set, operation_result_type = core.nil} {
-            ^bb6(%9: tribute_rt.anyref, %10: tribute_control.resume_token(core.nil, tribute_rt.anyref)):
+            ^bb6(%9: tribute_rt.anyref, %10: tribute_control.resume_token<core.nil, tribute_rt.anyref>):
               %11 = tribute_control.lambda() -> tribute_rt.anyref convention(cps) captures [%10] {
                   %12 = core.nil_value : core.nil
                   %13 = tribute_control.resume %10, %12 : tribute_rt.anyref

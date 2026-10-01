@@ -529,10 +529,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
-  !Closure = adt.struct() {name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]], layout = @closure}
-  !Frame = adt.struct() {name = @Frame, fields = []}
-  !Env = adt.struct() {name = @Env, fields = [[@closure, !Closure], [@evidence, !Evidence], [@frame, !Frame]]}
+  !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
+  !Closure = adt.struct<{name = @_closure, fields = [[@table_idx, core.i32], [@env, wasm.anyref]], layout = @closure}>
+  !Frame = adt.struct<{name = @Frame, fields = []}>
+  !Env = adt.struct<{name = @Env, fields = [[@closure, !Closure], [@evidence, !Evidence], [@frame, !Frame]]}>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {
     %env = adt.struct_new %closure, %evidence, %frame {type = !Env} : !Env
     %loaded = adt.struct_get %env {field = 1, type = !Env} : !Evidence
@@ -884,7 +884,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: wasm.arrayref, %payload: wasm.anyref) -> wasm.anyref {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : wasm.anyref
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read} : wasm.anyref
     func.return %result
   }
 }"#,
@@ -948,7 +948,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum() {name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}
+  !String = adt.enum<{name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}>
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "wrong"} : core.i32
     func.return
@@ -1042,7 +1042,7 @@ mod tests {
     fn lower_to_wasm_binds_evidence_runtime_declarations() {
         let output = lower_text(
             r#"core.module @test {
-  !Evidence = core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}
+  !Evidence = core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @prompt(%ev: !Evidence) -> core.i32 {
     %id = arith.const {value = 7} : core.i32

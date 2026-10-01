@@ -15,7 +15,9 @@ use std::collections::HashMap;
 use smallvec::smallvec;
 use winnow::prelude::*;
 
-use super::raw::{self, ParseError, RawAttribute, RawOperation, RawRegion, RawType};
+use super::raw::{
+    self, ParseError, RawAttrDict, RawAttribute, RawOperation, RawParam, RawRegion, RawType,
+};
 use crate::Symbol;
 use crate::context::{IrContext, OperationDataBuilder};
 use crate::ops::DialectType;
@@ -23,6 +25,10 @@ use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
 use crate::{BlockArgData, BlockData, RegionData};
+
+fn types_of(params: Vec<(TypeRef, AttributeMap)>) -> Vec<TypeRef> {
+    params.into_iter().map(|(ty, _)| ty).collect()
+}
 
 // ============================================================================
 // ArenaIrBuilder (Raw -> Arena IR)
@@ -71,29 +77,28 @@ impl<'a> ArenaIrBuilder<'a> {
                     message: format!("undefined type alias '!{name}'"),
                     offset: 0,
                 }),
+            RawType::Concrete { dialect, name, .. } | RawType::Function { dialect, name, .. }
+                if *dialect == "core" && *name == "func" =>
+            {
+                Err(ParseError {
+                    message: "unsupported core.func type; use func.func_sig".to_string(),
+                    offset: 0,
+                })
+            }
             RawType::Concrete {
                 dialect,
                 name,
                 params,
                 attrs,
             } => {
-                if *dialect == "core" && *name == "func" {
-                    return Err(ParseError {
-                        message: "unsupported core.func type; use func.func_sig".to_string(),
-                        offset: 0,
-                    });
-                }
                 let dialect = Symbol::from_dynamic(dialect);
                 let name = Symbol::from_dynamic(name);
-                let params: Vec<TypeRef> = params
-                    .iter()
-                    .map(|p| self.build_type(p))
-                    .collect::<Result<_, _>>()?;
-                let attrs = self.build_type_attrs(dialect, name, attrs, params.len())?;
+                let params = self.build_params(params)?;
+                let attrs = self.build_type_attrs(dialect, name, attrs, &params)?;
 
                 let mut builder = TypeDataBuilder::new(dialect, name);
-                for p in params {
-                    builder = builder.param(p);
+                for (ty, _) in params {
+                    builder = builder.param(ty);
                 }
                 for (k, v) in attrs {
                     builder = builder.attr(k, v);
@@ -110,33 +115,74 @@ impl<'a> ArenaIrBuilder<'a> {
         }
     }
 
-    /// Build a type's attributes, canonicalizing and checking its
-    /// per-parameter attributes against `params` type parameters.
+    /// Build type parameters together with their attributes.
+    fn build_params(
+        &mut self,
+        params: &[RawParam<'_>],
+    ) -> Result<Vec<(TypeRef, AttributeMap)>, ParseError> {
+        params
+            .iter()
+            .map(|param| {
+                let ty = self.build_type(&param.ty)?;
+                let attrs = self.build_attr_dict(&param.attrs)?;
+                Ok((ty, attrs))
+            })
+            .collect()
+    }
+
+    fn build_attr_dict(&mut self, attrs: &RawAttrDict<'_>) -> Result<AttributeMap, ParseError> {
+        attrs
+            .iter()
+            .map(|(key, value)| Ok((Symbol::from_dynamic(key), self.build_attribute(value)?)))
+            .collect()
+    }
+
+    /// Build a type's attributes and store the attributes written on its
+    /// parameters, `params`, in canonical [`PARAM_ATTRS_ATTR`] form.
+    ///
+    /// The textual form writes parameter attributes only inline, so an explicit
+    /// [`PARAM_ATTRS_ATTR`] key is rejected.
     fn build_type_attrs(
         &mut self,
         dialect: Symbol,
         name: Symbol,
-        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
-        params: usize,
+        attrs: &RawAttrDict<'_>,
+        params: &[(TypeRef, AttributeMap)],
     ) -> Result<AttributeMap, ParseError> {
-        let mut attrs = attrs
-            .iter()
-            .map(|(key, value)| Ok((Symbol::from_dynamic(key), self.build_attribute(value)?)))
-            .collect::<Result<AttributeMap, ParseError>>()?;
-        crate::types::normalize_param_attrs(&mut attrs, params).map_err(|error| ParseError {
-            message: format!("{dialect}.{name}: {error}"),
-            offset: 0,
-        })?;
+        if attrs.iter().any(|(key, _)| key == PARAM_ATTRS_ATTR) {
+            return Err(ParseError {
+                message: format!(
+                    "{dialect}.{name}: `{PARAM_ATTRS_ATTR}` is reserved; write parameter attributes after each parameter"
+                ),
+                offset: 0,
+            });
+        }
+        let mut attrs = self.build_attr_dict(attrs)?;
+        if let Some(value) = param_attrs_attribute(params.iter().map(|(_, attrs)| attrs.clone())) {
+            attrs.insert(Symbol::new(PARAM_ATTRS_ATTR), value);
+        }
         Ok(attrs)
+    }
+
+    fn build_function_type_attrs(
+        &mut self,
+        dialect: Symbol,
+        name: Symbol,
+        attrs: &RawAttrDict<'_>,
+        inputs: &[(TypeRef, AttributeMap)],
+        results: &[(TypeRef, AttributeMap)],
+    ) -> Result<AttributeMap, ParseError> {
+        let params: Vec<_> = inputs.iter().chain(results).cloned().collect();
+        self.build_type_attrs(dialect, name, attrs, &params)
     }
 
     fn build_function_type(
         &mut self,
         dialect: &str,
         name: &str,
-        inputs: &[RawType<'_>],
-        results: &[RawType<'_>],
-        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
+        inputs: &[RawParam<'_>],
+        results: &[RawParam<'_>],
+        attrs: &RawAttrDict<'_>,
     ) -> Result<TypeRef, ParseError> {
         if dialect == "func" && name == "func_sig" {
             return self.build_shared_function_type(inputs, results, attrs);
@@ -152,9 +198,9 @@ impl<'a> ArenaIrBuilder<'a> {
 
     fn build_wasm_function_type(
         &mut self,
-        inputs: &[RawType<'_>],
-        results: &[RawType<'_>],
-        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
+        inputs: &[RawParam<'_>],
+        results: &[RawParam<'_>],
+        attrs: &RawAttrDict<'_>,
     ) -> Result<TypeRef, ParseError> {
         if let Some((name, _)) = attrs.iter().find(|(name, _)| {
             matches!(
@@ -167,20 +213,16 @@ impl<'a> ArenaIrBuilder<'a> {
                 offset: 0,
             });
         }
-        let inputs = inputs
-            .iter()
-            .map(|ty| self.build_type(ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        let results = results
-            .iter()
-            .map(|ty| self.build_type(ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        let attrs = self.build_type_attrs(
+        let inputs = self.build_params(inputs)?;
+        let results = self.build_params(results)?;
+        let attrs = self.build_function_type_attrs(
             Symbol::new("wasm"),
             Symbol::new("func_sig"),
             attrs,
-            inputs.len() + results.len(),
+            &inputs,
+            &results,
         )?;
+        let (inputs, results) = (types_of(inputs), types_of(results));
         Ok(
             crate::dialect::wasm::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -190,9 +232,9 @@ impl<'a> ArenaIrBuilder<'a> {
     /// Build the native target signature through its owning validated API.
     fn build_clif_function_type(
         &mut self,
-        inputs: &[RawType<'_>],
-        results: &[RawType<'_>],
-        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
+        inputs: &[RawParam<'_>],
+        results: &[RawParam<'_>],
+        attrs: &RawAttrDict<'_>,
     ) -> Result<TypeRef, ParseError> {
         if let Some((name, _)) = attrs.iter().find(|(name, _)| {
             matches!(
@@ -205,20 +247,16 @@ impl<'a> ArenaIrBuilder<'a> {
                 offset: 0,
             });
         }
-        let inputs = inputs
-            .iter()
-            .map(|ty| self.build_type(ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        let results = results
-            .iter()
-            .map(|ty| self.build_type(ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        let attrs = self.build_type_attrs(
+        let inputs = self.build_params(inputs)?;
+        let results = self.build_params(results)?;
+        let attrs = self.build_function_type_attrs(
             Symbol::new("clif"),
             Symbol::new("func_sig"),
             attrs,
-            inputs.len() + results.len(),
+            &inputs,
+            &results,
         )?;
+        let (inputs, results) = (types_of(inputs), types_of(results));
         Ok(
             crate::dialect::clif::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -228,9 +266,9 @@ impl<'a> ArenaIrBuilder<'a> {
     /// Build the existing shared signature through its owning validated API.
     fn build_shared_function_type(
         &mut self,
-        inputs: &[RawType<'_>],
-        results: &[RawType<'_>],
-        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
+        inputs: &[RawParam<'_>],
+        results: &[RawParam<'_>],
+        attrs: &RawAttrDict<'_>,
     ) -> Result<TypeRef, ParseError> {
         if results.len() > 1 {
             return Err(ParseError {
@@ -253,20 +291,16 @@ impl<'a> ArenaIrBuilder<'a> {
             });
         }
 
-        let inputs = inputs
-            .iter()
-            .map(|ty| self.build_type(ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        let results = results
-            .iter()
-            .map(|ty| self.build_type(ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        let attrs = self.build_type_attrs(
+        let inputs = self.build_params(inputs)?;
+        let results = self.build_params(results)?;
+        let attrs = self.build_function_type_attrs(
             Symbol::new("func"),
             Symbol::new("func_sig"),
             attrs,
-            inputs.len() + results.len(),
+            &inputs,
+            &results,
         )?;
+        let (inputs, results) = (types_of(inputs), types_of(results));
         Ok(
             crate::dialect::func::func_sig_with_attrs(self.ctx, inputs, results, attrs)
                 .as_type_ref(),
@@ -279,9 +313,9 @@ impl<'a> ArenaIrBuilder<'a> {
         &mut self,
         dialect: &str,
         name: &str,
-        inputs: &[RawType<'_>],
-        results: &[RawType<'_>],
-        attrs: &[(std::borrow::Cow<'_, str>, RawAttribute<'_>)],
+        inputs: &[RawParam<'_>],
+        results: &[RawParam<'_>],
+        attrs: &RawAttrDict<'_>,
     ) -> Result<TypeRef, ParseError> {
         if let Some((reserved, _)) = attrs.iter().find(|(key, _)| {
             matches!(
@@ -294,20 +328,16 @@ impl<'a> ArenaIrBuilder<'a> {
                 offset: 0,
             });
         }
-        let inputs = inputs
-            .iter()
-            .map(|ty| self.build_type(ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        let results = results
-            .iter()
-            .map(|ty| self.build_type(ty))
-            .collect::<Result<Vec<_>, _>>()?;
-        let attrs = self.build_type_attrs(
+        let inputs = self.build_params(inputs)?;
+        let results = self.build_params(results)?;
+        let attrs = self.build_function_type_attrs(
             Symbol::from_dynamic(dialect),
             Symbol::from_dynamic(name),
             attrs,
-            inputs.len() + results.len(),
+            &inputs,
+            &results,
         )?;
+        let (inputs, results) = (types_of(inputs), types_of(results));
         let num_inputs = u32::try_from(inputs.len()).map_err(|_| ParseError {
             message: format!("{dialect}.{name} input count exceeds u32"),
             offset: 0,
@@ -940,7 +970,7 @@ mod tests {
     fn test_roundtrip_namespaced_type_attribute_key() {
         let input = r#"
 core.module @test {
-  %0 = test.make : test.value() {test.marker = 2}
+  %0 = test.make : test.value<{test.marker = 2}>
 }
 "#;
         let mut ctx = IrContext::new();
@@ -952,8 +982,8 @@ core.module @test {
 
     #[test]
     fn test_roundtrip_module_attributes() {
-        let input = r#"core.module @test {test.flag = 1, test.string = test.value() {name = @Str}} {
-  !Str = test.value() {name = @Str}
+        let input = r#"core.module @test {test.flag = 1, test.string = test.value<{name = @Str}>} {
+  !Str = test.value<{name = @Str}>
 
   %0 = test.make : !Str
 }
@@ -982,7 +1012,7 @@ core.module @test {
     fn test_roundtrip_dict_attributes() {
         let input = r#"
 core.module @test {
-  %0 = test.make {meta = {b = [{}, {k = @v}], a = core.i32}, nested = test.value() {b = {}}} : test.value() {param = {x = 1}}
+  %0 = test.make {meta = {b = [{}, {k = @v}], a = core.i32}, nested = test.value<{b = {}}>} : test.value<{param = {x = 1}}>
 }
 "#;
         let mut ctx = IrContext::new();
@@ -990,12 +1020,12 @@ core.module @test {
         let printed = print_module(&ctx, root);
         assert!(
             printed.contains(
-                "{meta = {a = core.i32, b = [{}, {k = @v}]}, nested = test.value() {b = {}}}"
+                "{meta = {a = core.i32, b = [{}, {k = @v}]}, nested = test.value<{b = {}}>}"
             ),
             "dictionary keys print in sorted order:\n{printed}"
         );
         assert!(
-            printed.contains("test.value() {param = {x = 1}}"),
+            printed.contains("test.value<{param = {x = 1}}>"),
             "{printed}"
         );
         assert_roundtrip(&ctx, root);
@@ -1023,21 +1053,19 @@ core.module @test {
     #[test]
     fn test_roundtrip_parameter_attributes() {
         let input = r#"core.module @test {
-  !pair = core.tuple(core.i32, core.ptr) {param_attrs = [{}, {k = @v}]}
-  !sig = func.func_sig<(core.i32, core.ptr) -> core.i32> {param_attrs = [{a = core.i32}, {}, {}]}
-  !plain = core.tuple(core.i32, core.ptr) {param_attrs = [{}, {}]}
+  !pair = core.tuple<core.i32, core.ptr {k = @v}>
+  !sig = func.func_sig<(core.i32 {a = core.i32}, core.ptr) -> core.i32>
+  !plain = core.tuple<core.i32 {}, core.ptr {}>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("parameter attributes should parse");
         let printed = print_module(&ctx, module);
         assert!(
-            printed.contains("core.tuple(core.i32, core.ptr) {param_attrs = [{}, {k = @v}]}"),
+            printed.contains("core.tuple<core.i32, core.ptr {k = @v}>"),
             "{printed}"
         );
         assert!(
-            printed.contains(
-                "func.func_sig<(core.i32, core.ptr) -> core.i32> {param_attrs = [{a = core.i32}, {}, {}]}"
-            ),
+            printed.contains("func.func_sig<(core.i32 {a = core.i32}, core.ptr) -> core.i32>"),
             "{printed}"
         );
         let aliases: std::collections::HashMap<_, _> = ctx
@@ -1063,33 +1091,19 @@ core.module @test {
     }
 
     #[test]
-    fn test_malformed_parameter_attributes_are_parse_errors() {
-        for (spelling, expected) in [
-            (
-                "core.tuple(core.i32) {param_attrs = 1}",
-                "list of dictionaries",
-            ),
-            (
-                "core.tuple(core.i32) {param_attrs = [{k = 1}, {}]}",
-                "2 entries for 1",
-            ),
-            (
-                "core.tuple(core.i32, core.i32) {param_attrs = [{}]}",
-                "1 entries for 2",
-            ),
-            (
-                "core.tuple(core.i32, core.i32) {param_attrs = [{k = 1}, 2]}",
-                "entry 1",
-            ),
-            (
-                "func.func_sig<(core.i32) -> ()> {param_attrs = [1]}",
-                "entry 0",
-            ),
+    fn test_explicit_parameter_attributes_are_parse_errors() {
+        for spelling in [
+            "core.tuple<core.i32, {param_attrs = [{k = 1}]}>",
+            "core.tuple<core.i32, {param_attrs = 1}>",
+            "func.func_sig<(core.i32) -> (), {param_attrs = [{k = 1}]}>",
         ] {
             let mut ctx = IrContext::new();
             let input = format!("core.module @test {{ !bad = {spelling} }}");
             let error = parse_module(&mut ctx, &input).expect_err(spelling);
-            assert!(error.message.contains(expected), "{spelling}: {error}");
+            assert!(
+                error.message.contains("`param_attrs` is reserved"),
+                "{spelling}: {error}"
+            );
         }
     }
 
@@ -1636,9 +1650,9 @@ core.module @test {
 
     #[test]
     fn review_function_result_type_preserves_empty_body() {
-        for attrs in ["", " {effect = core.nil}"] {
+        for attrs in ["", ", {effect = core.nil}"] {
             let input = format!(
-                "core.module @test {{ func.func @f() -> func.func_sig<() -> ()>{attrs} {{}} }}"
+                "core.module @test {{ func.func @f() -> func.func_sig<() -> (){attrs}> {{}} }}"
             );
             let mut ctx = IrContext::new();
             let module = parse_module(&mut ctx, &input).unwrap();
@@ -1736,7 +1750,7 @@ core.module @test {
     #[test]
     fn clif_syntax_uses_the_target_owned_signature() {
         let input = r#"core.module @test {
-  !contract = clif.func_sig<(core.i32) -> (core.i32, core.i64)> {tag = @native}
+  !contract = clif.func_sig<(core.i32) -> (core.i32, core.i64), {tag = @native}>
   clif.func @id(%value: core.i32) -> core.i32 {
     clif.return %value
   }
@@ -1757,7 +1771,7 @@ core.module @test {
         let mut rejected = IrContext::new();
         let error = parse_module(
             &mut rejected,
-            "core.module @test { !bad = clif.func_sig<() -> ()> {num_inputs = 0} }",
+            "core.module @test { !bad = clif.func_sig<() -> (), {num_inputs = 0}> }",
         )
         .expect_err("target count delimiters are constructor-owned");
         assert!(
@@ -1769,7 +1783,7 @@ core.module @test {
     #[test]
     fn unsupported_core_func_spellings_are_rejected() {
         for spelling in [
-            "core.func(core.i64, core.i32)",
+            "core.func<core.i64, core.i32>",
             "core.func<(core.i32) -> core.i64>",
         ] {
             let mut ctx = IrContext::new();
@@ -1781,14 +1795,15 @@ core.module @test {
     #[test]
     fn test_func_type_preserves_non_reserved_attributes() {
         let input = r#"core.module @test {
-  !with_attr = func.func_sig<(core.i32) -> core.i64> {effect = core.nil}
+  !with_attr = func.func_sig<(core.i32) -> core.i64, {effect = core.nil}>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("function type attribute should parse");
         let printed = print_module(&ctx, module);
         assert!(
-            printed
-                .contains("!with_attr = func.func_sig<(core.i32) -> core.i64> {effect = core.nil}"),
+            printed.contains(
+                "!with_attr = func.func_sig<(core.i32) -> core.i64, {effect = core.nil}>"
+            ),
             "{printed}"
         );
         assert!(!printed.contains("num_inputs"), "{printed}");
@@ -1800,7 +1815,7 @@ core.module @test {
     fn test_func_type_rejects_reserved_textual_attributes() {
         for reserved in [func::NUM_INPUTS_ATTR, func::NUM_RESULTS_ATTR] {
             let input = format!(
-                "core.module @test {{ !bad = func.func_sig<() -> core.nil> {{{reserved} = 0}} }}"
+                "core.module @test {{ !bad = func.func_sig<() -> core.nil, {{{reserved} = 0}}> }}"
             );
             let mut ctx = IrContext::new();
             let error = parse_module(&mut ctx, &input).expect_err("reserved key must be rejected");
@@ -1822,16 +1837,16 @@ core.module @test {
     #[test]
     fn foreign_func_sig_roundtrips_without_changing_shared_contracts() {
         let input = r#"core.module @test {
-  !foreign = foreign.func_sig<(core.i32, core.i64) -> (core.i1, core.i32)> {nested = core.array(core.i32)}
-  !unrelated = foreign.record(core.i32) {num_inputs = 1, num_results = 0}
+  !foreign = foreign.func_sig<(core.i32, core.i64) -> (core.i1, core.i32), {nested = core.array<core.i32>}>
+  !unrelated = foreign.record<core.i32, {num_inputs = 1, num_results = 0}>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("foreign signature should parse");
         let printed = print_module(&ctx, module);
-        assert!(printed.contains("!foreign = foreign.func_sig<(core.i32, core.i64) -> (core.i1, core.i32)> {nested = core.array(core.i32)}"), "{printed}");
+        assert!(printed.contains("!foreign = foreign.func_sig<(core.i32, core.i64) -> (core.i1, core.i32), {nested = core.array<core.i32>}>"), "{printed}");
         assert!(
             printed.contains(
-                "!unrelated = foreign.record(core.i32) {num_inputs = 1, num_results = 0}"
+                "!unrelated = foreign.record<core.i32, {num_inputs = 1, num_results = 0}>"
             ),
             "{printed}"
         );
@@ -1841,7 +1856,7 @@ core.module @test {
             let mut rejected = IrContext::new();
             let error = parse_module(
                 &mut rejected,
-                &format!("core.module @test {{ !bad = foreign.func_sig<() -> core.i32> {{{reserved} = 0}} }}"),
+                &format!("core.module @test {{ !bad = foreign.func_sig<() -> core.i32, {{{reserved} = 0}}> }}"),
             )
             .expect_err("foreign signature delimiters remain reserved");
             assert!(
@@ -1854,21 +1869,21 @@ core.module @test {
     #[test]
     fn malformed_func_sig_storage_roundtrips_as_concrete_type() {
         let input = r#"core.module @test {
-  !foreign = foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}
-  !shared = func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}
+  !foreign = foreign.func_sig<core.i32, {num_inputs = 2, num_results = 1}>
+  !shared = func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 2}>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("raw storage should remain parseable");
         let printed = print_module(&ctx, module);
         assert!(
             printed.contains(
-                "!foreign = foreign.func_sig(core.i32) {num_inputs = 2, num_results = 1}"
+                "!foreign = foreign.func_sig<core.i32, {num_inputs = 2, num_results = 1}>"
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "!shared = func.func_sig(core.i32, core.i32, core.i32) {num_inputs = 1, num_results = 2}"
+                "!shared = func.func_sig<core.i32, core.i32, core.i32, {num_inputs = 1, num_results = 2}>"
             ),
             "{printed}"
         );
@@ -1901,9 +1916,9 @@ core.module @test {
     #[test]
     fn test_roundtrip_type_alias() {
         let input = r#"core.module @test {
-  !marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32]], name = @_Marker}
+  !marker = adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32]], name = @_Marker}>
 
-  func.func @foo(%0: core.array(!marker)) -> core.array(!marker) {
+  func.func @foo(%0: core.array<!marker>) -> core.array<!marker> {
     func.return %0
   }
 }"#;
@@ -1956,7 +1971,7 @@ core.module @test {
         let printed = print_module(&ctx, module_op);
         // Alias should appear in output
         assert!(
-            printed.contains("!point = core.tuple(core.i32, core.i32)"),
+            printed.contains("!point = core.tuple<core.i32, core.i32>"),
             "Expected alias definition in output:\n{printed}",
         );
         assert!(
@@ -1968,7 +1983,7 @@ core.module @test {
     #[test]
     fn test_nested_type_alias() {
         let input = r#"core.module @test {
-  !inner = core.tuple(core.i32, core.i32)
+  !inner = core.tuple<core.i32, core.i32>
   !outer = func.func_sig<() -> !inner>
 
   func.func @foo(%0: !inner) -> !inner {
@@ -2017,7 +2032,7 @@ core.module @test {
     #[test]
     fn test_quoted_type_alias_roundtrip() {
         let input = r#"core.module @test {
-  !"test::MyStruct" = adt.struct() {fields = [[@x, core.i32], [@y, core.i32]], name = @"test::MyStruct"}
+  !"test::MyStruct" = adt.struct<{fields = [[@x, core.i32], [@y, core.i32]], name = @"test::MyStruct"}>
 
   func.func @foo(%0: !"test::MyStruct") -> !"test::MyStruct" {
     func.return %0

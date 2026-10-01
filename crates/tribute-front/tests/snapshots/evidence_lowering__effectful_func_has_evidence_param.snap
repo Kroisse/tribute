@@ -4,7 +4,7 @@ expression: ir_text
 ---
 core.module @test {
   tribute_control.func @effectful() -> core.i32 convention(cps) {
-      %0 = tribute_control.perform {ability_ref = core.ability_ref() {name = @Foo}, op_name = @bar, operation_kind = @op} : core.i32
+      %0 = tribute_control.perform {ability_ref = core.ability_ref<{name = @Foo}>, op_name = @bar, operation_kind = @op} : core.i32
       tribute_control.return %0
   }
   tribute_control.func @main() -> core.nil convention(direct) {

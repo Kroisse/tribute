@@ -65,21 +65,41 @@ pub struct RawBlock<'a> {
     pub ops: Vec<RawOperation<'a>>,
 }
 
+/// A raw attribute dictionary: `{key = value, ...}`.
+pub type RawAttrDict<'a> = Vec<(Cow<'a, str>, RawAttribute<'a>)>;
+
+/// A type parameter together with its own attributes: `type {key = value}`.
+#[derive(Debug, Clone)]
+pub struct RawParam<'a> {
+    pub ty: RawType<'a>,
+    pub attrs: RawAttrDict<'a>,
+}
+
+impl<'a> From<RawType<'a>> for RawParam<'a> {
+    fn from(ty: RawType<'a>) -> Self {
+        Self {
+            ty,
+            attrs: Vec::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum RawType<'a> {
+    /// `dialect.name` or `dialect.name<params..., {attrs}>`.
     Concrete {
         dialect: &'a str,
         name: &'a str,
-        params: Vec<RawType<'a>>,
-        attrs: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
+        params: Vec<RawParam<'a>>,
+        attrs: RawAttrDict<'a>,
     },
-    /// Canonical qualified `*.func_sig<(inputs...) -> results>` syntax.
+    /// Function syntax `dialect.name<(inputs...) -> results, {attrs}>`.
     Function {
         dialect: &'a str,
         name: &'a str,
-        inputs: Vec<RawType<'a>>,
-        results: Vec<RawType<'a>>,
-        attrs: Vec<(Cow<'a, str>, RawAttribute<'a>)>,
+        inputs: Vec<RawParam<'a>>,
+        results: Vec<RawParam<'a>>,
+        attrs: RawAttrDict<'a>,
     },
     /// Type alias reference: `!name` or `!"quoted name"`
     Alias(String),
@@ -251,13 +271,6 @@ pub(crate) fn string_lit(input: &mut &str) -> ModalResult<String> {
     Ok(result)
 }
 
-/// Parse a type: `dialect.name`, `dialect.name(params)`, or
-/// `dialect.name(params) {key = value, ...}`.
-///
-/// The optional `{...}` block carries type-level attributes (e.g., the
-/// `effect` attribute on function types).  Type attributes are only parsed
-/// when explicit parentheses `()` are present to avoid ambiguity with the
-/// opening `{` of operation body regions.
 /// Parse a type alias name: bare `ident` or quoted `"string"`.
 fn type_alias_name(input: &mut &str) -> ModalResult<String> {
     if input.starts_with('"') {
@@ -274,6 +287,21 @@ pub fn type_alias_ref<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     Ok(RawType::Alias(name))
 }
 
+/// Parse a type.
+///
+/// Types are self-delimiting: everything a type owns is inside its angle
+/// brackets, so a `{` after a type never belongs to it.
+///
+/// ```text
+/// dialect.name
+/// dialect.name<param {param attrs}, param, {type attrs}>
+/// dialect.name<(input {attrs}, ...) -> result {attrs}, {type attrs}>
+/// dialect.name<(inputs...) -> (results...)>
+/// ```
+///
+/// An element that starts with `{` holds the type's own attributes and must
+/// come last. A dictionary directly after a parameter holds that parameter's
+/// attributes. A list that starts with `(` is function syntax.
 pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     // Check for alias reference first
     if input.starts_with('!') {
@@ -282,38 +310,33 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
 
     let (dialect, name) = qualified_name.parse_next(input)?;
 
-    if name == "func_sig" && input.starts_with('<') {
-        '<'.parse_next(input)?;
-        ws.parse_next(input)?;
-        let inputs = delimited(
-            ('(', ws),
-            separated(0.., (ws, raw_type, ws).map(|(_, ty, _)| ty), ','),
-            (ws, ')'),
-        )
-        .parse_next(input)?;
+    if !input.starts_with('<') {
+        return Ok(RawType::Concrete {
+            dialect,
+            name,
+            params: vec![],
+            attrs: vec![],
+        });
+    }
+    '<'.parse_next(input)?;
+    ws.parse_next(input)?;
+
+    if input.starts_with('(') {
+        let inputs = raw_param_list.parse_next(input)?;
         ws.parse_next(input)?;
         "->".parse_next(input)?;
         ws.parse_next(input)?;
         let results = if input.starts_with('(') {
-            delimited(
-                ('(', ws),
-                separated(0.., (ws, raw_type, ws).map(|(_, ty, _)| ty), ','),
-                (ws, ')'),
-            )
-            .parse_next(input)?
+            raw_param_list.parse_next(input)?
         } else {
-            vec![raw_type.parse_next(input)?]
+            vec![raw_param.parse_next(input)?]
         };
         ws.parse_next(input)?;
+        let attrs = opt(preceded((',', ws), raw_attr_dict))
+            .parse_next(input)?
+            .unwrap_or_default();
+        ws.parse_next(input)?;
         '>'.parse_next(input)?;
-        // An empty dictionary is indistinguishable from an empty operation body.
-        // Only consume nonempty type attributes, leaving `{}` for the region parser.
-        let attrs = opt(preceded(
-            ws,
-            raw_attr_dict.verify(|attrs: &Vec<_>| !attrs.is_empty()),
-        ))
-        .parse_next(input)?
-        .unwrap_or_default();
         return Ok(RawType::Function {
             dialect,
             name,
@@ -323,26 +346,24 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
         });
     }
 
-    // Optional type parameters
-    let opt_params = opt(delimited(
-        ('(', ws),
-        separated(0.., (ws, raw_type, ws).map(|(_, t, _)| t), ','),
-        (ws, ')'),
-    ))
-    .parse_next(input)?;
-    let has_parens = opt_params.is_some();
-    let params = opt_params.unwrap_or_default();
-
-    // Optional type attributes: {key = value, ...}
-    // Only attempted after explicit parens `()` to avoid ambiguity with
-    // the opening `{` of operation body regions (e.g. `-> core.nil { ... }`).
-    let attrs = if has_parens {
-        opt(preceded(ws, raw_attr_dict))
-            .parse_next(input)?
-            .unwrap_or_default()
-    } else {
-        vec![]
-    };
+    let mut params = Vec::new();
+    let mut attrs = Vec::new();
+    if !input.starts_with('>') {
+        loop {
+            if input.starts_with('{') {
+                attrs = raw_attr_dict.parse_next(input)?;
+                ws.parse_next(input)?;
+                break;
+            }
+            params.push(raw_param.parse_next(input)?);
+            ws.parse_next(input)?;
+            if opt(',').parse_next(input)?.is_none() {
+                break;
+            }
+            ws.parse_next(input)?;
+        }
+    }
+    '>'.parse_next(input)?;
 
     Ok(RawType::Concrete {
         dialect,
@@ -350,6 +371,25 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
         params,
         attrs,
     })
+}
+
+/// Parse a type parameter with its optional attributes: `type {attrs}`.
+fn raw_param<'a>(input: &mut &'a str) -> ModalResult<RawParam<'a>> {
+    let ty = raw_type.parse_next(input)?;
+    let attrs = opt(preceded(ws, raw_attr_dict))
+        .parse_next(input)?
+        .unwrap_or_default();
+    Ok(RawParam { ty, attrs })
+}
+
+/// Parse a parenthesized parameter list: `(type {attrs}, type, ...)`.
+fn raw_param_list<'a>(input: &mut &'a str) -> ModalResult<Vec<RawParam<'a>>> {
+    delimited(
+        ('(', ws),
+        separated(0.., (ws, raw_param, ws).map(|(_, param, _)| param), ','),
+        (ws, ')'),
+    )
+    .parse_next(input)
 }
 
 /// Parse an attribute value.
@@ -806,7 +846,7 @@ mod tests {
     use super::*;
 
     /// Helper to unwrap a concrete RawType.
-    fn unwrap_concrete<'a, 'b>(ty: &'b RawType<'a>) -> (&'a str, &'a str, &'b [RawType<'a>]) {
+    fn unwrap_concrete<'a, 'b>(ty: &'b RawType<'a>) -> (&'a str, &'a str, &'b [RawParam<'a>]) {
         match ty {
             RawType::Concrete {
                 dialect,
@@ -876,7 +916,7 @@ mod tests {
 
     #[test]
     fn test_parse_parameterized_type() {
-        let mut input = "core.tuple(core.nil, core.i32, core.i32)";
+        let mut input = "core.tuple<core.nil, core.i32, core.i32>";
         let raw = raw_type.parse_next(&mut input).expect("should parse type");
         let (dialect, name, params) = unwrap_concrete(&raw);
         assert_eq!(dialect, "core");
@@ -1068,7 +1108,7 @@ mod tests {
 
     #[test]
     fn test_parse_type_with_attrs() {
-        let mut input = "core.tuple(core.nil, core.i32) {tag = core.nil}";
+        let mut input = "core.tuple<core.nil, core.i32, {tag = core.nil}> {";
         let result = raw_type.parse_next(&mut input).expect("should parse");
         match &result {
             RawType::Concrete {
@@ -1086,6 +1126,72 @@ mod tests {
             RawType::Function { .. } => panic!("expected Concrete, got Function"),
             RawType::Alias(n) => panic!("expected Concrete, got Alias(!{n})"),
         }
+        // A dictionary after the closing bracket is not the type's.
+        assert_eq!(input, " {");
+    }
+
+    #[test]
+    fn test_parse_type_with_only_attrs() {
+        let mut input = "adt.typeref<{name = @X}>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse");
+        let RawType::Concrete { params, attrs, .. } = raw else {
+            panic!("expected Concrete")
+        };
+        assert!(params.is_empty());
+        assert_eq!(attrs.len(), 1);
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn test_parse_parameter_attributes() {
+        let mut input = "core.tuple<core.i32 {k = @v}, core.ptr, {tag = 1}>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse");
+        let RawType::Concrete { params, attrs, .. } = raw else {
+            panic!("expected Concrete")
+        };
+        assert_eq!(params.len(), 2);
+        assert_eq!(params[0].attrs.len(), 1);
+        assert_eq!(params[0].attrs[0].0, "k");
+        assert!(params[1].attrs.is_empty());
+        assert_eq!(attrs.len(), 1);
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn test_parse_function_type_parameter_attributes() {
+        let mut input = "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = @tail}>";
+        let raw = raw_type.parse_next(&mut input).expect("should parse");
+        let RawType::Function {
+            inputs,
+            results,
+            attrs,
+            ..
+        } = raw
+        else {
+            panic!("expected Function")
+        };
+        assert_eq!(inputs[0].attrs.len(), 1);
+        assert!(inputs[1].attrs.is_empty());
+        assert_eq!(results[0].attrs.len(), 1);
+        assert_eq!(attrs.len(), 1);
+        assert!(input.is_empty());
+    }
+
+    #[test]
+    fn test_type_attributes_must_come_last() {
+        let mut input = "core.tuple<{tag = 1}, core.i32>";
+        assert!(raw_type.parse_next(&mut input).is_err());
+    }
+
+    #[test]
+    fn test_parenthesized_parameters_are_not_type_syntax() {
+        let mut input = "core.tuple(core.i32)";
+        let raw = raw_type
+            .parse_next(&mut input)
+            .expect("should parse the name");
+        let (_, _, params) = unwrap_concrete(&raw);
+        assert!(params.is_empty());
+        assert_eq!(input, "(core.i32)");
     }
 
     #[test]

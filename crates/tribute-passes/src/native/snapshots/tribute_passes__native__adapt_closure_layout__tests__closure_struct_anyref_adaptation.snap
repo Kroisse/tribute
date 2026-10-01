@@ -3,7 +3,7 @@ source: crates/tribute-passes/src/native/adapt_closure_layout.rs
 expression: result
 ---
 core.module @test {
-  !_closure = adt.struct(core.i64, core.ptr) {fields = [[@func_ptr, core.i64], [@env, core.ptr]], layout = @closure, name = @_closure}
+  !_closure = adt.struct<core.i64, core.ptr, {fields = [[@func_ptr, core.i64], [@env, core.ptr]], layout = @closure, name = @_closure}>
 
   clif.func {sym_name = @test_fn, type = clif.func_sig<(wasm.anyref) -> core.i32>} {
     ^bb0(%0: wasm.anyref):

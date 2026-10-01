@@ -12,10 +12,10 @@ use trunk_ir::printer::print_module;
 use super::*;
 
 const BORROW_FIXTURE: &str = r#"core.module @test {
-  !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
-  !ChildRef = adt.typeref() {name = @Child}
-  !Box = adt.struct() {name = @Box, fields = [[@child, !ChildRef]]}
-  !BoxRef = adt.typeref() {name = @Box}
+  !Child = adt.struct<{name = @Child, fields = [[@value, core.i32]]}>
+  !ChildRef = adt.typeref<{name = @Child}>
+  !Box = adt.struct<{name = @Box, fields = [[@child, !ChildRef]]}>
+  !BoxRef = adt.typeref<{name = @Box}>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
@@ -28,10 +28,10 @@ const BORROW_FIXTURE: &str = r#"core.module @test {
 }"#;
 
 const CAST_FIXTURE: &str = r#"core.module @test {
-  !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
-  !ChildRef = adt.typeref() {name = @Child}
-  !Choice = adt.enum() {name = @Choice, variants = [[@Some, [!ChildRef]]]}
-  !ChoiceRef = adt.typeref() {name = @Choice}
+  !Child = adt.struct<{name = @Child, fields = [[@value, core.i32]]}>
+  !ChildRef = adt.typeref<{name = @Child}>
+  !Choice = adt.enum<{name = @Choice, variants = [[@Some, [!ChildRef]]]}>
+  !ChoiceRef = adt.typeref<{name = @Choice}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
     %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
@@ -190,8 +190,8 @@ fn malformed_projection_fails_closed_without_publishing_facts() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Child = adt.struct() {name = @Child, fields = [[@value, core.i32]]}
-  !ChildRef = adt.typeref() {name = @Child}
+  !Child = adt.struct<{name = @Child, fields = [[@value, core.i32]]}>
+  !ChildRef = adt.typeref<{name = @Child}>
   func.func @load(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 1, type = !Child} : core.i32
     func.return %value

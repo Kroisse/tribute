@@ -4,7 +4,7 @@ expression: ir_text
 ---
 core.module @test {
   tribute_control.func @use_ask() -> core.i32 convention(cps) {
-      %0 = tribute_control.perform {ability_ref = core.ability_ref() {name = @Ask}, op_name = @ask, operation_kind = @op} : core.i32
+      %0 = tribute_control.perform {ability_ref = core.ability_ref<{name = @Ask}>, op_name = @ask, operation_kind = @op} : core.i32
       tribute_control.return %0
   }
   tribute_control.func @main() -> core.nil convention(cps) attributes {tribute.root_source_result = core.nil} {
@@ -15,8 +15,8 @@ core.module @test {
         ^bb2(%2: core.i32):
           tribute_control.yield %2
       } {
-          tribute_control.handler {ability_ref = core.ability_ref() {name = @Ask}, kind = @op, op_name = @ask, operation_result_type = core.i32} {
-            ^bb4(%3: tribute_control.resume_token(core.i32, core.i32)):
+          tribute_control.handler {ability_ref = core.ability_ref<{name = @Ask}>, kind = @op, op_name = @ask, operation_result_type = core.i32} {
+            ^bb4(%3: tribute_control.resume_token<core.i32, core.i32>):
               %4 = arith.const {value = 42} : core.i32
               %5 = tribute_control.resume %3, %4 : core.i32
               tribute_control.yield %5

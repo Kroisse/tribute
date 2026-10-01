@@ -650,7 +650,7 @@ mod tests {
     fn test_into_raw_lowers_to_the_explicit_native_conversion() {
         let output = run_pass(
             r#"core.module @test {
-  !_closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}
+  !_closure = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, tribute_rt.anyref]], layout = @closure}>
   func.func @f(%closure: !_closure) -> core.ptr {
     %raw = tribute_rt.into_raw %closure : core.ptr
     func.return %raw

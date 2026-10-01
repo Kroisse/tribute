@@ -301,7 +301,7 @@ mod tests {
 
     /// Build the canonical evidence type string for use in test IR.
     fn evidence_type_str() -> &'static str {
-        "core.array(adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}) {layout = @evidence}"
+        "core.array<adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>, {layout = @evidence}>"
     }
 
     fn attach_exact_perform_types(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
@@ -355,7 +355,7 @@ mod tests {
   func.func @test_fn(%ev: {ev_ty}) -> core.never {{
     %dispatch = arith.const {{value = 0}} : tribute_rt.anyref
     %resume = arith.const {{value = 1}} : tribute_rt.anyref
-    ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}}
+    ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @get}}
   }}
 }}"#
             ),
@@ -386,7 +386,7 @@ mod tests {
     %val = arith.const {{value = 42}} : core.i32
     %dispatch = arith.const {{value = 0}} : tribute_rt.anyref
     %resume = arith.const {{value = 1}} : tribute_rt.anyref
-    ability.perform %ev, %dispatch, %resume, %val {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @set}}
+    ability.perform %ev, %dispatch, %resume, %val {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @set}}
   }}
 }}"#
             ),
@@ -423,7 +423,7 @@ mod tests {
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
     %msg = arith.const {{value = 1}} : tribute_rt.anyref
-    %result = ability.call %msg {{ability_ref = core.ability_ref() {{name = @Console}}, op_name = @print}} : tribute_rt.anyref
+    %result = ability.call %msg {{ability_ref = core.ability_ref<{{name = @Console}}>, op_name = @print}} : tribute_rt.anyref
     func.return %result
   }}
 }}"#
@@ -464,7 +464,7 @@ mod tests {
                     r#"core.module @test {{
   !Evidence = {evidence}
   func.func @test_fn({params}) -> core.i32 {attributes} {{
-    %result = ability.call {{ability_ref = core.ability_ref() {{name = @Counter}}, op_name = @next}} : core.i32
+    %result = ability.call {{ability_ref = core.ability_ref<{{name = @Counter}}>, op_name = @next}} : core.i32
     func.return %result
   }}
 }}"#
@@ -487,7 +487,7 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = 1}} {{
-    %result = ability.call {{ability_ref = core.ability_ref() {{name = @Counter}}, op_name = @next}} : core.i32
+    %result = ability.call {{ability_ref = core.ability_ref<{{name = @Counter}}>, op_name = @next}} : core.i32
     func.return %result
   }}
 }}"#
@@ -515,7 +515,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn(%k: tribute_rt.anyref) -> core.never {
-    ability.perform %k {ability_ref = core.ability_ref() {name = @State}, op_name = @get}
+    ability.perform %k {ability_ref = core.ability_ref<{name = @State}>, op_name = @get}
   }
 }"#,
         );
@@ -539,7 +539,7 @@ mod tests {
             r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
     %k = arith.const {{value = 0}} : tribute_rt.anyref
-    %result = ability.perform %ev, %k {{ability_ref = core.ability_ref() {{name = @State}}, op_name = @get}} : tribute_rt.anyref
+    %result = ability.perform %ev, %k {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @get}} : tribute_rt.anyref
     func.return %result
   }}
 }}"#

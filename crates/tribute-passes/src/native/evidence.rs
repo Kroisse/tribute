@@ -469,11 +469,11 @@ mod tests {
     fn dispatch_module() -> &'static str {
         r#"core.module @test {
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read} : core.ptr
     func.return %result
   }
   func.func @untouched(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @print} : core.ptr
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = @Console}>, op_name = @print} : core.ptr
     func.return %result
   }
 }"#
@@ -596,11 +596,11 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct() {fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}
-  !evidence = core.array(!marker) {layout = @evidence}
+  !marker = adt.struct<{fields = [[@ability_id, core.i32], [@prompt_tag, core.i32], [@tr_dispatch_fn, core.ptr], [@handler_dispatch, core.ptr]], layout = @evidence_marker, name = @_Marker}>
+  !evidence = core.array<!marker, {layout = @evidence}>
   func.func @external(%ev: !evidence) -> !marker
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read} : core.ptr
     func.return %result
   }
 }"#,
@@ -670,7 +670,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @__tribute_evidence_empty(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
-    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+    %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read} : core.ptr
     func.return %result
   }
 }"#,
@@ -698,7 +698,7 @@ mod tests {
             r#"core.module @test {
   func.func @outer(%outer_ev: core.ptr, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
     func.func @inner(%inner_ev: core.ptr, %inner_payload: tribute_rt.anyref) -> core.ptr {
-      %result = effect.dispatch_tail %inner_ev, %inner_payload {ability_ref = core.ability_ref() {name = @Console}, op_name = @read} : core.ptr
+      %result = effect.dispatch_tail %inner_ev, %inner_payload {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read} : core.ptr
       func.return %result
     }
     func.return %payload
@@ -746,7 +746,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get} : tribute_rt.anyref
+    %result = effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = @State}>, op_name = @get} : tribute_rt.anyref
     func.return %result
   }
 }"#,
@@ -766,10 +766,10 @@ mod tests {
         let mut ctx = IrContext::new();
         let source = r#"core.module @test {
           func.func @first(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) {
-            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, answer_type = core.i32}
           }
           func.func @second(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) {
-            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i64}
+            effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, answer_type = core.i64}
           }
         }"#;
         let module = parse_test_module(&mut ctx, source);
@@ -819,7 +819,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%ev: core.ptr, %dispatch: tribute_rt.anyref, %resume: tribute_rt.anyref, %payload: tribute_rt.anyref) -> core.never {
-    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref() {name = @State}, op_name = @get, answer_type = core.i32}
+    effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, answer_type = core.i32}
   }
 }"#,
         );

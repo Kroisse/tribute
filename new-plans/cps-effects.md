@@ -480,7 +480,7 @@ instead of native `ptr` values. Marker construction and field access stay
 inside the target's helper implementations, so effect lowering never builds or
 reads a marker directly.
 
-Empty evidence is represented in high-level IR as an empty `core.array(Marker)`
+Empty evidence is represented in high-level IR as an empty `core.array<Marker>`
 or null evidence placeholder, and backend lowering turns that into the target
 runtime representation. Native lowering maps it to `__tribute_evidence_empty()`.
 When a handler for the same `ability_id` is nested inside an outer handler,

@@ -492,7 +492,7 @@ mod tests {
     fn tail_transfers_require_tail_call_conv_on_both_signatures() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @tail_target, type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+  clif.func {sym_name = @tail_target, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%value: core.i32):
       clif.return
   }
@@ -504,11 +504,11 @@ mod tests {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @tail_target}
   }
-  clif.func {sym_name = @to_platform, type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+  clif.func {sym_name = @to_platform, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @platform_target}
   }
-  clif.func {sym_name = @indirect_platform, type = clif.func_sig<(core.ptr, core.i32) -> ()> {call_conv = @tail}} {
+  clif.func {sym_name = @indirect_platform, type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%callee: core.ptr, %value: core.i32):
       clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> ()>}
   }
@@ -526,17 +526,17 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.func {sym_name = @target, type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+  clif.func {sym_name = @target, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%value: core.i32):
       clif.return
   }
-  clif.func {sym_name = @direct, type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
+  clif.func {sym_name = @direct, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @target}
   }
-  clif.func {sym_name = @indirect, type = clif.func_sig<(core.ptr, core.i32) -> ()> {call_conv = @tail}} {
+  clif.func {sym_name = @indirect, type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%callee: core.ptr, %value: core.i32):
-      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}}
+      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
   }
 }"#,
         );
@@ -547,8 +547,8 @@ mod tests {
     fn external_boundaries_cannot_use_tail_call_conv() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @foreign, abi = "C", type = clif.func_sig<(core.i32) -> ()> {call_conv = @tail}}
-  clif.func {sym_name = @main, type = clif.func_sig<() -> ()> {call_conv = @tail}} {
+  clif.func {sym_name = @foreign, abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
+  clif.func {sym_name = @main, type = clif.func_sig<() -> (), {call_conv = @tail}>} {
     ^entry:
       clif.return
   }
@@ -603,7 +603,7 @@ mod tests {
     fn native_boundary_rejects_malformed_target_signature_storage() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @bad, type = clif.func_sig(core.i32) {num_inputs = 2, num_results = 1}}
+  clif.func {sym_name = @bad, type = clif.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
 }"#,
         );
         assert!(
@@ -660,7 +660,7 @@ mod tests {
     fn native_boundary_rejects_semantic_and_shape_matched_values_in_pointer_slots() {
         let error = validation_error(
             r#"core.module @test {
-  !shaped = adt.struct() {fields = [[@field, core.i32]], name = @Impostor}
+  !shaped = adt.struct<{fields = [[@field, core.i32]], name = @Impostor}>
   clif.func @target(%value: core.ptr) -> core.ptr { clif.return %value }
   clif.func @semantic(%callee: core.ptr, %value: tribute_rt.anyref) -> core.ptr {
     %direct = clif.call %value {callee = @target} : tribute_rt.anyref
@@ -684,7 +684,7 @@ mod tests {
         );
         assert!(
             error.contains(
-                "clif.call call argument #0 type mismatch: expected core.ptr, found adt.struct()"
+                "clif.call call argument #0 type mismatch: expected core.ptr, found adt.struct<"
             ),
             "{error}"
         );

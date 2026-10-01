@@ -2465,7 +2465,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_typed_cps_transfer_passes() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure(func.func_sig<(core.i32) -> core.never>), %value: core.i32) -> core.never {
+  func.func @main(%k: closure.closure<func.func_sig<(core.i32) -> core.never>>, %value: core.i32) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.never>}
   }
 }"#;
@@ -2478,7 +2478,7 @@ mod tests {
     #[test]
     fn tail_call_indirect_rejects_non_cps_result_and_bad_arguments() {
         let input = r#"core.module @test {
-  func.func @main(%k: closure.closure(func.func_sig<(core.i32) -> core.i32>), %value: core.i1) -> core.never {
+  func.func @main(%k: closure.closure<func.func_sig<(core.i32) -> core.i32>>, %value: core.i1) -> core.never {
     func.tail_call_indirect %k, %value {signature = func.func_sig<(core.i32) -> core.i32>}
   }
 }"#;
@@ -2498,7 +2498,7 @@ mod tests {
         let input = r#"core.module @test {
   !never = func.func_sig<() -> core.never>
   !unary = func.func_sig<(core.i32) -> core.never>
-  func.func @result(%k: closure.closure(!never)) -> core.never {
+  func.func @result(%k: closure.closure<!never>) -> core.never {
     %bad = func.tail_call_indirect %k {signature = !never} : core.i32
   }
   func.func @not_last(%k: !never) -> core.never {
@@ -2511,7 +2511,7 @@ mod tests {
   func.func @unsigned(%k: !never) -> core.never {
     func.tail_call_indirect %k
   }
-  func.func @bad_closure(%k: closure.closure()) -> core.never {
+  func.func @bad_closure(%k: closure.closure) -> core.never {
     func.tail_call_indirect %k {signature = !never}
   }
   func.func @mismatched(%k: !unary) -> core.never {
@@ -2523,7 +2523,7 @@ mod tests {
   func.func @direct_function(%k: !never) -> core.never {
     func.tail_call_indirect %k {signature = !never}
   }
-  func.func @arity(%k: closure.closure(!unary)) -> core.never {
+  func.func @arity(%k: closure.closure<!unary>) -> core.never {
     func.tail_call_indirect %k {signature = !unary}
   }
 }"#;

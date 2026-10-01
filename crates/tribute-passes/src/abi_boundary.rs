@@ -454,12 +454,12 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}, tribute.definition.source = @here} {
+  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>, tribute.definition.source = @here} {
     func.return
   }
-  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {call_conv = @tail}} {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
-    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32) -> ()> {call_conv = @tail}}
+  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
+    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = @tail}>}
   }
 }"#,
         );
@@ -470,7 +470,7 @@ mod tests {
     fn forbidden_operations_and_closure_types_are_reported() {
         let violations = kinds(
             r#"core.module @test {
-  !closure = closure.closure(func.func_sig<(core.i32) -> core.i32>) {}
+  !closure = closure.closure<func.func_sig<(core.i32) -> core.i32>>
   func.func @run(%callback: !closure) -> !closure {
     func.return %callback
   }
@@ -513,7 +513,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  !frame = adt.typeref() {name = @Frame, tribute.cps_continuation_frame_result = core.nil}
+  !frame = adt.typeref<{name = @Frame, tribute.cps_continuation_frame_result = core.nil}>
 }"#
             ),
             [attribute("tribute.cps_continuation_frame_result")]
@@ -522,7 +522,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref() {name = @Frame, tribute.closure_environment_index = 0}) -> ()>]} {
+  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = @Frame, tribute.closure_environment_index = 0}>) -> ()>]} {
     func.return
   }
 }"#
@@ -543,7 +543,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  !frame = adt.typeref() {meta = {entry = {tribute.root_source_result = core.nil}}, name = @Frame}
+  !frame = adt.typeref<{meta = {entry = {tribute.root_source_result = core.nil}}, name = @Frame}>
 }"#
             ),
             [attribute("tribute.root_source_result")]
@@ -551,7 +551,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {meta = {ty = adt.typeref() {name = @Frame, tribute.closure_environment_index = 0}}} {
+  func.func @run() attributes {meta = {ty = adt.typeref<{name = @Frame, tribute.closure_environment_index = 0}>}} {
     func.return
   }
 }"#
@@ -608,12 +608,12 @@ mod tests {
   func.func @never() -> core.never {
     func.unreachable
   }
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> ()> {call_conv = @tail}} {
+  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
     func.return
   }
   func.func @caller(%value: core.i32) {
     %same = core.unrealized_conversion_cast %value : core.i32
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> ()> {call_conv = @tail}
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
     func.return
   }
 }"#,
@@ -628,26 +628,26 @@ mod tests {
         let module = |definition: &str, reference: &str| {
             format!(
                 r#"core.module @test {{
-  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> ()> {definition}}} {{
+  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (){definition}>}} {{
     func.return
   }}
   func.func @caller() {{
-    %reference = func.constant {{func_ref = @target}} : func.func_sig<(core.i32) -> ()> {reference}
+    %reference = func.constant {{func_ref = @target}} : func.func_sig<(core.i32) -> (){reference}>
     func.return
   }}
 }}"#
             )
         };
         assert_eq!(
-            kinds(&module("{call_conv = @tail}", "")),
+            kinds(&module(", {call_conv = @tail}", "")),
             [ViolationKind::ReferenceSignatureMismatch]
         );
         assert_eq!(
-            kinds(&module("", "{call_conv = @tail}")),
+            kinds(&module("", ", {call_conv = @tail}")),
             [ViolationKind::ReferenceSignatureMismatch]
         );
         assert_eq!(
-            kinds(&module("{call_conv = @tail}", "{call_conv = @tail}")),
+            kinds(&module(", {call_conv = @tail}", ", {call_conv = @tail}")),
             []
         );
     }
@@ -658,8 +658,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !frame = adt.typeref() {name = @Frame, tribute.cps_continuation_frame_result = core.nil}
-  !holder = adt.struct() {fields = [[@callback, func.func_sig<(core.ptr) -> !frame>]], name = @Holder}
+  !frame = adt.typeref<{name = @Frame, tribute.cps_continuation_frame_result = core.nil}>
+  !holder = adt.struct<{fields = [[@callback, func.func_sig<(core.ptr) -> !frame>]], name = @Holder}>
   func.func @run(%value: !holder) {
     func.return
   }
@@ -704,7 +704,7 @@ mod tests {
         };
         let plain = verify(
             r#"core.module @test {
-  !frame = adt.typeref() {name = @Frame}
+  !frame = adt.typeref<{name = @Frame}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return
@@ -714,7 +714,7 @@ mod tests {
         );
         let annotated = verify(
             r#"core.module @test {
-  !frame = adt.typeref() {name = @Frame, tribute.definition.end = 20, tribute.definition.source = 1, tribute.definition.start = 10}
+  !frame = adt.typeref<{name = @Frame, tribute.definition.end = 20, tribute.definition.source = 1, tribute.definition.start = 10}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2, tribute.definition.end = 40, tribute.definition.source = 1, tribute.definition.start = 30} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return
@@ -813,7 +813,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref) -> ()> {call_conv = @tail, param_attrs = [{tribute.ownership = @consumed}]}} {
+  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
     func.unreachable
   }
 }"#

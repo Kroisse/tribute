@@ -886,8 +886,8 @@ mod tests {
     #[test]
     fn call_conv_is_a_signature_attribute_that_round_trips() {
         let input = r#"core.module @test {
-  func.func @transfer(%callee: func.func_sig<(core.i32) -> ()> {call_conv = @tail}, %value: core.i32) attributes {type = func.func_sig<(func.func_sig<(core.i32) -> ()> {call_conv = @tail}, core.i32) -> ()> {call_conv = @tail}} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> ()> {call_conv = @tail}}
+  func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = @tail}>, %value: core.i32) attributes {type = func.func_sig<(func.func_sig<(core.i32) -> (), {call_conv = @tail}>, core.i32) -> (), {call_conv = @tail}>} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = @tail}>}
   }
 }"#;
         let mut ctx = crate::IrContext::new();
@@ -1123,8 +1123,8 @@ mod result_list_tests {
             }
         }
         for input in [
-            "core.module @m { func.func {sym_name = @f, type = func.func_sig<(core.i32) -> ()> {tag = @kept, nested = [core.i64]}} }",
-            "core.module @m { func.func @f(%x: core.i32) attributes {type = func.func_sig<(core.i32) -> ()> {tag = @kept, nested = [core.i64]}} { func.return } }",
+            "core.module @m { func.func {sym_name = @f, type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} }",
+            "core.module @m { func.func @f(%x: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} { func.return } }",
         ] {
             let mut ctx = IrContext::new();
             let op = parse_module(&mut ctx, input).unwrap();

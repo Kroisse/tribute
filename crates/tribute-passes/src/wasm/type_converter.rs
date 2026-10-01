@@ -665,7 +665,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct() {name = @_closure, fields = [[@func_ptr, core.i32], [@env, wasm.anyref]], layout = @closure}
+  !Closure = adt.struct<{name = @_closure, fields = [[@func_ptr, core.i32], [@env, wasm.anyref]], layout = @closure}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}
