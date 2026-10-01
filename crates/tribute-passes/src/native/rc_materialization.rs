@@ -102,7 +102,6 @@ fn build_schedule(
             let placement = placement_for(ctx, action.anchor)?;
             match action.kind {
                 ActionKind::EntryAcquire
-                | ActionKind::CallRetain
                 | ActionKind::CallAcquire
                 | ActionKind::StoreAcquire
                 | ActionKind::CopyAcquire => schedule.push(ScheduledAction::Retain {
@@ -132,8 +131,11 @@ fn build_schedule(
                     });
                 }
                 // These actions are ownership facts used by the planner. They
-                // deliberately have no standalone RC operation to emit.
+                // deliberately have no standalone RC operation to emit. A
+                // retained parameter's callee acquires its own unit at entry,
+                // so the caller only keeps its value alive across the call.
                 ActionKind::CallBorrow
+                | ActionKind::CallRetain
                 | ActionKind::BorrowLoad
                 | ActionKind::ReturnTransfer
                 | ActionKind::TailTransfer

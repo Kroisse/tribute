@@ -1362,6 +1362,58 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
 }
 
 #[test]
+fn retained_parameter_calls_balance_retains_and_releases() {
+    // The callee of a retained parameter acquires its own unit at entry, so
+    // neither a direct nor an indirect caller retains for the call.
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !R = adt.typeref() {name = @R}
+  !Layout = adt.struct() {name = @R, fields = [[@x, core.i32]]}
+  func.func @keep(%value: !R) -> !R {
+    func.return %value
+  }
+  func.func @direct(%value: !R) -> core.i32 {
+    %kept = func.call %value {callee = @keep} : !R
+    %seen = adt.struct_get %kept {field = 0, type = !Layout} : core.i32
+    func.return %seen
+  }
+  func.func @indirect(%value: !R, %callee: func.func_sig<(!R) -> !R>) -> core.i32 {
+    %kept = func.call_indirect %callee, %value {signature = func.func_sig<(!R) -> !R>} : !R
+    %seen = adt.struct_get %kept {field = 0, type = !Layout} : core.i32
+    func.return %seen
+  }
+}"#,
+    );
+    assert_eq!(
+        plan.function(Symbol::new("keep")).unwrap().entries(),
+        [EntryOwnership::Retained]
+    );
+    for caller in ["direct", "indirect"] {
+        assert_eq!(
+            count(
+                plan.function(Symbol::new(caller)).unwrap(),
+                ActionKind::CallRetain
+            ),
+            1
+        );
+    }
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+    // Each function retains only its own entry parameter. Each caller
+    // releases that unit and the one the call returns.
+    assert_eq!(
+        materialized.matches("tribute_rt.retain").count(),
+        3,
+        "{materialized}"
+    );
+    assert_eq!(
+        materialized.matches("tribute_rt.release").count(),
+        4,
+        "{materialized}"
+    );
+}
+
+#[test]
 fn bodyless_c_ffi_borrows_managed_arguments_and_transfers_managed_results() {
     let (_ctx, _module, plan) = build(
         r#"core.module @test {
