@@ -1,10 +1,12 @@
 // Simplest zero-arg method test
+use std::io::{Io, print_line}
 
 fn double(x: Int) -> Int {
     x + x
 }
 
 // Direct test: parameter.method()
-fn main() -> Int {
-    21.double()
+fn main() ->{Io} Nil {
+    let n = +21
+    print_line(Int::to_string(n.double()))
 }

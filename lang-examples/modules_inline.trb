@@ -5,10 +5,12 @@
 // - Qualified path calls (module::function)
 // - Module names: lowercase (unless same as type name)
 
+use std::io::{Io, print_line}
+
 // Inline module for utility functions
 pub mod utils {
     pub fn double(x: Int) -> Int {
-        x * 2
+        x * +2
     }
 
     pub fn square(x: Int) -> Int {
@@ -17,7 +19,7 @@ pub mod utils {
 
     // Private helper (not accessible outside utils)
     fn internal_helper(x: Int) -> Int {
-        x + 1
+        x + +1
     }
 }
 
@@ -40,28 +42,29 @@ pub mod math {
 pub mod outer {
     pub mod inner {
         pub fn value() -> Int {
-            42
+            +42
         }
     }
 
     pub fn use_inner() -> Int {
-        inner::value()
+        // `inner::value()` does not resolve relative to `outer` yet (#1211).
+        outer::inner::value()
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     print_line("Testing inline modules:")
 
     // Using qualified paths
-    print_line(utils::double(5))        // 10
-    print_line(utils::square(4))        // 16
+    print_line(Int::to_string(utils::double(+5)))        // 10
+    print_line(Int::to_string(utils::square(+4)))        // 16
 
     print_line("Math operations:")
-    print_line(math::add(10, 20))       // 30
-    print_line(math::subtract(20, 5))   // 15
-    print_line(math::multiply(3, 4))    // 12
+    print_line(Int::to_string(math::add(+10, +20)))       // 30
+    print_line(Int::to_string(math::subtract(+20, +5)))   // 15
+    print_line(Int::to_string(math::multiply(+3, +4)))    // 12
 
     print_line("Nested modules:")
-    print_line(outer::inner::value())   // 42
-    print_line(outer::use_inner())      // 42
+    print_line(Int::to_string(outer::inner::value()))   // 42
+    print_line(Int::to_string(outer::use_inner()))      // 42
 }

@@ -3,7 +3,9 @@
 // - Function call using bound variable
 // - Sequential statements
 
-fn main() -> Nil {
-    let x = 10
-    print_line(x)
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    let x = +10
+    print_line(Int::to_string(x))
 }

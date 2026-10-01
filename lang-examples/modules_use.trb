@@ -5,6 +5,8 @@
 // - Package-relative paths: pkg::, super::, self::
 // - Module names: lowercase; type names: PascalCase
 
+use std::io::{Io, print_line}
+
 // Define some modules to import from
 pub mod collections {
     // Type names are PascalCase
@@ -42,11 +44,11 @@ pub mod collections {
 
 pub mod helpers {
     pub fn double(x: Int) -> Int {
-        x * 2
+        x * +2
     }
 
     pub fn triple(x: Int) -> Int {
-        x * 3
+        x * +3
     }
 }
 
@@ -59,21 +61,21 @@ use collections::Option::{Some, None}
 // Aliased import
 use helpers::double as dbl
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     print_line("Testing use declarations:")
 
     // Using imported List
-    let xs = List::singleton(42)
+    let _xs = List::singleton(42)
 
     // Using imported constructors directly
-    let opt = Some(10)
-    let empty = None
+    let _opt = Some(10)
+    let _empty = None
 
     // Using aliased function
-    print_line(dbl(5))  // 10
+    print_line(Int::to_string(dbl(+5)))  // 10
 
     // Can still use fully qualified paths
-    print_line(helpers::triple(3))  // 9
+    print_line(Int::to_string(helpers::triple(+3)))  // 9
 
     print_line("Import patterns work!")
 }

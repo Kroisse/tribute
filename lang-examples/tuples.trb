@@ -1,38 +1,42 @@
 // Test tuple expressions and patterns
 
-fn swap(pair) {
+use std::io::{Io, print_line}
+
+fn swap(pair: #(a, b)) -> #(b, a) {
     case pair {
         #(a, b) -> #(b, a)
     }
 }
 
-fn first(triple) {
+fn first(triple: #(a, b, c)) -> a {
     case triple {
         #(x, _, _) -> x
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     // Tuple expression
-    let pair = #(1, "hello")
-    print_line(pair)
+    let #(number, text) = #(+1, "hello")
+    print_line(Int::to_string(number))
+    print_line(text)
 
     // Tuple pattern matching
-    case #(10, 20, 30) {
-        #(a, b, c) -> print_line(a + b + c)
+    case #(+10, +20, +30) {
+        #(a, b, c) -> print_line(Int::to_string(a + b + c))
     }
 
     // Nested tuple
-    let nested = #(1, #(2, 3))
-    print_line(nested)
+    let #(_, #(two, _)) = #(+1, #(+2, +3))
+    print_line(Int::to_string(two))
 
     // Swap function
-    print_line(swap(#("first", "second")))
+    let #(left, right) = swap(#("first", "second"))
+    print_line(left <> " " <> right)
 
     // Wildcard in tuple pattern
-    print_line(first(#(100, 200, 300)))
+    print_line(Int::to_string(first(#(+100, +200, +300))))
 
     // Tuple with different types
-    let mixed = #(42, "answer", True)
-    print_line(mixed)
+    let #(answer, label, _) = #(+42, "answer", True)
+    print_line(label <> ": " <> Int::to_string(answer))
 }

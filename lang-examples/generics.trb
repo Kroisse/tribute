@@ -1,6 +1,9 @@
 // Basic generic identity function
+use std::io::{Io, print_line}
+
 fn identity(x: a) -> a { x }
 
-fn main() -> Int {
-    identity(42)
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(identity(+42)))
+    print_line(identity("generic"))
 }

@@ -4,15 +4,17 @@
 // - Nested arithmetic expressions
 // - Multiple function definitions in one program
 
+use std::io::{Io, print_line}
+
 fn add(x: Int, y: Int) -> Int {
     x + y
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     print_line("Testing user-defined functions:")
-    print_line(add(10, 20))
+    print_line(Int::to_string(add(+10, +20)))
     print_line("Testing nested arithmetic:")
-    print_line(3 * 4 + 15 / 3)
+    print_line(Int::to_string(+3 * +4 + +15 / +3))
     print_line("Testing string operations:")
     print_line("Hello, Tribute World!")
 }

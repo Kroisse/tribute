@@ -1,4 +1,6 @@
-fn test_string_patterns(s) {
+use std::io::{Io, print_line}
+
+fn test_string_patterns(s: String) -> String {
     case s {
         "hello" -> "greeting found",
         "world" -> "world found",
@@ -6,19 +8,19 @@ fn test_string_patterns(s) {
     }
 }
 
-fn test_number_with_variable(x) {
+fn test_number_with_variable(x: Int) -> String {
     case x {
-        0 -> "zero value",
-        value -> value
+        +0 -> "zero value",
+        value -> Int::to_string(value)
     }
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     print_line("Testing advanced patterns:")
     print_line(test_string_patterns("hello"))
     print_line(test_string_patterns("world"))
     print_line(test_string_patterns("other"))
-    
-    print_line(test_number_with_variable(0))
-    print_line(test_number_with_variable(123))
+
+    print_line(test_number_with_variable(+0))
+    print_line(test_number_with_variable(+123))
 }

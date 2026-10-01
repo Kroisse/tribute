@@ -1,12 +1,14 @@
 // UFCS with qualified name test
-// 21.math::double() should resolve to math::double(21)
+// n.math::double() should resolve to math::double(n)
+use std::io::{Io, print_line}
 
 mod math {
-    fn double(x: Int) -> Int {
+    pub fn double(x: Int) -> Int {
         x + x
     }
 }
 
-fn main() -> Int {
-    21.math::double()
+fn main() ->{Io} Nil {
+    let n = +21
+    print_line(Int::to_string(n.math::double()))
 }

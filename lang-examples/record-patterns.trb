@@ -1,39 +1,41 @@
 // Test record pattern matching
 
+use std::io::{Io, print_line}
+
 // User struct definition
 struct User {
-    name: Text,
+    name: String,
     age: Int
 }
 
-fn get_name(user) {
+fn get_name(user: User) -> String {
     case user {
         User { name, age } -> name
     }
 }
 
-fn get_age_with_rest(user) {
+fn get_age_with_rest(user: User) -> Int {
     case user {
         User { age, .. } -> age
     }
 }
 
-fn describe(user) {
+fn describe(user: User) -> String {
     case user {
-        User { name, age } if age >= 18 -> "adult"
+        User { name, age } if age >= +18 -> "adult"
         User { name, age } -> "minor"
     }
 }
 
-fn main() -> Nil {
-    let alice = User { name: "Alice", age: 30 }
-    let bob = User { name: "Bob", age: 15 }
+fn main() ->{Io} Nil {
+    let alice = User { name: "Alice", age: +30 }
+    let bob = User { name: "Bob", age: +15 }
 
     // Test basic pattern matching
     print_line(get_name(alice))
 
     // Test pattern with rest (..)
-    print_line(get_age_with_rest(alice))
+    print_line(Int::to_string(get_age_with_rest(alice)))
 
     // Test guard conditions
     print_line(describe(alice))

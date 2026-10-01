@@ -3,10 +3,13 @@
 // - Variable scoping and shadowing
 // - Sequential variable definitions
 
-fn main() -> Nil {
-    let x = 10
-    let y = 20
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    let x = +10
+    let y = +20
     let sum = x + y
     print_line("Testing advanced let bindings:")
-    sum
+    let sum = sum * +2
+    print_line(Int::to_string(sum))
 }

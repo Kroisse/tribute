@@ -1,8 +1,10 @@
 // Simple Let Binding Example - demonstrates basic let syntax
 // - Let binding: let var = value
-// - Returns the bound value
+// - Uses the bound value
 
-fn main() -> Nil {
-    let x = 42
-    x
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    let x = +42
+    print_line(Int::to_string(x))
 }

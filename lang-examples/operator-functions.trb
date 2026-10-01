@@ -1,9 +1,11 @@
 // Test operator functions
 
-fn main() -> Nil {
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
     // Bytes concatenation using concat directly
     let a = b"Hello, "
     let b = b"Bytes!"
     let c = a.concat(b)
-    c
+    print_line(String::from_bytes(c))
 }

@@ -1,5 +1,7 @@
 // Performance test example for interpreter vs compiler comparison
-fn fibonacci(n) {
+use std::io::{Io, print_line}
+
+fn fibonacci(n: Nat) -> Nat {
     case n {
         0 -> 0,
         1 -> 1,
@@ -7,19 +9,18 @@ fn fibonacci(n) {
     }
 }
 
-fn string_operations() {
+fn string_operations() -> String {
     let short = "hello"
     let long = "this is a longer string for testing heap allocation"
-    let result = short
-    result
+    short <> long
 }
 
-fn main() -> Nil {
+fn main() ->{Io} Nil {
     // Test recursion performance
-    let fib_result = fibonacci(20)
-    
-    // Test string performance  
-    let str_result = string_operations()
-    
+    let _fib_result = fibonacci(20)
+
+    // Test string performance
+    let _str_result = string_operations()
+
     print_line("Performance test completed")
 }

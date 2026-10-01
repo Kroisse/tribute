@@ -1,6 +1,8 @@
 // AST-based Calculator
 // Demonstrates: enum, pattern matching, recursive functions
 
+use std::io::{Io, print_line}
+
 enum Expr {
     Num(Int),
     Add(Expr, Expr),
@@ -19,7 +21,7 @@ fn eval(e: Expr) ->{} Int {
     }
 }
 
-fn main() ->{} Int {
+fn main() ->{Io} Nil {
     // (1 + 2) * (10 - 4) / 2 = 9
     let expr = Div(
         Mul(
@@ -28,5 +30,5 @@ fn main() ->{} Int {
         ),
         Num(+2)
     )
-    eval(expr)
+    print_line(Int::to_string(eval(expr)))
 }

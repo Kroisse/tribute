@@ -3,11 +3,13 @@
 // - Variable references within function scope
 // - Sequential variable definitions
 
-fn main() -> Nil {
-    let x = 42
-    let y = x + 8
+use std::io::{Io, print_line}
+
+fn main() ->{Io} Nil {
+    let x = +42
+    let y = x + +8
     print_line("Testing let bindings:")
-    print_line(x)
-    print_line(y)
-    print_line(x + y)
+    print_line(Int::to_string(x))
+    print_line(Int::to_string(y))
+    print_line(Int::to_string(x + y))
 }

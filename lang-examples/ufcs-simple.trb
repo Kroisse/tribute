@@ -1,9 +1,12 @@
 // Simple UFCS test with top-level function
+use std::io::{Io, print_line}
+
 fn double(x: Int) -> Int {
     x + x
 }
 
-fn main() -> Int {
-    // Simple UFCS: 21.double() -> double(21)
-    21.double()
+fn main() ->{Io} Nil {
+    // Simple UFCS: n.double() -> double(n)
+    let n = +21
+    print_line(Int::to_string(n.double()))
 }

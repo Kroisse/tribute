@@ -13,11 +13,11 @@ pub use self::advanced::power
 pub mod constants {
     pub fn pi() -> Int {
         // Simplified: returning 3 for now (no floats in examples yet)
-        3
+        +3
     }
 
     pub fn e() -> Int {
         // Simplified: returning 2 for now
-        2
+        +2
     }
 }
