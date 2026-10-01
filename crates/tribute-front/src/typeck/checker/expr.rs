@@ -333,11 +333,25 @@ impl<'db> TypeChecker<'db> {
                     (None, crate::ast::CallingConvention::Direct)
                 };
 
+                // A revisited lambda keeps the parameter types of its first
+                // visit. Its nested lambdas are cached with those types, so
+                // fresh variables here would be unrelated to them whenever
+                // the context is not a function type that links the two.
+                let recorded_params =
+                    ctx.get_node_type(expr.id)
+                        .and_then(|ty| match ty.kind(self.db()) {
+                            TypeKind::Func {
+                                params: recorded, ..
+                            } if recorded.len() == params.len() => Some(recorded.clone()),
+                            _ => None,
+                        });
                 let param_types: Vec<Type<'db>> = params
                     .iter()
-                    .map(|p| match &p.ty {
-                        Some(ann) => self.annotation_to_type_with_ctx(ctx, ann),
-                        None => ctx.fresh_type_var(),
+                    .enumerate()
+                    .map(|(index, p)| match (&p.ty, &recorded_params) {
+                        (Some(ann), _) => self.annotation_to_type_with_ctx(ctx, ann),
+                        (None, Some(recorded)) => recorded[index],
+                        (None, None) => ctx.fresh_type_var(),
                     })
                     .collect();
 
