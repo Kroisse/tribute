@@ -1714,7 +1714,7 @@ fn test_string_equality_prelude_uses_direct_leaf_and_cursor_spans() {
         "Leaf/Leaf direct path must not construct cursors"
     );
     assert_eq!(
-        operator.matches("String::rope_equal(left, right)").count(),
+        operator.matches("rope_equal(left, right)").count(),
         2,
         "only Branch-containing cases should use the cursor fallback"
     );

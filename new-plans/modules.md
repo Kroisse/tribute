@@ -491,10 +491,11 @@ segment가 아닌 위치의 키워드는 이름 해석 오류다.
 `use`로 가져온 이름, prelude가 제공하는 namespace(`Option`, `std` 등)가 대상이다.
 `use` 경로도 같다. 패키지 루트는 자신의 선언과 `use`, prelude를 본다.
 
-예외로, 모듈은 자기 이름을 본다. 모듈 옆에 같은 이름의 타입이나 ability가 선언되어
-있으면 그 이름은 그 선언을 가리키고, `M::x`는 모듈 자신의 namespace를 가리킨다.
-그래서 [타입과 동명 네임스페이스](#타입과-동명-네임스페이스)의 companion 모듈은 자기
-타입과 생성자를 그대로 쓴다.
+예외로, 같은 이름의 타입이나 ability 옆에 선언된 companion 모듈은 그 이름으로 자기
+타입을 본다. 경로에는 예외가 없다. 모듈 안에서 모듈 자신의 이름은 경로를 시작하지
+않으며, 모듈의 항목과 생성자는 이름만으로 쓴다. 그래서
+[타입과 동명 네임스페이스](#타입과-동명-네임스페이스)의 companion 모듈은 자기 타입과
+생성자를 그대로 쓴다.
 
 ```rust
 ability State(s) { op get() -> s }
@@ -514,7 +515,8 @@ mod counter {
 }
 ```
 
-prelude의 모듈은 prelude 항목을 prelude로서 본다.
+prelude도 같은 규칙을 따른다. prelude의 모듈은 다른 prelude 항목을 `use super::…`나
+`pkg::…`로 가져온다.
 
 ### 가시성 (Visibility)
 

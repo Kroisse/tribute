@@ -151,7 +151,7 @@ pub mod A {
     }
 
     pub fn destructure(thing: Thing) -> Nat {
-        let A::Thing { value } = thing
+        let Thing { value } = thing
         value
     }
 }
@@ -176,7 +176,7 @@ pub mod A {
     }
 
     pub fn invalid(thing: Thing) -> Nat {
-        let A::Thing { value } = thing
+        let Thing { value } = thing
         value
     }
 }

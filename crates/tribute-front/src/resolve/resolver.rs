@@ -282,8 +282,8 @@ impl<'db> Resolver<'db> {
 
     /// The package-root namespace a qualified path's namespace names.
     ///
-    /// Inside an inline module the path starts from that module, from one of
-    /// its imports, or from a namespace the prelude supplies. At the package
+    /// Inside an inline module the path starts from one of its imports, from
+    /// the module, or from a namespace the prelude supplies. At the package
     /// root it is already a package-root namespace.
     fn namespace_in_scope(&self, namespace: Symbol) -> Option<Symbol> {
         if let Some(imported) = self.imported_namespace(namespace) {
@@ -293,17 +293,7 @@ impl<'db> Resolver<'db> {
             return Some(namespace);
         }
         let spelling = namespace.to_string();
-        let (first, rest) = spelling.split_once("::").unwrap_or((&spelling, ""));
-        let first = Symbol::from_dynamic(first);
-        // A module's own name names its own namespace.
-        if Some(&first) == self.module_path.last() {
-            let mut path = self.module_path.iter().format("::").to_string();
-            if !rest.is_empty() {
-                path.push_str("::");
-                path.push_str(rest);
-            }
-            return Some(Symbol::from_dynamic(&path));
-        }
+        let first = Symbol::from_dynamic(spelling.split("::").next().unwrap_or_default());
         let nested = Symbol::from_dynamic(&format!(
             "{}::{namespace}",
             self.module_path.iter().format("::")
@@ -386,8 +376,6 @@ impl<'db> Resolver<'db> {
                         let (&first, rest) = segments.split_first().expect("a path has a segment");
                         if let Some(target) = self.module_import(first) {
                             *segments = target.iter().chain(rest).copied().collect();
-                        } else if Some(&first) == self.module_path.last() {
-                            *segments = self.module_path.iter().chain(rest).copied().collect();
                         } else if self.defined_in_module(first) {
                             *segments =
                                 self.module_path.iter().chain(&*segments).copied().collect();

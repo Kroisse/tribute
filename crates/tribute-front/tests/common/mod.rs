@@ -35,7 +35,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     let prelude_span_map = parsed.span_map(db).clone();
 
     // Build env for name resolution merging
-    let env = tribute_front::resolve::build_library_env(db, prelude_ast);
+    let env = tribute_front::resolve::build_env(db, prelude_ast);
 
     // Resolve prelude with its own env
     let resolved_prelude = tribute_front::resolve::resolve_with_env(

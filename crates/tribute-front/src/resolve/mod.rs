@@ -141,17 +141,6 @@ pub fn build_env<'db>(
     env
 }
 
-/// Build the environment of a library module, the prelude, whose own items
-/// its inline modules see as every module sees the prelude.
-pub fn build_library_env<'db>(
-    db: &'db dyn salsa::Database,
-    module: &Module<UnresolvedName>,
-) -> ModuleEnv<'db> {
-    let mut env = build_env(db, module);
-    env.share_as_library();
-    env
-}
-
 /// Expose compiler-owned definitions through the ordinary resolver namespace.
 fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEnv<'db>) {
     env.add_library(

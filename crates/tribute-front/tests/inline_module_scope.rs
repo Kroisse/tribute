@@ -131,7 +131,7 @@ struct Point { x: Nat }
 
 pub mod Point {
     pub fn origin() -> Point { Point { x: 0 } }
-    pub fn shifted(p: Point) -> Point { Point::moved(p, 1) }
+    pub fn shifted(p: Point) -> Point { moved(p, 1) }
     pub fn moved(p: Point, by: Nat) -> Point { Point { x: p.x + by } }
 }
 
@@ -144,7 +144,7 @@ pub mod Shape {
     pub fn size(shape: Shape) -> Nat {
         case shape {
             Circle(r) -> r
-            Shape::Square(s) -> s
+            Square(s) -> s
         }
     }
 }
@@ -231,4 +231,36 @@ fn main() -> Nil {
 "#,
     );
     assert_eq!(errors, Vec::<String>::new());
+}
+
+/// A module's own name does not start a path inside it, companion or not;
+/// its items are named directly.
+#[salsa_test]
+fn module_name_does_not_start_a_path(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+struct Point { x: Nat }
+
+pub mod Point {
+    pub fn origin() -> Point { Point { x: 0 } }
+    pub fn again() -> Point { Point::origin() }
+}
+
+mod m {
+    pub fn one() -> Nat { 1 }
+    pub fn two() -> Nat { m::one() + 1 }
+}
+
+fn main() -> Nil { }
+"#,
+    );
+    for name in ["Point::origin", "m::one"] {
+        assert!(
+            errors
+                .iter()
+                .any(|message| message.starts_with(&format!("unresolved name `{name}`"))),
+            "{name}: {errors:?}"
+        );
+    }
 }

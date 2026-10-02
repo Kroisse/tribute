@@ -274,23 +274,6 @@ impl<'db> ModuleEnv<'db> {
             }
         }
     }
-
-    /// Make this module's own definitions and namespaces visible in every
-    /// inline module, as the library that supplies them, the prelude, sees
-    /// them.
-    pub fn share_as_library(&mut self) {
-        self.library.extend(
-            self.definitions
-                .iter()
-                .map(|(name, binding)| (*name, binding.clone())),
-        );
-        let roots: Vec<Symbol> = self
-            .namespaces
-            .keys()
-            .map(|ns| namespace_root(*ns))
-            .collect();
-        self.library_roots.extend(roots);
-    }
 }
 
 /// The first segment of a qualified namespace.
