@@ -180,3 +180,55 @@ fn main() -> Nil {
     );
     assert_eq!(errors, Vec::<String>::new());
 }
+
+/// An import's path may start from another import of the same module,
+/// whichever is declared first.
+#[salsa_test]
+fn imports_build_on_other_imports(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod other {
+    pub struct Point { x: Nat }
+    pub fn f() -> Nat { 2 }
+}
+
+mod m {
+    use other::f
+    use other::Point
+    use super::other
+
+    pub fn value(p: Point) -> Nat { f() + p.x }
+}
+
+fn main() -> Nil {
+    let _ = m::value(other::Point { x: 1 })
+}
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
+
+/// An import shadows the module's own name at the start of a path.
+#[salsa_test]
+fn imports_take_precedence_over_the_module_name(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+mod other {
+    pub struct Point { x: Nat }
+}
+
+mod m {
+    use super::other as m
+
+    pub fn x(p: m::Point) -> Nat { p.x }
+}
+
+fn main() -> Nil {
+    let _ = m::x(other::Point { x: 1 })
+}
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}

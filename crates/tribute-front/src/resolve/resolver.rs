@@ -384,10 +384,10 @@ impl<'db> Resolver<'db> {
                     Ok(None) if self.module_path.is_empty() => {}
                     Ok(None) => {
                         let (&first, rest) = segments.split_first().expect("a path has a segment");
-                        if Some(&first) == self.module_path.last() {
-                            *segments = self.module_path.iter().chain(rest).copied().collect();
-                        } else if let Some(target) = self.module_import(first) {
+                        if let Some(target) = self.module_import(first) {
                             *segments = target.iter().chain(rest).copied().collect();
+                        } else if Some(&first) == self.module_path.last() {
+                            *segments = self.module_path.iter().chain(rest).copied().collect();
                         } else if self.defined_in_module(first) {
                             *segments =
                                 self.module_path.iter().chain(&*segments).copied().collect();
@@ -619,21 +619,38 @@ impl<'db> Resolver<'db> {
         // For inline modules, recursively resolve nested declarations
         self.module_path.push(module.name);
         // The module's imports are in scope throughout its body, including
-        // before the `use` that declares them.
-        let imports = module
+        // before the `use` that declares them, and an import's path may start
+        // from another import of the module.
+        let uses: Vec<&UseDecl> = module
             .body
             .iter()
             .flatten()
             .filter_map(|decl| match decl {
-                Decl::Use(import) => {
-                    let target = self.use_target(&import.path)?;
-                    let name = import.alias.or_else(|| import.path.last().copied())?;
-                    Some((name, target))
-                }
+                Decl::Use(import) => Some(import),
                 _ => None,
             })
             .collect();
-        self.module_imports.push(imports);
+        self.module_imports.push(HashMap::new());
+        loop {
+            let resolved: Vec<(Symbol, Vec<Symbol>)> = uses
+                .iter()
+                .filter_map(|import| {
+                    let name = import.alias.or_else(|| import.path.last().copied())?;
+                    let imports = self.module_imports.last()?;
+                    if imports.contains_key(&name) {
+                        return None;
+                    }
+                    Some((name, self.use_target(&import.path)?))
+                })
+                .collect();
+            if resolved.is_empty() {
+                break;
+            }
+            self.module_imports
+                .last_mut()
+                .expect("pushed above")
+                .extend(resolved);
+        }
         let body = module
             .body
             .as_ref()
@@ -861,8 +878,14 @@ impl<'db> Resolver<'db> {
         if self.module_path.is_empty() {
             return names(path).then(|| path.to_vec());
         }
-        // An inline module's path starts from the module itself, or from a
-        // namespace the prelude supplies.
+        // An inline module's path starts from one of its imports, the module
+        // itself, or a namespace the prelude supplies.
+        if let Some((first, rest)) = path.split_first()
+            && let Some(target) = self.module_import(*first)
+        {
+            let imported: Vec<Symbol> = target.iter().chain(rest).copied().collect();
+            return names(&imported).then_some(imported);
+        }
         let nested: Vec<Symbol> = self.module_path.iter().chain(path).copied().collect();
         if names(&nested) {
             return Some(nested);
