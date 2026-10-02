@@ -979,6 +979,116 @@ mod tests {
         salsa::DatabaseImpl::new()
     }
 
+    fn lowering_ctx<'db>(db: &'db salsa::DatabaseImpl, ir: &mut IrContext) -> IrLoweringCtx<'db> {
+        let path = ir.intern_path("test.trb");
+        IrLoweringCtx::new(
+            db,
+            path,
+            crate::ast::SpanMap::default(),
+            HashMap::new(),
+            HashMap::new(),
+            smallvec::smallvec![Symbol::new("test")],
+            HashMap::new(),
+        )
+    }
+
+    fn func_type<'db>(
+        db: &'db salsa::DatabaseImpl,
+        params: Vec<AstType<'db>>,
+        effect: crate::ast::EffectRow<'db>,
+    ) -> AstType<'db> {
+        AstType::new(
+            db,
+            TypeKind::Func {
+                params,
+                result: AstType::new(db, TypeKind::Nat),
+                effect,
+                minimum_convention: CallingConvention::Direct,
+            },
+        )
+    }
+
+    /// Row variables are keyed by first appearance, not by inference ids, and
+    /// effects are keyed in canonical order.
+    #[test]
+    fn ability_instance_key_normalizes_effect_rows() {
+        use crate::ast::{Effect, EffectRow, EffectVar};
+
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let ctx = lowering_ctx(&db, &mut ir);
+        let ability = Symbol::new("State");
+        let effect = |name: &str| Effect {
+            ability_id: AbilityId::source(&db, Symbol::from_dynamic(name)),
+            args: vec![],
+        };
+        let open = |id, effects| EffectRow::new(&db, effects, Some(EffectVar { id }));
+        let key = |row| ctx.ability_instance_key(ability, &[func_type(&db, vec![], row)]);
+
+        assert_eq!(key(open(3, vec![])), key(open(9, vec![])));
+        assert_eq!(
+            key(open(3, vec![effect("Ask"), effect("Tell")])),
+            key(open(3, vec![effect("Tell"), effect("Ask")]))
+        );
+        assert_ne!(
+            key(open(3, vec![effect("Ask")])),
+            key(EffectRow::new(&db, vec![effect("Ask")], None))
+        );
+
+        let shared = |a, b| {
+            let inner = func_type(&db, vec![], open(a, vec![]));
+            ctx.ability_instance_key(ability, &[func_type(&db, vec![inner], open(b, vec![]))])
+        };
+        assert_eq!(shared(1, 1), shared(5, 5));
+        assert_ne!(shared(1, 1), shared(1, 2));
+    }
+
+    /// Structural and nominal arguments are keyed by their source identity.
+    #[test]
+    fn ability_instance_key_distinguishes_source_arguments() {
+        let db = test_db();
+        let mut ir = IrContext::new();
+        let ctx = lowering_ctx(&db, &mut ir);
+        let ability = Symbol::new("State");
+        let nat = AstType::new(&db, TypeKind::Nat);
+        let int = AstType::new(&db, TypeKind::Int);
+        let named = |id| {
+            AstType::new(
+                &db,
+                TypeKind::Named {
+                    id,
+                    name: Symbol::new("Box"),
+                    args: vec![nat],
+                },
+            )
+        };
+        let keys = [
+            AstType::new(&db, TypeKind::Tuple(vec![nat, int])),
+            AstType::new(&db, TypeKind::Tuple(vec![int, nat])),
+            AstType::new(
+                &db,
+                TypeKind::App {
+                    ctor: named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("a::Box"))),
+                    args: vec![nat],
+                },
+            ),
+            AstType::new(
+                &db,
+                TypeKind::Continuation {
+                    arg: nat,
+                    result: int,
+                    effect: crate::ast::EffectRow::pure(&db),
+                },
+            ),
+            named(crate::ast::TypeDefId::builtin_list(&db)),
+            named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("a::Box"))),
+            named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("b::Box"))),
+        ]
+        .map(|arg| ctx.ability_instance_key(ability, &[arg]));
+        let distinct: HashSet<_> = keys.iter().collect();
+        assert_eq!(distinct.len(), keys.len(), "{keys:#?}");
+    }
+
     #[test]
     fn test_convert_logical_bound_var_to_any() {
         let db = test_db();
