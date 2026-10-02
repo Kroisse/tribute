@@ -16,6 +16,7 @@
 //! - `lower`: Main orchestrator for lowering mid-level IR to WASM
 //! - `type_converter`: WASM type converter for IR-level type transformations
 
+pub mod adt_to_wasm;
 pub mod bytes;
 pub mod const_to_wasm;
 pub mod evidence_to_wasm;
