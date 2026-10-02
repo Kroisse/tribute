@@ -12,9 +12,8 @@
 //!
 //! ## Note
 //!
-//! `adt.struct_new` and `adt.variant_new` are handled by a separate
-//! Tribute-specific pass (`tribute_passes::native::adt_rc_header`) that
-//! initializes RC headers. This pass only handles field access and
+//! `adt.struct_new` and `adt.variant_new` are handled by a separate pass,
+//! [`adt_rc_header`](super::adt_rc_header), that initializes RC headers. This pass only handles field access and
 //! reference operations.
 //!
 //! ## Limitations
@@ -23,12 +22,11 @@
 
 use tracing::warn;
 
-use super::arith_to_clif::finalize_cmp;
-use trunk_ir::adt_layout::{
+use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
 };
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
@@ -38,6 +36,7 @@ use trunk_ir::rewrite::{
     TypeConverter,
 };
 use trunk_ir::types::TypeDataBuilder;
+use trunk_ir_cranelift_backend::passes::arith_to_clif::finalize_cmp;
 
 /// Lower ADT operations to clif dialect.
 ///

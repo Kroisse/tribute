@@ -18,10 +18,11 @@
 //! intermediate best-effort pass: the final `ability-lowered` boundary is
 //! established by `LowerHandleDispatch` after evidence resolution.
 
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, core, func};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -289,6 +290,7 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tribute_ir::continuation_frame;
     use trunk_ir::context::IrContext;
     use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
@@ -312,14 +314,14 @@ mod tests {
         let evidence = ability::evidence_adt_type_ref(ctx);
         let anyref = tribute_rt::anyref(ctx).as_type_ref();
         let frame_name = "test_frame";
-        let frame = cps_continuation_frame_ref_type(ctx, frame_name, answer);
+        let frame = continuation_frame::ref_type(ctx, frame_name, answer);
         let done = cps_done_type(ctx, answer);
         let dispatch = cps_dispatch_type(ctx, evidence, frame, anyref, answer);
         let resume =
             func::FuncSig::from_type_ref(ctx, cps_closure_function_type(ctx, dispatch).unwrap())
                 .unwrap()
                 .inputs(ctx)[1];
-        let layout = cps_continuation_frame_layout_type(ctx, frame_name, answer, done, dispatch);
+        let layout = continuation_frame::layout_type(ctx, frame_name, answer, done, dispatch);
         ctx.register_type_alias(Symbol::new("test_frame"), layout);
         let mut performs = Vec::new();
         let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {

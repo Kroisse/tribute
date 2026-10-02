@@ -6,11 +6,12 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::{Deref, DerefMut};
 
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::Symbol;
 use trunk_ir::SymbolVec;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, core};
+use trunk_ir::dialect::core;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 

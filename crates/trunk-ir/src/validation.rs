@@ -31,6 +31,7 @@ use super::ops::DialectType;
 use super::refs::{OpRef, RegionRef, ValueDef, ValueRef};
 use super::rewrite::Module;
 use super::symbol_table::SymbolTable;
+use super::type_verifier::lookup_type_verifier;
 use super::walk;
 
 use crate::Symbol;
@@ -429,22 +430,15 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 ),
             });
         }
-        if crate::dialect::adt::Struct::matches(ctx, ty) {
-            if let Err(error) = crate::dialect::adt::Struct::validate(ctx, ty) {
-                errors.push(ValidationError::Operation {
-                    message: format!("type verifier failed for adt.struct ({ty}): {error}"),
-                });
-            }
+        let Some(verifier) = lookup_type_verifier(data.dialect, data.name) else {
             continue;
-        }
-        if data.dialect != crate::dialect::func::DIALECT_NAME()
-            || data.name != crate::dialect::func::FUNC_SIG()
-        {
-            continue;
-        }
-        if let Err(error) = crate::dialect::func::FuncSig::validate(ctx, ty) {
+        };
+        if let Err(error) = (verifier.verify_fn)(ctx, ty) {
             errors.push(ValidationError::Operation {
-                message: format!("type verifier failed for func.func_sig ({ty}): {error}"),
+                message: format!(
+                    "type verifier failed for {}.{} ({ty}): {error}",
+                    data.dialect, data.name
+                ),
             });
         }
     }

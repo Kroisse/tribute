@@ -9,10 +9,11 @@
 //! It runs after native ownership planning and RC materialization, which
 //! read the semantic layout, and before `func_to_clif`.
 
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rtti;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, core};
+use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -51,8 +52,8 @@ fn native_closure_struct_type(ctx: &mut IrContext) -> TypeRef {
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let mut attrs = AttributeMap::new();
     attrs.insert(
-        tribute_core::runtime_layout::LAYOUT_ATTR,
-        ctx.string_attr(tribute_core::runtime_layout::CLOSURE),
+        tribute_ir::runtime_layout::LAYOUT_ATTR,
+        ctx.string_attr(tribute_ir::runtime_layout::CLOSURE),
     );
     adt::struct_type(
         ctx,

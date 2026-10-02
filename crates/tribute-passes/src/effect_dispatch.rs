@@ -11,10 +11,11 @@ use tribute_core::CallingConvention;
 use tribute_ir::dialect::ability::{self, compute_op_idx};
 
 use crate::target_abi::physical_parameter_attrs;
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{closure, effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, arith, core, func};
+use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, TypeConverter};

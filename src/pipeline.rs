@@ -243,9 +243,7 @@ use tribute_front::resolve::ModuleEnv;
 use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
-use trunk_ir_cranelift_backend::passes::{
-    adt_to_clif, arith_to_clif, cf_to_clif, func_to_clif, mem_to_clif,
-};
+use trunk_ir_cranelift_backend::passes::{arith_to_clif, cf_to_clif, func_to_clif, mem_to_clif};
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, emit_module_to_native,
 };
@@ -1378,7 +1376,8 @@ fn prepare_module_to_native(
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        adt_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
+        tribute_passes::native::adt_to_clif::lower(ctx, module, type_converter)
+            .map_err(native_conversion_failure)?;
     }
 
     // Phase 2.5 - Lower arith dialect to clif dialect
@@ -3280,7 +3279,7 @@ fn main() -> Nil {
     #[salsa_test]
     fn specialized_enum_schemas_and_dependencies_reach_logical_cps(db: &salsa::DatabaseImpl) {
         use tribute_front::ast::{Decl, TypeKind};
-        use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
+        use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
         use trunk_ir::{Symbol, TypeRef};
 
         fn alias(ir: &IrContext, name: &str) -> TypeRef {
@@ -3439,8 +3438,8 @@ fn main() -> Nil {}
 
     #[salsa_test]
     fn logical_nominal_layouts_are_published_through_cps(db: &salsa::DatabaseImpl) {
+        use tribute_ir::dialect::adt::layout::get_struct_fields;
         use tribute_ir::dialect::tribute_control;
-        use trunk_ir::adt_layout::get_struct_fields;
         use trunk_ir::{Symbol, TypeRef};
 
         fn layout(ir: &IrContext, name: Symbol, kind: &str) -> TypeRef {

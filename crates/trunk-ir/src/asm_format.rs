@@ -5,12 +5,12 @@
 //! unlike [operation interfaces](crate::op_interface), they carry no meaning
 //! that passes or analyses consult.
 
-use std::collections::HashMap;
 use std::fmt;
 use std::sync::LazyLock;
 
 use crate::Symbol;
 use crate::ops::{DialectOp, DialectType};
+use crate::registry::{Registered, Registry};
 use crate::{IrContext, OpRef, TypeRef};
 
 // =============================================================================
@@ -165,37 +165,4 @@ static TYPE_ASM_FORMATS: LazyLock<Registry<TypeAsmFormat>> = LazyLock::new(Regis
 /// Look up a registered custom assembly format for the given type.
 pub fn lookup_type_asm_format(dialect: Symbol, name: Symbol) -> Option<&'static TypeAsmFormat> {
     TYPE_ASM_FORMATS.get(dialect, name)
-}
-
-// =============================================================================
-// Registry shared by the format kinds
-// =============================================================================
-
-/// A format registered for one `(dialect, name)`.
-trait Registered: inventory::Collect {
-    /// The format kind, for duplicate-registration diagnostics.
-    const KIND: &'static str;
-
-    fn key(&self) -> (&'static str, &'static str);
-}
-
-/// Formats of one kind by `(dialect, name)`, built once from `inventory`.
-struct Registry<F: 'static>(HashMap<(Symbol, Symbol), &'static F>);
-
-impl<F: Registered> Registry<F> {
-    fn collect() -> Self {
-        let mut map = HashMap::new();
-        for format in inventory::iter::<F> {
-            let (dialect, name) = format.key();
-            let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(name));
-            if map.insert(key, format).is_some() {
-                panic!("duplicate {} registration for '{dialect}.{name}'", F::KIND);
-            }
-        }
-        Self(map)
-    }
-
-    fn get(&self, dialect: Symbol, name: Symbol) -> Option<&'static F> {
-        self.0.get(&(dialect, name)).copied()
-    }
 }

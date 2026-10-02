@@ -279,8 +279,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !A = adt.struct<A(value: core.i32)>
-  !B = adt.struct<B(value: core.i32)>
+  !A = adt.struct<core.i32 {name = "value"}, {name = "A"}>
+  !B = adt.struct<core.i32 {name = "value"}, {name = "B"}>
 
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
@@ -319,7 +319,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !data = core.array<core.i8, {layout = "bytes_data"}>
-  !bytes = adt.struct<_Bytes(data: !data, offset: core.i32, len: core.i32), {layout = "bytes"}>
+  !bytes = adt.struct<!data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
     %bytes = wasm_gc.struct_new %zero {type = !bytes} : !bytes
@@ -351,8 +351,8 @@ mod tests {
   !data = core.array<core.i8, {layout = "bytes_data"}>
   !plain = core.array<core.i8>
   !plain_ref = core.ref<core.array<core.i8>>
-  !bytes = adt.struct<_Bytes(data: !data, offset: core.i32, len: core.i32), {layout = "bytes"}>
-  !lookalike = adt.struct<_Bytes(data: !plain, offset: core.i32, len: core.i32)>
+  !bytes = adt.struct<!data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
+  !lookalike = adt.struct<!plain {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes"}>
 }"#,
         );
         fn alias(ctx: &IrContext, name: &'static str) -> TypeRef {
@@ -383,7 +383,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !A = adt.struct<A()>
+  !A = adt.struct<{name = "A"}>
 
   wasm.func @main() -> core.nil {
     %null = wasm.ref_null {heap_type = "anyref"} : wasm.anyref
@@ -415,7 +415,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<S(value: core.i32)>
+  !S = adt.struct<core.i32 {name = "value"}, {name = "S"}>
   !A = core.array<core.i32>
   !B = core.array<core.i32>
 

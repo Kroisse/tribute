@@ -660,11 +660,11 @@ mod tests {
     fn native_boundary_rejects_semantic_and_shape_matched_values_in_pointer_slots() {
         let error = validation_error(
             r#"core.module @test {
-  !shaped = adt.struct<Impostor(field: core.i32)>
+  !shaped = test.record<core.i32 {name = "field"}, {name = "Impostor"}>
   clif.func @target(%value: core.ptr) -> core.ptr { clif.return %value }
-  clif.func @semantic(%callee: core.ptr, %value: tribute_rt.anyref) -> core.ptr {
-    %direct = clif.call %value {callee = @target} : tribute_rt.anyref
-    %indirect = clif.call_indirect %callee, %direct {sig = clif.func_sig<(core.ptr) -> core.ptr>} : tribute_rt.anyref
+  clif.func @semantic(%callee: core.ptr, %value: test.anyref) -> core.ptr {
+    %direct = clif.call %value {callee = @target} : test.anyref
+    %indirect = clif.call_indirect %callee, %direct {sig = clif.func_sig<(core.ptr) -> core.ptr>} : test.anyref
     clif.return %indirect
   }
   clif.func @shaped(%value: !shaped) -> core.ptr {
@@ -675,16 +675,18 @@ mod tests {
         );
 
         assert!(
-            error.contains("clif.call call argument #0 type mismatch: expected core.ptr, found tribute_rt.anyref"),
+            error.contains(
+                "clif.call call argument #0 type mismatch: expected core.ptr, found test.anyref"
+            ),
             "{error}"
         );
         assert!(
-            error.contains("clif.call_indirect: operands `args`: expected S::Inputs = (core.ptr), found (tribute_rt.anyref)"),
+            error.contains("clif.call_indirect: operands `args`: expected S::Inputs = (core.ptr), found (test.anyref)"),
             "{error}"
         );
         assert!(
             error.contains(
-                "clif.call call argument #0 type mismatch: expected core.ptr, found adt.struct<"
+                "clif.call call argument #0 type mismatch: expected core.ptr, found test.record<"
             ),
             "{error}"
         );

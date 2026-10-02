@@ -1,30 +1,30 @@
 //! Arena-based adt dialect.
 
 // === Type alias hint registration ===
-inventory::submit!(crate::asm_format::TypeAliasHint {
+inventory::submit!(trunk_ir::asm_format::TypeAliasHint {
     dialect: "adt",
     suggest: |ctx, ty| { ctx.get_type(ty).attrs.get_str(ctx, "name") },
 });
 
 // === Pure operation registrations ===
-crate::register_pure_op!(StructNew);
-crate::register_pure_op!(StructGet);
+trunk_ir::register_pure_op!(StructNew);
+trunk_ir::register_pure_op!(StructGet);
 
-crate::register_pure_op!(VariantNew);
-crate::register_pure_op!(VariantIs);
-crate::register_pure_op!(VariantCast);
-crate::register_pure_op!(VariantGet);
+trunk_ir::register_pure_op!(VariantNew);
+trunk_ir::register_pure_op!(VariantIs);
+trunk_ir::register_pure_op!(VariantCast);
+trunk_ir::register_pure_op!(VariantGet);
 
-crate::register_pure_op!(ArrayNew);
-crate::register_pure_op!(ArrayGet);
-crate::register_pure_op!(ArrayLen);
+trunk_ir::register_pure_op!(ArrayNew);
+trunk_ir::register_pure_op!(ArrayGet);
+trunk_ir::register_pure_op!(ArrayLen);
 
-crate::register_pure_op!(RefNull);
-crate::register_pure_op!(RefIsNull);
-crate::register_pure_op!(RefCast);
+trunk_ir::register_pure_op!(RefNull);
+trunk_ir::register_pure_op!(RefIsNull);
+trunk_ir::register_pure_op!(RefCast);
 
-crate::register_pure_op!(StringConst);
-crate::register_pure_op!(BytesConst);
+trunk_ir::register_pure_op!(StringConst);
+trunk_ir::register_pure_op!(BytesConst);
 
 #[trunk_ir::dialect]
 mod adt {
@@ -69,13 +69,15 @@ mod adt {
 
 // === Nominal struct layout type ===
 
-use crate::Symbol;
-use crate::context::IrContext;
-use crate::ops::DialectType;
-use crate::refs::TypeRef;
-use crate::types::{
+use trunk_ir::Symbol;
+use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectType;
+use trunk_ir::refs::TypeRef;
+use trunk_ir::types::{
     Attribute, AttributeMap, PARAM_ATTRS_ATTR, StringArg, StringRef, TypeDataBuilder,
 };
+
+pub mod layout;
 
 /// Type attribute holding an `adt.struct`'s name, and the parameter attribute
 /// holding each field's name. Both are strings.
@@ -264,6 +266,12 @@ impl DialectType for Struct {
     }
 }
 
+inventory::submit! {
+    trunk_ir::type_verifier::TypeVerifier::new::<Struct>(|ctx, ty| {
+        Struct::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
+    })
+}
+
 impl From<Struct> for TypeRef {
     fn from(ty: Struct) -> Self {
         ty.0
@@ -358,11 +366,11 @@ fn finish_struct_type(
 // Names are bare identifiers, or quoted strings when they are not identifiers.
 
 inventory::submit! {
-    crate::asm_format::TypeAsmFormat::new::<Struct>(print_struct_type, parse_struct_type)
+    trunk_ir::asm_format::TypeAsmFormat::new::<Struct>(print_struct_type, parse_struct_type)
 }
 
 fn print_struct_type(
-    h: &mut crate::printer::TypePrintHelper<'_, '_>,
+    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
     ty: TypeRef,
 ) -> Option<std::fmt::Result> {
     let adt_struct = Struct::from_type_ref(h.ctx(), ty)?;
@@ -370,7 +378,7 @@ fn print_struct_type(
 }
 
 fn write_struct_type(
-    h: &mut crate::printer::TypePrintHelper<'_, '_>,
+    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
     adt_struct: Struct,
 ) -> std::fmt::Result {
     use std::fmt::Write;
@@ -411,8 +419,8 @@ fn parse_struct_type<'a>(
     input: &mut &'a str,
     dialect: &'a str,
     name: &'a str,
-) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
-    use crate::parser::raw::{
+) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
+    use trunk_ir::parser::raw::{
         RawAttribute, RawParam, RawType, name_token, raw_attr_dict, raw_param, ws,
     };
     use winnow::combinator::{delimited, opt, preceded, separated};
@@ -465,13 +473,13 @@ fn parse_struct_type<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::{parse_module, parse_test_module};
-    use crate::printer::print_module;
-    use crate::rewrite::Module;
-    use crate::validation::validate_operation_verifiers;
+    use trunk_ir::parser::{parse_module, parse_test_module};
+    use trunk_ir::printer::print_module;
+    use trunk_ir::rewrite::Module;
+    use trunk_ir::validation::validate_operation_verifiers;
 
     /// Print `module`, parse the output, and check that it prints the same.
-    fn assert_roundtrip(ctx: &IrContext, module: crate::refs::OpRef) {
+    fn assert_roundtrip(ctx: &IrContext, module: trunk_ir::refs::OpRef) {
         let printed = print_module(ctx, module);
         let mut reparsed = IrContext::new();
         let module = parse_module(&mut reparsed, &printed).expect("printed IR must parse");
@@ -480,7 +488,7 @@ mod tests {
 
     #[test]
     fn string_attribute_accessors_return_text_and_handle() {
-        use crate::ops::DialectOp;
+        use trunk_ir::ops::DialectOp;
 
         let mut ctx = IrContext::new();
         let module = parse_test_module(

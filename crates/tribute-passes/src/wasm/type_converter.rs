@@ -24,9 +24,9 @@
 
 use tribute_ir::dialect::ability::marker_adt_type_ref;
 use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
@@ -65,8 +65,8 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
 
     let mut attrs = AttributeMap::new();
     attrs.insert(
-        tribute_core::runtime_layout::LAYOUT_ATTR,
-        ctx.string_attr(tribute_core::runtime_layout::CLOSURE),
+        tribute_ir::runtime_layout::LAYOUT_ATTR,
+        ctx.string_attr(tribute_ir::runtime_layout::CLOSURE),
     );
     adt::struct_type(
         ctx,
@@ -599,31 +599,31 @@ mod tests {
     #[test]
     fn runtime_layout_identifiers_match_the_wasm_builtin_layouts() {
         assert_eq!(
-            tribute_core::runtime_layout::CLOSURE,
+            tribute_ir::runtime_layout::CLOSURE,
             trunk_ir_wasm_backend::gc_types::CLOSURE_LAYOUT
         );
         assert_eq!(
-            tribute_core::runtime_layout::EVIDENCE_MARKER,
+            tribute_ir::runtime_layout::EVIDENCE_MARKER,
             trunk_ir_wasm_backend::gc_types::MARKER_LAYOUT
         );
         assert_eq!(
-            tribute_core::runtime_layout::EVIDENCE,
+            tribute_ir::runtime_layout::EVIDENCE,
             trunk_ir_wasm_backend::gc_types::EVIDENCE_LAYOUT
         );
         assert_eq!(
-            tribute_core::runtime_layout::BYTES,
+            tribute_ir::runtime_layout::BYTES,
             trunk_ir_wasm_backend::gc_types::BYTES_LAYOUT
         );
         assert_eq!(
-            tribute_core::runtime_layout::BYTES_DATA,
+            tribute_ir::runtime_layout::BYTES_DATA,
             trunk_ir_wasm_backend::gc_types::BYTES_DATA_LAYOUT
         );
         let mut ctx = IrContext::new();
         let closure = closure_adt_type(&mut ctx);
-        assert!(tribute_core::runtime_layout::has_runtime_layout(
+        assert!(tribute_ir::runtime_layout::has_runtime_layout(
             &ctx,
             closure,
-            tribute_core::runtime_layout::CLOSURE
+            tribute_ir::runtime_layout::CLOSURE
         ));
     }
     use trunk_ir::ops::DialectOp;

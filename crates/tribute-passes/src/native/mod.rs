@@ -14,6 +14,7 @@
 
 pub mod adapt_closure_layout;
 pub mod adt_rc_header;
+pub mod adt_to_clif;
 pub mod const_to_native;
 pub mod entrypoint;
 pub mod evidence;

@@ -175,7 +175,7 @@ fn wasm_lowering_passes() -> PassManager {
     // Convert all adt operations, including String::Leaf from const lowering.
     .add_pass(pass_fn("adt-to-wasm", |ctx, m: core::Module, _| {
         let tc = wasm_type_converter(ctx);
-        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(ctx, m.into(), tc);
+        crate::wasm::adt_to_wasm::lower(ctx, m.into(), tc);
         Ok(())
     }))
     // Bind the evidence runtime helpers that boundary evidence lowering
@@ -522,7 +522,7 @@ mod tests {
             .add_pattern(WasmFuncSignatureConversionPattern)
             .apply_partial(&mut ctx, module);
         let tc = wasm_type_converter(&mut ctx);
-        trunk_ir_wasm_backend::passes::adt_to_wasm::lower(&mut ctx, module, tc);
+        crate::wasm::adt_to_wasm::lower(&mut ctx, module, tc);
 
         let func = module.ops(&ctx)[0];
         let body = ctx.op_region(func, 0).unwrap();

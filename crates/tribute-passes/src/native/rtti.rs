@@ -30,13 +30,14 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
-use trunk_ir::Symbol;
-use trunk_ir::TypeDataBuilder;
-use trunk_ir::adt_layout::{
+use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, get_enum_variants, get_struct_fields,
 };
+use trunk_ir::Symbol;
+use trunk_ir::TypeDataBuilder;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{adt, clif};
+use trunk_ir::dialect::clif;
 use trunk_ir::location::Span;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::{Module, TypeConverter};
@@ -712,7 +713,7 @@ fn gen_dealloc_and_return(
     loc: Location,
     block: BlockRef,
     payload_ptr: ValueRef,
-    layout: &trunk_ir::adt_layout::StructLayout,
+    layout: &tribute_ir::dialect::adt::layout::StructLayout,
     ptr_ty: TypeRef,
     nil_ty: TypeRef,
     i64_ty: TypeRef,
@@ -774,7 +775,7 @@ fn gen_dealloc_and_return_with_size(
 #[cfg(test)]
 pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, TypeRef)]) -> TypeRef {
     let fields = fields.iter().map(|&(name, ty)| (name, ty));
-    trunk_ir::dialect::adt::struct_type(ctx, "Test", fields, trunk_ir::types::AttributeMap::new())
+    tribute_ir::dialect::adt::struct_type(ctx, "Test", fields, trunk_ir::types::AttributeMap::new())
         .as_type_ref()
 }
 

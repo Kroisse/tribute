@@ -1766,10 +1766,11 @@ dependencies = [
 name = "tribute-ir"
 version = "0.1.0"
 dependencies = [
+ "derive_more",
  "inventory",
  "itertools 0.14.0",
  "rustc-hash",
- "tribute-core",
+ "smallvec",
  "tribute-rc",
  "trunk-ir",
  "winnow",

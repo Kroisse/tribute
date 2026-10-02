@@ -570,14 +570,14 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @callee() -> tribute_rt.anyref
-  func.func @caller() -> tribute_rt.anyref {
-    %result = func.call {callee = @callee} : tribute_rt.anyref
+  func.func @callee() -> test.anyref
+  func.func @caller() -> test.anyref {
+    %result = func.call {callee = @callee} : test.anyref
     func.return %result
   }
 }"#,
         );
-        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
+        let anyref_ty = ctx.intern_type(TypeDataBuilder::new("test", "anyref").build());
         let ptr_ty = core::ptr(&mut ctx).as_type_ref();
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |_, ty| (ty == anyref_ty).then_some(ptr_ty));
@@ -590,7 +590,7 @@ mod tests {
             .find(|line| line.contains("clif.call"))
             .expect("lowered direct call");
         assert!(call.contains(": core.ptr"), "{printed}");
-        assert!(!call.contains("tribute_rt.anyref"), "{printed}");
+        assert!(!call.contains("test.anyref"), "{printed}");
     }
 
     #[test]

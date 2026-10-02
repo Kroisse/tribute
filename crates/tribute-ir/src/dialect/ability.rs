@@ -93,7 +93,7 @@ pub fn operation_payload_type_ref(
         .into_iter()
         .enumerate()
         .map(|(index, ty)| (format!("arg{index}"), ty));
-    trunk_ir::dialect::adt::struct_type(
+    crate::dialect::adt::struct_type(
         ctx,
         format!("__tribute_ability_payload_{op_idx:08x}"),
         fields,
@@ -223,7 +223,7 @@ inventory::submit! { CallableExitOps::register::<HandleDispatch>() }
 
 // === ADT Type Functions ===
 
-use tribute_core::runtime_layout;
+use crate::runtime_layout;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
@@ -368,7 +368,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
         runtime_layout::LAYOUT_ATTR,
         ctx.string_attr(runtime_layout::EVIDENCE_MARKER),
     );
-    trunk_ir::dialect::adt::struct_type(ctx, "_Marker", fields, attrs).as_type_ref()
+    crate::dialect::adt::struct_type(ctx, "_Marker", fields, attrs).as_type_ref()
 }
 
 /// Get the canonical Evidence ADT type — `core.array<Marker>` carrying the
@@ -439,7 +439,7 @@ mod tests {
         assert_eq!(data.attrs.get_str(&ctx, "name"), Some("_Marker"));
 
         // Should have the canonical field layout.
-        let marker = trunk_ir::dialect::adt::Struct::from_type_ref(&ctx, marker_ty).unwrap();
+        let marker = crate::dialect::adt::Struct::from_type_ref(&ctx, marker_ty).unwrap();
         assert_eq!(marker.field_count(&ctx), MARKER_FIELD_COUNT);
         for (idx, spec) in MARKER_FIELDS.into_iter().enumerate() {
             assert_eq!(spec.field.index() as usize, idx);

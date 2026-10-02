@@ -10,8 +10,8 @@ use tribute::pipeline::{
     NativePipelineStage, OptimizationOptions, compile_ast, compile_with_diagnostics, dump_ir,
     dump_native_ir_at_stage,
 };
-use tribute_core::calling_convention::CPS_CONTINUATION_FRAME_NAME_PREFIX;
 use tribute_front::SourceCst;
+use tribute_ir::continuation_frame;
 use trunk_ir::printer::print_module;
 
 fn assert_no_diagnostics(stage: &str, diagnostics: &[Diagnostic]) {
@@ -51,7 +51,7 @@ fn native_pipeline_ir<'db>(db: &'db dyn salsa::Database, name: &str, code: &str)
 
 fn assert_shared_cps_contract(ir_text: &str) {
     for required in [
-        CPS_CONTINUATION_FRAME_NAME_PREFIX,
+        continuation_frame::NAME_PREFIX,
         "func.func @main",
         "func.tail_call_indirect",
     ] {
@@ -74,7 +74,7 @@ fn assert_shared_cps_contract(ir_text: &str) {
 
 fn assert_native_cps_root_contract(ir_text: &str) {
     for required in [
-        CPS_CONTINUATION_FRAME_NAME_PREFIX,
+        continuation_frame::NAME_PREFIX,
         "func.func @__tribute_main",
         "func.func @__tribute_done_k",
         "func.func @__tribute_unhandled",
@@ -103,9 +103,7 @@ fn assert_native_cps_root_contract(ir_text: &str) {
 fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
     use std::collections::BTreeMap;
     use std::ops::ControlFlow;
-    use tribute_core::calling_convention::{
-        CPS_CONTINUATION_FRAME_RESULT_ATTR, CallingConvention, get_calling_convention,
-    };
+    use tribute_core::calling_convention::{CallingConvention, get_calling_convention};
     use trunk_ir::dialect::func;
     use trunk_ir::ops::{DialectOp, DialectType};
     use trunk_ir::walk::{WalkAction, walk_op};
@@ -113,7 +111,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
 
     fn type_shape(ctx: &IrContext, ty: TypeRef) -> String {
         let data = ctx.get_type(ty);
-        if let Some(result) = data.attrs.get_type(CPS_CONTINUATION_FRAME_RESULT_ATTR) {
+        if let Some(result) = data.attrs.get_type(continuation_frame::RESULT_ATTR) {
             return format!("Frame<{}>", type_shape(ctx, result));
         }
         // Physicalization consumes the frame answer type, and the generated
@@ -121,7 +119,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         if data
             .attrs
             .get_str(ctx, "name")
-            .is_some_and(|name| name.starts_with(CPS_CONTINUATION_FRAME_NAME_PREFIX))
+            .is_some_and(|name| name.starts_with(continuation_frame::NAME_PREFIX))
         {
             return "Frame".to_owned();
         }
@@ -130,7 +128,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
             shape.push_str(&format!("<{name}>"));
         }
         // A struct layout's parameters are its fields; its name is its shape.
-        let is_struct = trunk_ir::dialect::adt::Struct::matches(ctx, ty);
+        let is_struct = tribute_ir::dialect::adt::Struct::matches(ctx, ty);
         if !data.params.is_empty() && !is_struct {
             shape.push_str(&format!(
                 "<{}>",

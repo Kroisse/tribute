@@ -40,9 +40,9 @@
 //! indexed `wasm` operations before emission.
 
 use tracing::warn;
-use trunk_ir::adt_layout::get_enum_variants;
+use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::get_enum_variants;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
@@ -54,7 +54,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::{StringRef, Symbol};
 
-use crate::emit::helpers;
+use tribute_ir::runtime_layout::{self, has_runtime_layout};
 
 /// The logical variant operation's `type` attribute is its exact enum-layout
 /// identity. Operand types may be an equivalent `adt.typeref` or already have
@@ -399,10 +399,9 @@ impl RewritePattern for VariantGetPattern {
         // String::Leaf has the canonical bytes layout even though frontend
         // pattern extraction is temporarily erased to wasm.anyref. All other
         // variant_get results must agree with their declared enum field type.
-        let declared_is_bytes =
-            helpers::has_layout(ctx, declared_field_ty, crate::gc_types::BYTES_LAYOUT);
+        let declared_is_bytes = has_runtime_layout(ctx, declared_field_ty, runtime_layout::BYTES);
         let is_bytes_anyref_erasure =
-            declared_is_bytes && helpers::is_type(ctx, requested_result_ty, "wasm", "anyref");
+            declared_is_bytes && wasm_dialect::Anyref::matches(ctx, requested_result_ty);
         if requested_result_ty != declared_field_ty && !is_bytes_anyref_erasure {
             return false;
         }
@@ -869,7 +868,7 @@ mod tests {
         assert!(variant_types.iter().skip(1).all(|ty| *ty == cons));
         assert_eq!(ctx.get_type(cons).attrs.get_type("base_enum"), Some(list));
 
-        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+        trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
         let indexed_variant_ops: Vec<_> = ctx
             .block(block)
             .ops
@@ -1001,10 +1000,10 @@ mod tests {
             let data = ctx.get_type(ty);
             data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
         }));
-        assert!(lowered_result_types.iter().any(|&ty| helpers::has_layout(
+        assert!(lowered_result_types.iter().any(|&ty| has_runtime_layout(
             &ctx,
             ty,
-            crate::gc_types::BYTES_LAYOUT
+            runtime_layout::BYTES
         )));
         assert!(lowered_result_types.iter().any(|&ty| {
             let data = ctx.get_type(ty);

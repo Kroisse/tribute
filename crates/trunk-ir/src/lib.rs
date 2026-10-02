@@ -13,9 +13,6 @@ extern crate self as trunk_ir;
 pub mod symbol;
 pub mod symbol_table;
 
-// === ADT layout computation ===
-pub mod adt_layout;
-
 // === Diagnostic types ===
 pub mod diagnostic;
 
@@ -27,12 +24,14 @@ pub mod op_interface;
 
 // === Textual assembly format hooks ===
 pub mod asm_format;
+mod registry;
 
 // === Operation and type utilities ===
 pub mod op_def;
 pub mod op_schema;
 pub mod ops;
 pub mod type_constraint;
+pub mod type_verifier;
 
 // === IR core structures ===
 pub mod callable;

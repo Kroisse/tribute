@@ -2,17 +2,13 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, core, func};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
-use trunk_ir::types::{Attribute, AttributeMap, StringArg, TypeDataBuilder};
+use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
-/// Result type carried by a private immutable CPS continuation frame.
-pub const CPS_CONTINUATION_FRAME_RESULT_ATTR: &str = "tribute.cps_continuation_frame_result";
 pub const CLOSURE_ENVIRONMENT_INDEX_ATTR: &str = "tribute.closure_environment_index";
-/// Name prefix of the compiler-generated CPS continuation frame layouts.
-pub const CPS_CONTINUATION_FRAME_NAME_PREFIX: &str = "__tribute_continuation_frame_";
 
 /// The ABI strength required to call a function.
 ///
@@ -91,45 +87,6 @@ pub fn cps_done_type(ctx: &mut IrContext, result: TypeRef) -> TypeRef {
     let never = core::never(ctx).as_type_ref();
     let function = func::func_sig(ctx, [result], [never]).as_type_ref();
     generated_cps_closure_type(ctx, function)
-}
-
-/// Make the nominal reference for one private immutable `ContinuationFrame<R>`.
-///
-/// Its paired layout may recursively use this reference.
-pub fn cps_continuation_frame_ref_type(
-    ctx: &mut IrContext,
-    name: impl Into<StringArg>,
-    result: TypeRef,
-) -> TypeRef {
-    let name = ctx.intern_string_arg(name.into());
-    ctx.intern_type(
-        TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-            .attr("name", Attribute::String(name))
-            .attr(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result))
-            .build(),
-    )
-}
-
-/// Read result-index metadata only from an explicit continuation-frame type.
-pub fn cps_continuation_frame_result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
-    let data = ctx.get_type(frame);
-    (data.dialect == Symbol::new("adt")
-        && matches!(data.name, name if name == Symbol::new("typeref") || name == Symbol::new("struct")))
-    .then(|| data.attrs.get_type(CPS_CONTINUATION_FRAME_RESULT_ATTR))
-    .flatten()
-}
-
-/// Make the exact immutable layout for [`cps_continuation_frame_ref_type`].
-pub fn cps_continuation_frame_layout_type(
-    ctx: &mut IrContext,
-    name: impl Into<StringArg>,
-    result: TypeRef,
-    done: TypeRef,
-    dispatch: TypeRef,
-) -> TypeRef {
-    let mut attrs = AttributeMap::new();
-    attrs.insert(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result));
-    adt::struct_type(ctx, name, [("done", done), ("dispatch", dispatch)], attrs).as_type_ref()
 }
 
 /// Strict suffix continuation `Completion<X, R> = (Evidence, ContinuationFrame<R>, X) -> never`.
@@ -330,37 +287,18 @@ mod tests {
     }
 
     #[test]
-    fn result_indexed_continuation_frame_builders_preserve_exact_types_and_provenance() {
+    fn result_indexed_cps_closure_builders_preserve_exact_types() {
         let mut ctx = IrContext::new();
         let evidence = ctx.intern_type(TypeDataBuilder::new("ability", "evidence").build());
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let anyref = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
-        let frame_name = "ContinuationFrameI32";
-        let frame = cps_continuation_frame_ref_type(&mut ctx, frame_name, i32_ty);
+        let frame = ctx.intern_type(TypeDataBuilder::new("test", "frame").build());
         let done = cps_done_type(&mut ctx, i32_ty);
         let dispatch = cps_dispatch_type(&mut ctx, evidence, frame, anyref, i32_ty);
-        let layout =
-            cps_continuation_frame_layout_type(&mut ctx, frame_name, i32_ty, done, dispatch);
         let completion = cps_completion_type(&mut ctx, evidence, i32_ty, frame);
         let resume_exact = cps_resume_exact_type(&mut ctx, evidence, i32_ty, frame);
         let resume = cps_resume_type(&mut ctx, evidence, frame, anyref);
         let never = core::never(&mut ctx).as_type_ref();
-
-        assert_eq!(
-            cps_continuation_frame_result_type(&ctx, frame),
-            Some(i32_ty)
-        );
-        assert_eq!(
-            cps_continuation_frame_result_type(&ctx, layout),
-            Some(i32_ty)
-        );
-        assert_eq!(
-            adt::Struct::from_type_ref(&ctx, layout)
-                .unwrap()
-                .fields(&ctx)
-                .collect::<Vec<_>>(),
-            [("done", done), ("dispatch", dispatch)]
-        );
 
         for (closure, environment_index, expected) in [
             (done, 0, vec![i32_ty, never]),
@@ -386,7 +324,7 @@ mod tests {
     }
 
     #[test]
-    fn continuation_frame_and_cps_closure_readers_fail_closed_on_malformed_metadata() {
+    fn cps_closure_readers_fail_closed_on_malformed_metadata() {
         let mut ctx = IrContext::new();
         let never = core::never(&mut ctx).as_type_ref();
         let function = func::func_sig(&mut ctx, [], [never]).as_type_ref();
@@ -420,25 +358,11 @@ mod tests {
                 .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(1))
                 .build(),
         );
-        let name_attr = ctx.string_attr("ContinuationFrame");
-        let unmarked_frame = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", name_attr)
-                .build(),
-        );
 
         assert_eq!(cps_closure_function_type(&ctx, missing_environment), None);
         assert_eq!(cps_closure_function_type(&ctx, extra_outer_parameter), None);
         assert_eq!(
             cps_closure_function_type(&ctx, out_of_range_environment),
-            None
-        );
-        assert_eq!(
-            cps_continuation_frame_result_type(&ctx, unmarked_frame),
-            None
-        );
-        assert_eq!(
-            cps_continuation_frame_result_type(&ctx, missing_environment),
             None
         );
     }

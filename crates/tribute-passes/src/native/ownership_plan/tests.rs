@@ -1719,7 +1719,7 @@ fn nominal_layout_lookup_ignores_unreachable_interner_entries() {
 }"#,
     );
     let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
-    let stale = trunk_ir::dialect::adt::struct_type(
+    let stale = tribute_ir::dialect::adt::struct_type(
         &mut ctx,
         "R",
         [("x", i64_ty)],

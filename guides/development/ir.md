@@ -17,16 +17,16 @@ Dialects are split across two crates:
 
 - **trunk-ir** (`crates/trunk-ir/src/dialect/`):
   Language-agnostic dialects (core, func, scf, arith, mem, cf, clif,
-  wasm, adt)
+  wasm)
 - **tribute-ir** (`crates/tribute-ir/src/dialect/`):
-  Tribute-specific dialects (tribute_control, ability, effect, closure, list,
-  tribute_io, tribute_rt)
+  Tribute-specific dialects (tribute_control, ability, effect, closure, adt,
+  list, tribute_io, tribute_rt)
 
 Dialect levels (high → low):
 
-- **High-level**: tribute_control, ability, effect, closure, list, tribute_io,
-  tribute_rt — Tribute language concepts
-- **Mid-level**: func, scf, arith, mem, adt — structured operations
+- **High-level**: tribute_control, ability, effect, closure, adt, list,
+  tribute_io, tribute_rt — Tribute language concepts
+- **Mid-level**: func, scf, arith, mem — structured operations
 - **Low-level**: cf, wasm, clif — target-specific
 
 ## Source-logical Control
@@ -101,6 +101,11 @@ fn call_indirect<S: FuncSig>(
   Result<(), String>`) for its wrapper, and reserves the entity name
   `verify`. It checks what the schema cannot express and runs only after
   every generated check passed.
+- A type whose data must satisfy rules beyond its generic shape registers
+  `inventory::submit! { TypeVerifier::new::<T>(verify_fn) }`
+  (`trunk_ir::type_verifier`). IR validation runs it on every interned type
+  of that kind; `func.func_sig` and `adt.struct` register theirs this way.
+
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:
 

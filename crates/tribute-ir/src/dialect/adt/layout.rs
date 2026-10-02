@@ -32,12 +32,12 @@
 //! | `core.ptr`  | 8    | 8         |
 //! | other       | 8    | 8         |
 
-use crate::Symbol;
-use crate::context::IrContext;
-use crate::ops::DialectType;
-use crate::refs::TypeRef;
-use crate::rewrite::type_converter::TypeConverter;
-use crate::types::{Attribute, StringRef};
+use trunk_ir::Symbol;
+use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectType;
+use trunk_ir::refs::TypeRef;
+use trunk_ir::rewrite::type_converter::TypeConverter;
+use trunk_ir::types::{Attribute, StringRef};
 
 /// Memory layout of a struct type.
 #[derive(Debug, Clone)]
@@ -116,7 +116,7 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
 ///
 /// Returns `None` if the type is not a valid `adt.struct`.
 pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef, TypeRef)>> {
-    let adt_struct = crate::dialect::adt::Struct::from_type_ref(ctx, ty)?;
+    let adt_struct = super::Struct::from_type_ref(ctx, ty)?;
     Some(
         (0..adt_struct.field_count(ctx))
             .map(|index| {

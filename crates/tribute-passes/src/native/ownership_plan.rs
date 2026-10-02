@@ -8,11 +8,12 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
 
-use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
+use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, core, func};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::qualified_name;

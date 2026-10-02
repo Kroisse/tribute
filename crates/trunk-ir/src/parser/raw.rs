@@ -1153,7 +1153,7 @@ mod tests {
 
     #[test]
     fn test_parse_type_with_only_attrs() {
-        let mut input = "adt.typeref<{name = \"X\"}>";
+        let mut input = "test.named<{name = \"X\"}>";
         let raw = raw_type.parse_next(&mut input).expect("should parse");
         let RawType::Concrete { params, attrs, .. } = raw else {
             panic!("expected Concrete")

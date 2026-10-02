@@ -95,12 +95,12 @@ flowchart TB
         cfg["structured control normalization\nscf_to_cf"]
         rc_plan["typed ownership/RTTI plan\nsemantic type + CFG"]
         rc_pass["explicit RC materialization\nretain/release 삽입"]
+        adt["adt_to_clif\nadt.* → clif.load/store + malloc"]
     end
 
     subgraph clif_passes["trunk-ir-cranelift-backend/passes/"]
         arith["arith_to_clif\narith.* → clif.iadd, clif.fadd, ..."]
         cf["cf_to_clif\ncf.* → clif.brif/jump + blocks"]
-        adt["adt_to_clif\nadt.* → clif.load/store + malloc"]
         func["func_to_clif\nfunc.* → clif.func/call/return_call"]
         intrinsic["const/intrinsic/runtime lowering\nverified runtime ABI → clif.*"]
     end
