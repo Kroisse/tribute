@@ -135,7 +135,12 @@ fn main() -> Nil {
 /// path from the package root.
 #[salsa_test]
 fn relative_type_imports_keep_the_resolved_type(db: &salsa::DatabaseImpl) {
-    for import in ["use a::P", "use outer::a::P", "use a::P as Q"] {
+    for import in [
+        "use a::P",
+        "use self::a::P",
+        "use pkg::outer::a::P",
+        "use a::P as Q",
+    ] {
         let annotation = if import.ends_with("as Q") { "Q" } else { "P" };
         let errors = errors(
             db,
@@ -162,10 +167,10 @@ fn main() -> Nil {{
     }
 }
 
-/// A path that names something from both the package root and the enclosing
-/// inline module is read from the package root.
+/// A path inside an inline module is read from that module, never from the
+/// package root, even when the package root names the same path.
 #[salsa_test]
-fn root_relative_reading_wins_over_the_enclosing_module(db: &salsa::DatabaseImpl) {
+fn inline_module_paths_start_from_the_module(db: &salsa::DatabaseImpl) {
     let errors = errors(
         db,
         r#"
@@ -179,12 +184,12 @@ mod outer {
     use a::P
 
     pub fn get(p: P) -> Nat {
-        p.root
+        p.nested
     }
 }
 
 fn main() -> Nil {
-    let _ = outer::get(a::P { root: 1 })
+    let _ = outer::get(outer::a::P { nested: 1 })
 }
 "#,
     );
@@ -197,7 +202,7 @@ fn main() -> Nil {
 #[salsa_test]
 fn inline_module_imports_are_in_scope_in_the_module(db: &salsa::DatabaseImpl) {
     for (import, call) in [
-        ("use outer::a::one", "one()"),
+        ("use pkg::outer::a::one", "one()"),
         ("use a::one", "one()"),
         ("use a::one as uno", "uno()"),
         ("use a", "a::one()"),
@@ -438,7 +443,7 @@ ability Tick {
     op tick() -> Nat
 }
 mod outer {
-    use Tick as T
+    use super::Tick as T
 
     pub fn count() ->{T} Nat {
         tick()

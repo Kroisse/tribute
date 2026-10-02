@@ -13,7 +13,8 @@ use trunk_ir::Symbol;
 use crate::ast::{
     Arm, Decl, Expr, ExprKind, FieldDecl, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId,
     LocalIdGen, Module, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef,
-    SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeParamDecl, UnresolvedName, UseDecl,
+    SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
+    UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -182,8 +183,15 @@ impl<'db> Resolver<'db> {
                 return self.binding_to_ref(binding, sym);
             }
 
-            // Check module environment (unqualified lookup)
-            if let Some(binding) = self.env.lookup(sym) {
+            // An inline module sees its companion and the prelude, not the
+            // items of the modules around it; the package root sees its own
+            // items too.
+            let binding = if self.module_path.is_empty() {
+                self.env.lookup(sym)
+            } else {
+                self.companion(sym).or_else(|| self.env.lookup_library(sym))
+            };
+            if let Some(binding) = binding {
                 return self.binding_to_ref(binding, sym);
             }
 
@@ -226,9 +234,8 @@ impl<'db> Resolver<'db> {
             // A first segment the enclosing module imports names only the
             // imported path; it does not fall back to the package root.
             if let Some(namespace) = name.namespace()
-                && let Some(binding) = self
-                    .env
-                    .lookup_qualified(self.imported_namespace(namespace).unwrap_or(namespace), sym)
+                && let Some(namespace) = self.namespace_in_scope(namespace)
+                && let Some(binding) = self.env.lookup_qualified(namespace, sym)
             {
                 return self.binding_to_ref(binding, sym);
             }
@@ -273,6 +280,43 @@ impl<'db> Resolver<'db> {
         Some(Symbol::from_dynamic(&path))
     }
 
+    /// The package-root namespace a qualified path's namespace names.
+    ///
+    /// Inside an inline module the path starts from that module, from one of
+    /// its imports, or from a namespace the prelude supplies. At the package
+    /// root it is already a package-root namespace.
+    fn namespace_in_scope(&self, namespace: Symbol) -> Option<Symbol> {
+        if let Some(imported) = self.imported_namespace(namespace) {
+            return Some(imported);
+        }
+        if self.module_path.is_empty() {
+            return Some(namespace);
+        }
+        let spelling = namespace.to_string();
+        let (first, rest) = spelling.split_once("::").unwrap_or((&spelling, ""));
+        let first = Symbol::from_dynamic(first);
+        // A module's own name names its own namespace.
+        if Some(&first) == self.module_path.last() {
+            let mut path = self.module_path.iter().format("::").to_string();
+            if !rest.is_empty() {
+                path.push_str("::");
+                path.push_str(rest);
+            }
+            return Some(Symbol::from_dynamic(&path));
+        }
+        let nested = Symbol::from_dynamic(&format!(
+            "{}::{namespace}",
+            self.module_path.iter().format("::")
+        ));
+        if self.env.has_namespace(nested) || self.defined_in_module(first) {
+            Some(nested)
+        } else if self.env.is_library_root(first) {
+            Some(namespace)
+        } else {
+            None
+        }
+    }
+
     /// The binding a package-root path names.
     fn lookup_path(&self, path: &[Symbol]) -> Option<&Binding<'db>> {
         let (last, namespace) = path.split_last()?;
@@ -294,10 +338,33 @@ impl<'db> Resolver<'db> {
         .accumulate(self.db);
     }
 
-    /// Rewrite every path in `ann` that starts with a path keyword to the
-    /// package-root path it names.
+    /// Rewrite the names in `ann` to the package-root paths they name.
+    ///
+    /// A path starting with a path keyword names the path it expands to.
+    /// Inside an inline module, a type or ability name the module does not
+    /// declare comes from its imports or the prelude, and a path starts from
+    /// the module, an import, or a prelude namespace.
     fn resolve_annotation_paths(&self, ann: &mut TypeAnnotation) {
         match &mut ann.kind {
+            TypeAnnotationKind::Named(name) if !self.module_path.is_empty() => {
+                let local = name.with_str(|spelling| {
+                    spelling.starts_with(|c: char| c.is_ascii_lowercase())
+                        || TypeKind::from_primitive_name(spelling).is_some()
+                });
+                if local || self.defined_in_module(*name) {
+                    return;
+                }
+                if let Some(path) = self.companion_type(*name) {
+                    ann.kind = TypeAnnotationKind::Path(path);
+                } else if let Some(target) = self.module_import(*name) {
+                    ann.kind = TypeAnnotationKind::Path(target.to_vec());
+                } else if self.env.lookup_library(*name).is_some() {
+                    ann.kind = TypeAnnotationKind::Path(vec![*name]);
+                } else {
+                    self.report_unresolved_annotation(ann.id, *name);
+                    ann.kind = TypeAnnotationKind::Error;
+                }
+            }
             TypeAnnotationKind::Path(segments) => {
                 match absolute_path(&self.module_path, segments) {
                     Ok(Some(path)) if !path.is_empty() => *segments = path,
@@ -314,7 +381,23 @@ impl<'db> Resolver<'db> {
                         .accumulate(self.db);
                         ann.kind = TypeAnnotationKind::Error;
                     }
-                    Ok(None) => {}
+                    Ok(None) if self.module_path.is_empty() => {}
+                    Ok(None) => {
+                        let (&first, rest) = segments.split_first().expect("a path has a segment");
+                        if Some(&first) == self.module_path.last() {
+                            *segments = self.module_path.iter().chain(rest).copied().collect();
+                        } else if let Some(target) = self.module_import(first) {
+                            *segments = target.iter().chain(rest).copied().collect();
+                        } else if self.defined_in_module(first) {
+                            *segments =
+                                self.module_path.iter().chain(&*segments).copied().collect();
+                        } else if !self.env.is_library_root(first) {
+                            let path =
+                                Symbol::from_dynamic(&segments.iter().format("::").to_string());
+                            self.report_unresolved_annotation(ann.id, path);
+                            ann.kind = TypeAnnotationKind::Error;
+                        }
+                    }
                     Err(error) => {
                         self.report_path_keyword(ann.id, error);
                         ann.kind = TypeAnnotationKind::Error;
@@ -344,6 +427,49 @@ impl<'db> Resolver<'db> {
             | TypeAnnotationKind::Infer
             | TypeAnnotationKind::Error => {}
         }
+    }
+
+    /// The package-root path of the type or ability a module's own name
+    /// names: the declaration beside the module that it accompanies, as
+    /// `mod Option` accompanies `enum Option`.
+    fn companion_type(&self, name: Symbol) -> Option<Vec<Symbol>> {
+        let binding = self.companion(name)?;
+        // A struct's name binds its constructor.
+        matches!(
+            binding,
+            Binding::TypeDef { .. }
+                | Binding::Ability { .. }
+                | Binding::Constructor { tag: None, .. }
+        )
+        .then(|| {
+            let parent = &self.module_path[..self.module_path.len() - 1];
+            parent.iter().chain([&name]).copied().collect()
+        })
+    }
+
+    /// The declaration beside the current module that shares its name, which
+    /// the module sees under that name.
+    fn companion(&self, name: Symbol) -> Option<&Binding<'db>> {
+        let (own, parent) = self.module_path.split_last()?;
+        if *own != name {
+            return None;
+        }
+        if parent.is_empty() {
+            return self.env.lookup(name);
+        }
+        let namespace = Symbol::from_dynamic(&parent.iter().format("::").to_string());
+        self.env.lookup_qualified(namespace, name)
+    }
+
+    /// Report a type or ability name an annotation cannot see.
+    fn report_unresolved_annotation(&self, node: NodeId, name: Symbol) {
+        Diagnostic::new(
+            format!("unresolved name `{name}`"),
+            self.span_map.get_or_default(node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.db);
     }
 
     fn resolve_param_paths(&self, params: &mut [ParamDecl]) {
@@ -550,7 +676,10 @@ impl<'db> Resolver<'db> {
         // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
         let mut effects = func.effects.clone();
         if let Some(effs) = &mut effects {
-            self.resolve_effect_annotations(effs);
+            // Inside an inline module the general pass resolves imports too.
+            if self.module_path.is_empty() {
+                self.resolve_effect_annotations(effs);
+            }
             effs.iter_mut()
                 .for_each(|ann| self.resolve_annotation_paths(ann));
         }
@@ -642,51 +771,30 @@ impl<'db> Resolver<'db> {
         }
     }
 
-    /// Resolve imported ability names in effect annotations to qualified paths.
+    /// Resolve the package root's imported ability names in effect
+    /// annotations to qualified paths.
     ///
     /// When an ability is imported via `use` (e.g., `use abilities::Abort`), the
     /// import stores the original module path. This method rewrites unqualified
     /// ability names in effect annotations to their qualified form so that
-    /// `annotation_to_effect` creates the correct AbilityId.
+    /// `annotation_to_effect` creates the correct AbilityId. Inside an inline
+    /// module, `resolve_annotation_paths` resolves imports instead.
     fn resolve_effect_annotations(&self, effects: &mut [TypeAnnotation]) {
         for ann in effects {
             self.resolve_ability_in_annotation(ann);
         }
     }
 
-    /// Resolve a single annotation: if the ability name was imported via `use`,
-    /// rewrite it to the qualified path from the original module.
     fn resolve_ability_in_annotation(&self, ann: &mut TypeAnnotation) {
         match &mut ann.kind {
             TypeAnnotationKind::Named(sym)
-                if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase())) =>
+                if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
+                    && !self.env.has_definition(*sym) =>
             {
-                // An import of the enclosing inline module names the ability
-                // by its package-root path, unless the module itself defines
-                // the name, as in `resolve_name`. The path is spelled out even
-                // for a single segment so it is not read relative to the
-                // module.
-                if !self.defined_in_module(*sym)
-                    && let Some(target) = self.module_import(*sym)
-                {
-                    ann.kind = TypeAnnotationKind::Path(target.to_vec());
-                // Check if this name was imported via `use` with a qualified path
-                } else if !self.env.has_definition(*sym)
-                    && let Some(path) = self.env.get_use_path(*sym)
+                if let Some(path) = self.env.get_use_path(*sym)
                     && path.len() >= 2
                 {
                     ann.kind = TypeAnnotationKind::Path(path.clone());
-                }
-            }
-            // A path whose first segment the enclosing inline module imports
-            // continues from the import's package-root path. A path keyword
-            // already names its package-root path.
-            TypeAnnotationKind::Path(segments) => {
-                if let Ok(None) = absolute_path(&self.module_path, segments)
-                    && let Some((first, rest)) = segments.split_first()
-                    && let Some(target) = self.module_import(*first)
-                {
-                    *segments = target.iter().chain(rest).copied().collect();
                 }
             }
             TypeAnnotationKind::App { ctor, .. } => self.resolve_ability_in_annotation(ctor),
@@ -727,8 +835,8 @@ impl<'db> Resolver<'db> {
     /// The package-root path of the definition or module `path` names.
     ///
     /// A path starting with a path keyword names exactly the path it expands
-    /// to. Any other path is read from the package root first, then from the
-    /// enclosing inline module.
+    /// to. Any other path starts from the current module, or inside an inline
+    /// module from a namespace the prelude supplies.
     fn use_target(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
         let names = |path: &[Symbol]| {
             let Some((last, namespace)) = path.split_last() else {
@@ -750,11 +858,19 @@ impl<'db> Resolver<'db> {
             Err(_) => return None,
             Ok(None) => {}
         }
-        if names(path) {
-            return Some(path.to_vec());
+        if self.module_path.is_empty() {
+            return names(path).then(|| path.to_vec());
         }
+        // An inline module's path starts from the module itself, or from a
+        // namespace the prelude supplies.
         let nested: Vec<Symbol> = self.module_path.iter().chain(path).copied().collect();
-        (!self.module_path.is_empty() && names(&nested)).then_some(nested)
+        if names(&nested) {
+            return Some(nested);
+        }
+        let library = path
+            .first()
+            .is_some_and(|first| self.env.is_library_root(*first));
+        (library && names(path)).then(|| path.to_vec())
     }
 
     /// Resolve an expression.

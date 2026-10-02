@@ -3,7 +3,7 @@
 //! This module provides structures for tracking definitions and looking up names
 //! during the name resolution phase.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use trunk_ir::Symbol;
 
@@ -76,6 +76,10 @@ pub struct ModuleEnv<'db> {
     /// Original paths for resolved `use` imports (import name → original path).
     /// Used to rewrite effect annotations from imported names to qualified paths.
     use_paths: HashMap<Symbol, Vec<Symbol>>,
+    /// Names the prelude and the compiler supply, visible in every module.
+    library: HashMap<Symbol, Binding<'db>>,
+    /// First segments of the namespaces the prelude and the compiler supply.
+    library_roots: HashSet<Symbol>,
 }
 
 impl<'db> ModuleEnv<'db> {
@@ -132,6 +136,27 @@ impl<'db> ModuleEnv<'db> {
         if !self.definitions.contains_key(&name) && !self.imports.contains_key(&name) {
             self.imports.insert(name, binding);
         }
+    }
+
+    /// Add a name the prelude or the compiler supplies to every module.
+    pub fn add_library(&mut self, name: Symbol, binding: Binding<'db>) {
+        self.library.entry(name).or_insert(binding.clone());
+        self.add_import_if_absent(name, binding);
+    }
+
+    /// Mark the namespaces under `root` as supplied to every module.
+    pub fn add_library_root(&mut self, root: Symbol) {
+        self.library_roots.insert(root);
+    }
+
+    /// A name the prelude or the compiler supplies to every module.
+    pub fn lookup_library(&self, name: Symbol) -> Option<&Binding<'db>> {
+        self.library.get(&name)
+    }
+
+    /// Whether namespaces under `root` are supplied to every module.
+    pub fn is_library_root(&self, root: Symbol) -> bool {
+        self.library_roots.contains(&root)
     }
 
     /// Add a qualified name to a namespace only if it doesn't already exist.
@@ -235,16 +260,42 @@ impl<'db> ModuleEnv<'db> {
     /// Self takes precedence: user definitions shadow prelude.
     /// This is used to inject prelude bindings into user code's environment.
     pub fn merge(&mut self, other: &ModuleEnv<'db>) {
-        // Add other's definitions as imports (so they don't override user definitions)
+        // Add other's definitions as imports (so they don't override user
+        // definitions) that every module sees.
         for (name, binding) in other.iter_definitions() {
-            self.add_import_if_absent(name, binding.clone());
+            self.add_library(name, binding.clone());
         }
 
         // Add other's namespaces
         for (ns, bindings) in other.iter_namespaces() {
+            self.add_library_root(namespace_root(ns));
             for (name, binding) in bindings {
                 self.add_to_namespace_if_absent(ns, name, binding.clone());
             }
         }
     }
+
+    /// Make this module's own definitions and namespaces visible in every
+    /// inline module, as the library that supplies them, the prelude, sees
+    /// them.
+    pub fn share_as_library(&mut self) {
+        self.library.extend(
+            self.definitions
+                .iter()
+                .map(|(name, binding)| (*name, binding.clone())),
+        );
+        let roots: Vec<Symbol> = self
+            .namespaces
+            .keys()
+            .map(|ns| namespace_root(*ns))
+            .collect();
+        self.library_roots.extend(roots);
+    }
+}
+
+/// The first segment of a qualified namespace.
+fn namespace_root(namespace: Symbol) -> Symbol {
+    // Interning inside `with_str` would re-enter the interner.
+    let spelling = namespace.to_string();
+    Symbol::from_dynamic(spelling.split("::").next().unwrap_or_default())
 }

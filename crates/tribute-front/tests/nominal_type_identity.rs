@@ -28,7 +28,7 @@ fn main() -> Nil { take_source([1]) }
 }
 
 #[salsa_test]
-fn unqualified_annotation_uses_nested_module_type_identity(db: &salsa::DatabaseImpl) {
+fn imported_parent_type_keeps_its_nominal_identity(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
         db,
         "nested_nominal_annotation.trb",
@@ -37,7 +37,9 @@ pub mod A {
     pub struct Thing { value: Nat }
 
     pub mod Inner {
-        pub fn forward(thing: Thing) -> A::Thing {
+        use super::Thing
+
+        pub fn forward(thing: Thing) -> pkg::A::Thing {
             thing
         }
     }

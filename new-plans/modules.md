@@ -480,6 +480,42 @@ use pkg::api::Response       // api::Response (패키지 루트에서)
 effect annotation에 똑같이 적용한다. 패키지 루트에서 쓴 `super`, 그리고 첫
 segment가 아닌 위치의 키워드는 이름 해석 오류다.
 
+### 인라인 모듈의 이름 범위
+
+인라인 모듈은 파일 기반 모듈과 같은 범위를 갖는다. 모듈 안에서 보이는 이름은 그
+모듈의 선언, 그 모듈의 `use`, prelude뿐이다. 감싼 모듈이나 패키지 루트의 항목은
+자동으로 보이지 않으며, `use super::x`나 `pkg::x`로 가져온다. 그래서 인라인 모듈을
+파일로 옮겨도 이름의 뜻이 바뀌지 않는다.
+
+경로의 첫 segment도 같은 범위에서 찾는다. 그 모듈의 하위 모듈이나 선언, 그 모듈이
+`use`로 가져온 이름, prelude가 제공하는 namespace(`Option`, `std` 등)가 대상이다.
+`use` 경로도 같다. 패키지 루트는 자신의 선언과 `use`, prelude를 본다.
+
+예외로, 모듈은 자기 이름을 본다. 모듈 옆에 같은 이름의 타입이나 ability가 선언되어
+있으면 그 이름은 그 선언을 가리키고, `M::x`는 모듈 자신의 namespace를 가리킨다.
+그래서 [타입과 동명 네임스페이스](#타입과-동명-네임스페이스)의 companion 모듈은 자기
+타입과 생성자를 그대로 쓴다.
+
+```rust
+ability State(s) { op get() -> s }
+
+enum Shape { Circle(Nat) }
+
+mod Shape {
+    pub fn radius(shape: Shape) -> Nat {   // companion: 옆의 enum Shape
+        case shape { Circle(r) -> r }
+    }
+}
+
+mod counter {
+    use super::State                       // 감싼 모듈의 항목은 가져온다
+
+    pub fn read() ->{State(Int)} Int { State::get() }
+}
+```
+
+prelude의 모듈은 prelude 항목을 prelude로서 본다.
+
 ### 가시성 (Visibility)
 
 | 수식자 | 범위 |

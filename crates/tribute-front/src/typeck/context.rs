@@ -328,13 +328,14 @@ impl<'db> ModuleTypeEnv<'db> {
             return self.lookup_type_def(name);
         }
 
-        let mut scope = prefix.trim_end_matches("::");
-        while !scope.is_empty() {
+        // Name resolution leaves a bare name only for a declaration of the
+        // current module; the package root holds the rest.
+        let scope = prefix.trim_end_matches("::");
+        if !scope.is_empty() {
             let candidate = Symbol::from_dynamic(&format!("{scope}::{spelling}"));
             if let Some(scheme) = self.lookup_type_def(candidate) {
                 return Some(scheme);
             }
-            scope = scope.rsplit_once("::").map_or("", |(parent, _)| parent);
         }
 
         self.lookup_type_def(name)
