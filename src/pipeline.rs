@@ -7,7 +7,9 @@
 //! ## Architecture Principles
 //!
 //! 1. **Explicit Boundaries**: Verify source-logical, shared CPS, and target contracts;
-//!    passes after the representation/ABI boundary exit consume only physical contracts
+//!    the representation/ABI boundary exit verifies the physical contracts later
+//!    passes consume, and native validation checks direct-call argument and
+//!    result compatibility later, before object emission
 //! 2. **Centralized Orchestration**: Pass sequencing is managed here, not in passes
 //! 3. **Scoped Caching**: Salsa caches frontend queries; arena passes own IR analyses
 //! 4. **Separation of Concerns**: Pass implementation vs pipeline composition
@@ -59,12 +61,13 @@
 //!     ▼ closure storage layout finalization
 //!     ▼ cleanup (global DCE, canonicalize, DCE, cast materialization)
 //!     ▼ boundary exit verification (enforced in every build)
-//! Module (physical contracts only)  ◄── dump_ir (`--dump-ir`)
+//! Module (physical contracts verified)  ◄── dump_ir (`--dump-ir`)
 //!     │
 //!     ├─── After the Boundary Exit (emit_from_boundary_exit) ──┤
 //!     ├─► [wasm]   compile_to_wasm: lower_to_wasm → cast legalization → emit
 //!     └─► [native] prepare_module_to_native: entrypoint, clif lowering,
-//!                  RTTI/RC (◄── dump_native_ir_at_stage) → emit
+//!                  RTTI/RC (◄── dump_native_ir_at_stage)
+//!                  → validate_clif_ir (direct-call argument/result types) → emit
 //! ```
 //!
 //! ## Diagnostics
