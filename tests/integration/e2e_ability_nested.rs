@@ -422,3 +422,50 @@ fn main() -> Nil {
 "#;
     assert_native_output("same_ability_distinct_nominals.trb", code, "7");
 }
+
+/// Same-spelled nominal arguments declared in different modules are distinct
+/// ability instances.
+#[test]
+fn test_same_ability_instances_with_same_spelled_nominal_arguments() {
+    let code = r#"pub mod A {
+    pub struct Color { value: Nat }
+}
+
+pub mod B {
+    pub struct Color { value: Nat }
+}
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn get_a() ->{State(A::Color)} A::Color {
+    State::get()
+}
+
+fn set_b(value: B::Color) ->{State(B::Color)} Nil {
+    State::set(value)
+}
+
+fn both() ->{State(B::Color), State(A::Color)} Nat {
+    set_b(B::Color { value: 5 })
+    let A::Color { value } = get_a()
+    value
+}
+
+fn main() -> Nil {
+    let result = run_state(fn() { run_state(fn() { both() }, B::Color { value: 1 }) }, A::Color { value: 7 })
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("same_ability_same_spelled_nominals.trb", code, "7");
+}

@@ -515,6 +515,70 @@ fn run() -> Int {
 }
 
 #[salsa_test]
+fn ability_instance_keys_distinguish_source_arguments(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "instance_keys.trb",
+        r#"
+pub mod A {
+    pub struct Color { value: Nat }
+}
+pub mod B {
+    pub struct Color { value: Nat }
+}
+ability Ask {
+    op ask() -> Nat
+}
+ability Tell {
+    op tell() -> Nat
+}
+ability Reader(r) {
+    fn read() -> r
+}
+fn read_a() ->{Reader(A::Color)} A::Color { Reader::read() }
+fn read_b() ->{Reader(B::Color)} B::Color { Reader::read() }
+fn read_ask() ->{Reader(fn() ->{Ask} Nat)} fn() ->{Ask} Nat { Reader::read() }
+fn read_tell() ->{Reader(fn() ->{Tell} Nat)} fn() ->{Tell} Nat { Reader::read() }
+fn main() -> Nil { }
+"#,
+    );
+    let ir_text = run_ast_pipeline_with_ir(db, source);
+    // The printer may alias a repeated ability type, so resolve `!tN` first.
+    let instance = |name: &str| {
+        let function = logical_function(&ir_text, name);
+        let start = function
+            .find("ability_ref = ")
+            .unwrap_or_else(|| panic!("{name} performs an ability:\n{function}"))
+            + "ability_ref = ".len();
+        let mut ability = &function[start..];
+        if let Some(alias) = ability.strip_prefix('!') {
+            let alias = &alias[..alias.find([',', '}']).unwrap()];
+            let definition = format!("!{alias} = ");
+            let line = ir_text
+                .lines()
+                .find_map(|line| line.trim_start().strip_prefix(definition.as_str()))
+                .unwrap_or_else(|| panic!("alias !{alias} is defined:\n{ir_text}"));
+            ability = line;
+        }
+        let key = &ability[ability
+            .find("instance = \"")
+            .expect("keyed ability instance")
+            + "instance = \"".len()..];
+        key[..key.find('"').unwrap()].to_owned()
+    };
+    assert_ne!(
+        instance("read_a"),
+        instance("read_b"),
+        "same-spelled nominals from different modules are distinct instances:\n{ir_text}"
+    );
+    assert_ne!(
+        instance("read_ask"),
+        instance("read_tell"),
+        "function arguments differing only in effects are distinct instances:\n{ir_text}"
+    );
+}
+
+#[salsa_test]
 fn perform_metadata_preserves_phantom_args(db: &salsa::DatabaseImpl) {
     let phantom = SourceCst::from_source_str(
         db,

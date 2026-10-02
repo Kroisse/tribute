@@ -626,6 +626,141 @@ impl<'db> IrLoweringCtx<'db> {
         }
     }
 
+    /// Source-level identity of one ability instance.
+    ///
+    /// Unlike [`Self::logical_type_key`], this keys nominal arguments by their
+    /// qualified declaration and function arguments by their effect rows, so
+    /// it distinguishes every distinct source instance.
+    fn ability_instance_key(&self, ability: Symbol, arguments: &[crate::ast::Type<'db>]) -> String {
+        let mut row_vars = Vec::new();
+        let mut parts = vec![ability.with_str(str::to_owned)];
+        parts.extend(
+            arguments
+                .iter()
+                .map(|arg| self.source_type_key(*arg, &mut row_vars)),
+        );
+        logical_key("ability", parts)
+    }
+
+    fn source_type_key(
+        &self,
+        ty: crate::ast::Type<'db>,
+        row_vars: &mut Vec<crate::ast::EffectVar>,
+    ) -> String {
+        match ty.kind(self.db) {
+            TypeKind::Named { id, args, .. } => {
+                let mut parts = vec![self.source_nominal_key(*id)];
+                parts.extend(args.iter().map(|arg| self.source_type_key(*arg, row_vars)));
+                logical_key("named", parts)
+            }
+            TypeKind::Func {
+                params,
+                result,
+                effect,
+                ..
+            } => {
+                let mut parts = vec![params.len().to_string()];
+                parts.extend(
+                    params
+                        .iter()
+                        .map(|param| self.source_type_key(*param, row_vars)),
+                );
+                parts.push(self.source_type_key(*result, row_vars));
+                parts.push(self.source_row_key(*effect, row_vars));
+                parts.push(logical_convention_key(
+                    self.calling_convention_for_type(ty)
+                        .unwrap_or(crate::ast::CallingConvention::Cps),
+                ));
+                logical_key("callable", parts)
+            }
+            TypeKind::Tuple(elements) => {
+                let mut parts = vec![elements.len().to_string()];
+                parts.extend(
+                    elements
+                        .iter()
+                        .map(|element| self.source_type_key(*element, row_vars)),
+                );
+                logical_key("tuple", parts)
+            }
+            TypeKind::App { ctor, args } => {
+                let mut parts = vec![
+                    args.len().to_string(),
+                    self.source_type_key(*ctor, row_vars),
+                ];
+                parts.extend(args.iter().map(|arg| self.source_type_key(*arg, row_vars)));
+                logical_key("app", parts)
+            }
+            TypeKind::Continuation {
+                arg,
+                result,
+                effect,
+            } => logical_key(
+                "resume",
+                [
+                    self.source_type_key(*arg, row_vars),
+                    self.source_type_key(*result, row_vars),
+                    self.source_row_key(*effect, row_vars),
+                ],
+            ),
+            _ => self.logical_type_key(ty),
+        }
+    }
+
+    fn source_nominal_key(&self, id: crate::ast::TypeDefId<'db>) -> String {
+        let origin = match id.origin(self.db) {
+            crate::ast::TypeOrigin::Source(_) => "source",
+            crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list",
+            crate::ast::TypeOrigin::Synthetic => "synthetic",
+        };
+        logical_key(
+            "nominal",
+            [
+                origin.to_owned(),
+                id.qualified(self.db).with_str(str::to_owned),
+            ],
+        )
+    }
+
+    /// Key an effect row with its abilities in canonical order. Row variables
+    /// are numbered by first appearance within the instance key, so the key
+    /// does not depend on inference numbering.
+    fn source_row_key(
+        &self,
+        row: crate::ast::EffectRow<'db>,
+        row_vars: &mut Vec<crate::ast::EffectVar>,
+    ) -> String {
+        let mut effects: Vec<String> = row
+            .effects(self.db)
+            .iter()
+            .map(|effect| {
+                let mut parts = vec![effect.ability_id.qualified(self.db).with_str(str::to_owned)];
+                parts.extend(
+                    effect
+                        .args
+                        .iter()
+                        .map(|arg| self.source_type_key(*arg, row_vars)),
+                );
+                logical_key("effect", parts)
+            })
+            .collect();
+        effects.sort();
+        let rest = match row.rest(self.db) {
+            Some(var) => {
+                let index = row_vars
+                    .iter()
+                    .position(|seen| *seen == var)
+                    .unwrap_or_else(|| {
+                        row_vars.push(var);
+                        row_vars.len() - 1
+                    });
+                logical_key("open", [index.to_string()])
+            }
+            None => "closed".to_owned(),
+        };
+        effects.push(rest);
+        logical_key("row", effects)
+    }
+
     fn logical_nominal_key(&self, id: crate::ast::TypeDefId<'db>, name: Symbol) -> String {
         let origin = match id.origin(self.db) {
             crate::ast::TypeOrigin::Source(_) => "source".into(),
@@ -696,11 +831,7 @@ impl<'db> IrLoweringCtx<'db> {
         ability_name: Symbol,
         arguments: &[crate::ast::Type<'db>],
     ) -> TypeRef {
-        let instance = logical_key(
-            "ability",
-            std::iter::once(ability_name.with_str(str::to_owned))
-                .chain(arguments.iter().map(|arg| self.logical_type_key(*arg))),
-        );
+        let instance = self.ability_instance_key(ability_name, arguments);
         let params: Vec<_> = arguments
             .iter()
             .map(|arg| self.convert_logical_type(ir, *arg))
