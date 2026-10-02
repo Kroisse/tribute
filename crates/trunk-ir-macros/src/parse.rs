@@ -58,6 +58,8 @@ pub struct AttrDef {
     /// Original ident
     pub raw_ident: Ident,
     pub ty: AttrType,
+    /// `Attr<[K]>`: a list whose every element has kind `ty`.
+    pub list: bool,
     pub optional: bool,
     pub binds: Option<usize>,
 }
@@ -364,6 +366,7 @@ fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, Str
             name,
             raw_ident: name_ident,
             ty,
+            list: false,
             optional,
             binds: None,
         });
@@ -740,6 +743,38 @@ mod tests {
         assert!(matches!(op.attrs[0].ty, AttrType::Type));
         assert_eq!(op.attrs[1].name, "field");
         assert!(matches!(op.attrs[1].ty, AttrType::U32));
+    }
+
+    #[test]
+    fn test_parse_list_attributes() {
+        let module = parse_test_module(quote! {
+            mod rtti {
+                fn layout(fields: Attr<[String]>, sizes: Option<Attr<[u32]>>) {}
+            }
+        })
+        .unwrap();
+
+        let DialectItem::Operation(op) = &module.items[0] else {
+            panic!("expected operation")
+        };
+        assert!(op.attrs[0].list && matches!(op.attrs[0].ty, AttrType::String));
+        assert!(op.attrs[1].list && op.attrs[1].optional);
+        assert!(matches!(op.attrs[1].ty, AttrType::U32));
+
+        for (kind, expected) in [
+            (quote!([_]), "a list attribute needs a named element kind"),
+            (quote!([[u32]]), "invalid attribute kind"),
+            (quote!([u32, u32]), "expected one element type"),
+        ] {
+            let error = parse_test_module(quote! {
+                mod rtti {
+                    fn layout(fields: Attr<#kind>) {}
+                }
+            })
+            .err()
+            .expect(expected);
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]

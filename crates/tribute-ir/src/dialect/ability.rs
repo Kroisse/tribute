@@ -36,7 +36,7 @@ mod ability {
     /// evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
     fn handle_dispatch(
-        ability_refs: Attr<_>,
+        ability_refs: Attr<[Type]>,
         evidence: Value<_>,
         prompt_tag: Value<_>,
         dispatchers: Variadic<_>,

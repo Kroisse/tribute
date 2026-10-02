@@ -143,7 +143,7 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
 
     let attributes = op.attrs.iter().map(|attr| {
         let name = &attr.name;
-        let kind = attr_kind(crate_path, attr.ty);
+        let kind = attr_def_kind(crate_path, attr);
         let optional = attr.optional;
         let binds = match attr.binds {
             Some(i) => quote!(Some(#i)),
@@ -410,6 +410,9 @@ fn gen_map_attr_accessor(
     attr: &AttrDef,
     attrs: TokenStream,
 ) -> TokenStream {
+    if attr.list {
+        return gen_list_attr_accessor(crate_path, attr, attrs);
+    }
     let name = &attr.raw_ident;
     let name_str = &attr.name;
     let rust_ty = attr_rust_type(crate_path, attr.ty);
@@ -482,6 +485,62 @@ fn gen_map_attr_accessor(
             }
         }
     }
+}
+
+/// Accessors of an `Attr<[K]>` attribute: an iterator over its elements, and
+/// for strings also `<name>_ref` over their pooled handles.
+fn gen_list_attr_accessor(
+    crate_path: &TokenStream,
+    attr: &AttrDef,
+    attrs: TokenStream,
+) -> TokenStream {
+    let name = &attr.raw_ident;
+    let name_str = &attr.name;
+    let rust_ty = attr_rust_type(crate_path, attr.ty);
+    let from_attr = attr_from_attr(crate_path, attr.ty);
+    let items = quote! {
+        #attrs.get(#name_str).map(|list| match list {
+            #crate_path::Attribute::List(items) => items.as_slice(),
+            _ => panic!(concat!("expected a list attribute: ", #name_str)),
+        })
+    };
+    let accessor = |method: &proc_macro2::Ident, item: TokenStream, map: TokenStream| {
+        if attr.optional {
+            quote! {
+                pub fn #method<'ctx>(
+                    &self,
+                    ctx: &'ctx #crate_path::IrContext,
+                ) -> Option<impl ExactSizeIterator<Item = #item> + 'ctx> {
+                    #items.map(|items| items.iter().map(#map))
+                }
+            }
+        } else {
+            quote! {
+                pub fn #method<'ctx>(
+                    &self,
+                    ctx: &'ctx #crate_path::IrContext,
+                ) -> impl ExactSizeIterator<Item = #item> + 'ctx {
+                    #items
+                        .expect(concat!("missing attribute: ", #name_str))
+                        .iter()
+                        .map(#map)
+                }
+            }
+        }
+    };
+    if !matches!(attr.ty, AttrType::String) {
+        return accessor(name, rust_ty, quote!(|attr| #from_attr));
+    }
+    // Like a single string attribute, the accessor reads the pooled text and
+    // `<name>_ref` returns the handles.
+    let handle = format_ident!("{}_ref", attr.name);
+    let handles = accessor(&handle, rust_ty, quote!(|attr| #from_attr));
+    let text = accessor(
+        name,
+        quote!(&'ctx str),
+        quote!(move |attr| ctx.str(#from_attr)),
+    );
+    quote!(#text #handles)
 }
 
 // ============================================================================
@@ -620,6 +679,61 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         let rust_ty = attr_rust_type(crate_path, attr.ty);
         let conv = attr_to_attr(crate_path, attr.ty, quote!(value));
         field_inits.push(quote!(#field: None,));
+        if attr.list {
+            // A list is set from its elements; an optional one is absent
+            // unless set.
+            if matches!(attr.ty, AttrType::String) {
+                fields.push(quote!(#field: Option<::std::vec::Vec<#crate_path::StringArg>>));
+                attr_locals.push(quote! {
+                    let #field = self.#field.map(|values| {
+                        #crate_path::Attribute::List(
+                            values
+                                .into_iter()
+                                .map(|value| {
+                                    #crate_path::Attribute::String(ctx.intern_string_arg(value))
+                                })
+                                .collect(),
+                        )
+                    });
+                });
+                methods.push(quote! {
+                    pub fn #name(
+                        mut self,
+                        values: impl IntoIterator<Item = impl Into<#crate_path::StringArg>>,
+                    ) -> Self {
+                        self.#field = Some(values.into_iter().map(Into::into).collect());
+                        self
+                    }
+                });
+            } else {
+                fields.push(quote!(#field: Option<#crate_path::Attribute>));
+                attr_locals.push(quote!(let #field = self.#field;));
+                methods.push(quote! {
+                    pub fn #name(mut self, values: impl IntoIterator<Item = #rust_ty>) -> Self {
+                        self.#field = Some(#crate_path::Attribute::List(
+                            values.into_iter().map(|value| #conv).collect(),
+                        ));
+                        self
+                    }
+                });
+            }
+            if attr.optional {
+                build_stmts.push(quote! {
+                    if let Some(value) = #field {
+                        __builder = __builder.attr(#crate_path::Symbol::new(#name_str), value);
+                    }
+                });
+            } else {
+                let missing = format!("{full_name}: missing attribute `{name_str}`");
+                build_stmts.push(quote! {
+                    __builder = __builder.attr(
+                        #crate_path::Symbol::new(#name_str),
+                        #field.expect(#missing),
+                    );
+                });
+            }
+            continue;
+        }
         if matches!(attr.ty, AttrType::String) {
             fields.push(quote!(#field: Option<#crate_path::StringArg>));
             attr_locals.push(quote! {
@@ -1200,6 +1314,16 @@ fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         AttrType::String => quote!(#crate_path::StringRef),
         AttrType::SymbolRef => quote!(#crate_path::Symbol),
         AttrType::Bytes => quote!(#crate_path::smallvec::SmallVec<[u8; 16]>),
+    }
+}
+
+/// The schema kind of a declared attribute: its kind, or a list of it.
+fn attr_def_kind(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
+    let kind = attr_kind(crate_path, attr.ty);
+    if attr.list {
+        quote!(#crate_path::op_schema::AttributeKind::List(&#kind))
+    } else {
+        kind
     }
 }
 

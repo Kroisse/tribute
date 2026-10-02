@@ -115,8 +115,10 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
 - 파라미터 wrapper가 종류를 정한다. `Value<C>`는 operand 하나,
   `Variadic<C>`는 같은 제약을 만족하는 0개 이상의 operand, `Values<L>`는
   타입 목록 `L`과 개수·순서·타입이 정확히 일치하는 operand 목록이다.
-  `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다. 가변
-  operand 구간은 operand 중 마지막 하나만 허용한다.
+  `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다.
+  `Attr<[K]>`는 모든 원소가 종류 `K`인 attribute 목록이며, 원소 종류는 이름
+  있는 scalar 종류여야 한다. 가변 operand 구간은 operand 중 마지막 하나만
+  허용한다.
 - 결과는 `-> Value<C>`(accessor `result`) 또는 `-> Variadic<C>` /
   `-> Values<L>`(accessor `results`)로 선언한다. 결과가 0개 또는 1개인
   operation은 `-> Option<Value<C>>`로 선언한다. 결과가 없는 operation과

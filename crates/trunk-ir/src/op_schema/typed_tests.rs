@@ -64,6 +64,8 @@ mod test_typed {
         fn nonempty(values: Variadic<_>) {}
 
         fn maybe_call<S: func::FuncSig>(sig: Option<Attr<S::Type>>, args: Values<S::Inputs>) {}
+
+        fn labeled(labels: Attr<[String]>, sizes: Option<Attr<[u32]>>) {}
     }
 
     impl crate::ops::Verify for Nonempty {
@@ -571,4 +573,53 @@ fn scalar_bounds_match_one_core_type_and_verify_wasm_add() {
         "{text}"
     );
     assert!(!text.contains("arith.addi"), "{text}");
+}
+
+#[test]
+fn list_attributes_build_read_and_verify_their_elements() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let schema = &test_typed::Labeled::DEF.schema;
+    assert_eq!(
+        schema.attributes[0].kind,
+        AttributeKind::List(&AttributeKind::String)
+    );
+    assert_eq!(schema.attributes[1].kind.to_string(), "[u32]");
+
+    let op = test_typed::Labeled::operands()
+        .labels(["left", "right"])
+        .sizes([4, 8])
+        .build(&mut ctx, loc);
+    assert_eq!(op.labels(&ctx).collect::<Vec<_>>(), ["left", "right"]);
+    let right = op.labels_ref(&ctx).nth(1).unwrap();
+    assert_eq!(ctx.str(right), "right");
+    assert_eq!(
+        op.sizes(&ctx).map(Iterator::collect::<Vec<_>>),
+        Some(vec![4, 8])
+    );
+    assert!(
+        test_typed::Labeled::DEF
+            .verify(&ctx, op.op_ref())
+            .is_empty()
+    );
+
+    let unsized_op = test_typed::Labeled::operands()
+        .labels(Vec::<String>::new())
+        .build(&mut ctx, loc);
+    assert_eq!(unsized_op.labels(&ctx).len(), 0);
+    assert!(unsized_op.sizes(&ctx).is_none());
+
+    let mixed = op.op_ref();
+    let label = ctx.string_attr("label");
+    ctx.op_mut(mixed)
+        .attributes
+        .insert("labels", Attribute::List(vec![label, Attribute::Int(1)]));
+    let violations = test_typed::Labeled::DEF.verify(&ctx, mixed);
+    assert_eq!(
+        violations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["attribute `labels` must be a [String] attribute"]
+    );
 }

@@ -81,9 +81,13 @@ fn call_indirect<S: FuncSig>(
 ) -> Values<S::Results> {}
 ```
 
-- Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`, and
-  `Option<Attr<K>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
+- Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`,
+  `Attr<[K]>` (a list whose every element has kind `K`), and
+  `Option<Attr<..>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
+- A list attribute's accessor iterates its elements, and its builder setter
+  takes an iterator. For `Attr<[String]>` the accessor yields `&str` and
+  `<name>_ref` yields the `StringRef`s, as for a single string.
 - Regions and successors are declared in the body: `#[region(name)] {}`,
   `#[region(name?)] {}` for an optional last region such as the body of an
   external function, and `#[successor(name)] {}`.

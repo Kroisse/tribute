@@ -101,6 +101,8 @@ enum Ty {
     Impl(Vec<BoundPath>),
     /// `a::B<C>`, `S::X`, `<S as B>::X`
     Path(TyPath),
+    /// `[T]`
+    Slice(Box<Ty>),
     /// Any other type form (references, slices, ...), which is always rejected.
     Other,
 }
@@ -157,6 +159,15 @@ fn parse_ty(iter: &mut TokenIter) -> Result<Ty, String> {
         Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis => {
             iter.next();
             parse_ty_list(g.stream()).map(Ty::Tuple)
+        }
+        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => {
+            iter.next();
+            let mut inner = g.stream().to_token_iter();
+            let element = parse_ty(&mut inner)?;
+            if has_remaining(&inner) {
+                return Err("expected one element type in `[..]`".into());
+            }
+            Ok(Ty::Slice(Box::new(element)))
         }
         Some(TokenTree::Punct(p)) if p.as_char() == '<' => parse_qualified(iter).map(Ty::Path),
         Some(TokenTree::Ident(_)) => parse_ty_path(iter).map(Ty::Path),
@@ -337,11 +348,18 @@ pub(super) fn parse_typed_operation(
         let (wrapper, inner, optional) = unwrap_wrapper(ty)?;
         match wrapper.as_str() {
             "Attr" => {
-                let (ty, binds) = parse_attr_kind(inner, &vars)?;
+                let (ty, list, binds) = match inner {
+                    Ty::Slice(element) => (parse_list_attr_kind(element)?, true, None),
+                    _ => {
+                        let (ty, binds) = parse_attr_kind(inner, &vars)?;
+                        (ty, false, binds)
+                    }
+                };
                 attrs.push(AttrDef {
                     name,
                     raw_ident: ident.clone(),
                     ty,
+                    list,
                     optional,
                     binds,
                 });
@@ -549,6 +567,15 @@ fn unwrap_wrapper(ty: &Ty) -> Result<(String, &Ty, bool), String> {
     }
 }
 
+/// The element kind of `Attr<[K]>`: a named kind, not `_`, a projection, or
+/// another list.
+fn parse_list_attr_kind(element: &Ty) -> Result<AttrType, String> {
+    match parse_attr_kind(element, &[])? {
+        (AttrType::Any, _) => Err("a list attribute needs a named element kind".into()),
+        (kind, _) => Ok(kind),
+    }
+}
+
 fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrType, Option<usize>), String> {
     let path = match ty {
         Ty::Infer => return Ok((AttrType::Any, None)),
@@ -590,7 +617,7 @@ fn parse_one(ty: &Ty, vars: &[TypeVar]) -> Result<TypeExpr, String> {
             }
             Ok(TypeExpr::Exact(bound))
         }
-        Ty::Other => Err("invalid single-type constraint".into()),
+        Ty::Slice(_) | Ty::Other => Err("invalid single-type constraint".into()),
     }
 }
 

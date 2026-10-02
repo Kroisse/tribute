@@ -3254,9 +3254,7 @@ impl<'a> Converter<'a> {
             prompt.result(self.ctx),
             dispatchers,
         )
-        .ability_refs(Attribute::List(
-            ability_refs.into_iter().map(Attribute::Type).collect(),
-        ))
+        .ability_refs(ability_refs)
         .regions(body_region)
         .build(self.ctx, location);
         self.ctx.push_op(block, dispatch.op_ref());
