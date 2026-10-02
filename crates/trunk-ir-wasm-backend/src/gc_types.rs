@@ -63,7 +63,7 @@ pub const BYTES_LAYOUT: &str = "bytes";
 pub const BYTES_DATA_LAYOUT: &str = "bytes_data";
 
 /// The builtin GC type index of a type carrying a runtime layout identifier.
-pub fn builtin_layout_idx(layout: trunk_ir::Symbol) -> Option<u32> {
+pub fn builtin_layout_idx(layout: &str) -> Option<u32> {
     if layout == BYTES_DATA_LAYOUT {
         Some(BYTES_ARRAY_IDX)
     } else if layout == BYTES_LAYOUT {

@@ -96,7 +96,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = @closure}>
+  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = "closure"}>
   !Ref = adt.typeref<{name = @Node}>
   func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: core.array<core.i32>) {
     %c_struct = core.unrealized_conversion_cast %c : wasm.structref
@@ -116,7 +116,7 @@ mod tests {
             &ctx,
             module,
             r#"core.module @test {
-  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = @closure}>
+  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = "closure"}>
   !Ref = adt.typeref<{name = @Node}>
   func.func @f(%c: !Closure, %r: !Ref, %s: wasm.structref, %a: core.array<core.i32>) {
     func.call %c, %c, %r, %s, %a {callee = @use}
@@ -148,7 +148,7 @@ mod tests {
     #[test]
     fn waits_for_the_result_type_to_be_converted() {
         let input = r#"core.module @test {
-  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = @closure}>
+  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %r = core.unrealized_conversion_cast %c : wasm.structref
     func.call %r {callee = @use}

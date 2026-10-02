@@ -130,10 +130,10 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = core.array<core.i8, {layout = @bytes_data}>
-  !bytes = adt.struct<@_Bytes(@data: !data, @offset: core.i32, @len: core.i32), {layout = @bytes}>
-  !closure = adt.struct<@_closure(@table_idx: core.i32, @env: wasm.anyref), {layout = @closure}>
-  !view = adt.struct<@BytesView(@data: !data, @start: core.i32, @count: core.i32), {layout = @bytes}>
+  !data = core.array<core.i8, {layout = "bytes_data"}>
+  !bytes = adt.struct<@_Bytes(@data: !data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
+  !closure = adt.struct<@_closure(@table_idx: core.i32, @env: wasm.anyref), {layout = "closure"}>
+  !view = adt.struct<@BytesView(@data: !data, @start: core.i32, @count: core.i32), {layout = "bytes"}>
   !plain = core.array<core.i8>
 }"#,
         );

@@ -8,12 +8,11 @@
 //! lowering inserts folds away.
 
 use tribute_core::runtime_layout::{BYTES, BYTES_DATA, LAYOUT_ATTR};
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
-use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
+use trunk_ir::types::{AttributeMap, TypeDataBuilder};
 
 use crate::bytes_intrinsic::{self, BytesIntrinsicError};
 
@@ -24,24 +23,25 @@ pub const OFFSET_FIELD: u32 = 1;
 /// Field index of the length in the bytes struct.
 pub const LEN_FIELD: u32 = 2;
 
-/// The bytes backing array: `core.array<core.i8, {layout = @bytes_data}>`.
+/// The bytes backing array: `core.array<core.i8, {layout = "bytes_data"}>`.
 pub fn bytes_data_type(ctx: &mut IrContext) -> TypeRef {
     let i8_ty = ctx.intern_type(TypeDataBuilder::new("core", "i8").build());
+    let layout = ctx.string_attr(BYTES_DATA);
     ctx.intern_type(
         TypeDataBuilder::new("core", "array")
             .param(i8_ty)
-            .attr(LAYOUT_ATTR, Attribute::Symbol(Symbol::new(BYTES_DATA)))
+            .attr(LAYOUT_ATTR, layout)
             .build(),
     )
 }
 
 /// The bytes struct: backing array, start offset, and length, with
-/// `layout = @bytes`.
+/// `layout = "bytes"`.
 pub fn bytes_struct_type(ctx: &mut IrContext) -> TypeRef {
     let data_ty = bytes_data_type(ctx);
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     let mut attrs = AttributeMap::new();
-    attrs.insert(LAYOUT_ATTR, Symbol::new(BYTES));
+    attrs.insert(LAYOUT_ATTR, ctx.string_attr(BYTES));
     adt::struct_type(
         ctx,
         "_Bytes",
@@ -159,6 +159,6 @@ mod tests {
         assert_eq!(printed.matches("adt.struct_get").count(), 2, "{printed}");
         assert!(printed.contains("adt.array_get"), "{printed}");
         assert!(printed.contains("arith.extui"), "{printed}");
-        assert!(printed.contains("layout = @bytes"), "{printed}");
+        assert!(printed.contains("layout = \"bytes\""), "{printed}");
     }
 }

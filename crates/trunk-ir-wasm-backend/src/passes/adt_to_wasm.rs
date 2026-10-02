@@ -968,8 +968,8 @@ mod tests {
   !E = adt.enum<{name = @E, variants = [[@Some, [core.i32]]]}>
   !Box = adt.enum<{name = @Box, variants = [[@Next, [!NodeRef]]]}>
   !Node = adt.enum<{name = @Node, variants = [[@Node, []]]}>
-  !Data = core.array<core.i8, {layout = @bytes_data}>
-  !Bytes = adt.struct<@_Bytes(@data: !Data, @offset: core.i32, @len: core.i32), {layout = @bytes}>
+  !Data = core.array<core.i8, {layout = "bytes_data"}>
+  !Bytes = adt.struct<@_Bytes(@data: !Data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
   !String = adt.enum<{name = @String, variants = [[@Leaf, [!Bytes]]]}>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {

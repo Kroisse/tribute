@@ -54,7 +54,7 @@ pub fn closure_struct_type_ref(ctx: &mut IrContext) -> TypeRef {
     let mut attrs = AttributeMap::new();
     attrs.insert(
         runtime_layout::LAYOUT_ATTR,
-        Symbol::new(runtime_layout::CLOSURE),
+        ctx.string_attr(runtime_layout::CLOSURE),
     );
     adt::struct_type(
         ctx,
@@ -796,7 +796,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Named = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref)>
-  !Layout = adt.struct<@Other(@code: core.i32), {layout = @closure}>
+  !Layout = adt.struct<@Other(@code: core.i32), {layout = "closure"}>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| {
@@ -823,7 +823,7 @@ mod tests {
             "core.module @test {{\n  !C = {}\n}}",
             trunk_ir::printer::print_type(&ctx, canonical)
         );
-        assert!(printed.contains("layout = @closure"), "{printed}");
+        assert!(printed.contains("layout = \"closure\""), "{printed}");
 
         let mut reparsed = IrContext::new();
         parse_test_module(&mut reparsed, &printed);
@@ -836,7 +836,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = @evidence_marker}>, {layout = @evidence}>"
+        "core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {

@@ -66,7 +66,7 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     let mut attrs = AttributeMap::new();
     attrs.insert(
         tribute_core::runtime_layout::LAYOUT_ATTR,
-        Symbol::new(tribute_core::runtime_layout::CLOSURE),
+        ctx.string_attr(tribute_core::runtime_layout::CLOSURE),
     );
     adt::struct_type(
         ctx,
@@ -637,7 +637,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = @closure}>
+  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}

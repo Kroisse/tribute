@@ -766,8 +766,8 @@ fn test_validate_fixed_wasm_dispatch_abis() {
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
         r#"core.module @test {
-        !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = @evidence_marker}>, {layout = @evidence}>
-        !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref), {layout = @closure}>
+        !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+        !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref), {layout = "closure"}>
         func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
             %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read} : tribute_rt.anyref
             func.return %result
