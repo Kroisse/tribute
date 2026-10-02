@@ -92,9 +92,9 @@ Native RC 객체의 header가 descriptor를 가리킨다.
 [ 0] payload...
 ```
 
-- Header의 index 칸은 [RC header](rc.md#object-header)의 RTTI index다. 같은 번호로
-  release 함수 table과 descriptor table을 찾는다. 번호 배정과 두 table의 모양은
-  [RTTI table](rc.md#rtti-table)이 정한다.
+- Header의 index 칸은 [RC header](rc.md#object-header)의 RTTI index다. 이 번호가
+  RTTI table의 descriptor 레코드를 고르며, 레코드가 release 함수도 담는다. 번호
+  배정과 레코드 모양은 [RTTI table](rc.md#rtti-table)이 정한다.
 - Structural layout(`mem.struct`)의 필드 타입은 managed 참조와 unmanaged 포인터를
   구분한다. Managed 참조는 `tribute_rt.anyref`, unmanaged 포인터는 `core.ptr`로
   둔다. 둘의 크기와 정렬은 같지만 해제 동작이 다르기 때문이다.

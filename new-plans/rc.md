@@ -542,24 +542,29 @@ RTTI index는 [runtime 타입 descriptor](runtime-types.md)의 번호다. Index�
 아니라 descriptor마다 정해지므로, 같은 layout을 쓰는 두 소스 타입은 서로 다른 index를
 가지며 release 함수는 공유할 수 있다.
 
-같은 index로 두 table을 찾는다. 아래의 RTTI table은 release 함수만 담는다. Descriptor
-table `__tribute_type_descriptors`는 index마다 포인터 폭의 칸 하나를 두고 그 index의
-descriptor 레코드(kind, 이름, 소속, 필드 이름과 필드 종류)의 주소를 담는다. 값 출력은
-객체 header의 RTTI index로 descriptor table을 읽으며 RTTI table을 거치지 않는다. 두
-table의 길이는 같고, 모든 index는 descriptor 칸을 채운다.
+RTTI table `__tribute_rtti`는 index마다 고정 크기 descriptor 레코드 하나를 담는 읽기
+전용 배열이다. RTTI index는 이 배열의 레코드 번호이며, 모든 index는 레코드를 가진다.
+해제와 값 출력은 모두 객체 header의 RTTI index로 같은 레코드를 읽는다.
 
 ```text
-__tribute_type_descriptors: [descriptor_record_ptr; max_index + 1]
+__tribute_rtti: [record; max_index + 1]
 ```
 
-Descriptor 레코드는 8바이트 정렬의 읽기 전용 데이터다. 포인터는 모두 같은 프로그램
-안의 데이터를 가리키며, 이름은 UTF-8 바이트이고 NUL로 끝나지 않는다.
+레코드는 8바이트 정렬이다. 포인터는 모두 같은 프로그램 안의 함수나 데이터를
+가리키며, 이름은 UTF-8 바이트이고 NUL로 끝나지 않는다. Index를 받지 않는 enum
+레코드와 필드 배열, 이름은 table 밖의 별도 데이터다.
 
 ```text
-record:  u32 kind | u32 field_count | ptr name | u32 name_len | u32 tag_index
-         | ptr enum_record_or_null | ptr fields_or_null
+record:  ptr release_fn_or_null | u32 kind | u32 field_count | ptr name
+         | u32 name_len | u32 tag_index | ptr enum_record_or_null
+         | ptr fields_or_null
 field:   ptr name | u32 name_len | u32 field_kind
 ```
+
+`release_fn`은 그 index의 release 함수다. Null이면 얕은 해제를 뜻한다. Native RTTI
+생성은 table을 함수와 데이터 재배치가 달린 `clif.data`로, table을 통해 해제를
+디스패치하는 `__tribute_deep_release`를 `clif.func`로 IR에 선언한다. 해제할 크기는
+table에 두지 않고 `__tribute_deep_release(ptr, size)`의 인자로 받는다.
 
 | `kind` | 뜻 |
 | ---- | ---- |
@@ -588,16 +593,6 @@ Managed 판정을 받은 타입은 managed 참조나 동적 값이고, `Int`·`N
 Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다. 예약 index의 값은
 `kind = 3`인 레코드를 가지며, payload가 하나인 boxing된 scalar는 그 scalar를 필드
 하나로 설명한다.
-
-RTTI table은 RTTI index마다 포인터 폭의 칸 하나를 두고, release 함수가 있는 index의
-칸에 그 함수의 주소를 담는다. 빈 칸은 null이며 얕은 해제를 뜻한다. Native RTTI
-생성은 table을 함수 재배치가 달린 `clif.data`로, table을 통해 해제를 디스패치하는
-`__tribute_deep_release`를 `clif.func`로 IR에 선언한다. 해제할 크기는 table에 두지
-않고 `__tribute_deep_release(ptr, size)`의 인자로 받는다.
-
-```text
-__tribute_rtti_table: [release_fn_or_null; max_index + 1]
-```
 
 **Index allocation:**
 
