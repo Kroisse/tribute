@@ -660,7 +660,7 @@ mod tests {
     fn native_boundary_rejects_semantic_and_shape_matched_values_in_pointer_slots() {
         let error = validation_error(
             r#"core.module @test {
-  !shaped = adt.struct<core.i32 {name = "field"}, {name = "Impostor"}>
+  !shaped = test.record<core.i32 {name = "field"}, {name = "Impostor"}>
   clif.func @target(%value: core.ptr) -> core.ptr { clif.return %value }
   clif.func @semantic(%callee: core.ptr, %value: tribute_rt.anyref) -> core.ptr {
     %direct = clif.call %value {callee = @target} : tribute_rt.anyref
@@ -684,7 +684,7 @@ mod tests {
         );
         assert!(
             error.contains(
-                "clif.call call argument #0 type mismatch: expected core.ptr, found adt.struct<"
+                "clif.call call argument #0 type mismatch: expected core.ptr, found test.record<"
             ),
             "{error}"
         );

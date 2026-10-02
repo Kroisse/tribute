@@ -1891,7 +1891,7 @@ core.module @test {
     #[test]
     fn test_roundtrip_type_alias() {
         let input = r#"core.module @test {
-  !marker = adt.struct<core.i32 {name = "ability_id"}, core.i32 {name = "prompt_tag"}, {name = "_Marker"}>
+  !marker = test.record<core.i32 {name = "ability_id"}, core.i32 {name = "prompt_tag"}, {name = "_Marker"}>
 
   func.func @foo(%0: core.array<!marker>) -> core.array<!marker> {
     func.return %0
@@ -2007,7 +2007,7 @@ core.module @test {
     #[test]
     fn test_quoted_type_alias_roundtrip() {
         let input = r#"core.module @test {
-  !"test::MyStruct" = adt.struct<core.i32 {name = "x"}, core.i32 {name = "y"}, {name = "test::MyStruct"}>
+  !"test::MyStruct" = test.record<core.i32 {name = "x"}, core.i32 {name = "y"}, {name = "test::MyStruct"}>
 
   func.func @foo(%0: !"test::MyStruct") -> !"test::MyStruct" {
     func.return %0
@@ -2027,7 +2027,7 @@ core.module @test {
     fn test_roundtrip_bytes_const() {
         let input = r#"core.module @test {
   func.func @f() -> core.bytes {
-    %0 = adt.bytes_const {value = b"hello"} : core.bytes
+    %0 = test.bytes_const {value = b"hello"} : core.bytes
     func.return %0
   }
 }"#;
@@ -2040,7 +2040,7 @@ core.module @test {
     fn test_roundtrip_bytes_const_with_escapes() {
         let input = r#"core.module @test {
   func.func @f() -> core.bytes {
-    %0 = adt.bytes_const {value = b"a\nb\t\0\\\""} : core.bytes
+    %0 = test.bytes_const {value = b"a\nb\t\0\\\""} : core.bytes
     func.return %0
   }
 }"#;
@@ -2054,7 +2054,7 @@ core.module @test {
     fn test_roundtrip_bytes_const_with_non_ascii() {
         let input = r#"core.module @test {
   func.func @f() -> core.bytes {
-    %0 = adt.bytes_const {value = b"\x80\xff\x00"} : core.bytes
+    %0 = test.bytes_const {value = b"\x80\xff\x00"} : core.bytes
     func.return %0
   }
 }"#;
