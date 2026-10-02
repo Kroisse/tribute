@@ -646,6 +646,54 @@ fn main() ->{std::io::Io} Nil {
     assert_eq!(output.stdout, b"ok\n");
 }
 
+#[salsa_test]
+fn test_execute_handler_that_drops_its_continuation(db: &salsa::DatabaseImpl) {
+    let code = r#"
+ability Abort {
+    op abort(code: Nat) -> Never
+}
+
+fn checked(value: Nat) ->{Abort} Nat {
+    case value {
+        0 -> Abort::abort(7)
+        _ -> value + 100
+    }
+}
+
+fn run(value: Nat) -> Nat {
+    handle checked(value) {
+        do result { result }
+        op Abort::abort(code) { code }
+    }
+}
+
+fn check(ok: Bool) ->{std::io::Io} Nil {
+    case ok {
+        True -> std::io::print_line("ok")
+        False -> std::io::print_line("unexpected")
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    check(run(0) == 7)
+    check(run(1) == 101)
+}
+"#;
+    let source = SourceCst::from_source_str(db, "aborting_handler.trb", code);
+    let binary = expect_wasm_compilation_success(
+        db,
+        source,
+        "Should compile a handler arm that drops its continuation",
+    );
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok\nok\n");
+}
+
 const BYTES_SLICES: &str = r#"
 fn main() ->{std::io::Io} Nil {
     let bytes = b"<hello world>"
