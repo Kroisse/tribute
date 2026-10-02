@@ -112,7 +112,10 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   GC 타입 index를 둘 필요가 없다.
 - Builtin layout(bytes, closure, marker, evidence, boxing된 scalar)은 지금처럼
   예약 GC 타입을 쓰며, descriptor 필드를 두지 않는다. 이 값들의 descriptor는 예약
-  번호로 정해진다.
+  번호로 정해진다. Builtin layout은 layout마다 필드와 해제 동작이 하나로 고정되어
+  있으므로 descriptor도 layout마다 하나다. 예를 들어 모든 closure는 같은 함수 참조
+  필드와 동적 값 environment 필드를 가진다. Capture마다 달라지는 내용은 closure
+  descriptor가 아니라, environment가 가리키는 객체 자신의 descriptor가 설명한다.
 
 ## Variant 판별
 
