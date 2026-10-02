@@ -217,7 +217,7 @@ fn advance_revision(revision: &mut u64) {
 /// Allocate an identity no other context in this process has.
 fn next_context_identity() -> u64 {
     NEXT_CONTEXT_ID
-        .fetch_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
+        .try_update(Ordering::Relaxed, Ordering::Relaxed, |next| {
             next.checked_add(1)
         })
         .expect("IrContext identity exhausted")
