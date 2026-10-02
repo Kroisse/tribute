@@ -182,6 +182,14 @@ pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<Unresol
     }
 }
 
+/// Give `env` the library package `library` declares: its root items under
+/// their short names, then re-resolve the package's own imports, which may
+/// name library items.
+pub fn merge_library<'db>(env: &mut ModuleEnv<'db>, library: &ModuleEnv<'db>) {
+    env.merge(library, Symbol::new(LIBRARY_PACKAGE));
+    resolve_use_imports(env);
+}
+
 /// Resolve a library package module from [`library_package_module`], whose
 /// root is its one package module.
 pub fn resolve_library_with_env<'db>(

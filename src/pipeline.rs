@@ -1560,10 +1560,8 @@ pub fn parse_and_lower_ast<'db>(
     let mut user_env = ast_resolve::build_env(db, user_ast);
     if let Some(p_env) = prelude_env(db) {
         // Prelude bindings injected, user definitions take precedence
-        user_env.merge(p_env, trunk_ir::Symbol::new(ast_resolve::LIBRARY_PACKAGE));
+        ast_resolve::merge_library(&mut user_env, p_env);
     }
-    // Resolve `use` imports that reference prelude modules (e.g., `use abilities::Abort`)
-    ast_resolve::resolve_use_imports(&mut user_env);
 
     // Phase 3: Name resolution with merged environment
     let resolved_ast = ast_resolve::resolve_with_env(db, user_ast, user_env, span_map.clone());

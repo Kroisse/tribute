@@ -76,10 +76,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     // Build env, merging prelude bindings so operator names resolve
     let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
-        env.merge(
-            &p.env,
-            trunk_ir::Symbol::new(tribute_front::resolve::LIBRARY_PACKAGE),
-        );
+        tribute_front::resolve::merge_library(&mut env, &p.env);
     }
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 
@@ -160,10 +157,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
 
     let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
-        env.merge(
-            &p.env,
-            trunk_ir::Symbol::new(tribute_front::resolve::LIBRARY_PACKAGE),
-        );
+        tribute_front::resolve::merge_library(&mut env, &p.env);
     }
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 
@@ -195,10 +189,7 @@ fn tdnr_function_summary_inner(
 
     let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
-        env.merge(
-            &p.env,
-            trunk_ir::Symbol::new(tribute_front::resolve::LIBRARY_PACKAGE),
-        );
+        tribute_front::resolve::merge_library(&mut env, &p.env);
     }
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 
