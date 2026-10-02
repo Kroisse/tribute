@@ -689,8 +689,12 @@ mod tests {
             let body = ctx.ir().op_region(target, 0).unwrap();
             let block = ctx.ir().region(body).blocks[0];
             let first_child = ctx.ir().block(block).ops[0];
-            if ctx.ir().op(first_child).attributes.get_symbol("sym_name")
-                == Some(crate::symbol::Symbol::new("first"))
+            if ctx
+                .ir()
+                .op(first_child)
+                .attributes
+                .get_str(ctx.ir(), "sym_name")
+                == Some("first")
             {
                 let _ = ctx.get::<ChoicePrerequisiteFirst>(first_child)?;
             } else {

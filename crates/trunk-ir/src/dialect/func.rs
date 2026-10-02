@@ -42,7 +42,7 @@ crate::register_isolated_op!(Func);
 
 #[trunk_ir::dialect]
 mod func {
-    fn func(sym_name: Attr<Symbol>, r#type: Attr<Type>) {
+    fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
         {}
     }
@@ -682,26 +682,19 @@ fn print_func(
 
     // Extract sym_name before mutable operations
     let sym_name = {
-        let data = h.ctx().op(op);
-        data.attributes.get_symbol("sym_name")
+        let ctx = h.ctx();
+        ctx.op(op)
+            .attributes
+            .get_str(ctx, "sym_name")
+            .map(str::to_owned)
     };
 
     write!(h, "{indent_str}func.func")?;
 
     // Function name
     if let Some(name) = sym_name {
-        write!(h, " @")?;
-        name.with_str(|s| {
-            let needs_quoting =
-                s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-            if needs_quoting {
-                write!(h, "\"")?;
-                crate::printer::write_escaped_string(h, s)?;
-                write!(h, "\"")
-            } else {
-                write!(h, "{s}")
-            }
-        })?;
+        write!(h, " ")?;
+        h.write_symbol_text(&name)?;
     }
 
     // Reset numbering for function body
@@ -1129,7 +1122,7 @@ mod result_list_tests {
             }
         }
         for input in [
-            "core.module @m { func.func {sym_name = @f, type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} }",
+            "core.module @m { func.func {sym_name = \"f\", type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} }",
             "core.module @m { func.func @f(%x: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {tag = @kept, nested = [core.i64]}>} { func.return } }",
         ] {
             let mut ctx = IrContext::new();
@@ -1278,7 +1271,7 @@ mod owner_identity_tests {
     fn missing_runtime_symbols_do_not_hide_known_invalid_declarations() {
         for declaration in [
             "func.func @f() func.func @f()",
-            "test.object {sym_name = @f}",
+            "test.object {sym_name = \"f\"}",
         ] {
             let mut ctx = crate::IrContext::new();
             let input = format!(

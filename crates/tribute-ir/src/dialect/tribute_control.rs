@@ -78,7 +78,7 @@ mod tribute_control {
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
-    fn func<S: FuncSig>(sym_name: Attr<Symbol>, r#type: Attr<S::Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<S::Type>) {
         #[region(body?)]
         {}
     }
@@ -373,7 +373,10 @@ pub fn func_declaration(
         Symbol::new("tribute_control"),
         Symbol::new("func"),
     )
-    .attr("sym_name", Attribute::Symbol(sym_name))
+    .attr(
+        "sym_name",
+        Attribute::String(ctx.intern_symbol_text(sym_name)),
+    )
     .attr("type", Attribute::Type(func_sig_type))
     .build(ctx);
     let op = ctx.create_op(data);
@@ -404,10 +407,6 @@ inventory::submit! {
 }
 
 // === Custom assembly: tribute_control.func ===
-
-fn print_symbol(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, symbol: Symbol) -> fmt::Result {
-    h.write_attribute(&Attribute::Symbol(symbol))
-}
 
 fn func_sig_parts(
     ctx: &IrContext,
@@ -505,7 +504,10 @@ fn print_func(
     use fmt::Write;
 
     let data = h.ctx().op(op);
-    let symbol = data.attributes.get_symbol("sym_name");
+    let symbol = data
+        .attributes
+        .get_str(h.ctx(), "sym_name")
+        .map(str::to_owned);
     let callable_ty = data.attributes.get_type("type");
     let region = h.ctx().op_region(op, 0);
     if !has_concise_func_sig(h.ctx(), callable_ty) {
@@ -515,7 +517,7 @@ fn print_func(
 
     write!(h, "{}tribute_control.func ", " ".repeat(indent))?;
     if let Some(symbol) = symbol {
-        print_symbol(h, symbol)?;
+        h.write_symbol_text(&symbol)?;
     } else {
         write!(h, "@<missing>")?;
     }
@@ -3551,12 +3553,12 @@ mod tests {
   !shared = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @signature]], tribute.calling_convention = 0}>
   !lambda = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}>
   !distinct = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @distinct]], tribute.calling_convention = 0}>
-  tribute_control.func {metadata = @declaration, sym_name = @decl, type = !shared, visibility = @private}
-  tribute_control.func {metadata = @definition, sym_name = @definition, type = !shared, visibility = @private} {
+  tribute_control.func {metadata = @declaration, sym_name = "decl", type = !shared, visibility = @private}
+  tribute_control.func {metadata = @definition, sym_name = "definition", type = !shared, visibility = @private} {
     ^bb0(%left: core.i32, %right: core.i32):
       tribute_control.return %left
   }
-  tribute_control.func {sym_name = @different, type = !distinct}
+  tribute_control.func {sym_name = "different", type = !distinct}
   tribute_control.func @identity(%value: core.i32) -> core.i32 convention(evidence_direct) {
     tribute_control.return %value
   }
@@ -3583,8 +3585,8 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains("type = !shared"), "{printed}");
-        assert!(printed.contains("sym_name = @decl"), "{printed}");
-        assert!(printed.contains("sym_name = @definition"), "{printed}");
+        assert!(printed.contains("sym_name = \"decl\""), "{printed}");
+        assert!(printed.contains("sym_name = \"definition\""), "{printed}");
         assert!(printed.contains("metadata = @declaration"), "{printed}");
         assert!(printed.contains("metadata = @definition"), "{printed}");
         assert!(printed.contains(" : !lambda"), "{printed}");
@@ -3611,13 +3613,23 @@ mod tests {
         let declaration = funcs
             .iter()
             .copied()
-            .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("decl")))
+            .find(|op| {
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
+                    == Some(Symbol::new("decl"))
+            })
             .unwrap();
         let definition = funcs
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("definition"))
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
+                    == Some(Symbol::new("definition"))
             })
             .unwrap();
         let shared = ctx.op(declaration).attributes.get_type("type").unwrap();
@@ -3629,7 +3641,11 @@ mod tests {
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("different"))
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
+                    == Some(Symbol::new("different"))
             })
             .and_then(|op| ctx.op(op).attributes.get_type("type"))
             .unwrap();
@@ -3644,7 +3660,7 @@ mod tests {
         );
 
         let inline = r#"core.module @test {
-  tribute_control.func {sym_name = @inline, type = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = @inline, tribute.calling_convention = 0}>}
+  tribute_control.func {sym_name = "inline", type = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = @inline, tribute.calling_convention = 0}>}
 }"#;
         let (inline_ctx, inline_module) = parse_fixture(inline);
         let inline_printed = assert_round_trip(&inline_ctx, inline_module);
@@ -3659,15 +3675,15 @@ mod tests {
     #[test]
     fn malformed_func_sig_storage_uses_generic_assembly_without_loss() {
         let input = r#"core.module @test {
-  tribute_control.func {sym_name = @missing}
-  tribute_control.func {sym_name = @broken, type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>}
+  tribute_control.func {sym_name = "missing"}
+  tribute_control.func {sym_name = "broken", type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>}
   %lambda = tribute_control.lambda : tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>
 }"#;
         let (ctx, module) = parse_fixture(input);
         let printed = assert_round_trip(&ctx, module);
 
         assert!(
-            printed.contains("tribute_control.func {sym_name = @missing}"),
+            printed.contains("tribute_control.func {sym_name = \"missing\"}"),
             "missing source signatures must use generic assembly: {printed}"
         );
         assert!(
@@ -3677,7 +3693,7 @@ mod tests {
             "malformed signature type/count storage must remain intact: {printed}"
         );
         assert!(
-            printed.contains("tribute_control.func {sym_name = @broken, type = !t0}"),
+            printed.contains("tribute_control.func {sym_name = \"broken\", type = !t0}"),
             "malformed function signature must remain attached to the function: {printed}"
         );
         assert!(
@@ -3812,7 +3828,7 @@ mod tests {
             &result,
             malformed_func,
             &[
-                "attribute `sym_name` must be a Symbol attribute",
+                "attribute `sym_name` must be a String attribute",
                 "attribute `type` must be a Type attribute",
             ],
         );
@@ -3999,7 +4015,11 @@ mod tests {
         let bad_func = control_ops(&ctx, module, "func")
             .into_iter()
             .find(|op| {
-                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("bad_func"))
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
+                    == Some(Symbol::new("bad_func"))
             })
             .unwrap();
         // Custom assembly always derives a callable type and permits at most one
@@ -4986,7 +5006,13 @@ mod tests {
         );
         let intrinsic = control_ops(&ctx, module, "func")
             .into_iter()
-            .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("Nat::+")))
+            .find(|op| {
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
+                    == Some(Symbol::new("Nat::+"))
+            })
             .unwrap();
         let func_sig_type = ctx.op(intrinsic).attributes.get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
@@ -5016,7 +5042,13 @@ mod tests {
             let function = functions
                 .iter()
                 .copied()
-                .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(symbol))
+                .find(|op| {
+                    ctx.op(*op)
+                        .attributes
+                        .get_str(&ctx, "sym_name")
+                        .map(Symbol::from_dynamic)
+                        == Some(symbol)
+                })
                 .unwrap();
             CompilerIntrinsicDeclaration::new(
                 symbol,

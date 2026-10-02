@@ -273,11 +273,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                             format!("{}.{}", td.dialect, td.name)
                         })
                         .collect();
-                    let sym_name = data
-                        .attributes
-                        .get_text(ctx, "sym_name")
-                        .map(|text| text.to_string())
-                        .unwrap_or_default();
+                    let sym_name = data.attributes.get_str(ctx, "sym_name").unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
             } else if data.dialect == wasm_dialect::DIALECT_NAME()
@@ -295,11 +291,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         format!("{}.{}", td.dialect, td.name)
                     })
                     .collect();
-                let sym_name = data
-                    .attributes
-                    .get_text(ctx, "sym_name")
-                    .map(|text| text.to_string())
-                    .unwrap_or_default();
+                let sym_name = data.attributes.get_str(ctx, "sym_name").unwrap_or_default();
                 tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
             }
         }
@@ -426,7 +418,11 @@ impl WasmLowerer {
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
-        let Some(sym_name) = data.attributes.get_symbol("sym_name") else {
+        let Some(sym_name) = data
+            .attributes
+            .get_str(ctx, "sym_name")
+            .map(Symbol::from_dynamic)
+        else {
             return;
         };
 
@@ -994,11 +990,11 @@ mod tests {
         );
 
         assert!(
-            output.contains("sym_name = @__tribute_evidence_find_marker,"),
+            output.contains("sym_name = \"__tribute_evidence_find_marker\","),
             "{output}"
         );
         assert!(
-            output.contains("sym_name = @__tribute_evidence_lookup,"),
+            output.contains("sym_name = \"__tribute_evidence_lookup\","),
             "{output}"
         );
         assert!(!output.contains("abi = \"C\""), "{output}");

@@ -201,7 +201,12 @@ impl<'a> Verifier<'a> {
                 {
                     continue;
                 }
-                let Some(name) = ctx.op(declaration).attributes.get_symbol("sym_name") else {
+                let Some(name) = ctx
+                    .op(declaration)
+                    .attributes
+                    .get_str(ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
+                else {
                     continue;
                 };
                 if !target.binds_c_helper(name) {
@@ -210,7 +215,11 @@ impl<'a> Verifier<'a> {
             }
         }
         for declaration in unbound {
-            let name = ctx.op(declaration).attributes.get_symbol("sym_name");
+            let name = ctx
+                .op(declaration)
+                .attributes
+                .get_str(ctx, "sym_name")
+                .map(Symbol::from_dynamic);
             let name = name.map(|name| name.to_string()).unwrap_or_default();
             self.report(
                 ViolationKind::UnsatisfiableRuntimeBinding(name.clone()),

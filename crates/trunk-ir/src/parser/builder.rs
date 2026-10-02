@@ -640,7 +640,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {
-            attributes.insert("sym_name", Symbol::from_dynamic(name.as_str()));
+            attributes.insert("sym_name", Attribute::String(self.ctx.intern_str(name)));
         }
 
         // Handle func-style signature → func.func_sig type
@@ -1698,7 +1698,7 @@ core.module @test {
     fn generic_shared_func_assembly_remains_parseable() {
         let input = r#"core.module @test {
   !signature = func.func_sig<(core.i32) -> core.i32>
-  func.func {sym_name = @generic, type = !signature}
+  func.func {sym_name = "generic", type = !signature}
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("generic func assembly should parse");
@@ -1706,8 +1706,8 @@ core.module @test {
             .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
         assert_eq!(
-            ctx.op(function).attributes.get_symbol("sym_name"),
-            Some(Symbol::new("generic"))
+            ctx.op(function).attributes.get_str(&ctx, "sym_name"),
+            Some("generic")
         );
         assert_eq!(
             ctx.op(function).attributes.get_type("type"),
@@ -1718,7 +1718,7 @@ core.module @test {
     #[test]
     fn wasm_assembly_keeps_an_explicit_shared_signature_shared() {
         let input = r#"core.module @test {
-  wasm.func {sym_name = @unlowered, type = func.func_sig<() -> core.nil>} { wasm.return }
+  wasm.func {sym_name = "unlowered", type = func.func_sig<() -> core.nil>} { wasm.return }
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("explicit assembly should parse");

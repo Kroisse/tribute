@@ -73,7 +73,10 @@ impl Module {
 
     /// Get the module name (from `sym_name` attribute).
     pub fn name(self, ctx: &IrContext) -> Option<crate::symbol::Symbol> {
-        ctx.op(self.0).attributes.get_symbol("sym_name")
+        ctx.op(self.0)
+            .attributes
+            .get_str(ctx, "sym_name")
+            .map(crate::symbol::Symbol::from_dynamic)
     }
 
     /// Get the first block of the module body.
@@ -121,7 +124,10 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         // Create a core.module op without any regions.
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("empty")))
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_symbol_text(Symbol::new("empty"))),
+            )
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
 
@@ -146,7 +152,10 @@ mod tests {
             parent_op: None,
         });
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("m")))
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_symbol_text(Symbol::new("m"))),
+            )
             .region(region)
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
@@ -162,7 +171,10 @@ mod tests {
 
         let (mut ctx, loc) = test_ctx();
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("m")))
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_symbol_text(Symbol::new("m"))),
+            )
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
 

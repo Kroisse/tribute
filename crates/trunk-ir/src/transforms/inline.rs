@@ -527,7 +527,10 @@ mod mechanics {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                )
                 .region(region)
                 .build(ctx);
         ctx.create_op(module_data)
@@ -921,7 +924,10 @@ mod pass {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                )
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -1177,7 +1183,10 @@ mod pass {
 
         let fn_ty = crate::dialect::func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
         let helper_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("helper")))
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_symbol_text(Symbol::new("helper"))),
+            )
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)

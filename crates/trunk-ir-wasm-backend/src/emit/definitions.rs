@@ -97,7 +97,8 @@ pub(crate) fn extract_function_def(
     func_op: wasm_dialect::Func,
 ) -> CompilationResult<FunctionDef> {
     // References name functions by root-qualified path.
-    let name = qualified_name(ctx, func_op.op_ref()).unwrap_or_else(|| func_op.sym_name(ctx));
+    let name = qualified_name(ctx, func_op.op_ref())
+        .unwrap_or_else(|| Symbol::from_dynamic(func_op.sym_name(ctx)));
     let ty = func_op.r#type(ctx);
 
     let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
@@ -135,7 +136,8 @@ pub(crate) fn extract_import_def(
 ) -> CompilationResult<ImportFuncDef> {
     let module = import_op.module_ref(ctx);
     let name = import_op.name_ref(ctx);
-    let sym = qualified_name(ctx, import_op.op_ref()).unwrap_or_else(|| import_op.sym_name(ctx));
+    let sym = qualified_name(ctx, import_op.op_ref())
+        .unwrap_or_else(|| Symbol::from_dynamic(import_op.sym_name(ctx)));
     let ty = import_op.r#type(ctx);
 
     if wasm_dialect::FuncSig::from_type_ref(ctx, ty).is_none() {

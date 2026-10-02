@@ -413,6 +413,11 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
         self.state.write_type(&mut *self.f, ty)
     }
 
+    /// Write `@name` for a definition name held as text, quoting it when needed.
+    pub fn write_symbol_text(&mut self, name: &str) -> fmt::Result {
+        write_symbol_text(&mut *self.f, name)
+    }
+
     /// Write an attribute value.
     pub fn write_attribute(&mut self, attr: &Attribute) -> fmt::Result {
         self.state.write_attribute(&mut *self.f, attr)
@@ -605,17 +610,19 @@ fn write_name(f: &mut dyn Write, name: &str) -> fmt::Result {
 }
 
 fn write_symbol(f: &mut dyn Write, sym: crate::symbol::Symbol) -> fmt::Result {
-    sym.with_str(|s| {
-        let needs_quoting =
-            s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if needs_quoting {
-            f.write_str("@\"")?;
-            write_escaped_string(f, s)?;
-            f.write_char('"')
-        } else {
-            write!(f, "@{s}")
-        }
-    })
+    sym.with_str(|s| write_symbol_text(f, s))
+}
+
+/// Write `@name` for symbol text, quoting it when needed.
+fn write_symbol_text(f: &mut dyn Write, s: &str) -> fmt::Result {
+    let needs_quoting = s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if needs_quoting {
+        f.write_str("@\"")?;
+        write_escaped_string(f, s)?;
+        f.write_char('"')
+    } else {
+        write!(f, "@{s}")
+    }
 }
 
 // ============================================================================
@@ -1031,9 +1038,9 @@ fn print_module_op(
     write!(f, "{indent_str}core.module")?;
 
     // Module name
-    if let Some(name) = data.attributes.get_symbol("sym_name") {
+    if let Some(name) = data.attributes.get_str(state.ctx, "sym_name") {
         f.write_char(' ')?;
-        write_symbol(f, name)?;
+        write_symbol_text(f, name)?;
     }
 
     // Type aliases are declared inside the body, so these attributes spell

@@ -458,9 +458,10 @@ pub fn compose_root_entry_bridge(
     }
 
     let location = ctx.op(worker_op).location;
+    let root_main_name = ctx.intern_str(ROOT_MAIN_SYMBOL);
     ctx.op_mut(worker_op)
         .attributes
-        .insert("sym_name", root_main);
+        .insert("sym_name", Attribute::String(root_main_name));
     for &op in &top_level_ops {
         rewrite_symbol_refs(ctx, op, main, root_main);
     }

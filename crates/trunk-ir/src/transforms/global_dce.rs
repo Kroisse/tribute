@@ -305,7 +305,10 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                )
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -470,7 +473,10 @@ mod tests {
             parent_op: None,
         });
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("extern_fn")))
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_symbol_text(Symbol::new("extern_fn"))),
+            )
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)
@@ -537,7 +543,10 @@ mod tests {
             parent_op: None,
         });
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("extern_fn")))
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_symbol_text(Symbol::new("extern_fn"))),
+            )
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)
@@ -579,7 +588,10 @@ mod tests {
         });
         let nested_module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("nested")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("nested"))),
+                )
                 .region(nested_region)
                 .build(&mut ctx);
         let nested_module_op = ctx.create_op(nested_module_data);
@@ -625,7 +637,10 @@ mod tests {
         });
         let nested_module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("nested")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("nested"))),
+                )
                 .region(nested_region)
                 .build(&mut ctx);
         let nested_module_op = ctx.create_op(nested_module_data);

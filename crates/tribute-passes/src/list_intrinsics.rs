@@ -58,7 +58,7 @@ impl Pass for LowerListIntrinsics {
             let Ok(function) = func::Func::from_op(ctx, op) else {
                 continue;
             };
-            let name = function.sym_name(ctx);
+            let name = Symbol::from_dynamic(function.sym_name(ctx));
             intrinsic_declarations.all.insert(name);
             if is_prepend_intrinsic(name)
                 && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
@@ -159,7 +159,7 @@ impl RewritePattern for PrependDeclarationPattern {
         if !self
             .intrinsic_declarations
             .eligible
-            .contains(&function.sym_name(ctx))
+            .contains(&Symbol::from_dynamic(function.sym_name(ctx)))
         {
             return false;
         }

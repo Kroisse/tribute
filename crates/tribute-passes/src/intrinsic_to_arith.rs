@@ -42,7 +42,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
             .copied()
             .filter_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                let symbol = function.sym_name(ctx);
+                let symbol = Symbol::from_dynamic(function.sym_name(ctx));
                 (ctx.op(op)
                     .attributes
                     .get_str(ctx, COMPILER_INTRINSIC_ATTR)
@@ -74,8 +74,9 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         .iter()
         .copied()
         .filter(|&op| {
-            func::Func::from_op(ctx, op)
-                .is_ok_and(|function| eligible.contains(&function.sym_name(ctx)))
+            func::Func::from_op(ctx, op).is_ok_and(|function| {
+                eligible.contains(&Symbol::from_dynamic(function.sym_name(ctx)))
+            })
         })
         .collect();
     if declarations.is_empty() {
@@ -313,7 +314,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         };
 
         // Check if this is one of our known arithmetic intrinsics
-        let sym_name = func_op.sym_name(ctx);
+        let sym_name = Symbol::from_dynamic(func_op.sym_name(ctx));
         if !self.eligible.contains(&sym_name) {
             return false;
         }

@@ -768,7 +768,7 @@ mod tests {
     fn test_parse_regions() {
         let module = parse_test_module(quote! {
             mod func {
-                fn func(sym_name: Attr<Symbol>) {
+                fn func(sym_name: Attr<String>) {
                     #[region(body)] {}
                 }
             }

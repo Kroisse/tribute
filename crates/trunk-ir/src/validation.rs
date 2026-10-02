@@ -126,7 +126,11 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
         ValueDef::OpResult(op, idx) => {
             let data = ctx.op(op);
             let full_name = format!("{}.{}", data.dialect, data.name);
-            match data.attributes.get_symbol("sym_name") {
+            match data
+                .attributes
+                .get_str(ctx, "sym_name")
+                .map(Symbol::from_dynamic)
+            {
                 Some(s) => {
                     format!("result #{} of {} (@{})", idx, full_name, s)
                 }
@@ -216,7 +220,8 @@ fn validate_functions_in_region(
                 // This is a func.func or wasm.func
                 let fn_name = data
                     .attributes
-                    .get_symbol("sym_name")
+                    .get_str(ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "<unnamed>".to_string());
 
@@ -1166,7 +1171,11 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
                 continue;
             }
 
-            let Some(sym_name) = data.attributes.get_symbol(sym_name_key) else {
+            let Some(sym_name) = data
+                .attributes
+                .get_str(ctx, sym_name_key)
+                .map(Symbol::from_dynamic)
+            else {
                 continue;
             };
 
@@ -1260,8 +1269,8 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 
             let fn_name = data
                 .attributes
-                .get_symbol(sym_name_key)
-                .map(|s| s.to_string())
+                .get_str(ctx, sym_name_key)
+                .map(str::to_owned)
                 .unwrap_or_else(|| "<unnamed>".to_string());
 
             for func_region in ctx.op_regions(op) {
@@ -2095,7 +2104,10 @@ mod tests {
         // Build wasm.func manually
         let wasm_func_data =
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("func_b")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("func_b"))),
+                )
                 .attr("type", Attribute::Type(wasm_func_ty))
                 .region(body_b)
                 .build(&mut ctx);

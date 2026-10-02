@@ -45,6 +45,11 @@ pub fn is_c_declaration(ctx: &IrContext, op: OpRef) -> bool {
 pub(crate) fn c_helper(ctx: &IrContext, symbols: &SymbolTable, callee: Symbol) -> Option<Symbol> {
     let declaration = symbols.resolve(callee)?;
     is_c_declaration(ctx, declaration)
-        .then(|| ctx.op(declaration).attributes.get_symbol("sym_name"))
+        .then(|| {
+            ctx.op(declaration)
+                .attributes
+                .get_str(ctx, "sym_name")
+                .map(Symbol::from_dynamic)
+        })
         .flatten()
 }

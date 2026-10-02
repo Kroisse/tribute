@@ -344,7 +344,10 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::from_dynamic(name)))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::from_dynamic(name))),
+                )
                 .region(region)
                 .build(ctx);
         ctx.create_op(module_data)

@@ -170,7 +170,11 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> (bool, bool,
 
 fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
     module.ops(ctx).iter().copied().any(|op| {
-        ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new(name))
+        ctx.op(op)
+            .attributes
+            .get_str(ctx, "sym_name")
+            .map(Symbol::from_dynamic)
+            == Some(Symbol::new(name))
             && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
     })
 }
@@ -326,7 +330,11 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         if !is_function || ctx.op_has_regions(op) {
             continue;
         }
-        let Some(name) = data.attributes.get_symbol("sym_name") else {
+        let Some(name) = data
+            .attributes
+            .get_str(ctx, "sym_name")
+            .map(Symbol::from_dynamic)
+        else {
             continue;
         };
         let Some(signature) = data.attributes.get_type("type") else {
@@ -1436,7 +1444,7 @@ mod tests {
             print_module(&ctx, module.op()),
             r#"core.module @test {
   wasm.global {init = 7, mutable = false, valtype = "i32"}
-  wasm.func {sym_name = @__tribute_next_tag, type = wasm.func_sig<() -> core.i32>} {
+  wasm.func {sym_name = "__tribute_next_tag", type = wasm.func_sig<() -> core.i32>} {
       %0 = wasm.global_get {index = 1} : core.i32
       %1 = wasm.i32_const {value = 1} : core.i32
       %2 = wasm.i32_add %0, %1 : core.i32

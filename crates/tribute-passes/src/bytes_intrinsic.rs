@@ -82,9 +82,11 @@ pub(crate) fn lower_get_or_panic(
     let names: Vec<Symbol> = declarations
         .iter()
         .map(|&op| {
-            func::Func::from_op(ctx, op)
-                .expect("func.func")
-                .sym_name(ctx)
+            Symbol::from_dynamic(
+                func::Func::from_op(ctx, op)
+                    .expect("func.func")
+                    .sym_name(ctx),
+            )
         })
         .collect();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {

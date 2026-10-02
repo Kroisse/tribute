@@ -433,7 +433,7 @@ fn find_enclosing_func_name(ctx: &IrContext, op: OpRef) -> String {
             break;
         };
         if let Ok(f) = func::Func::from_op(ctx, parent) {
-            return f.sym_name(ctx).with_str(|s| s.to_string());
+            return f.sym_name(ctx).to_owned();
         }
         current_op = parent;
     }
@@ -498,7 +498,10 @@ mod tests {
             parent_op: None,
         });
         let module_op = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+            )
             .region(module_region)
             .build(ctx);
         let module_ref = ctx.create_op(module_op);
