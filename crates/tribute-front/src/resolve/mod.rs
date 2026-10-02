@@ -15,6 +15,7 @@
 //! 3. Module-level definitions (functions, types, constructors)
 
 mod env;
+mod path;
 mod resolver;
 
 pub use env::{Binding, ModuleEnv};
@@ -266,10 +267,18 @@ fn collect_definition<'db>(
             // Import the last segment of the path
             if let Some(&name) = u.path.last() {
                 let import_name = u.alias.unwrap_or(name);
-                let binding = Binding::Module {
-                    path: u.path.clone(),
-                };
-                env.add_import(import_name, binding);
+                // A path keyword names a package-root path; the resolver
+                // reports a keyword that names none.
+                let module: Vec<Symbol> = prefix
+                    .split("::")
+                    .filter(|segment| !segment.is_empty())
+                    .map(Symbol::from_dynamic)
+                    .collect();
+                let path = path::absolute_path(&module, &u.path)
+                    .ok()
+                    .flatten()
+                    .unwrap_or_else(|| u.path.clone());
+                env.add_import(import_name, Binding::Module { path });
             }
         }
 

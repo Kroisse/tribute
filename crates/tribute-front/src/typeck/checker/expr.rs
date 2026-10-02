@@ -3348,13 +3348,7 @@ impl<'db> TypeChecker<'db> {
                     ctx.named_type_in_scope(*name, vec![], self.current_prefix())
                 }
             }
-            TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
-                if let Some(name) = crate::qualified_path_symbol(parts) {
-                    ctx.named_type_in_scope(name, vec![], self.current_prefix())
-                } else {
-                    ctx.error_type()
-                }
-            }
+            TypeAnnotationKind::Path(parts) => ctx.path_type(parts),
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_with_ctx(ctx, ctor);
                 if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
@@ -3423,7 +3417,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.tuple_type(elem_types)
             }
             TypeAnnotationKind::Infer => ctx.fresh_type_var(),
-            TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => ctx.error_type(),
+            TypeAnnotationKind::Error => ctx.error_type(),
         };
         ctx.record_annotation_type(ann.id, ty);
         ty

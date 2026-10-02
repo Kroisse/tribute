@@ -735,6 +735,16 @@ impl<'db> ModuleTypeEnv<'db> {
         self.named_type_in_scope(name, args, "")
     }
 
+    /// The named type a type annotation's path names. Name resolution spells
+    /// the path from the package root, so it is not read through the
+    /// enclosing modules.
+    pub fn path_type(&self, path: &[Symbol]) -> Type<'db> {
+        crate::qualified_path_symbol(path).map_or_else(
+            || self.error_type(),
+            |name| self.named_type_in_scope(name, vec![], ""),
+        )
+    }
+
     /// Create a named type using lexical module lookup.
     pub fn named_type_in_scope(
         &self,
