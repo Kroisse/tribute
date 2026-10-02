@@ -34,7 +34,7 @@ pub enum Command {
         #[arg(long, default_value = "native")]
         target: String,
 
-        /// Dump the TrunkIR text representation after compilation
+        /// Dump the TrunkIR text at the target's representation/ABI boundary exit
         #[arg(long)]
         dump_ir: bool,
 
