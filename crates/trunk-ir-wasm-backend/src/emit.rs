@@ -318,8 +318,8 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
         let type_index = next_type_index;
         next_type_index += 1;
         import_section.import(
-            &import_def.module,
-            &import_def.name,
+            ctx.str(import_def.module),
+            ctx.str(import_def.name),
             EntityType::Function(type_index),
         );
     }

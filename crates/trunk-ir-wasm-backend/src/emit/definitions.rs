@@ -7,13 +7,13 @@
 use tracing::debug;
 
 use trunk_ir::IrContext;
-use trunk_ir::Symbol;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::types::Attribute;
+use trunk_ir::{StringRef, Symbol};
 use wasm_encoder::{ExportKind, RefType, ValType};
 
 use crate::{CompilationError, CompilationResult};
@@ -33,8 +33,8 @@ pub(crate) struct FunctionDef {
 #[derive(Debug)]
 pub(crate) struct ImportFuncDef {
     pub sym: Symbol,
-    pub module: String,
-    pub name: String,
+    pub module: StringRef,
+    pub name: StringRef,
     /// wasm.func_sig TypeRef
     pub func_type: TypeRef,
 }
@@ -133,8 +133,8 @@ pub(crate) fn extract_import_def(
     ctx: &IrContext,
     import_op: wasm_dialect::ImportFunc,
 ) -> CompilationResult<ImportFuncDef> {
-    let module = import_op.module(ctx).to_owned();
-    let name = import_op.name(ctx).to_owned();
+    let module = import_op.module_ref(ctx);
+    let name = import_op.name_ref(ctx);
     let sym = qualified_name(ctx, import_op.op_ref()).unwrap_or_else(|| import_op.sym_name(ctx));
     let ty = import_op.r#type(ctx);
 
