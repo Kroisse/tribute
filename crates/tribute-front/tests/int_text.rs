@@ -65,7 +65,7 @@ fn format_box(value: Int) -> String {
         .find("adt.variant_new")
         .expect("generic constructor must construct Box");
     let int_to_string = format_box
-        .find("callee = @\"Int::to_string\"")
+        .find("callee = @\"std::Int::to_string\"")
         .expect("Box payload must be passed to Int::to_string");
     let payload_recovery = format_box[..int_to_string]
         .rfind("core.unrealized_conversion_cast")

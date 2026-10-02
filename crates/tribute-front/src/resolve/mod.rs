@@ -74,6 +74,10 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
     let module_imports: Vec<(Symbol, Vec<Symbol>)> = env
         .iter_imports()
         .filter_map(|(name, binding)| {
+            // Library names come through their package paths, not a `use`.
+            if env.lookup_library(name) == Some(binding) {
+                return None;
+            }
             let path = match binding {
                 Binding::Module { path } => Some(path),
                 _ => env.get_use_path(name),
@@ -83,6 +87,22 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         .collect();
 
     for (import_name, path) in module_imports {
+        // A path into a library namespace continues from its package path,
+        // unless the package declares the first segment itself.
+        let path = match path.split_first() {
+            Some((first, rest))
+                if !env.declares(*first)
+                    && let Some(library) = env.library_namespace(*first) =>
+            {
+                library
+                    .to_string()
+                    .split("::")
+                    .map(Symbol::from_dynamic)
+                    .chain(rest.iter().copied())
+                    .collect()
+            }
+            _ => path,
+        };
         let target_name = *path.last().unwrap();
         let ns = Symbol::from_dynamic(
             &path[..path.len() - 1]
@@ -141,6 +161,47 @@ pub fn build_env<'db>(
     env
 }
 
+/// The package the prelude is the root of. Its declarations' identities and
+/// symbols start with this path; every module sees its root items under
+/// their short names.
+pub const LIBRARY_PACKAGE: &str = "std";
+
+/// The prelude as the root module of its package, so its declarations are
+/// identified by their package paths.
+pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<UnresolvedName> {
+    Module {
+        id: module.id,
+        name: module.name,
+        decls: vec![Decl::Module(crate::ast::ModuleDecl {
+            id: module.id,
+            name: Symbol::new(LIBRARY_PACKAGE),
+            is_pub: true,
+            body: Some(module.decls.clone()),
+        })],
+    }
+}
+
+/// Give `env` the library package `library` declares: its root items under
+/// their short names, then re-resolve the package's own imports, which may
+/// name library items.
+pub fn merge_library<'db>(env: &mut ModuleEnv<'db>, library: &ModuleEnv<'db>) {
+    env.merge(library, Symbol::new(LIBRARY_PACKAGE));
+    resolve_use_imports(env);
+}
+
+/// Resolve a library package module from [`library_package_module`], whose
+/// root is its one package module.
+pub fn resolve_library_with_env<'db>(
+    db: &'db dyn salsa::Database,
+    module: &Module<UnresolvedName>,
+    env: ModuleEnv<'db>,
+    span_map: SpanMap,
+) -> Module<ResolvedRef<'db>> {
+    Resolver::new(db, env, span_map)
+        .with_package_depth(1)
+        .resolve_module(module)
+}
+
 /// Expose compiler-owned definitions through the ordinary resolver namespace.
 fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEnv<'db>) {
     env.add_library(
@@ -148,7 +209,9 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEn
         Binding::TypeDef {
             id: TypeDefId::builtin_list(db),
         },
+        vec![Symbol::new("List")],
     );
+    env.add_library_namespace(Symbol::new("List"), Symbol::new("std::collections::List"));
     env.add_library_root(Symbol::new("std"));
     // The source List module contributes members, not a new nominal type.
     // Keep its namespace while exposing the compiler-owned type at this path.
@@ -275,7 +338,7 @@ fn collect_definition<'db>(
                     .filter(|segment| !segment.is_empty())
                     .map(Symbol::from_dynamic)
                     .collect();
-                let path = path::absolute_path(&module, &u.path)
+                let path = path::absolute_path(0, &module, &u.path)
                     .ok()
                     .flatten()
                     .unwrap_or_else(|| u.path.clone());

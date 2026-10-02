@@ -2,7 +2,7 @@
 //! compiler intrinsic.
 //!
 //! Calls whose callee resolves to a declaration carrying the verified compiler
-//! intrinsic identity `__bytes_get_or_panic` are handed to a target's
+//! intrinsic identity `std::__bytes_get_or_panic` are handed to a target's
 //! rewrite of one call. The lowering is the last reader of that identity: it
 //! consumes the identity and removes the declaration.
 
@@ -20,7 +20,7 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 /// Canonical identity of the bytes element read intrinsic.
-const BYTES_GET_OR_PANIC: &str = "__bytes_get_or_panic";
+const BYTES_GET_OR_PANIC: &str = "std::__bytes_get_or_panic";
 
 /// A bytes intrinsic declaration or use a target lowering cannot honor.
 #[derive(Debug, derive_more::Display, derive_more::Error)]
@@ -177,7 +177,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i64) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @read(%bytes: core.bytes, %index: core.i64) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::__bytes_get_or_panic"}
 }"#,
         );
 
@@ -192,7 +192,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
     %byte = func.call %bytes, %index {callee = @read} : core.i32
     %f = func.constant {func_ref = @read} : func.func_sig<(core.bytes, core.i32) -> core.i32>
@@ -214,7 +214,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
     %ok = func.call %bytes, %index {callee = @read} : core.i32
     %bad = func.call %bytes {callee = @read} : core.i32
@@ -233,9 +233,9 @@ mod tests {
     #[test]
     fn name_and_abi_alone_do_not_select_the_intrinsic() {
         let input = r#"core.module @test {
-  func.func @__bytes_get_or_panic(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic"}
+  func.func @"std::__bytes_get_or_panic"(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
-    %byte = func.call %bytes, %index {callee = @__bytes_get_or_panic} : core.i32
+    %byte = func.call %bytes, %index {callee = @"std::__bytes_get_or_panic"} : core.i32
     func.return %byte
   }
 }"#;

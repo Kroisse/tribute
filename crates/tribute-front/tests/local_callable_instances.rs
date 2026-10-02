@@ -46,7 +46,7 @@ fn main() -> Nil {{
                     panic!("expected named callback: {text}");
                 };
                 let reference = tribute_control::FuncRef::from_op(&ir, producer).unwrap();
-                assert_eq!(reference.func_ref(&ir), Symbol::new("Int::+"));
+                assert_eq!(reference.func_ref(&ir), Symbol::new("std::Int::+"));
                 conventions.push(tribute_control::func_sig_convention(
                     &ir,
                     ir.value_ty(callback),

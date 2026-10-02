@@ -2,7 +2,7 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-- message: "constructor `Some` expects 1 field, but the pattern has 2"
+- message: "constructor `std::Some` expects 1 field, but the pattern has 2"
   span:
     start: 54
     end: 64

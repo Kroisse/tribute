@@ -2430,7 +2430,7 @@ fn main() -> Nil {
         let type_str = extract_hover_type(&hover).expect("Should have type content");
         // outer should be String (from inner block's value)
         assert_eq!(
-            type_str, "String",
+            type_str, "std::String",
             "Nested block variable 'outer' should have type String"
         );
     }

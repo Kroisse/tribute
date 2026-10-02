@@ -170,8 +170,11 @@ fn lower_function_ref<'db>(
                     >= tribute_control::func_sig_convention(builder.ir, worker_ty)
         })
         .unwrap_or(worker_ty);
+    let symbol = builder.ctx.function_symbol(name);
     let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
-        builder.result(ty).attr("func_ref", Attribute::Symbol(name))
+        builder
+            .result(ty)
+            .attr("func_ref", Attribute::Symbol(symbol))
     });
     result(builder.ir, op)
 }
@@ -715,7 +718,11 @@ fn prescan_source_functions<'db>(
                 ctx.register_logical_source_function(ctx.qualify_name(function.name));
             }
             Decl::ExternFunction(function) => {
-                ctx.register_logical_source_function(ctx.qualify_name(function.name));
+                let qualified = ctx.qualify_name(function.name);
+                ctx.register_logical_source_function(qualified);
+                if function.abi == "C" {
+                    ctx.register_c_symbol(qualified, function.name);
+                }
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
@@ -955,7 +962,7 @@ fn lower_extern<'db>(
         signature.param_types,
         signature.convention,
     );
-    let name = ctx.qualify_name(decl.name);
+    let name = ctx.function_symbol(ctx.qualify_name(decl.name));
     let function = tribute_control::func_declaration(ir, location, name, callable);
     if let Some(identity) = ctx.compiler_intrinsic(decl.id) {
         ir.op_mut(function.op_ref()).attributes.insert(
@@ -997,7 +1004,8 @@ fn ensure_prelude_declaration(
         signature.param_types.iter().copied(),
         signature.convention,
     );
-    let declaration = tribute_control::func_declaration(builder.ir, location, name, callable);
+    let symbol = builder.ctx.function_symbol(name);
+    let declaration = tribute_control::func_declaration(builder.ir, location, symbol, callable);
     let top = builder
         .ctx
         .module_block()
@@ -1924,11 +1932,12 @@ pub(super) fn emit_named_call(
         .zip(signature.param_types.iter().copied())
         .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
         .collect();
+    let symbol = builder.ctx.function_symbol(name);
     let call = op(builder.ir, builder.block, location, "call", |builder| {
         builder
             .operands(values)
             .result(signature.return_type)
-            .attr("callee", Attribute::Symbol(name))
+            .attr("callee", Attribute::Symbol(symbol))
     });
     result(builder.ir, call)
 }
