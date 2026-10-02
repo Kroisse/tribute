@@ -67,18 +67,20 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 
 ## IR에서의 표현
 
-Descriptor 참조는 nominal 정보가 남아 있는 동안 정해진다.
+IR에는 descriptor 선언이 따로 없다. Descriptor의 identity는 할당 operation이
+가리키는 nominal layout 타입과 variant tag의 쌍이다. 이름과 필드 이름의 출처는
+`adt.struct`와 `adt.enum` 하나뿐이다.
 
-- 할당 operation(`adt.struct_new`, `adt.variant_new`)은 nominal layout을 해석하는
-  단계에서 자기 descriptor 참조를 얻는다. 참조는 모듈 수준 descriptor 선언을
-  가리키는 operation 속성이며, layout 타입과 별개다.
-- 이후 layout 타입이 이름 없는 structural struct로 바뀌어도 descriptor 참조는
-  그대로 남는다. 저수준 pass는 descriptor를 layout 타입에서 다시 찾지 않는다.
-- Descriptor 선언은 descriptor 내용을 모두 담는다. Target은 선언을 자기 runtime
-  표현(table, data segment)으로 내리고, 할당 operation의 참조를 그 표현의
-  번호로 바꾼다.
-- 해제 정보는 ownership 계획이 정한 managed 판정을 그대로 쓴다. 저수준에서 필드의
-  물리 타입만 보고 다시 판정하지 않는다.
+- Nominal layout을 마지막으로 해석하는 target 경계가 descriptor를 소유한다. 이
+  경계는 `(layout 타입, tag)`마다 번호를 정하고, 레코드를 만들고, 할당
+  operation(`adt.struct_new`, `adt.variant_new`)에 그 번호를 새긴다. Native는 RC
+  header의 RTTI index, Wasm은 객체의 첫 필드다.
+- 번호와 레코드는 nominal 이름이 지워지기 전에 확정된다. 그 아래의 이름 없는
+  [structural struct](ir.md#nominal-수준과-structural-수준)는 번호만 다루고
+  descriptor를 layout 타입에서 다시 찾지 않는다.
+- 필드 종류는 target이 정한다. Native 해제 정보는 ownership 계획이 의미 타입으로
+  정한 managed 판정을 그대로 쓴다. 저수준에서 필드의 물리 타입만 보고 다시
+  판정하지 않는다.
 
 ## Native 배치
 

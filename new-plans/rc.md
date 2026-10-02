@@ -550,6 +550,38 @@ table의 길이는 같고, 모든 index는 descriptor 칸을 채운다.
 __tribute_type_descriptors: [descriptor_record_ptr; max_index + 1]
 ```
 
+Descriptor 레코드는 8바이트 정렬의 읽기 전용 데이터다. 포인터는 모두 같은 프로그램
+안의 데이터를 가리키며, 이름은 UTF-8 바이트이고 NUL로 끝나지 않는다.
+
+```text
+record:  u32 kind | u32 field_count | ptr name | u32 name_len | u32 tag_index
+         | ptr enum_record_or_null | ptr fields_or_null
+field:   ptr name | u32 name_len | u32 field_kind
+```
+
+| `kind` | 뜻 |
+| ---- | ---- |
+| `0` | struct |
+| `1` | variant. `enum_record`가 소속 enum 레코드, `tag_index`가 선언 순서의 variant 번호 |
+| `2` | enum. Index를 받지 않으며 variant 레코드만 가리킨다 |
+| `3` | compiler 소유 builtin 값(예약 index) |
+
+`field_kind`의 하위 8비트는 분류, 그다음 8비트는 scalar의 bit 폭이다.
+
+| 분류 | 뜻 |
+| ---- | ---- |
+| `0` | managed 참조 |
+| `1` | 동적 값 |
+| `2` | unmanaged 포인터 |
+| `3` | 부호 있는 정수 |
+| `4` | 부호 없는 정수 |
+| `5` | 부동소수 |
+| `6` | bool |
+
+Variant의 필드 이름은 선언 순서의 위치 번호(`"0"`, `"1"`, …)다. 예약 index의 값은
+`kind = 3`인 레코드를 가지며, payload가 하나인 boxing된 scalar는 그 scalar를 필드
+하나로 설명한다.
+
 RTTI table은 RTTI index마다 포인터 폭의 칸 하나를 두고, release 함수가 있는 index의
 칸에 그 함수의 주소를 담는다. 빈 칸은 null이며 얕은 해제를 뜻한다. Native RTTI
 생성은 table을 함수 재배치가 달린 `clif.data`로, table을 통해 해제를 디스패치하는
@@ -566,7 +598,7 @@ __tribute_rtti_table: [release_fn_or_null; max_index + 1]
 | ---- | ---- |
 | `0` | Runtime이 할당하는 `Bytes`. Release 함수 없음, 얕은 해제. |
 | `1`–`4` | boxing된 `Bool`, `Nat`, `Int`, `Float`. 고정 크기 release |
-| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 descriptor |
+| 예약 범위 다음 | ownership planning이 할당 순서대로 정한 struct와 variant의 descriptor |
 
 예약 범위는 compiler가 생성하는 할당 operation 없이 runtime이나 boxing lowering이
 만드는 값에만 쓴다. 할당 operation으로 만드는 값은 모두 예약 범위 다음 번호를 받는다.
