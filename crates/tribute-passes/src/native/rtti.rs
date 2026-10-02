@@ -992,6 +992,79 @@ mod tests {
     }
 
     #[test]
+    fn each_variant_releases_its_own_fields_and_frees_the_enum_allocation() {
+        use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
+
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Choice = adt.enum<{name = "Choice", variants = [["None", []], ["Pair", [core.i32, tribute_rt.anyref]]]}>
+  func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
+    %none = adt.variant_new {type = !Choice, tag = "None"} : !Choice
+    %pair = adt.variant_new %n, %v {type = !Choice, tag = "Pair"} : !Choice
+    func.return
+  }
+}"#,
+        );
+        let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
+        declare_planned_layouts(&mut ctx, module);
+        generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
+
+        let choice = ctx.type_alias_by_text("Choice").expect("Choice alias");
+        let layout = compute_enum_layout(&ctx, choice, &tc).expect("enum layout");
+        let alloc_size = i64::from(layout.total_size) + RC_HEADER_SIZE as i64;
+        let pair = ctx.intern_str("Pair");
+        let pair_field =
+            layout.fields_offset + find_variant_layout(&layout, pair).unwrap().field_offsets[1];
+        let none = ctx.intern_str("None");
+        let indices = declared_rtti_indices(&ctx, module);
+        assert_eq!(indices.len(), 2, "one descriptor per allocated variant");
+
+        let release = |index: u32| {
+            let symbol = format!("{RELEASE_FN_PREFIX}{index}");
+            module
+                .ops(&ctx)
+                .iter()
+                .find_map(|&op| {
+                    clif::Func::from_op(&ctx, op)
+                        .ok()
+                        .filter(|function| function.sym_name(&ctx) == symbol.as_str())
+                })
+                .expect("descriptor release function")
+        };
+        let summary = |index: u32| {
+            let mut released = Vec::new();
+            let mut sizes = Vec::new();
+            let _ = trunk_ir::walk::walk_op::<()>(&ctx, release(index).op_ref(), &mut |op| {
+                if let Ok(release) = tribute_rt::Release::from_op(&ctx, op)
+                    && let trunk_ir::ValueDef::OpResult(load, _) = ctx.value_def(release.ptr(&ctx))
+                {
+                    released.push(clif::Load::from_op(&ctx, load).unwrap().offset(&ctx));
+                }
+                if let Ok(call) = clif::Call::from_op(&ctx, op)
+                    && call.callee(&ctx) == DEALLOC_FN
+                    && let trunk_ir::ValueDef::OpResult(size, _) =
+                        ctx.value_def(ctx.op_operands(op)[1])
+                {
+                    sizes.push(clif::Iconst::from_op(&ctx, size).unwrap().value(&ctx));
+                }
+                ControlFlow::Continue(WalkAction::Advance)
+            });
+            (released, sizes)
+        };
+
+        assert_eq!(
+            summary(indices[&(choice, Some(none))]),
+            (vec![], vec![alloc_size])
+        );
+        assert_eq!(
+            summary(indices[&(choice, Some(pair))]),
+            (vec![pair_field as i32], vec![alloc_size])
+        );
+    }
+
+    #[test]
     fn test_struct_no_ptr_fields() {
         let (mut ctx, loc) = test_ctx();
         let i32_ty = intern_ty(&mut ctx, "core", "i32");
