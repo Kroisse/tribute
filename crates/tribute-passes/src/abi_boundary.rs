@@ -230,15 +230,11 @@ impl<'a> Verifier<'a> {
         let Ok(function) = func::Func::from_op(ctx, main) else {
             return;
         };
-        let nil = core::Nil::from_type_ref;
         let well_formed = ctx.op_has_regions(main)
             && func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some_and(|signature| {
                 signature.inputs(ctx).is_empty()
                     && signature.call_conv(ctx) == Some(func::CallConv::Platform)
-                    && signature
-                        .results(ctx)
-                        .iter()
-                        .all(|&result| nil(ctx, result).is_some())
+                    && matches!(signature.results(ctx), [result] if core::Nil::matches(ctx, *result))
             });
         if !well_formed {
             self.report(
@@ -734,8 +730,8 @@ mod tests {
             )
         };
         assert_eq!(kinds(&entry("() -> core.nil", "", "func.return")), []);
-        assert_eq!(kinds(&entry("()", "", "func.return")), []);
         for malformed in [
+            entry("()", "", "func.return"),
             entry("(%value: core.i32) -> core.nil", "", "func.return"),
             entry(
                 "() -> core.i32",
