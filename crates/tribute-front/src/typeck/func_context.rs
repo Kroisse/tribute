@@ -1242,6 +1242,10 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.env.named_type_in_scope(name, args, prefix)
     }
 
+    pub fn path_type(&self, path: &[Symbol]) -> Type<'db> {
+        self.env.path_type(path)
+    }
+
     /// Create a named type while preserving its resolved declaration identity.
     pub fn named_type_with_id(
         &self,

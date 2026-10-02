@@ -633,6 +633,15 @@ pub fn is_type_variable(name: &Symbol) -> bool {
     name.with_str(|s| s.starts_with(|c: char| c.is_ascii_lowercase()))
 }
 
+/// The qualified name of the ability an annotation path names; `None` for a
+/// row variable such as `e`.
+fn ability_path(path: &[Symbol]) -> Option<Symbol> {
+    path.last()
+        .is_some_and(|name| !is_type_variable(name))
+        .then(|| crate::qualified_path_symbol(path))
+        .flatten()
+}
+
 /// Convert a single type annotation to an `Effect`.
 ///
 /// Returns `None` for annotations that represent row variables (lowercase names, `Infer`)
@@ -655,18 +664,8 @@ pub fn annotation_to_effect<'db>(
                 args: vec![],
             })
         }
-        TypeAnnotationKind::Path(path) if !path.is_empty() => {
-            let name = *path.last()?;
-            if is_type_variable(&name) {
-                return None;
-            }
-            // For paths like foo::bar::State, build qualified from path segments
-            let mut buf = String::new();
-            for seg in &path[..path.len() - 1] {
-                crate::push_prefix(&mut buf, *seg);
-            }
-            let qualified = crate::qualified_symbol(&mut buf, name);
-            let ability_id = super::AbilityId::from_resolved_path(db, qualified);
+        TypeAnnotationKind::Path(path) => {
+            let ability_id = super::AbilityId::from_resolved_path(db, ability_path(path)?);
             Some(Effect {
                 ability_id,
                 args: vec![],
@@ -677,17 +676,7 @@ pub fn annotation_to_effect<'db>(
                 TypeAnnotationKind::Named(n) if !is_type_variable(n) => {
                     crate::qualified_symbol(&mut prefix.to_owned(), *n)
                 }
-                TypeAnnotationKind::Path(path) => {
-                    let n = *path.last()?;
-                    if is_type_variable(&n) {
-                        return None;
-                    }
-                    let mut buf = String::new();
-                    for seg in &path[..path.len() - 1] {
-                        crate::push_prefix(&mut buf, *seg);
-                    }
-                    crate::qualified_symbol(&mut buf, n)
-                }
+                TypeAnnotationKind::Path(path) => ability_path(path)?,
                 _ => return None,
             };
             let type_args: Vec<Type<'db>> = args.iter().map(&mut *convert_type).collect();

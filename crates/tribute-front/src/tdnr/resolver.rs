@@ -355,18 +355,10 @@ impl<'db> TdnrResolver<'db> {
                 }
             }
             // Name resolution spelled the path from the package root.
-            TypeAnnotationKind::Path(path) if !path.is_empty() => {
-                let name = crate::qualified_path_symbol(path).unwrap();
-                let id = self.lookup_type_identity(name, "");
-                Type::new(
-                    self.db,
-                    TypeKind::Named {
-                        id,
-                        name,
-                        args: vec![],
-                    },
-                )
-            }
+            TypeAnnotationKind::Path(path) => crate::qualified_path_symbol(path).map_or_else(
+                || Type::new(self.db, TypeKind::Error),
+                |name| self.nominal_type_in_scope(name, ""),
+            ),
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_in_scope(Some(ctor), prefix);
                 let arg_tys: Vec<Type<'db>> = args
@@ -435,9 +427,7 @@ impl<'db> TdnrResolver<'db> {
         let ann = annotation.as_ref()?;
         match &ann.kind {
             TypeAnnotationKind::Named(name) => Some(*name),
-            TypeAnnotationKind::Path(path) if !path.is_empty() => {
-                crate::qualified_path_symbol(path)
-            }
+            TypeAnnotationKind::Path(path) => crate::qualified_path_symbol(path),
             TypeAnnotationKind::App { ctor, .. } => {
                 self.extract_receiver_type_from_annotation(&Some((**ctor).clone()))
             }

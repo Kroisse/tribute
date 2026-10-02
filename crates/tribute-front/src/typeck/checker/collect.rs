@@ -560,14 +560,7 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             TypeAnnotationKind::Named(name) => self.primitive_or_named_type(*name),
-            // Name resolution spelled the path from the package root.
-            TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
-                if let Some(name) = crate::qualified_path_symbol(parts) {
-                    self.env.named_type_in_scope(name, vec![], "")
-                } else {
-                    self.env.error_type()
-                }
-            }
+            TypeAnnotationKind::Path(parts) => self.env.path_type(parts),
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_for_sig(ctor, vars);
                 if let TypeKind::Named { id, name, .. } = ctor_ty.kind(self.db()) {
@@ -606,7 +599,7 @@ impl<'db> TypeChecker<'db> {
                 vars.next_type += 1;
                 Type::new(self.db(), TypeKind::BoundVar { index })
             }
-            TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => self.env.error_type(),
+            TypeAnnotationKind::Error => self.env.error_type(),
         }
     }
 
@@ -717,17 +710,8 @@ impl<'db> TypeChecker<'db> {
                     .collect();
                 self.env.tuple_type(elem_types)
             }
-            // Name resolution spelled the path from the package root.
-            TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
-                if let Some(name) = crate::qualified_path_symbol(parts) {
-                    self.env.named_type_in_scope(name, vec![], "")
-                } else {
-                    self.env.error_type()
-                }
-            }
-            TypeAnnotationKind::Infer | TypeAnnotationKind::Path(_) | TypeAnnotationKind::Error => {
-                self.env.error_type()
-            }
+            TypeAnnotationKind::Path(parts) => self.env.path_type(parts),
+            TypeAnnotationKind::Infer | TypeAnnotationKind::Error => self.env.error_type(),
         }
     }
 
