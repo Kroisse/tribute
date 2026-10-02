@@ -136,12 +136,22 @@ impl FunctionOwnershipPlan {
     }
 }
 
-pub use tribute_ir::dialect::tribute_rtti::ManagedFieldBitmap;
+pub use tribute_ir::dialect::tribute_rtti::FieldKind;
+use tribute_ir::dialect::tribute_rtti::{allocation_descriptor, descriptor_field_types};
 
+/// One runtime type descriptor: a struct layout, or one variant of an enum
+/// layout, with how the runtime reads each of its fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RttiTypePlan {
     pub ty: TypeRef,
-    pub fields: ManagedFieldBitmap,
+    pub tag: Option<StringRef>,
+    pub fields: Vec<FieldKind>,
+}
+
+impl RttiTypePlan {
+    pub fn key(&self) -> (TypeRef, Option<StringRef>) {
+        (self.ty, self.tag)
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -221,31 +231,23 @@ impl NativeOwnershipPlan {
         let planned = self
             .rtti_types
             .iter()
-            .map(|entry| entry.ty)
+            .map(RttiTypePlan::key)
             .collect::<HashSet<_>>();
         if planned.len() != self.rtti_types.len() {
             return Err(OwnershipPlanError::new(
-                "RTTI plan has duplicate layout identities",
+                "RTTI plan has duplicate descriptor identities",
             ));
         }
 
         let mut current = HashSet::new();
         walk_module(ctx, module, |op| {
-            let ty = adt::StructNew::from_op(ctx, op)
-                .ok()
-                .map(|new| new.r#type(ctx))
-                .or_else(|| {
-                    adt::VariantNew::from_op(ctx, op)
-                        .ok()
-                        .map(|new| new.r#type(ctx))
-                });
-            if let Some(ty) = ty {
-                current.insert(ty);
+            if let Some(descriptor) = allocation_descriptor(ctx, op) {
+                current.insert(descriptor);
             }
         });
         if current != planned {
             return Err(OwnershipPlanError::new(
-                "RTTI allocation layout identities differ from the plan",
+                "RTTI allocation descriptors differ from the plan",
             ));
         }
         Ok(())
@@ -699,58 +701,85 @@ fn build_rtti_plan(
     let mut order = Vec::new();
     let mut seen = HashSet::new();
     walk_module(ctx, module, |op| {
-        let layout = adt::StructNew::from_op(ctx, op)
-            .ok()
-            .map(|new| new.r#type(ctx))
-            .or_else(|| {
-                adt::VariantNew::from_op(ctx, op)
-                    .ok()
-                    .map(|new| new.r#type(ctx))
-            });
-        if let Some(layout) = layout
-            && managed_layouts.contains(&layout)
-            && seen.insert(layout)
+        if let Some(descriptor) = allocation_descriptor(ctx, op)
+            && managed_layouts.contains(&descriptor.0)
+            && seen.insert(descriptor)
         {
-            order.push(layout);
+            order.push(descriptor);
         }
     });
 
     order
         .into_iter()
-        .map(|ty| {
-            let fields = build_managed_field_bitmap(ctx, ty, managed_layouts)?;
-            Ok(RttiTypePlan { ty, fields })
+        .map(|(ty, tag)| {
+            let fields = build_field_kinds(ctx, ty, tag, managed_layouts)?;
+            Ok(RttiTypePlan { ty, tag, fields })
         })
         .collect()
 }
 
-fn build_managed_field_bitmap(
+fn build_field_kinds(
     ctx: &IrContext,
     ty: TypeRef,
+    tag: Option<StringRef>,
     managed_layouts: &HashSet<TypeRef>,
-) -> Result<ManagedFieldBitmap, OwnershipPlanError> {
-    if let Some(fields) = get_struct_fields(ctx, ty) {
-        Ok(ManagedFieldBitmap::Struct(
-            fields
-                .iter()
-                .map(|(_, ty)| is_typed_managed_reference(ctx, *ty, managed_layouts))
-                .collect(),
-        ))
-    } else if let Some(variants) = get_enum_variants(ctx, ty) {
-        Ok(ManagedFieldBitmap::Enum(
-            variants
-                .iter()
-                .map(|(_, fields)| {
-                    fields
-                        .iter()
-                        .map(|ty| is_typed_managed_reference(ctx, *ty, managed_layouts))
-                        .collect()
-                })
-                .collect(),
-        ))
-    } else {
-        Err(OwnershipPlanError::new("RTTI type has no aggregate layout"))
+) -> Result<Vec<FieldKind>, OwnershipPlanError> {
+    let fields = descriptor_field_types(ctx, ty, tag)
+        .map_err(|error| OwnershipPlanError::new(format!("RTTI descriptor: {error}")))?;
+    Ok(fields
+        .into_iter()
+        .map(|field| field_kind(ctx, field, managed_layouts))
+        .collect())
+}
+
+/// How the runtime reads a field of semantic type `ty`. Managed-ness follows
+/// [`is_typed_managed_reference`], so release and ownership agree.
+fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) -> FieldKind {
+    let data = ctx.get_type(ty);
+    let is = |dialect: &'static str, name: &'static str| {
+        data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
+    };
+    if is_typed_managed_reference(ctx, ty, managed_layouts) {
+        return if is("tribute_rt", "anyref") || is("tribute_rt", "intref") {
+            FieldKind::Dynamic
+        } else {
+            FieldKind::Managed
+        };
     }
+    if is("core", "i1") || is("tribute_rt", "bool") {
+        return FieldKind::Bool;
+    }
+    if is("tribute_rt", "int") {
+        return FieldKind::Int {
+            width: 32,
+            signed: true,
+        };
+    }
+    if is("tribute_rt", "nat") {
+        return FieldKind::Int {
+            width: 32,
+            signed: false,
+        };
+    }
+    if is("tribute_rt", "float") || is("core", "f64") {
+        return FieldKind::Float { width: 64 };
+    }
+    if is("core", "f32") {
+        return FieldKind::Float { width: 32 };
+    }
+    if data.dialect == Symbol::new("core")
+        && let Some(width) = data
+            .name
+            .with_str(|name| name.strip_prefix('i').and_then(|width| width.parse().ok()))
+    {
+        return FieldKind::Int {
+            width,
+            signed: false,
+        };
+    }
+    // Pointers, code references, and runtime buffers that ownership does not
+    // manage are raw: neither released nor followed.
+    FieldKind::Raw
 }
 
 fn compute_entry_contracts(
@@ -1091,15 +1120,13 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
     }
     let mut rtti_types = HashSet::new();
     for entry in &plan.rtti_types {
-        if !rtti_types.insert(entry.ty) || !plan.managed_layouts.contains(&entry.ty) {
+        if !rtti_types.insert(entry.key()) || !plan.managed_layouts.contains(&entry.ty) {
             return Err(OwnershipPlanError::new(
-                "RTTI plan has duplicate or stale type",
+                "RTTI plan has duplicate or stale descriptor",
             ));
         }
-        if build_managed_field_bitmap(ctx, entry.ty, &plan.managed_layouts)? != entry.fields {
-            return Err(OwnershipPlanError::new(
-                "RTTI managed-field bitmap is stale",
-            ));
+        if build_field_kinds(ctx, entry.ty, entry.tag, &plan.managed_layouts)? != entry.fields {
+            return Err(OwnershipPlanError::new("RTTI field kinds are stale"));
         }
     }
     Ok(())

@@ -26,6 +26,55 @@ core.module @test {
       %4 = clif.call %2, %3 {callee = @__tribute_dealloc} : core.nil
       clif.return
   }
+  clif.data {align = 1, bytes = b"Bytes", sym_name = @__tribute_type_name_0}
+  clif.data {align = 8, bytes = b"\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_type_record_0} {
+      clif.data_reloc {data = @__tribute_type_name_0, offset = 8}
+  }
+  clif.data {align = 1, bytes = b"Bool", sym_name = @__tribute_type_name_1}
+  clif.data {align = 1, bytes = b"0", sym_name = @__tribute_type_name_2}
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x06\0\0\0", sym_name = @__tribute_type_record_1_fields} {
+      clif.data_reloc {data = @__tribute_type_name_2, offset = 0}
+  }
+  clif.data {align = 8, bytes = b"\x03\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\x04\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_type_record_1} {
+      clif.data_reloc {data = @__tribute_type_name_1, offset = 8}
+      clif.data_reloc {data = @__tribute_type_record_1_fields, offset = 32}
+  }
+  clif.data {align = 1, bytes = b"Nat", sym_name = @__tribute_type_name_3}
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x04 \0\0", sym_name = @__tribute_type_record_2_fields} {
+      clif.data_reloc {data = @__tribute_type_name_2, offset = 0}
+  }
+  clif.data {align = 8, bytes = b"\x03\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_type_record_2} {
+      clif.data_reloc {data = @__tribute_type_name_3, offset = 8}
+      clif.data_reloc {data = @__tribute_type_record_2_fields, offset = 32}
+  }
+  clif.data {align = 1, bytes = b"Int", sym_name = @__tribute_type_name_4}
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x03 \0\0", sym_name = @__tribute_type_record_3_fields} {
+      clif.data_reloc {data = @__tribute_type_name_2, offset = 0}
+  }
+  clif.data {align = 8, bytes = b"\x03\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_type_record_3} {
+      clif.data_reloc {data = @__tribute_type_name_4, offset = 8}
+      clif.data_reloc {data = @__tribute_type_record_3_fields, offset = 32}
+  }
+  clif.data {align = 1, bytes = b"Float", sym_name = @__tribute_type_name_5}
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x05@\0\0", sym_name = @__tribute_type_record_4_fields} {
+      clif.data_reloc {data = @__tribute_type_name_2, offset = 0}
+  }
+  clif.data {align = 8, bytes = b"\x03\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_type_record_4} {
+      clif.data_reloc {data = @__tribute_type_name_5, offset = 8}
+      clif.data_reloc {data = @__tribute_type_record_4_fields, offset = 32}
+  }
+  clif.data {align = 1, bytes = b"Test", sym_name = @__tribute_type_name_6}
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x04\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_type_record_5} {
+      clif.data_reloc {data = @__tribute_type_name_6, offset = 8}
+  }
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_type_descriptors} {
+      clif.data_reloc {data = @__tribute_type_record_0, offset = 0}
+      clif.data_reloc {data = @__tribute_type_record_1, offset = 8}
+      clif.data_reloc {data = @__tribute_type_record_2, offset = 16}
+      clif.data_reloc {data = @__tribute_type_record_3, offset = 24}
+      clif.data_reloc {data = @__tribute_type_record_4, offset = 32}
+      clif.data_reloc {data = @__tribute_type_record_5, offset = 40}
+  }
   clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_rtti_table} {
       clif.func_reloc {func = @__tribute_release_5, offset = 40}
   }

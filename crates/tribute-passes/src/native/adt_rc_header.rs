@@ -31,6 +31,7 @@ use trunk_ir::rewrite::type_converter::TypeConverter;
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, RewritePattern,
 };
+use trunk_ir::types::StringRef;
 use trunk_ir::types::TypeDataBuilder;
 
 /// Name of the runtime allocation function.
@@ -95,7 +96,7 @@ pub fn lower(
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
 struct StructNewPattern {
-    rtti_map: HashMap<TypeRef, u32>,
+    rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
@@ -158,14 +159,18 @@ impl RewritePattern for StructNewPattern {
         ops.push(store_rc.op_ref());
 
         // 4. Store rtti_idx at raw_ptr + 4
-        let rtti_idx = self.rtti_map.get(&struct_ty).copied().unwrap_or_else(|| {
-            panic!(
-                "adt_rc_header: missing RTTI entry for struct type {:?}; \
+        let rtti_idx = self
+            .rtti_map
+            .get(&(struct_ty, None))
+            .copied()
+            .unwrap_or_else(|| {
+                panic!(
+                    "adt_rc_header: missing RTTI entry for struct type {:?}; \
                      ensure its tribute_rtti.layout is declared; layout = {:?}",
-                struct_ty,
-                ctx.get_type(struct_ty)
-            )
-        }) as i64;
+                    struct_ty,
+                    ctx.get_type(struct_ty)
+                )
+            }) as i64;
         let rtti_val = clif::Iconst::operands()
             .value(rtti_idx)
             .results(self.i32_ty)
@@ -248,7 +253,7 @@ impl RewritePattern for StructNewPattern {
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
 struct VariantNewPattern {
-    rtti_map: HashMap<TypeRef, u32>,
+    rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
@@ -320,13 +325,17 @@ impl RewritePattern for VariantNewPattern {
         ops.push(store_rc.op_ref());
 
         // 4. Store rtti_idx at raw_ptr + 4
-        let rtti_idx = self.rtti_map.get(&enum_ty).copied().unwrap_or_else(|| {
-            panic!(
-                "adt_rc_header: missing RTTI entry for enum type {:?}; \
+        let rtti_idx = self
+            .rtti_map
+            .get(&(enum_ty, Some(tag)))
+            .copied()
+            .unwrap_or_else(|| {
+                panic!(
+                    "adt_rc_header: missing RTTI entry for enum type {:?}; \
                      ensure its tribute_rtti.layout is declared",
-                enum_ty
-            )
-        }) as i64;
+                    enum_ty
+                )
+            }) as i64;
         let rtti_val = clif::Iconst::operands()
             .value(rtti_idx)
             .results(self.i32_ty)
