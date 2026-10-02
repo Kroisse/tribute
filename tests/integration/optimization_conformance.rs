@@ -334,9 +334,11 @@ fn assert_source_allocation_field_releases(ir: &str) {
             .is_some_and(|name| name == "_closure")
         {
             "closure"
-        } else if ty.attrs.get_str(&ctx, "name").is_some_and(|name| {
-            name.starts_with(tribute_core::calling_convention::CPS_CONTINUATION_FRAME_NAME_PREFIX)
-        }) {
+        } else if ty
+            .attrs
+            .get_str(&ctx, "name")
+            .is_some_and(|name| name.starts_with(tribute_ir::continuation_frame::NAME_PREFIX))
+        {
             "frame"
         } else {
             continue;

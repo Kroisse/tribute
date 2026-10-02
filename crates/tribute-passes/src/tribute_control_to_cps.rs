@@ -8,11 +8,11 @@ use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use tribute_ir::continuation_frame;
 
 use tribute_core::calling_convention::{
-    cps_closure_function_type, cps_completion_type, cps_continuation_frame_layout_type,
-    cps_continuation_frame_ref_type, cps_done_type, cps_resume_exact_type, cps_resume_type,
-    physical_closure_function_type, physical_closure_type_with_environment_index,
+    cps_closure_function_type, cps_completion_type, cps_done_type, cps_resume_exact_type,
+    cps_resume_type, physical_closure_function_type, physical_closure_type_with_environment_index,
 };
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallableAbi, CallingConvention, physical_closure_type,
@@ -872,12 +872,9 @@ impl<'a> Converter<'a> {
         if let Some(frame) = self.frames.get(&answer).copied() {
             return frame;
         }
-        let name_text = format!(
-            "{}{answer:?}",
-            tribute_core::calling_convention::CPS_CONTINUATION_FRAME_NAME_PREFIX
-        );
+        let name_text = format!("{}{answer:?}", tribute_ir::continuation_frame::NAME_PREFIX);
         let name = self.ctx.intern_str(&name_text);
-        let reference = cps_continuation_frame_ref_type(self.ctx, name, answer);
+        let reference = continuation_frame::ref_type(self.ctx, name, answer);
         let done = self.done_k_type(answer);
         let evidence = self.evidence_type();
         let anyref = self.anyref_type();
@@ -885,7 +882,7 @@ impl<'a> Converter<'a> {
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             self.ctx, evidence, reference, anyref, i32,
         );
-        let layout = cps_continuation_frame_layout_type(self.ctx, name, answer, done, dispatch);
+        let layout = continuation_frame::layout_type(self.ctx, name, answer, done, dispatch);
         let frame = FrameTypes {
             reference,
             layout,

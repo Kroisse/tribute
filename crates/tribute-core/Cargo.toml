@@ -9,5 +9,4 @@ license.workspace = true
 salsa.workspace = true
 serde.workspace = true
 target-lexicon.workspace = true
-tribute-ir.workspace = true
 trunk-ir.workspace = true

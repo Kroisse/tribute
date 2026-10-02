@@ -8,10 +8,11 @@ use std::collections::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
+use tribute_ir::continuation_frame;
 
 use tribute_core::calling_convention::{
-    CLOSURE_ENVIRONMENT_INDEX_ATTR, CPS_CONTINUATION_FRAME_RESULT_ATTR, cps_closure_function_type,
-    cps_continuation_frame_result_type, get_physical_closure_environment_index,
+    CLOSURE_ENVIRONMENT_INDEX_ATTR, cps_closure_function_type,
+    get_physical_closure_environment_index,
 };
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
@@ -736,7 +737,7 @@ pub(crate) fn dispatch_answer_type(
         .inputs(ctx)
         .get(1)
         .ok_or_else(|| TargetAbiError::new("CPS resume lacks frame input"))?;
-    let answer = cps_continuation_frame_result_type(ctx, frame)
+    let answer = continuation_frame::result_type(ctx, frame)
         .ok_or_else(|| TargetAbiError::new("CPS resume frame lacks answer type"))?;
     let results = resume_signature.results(ctx);
     if !(results.is_empty()
@@ -828,7 +829,7 @@ fn validate_root_continuation_frame(
     // Physicalization consumes the frame answer provenance after checking it
     // here; the physical frame's Done input then carries the source result.
     let expected_provenance = (phase == ContractPhase::Logical).then_some(source_result);
-    if cps_continuation_frame_result_type(ctx, frame) != expected_provenance {
+    if continuation_frame::result_type(ctx, frame) != expected_provenance {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame result provenance differs from root source result",
         ));
@@ -841,7 +842,7 @@ fn validate_root_continuation_frame(
     })?;
     let layout_struct = adt::Struct::from_type_ref(ctx, layout)
         .filter(|layout_struct| layout_struct.name(ctx) == name)
-        .filter(|_| cps_continuation_frame_result_type(ctx, layout) == expected_provenance)
+        .filter(|_| continuation_frame::result_type(ctx, layout) == expected_provenance)
         .ok_or_else(|| {
             TargetAbiError::new("target root bridge: worker frame layout provenance is malformed")
         })?;
@@ -1550,8 +1551,8 @@ impl<'a> PhysicalTypeConverter<'a> {
         // Frame answer provenance is read only by the logical dispatch and
         // root contract checks, which run before conversion. Physical frames
         // are ordinary nominal layouts.
-        if cps_continuation_frame_result_type(self.ctx, ty).is_some() {
-            converted.attrs.remove(CPS_CONTINUATION_FRAME_RESULT_ATTR);
+        if continuation_frame::result_type(self.ctx, ty).is_some() {
+            converted.attrs.remove(continuation_frame::RESULT_ATTR);
         }
         let converted = self.intern_if_changed(ty, converted);
         self.embedded.insert(ty, converted);
@@ -1703,7 +1704,7 @@ mod tests {
             );
             let printed = print_module(&ctx, module.op());
             assert!(
-                !printed.contains(CPS_CONTINUATION_FRAME_RESULT_ATTR),
+                !printed.contains(continuation_frame::RESULT_ATTR),
                 "physicalization must consume frame answer provenance:\n{printed}"
             );
             assert!(
@@ -1747,12 +1748,11 @@ mod tests {
                         let signature = func::FuncSig::from_type_ref(&ctx, ty.params[0]).unwrap();
                         let mut inputs = signature.inputs(&ctx).to_vec();
                         let answer = ctx.op(dispatch).attributes.get_type("answer_type").unwrap();
-                        inputs[1] =
-                            tribute_core::calling_convention::cps_continuation_frame_ref_type(
-                                &mut ctx,
-                                "other_nominal_frame",
-                                answer,
-                            );
+                        inputs[1] = tribute_ir::continuation_frame::ref_type(
+                            &mut ctx,
+                            "other_nominal_frame",
+                            answer,
+                        );
                         let results = signature.results(&ctx).to_vec();
                         ty.params[0] = func::func_sig(&mut ctx, inputs, results).as_type_ref();
                     }
@@ -1969,17 +1969,14 @@ mod tests {
             0,
         );
         let frame_name = "__tribute_continuation_frame_root_nil";
-        let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
-            &mut ctx, frame_name, nil,
-        );
+        let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
             &mut ctx, evidence, frame, anyref, i32_ty,
         );
-        let layout = tribute_core::calling_convention::cps_continuation_frame_layout_type(
-            &mut ctx, frame_name, nil, done, dispatch,
-        );
+        let layout =
+            tribute_ir::continuation_frame::layout_type(&mut ctx, frame_name, nil, done, dispatch);
         ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
@@ -2312,7 +2309,7 @@ mod tests {
             let evidence = ability::evidence_adt_type_ref(&mut ctx);
             let frame_name = "__tribute_malformed_root_frame";
             let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-            let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
+            let frame = tribute_ir::continuation_frame::ref_type(
                 &mut ctx,
                 frame_name,
                 if frame_result { nil } else { i32_ty },
@@ -2360,9 +2357,7 @@ mod tests {
         let never = core::never(&mut ctx).as_type_ref();
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
         let frame_name = "__tribute_parameterized_dispatch_tag";
-        let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
-            &mut ctx, frame_name, nil,
-        );
+        let frame = tribute_ir::continuation_frame::ref_type(&mut ctx, frame_name, nil);
         let done = tribute_core::calling_convention::cps_done_type(&mut ctx, nil);
         let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
         let parameterized_i32 = ctx.intern_type(
@@ -2377,9 +2372,8 @@ mod tests {
             anyref,
             parameterized_i32,
         );
-        let layout = tribute_core::calling_convention::cps_continuation_frame_layout_type(
-            &mut ctx, frame_name, nil, done, dispatch,
-        );
+        let layout =
+            tribute_ir::continuation_frame::layout_type(&mut ctx, frame_name, nil, done, dispatch);
         ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
