@@ -1077,15 +1077,10 @@ fn call_operation_metadata<'db>(
             semantic.params, semantic.result
         );
     }
-    let ability_arguments = args
-        .into_iter()
-        .map(|arg| builder.ctx.convert_logical_type(builder.ir, arg))
-        .collect::<Vec<_>>();
-    let ability_ref = builder.ctx.ability_ref_type(
-        builder.ir,
-        ability.qualified(builder.db()),
-        &ability_arguments,
-    );
+    let ability_ref =
+        builder
+            .ctx
+            .ability_ref_type(builder.ir, ability.qualified(builder.db()), &args);
     let parameters = semantic
         .params
         .iter()
@@ -2398,11 +2393,7 @@ fn lower_handler<'db>(
     if params.len() != semantic.params.len() {
         panic!("handler parameter arity disagrees with typed semantic signature");
     }
-    let ability_arguments: Vec<_> = arguments
-        .iter()
-        .map(|arg| ctx.convert_logical_type(ir, *arg))
-        .collect();
-    let ability_ref = ctx.ability_ref_type(ir, ability_id.qualified(ctx.db), &ability_arguments);
+    let ability_ref = ctx.ability_ref_type(ir, ability_id.qualified(ctx.db), &arguments);
     let parameter_types: Vec<_> = expected_params
         .into_iter()
         .map(|ty| ctx.convert_logical_type(ir, ty))

@@ -339,3 +339,86 @@ fn main() -> Nil {
     // result = 2
     assert_native_output("nested_handler_deep_four_levels.trb", code, "4\n3\n2\n1\n2");
 }
+
+/// Two instances of one ability whose arguments share a representation
+/// (`Nat` and `Int` are both `core.i32`) remain distinct evidence entries.
+///
+/// The inner handler runs `State(Int)`. Inside it, `get_nat()` performs the
+/// outer `State(Nat)` and must reach the outer handler (7), not the inner one.
+#[test]
+fn test_same_ability_instances_with_shared_representation() {
+    let code = r#"ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn get_nat() ->{State(Nat)} Nat {
+    State::get()
+}
+
+fn set_int(value: Int) ->{State(Int)} Nil {
+    State::set(value)
+}
+
+fn both() ->{State(Int), State(Nat)} Nat {
+    set_int(+5)
+    get_nat()
+}
+
+fn main() -> Nil {
+    let result = run_state(fn() { run_state(fn() { both() }, +1) }, 7)
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("same_ability_shared_representation.trb", code, "7");
+}
+
+/// Two instances of one ability whose arguments are distinct nominal types
+/// with the same shape remain distinct evidence entries.
+#[test]
+fn test_same_ability_instances_with_distinct_nominal_arguments() {
+    let code = r#"struct Point { value: Nat }
+struct Color { value: Nat }
+
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn get_point() ->{State(Point)} Point {
+    State::get()
+}
+
+fn set_color(value: Color) ->{State(Color)} Nil {
+    State::set(value)
+}
+
+fn both() ->{State(Color), State(Point)} Nat {
+    set_color(Color { value: 5 })
+    let Point { value } = get_point()
+    value
+}
+
+fn main() -> Nil {
+    let result = run_state(fn() { run_state(fn() { both() }, Color { value: 1 }) }, Point { value: 7 })
+    __tribute_print_nat(result)
+}
+"#;
+    assert_native_output("same_ability_distinct_nominals.trb", code, "7");
+}

@@ -529,7 +529,9 @@ fn main() -> Nil { }
     );
     let phantom_ir = run_ast_pipeline_with_ir(db, phantom);
     assert!(
-        phantom_ir.contains("core.ability_ref<core.i1, {name = \"Phantom\"}>"),
+        phantom_ir.contains(
+            "core.ability_ref<core.i1, {instance = \"ability_2_7_Phantom_4_bool\", name = \"Phantom\"}>"
+        ),
         "perform must retain the phantom ability argument from its typed effect:\n{phantom_ir}"
     );
     let conflicting = SourceCst::from_source_str(

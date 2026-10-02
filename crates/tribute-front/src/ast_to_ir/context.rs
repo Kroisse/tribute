@@ -686,17 +686,31 @@ impl<'db> IrLoweringCtx<'db> {
         tribute_rt::anyref(ir).as_type_ref()
     }
 
-    /// Create a `core.ability_ref` type.
+    /// Create a `core.ability_ref` type for one ability instance.
+    ///
+    /// The `instance` key is derived from the checked source arguments, so
+    /// arguments sharing a lowered representation stay distinct instances.
     pub fn ability_ref_type(
         &self,
         ir: &mut IrContext,
         ability_name: Symbol,
-        params: &[TypeRef],
+        arguments: &[crate::ast::Type<'db>],
     ) -> TypeRef {
+        let instance = logical_key(
+            "ability",
+            std::iter::once(ability_name.with_str(str::to_owned))
+                .chain(arguments.iter().map(|arg| self.logical_type_key(*arg))),
+        );
+        let params: Vec<_> = arguments
+            .iter()
+            .map(|arg| self.convert_logical_type(ir, *arg))
+            .collect();
         let ability_name = ir.intern_symbol_text(ability_name);
+        let instance = ir.intern_str(&instance);
         let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-            .attr("name", Attribute::String(ability_name));
-        for &p in params {
+            .attr("name", Attribute::String(ability_name))
+            .attr("instance", Attribute::String(instance));
+        for p in params {
             builder = builder.param(p);
         }
         ir.intern_type(builder.build())
