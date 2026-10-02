@@ -6,7 +6,8 @@
 //!
 //! ## Architecture Principles
 //!
-//! 1. **Explicit Boundaries**: Verify source-logical, shared CPS, and target contracts
+//! 1. **Explicit Boundaries**: Verify source-logical, shared CPS, and target contracts;
+//!    passes after the representation/ABI boundary exit consume only physical contracts
 //! 2. **Centralized Orchestration**: Pass sequencing is managed here, not in passes
 //! 3. **Scoped Caching**: Salsa caches frontend queries; arena passes own IR analyses
 //! 4. **Separation of Concerns**: Pass implementation vs pipeline composition
@@ -32,12 +33,12 @@
 //!     ▼ tdnr
 //! Module (UFCS resolved)
 //!     │
-//!     ├─── Shared Pipeline (single arena session) ────┤
+//!     ├─── Shared Middle-End (single arena session) ──┤
 //!     ▼ ast_to_ir
 //! Module (source-logical callable/control IR)
 //!     │
-//!     ▼ tribute_control_to_cps → lower_closure_lambda
-//! Module (physical callable contracts and explicit evidence)
+//!     ▼ tribute_control_to_cps → lower_closure_lambda → intrinsic/list/io lowering
+//! Module (CPS callable contracts and explicit evidence)
 //!     │
 //!     ▼ lower_ability_perform (CPS tail-call)
 //! Module (ability.perform/call lowered to effect.dispatch_*)
@@ -48,11 +49,22 @@
 //!     ▼ lower_handle_dispatch
 //! Module (ability.handle_dispatch lowered)
 //!     │
-//!     ▼ target ABI validation ─► lower-prepared-closures
-//! Module (target closure storage selected)
+//!     ├─── Representation/ABI Boundary (run_target_to_boundary_exit) ──┤
+//!     ▼ inline_functions
+//!     ▼ target ABI validation → CPS signature physicalization
+//!     ▼ root entry bridge
+//!     ▼ lower-prepared-closures
+//!     ▼ target evidence lowering ([wasm] evidence_to_wasm, [native] evidence_to_native)
+//!     ▼ bytes intrinsic bridge
+//!     ▼ closure storage layout finalization
+//!     ▼ cleanup (global DCE, canonicalize, DCE, cast materialization)
+//!     ▼ boundary exit verification (enforced in every build)
+//! Module (physical contracts only)  ◄── dump_ir (`--dump-ir`)
 //!     │
-//!     ├─► [wasm]   compile_to_wasm (includes evidence_to_wasm)
-//!     └─► [native] compile_to_native (includes evidence_to_native)
+//!     ├─── After the Boundary Exit (emit_from_boundary_exit) ──┤
+//!     ├─► [wasm]   compile_to_wasm: lower_to_wasm → cast legalization → emit
+//!     └─► [native] prepare_module_to_native: entrypoint, clif lowering,
+//!                  RTTI/RC (◄── dump_native_ir_at_stage) → emit
 //! ```
 //!
 //! ## Diagnostics
@@ -1135,9 +1147,10 @@ fn enter_target_closure_storage_boundary(
     Ok(())
 }
 
-/// Dump IR text after running the pipeline up to the target-specific passes.
+/// Dump IR text at the target's representation/ABI boundary exit.
 ///
 /// If `native` is true, runs the native pipeline; otherwise runs the WASM pipeline.
+/// A module that violates the exit contract is an error.
 /// Returns the IR text borrowed from the database, or an error. Diagnostics are
 /// accumulated.
 #[salsa::tracked(returns(as_deref))]

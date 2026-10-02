@@ -38,6 +38,13 @@ Target ABI lowering validates that graph before physicalizing CPS results and
 selecting closure storage. See [the IR contract](../../new-plans/ir.md) and
 [the shared pipeline](../../new-plans/cps-effects.md#shared-middle-end-pipeline).
 
+The target [representation/ABI boundary](../../new-plans/ir.md#representationabi-경계)
+ends with an exit verification that rejects any violation in every build; later
+passes read only the physical contracts it checked. `pipeline::dump_ir`
+(`--dump-ir`) prints the module at that exit, and tests split a compilation
+there with `run_target_to_boundary_exit` and `emit_from_boundary_exit`. The
+stage order is in the top-of-file comment in [src/pipeline.rs](../../src/pipeline.rs).
+
 ## `#[dialect]` Macro
 
 Operations and types are defined with the `#[trunk_ir::dialect]` attribute
