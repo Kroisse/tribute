@@ -101,6 +101,31 @@ fn main() -> Nil {
 }
 
 #[test]
+fn test_native_path_keywords() {
+    assert_native_output(
+        "path_keywords.trb",
+        r#"
+fn base() -> Nat { 1 }
+
+mod outer {
+    pub fn own() -> Nat { 10 }
+
+    pub mod inner {
+        use super::own
+        pub fn sum() -> Nat { pkg::base() + own() + self::local() }
+        fn local() -> Nat { 100 }
+    }
+}
+
+fn main() -> Nil {
+    __tribute_print_nat(self::outer::inner::sum())
+}
+"#,
+        "111",
+    );
+}
+
+#[test]
 fn test_native_function_call() {
     assert_native_output(
         "function_call.trb",

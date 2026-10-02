@@ -3348,9 +3348,10 @@ impl<'db> TypeChecker<'db> {
                     ctx.named_type_in_scope(*name, vec![], self.current_prefix())
                 }
             }
+            // Name resolution spelled the path from the package root.
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
                 if let Some(name) = crate::qualified_path_symbol(parts) {
-                    ctx.named_type_in_scope(name, vec![], self.current_prefix())
+                    ctx.named_type_in_scope(name, vec![], "")
                 } else {
                     ctx.error_type()
                 }

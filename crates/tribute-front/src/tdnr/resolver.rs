@@ -354,9 +354,10 @@ impl<'db> TdnrResolver<'db> {
                     self.nominal_type_in_scope(*name, prefix)
                 }
             }
+            // Name resolution spelled the path from the package root.
             TypeAnnotationKind::Path(path) if !path.is_empty() => {
                 let name = crate::qualified_path_symbol(path).unwrap();
-                let id = self.lookup_type_identity(name, prefix);
+                let id = self.lookup_type_identity(name, "");
                 Type::new(
                     self.db,
                     TypeKind::Named {

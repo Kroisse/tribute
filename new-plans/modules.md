@@ -470,6 +470,16 @@ use super::string::format    // utils::string::format
 use pkg::api::Response       // api::Response (패키지 루트에서)
 ```
 
+경로 키워드는 경로의 첫 segment에만 올 수 있다. 키워드로 시작하는 경로는 패키지
+루트 기준의 경로 하나를 가리킨다. `pkg`는 루트, `self`는 현재 모듈, `super`는 현재
+모듈의 부모다. 현재 모듈은 경로가 쓰인 inline 모듈이거나, 그 경로를 담은 파일의
+모듈이다. 이 경로는 현재 모듈을 기준으로 다시 해석하지 않는다. 두 단계 위의 모듈은
+`pkg`로 시작하는 경로로 가리킨다.
+
+이 규칙은 `use` 경로, 값 경로(호출, 생성자, 패턴, handler arm의 ability), 타입과
+effect annotation에 똑같이 적용한다. 패키지 루트에서 쓴 `super`, 그리고 첫
+segment가 아닌 위치의 키워드는 이름 해석 오류다.
+
 ### 가시성 (Visibility)
 
 | 수식자 | 범위 |

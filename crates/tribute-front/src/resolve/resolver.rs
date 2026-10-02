@@ -11,13 +11,13 @@ use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity}
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, Decl, Expr, ExprKind, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId,
-    LocalIdGen, Module, ModulePath, Param, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt,
-    TypeAnnotation, TypeAnnotationKind, UnresolvedName, UseDecl,
+    Arm, Decl, Expr, ExprKind, FieldDecl, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId,
+    LocalIdGen, Module, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef,
+    SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeParamDecl, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
-use crate::keywords::PATH_KEYWORDS;
+use super::path::{PathKeywordError, absolute_path};
 
 /// Find the best matches from `candidates` by a caller-provided score function.
 ///
@@ -193,6 +193,36 @@ impl<'db> Resolver<'db> {
             }
         } else {
             // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
+            // A path keyword names a package-root path, read from nowhere else.
+            if let Some(namespace) = name.namespace() {
+                // Interning inside `with_str` would re-enter the interner.
+                let segments: Vec<Symbol> = namespace
+                    .to_string()
+                    .split("::")
+                    .map(Symbol::from_dynamic)
+                    .collect();
+                match absolute_path(&self.module_path, &segments) {
+                    Ok(Some(path)) => {
+                        let binding = if path.is_empty() {
+                            self.env.lookup(sym)
+                        } else {
+                            let namespace =
+                                Symbol::from_dynamic(&path.iter().format("::").to_string());
+                            self.env.lookup_qualified(namespace, sym)
+                        };
+                        if let Some(binding) = binding {
+                            return self.binding_to_ref(binding, sym);
+                        }
+                        self.report_unresolved_name(name);
+                        return ResolvedRef::local(LocalId::UNRESOLVED, sym);
+                    }
+                    Err(error) => {
+                        self.report_path_keyword(name.id, error);
+                        return ResolvedRef::local(LocalId::UNRESOLVED, sym);
+                    }
+                    Ok(None) => {}
+                }
+            }
             // A first segment the enclosing module imports names only the
             // imported path; it does not fall back to the package root.
             if let Some(namespace) = name.namespace()
@@ -251,6 +281,92 @@ impl<'db> Resolver<'db> {
         }
         let namespace = Symbol::from_dynamic(&namespace.iter().format("::").to_string());
         self.env.lookup_qualified(namespace, *last)
+    }
+
+    /// Report a path whose keywords do not denote a module.
+    fn report_path_keyword(&self, node: NodeId, error: PathKeywordError) {
+        Diagnostic::new(
+            error.to_string(),
+            self.span_map.get_or_default(node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::NameResolution,
+        )
+        .accumulate(self.db);
+    }
+
+    /// Rewrite every path in `ann` that starts with a path keyword to the
+    /// package-root path it names.
+    fn resolve_annotation_paths(&self, ann: &mut TypeAnnotation) {
+        match &mut ann.kind {
+            TypeAnnotationKind::Path(segments) => {
+                match absolute_path(&self.module_path, segments) {
+                    Ok(Some(path)) if !path.is_empty() => *segments = path,
+                    Ok(Some(_)) => {
+                        Diagnostic::new(
+                            format!(
+                                "`{}` names a module, not a type",
+                                segments.iter().format("::")
+                            ),
+                            self.span_map.get_or_default(ann.id),
+                            DiagnosticSeverity::Error,
+                            CompilationPhase::NameResolution,
+                        )
+                        .accumulate(self.db);
+                        ann.kind = TypeAnnotationKind::Error;
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        self.report_path_keyword(ann.id, error);
+                        ann.kind = TypeAnnotationKind::Error;
+                    }
+                }
+            }
+            TypeAnnotationKind::App { ctor, args } => {
+                self.resolve_annotation_paths(ctor);
+                args.iter_mut()
+                    .for_each(|arg| self.resolve_annotation_paths(arg));
+            }
+            TypeAnnotationKind::Func {
+                params,
+                result,
+                abilities,
+            } => {
+                params
+                    .iter_mut()
+                    .chain(abilities)
+                    .for_each(|ann| self.resolve_annotation_paths(ann));
+                self.resolve_annotation_paths(result);
+            }
+            TypeAnnotationKind::Tuple(elements) => elements
+                .iter_mut()
+                .for_each(|element| self.resolve_annotation_paths(element)),
+            TypeAnnotationKind::Named(_)
+            | TypeAnnotationKind::Infer
+            | TypeAnnotationKind::Error => {}
+        }
+    }
+
+    fn resolve_param_paths(&self, params: &mut [ParamDecl]) {
+        for param in params {
+            if let Some(ty) = &mut param.ty {
+                self.resolve_annotation_paths(ty);
+            }
+        }
+    }
+
+    fn resolve_field_paths(&self, fields: &mut [FieldDecl]) {
+        for field in fields {
+            self.resolve_annotation_paths(&mut field.ty);
+        }
+    }
+
+    fn resolve_bound_paths(&self, type_params: &mut [TypeParamDecl]) {
+        for param in type_params {
+            param
+                .bounds
+                .iter_mut()
+                .for_each(|bound| self.resolve_annotation_paths(bound));
+        }
     }
 
     /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
@@ -335,10 +451,35 @@ impl<'db> Resolver<'db> {
         match decl {
             Decl::Function(f) => Decl::Function(self.resolve_func_decl(f)),
             // These declarations contain no expressions to resolve.
-            Decl::ExternFunction(e) => Decl::ExternFunction(e.clone()),
-            Decl::Struct(s) => Decl::Struct(s.clone()),
-            Decl::Enum(e) => Decl::Enum(e.clone()),
-            Decl::Ability(a) => Decl::Ability(a.clone()),
+            Decl::ExternFunction(e) => {
+                let mut e = e.clone();
+                self.resolve_param_paths(&mut e.params);
+                self.resolve_annotation_paths(&mut e.return_ty);
+                Decl::ExternFunction(e)
+            }
+            Decl::Struct(s) => {
+                let mut s = s.clone();
+                self.resolve_bound_paths(&mut s.type_params);
+                self.resolve_field_paths(&mut s.fields);
+                Decl::Struct(s)
+            }
+            Decl::Enum(e) => {
+                let mut e = e.clone();
+                self.resolve_bound_paths(&mut e.type_params);
+                for variant in &mut e.variants {
+                    self.resolve_field_paths(&mut variant.fields);
+                }
+                Decl::Enum(e)
+            }
+            Decl::Ability(a) => {
+                let mut a = a.clone();
+                self.resolve_bound_paths(&mut a.type_params);
+                for op in &mut a.operations {
+                    self.resolve_param_paths(&mut op.params);
+                    self.resolve_annotation_paths(&mut op.return_ty);
+                }
+                Decl::Ability(a)
+            }
             Decl::Use(u) => Decl::Use(self.resolve_use_decl(u)),
             Decl::Module(m) => Decl::Module(self.resolve_module_decl(m)),
         }
@@ -388,7 +529,7 @@ impl<'db> Resolver<'db> {
         self.push_scope();
 
         // Bind parameters and assign local IDs
-        let params = func
+        let mut params: Vec<ParamDecl> = func
             .params
             .iter()
             .map(|p| {
@@ -397,11 +538,20 @@ impl<'db> Resolver<'db> {
                 p
             })
             .collect();
+        self.resolve_param_paths(&mut params);
+        let mut type_params = func.type_params.clone();
+        self.resolve_bound_paths(&mut type_params);
+        let mut return_ty = func.return_ty.clone();
+        if let Some(ty) = &mut return_ty {
+            self.resolve_annotation_paths(ty);
+        }
 
         // Resolve imported ability names in effect annotations to qualified paths.
         // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
         let mut effects = func.effects.clone();
         if let Some(effs) = &mut effects {
+            effs.iter_mut()
+                .for_each(|ann| self.resolve_annotation_paths(ann));
             self.resolve_effect_annotations(effs);
         }
 
@@ -424,9 +574,9 @@ impl<'db> Resolver<'db> {
             id: func.id,
             is_pub: func.is_pub,
             name: func.name,
-            type_params: func.type_params.clone(),
+            type_params,
             params,
-            return_ty: func.return_ty.clone(),
+            return_ty,
             effects,
             body,
         }
@@ -555,9 +705,8 @@ impl<'db> Resolver<'db> {
     /// reported, since it would otherwise leave the import as a module
     /// placeholder.
     fn resolve_use_target(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
-        let first = u.path.first()?;
-        let message = if first.with_str(|name| PATH_KEYWORDS.contains(&name)) {
-            format!("path keyword `{first}` is not supported in `use` paths yet")
+        let message = if let Err(error) = absolute_path(&self.module_path, &u.path) {
+            error.to_string()
         } else if let Some(target) = self.use_target(&u.path) {
             return Some(target);
         } else {
@@ -575,8 +724,9 @@ impl<'db> Resolver<'db> {
 
     /// The package-root path of the definition or module `path` names.
     ///
-    /// The path is read from the package root first, then from the enclosing
-    /// inline module.
+    /// A path starting with a path keyword names exactly the path it expands
+    /// to. Any other path is read from the package root first, then from the
+    /// enclosing inline module.
     fn use_target(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
         let names = |path: &[Symbol]| {
             let Some((last, namespace)) = path.split_last() else {
@@ -593,6 +743,11 @@ impl<'db> Resolver<'db> {
             };
             found || self.env.has_namespace(full)
         };
+        match absolute_path(&self.module_path, path) {
+            Ok(Some(path)) => return names(&path).then_some(path),
+            Err(_) => return None,
+            Ok(None) => {}
+        }
         if names(path) {
             return Some(path.to_vec());
         }
@@ -681,6 +836,9 @@ impl<'db> Resolver<'db> {
                     .iter()
                     .map(|p| {
                         let mut p = p.clone();
+                        if let Some(ty) = &mut p.ty {
+                            self.resolve_annotation_paths(ty);
+                        }
                         p.local_id = Some(self.bind_local(p.name));
                         p
                     })
@@ -738,10 +896,14 @@ impl<'db> Resolver<'db> {
             } => {
                 let value = self.resolve_expr(value);
                 let pattern = self.resolve_pattern_with_bindings(pattern);
+                let mut ty = ty.clone();
+                if let Some(ty) = &mut ty {
+                    self.resolve_annotation_paths(ty);
+                }
                 Stmt::Let {
                     id: *id,
                     pattern,
-                    ty: ty.clone(),
+                    ty,
                     value,
                 }
             }

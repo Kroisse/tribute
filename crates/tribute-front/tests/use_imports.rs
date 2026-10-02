@@ -66,10 +66,9 @@ fn main() -> Nil {}
     );
 }
 
-/// Path keywords are not resolved yet. The import is reported, and a call
-/// through it is rejected before lowering instead of crashing there.
+/// A `use` path may start with a path keyword.
 #[salsa_test]
-fn path_keyword_imports_are_reported(db: &salsa::DatabaseImpl) {
+fn path_keyword_imports_resolve(db: &salsa::DatabaseImpl) {
     let errors = errors(
         db,
         r#"
@@ -83,13 +82,7 @@ fn main() -> Nil {
 }
 "#,
     );
-    assert_eq!(
-        errors,
-        [
-            "path keyword `self` is not supported in `use` paths yet",
-            "expected a value, found module `self::basic::add`",
-        ],
-    );
+    assert_eq!(errors, Vec::<String>::new());
 }
 
 /// A module named where a pattern expects a constructor is rejected before

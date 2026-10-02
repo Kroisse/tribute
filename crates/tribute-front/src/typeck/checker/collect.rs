@@ -560,10 +560,10 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             TypeAnnotationKind::Named(name) => self.primitive_or_named_type(*name),
+            // Name resolution spelled the path from the package root.
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
                 if let Some(name) = crate::qualified_path_symbol(parts) {
-                    self.env
-                        .named_type_in_scope(name, vec![], self.current_prefix())
+                    self.env.named_type_in_scope(name, vec![], "")
                 } else {
                     self.env.error_type()
                 }
@@ -717,10 +717,10 @@ impl<'db> TypeChecker<'db> {
                     .collect();
                 self.env.tuple_type(elem_types)
             }
+            // Name resolution spelled the path from the package root.
             TypeAnnotationKind::Path(parts) if !parts.is_empty() => {
                 if let Some(name) = crate::qualified_path_symbol(parts) {
-                    self.env
-                        .named_type_in_scope(name, vec![], self.current_prefix())
+                    self.env.named_type_in_scope(name, vec![], "")
                 } else {
                     self.env.error_type()
                 }
