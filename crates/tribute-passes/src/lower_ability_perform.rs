@@ -311,7 +311,7 @@ mod tests {
         );
         let evidence = ability::evidence_adt_type_ref(ctx);
         let anyref = tribute_rt::anyref(ctx).as_type_ref();
-        let frame_name = ctx.intern_str("test_frame");
+        let frame_name = "test_frame";
         let frame = cps_continuation_frame_ref_type(ctx, frame_name, answer);
         let done = cps_done_type(ctx, answer);
         let dispatch = cps_dispatch_type(ctx, evidence, frame, anyref, answer);

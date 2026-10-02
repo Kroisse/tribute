@@ -1746,11 +1746,10 @@ mod tests {
                         let signature = func::FuncSig::from_type_ref(&ctx, ty.params[0]).unwrap();
                         let mut inputs = signature.inputs(&ctx).to_vec();
                         let answer = ctx.op(dispatch).attributes.get_type("answer_type").unwrap();
-                        let other_frame = ctx.intern_str("other_nominal_frame");
                         inputs[1] =
                             tribute_core::calling_convention::cps_continuation_frame_ref_type(
                                 &mut ctx,
-                                other_frame,
+                                "other_nominal_frame",
                                 answer,
                             );
                         let results = signature.results(&ctx).to_vec();
@@ -1968,8 +1967,7 @@ mod tests {
             CallingConvention::Cps,
             0,
         );
-        let frame_text = "__tribute_continuation_frame_root_nil";
-        let frame_name = ctx.intern_str(frame_text);
+        let frame_name = "__tribute_continuation_frame_root_nil";
         let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
             &mut ctx, frame_name, nil,
         );
@@ -1981,7 +1979,7 @@ mod tests {
         let layout = tribute_core::calling_convention::cps_continuation_frame_layout_type(
             &mut ctx, frame_name, nil, done, dispatch,
         );
-        ctx.register_type_alias(Symbol::new(frame_text), layout);
+        ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
@@ -2311,8 +2309,7 @@ mod tests {
             let nil = core::nil(&mut ctx).as_type_ref();
             let never = core::never(&mut ctx).as_type_ref();
             let evidence = ability::evidence_adt_type_ref(&mut ctx);
-            let frame_text = "__tribute_malformed_root_frame";
-            let frame_name = ctx.intern_str(frame_text);
+            let frame_name = "__tribute_malformed_root_frame";
             let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
             let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
                 &mut ctx,
@@ -2323,7 +2320,7 @@ mod tests {
                 let wrong =
                     adt::struct_type::<String>(&mut ctx, frame_name, [], AttributeMap::new())
                         .as_type_ref();
-                ctx.register_type_alias(Symbol::new(frame_text), wrong);
+                ctx.register_type_alias(Symbol::new(frame_name), wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
             ctx.op_mut(main.op_ref())
@@ -2361,8 +2358,7 @@ mod tests {
         let nil = core::nil(&mut ctx).as_type_ref();
         let never = core::never(&mut ctx).as_type_ref();
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
-        let frame_text = "__tribute_parameterized_dispatch_tag";
-        let frame_name = ctx.intern_str(frame_text);
+        let frame_name = "__tribute_parameterized_dispatch_tag";
         let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
             &mut ctx, frame_name, nil,
         );
@@ -2383,7 +2379,7 @@ mod tests {
         let layout = tribute_core::calling_convention::cps_continuation_frame_layout_type(
             &mut ctx, frame_name, nil, done, dispatch,
         );
-        ctx.register_type_alias(Symbol::new(frame_text), layout);
+        ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
