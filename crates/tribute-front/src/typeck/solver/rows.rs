@@ -533,6 +533,25 @@ impl<'db> TypeSolver<'db> {
         Ok(false)
     }
 
+    /// Unify a union's sources with its result. The sources come first: a
+    /// pure result must not take the call-site shortcut that lets a pure row
+    /// ignore the effects of the other side. The result stays the expected
+    /// side of a mismatch.
+    fn unify_union_source(
+        &mut self,
+        sources: EffectRow<'db>,
+        result: EffectRow<'db>,
+    ) -> Result<(), SolveError<'db>> {
+        self.unify_rows(sources, result)
+            .map_err(|error| match error {
+                SolveError::RowMismatch { expected, actual } => SolveError::RowMismatch {
+                    expected: actual,
+                    actual: expected,
+                },
+                error => error,
+            })
+    }
+
     pub(super) fn solve_row_union(
         &mut self,
         union: &crate::ast::RowUnion<'db>,
@@ -558,12 +577,12 @@ impl<'db> TypeSolver<'db> {
             if actual == union.result {
                 return Ok(true);
             }
-            self.unify_rows(union.result, actual)?;
+            self.unify_union_source(actual, union.result)?;
             return Ok(true);
         }
         if union.result.is_pure(self.db) {
             for source in union.sources {
-                self.unify_rows(union.result, source)?;
+                self.unify_union_source(source, union.result)?;
             }
             return Ok(true);
         }
