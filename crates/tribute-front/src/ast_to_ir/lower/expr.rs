@@ -24,7 +24,7 @@ pub(super) fn cast_variant_args<'db>(
         .and_then(|variants| {
             variants
                 .into_iter()
-                .find_map(|(tag, fields)| (tag == variant).then_some(fields))
+                .find_map(|(tag, fields)| (variant == builder.ir.str(tag)).then_some(fields))
         })
         .expect("resolved constructor must exist in enum metadata");
 

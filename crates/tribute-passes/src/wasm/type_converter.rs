@@ -637,7 +637,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: wasm.anyref), {layout = "closure"}>
+  !Closure = adt.struct<_closure(func_ptr: core.i32, env: wasm.anyref), {layout = "closure"}>
   func.func @f(%c: !Closure) {
     %erased = core.unrealized_conversion_cast %c : tribute_rt.anyref
     func.call %erased {callee = @use}
@@ -757,10 +757,7 @@ mod tests {
                 .unwrap()
                 .fields(&ctx)
                 .collect::<Vec<_>>(),
-            [
-                (Symbol::new("table_idx"), i32_ty),
-                (Symbol::new("env"), anyref),
-            ]
+            [("table_idx", i32_ty), ("env", anyref)]
         );
     }
 }

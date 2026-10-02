@@ -18,7 +18,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
-use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{IrContext, Symbol};
 
@@ -1891,24 +1891,15 @@ fn attribute_contains_adt_typeref(
     contains
 }
 
-fn nominal_identity(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
-    let data = ctx.get_type(ty);
-    (data.dialect == Symbol::new("adt")
-        && matches!(
-            data.name,
-            name if name == Symbol::new("typeref")
-                || name == Symbol::new("struct")
-                || name == Symbol::new("enum")
-        ))
-    .then(|| data.attrs.get_symbol("name"))
-    .flatten()
+fn nominal_identity(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
+    adt::nominal_name_ref(ctx, ty)
 }
 
 fn canonical_nominal_layouts(
     ctx: &IrContext,
     reachable_types: &HashSet<TypeRef>,
     errors: &mut Vec<ValidationError>,
-) -> HashMap<Symbol, TypeRef> {
+) -> HashMap<StringRef, TypeRef> {
     let mut layouts = HashMap::new();
     let mut referenced_names = HashSet::new();
     let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
@@ -1916,7 +1907,7 @@ fn canonical_nominal_layouts(
     for ty in sorted_reachable_types {
         let data = ctx.get_type(ty);
         if is_adt_typeref(ctx, ty) {
-            if let Some(name) = data.attrs.get_symbol("name") {
+            if let Some(name) = data.attrs.get_string_ref("name") {
                 referenced_names.insert(name);
             }
             continue;
@@ -1926,7 +1917,7 @@ fn canonical_nominal_layouts(
         {
             continue;
         }
-        let Some(name) = data.attrs.get_symbol("name") else {
+        let Some(name) = data.attrs.get_string_ref("name") else {
             continue;
         };
         if let Some(previous) = layouts.get(&name).copied() {
@@ -1934,7 +1925,8 @@ fn canonical_nominal_layouts(
                 push_type_error(
                     errors,
                     format!(
-                        "nominal layout @{name} is declared more than once ({previous} and {ty})"
+                        "nominal layout {:?} is declared more than once ({previous} and {ty})",
+                        ctx.str(name)
                     ),
                 );
             }
@@ -1952,7 +1944,7 @@ fn canonical_nominal_layouts(
             .filter_map(|(ty, data)| {
                 (data.dialect == Symbol::new("adt")
                     && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
-                    && data.attrs.get_symbol("name") == Some(name))
+                    && data.attrs.get_string_ref("name") == Some(name))
                 .then_some(ty)
             })
             .collect::<Vec<_>>();
@@ -1961,7 +1953,10 @@ fn canonical_nominal_layouts(
         } else if let [first, second, ..] = candidates.as_slice() {
             push_type_error(
                 errors,
-                format!("nominal layout @{name} is declared more than once ({first} and {second})"),
+                format!(
+                    "nominal layout {:?} is declared more than once ({first} and {second})",
+                    ctx.str(name)
+                ),
             );
         }
     }
@@ -2050,7 +2045,7 @@ fn validate_managed_reference_boundaries(
     ctx: &IrContext,
     body: RegionRef,
     reachable_types: &HashSet<TypeRef>,
-    nominal_layouts: &HashMap<Symbol, TypeRef>,
+    nominal_layouts: &HashMap<StringRef, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
     for ty in reachable_types.iter().copied() {
@@ -2058,7 +2053,7 @@ fn validate_managed_reference_boundaries(
             continue;
         }
         let data = ctx.get_type(ty);
-        let Some(name) = data.attrs.get_symbol("name") else {
+        let Some(name) = data.attrs.get_string_ref("name") else {
             push_type_error(
                 errors,
                 format!("{ty}: adt.typeref requires nominal name metadata"),
@@ -2074,7 +2069,10 @@ fn validate_managed_reference_boundaries(
         if !nominal_layouts.contains_key(&name) {
             push_type_error(
                 errors,
-                format!("{ty}: adt.typeref @{name} has no verified nominal declaration"),
+                format!(
+                    "{ty}: adt.typeref {:?} has no verified nominal declaration",
+                    ctx.str(name)
+                ),
             );
         }
     }
@@ -2187,7 +2185,7 @@ fn adt_projection_has_exact_callable_type(
     ctx: &IrContext,
     producer: OpRef,
     result_type: TypeRef,
-    nominal_layouts: &HashMap<Symbol, TypeRef>,
+    nominal_layouts: &HashMap<StringRef, TypeRef>,
 ) -> bool {
     if ctx.op_result_types(producer) != [result_type] {
         return false;
@@ -2200,7 +2198,8 @@ fn adt_projection_has_exact_callable_type(
     if let Ok(get) = adt::VariantGet::from_op(ctx, producer) {
         let layout = get.r#type(ctx);
         return projection_source_matches_layout(ctx, get.r#ref(ctx), layout, nominal_layouts)
-            && variant_field_type(ctx, layout, get.tag(ctx), get.field(ctx)) == Some(result_type);
+            && variant_field_type(ctx, layout, get.tag_ref(ctx), get.field(ctx))
+                == Some(result_type);
     }
     false
 }
@@ -2209,7 +2208,7 @@ fn projection_source_matches_layout(
     ctx: &IrContext,
     source: ValueRef,
     layout: TypeRef,
-    nominal_layouts: &HashMap<Symbol, TypeRef>,
+    nominal_layouts: &HashMap<StringRef, TypeRef>,
 ) -> bool {
     let layout_identity = nominal_identity(ctx, layout);
     layout_identity.is_some_and(|identity| nominal_layouts.get(&identity) == Some(&layout))
@@ -2224,7 +2223,7 @@ fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<Typ
 fn variant_field_type(
     ctx: &IrContext,
     layout: TypeRef,
-    tag: Symbol,
+    tag: StringRef,
     field: u32,
 ) -> Option<TypeRef> {
     let data = ctx.get_type(layout);
@@ -2238,7 +2237,7 @@ fn variant_field_type(
         let Attribute::List(pair) = variant else {
             return None;
         };
-        let [Attribute::Symbol(variant_tag), Attribute::List(fields)] = pair.as_slice() else {
+        let [Attribute::String(variant_tag), Attribute::List(fields)] = pair.as_slice() else {
             return None;
         };
         (*variant_tag == tag).then(|| match fields.get(field as usize) {
@@ -2252,7 +2251,7 @@ struct CallableProvenance<'a> {
     functions: &'a SymbolTable,
     registered: &'a HashMap<Symbol, &'a CompilerIntrinsicDeclaration>,
     declarations: &'a HashMap<(TypeRef, Symbol), &'a OperationDeclaration>,
-    nominal_layouts: &'a HashMap<Symbol, TypeRef>,
+    nominal_layouts: &'a HashMap<StringRef, TypeRef>,
 }
 
 fn callable_block_arg_has_source_contract(
@@ -2401,7 +2400,7 @@ fn validate_callable_origins(
     functions: &SymbolTable,
     declarations: &[CompilerIntrinsicDeclaration],
     operation_declarations: &HashMap<(TypeRef, Symbol), &OperationDeclaration>,
-    nominal_layouts: &HashMap<Symbol, TypeRef>,
+    nominal_layouts: &HashMap<StringRef, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
     let registered = compiler_intrinsic_map(ctx, declarations, errors);
@@ -5049,10 +5048,10 @@ mod tests {
     fn managed_reference_metadata_and_return_contracts_fail_closed() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct<@S()>
+  !S = adt.struct<S()>
   !Unnamed = adt.typeref
-  !Parameterized = adt.typeref<core.i32, {name = @S}>
-  !Missing = adt.typeref<{name = @Missing}>
+  !Parameterized = adt.typeref<core.i32, {name = "S"}>
+  !Missing = adt.typeref<{name = "Missing"}>
   tribute_control.func @unnamed(%value: !Unnamed) -> !Unnamed convention(direct) {
     tribute_control.return %value
   }
@@ -5092,8 +5091,8 @@ mod tests {
     fn managed_defined_boundaries_null_and_compatible_cast_are_valid() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct<@S()>
-  !R = adt.typeref<{name = @S}>
+  !S = adt.struct<S()>
+  !R = adt.typeref<{name = "S"}>
   tribute_control.func @managed(%value: !R) -> !R convention(direct) {
     %null = adt.ref_null {type = !R} : !R
     %cast = adt.ref_cast %null {type = !R} : !R
@@ -5110,8 +5109,8 @@ mod tests {
     fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_closed() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !ReadLineResult = adt.enum<{name = @ReadLineResult, variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}>
-  !ReadLineResultRef = adt.typeref<{name = @ReadLineResult}>
+  !ReadLineResult = adt.enum<{name = "ReadLineResult", variants = [["ReadLine", [core.bytes]], ["ReadEndOfFile", []], ["ReadInvalidEncoding", []], ["ReadSystem", [core.i32, core.bytes]]]}>
+  !ReadLineResultRef = adt.typeref<{name = "ReadLineResult"}>
   tribute_control.func @user_read_line() -> !ReadLineResultRef convention(direct)
     attributes {abi = "intrinsic"}
   tribute_control.func @masquerade(%raw: core.ptr) -> !ReadLineResultRef convention(direct) {
@@ -5132,9 +5131,9 @@ mod tests {
     fn managed_nested_aggregate_in_bodyless_c_external_is_a_trusted_user_boundary() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct<@S()>
-  !R = adt.typeref<{name = @S}>
-  !Container = adt.struct<@Container(@managed: !R)>
+  !S = adt.struct<S()>
+  !R = adt.typeref<{name = "S"}>
+  !Container = adt.struct<Container(managed: !R)>
   tribute_control.func @private_helper(%value: !Container) -> core.i32 convention(direct)
     attributes {abi = "C"}
 }"#,
@@ -5161,10 +5160,10 @@ mod tests {
     fn ref_cast_rejects_distinct_nominal_managed_references() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !S = adt.struct<@S()>
-  !T = adt.struct<@T()>
-  !RS = adt.typeref<{name = @S}>
-  !RT = adt.typeref<{name = @T}>
+  !S = adt.struct<S()>
+  !T = adt.struct<T()>
+  !RS = adt.typeref<{name = "S"}>
+  !RT = adt.typeref<{name = "T"}>
   tribute_control.func @incompatible(%value: !RS) -> !RT convention(direct) {
     %cast = adt.ref_cast %value {type = !RT} : !RT
     tribute_control.return %cast
@@ -5301,15 +5300,15 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
-  !Tuple = adt.struct<@Tuple(@callee: !F)>
-  !TupleRef = adt.typeref<{name = @Tuple}>
-  !Choice = adt.enum<{name = @Choice, variants = [[@Some, [!F]]]}>
-  !ChoiceRef = adt.typeref<{name = @Choice}>
+  !Tuple = adt.struct<Tuple(callee: !F)>
+  !TupleRef = adt.typeref<{name = "Tuple"}>
+  !Choice = adt.enum<{name = "Choice", variants = [["Some", [!F]]]}>
+  !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 convention(direct) {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee, %value : core.i32
-    %some = adt.variant_cast %choice {type = !Choice, tag = @Some} : !Choice
-    %choice_callee = adt.variant_get %some {type = !Choice, tag = @Some, field = 0} : !F
+    %some = adt.variant_cast %choice {type = !Choice, tag = "Some"} : !Choice
+    %choice_callee = adt.variant_get %some {type = !Choice, tag = "Some", field = 0} : !F
     %choice_result = tribute_control.call_indirect %choice_callee, %tuple_result : core.i32
     tribute_control.return %choice_result
   }
@@ -5325,15 +5324,15 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
-  !Tuple = adt.struct<@Tuple(@not_callable: core.i32)>
-  !TupleRef = adt.typeref<{name = @Tuple}>
-  !Choice = adt.enum<{name = @Choice, variants = [[@Some, [core.i32]]]}>
-  !ChoiceRef = adt.typeref<{name = @Choice}>
+  !Tuple = adt.struct<Tuple(not_callable: core.i32)>
+  !TupleRef = adt.typeref<{name = "Tuple"}>
+  !Choice = adt.enum<{name = "Choice", variants = [["Some", [core.i32]]]}>
+  !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 convention(direct) {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
     %tuple_result = tribute_control.call_indirect %tuple_callee, %value : core.i32
-    %some = adt.variant_cast %choice {type = !Choice, tag = @Some} : !Choice
-    %choice_callee = adt.variant_get %some {type = !Choice, tag = @Some, field = 0} : !F
+    %some = adt.variant_cast %choice {type = !Choice, tag = "Some"} : !Choice
+    %choice_callee = adt.variant_get %some {type = !Choice, tag = "Some", field = 0} : !F
     %choice_result = tribute_control.call_indirect %choice_callee, %tuple_result : core.i32
     tribute_control.return %choice_result
   }
@@ -5353,9 +5352,9 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
-  !Canonical = adt.struct<@Tuple(@value: core.i32)>
-  !Spoofed = adt.struct<@Tuple(@callee: !F)>
-  !TupleRef = adt.typeref<{name = @Tuple}>
+  !Canonical = adt.struct<Tuple(value: core.i32)>
+  !Spoofed = adt.struct<Tuple(callee: !F)>
+  !TupleRef = adt.typeref<{name = "Tuple"}>
   tribute_control.func @caller(%tuple: !TupleRef, %value: core.i32) -> core.i32 convention(direct) {
     %canonical = adt.struct_new %value {type = !Canonical} : !TupleRef
     %callee = adt.struct_get %tuple {type = !Spoofed, field = 0} : !F
@@ -5367,7 +5366,7 @@ mod tests {
 
         let result = validate(&ctx, module, &[], &[], &mut Default::default());
         let diagnostics = messages(&result);
-        assert!(diagnostics.contains("nominal layout @Tuple is declared more than once"));
+        assert!(diagnostics.contains("nominal layout \"Tuple\" is declared more than once"));
         assert!(diagnostics.contains("callable provenance"), "{result}");
     }
 
@@ -5375,8 +5374,8 @@ mod tests {
     fn unreachable_nominal_layout_collision_does_not_affect_validation() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !UnusedStruct = adt.struct<@Unused(@value: core.i32)>
-  !UnusedEnum = adt.enum<{name = @Unused, variants = [[@Value, [core.i32]]]}>
+  !UnusedStruct = adt.struct<Unused(value: core.i32)>
+  !UnusedEnum = adt.enum<{name = "Unused", variants = [["Value", [core.i32]]]}>
   tribute_control.func @caller(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }

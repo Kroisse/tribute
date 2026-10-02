@@ -272,7 +272,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-                !Closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref), {{layout = "closure"}}>
+                !Closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {{layout = "closure"}}>
                 func.func @transfer(%index: core.i32, %erased: tribute_rt.anyref) {{
                     {cast}
                     func.tail_call_indirect %index, {arg} {{signature = func.func_sig<(!Closure) -> ()>, tribute.calling_convention = 2}}
@@ -398,17 +398,19 @@ mod tests {
     }
 
     fn nominal_reference_type(ctx: &mut IrContext) -> TypeRef {
+        let name_attr = ctx.string_attr("String");
         ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", Attribute::Symbol(Symbol::new("String")))
+                .attr("name", name_attr)
                 .build(),
         )
     }
 
     fn struct_type(ctx: &mut IrContext) -> TypeRef {
+        let name_attr = ctx.string_attr("Payload");
         ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                .attr("name", Attribute::Symbol(Symbol::new("Payload")))
+                .attr("name", name_attr)
                 .build(),
         )
     }

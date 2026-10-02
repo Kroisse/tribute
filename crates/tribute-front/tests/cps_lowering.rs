@@ -184,7 +184,7 @@ fn main() -> Nil { }
         .lines()
         .find_map(|line| {
             let (alias, definition) = line.trim().split_once(" = ")?;
-            (definition == "adt.typeref<{name = @String}>").then_some(alias)
+            (definition == "adt.typeref<{name = \"String\"}>").then_some(alias)
         })
         .expect("nominal String reference");
     assert!(
@@ -1926,9 +1926,9 @@ fn keep_first(first: First) -> First { first }
     let ir = run_ast_pipeline_with_ir(db, source);
     assert_logical_boundary(&ir);
     for field in [
-        "!Node = adt.struct<@Node(@next: adt.typeref<{name = @Node}>)>",
-        "!First = adt.struct<@First(@second: adt.typeref<{name = @Second}>)>",
-        "!Second = adt.struct<@Second(@first: adt.typeref<{name = @First}>)>",
+        "!Node = adt.struct<Node(next: adt.typeref<{name = \"Node\"}>)>",
+        "!First = adt.struct<First(second: adt.typeref<{name = \"Second\"}>)>",
+        "!Second = adt.struct<Second(first: adt.typeref<{name = \"First\"}>)>",
     ] {
         assert!(
             ir.contains(field),

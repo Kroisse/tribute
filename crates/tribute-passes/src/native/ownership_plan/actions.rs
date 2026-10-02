@@ -212,7 +212,7 @@ impl ActionPlanner<'_> {
                 .ok_or_else(|| OwnershipPlanError::new("variant_new has invalid layout"))?;
             let fields = variants
                 .iter()
-                .find(|(tag, _)| *tag == new.tag(self.ir))
+                .find(|(tag, _)| *tag == new.tag_ref(self.ir))
                 .map(|(_, fields)| fields.as_slice())
                 .ok_or_else(|| OwnershipPlanError::new("variant_new tag is stale"))?;
             validate_allocation_result(self.ir, op, new.r#type(self.ir), self.managed_layouts)?;

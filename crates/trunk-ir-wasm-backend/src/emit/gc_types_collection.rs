@@ -718,8 +718,8 @@ mod tests {
                         &mut ctx,
                         &format!(
                             r#"core.module @test {{
-                        !A = adt.typeref<{{name = @A}}>
-                        !B = adt.typeref<{{name = @B}}>
+                        !A = adt.typeref<{{name = "A"}}>
+                        !B = adt.typeref<{{name = "B"}}>
                         wasm.func @make_a() {{
                             %x = wasm.i32_const {{value = 0}} : core.i32
                             %a = wasm.struct_new %x {{type_idx = {a}}} : !A
@@ -773,7 +773,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = adt.struct<@_Marker(@ability_id: {field_type}, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {{layout = \"evidence_marker\"}}>
+                        !Marker = adt.struct<_Marker(ability_id: {field_type}, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {{layout = \"evidence_marker\"}}>
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable
@@ -797,7 +797,7 @@ mod tests {
             "wasm.anyref",
             "wasm.structref",
             "wasm.arrayref",
-            "adt.struct<@Other()>",
+            "adt.struct<Other()>",
         ] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(
@@ -829,7 +829,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-            !Marker = adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr)>
+            !Marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr)>
             wasm.func @test(%marker: !Marker) -> core.i32 {{
                 %value = wasm.struct_get %marker {{type_idx = {CLOSURE_STRUCT_IDX}, field_idx = 0}} : core.i32
                 wasm.return %value
@@ -872,7 +872,7 @@ wasm.return
                         &mut ctx,
                         &format!(
                             "core.module @test {{
-!Cell = adt.typeref<{{name = @Cell}}>
+!Cell = adt.typeref<{{name = \"Cell\"}}>
 {functions}
 }}"
                         ),
@@ -915,16 +915,18 @@ wasm.return
     #[test]
     fn variant_types_normalize_to_wasm_structref() {
         let mut ctx = IrContext::new();
+        let name_attr = ctx.string_attr("List");
         let enum_ty = ctx.intern_type(
             TypeDataBuilder::new("adt", "enum")
-                .attr("name", Attribute::Symbol(Symbol::new("List")))
+                .attr("name", name_attr)
                 .build(),
         );
+        let variant_tag_attr = ctx.string_attr("Cons");
         let variant_ty = ctx.intern_type(
             TypeDataBuilder::new("adt", "List$Cons")
                 .attr("is_variant", Attribute::Bool(true))
                 .attr("base_enum", Attribute::Type(enum_ty))
-                .attr("variant_tag", Attribute::Symbol(Symbol::new("Cons")))
+                .attr("variant_tag", variant_tag_attr)
                 .build(),
         );
         let structref = intern_wasm_structref(&mut ctx);
@@ -936,21 +938,24 @@ wasm.return
     #[test]
     fn record_struct_field_canonicalizes_typeref_and_variant_to_structref() {
         let mut ctx = IrContext::new();
+        let name_attr = ctx.string_attr("List");
         let enum_ty = ctx.intern_type(
             TypeDataBuilder::new("adt", "enum")
-                .attr("name", Attribute::Symbol(Symbol::new("List")))
+                .attr("name", name_attr)
                 .build(),
         );
+        let name_attr = ctx.string_attr("List");
         let typeref_ty = ctx.intern_type(
             TypeDataBuilder::new("adt", "typeref")
-                .attr("name", Attribute::Symbol(Symbol::new("List")))
+                .attr("name", name_attr)
                 .build(),
         );
+        let variant_tag_attr = ctx.string_attr("Cons");
         let variant_ty = ctx.intern_type(
             TypeDataBuilder::new("adt", "List$Cons")
                 .attr("is_variant", Attribute::Bool(true))
                 .attr("base_enum", Attribute::Type(enum_ty))
-                .attr("variant_tag", Attribute::Symbol(Symbol::new("Cons")))
+                .attr("variant_tag", variant_tag_attr)
                 .build(),
         );
         let structref = intern_wasm_structref(&mut ctx);
@@ -968,15 +973,17 @@ wasm.return
     #[test]
     fn same_named_adt_layouts_are_not_gc_equivalent() {
         let mut ctx = IrContext::new();
+        let name_attr = ctx.string_attr("String");
         let canonical = ctx.intern_type(
             TypeDataBuilder::new("adt", "enum")
-                .attr("name", Attribute::Symbol(Symbol::new("String")))
+                .attr("name", name_attr)
                 .attr("layout", Attribute::Bool(true))
                 .build(),
         );
+        let name_attr = ctx.string_attr("String");
         let unrelated = ctx.intern_type(
             TypeDataBuilder::new("adt", "enum")
-                .attr("name", Attribute::Symbol(Symbol::new("String")))
+                .attr("name", name_attr)
                 .attr("layout", Attribute::Bool(false))
                 .build(),
         );

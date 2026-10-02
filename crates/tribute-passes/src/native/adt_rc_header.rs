@@ -264,7 +264,7 @@ impl RewritePattern for VariantNewPattern {
         };
 
         let enum_ty = variant_new.r#type(ctx);
-        let tag = variant_new.tag(ctx);
+        let tag = variant_new.tag_ref(ctx);
         let tc = rewriter.type_converter();
 
         let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {

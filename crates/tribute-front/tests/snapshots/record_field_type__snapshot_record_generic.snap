@@ -3,8 +3,8 @@ source: crates/tribute-front/tests/record_field_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !Pair = adt.struct<@Pair(@first: tribute_rt.anyref, @second: tribute_rt.anyref)>
-  !Pair_1 = adt.typeref<{name = @Pair}>
+  !Pair = adt.struct<Pair(first: tribute_rt.anyref, second: tribute_rt.anyref)>
+  !Pair_1 = adt.typeref<{name = "Pair"}>
   !t0 = tribute_control.func_sig<(!Pair_1) -> tribute_rt.anyref, {tribute.calling_convention = 0}>
 
   tribute_control.func @"Pair::first"(%0: !Pair_1) -> tribute_rt.anyref convention(direct) {

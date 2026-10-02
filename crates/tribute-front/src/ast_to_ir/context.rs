@@ -707,7 +707,12 @@ impl<'db> IrLoweringCtx<'db> {
         name: Symbol,
         fields: &[(Symbol, TypeRef)],
     ) -> TypeRef {
-        adt::struct_type(ir, name, fields.iter().copied(), AttributeMap::new()).as_type_ref()
+        let name = ir.intern_symbol_text(name);
+        let fields: Vec<_> = fields
+            .iter()
+            .map(|&(field, ty)| (ir.intern_symbol_text(field), ty))
+            .collect();
+        adt::struct_type(ir, name, fields, AttributeMap::new()).as_type_ref()
     }
 
     /// Create an `adt.enum` type with name and variants.
@@ -717,13 +722,14 @@ impl<'db> IrLoweringCtx<'db> {
         name: Symbol,
         variants: &[(Symbol, Vec<TypeRef>)],
     ) -> TypeRef {
+        let name = ir.intern_symbol_text(name);
         let variants_attr: Vec<Attribute> = variants
             .iter()
             .map(|(variant_name, field_types)| {
                 let field_attrs: Vec<Attribute> =
                     field_types.iter().map(|t| Attribute::Type(*t)).collect();
                 Attribute::List(vec![
-                    Attribute::Symbol(*variant_name),
+                    Attribute::String(ir.intern_symbol_text(*variant_name)),
                     Attribute::List(field_attrs),
                 ])
             })
@@ -731,7 +737,7 @@ impl<'db> IrLoweringCtx<'db> {
 
         ir.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
-                .attr("name", Attribute::Symbol(name))
+                .attr("name", Attribute::String(name))
                 .attr("variants", Attribute::List(variants_attr))
                 .build(),
         )
@@ -745,13 +751,14 @@ impl<'db> IrLoweringCtx<'db> {
         variants: &[(Symbol, Vec<TypeRef>)],
         definition: crate::typeck::DefinitionIdentity,
     ) -> TypeRef {
+        let name = ir.intern_symbol_text(name);
         let variants_attr: Vec<Attribute> = variants
             .iter()
             .map(|(variant_name, field_types)| {
                 let field_attrs: Vec<Attribute> =
                     field_types.iter().map(|ty| Attribute::Type(*ty)).collect();
                 Attribute::List(vec![
-                    Attribute::Symbol(*variant_name),
+                    Attribute::String(ir.intern_symbol_text(*variant_name)),
                     Attribute::List(field_attrs),
                 ])
             })
@@ -759,7 +766,7 @@ impl<'db> IrLoweringCtx<'db> {
 
         ir.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
-                .attr("name", Attribute::Symbol(name))
+                .attr("name", Attribute::String(name))
                 .attr("variants", Attribute::List(variants_attr))
                 .attr(
                     "tribute.definition.source",
@@ -779,9 +786,10 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Create an `adt.typeref` type — a reference to a named type.
     pub fn adt_typeref(&self, ir: &mut IrContext, name: Symbol) -> TypeRef {
+        let name = ir.intern_symbol_text(name);
         ir.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", Attribute::Symbol(name))
+                .attr("name", name)
                 .build(),
         )
     }
@@ -974,7 +982,7 @@ mod tests {
             .expect("logical tuple layout");
         assert_eq!(
             layout.fields(&ir).collect::<Vec<_>>(),
-            [(Symbol::new("0"), anyref), (Symbol::new("1"), nominal_list),]
+            [("0", anyref), ("1", nominal_list)]
         );
 
         let generated = Symbol::new("Forward::value");

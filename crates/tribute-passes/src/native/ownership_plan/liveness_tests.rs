@@ -9,10 +9,10 @@ use trunk_ir::parser::parse_test_module;
 use super::*;
 
 const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
-  !Child = adt.struct<@Child(@value: core.i32)>
-  !ChildRef = adt.typeref<{name = @Child}>
-  !Box = adt.struct<@Box(@child: !ChildRef)>
-  !BoxRef = adt.typeref<{name = @Box}>
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
@@ -29,8 +29,8 @@ const CROSS_BLOCK_BORROW: &str = r#"core.module @test {
 }"#;
 
 const BRANCH_LOOP: &str = r#"core.module @test {
-  !R = adt.typeref<{name = @R}>
-  !Layout = adt.struct<@R(@x: core.i32)>
+  !R = adt.typeref<{name = "R"}>
+  !Layout = adt.struct<R(x: core.i32)>
   func.func @flow(%condition: core.i1, %value: !R) -> core.nil {
     ^entry:
       cf.cond_br %condition [^left, ^right]
@@ -49,15 +49,15 @@ const BRANCH_LOOP: &str = r#"core.module @test {
 }"#;
 
 const ALIAS_PROJECTION: &str = r#"core.module @test {
-  !Child = adt.struct<@Child(@value: core.i32)>
-  !ChildRef = adt.typeref<{name = @Child}>
-  !Choice = adt.enum<{name = @Choice, variants = [[@Some, [!ChildRef]]]}>
-  !ChoiceRef = adt.typeref<{name = @Choice}>
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Choice = adt.enum<{name = "Choice", variants = [["Some", [!ChildRef]]]}>
+  !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     ^entry:
       %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
       %restored = adt.ref_cast %erased {type = !ChoiceRef} : !ChoiceRef
-      %child = adt.variant_get %restored {type = !Choice, tag = @Some, field = 0} : !ChildRef
+      %child = adt.variant_get %restored {type = !Choice, tag = "Some", field = 0} : !ChildRef
       cf.br [^next]
     ^next:
       func.return %child
@@ -65,11 +65,11 @@ const ALIAS_PROJECTION: &str = r#"core.module @test {
 }"#;
 
 const NESTED_PROJECTION: &str = r#"core.module @test {
-  !Child = adt.struct<@Child(@value: core.i32)>
-  !ChildRef = adt.typeref<{name = @Child}>
-  !Inner = adt.struct<@Inner(@child: !ChildRef)>
-  !InnerRef = adt.typeref<{name = @Inner}>
-  !Box = adt.struct<@Box(@inner: !InnerRef)>
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Inner = adt.struct<Inner(child: !ChildRef)>
+  !InnerRef = adt.typeref<{name = "Inner"}>
+  !Box = adt.struct<Box(inner: !InnerRef)>
   func.func @observe(%child: !ChildRef) -> core.i32 {
     %value = adt.struct_get %child {field = 0, type = !Child} : core.i32
     func.return %value
@@ -397,8 +397,8 @@ fn failed_facts_lookup_does_not_publish_liveness() {
     let module = parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !R = adt.typeref<{name = @R}>
-  !Layout = adt.struct<@R(@x: core.i32)>
+  !R = adt.typeref<{name = "R"}>
+  !Layout = adt.struct<R(x: core.i32)>
   func.func @bad(%value: !R) -> core.i32 {
     %field = adt.struct_get %value {field = 1, type = !Layout} : core.i32
     func.return %field

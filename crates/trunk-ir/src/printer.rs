@@ -363,6 +363,12 @@ impl<'a, 'ctx> TypePrintHelper<'a, 'ctx> {
     pub fn write_symbol(&mut self, symbol: crate::Symbol) -> fmt::Result {
         write_symbol(&mut *self.f, symbol)
     }
+
+    /// Write a name as a bare identifier, or as a quoted string when it is not
+    /// one.
+    pub fn write_name(&mut self, name: &str) -> fmt::Result {
+        write_name(&mut *self.f, name)
+    }
 }
 
 impl Write for TypePrintHelper<'_, '_> {
@@ -581,6 +587,23 @@ fn write_attribute_key(f: &mut dyn Write, key: crate::symbol::Symbol) -> fmt::Re
     })
 }
 
+/// Write `name` bare when it is an identifier (`[A-Za-z_][A-Za-z0-9_]*`),
+/// and as a quoted string otherwise.
+fn write_name(f: &mut dyn Write, name: &str) -> fmt::Result {
+    let mut chars = name.chars();
+    let is_ident = chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if is_ident {
+        f.write_str(name)
+    } else {
+        f.write_char('"')?;
+        write_escaped_string(f, name)?;
+        f.write_char('"')
+    }
+}
+
 fn write_symbol(f: &mut dyn Write, sym: crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| {
         let needs_quoting =
@@ -719,8 +742,8 @@ fn choose_alias_name(
     used_names: &HashSet<String>,
     next_num: &mut usize,
 ) -> String {
-    if let Some(sym) = crate::asm_format::suggest_type_alias_name(ctx, ty) {
-        let base = sym.with_str(|s| s.to_string());
+    if let Some(base) = crate::asm_format::suggest_type_alias_name(ctx, ty) {
+        let base = base.to_owned();
         if !used_names.contains(&base) {
             return base;
         }
@@ -1568,16 +1591,9 @@ mod tests {
 
     /// Helper: build an `adt.struct` type with given field list and name.
     fn make_adt_struct(ctx: &mut IrContext, name: &str, fields: &[(&str, TypeRef)]) -> TypeRef {
-        let fields = fields
-            .iter()
-            .map(|(field, ty)| (Symbol::from_dynamic(field), *ty));
-        crate::dialect::adt::struct_type(
-            ctx,
-            Symbol::from_dynamic(name),
-            fields,
-            AttributeMap::new(),
-        )
-        .as_type_ref()
+        let fields = fields.iter().map(|(field, ty)| (field.to_string(), *ty));
+        crate::dialect::adt::struct_type(ctx, name.to_owned(), fields, AttributeMap::new())
+            .as_type_ref()
     }
 
     /// Helper: build a module with given functions.
@@ -1828,20 +1844,20 @@ mod tests {
         let input = "\
 core.module @test {
   core.module @inner {
-    func.func @f1(%0: adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)>) -> adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)> {
+    func.func @f1(%0: adt.struct<InnerOnly(a: core.i32, b: core.i32)>) -> adt.struct<InnerOnly(a: core.i32, b: core.i32)> {
     ^bb0:
       func.return %0
     }
-    func.func @f2(%0: adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)>) -> adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)> {
+    func.func @f2(%0: adt.struct<InnerOnly(a: core.i32, b: core.i32)>) -> adt.struct<InnerOnly(a: core.i32, b: core.i32)> {
     ^bb0:
       func.return %0
     }
   }
-  func.func @g1(%0: adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)>) -> adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)> {
+  func.func @g1(%0: adt.struct<OuterOnly(x: core.i32, y: core.i32)>) -> adt.struct<OuterOnly(x: core.i32, y: core.i32)> {
   ^bb0:
     func.return %0
   }
-  func.func @g2(%0: adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)>) -> adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)> {
+  func.func @g2(%0: adt.struct<OuterOnly(x: core.i32, y: core.i32)>) -> adt.struct<OuterOnly(x: core.i32, y: core.i32)> {
   ^bb0:
     func.return %0
   }
@@ -1909,8 +1925,8 @@ core.module @test {
 
         let output = print_module_with_point_types(false);
         assert_eq!(output, print_module_with_point_types(true));
-        assert!(output.contains("!Point = adt.struct<@Point(@alpha: core.i32)>"));
-        assert!(output.contains("!Point_1 = adt.struct<@Point(@zebra: core.i32)>"));
+        assert!(output.contains("!Point = adt.struct<Point(alpha: core.i32)>"));
+        assert!(output.contains("!Point_1 = adt.struct<Point(zebra: core.i32)>"));
 
         let mut reparsed_ctx = IrContext::new();
         let reparsed =

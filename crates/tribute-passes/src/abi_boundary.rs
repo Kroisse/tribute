@@ -546,7 +546,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  !frame = adt.typeref<{name = @Frame, tribute.cps_continuation_frame_result = core.nil}>
+  !frame = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>
 }"#
             ),
             [attribute("tribute.cps_continuation_frame_result")]
@@ -555,7 +555,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = @Frame, tribute.closure_environment_index = 0}>) -> ()>]} {
+  func.func @run() attributes {evidence = [func.func_sig<(adt.typeref<{name = "Frame", tribute.closure_environment_index = 0}>) -> ()>]} {
     func.return
   }
 }"#
@@ -576,7 +576,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  !frame = adt.typeref<{meta = {entry = {tribute.root_source_result = core.nil}}, name = @Frame}>
+  !frame = adt.typeref<{meta = {entry = {tribute.root_source_result = core.nil}}, name = "Frame"}>
 }"#
             ),
             [attribute("tribute.root_source_result")]
@@ -584,7 +584,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {meta = {ty = adt.typeref<{name = @Frame, tribute.closure_environment_index = 0}>}} {
+  func.func @run() attributes {meta = {ty = adt.typeref<{name = "Frame", tribute.closure_environment_index = 0}>}} {
     func.return
   }
 }"#
@@ -719,8 +719,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !frame = adt.typeref<{name = @Frame, tribute.cps_continuation_frame_result = core.nil}>
-  !holder = adt.struct<@Holder(@callback: func.func_sig<(core.ptr) -> !frame>)>
+  !frame = adt.typeref<{name = "Frame", tribute.cps_continuation_frame_result = core.nil}>
+  !holder = adt.struct<Holder(callback: func.func_sig<(core.ptr) -> !frame>)>
   func.func @run(%value: !holder) {
     func.return
   }
@@ -765,7 +765,7 @@ mod tests {
         };
         let plain = verify(
             r#"core.module @test {
-  !frame = adt.typeref<{name = @Frame}>
+  !frame = adt.typeref<{name = "Frame"}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return
@@ -775,7 +775,7 @@ mod tests {
         );
         let annotated = verify(
             r#"core.module @test {
-  !frame = adt.typeref<{name = @Frame, tribute.definition.end = 20, tribute.definition.source = 1, tribute.definition.start = 10}>
+  !frame = adt.typeref<{name = "Frame", tribute.definition.end = 20, tribute.definition.source = 1, tribute.definition.start = 10}>
   func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2, tribute.definition.end = 40, tribute.definition.source = 1, tribute.definition.start = 30} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return

@@ -301,7 +301,7 @@ mod tests {
 
     /// Build the canonical evidence type string for use in test IR.
     fn evidence_type_str() -> &'static str {
-        "core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
+        "core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
     }
 
     fn attach_exact_perform_types(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
@@ -400,7 +400,7 @@ mod tests {
         assert!(ir_text.contains("effect.dispatch_cps"), "{ir_text}");
         assert!(ir_text.contains("adt.struct_new"), "{ir_text}");
         assert!(
-            ir_text.contains("(@arg0: tribute_rt.anyref)"),
+            ir_text.contains("(arg0: tribute_rt.anyref)"),
             "payload fields must use the canonical dynamic storage contract:\n{ir_text}"
         );
         assert!(

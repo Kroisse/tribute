@@ -26,13 +26,13 @@ pub struct TypeAliasHint {
     pub dialect: &'static str,
     /// Given a type belonging to this dialect, suggest an alias name.
     /// Returns `None` if no name can be suggested.
-    pub suggest: fn(&IrContext, TypeRef) -> Option<Symbol>,
+    pub suggest: for<'a> fn(&'a IrContext, TypeRef) -> Option<&'a str>,
 }
 
 inventory::collect!(TypeAliasHint);
 
 /// Query all registered `TypeAliasHint`s to find a suggested name for the given type.
-pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<Symbol> {
+pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
     let data = ctx.get_type(ty);
     let dialect = data.dialect;
     for hint in inventory::iter::<TypeAliasHint> {

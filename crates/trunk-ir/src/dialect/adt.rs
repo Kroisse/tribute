@@ -3,7 +3,7 @@
 // === Type alias hint registration ===
 inventory::submit!(crate::asm_format::TypeAliasHint {
     dialect: "adt",
-    suggest: |ctx, ty| { ctx.get_type(ty).attrs.get_symbol("name") },
+    suggest: |ctx, ty| { ctx.get_type(ty).attrs.get_str(ctx, "name") },
 });
 
 // === Pure operation registrations ===
@@ -34,15 +34,15 @@ mod adt {
 
     fn struct_set(r#type: Attr<Type>, field: Attr<u32>, r#ref: Value<_>, value: Value<_>) {}
 
-    fn variant_new(r#type: Attr<Type>, tag: Attr<Symbol>, fields: Variadic<_>) -> Value<_> {}
+    fn variant_new(r#type: Attr<Type>, tag: Attr<String>, fields: Variadic<_>) -> Value<_> {}
 
-    fn variant_is(r#type: Attr<Type>, tag: Attr<Symbol>, r#ref: Value<_>) -> Value<_> {}
+    fn variant_is(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
-    fn variant_cast(r#type: Attr<Type>, tag: Attr<Symbol>, r#ref: Value<_>) -> Value<_> {}
+    fn variant_cast(r#type: Attr<Type>, tag: Attr<String>, r#ref: Value<_>) -> Value<_> {}
 
     fn variant_get(
         r#type: Attr<Type>,
-        tag: Attr<Symbol>,
+        tag: Attr<String>,
         field: Attr<u32>,
         r#ref: Value<_>,
     ) -> Value<_> {
@@ -73,21 +73,41 @@ use crate::Symbol;
 use crate::context::IrContext;
 use crate::ops::DialectType;
 use crate::refs::TypeRef;
-use crate::types::{Attribute, AttributeMap, PARAM_ATTRS_ATTR, TypeDataBuilder};
+use crate::types::{
+    Attribute, AttributeMap, PARAM_ATTRS_ATTR, StringArg, StringRef, TypeDataBuilder,
+};
 
 /// Type attribute holding an `adt.struct`'s name, and the parameter attribute
-/// holding each field's name.
+/// holding each field's name. Both are strings.
 pub const STRUCT_NAME_ATTR: &str = "name";
+
+/// The nominal name of an `adt.struct`, `adt.enum` or `adt.typeref`: its
+/// `name` type attribute.
+pub fn nominal_name_ref(ctx: &IrContext, ty: TypeRef) -> Option<StringRef> {
+    let data = ctx.get_type(ty);
+    let nominal = data.dialect == Symbol::new("adt")
+        && (data.name == Symbol::new("struct")
+            || data.name == Symbol::new("enum")
+            || data.name == Symbol::new("typeref"));
+    nominal
+        .then(|| data.attrs.get_string_ref(STRUCT_NAME_ATTR))
+        .flatten()
+}
+
+/// The text of [`nominal_name_ref`].
+pub fn nominal_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
+    nominal_name_ref(ctx, ty).map(|name| ctx.str(name))
+}
 
 /// A malformed `adt.struct` type.
 #[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
 pub enum StructTypeError {
-    #[display("missing `{STRUCT_NAME_ATTR}` symbol")]
+    #[display("missing `{STRUCT_NAME_ATTR}` string")]
     MissingName,
-    #[display("field {_0} has no `{STRUCT_NAME_ATTR}` symbol")]
+    #[display("field {_0} has no `{STRUCT_NAME_ATTR}` string")]
     MissingFieldName(#[error(not(source))] usize),
-    #[display("duplicate field name @{_0}")]
-    DuplicateFieldName(#[error(not(source))] Symbol),
+    #[display("duplicate field name {_0:?}")]
+    DuplicateFieldName(#[error(not(source))] String),
     #[display("`fields` is not an `adt.struct` attribute; fields are type parameters")]
     FieldsAttribute,
 }
@@ -107,17 +127,19 @@ impl Struct {
         if data.attrs.contains_key("fields") {
             return Err(StructTypeError::FieldsAttribute);
         }
-        if data.attrs.get_symbol(STRUCT_NAME_ATTR).is_none() {
+        if data.attrs.get_string_ref(STRUCT_NAME_ATTR).is_none() {
             return Err(StructTypeError::MissingName);
         }
-        let mut names: smallvec::SmallVec<[Symbol; 8]> = smallvec::SmallVec::new();
+        let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
         for index in 0..data.params.len() {
             let name = data
                 .param_attrs(index)
-                .get_symbol(STRUCT_NAME_ATTR)
+                .get_string_ref(STRUCT_NAME_ATTR)
                 .ok_or(StructTypeError::MissingFieldName(index))?;
             if names.contains(&name) {
-                return Err(StructTypeError::DuplicateFieldName(name));
+                return Err(StructTypeError::DuplicateFieldName(
+                    ctx.str(name).to_owned(),
+                ));
             }
             names.push(name);
         }
@@ -129,10 +151,15 @@ impl Struct {
     }
 
     /// The struct's name.
-    pub fn name(self, ctx: &IrContext) -> Symbol {
+    pub fn name(self, ctx: &IrContext) -> &str {
+        ctx.str(self.name_ref(ctx))
+    }
+
+    /// The struct's name as a pooled handle.
+    pub fn name_ref(self, ctx: &IrContext) -> StringRef {
         ctx.get_type(self.0)
             .attrs
-            .get_symbol(STRUCT_NAME_ATTR)
+            .get_string_ref(STRUCT_NAME_ATTR)
             .expect("validated adt.struct must retain its name")
     }
 
@@ -151,23 +178,28 @@ impl Struct {
     }
 
     /// The name of field `index`, if it exists.
-    pub fn field_name(self, ctx: &IrContext, index: usize) -> Option<Symbol> {
+    pub fn field_name(self, ctx: &IrContext, index: usize) -> Option<&str> {
+        self.field_name_ref(ctx, index).map(|name| ctx.str(name))
+    }
+
+    /// The name of field `index` as a pooled handle, if it exists.
+    pub fn field_name_ref(self, ctx: &IrContext, index: usize) -> Option<StringRef> {
         let data = ctx.get_type(self.0);
         (index < data.params.len()).then(|| field_name(data.param_attrs(index)))
     }
 
     /// The index of the field named `name`.
-    pub fn field_index(self, ctx: &IrContext, name: Symbol) -> Option<usize> {
+    pub fn field_index(self, ctx: &IrContext, name: &str) -> Option<usize> {
         self.fields(ctx).position(|(field, _)| field == name)
     }
 
     /// Each field's name and type, in declaration order.
-    pub fn fields(self, ctx: &IrContext) -> impl ExactSizeIterator<Item = (Symbol, TypeRef)> + '_ {
+    pub fn fields(self, ctx: &IrContext) -> impl ExactSizeIterator<Item = (&str, TypeRef)> + '_ {
         let data = ctx.get_type(self.0);
         data.params
             .iter()
             .enumerate()
-            .map(|(index, &ty)| (field_name(data.param_attrs(index)), ty))
+            .map(|(index, &ty)| (ctx.str(field_name(data.param_attrs(index))), ty))
     }
 
     /// The attributes of field `index` other than its name.
@@ -191,11 +223,11 @@ impl Struct {
 
     /// Each field as an owned `(name, type, attributes)` triple, for rebuilding
     /// the struct with [`struct_type_with_field_attrs`].
-    pub fn fields_with_attrs(self, ctx: &IrContext) -> Vec<(Symbol, TypeRef, AttributeMap)> {
+    pub fn fields_with_attrs(self, ctx: &IrContext) -> Vec<(StringRef, TypeRef, AttributeMap)> {
         (0..self.field_count(ctx))
             .map(|index| {
                 let name = self
-                    .field_name(ctx, index)
+                    .field_name_ref(ctx, index)
                     .expect("field index is in range");
                 let ty = self
                     .field_type(ctx, index)
@@ -210,9 +242,9 @@ impl Struct {
     }
 }
 
-fn field_name(attrs: &AttributeMap) -> Symbol {
+fn field_name(attrs: &AttributeMap) -> StringRef {
     attrs
-        .get_symbol(STRUCT_NAME_ATTR)
+        .get_string_ref(STRUCT_NAME_ATTR)
         .expect("validated adt.struct fields must retain their names")
 }
 
@@ -241,9 +273,9 @@ impl From<Struct> for TypeRef {
 /// Construct an `adt.struct` named `name` with `fields` in declaration order.
 ///
 /// `attrs` holds the remaining type attributes, such as `layout`.
-pub fn struct_type<N: Into<Symbol>>(
+pub fn struct_type<N: Into<StringArg>>(
     ctx: &mut IrContext,
-    name: impl Into<Symbol>,
+    name: impl Into<StringArg>,
     fields: impl IntoIterator<Item = (N, TypeRef)>,
     attrs: AttributeMap,
 ) -> Struct {
@@ -262,9 +294,9 @@ pub fn struct_type<N: Into<Symbol>>(
 /// # Panics
 ///
 /// If the result is not a valid `adt.struct`; see [`try_struct_type`].
-pub fn struct_type_with_field_attrs<N: Into<Symbol>>(
+pub fn struct_type_with_field_attrs<N: Into<StringArg>>(
     ctx: &mut IrContext,
-    name: impl Into<Symbol>,
+    name: impl Into<StringArg>,
     fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
     attrs: AttributeMap,
 ) -> Struct {
@@ -276,24 +308,26 @@ pub fn struct_type_with_field_attrs<N: Into<Symbol>>(
 ///
 /// A `name` in `attrs` or in a field's attributes is replaced by `name` or the
 /// field's name, so a caller may pass a source struct's attributes unchanged.
-pub fn try_struct_type<N: Into<Symbol>>(
+pub fn try_struct_type<N: Into<StringArg>>(
     ctx: &mut IrContext,
-    name: impl Into<Symbol>,
+    name: impl Into<StringArg>,
     fields: impl IntoIterator<Item = (N, TypeRef, AttributeMap)>,
     attrs: AttributeMap,
 ) -> Result<Struct, StructTypeError> {
     let mut builder = TypeDataBuilder::new("adt", "struct");
     for (field, ty, mut field_attrs) in fields {
-        field_attrs.insert(STRUCT_NAME_ATTR, field.into());
+        let field = ctx.intern_string_arg(field.into());
+        field_attrs.insert(STRUCT_NAME_ATTR, field);
         builder = builder.param_with_attrs(ty, field_attrs);
     }
-    finish_struct_type(ctx, name.into(), builder, attrs)
+    let name = ctx.intern_string_arg(name.into());
+    finish_struct_type(ctx, name, builder, attrs)
 }
 
 /// The non-generic rest of [`try_struct_type`], once the fields are added.
 fn finish_struct_type(
     ctx: &mut IrContext,
-    name: Symbol,
+    name: StringRef,
     mut builder: TypeDataBuilder,
     mut attrs: AttributeMap,
 ) -> Result<Struct, StructTypeError> {
@@ -306,18 +340,22 @@ fn finish_struct_type(
     if data.attrs.contains_key("fields") {
         return Err(StructTypeError::FieldsAttribute);
     }
-    let mut seen: smallvec::SmallVec<[Symbol; 8]> = smallvec::SmallVec::new();
+    let mut seen: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
     for index in 0..data.params.len() {
         let field = field_name(data.param_attrs(index));
         if seen.contains(&field) {
-            return Err(StructTypeError::DuplicateFieldName(field));
+            return Err(StructTypeError::DuplicateFieldName(
+                ctx.str(field).to_owned(),
+            ));
         }
         seen.push(field);
     }
     Ok(Struct(ctx.intern_type(data)))
 }
 
-// === Textual syntax: `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>` ===
+// === Textual syntax: `adt.struct<Name(field: type {attrs}, ...), {attrs}>` ===
+//
+// Names are bare identifiers, or quoted strings when they are not identifiers.
 
 inventory::submit! {
     crate::asm_format::TypeAsmFormat::new::<Struct>(print_struct_type, parse_struct_type)
@@ -339,13 +377,13 @@ fn write_struct_type(
 
     let ctx = h.ctx();
     h.write_str("adt.struct<")?;
-    h.write_symbol(adt_struct.name(ctx))?;
+    h.write_name(adt_struct.name(ctx))?;
     h.write_char('(')?;
     for (index, (name, ty)) in adt_struct.fields(ctx).enumerate() {
         if index > 0 {
             h.write_str(", ")?;
         }
-        h.write_symbol(name)?;
+        h.write_name(name)?;
         h.write_str(": ")?;
         h.write_type(ty)?;
         let mut attrs = adt_struct.field_attrs(ctx, index).peekable();
@@ -363,7 +401,7 @@ fn write_struct_type(
     h.write_char('>')
 }
 
-/// Parse the rest of `adt.struct<@Name(@field: type {attrs}, ...), {attrs}>`
+/// Parse the rest of `adt.struct<Name(field: type {attrs}, ...), {attrs}>`
 /// after its opening bracket into the generic form: each field's name becomes
 /// its parameter's `name` attribute, and the struct's name the type's.
 ///
@@ -375,19 +413,19 @@ fn parse_struct_type<'a>(
     name: &'a str,
 ) -> winnow::ModalResult<crate::parser::raw::RawType<'a>> {
     use crate::parser::raw::{
-        RawAttribute, RawParam, RawType, raw_attr_dict, raw_param, symbol_ref, ws,
+        RawAttribute, RawParam, RawType, name_token, raw_attr_dict, raw_param, ws,
     };
     use winnow::combinator::{delimited, opt, preceded, separated};
     use winnow::prelude::*;
 
     let backtrack = || winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new());
-    let struct_name = symbol_ref.parse_next(input)?;
+    let struct_name = name_token.parse_next(input)?;
     ws.parse_next(input)?;
     let fields: Vec<(String, RawParam<'a>)> = delimited(
         ('(', ws),
         separated(
             0..,
-            (ws, symbol_ref, ws, ':', ws, raw_param, ws)
+            (ws, name_token, ws, ':', ws, raw_param, ws)
                 .map(|(_, field, _, _, _, param, _)| (field, param)),
             ',',
         ),
@@ -405,7 +443,7 @@ fn parse_struct_type<'a>(
     if attrs.iter().any(|(key, _)| is_name(key)) {
         return Err(backtrack());
     }
-    attrs.push((STRUCT_NAME_ATTR.into(), RawAttribute::Symbol(struct_name)));
+    attrs.push((STRUCT_NAME_ATTR.into(), RawAttribute::String(struct_name)));
     let mut params = Vec::with_capacity(fields.len());
     for (field, mut param) in fields {
         if param.attrs.iter().any(|(key, _)| is_name(key)) {
@@ -413,7 +451,7 @@ fn parse_struct_type<'a>(
         }
         param
             .attrs
-            .push((STRUCT_NAME_ATTR.into(), RawAttribute::Symbol(field)));
+            .push((STRUCT_NAME_ATTR.into(), RawAttribute::String(field)));
         params.push(param);
     }
     Ok(RawType::Concrete {
@@ -468,10 +506,10 @@ mod tests {
     #[test]
     fn test_roundtrip_adt_struct() {
         let input = r#"core.module @test {
-  !point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>
-  !closure = adt.struct<@"Nested::Closure"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}> {}, @env: core.tuple<core.ptr>), {layout = "closure"}>
-  !empty = adt.struct<@Empty()>
-  !nested = adt.struct<@Outer(@inner: adt.struct<@Inner(@a: core.i32), {layout = "closure"}> {m = 1})>
+  !point = adt.struct<Point(x: core.i32, y: core.i32 {k = @v})>
+  !closure = adt.struct<"Nested::Closure"(func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}> {}, env: core.tuple<core.ptr>), {layout = "closure"}>
+  !empty = adt.struct<Empty()>
+  !nested = adt.struct<Outer(inner: adt.struct<Inner(a: core.i32), {layout = "closure"}> {m = 1})>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
@@ -484,17 +522,17 @@ mod tests {
         assert_eq!(point.name(&ctx), Symbol::new("Point"));
         assert_eq!(
             point.fields(&ctx).map(|(name, _)| name).collect::<Vec<_>>(),
-            [Symbol::new("x"), Symbol::new("y")]
+            ["x", "y"]
         );
         assert_eq!(point.field_attrs(&ctx, 1).count(), 1);
         let empty = Struct::from_type_ref(&ctx, aliases["empty"]).unwrap();
         assert_eq!(empty.field_count(&ctx), 0);
         let printed = print_module(&ctx, module);
         for expected in [
-            "!point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>",
-            "adt.struct<@\"Nested::Closure\"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}>, @env: core.tuple<core.ptr>), {layout = \"closure\"}>",
-            "!empty = adt.struct<@Empty()>",
-            "(@inner: adt.struct<@Inner(@a: core.i32), {layout = \"closure\"}> {m = 1})>",
+            "!point = adt.struct<Point(x: core.i32, y: core.i32 {k = @v})>",
+            "adt.struct<\"Nested::Closure\"(func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}>, env: core.tuple<core.ptr>), {layout = \"closure\"}>",
+            "!empty = adt.struct<Empty()>",
+            "(inner: adt.struct<Inner(a: core.i32), {layout = \"closure\"}> {m = 1})>",
         ] {
             assert!(printed.contains(expected), "{expected}\n{printed}");
         }
@@ -504,10 +542,10 @@ mod tests {
     #[test]
     fn repeated_struct_is_aliased_by_its_name() {
         let input = r#"core.module @test {
-  func.func @f1(%x: adt.struct<@_Marker(@a: core.i32)>) -> adt.struct<@_Marker(@a: core.i32)> {
+  func.func @f1(%x: adt.struct<_Marker(a: core.i32)>) -> adt.struct<_Marker(a: core.i32)> {
     func.return %x
   }
-  func.func @f2(%x: adt.struct<@_Marker(@a: core.i32)>) -> adt.struct<@_Marker(@a: core.i32)> {
+  func.func @f2(%x: adt.struct<_Marker(a: core.i32)>) -> adt.struct<_Marker(a: core.i32)> {
     func.return %x
   }
 }"#;
@@ -515,7 +553,7 @@ mod tests {
         let module = parse_module(&mut ctx, input).expect("struct types should parse");
         let printed = print_module(&ctx, module);
         assert!(
-            printed.contains("!_Marker = adt.struct<@_Marker(@a: core.i32)>"),
+            printed.contains("!_Marker = adt.struct<_Marker(a: core.i32)>"),
             "{printed}"
         );
         assert!(
@@ -528,9 +566,9 @@ mod tests {
     #[test]
     fn test_adt_struct_reserved_names_are_parse_errors() {
         for spelling in [
-            "adt.struct<@P(@x: core.i32), {name = @Q}>",
-            "adt.struct<@P(@x: core.i32), {param_attrs = [{}]}>",
-            "adt.struct<@P(@x: core.i32 {name = @y})>",
+            "adt.struct<P(x: core.i32), {name = @Q}>",
+            "adt.struct<P(x: core.i32), {param_attrs = [{}]}>",
+            "adt.struct<P(x: core.i32 {name = @y})>",
         ] {
             let mut ctx = IrContext::new();
             let input = format!("core.module @test {{ !bad = {spelling} }}");
@@ -541,8 +579,8 @@ mod tests {
     #[test]
     fn test_malformed_adt_struct_parses_but_fails_validation() {
         for spelling in [
-            "adt.struct<@P(@x: core.i32, @x: core.i64)>",
-            "adt.struct<@P(), {fields = []}>",
+            "adt.struct<P(x: core.i32, x: core.i64)>",
+            "adt.struct<P(), {fields = []}>",
             "adt.struct<core.i32, {name = @P}>",
         ] {
             let mut ctx = IrContext::new();
@@ -560,38 +598,40 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, "core.module @test {}");
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let named_field = |name: &str| {
+        let x = ctx.string_attr("x");
+        let p = ctx.string_attr("P");
+        let named_field = || {
             let mut attrs = AttributeMap::new();
-            attrs.insert("name", Symbol::from_dynamic(name));
+            attrs.insert("name", x.clone());
             attrs
         };
         let cases = [
             (
-                "missing `name` symbol",
+                "missing `name` string",
                 TypeDataBuilder::new("adt", "struct")
-                    .param_with_attrs(i32_ty, named_field("x"))
+                    .param_with_attrs(i32_ty, named_field())
                     .build(),
             ),
             (
-                "field 1 has no `name` symbol",
+                "field 1 has no `name` string",
                 TypeDataBuilder::new("adt", "struct")
-                    .param_with_attrs(i32_ty, named_field("x"))
+                    .param_with_attrs(i32_ty, named_field())
                     .param(i32_ty)
-                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .attr("name", p.clone())
                     .build(),
             ),
             (
-                "duplicate field name @x",
+                "duplicate field name \"x\"",
                 TypeDataBuilder::new("adt", "struct")
-                    .param_with_attrs(i32_ty, named_field("x"))
-                    .param_with_attrs(i32_ty, named_field("x"))
-                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .param_with_attrs(i32_ty, named_field())
+                    .param_with_attrs(i32_ty, named_field())
+                    .attr("name", p.clone())
                     .build(),
             ),
             (
                 "`fields` is not an `adt.struct` attribute",
                 TypeDataBuilder::new("adt", "struct")
-                    .attr("name", Attribute::Symbol(Symbol::new("P")))
+                    .attr("name", p.clone())
                     .attr("fields", Attribute::List(vec![]))
                     .build(),
             ),

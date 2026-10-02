@@ -1715,13 +1715,13 @@ mod tests {
     fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
         let source = r#"core.module @test {
-            !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
-            !Frame = adt.typeref<{name = @__tribute_continuation_frame_root_nil, tribute.cps_continuation_frame_result = core.nil}>
+            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+            !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
             !Done = closure.closure<func.func_sig<(core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 1}>
-            !__tribute_continuation_frame_root_nil = adt.struct<@__tribute_continuation_frame_root_nil(@done: !Done, @dispatch: !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
-            !Payload = adt.struct<@__tribute_ability_payload_7590c57e()>
+            !__tribute_continuation_frame_root_nil = adt.struct<__tribute_continuation_frame_root_nil(done: !Done, dispatch: !Dispatch), {tribute.cps_continuation_frame_result = core.nil}>
+            !Payload = adt.struct<__tribute_ability_payload_7590c57e()>
             func.func @main(%evidence: !Evidence, %frame: !Frame) -> core.never attributes {tribute.calling_convention = 2, tribute.root_source_result = core.nil} {
                 BODY
             }
@@ -1806,7 +1806,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-                func.func @__tribute_evidence_lookup(%ev: core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>, %id: core.i32) -> core.i32 attributes {abi = "C"}
+                func.func @__tribute_evidence_lookup(%ev: core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>, %id: core.i32) -> core.i32 attributes {abi = "C"}
             }"#,
         );
         tribute_passes::wasm::evidence_to_wasm::bind_wasm_evidence_runtime(&mut ctx, module);
@@ -2431,7 +2431,7 @@ fn main() -> Nil {
         use std::os::unix::process::ExitStatusExt;
 
         let input = r#"core.module @one_shot {
-  !state = adt.struct<@OneShotState(@consumed: core.i1)>
+  !state = adt.struct<OneShotState(consumed: core.i1)>
 
   func.func @one_shot_wrapper(%state: !state, %value: core.i32) -> core.i32 attributes {tribute.calling_convention = 0} {
     %consumed = adt.struct_get %state {field = 0, type = !state} : core.i1
@@ -3272,13 +3272,18 @@ fn main() -> Nil {
             let ty = ir
                 .type_alias_by_name(name)
                 .expect("dependency layout is published");
-            assert_eq!(ir.get_type(ty).attrs.get_symbol("name"), Some(name));
+            assert!(
+                ir.get_type(ty)
+                    .attrs
+                    .get_str(ir, "name")
+                    .is_some_and(|text| name == text)
+            );
             ty
         }
         fn target(ir: &IrContext, ty: TypeRef) -> TypeRef {
             let data = ir.get_type(ty);
             assert_eq!(data.name, Symbol::new("typeref"));
-            ir.type_alias_by_name(data.attrs.get_symbol("name").unwrap())
+            ir.type_alias_by_text(data.attrs.get_str(ir, "name").unwrap())
                 .expect("referenced layout")
         }
         let source = source_from_str(
@@ -3368,7 +3373,7 @@ fn main() -> Nil {}
                 let value = get_struct_fields(&ir, inner).unwrap()[0].1;
                 assert_eq!(ir.get_type(value).name, Symbol::from_dynamic(primitive));
                 let outer = get_enum_variants(&ir, alias(&ir, &format!("Outer${suffix}"))).unwrap();
-                assert_eq!(outer[0].0, Symbol::new("Wrap"));
+                assert_eq!(ir.str(outer[0].0), "Wrap");
                 assert_eq!(target(&ir, outer[0].1[0]), inner);
                 assert!(outer[2].1.is_empty());
                 assert_eq!(outer[3].1.len(), 2);
@@ -3398,7 +3403,7 @@ fn main() -> Nil {}
             assert_eq!(target(&ir, recursive[0].1[0]), alias(&ir, "Link$Int"));
             for (name, primitive) in [("A::Token$Int", "i32"), ("B::Token$Bool", "i1")] {
                 let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
-                assert_eq!(variants[0].0, Symbol::new("Item"));
+                assert_eq!(ir.str(variants[0].0), "Item");
                 assert_eq!(
                     ir.get_type(variants[0].1[0]).name,
                     Symbol::from_dynamic(primitive)
@@ -3429,11 +3434,20 @@ fn main() -> Nil {}
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::from_dynamic(kind));
-            assert_eq!(data.attrs.get_symbol("name"), Some(name));
+            assert!(
+                data.attrs
+                    .get_str(ir, "name")
+                    .is_some_and(|text| name == text)
+            );
             assert_eq!(
                 ir.type_aliases()
                     .iter()
-                    .filter(|(_, ty)| ir.get_type(*ty).attrs.get_symbol("name") == Some(name))
+                    .filter(|(_, ty)| {
+                        ir.get_type(*ty)
+                            .attrs
+                            .get_str(ir, "name")
+                            .is_some_and(|text| name == text)
+                    })
                     .count(),
                 1,
                 "one published layout for {name}"
@@ -3445,7 +3459,7 @@ fn main() -> Nil {}
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::new("typeref"));
-            data.attrs.get_symbol("name").expect("nominal identity")
+            Symbol::from_dynamic(data.attrs.get_str(ir, "name").expect("nominal identity"))
         }
 
         // These specializations occur only in signatures, never in allocations.
@@ -4028,7 +4042,7 @@ fn main() -> String { "hello" }
             (ty != string_ty
                 && data.dialect == "adt"
                 && data.name == "enum"
-                && data.attrs.get_symbol("name") == Some(trunk_ir::Symbol::new("String")))
+                && data.attrs.get_str(&ctx, "name") == Some("String"))
             .then_some(ty)
         });
         assert!(

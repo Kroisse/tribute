@@ -468,15 +468,17 @@ mod tests {
     #[test]
     fn builtin_closure_is_identified_by_layout_not_name() {
         let mut ctx = IrContext::new();
+        let name_attr = ctx.string_attr("_closure");
         let named = ctx.intern_type(
             TypeDataBuilder::new("adt", "struct")
-                .attr("name", Attribute::Symbol(Symbol::new("_closure")))
+                .attr("name", name_attr)
                 .build(),
         );
         let closure_layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
+        let name_attr = ctx.string_attr("Other");
         let layout = ctx.intern_type(
             TypeDataBuilder::new("adt", "struct")
-                .attr("name", Attribute::Symbol(Symbol::new("Other")))
+                .attr("name", name_attr)
                 .attr(trunk_ir::types::LAYOUT_ATTR, closure_layout)
                 .build(),
         );

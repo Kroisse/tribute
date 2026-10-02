@@ -101,9 +101,10 @@ pub fn cps_continuation_frame_ref_type(
     name: Symbol,
     result: TypeRef,
 ) -> TypeRef {
+    let name = name.with_str(|name| ctx.string_attr(name));
     ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-            .attr("name", Attribute::Symbol(name))
+            .attr("name", name)
             .attr(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result))
             .build(),
     )
@@ -128,6 +129,7 @@ pub fn cps_continuation_frame_layout_type(
 ) -> TypeRef {
     let mut attrs = AttributeMap::new();
     attrs.insert(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result));
+    let name = name.with_str(|name| ctx.intern_str(name));
     adt::struct_type(ctx, name, [("done", done), ("dispatch", dispatch)], attrs).as_type_ref()
 }
 
@@ -363,10 +365,7 @@ mod tests {
                 .unwrap()
                 .fields(&ctx)
                 .collect::<Vec<_>>(),
-            [
-                (Symbol::new("done"), done),
-                (Symbol::new("dispatch"), dispatch)
-            ]
+            [("done", done), ("dispatch", dispatch)]
         );
 
         for (closure, environment_index, expected) in [
@@ -427,9 +426,10 @@ mod tests {
                 .attr(CLOSURE_ENVIRONMENT_INDEX_ATTR, Attribute::Int(1))
                 .build(),
         );
+        let name_attr = ctx.string_attr("ContinuationFrame");
         let unmarked_frame = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", Attribute::Symbol(Symbol::new("ContinuationFrame")))
+                .attr("name", name_attr)
                 .build(),
         );
 

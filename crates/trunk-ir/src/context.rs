@@ -394,6 +394,14 @@ impl IrContext {
         }
     }
 
+    /// Intern the text of `symbol` as a string value.
+    ///
+    /// For names that reach the IR as symbols, such as frontend declaration
+    /// names, but are stored as string attributes.
+    pub fn intern_symbol_text(&mut self, symbol: Symbol) -> StringRef {
+        symbol.with_str(|text| self.intern_str(text))
+    }
+
     /// Find a pooled string without interning it.
     pub fn lookup_str(&self, text: &str) -> Option<StringRef> {
         self.strings.lookup(text)
@@ -491,6 +499,12 @@ impl IrContext {
     /// Look up a type alias by name.
     pub fn type_alias_by_name(&self, name: Symbol) -> Option<TypeRef> {
         self.type_alias_by_name.get(&name).copied()
+    }
+
+    /// Look up a type alias by the text of its name, such as a nominal
+    /// type's string name, without interning it.
+    pub fn type_alias_by_text(&self, name: &str) -> Option<TypeRef> {
+        self.type_alias_by_name(Symbol::lookup(name)?)
     }
 
     /// Look up an alias name for a given type (reverse lookup for printer).

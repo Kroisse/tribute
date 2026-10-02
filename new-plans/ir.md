@@ -948,7 +948,8 @@ specialization에 대응해야 한다.
 
 Source-logical frontend는 nominal layout을 생성할 때 실제 `adt.struct` 또는
 `adt.enum` 타입을 normalized nominal symbol의 IR type alias로 게시한다.
-`adt.typeref`의 `name`, layout의 `name`, 게시된 alias의 이름은 일치해야 한다.
+`adt.typeref`의 `name`, layout의 `name`(둘 다 문자열), 게시된 alias의 이름은
+텍스트가 일치해야 한다.
 생성 연산 없이 signature에만 등장하는 특수화도 같은 계약을 따르며, 필드에서
 참조하는 compiler-generated nominal tuple layout도 게시한다. Frontend 내부
 type map이나 type interner에만 존재하는 layout은 게시된 정의가 아니다.
@@ -1259,7 +1260,7 @@ representation.
 core.i32
 core.tuple<core.i32, core.ptr {k = @v}>
 core.ref<core.i32, {nullable = true}>
-adt.typeref<{name = @Point}>
+adt.typeref<{name = "Point"}>
 func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv = @tail}>
 ```
 
@@ -1362,7 +1363,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<@_closure(@func_ptr: core.ptr, @env: core.ptr), {layout = "closure"}>`.
+  `adt.struct<_closure(func_ptr: core.ptr, env: core.ptr), {layout = "closure"}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1377,18 +1378,21 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 ### `adt.struct` nominal layout type
 
 `adt.struct`는 이름 있는 nominal struct layout이다. 이름과 필드 이름을 항상 가지며
-전용 textual 문법을 쓴다.
+전용 textual 문법을 쓴다. 이름은 식별자(`[A-Za-z_][A-Za-z0-9_]*`)면 그대로 쓰고,
+아니면 따옴표 문자열로 쓴다(`adt.struct<"Nested::Closure"(…)>`, `"0": core.i32`).
+Struct·enum 이름과 필드·variant 이름은 타입 이름공간의 이름이며 symbol table의
+정의가 아니므로 `@`를 붙이지 않는다.
 
 ```text
-adt.struct<@Point(@x: core.i32, @y: core.i32)>
-adt.struct<@Node(@value: core.i32 {k = @v}, @next: adt.typeref<{name = @Node}>)>
-adt.struct<@_closure(@func_ptr: core.ptr, @env: core.ptr), {layout = "closure"}>
-adt.struct<@Empty()>
+adt.struct<Point(x: core.i32, y: core.i32)>
+adt.struct<Node(value: core.i32 {k = @v}, next: adt.typeref<{name = "Node"}>)>
+adt.struct<_closure(func_ptr: core.ptr, env: core.ptr), {layout = "closure"}>
+adt.struct<Empty()>
 ```
 
 - 저장 표현은 다음과 같다. 필드 타입은 `params`에 선언 순서대로 둔다. 필드 이름은
-  각 필드의 [매개변수 속성](#타입-매개변수-속성) `name`(symbol)이고, struct 이름은
-  type 속성 `name`(symbol)이다. 필드 하나의 다른 속성은 같은 매개변수 속성
+  각 필드의 [매개변수 속성](#타입-매개변수-속성) `name`(문자열)이고, struct 이름은
+  type 속성 `name`(문자열)이다. 필드 하나의 다른 속성은 같은 매개변수 속성
   dictionary에 함께 둔다.
 - 이름과 모든 필드 이름은 필수이고, 필드 이름은 struct 안에서 겹치지 않는다.
   매개변수가 없으면 필드가 없는 struct다. 필드 목록을 담는 별도 type 속성은 없다.
@@ -1427,8 +1431,12 @@ descriptor로만 구별된다.
   [`layout`](#runtime-layout-식별자)으로 식별한다.
 - 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
   reference로 끊겨 있다.
-- `adt.enum`은 `variants` 속성으로 variant별 필드를 표현한다. 저수준 struct를 이용한
-  enum 표현은 별도로 정한다.
+- `adt.enum`은 type 속성 `name`(문자열)과 `variants` 속성으로 variant별 필드를
+  표현한다. `variants`는 `[["Some", [T]], ["None", []]]`처럼 variant 이름(문자열)과
+  필드 타입 list의 쌍을 선언 순서로 담는다. `adt.variant_*` operation의 `tag`와
+  Wasm variant 타입의 `variant_tag`는 이 variant 이름 문자열이다. `adt.typeref`의
+  `name`(문자열)은 같은 이름의 layout을 가리키는 타입 이름공간의 참조다. 저수준
+  struct를 이용한 enum 표현은 별도로 정한다.
 
 ### `func.func_sig` function type
 

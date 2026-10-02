@@ -531,10 +531,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
-  !Closure = adt.struct<@_closure(@table_idx: core.i32, @env: wasm.anyref), {layout = "closure"}>
-  !Frame = adt.struct<@Frame()>
-  !Env = adt.struct<@Env(@closure: !Closure, @evidence: !Evidence, @frame: !Frame)>
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
+  !Frame = adt.struct<Frame()>
+  !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
   wasm.func @worker(%evidence: !Evidence, %closure: !Closure, %frame: !Frame) {
     %env = adt.struct_new %closure, %evidence, %frame {type = !Env} : !Env
     %loaded = adt.struct_get %env {field = 1, type = !Env} : !Evidence
@@ -570,8 +570,8 @@ mod tests {
         assert_eq!(
             ctx.get_type(struct_get.r#type(&ctx))
                 .attrs
-                .get_symbol("name"),
-            Some(Symbol::new("Env"))
+                .get_str(&ctx, "name"),
+            Some("Env")
         );
 
         finalize_wasm_gc_types(&mut ctx, module)
@@ -951,7 +951,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}>
+  !String = adt.enum<{name = "String", variants = [["Leaf", [core.bytes]], ["Branch", [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}>
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "wrong"} : core.i32
     func.return
@@ -1045,7 +1045,7 @@ mod tests {
     fn lower_to_wasm_binds_evidence_runtime_declarations() {
         let output = lower_text(
             r#"core.module @test {
-  !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @prompt(%ev: !Evidence) -> core.i32 {
     %id = arith.const {value = 7} : core.i32

@@ -40,7 +40,6 @@
 //! indexed `wasm` operations before emission.
 
 use tracing::warn;
-use trunk_ir::Symbol;
 use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::adt;
@@ -53,6 +52,7 @@ use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
 use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::{StringRef, Symbol};
 
 use crate::emit::helpers;
 
@@ -72,8 +72,8 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("typeref") {
         return None;
     }
-    let name = data.attrs.get_symbol("name")?;
-    let enum_ty = ctx.type_alias_by_name(name)?;
+    let name = data.attrs.get_str(ctx, "name")?;
+    let enum_ty = ctx.type_alias_by_text(name)?;
     canonical_enum_type(ctx, enum_ty)
 }
 
@@ -227,7 +227,7 @@ impl RewritePattern for VariantNewPattern {
         };
 
         let loc = ctx.op(op).location;
-        let tag_sym = variant_new.tag(ctx);
+        let tag_sym = variant_new.tag_ref(ctx);
         let Some(base_type) = canonical_enum_type(ctx, variant_new.r#type(ctx)) else {
             return false;
         };
@@ -253,7 +253,7 @@ impl RewritePattern for VariantNewPattern {
 /// - `is_variant = true` - marks this as a variant instance type
 /// - `variant_tag = Symbol` - the variant tag (e.g., `Add`, `Num`)
 /// - `base_enum = Type` - the base enum type
-fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> TypeRef {
+fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: StringRef) -> TypeRef {
     let base_data = ctx.get_type(base_type);
     let dialect = base_data.dialect;
 
@@ -262,14 +262,14 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
     let is_typeref =
         base_data.dialect == Symbol::new("adt") && base_data.name == Symbol::new("typeref");
 
-    let base_name = if is_typeref {
-        // Get the name attribute from the typeref type
-        base_data.attrs.get_symbol("name").unwrap_or(base_data.name)
-    } else {
-        base_data.name
+    let typeref_name = is_typeref
+        .then(|| base_data.attrs.get_str(ctx, "name"))
+        .flatten();
+    let variant_name = match typeref_name {
+        Some(base_name) => format!("{base_name}${}", ctx.str(tag)),
+        None => format!("{}${}", base_data.name, ctx.str(tag)),
     };
-
-    let variant_name = Symbol::from_dynamic(&format!("{base_name}${tag}"));
+    let variant_name = Symbol::from_dynamic(&variant_name);
 
     // Copy params from base type
     let params: Vec<TypeRef> = base_data.params.to_vec();
@@ -279,7 +279,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: Symbol) -> Ty
         .params(params)
         .attr(Symbol::new("is_variant"), Attribute::Bool(true))
         .attr(Symbol::new("base_enum"), Attribute::Type(base_type))
-        .attr(Symbol::new("variant_tag"), Attribute::Symbol(tag));
+        .attr(Symbol::new("variant_tag"), Attribute::String(tag));
 
     ctx.intern_type(builder.build())
 }
@@ -301,7 +301,7 @@ impl RewritePattern for VariantIsPattern {
         };
 
         let loc = ctx.op(op).location;
-        let tag = variant_is.tag(ctx);
+        let tag = variant_is.tag_ref(ctx);
         let ref_val = variant_is.r#ref(ctx);
         let result_ty = variant_is.result_ty(ctx);
 
@@ -339,7 +339,7 @@ impl RewritePattern for VariantCastPattern {
         };
 
         let loc = ctx.op(op).location;
-        let tag = variant_cast.tag(ctx);
+        let tag = variant_cast.tag_ref(ctx);
         let ref_val = variant_cast.r#ref(ctx);
 
         let Some(enum_type) = canonical_enum_type(ctx, variant_cast.r#type(ctx)) else {
@@ -380,7 +380,7 @@ impl RewritePattern for VariantGetPattern {
         let loc = ctx.op(op).location;
         let ref_val = variant_get.r#ref(ctx);
         let field_idx = variant_get.field(ctx);
-        let tag = variant_get.tag(ctx);
+        let tag = variant_get.tag_ref(ctx);
         let Some(enum_type) = canonical_enum_type(ctx, variant_get.r#type(ctx)) else {
             return false;
         };
@@ -411,7 +411,7 @@ impl RewritePattern for VariantGetPattern {
         let variant_type = if ctx.get_type(operand_ty).attrs.get_bool("is_variant") == Some(true) {
             let operand_attrs = &ctx.get_type(operand_ty).attrs;
             if operand_attrs.get_type("base_enum") != Some(enum_type)
-                || operand_attrs.get_symbol("variant_tag") != Some(tag)
+                || operand_attrs.get_string_ref("variant_tag") != Some(tag)
             {
                 return false;
             }
@@ -687,8 +687,8 @@ mod tests {
         let _module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !E = adt.enum<{name = @E, variants = []}>
-  !ERef = adt.typeref<{name = @E}>
+  !E = adt.enum<{name = "E", variants = []}>
+  !ERef = adt.typeref<{name = "E"}>
 }"#,
         );
         let enum_ty = ctx
@@ -708,9 +708,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<@S(@value: core.i32)>
-  !E = adt.enum<{name = @E, variants = [[@Some, [core.i32]]]}>
-  !ERef = adt.typeref<{name = @E}>
+  !S = adt.struct<S(value: core.i32)>
+  !E = adt.enum<{name = "E", variants = [["Some", [core.i32]]]}>
+  !ERef = adt.typeref<{name = "E"}>
   !A = core.array<core.i32>
 
   wasm.func @main() -> core.nil {
@@ -720,10 +720,10 @@ mod tests {
     %field = adt.struct_get %struct {type = !S, field = 0} : core.i32
     adt.struct_set %struct, %field {type = !S, field = 0}
 
-    %variant = adt.variant_new %one {type = !E, tag = @Some} : !ERef
-    %is_some = adt.variant_is %variant {type = !E, tag = @Some} : core.i32
-    %cast = adt.variant_cast %variant {type = !E, tag = @Some} : !ERef
-    %payload = adt.variant_get %cast {type = !E, tag = @Some, field = 0} : core.i32
+    %variant = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
+    %is_some = adt.variant_is %variant {type = !E, tag = "Some"} : core.i32
+    %cast = adt.variant_cast %variant {type = !E, tag = "Some"} : !ERef
+    %payload = adt.variant_get %cast {type = !E, tag = "Some", field = 0} : core.i32
 
     %empty = adt.array_new {type = !A} : !A
     %default = adt.array_new %one {type = !A} : !A
@@ -812,16 +812,16 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ListRef = adt.typeref<{name = @List}>
-  !List = adt.enum<{name = @List, variants = [[@Empty, []], [@Cons, [core.i32, !ListRef]]]}>
+  !ListRef = adt.typeref<{name = "List"}>
+  !List = adt.enum<{name = "List", variants = [["Empty", []], ["Cons", [core.i32, !ListRef]]]}>
 
   wasm.func @main(%input: !ListRef) -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
-    %empty = adt.variant_new {type = !List, tag = @Empty} : !ListRef
-    %list = adt.variant_new %zero, %empty {type = !List, tag = @Cons} : !ListRef
-    %is_cons = adt.variant_is %input {type = !List, tag = @Cons} : core.i1
-    %cast = adt.variant_cast %input {type = !List, tag = @Cons} : !ListRef
-    %tail = adt.variant_get %cast {type = !List, tag = @Cons, field = 1} : !ListRef
+    %empty = adt.variant_new {type = !List, tag = "Empty"} : !ListRef
+    %list = adt.variant_new %zero, %empty {type = !List, tag = "Cons"} : !ListRef
+    %is_cons = adt.variant_is %input {type = !List, tag = "Cons"} : core.i1
+    %cast = adt.variant_cast %input {type = !List, tag = "Cons"} : !ListRef
+    %tail = adt.variant_get %cast {type = !List, tag = "Cons", field = 1} : !ListRef
     wasm.return
   }
 }"#,
@@ -858,8 +858,10 @@ mod tests {
         let list = ctx
             .type_alias_by_name(Symbol::new("List"))
             .expect("list layout");
-        let cons = make_variant_type(&mut ctx, list, Symbol::new("Cons"));
-        let empty = make_variant_type(&mut ctx, list, Symbol::new("Empty"));
+        let cons_tag = ctx.intern_str("Cons");
+        let empty_tag = ctx.intern_str("Empty");
+        let cons = make_variant_type(&mut ctx, list, cons_tag);
+        let empty = make_variant_type(&mut ctx, list, empty_tag);
 
         assert_eq!(variant_types.len(), 5);
         assert_eq!(variant_types[0], empty);
@@ -909,19 +911,19 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ARef = adt.typeref<{name = @A}>
-  !BRef = adt.typeref<{name = @B}>
-  !A = adt.enum<{name = @A, variants = [[@Some, [core.i32]], [@Other, [core.i32]]]}>
-  !B = adt.enum<{name = @B, variants = [[@Some, [core.i32]]]}>
+  !ARef = adt.typeref<{name = "A"}>
+  !BRef = adt.typeref<{name = "B"}>
+  !A = adt.enum<{name = "A", variants = [["Some", [core.i32]], ["Other", [core.i32]]]}>
+  !B = adt.enum<{name = "B", variants = [["Some", [core.i32]]]}>
 
   wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef) -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
-    %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = @Some, field = 0} : core.i32
-    %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = @Some, field = 0} : core.i32
-    %from_b = adt.variant_new %zero {type = !B, tag = @Some} : !BRef
-    %wrong_enum = adt.variant_get %from_b {type = !A, tag = @Some, field = 0} : core.i32
-    %from_a_other = adt.variant_new %zero {type = !A, tag = @Other} : !ARef
-    %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = @Some, field = 0} : core.i32
+    %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = "Some", field = 0} : core.i32
+    %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = "Some", field = 0} : core.i32
+    %from_b = adt.variant_new %zero {type = !B, tag = "Some"} : !BRef
+    %wrong_enum = adt.variant_get %from_b {type = !A, tag = "Some", field = 0} : core.i32
+    %from_a_other = adt.variant_new %zero {type = !A, tag = "Other"} : !ARef
+    %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = "Some", field = 0} : core.i32
     wasm.return
   }
 }"#,
@@ -961,22 +963,22 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !ERef = adt.typeref<{name = @E}>
-  !BoxRef = adt.typeref<{name = @Box}>
-  !NodeRef = adt.typeref<{name = @Node}>
-  !StringRef = adt.typeref<{name = @String}>
-  !E = adt.enum<{name = @E, variants = [[@Some, [core.i32]]]}>
-  !Box = adt.enum<{name = @Box, variants = [[@Next, [!NodeRef]]]}>
-  !Node = adt.enum<{name = @Node, variants = [[@Node, []]]}>
+  !ERef = adt.typeref<{name = "E"}>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  !NodeRef = adt.typeref<{name = "Node"}>
+  !StringRef = adt.typeref<{name = "String"}>
+  !E = adt.enum<{name = "E", variants = [["Some", [core.i32]]]}>
+  !Box = adt.enum<{name = "Box", variants = [["Next", [!NodeRef]]]}>
+  !Node = adt.enum<{name = "Node", variants = [["Node", []]]}>
   !Data = core.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<@_Bytes(@data: !Data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
-  !String = adt.enum<{name = @String, variants = [[@Leaf, [!Bytes]]]}>
+  !Bytes = adt.struct<_Bytes(data: !Data, offset: core.i32, len: core.i32), {layout = "bytes"}>
+  !String = adt.enum<{name = "String", variants = [["Leaf", [!Bytes]]]}>
 
   wasm.func @main(%e: !ERef, %box: !BoxRef, %string: !StringRef) -> core.nil {
-    %valid = adt.variant_get %e {type = !E, tag = @Some, field = 0} : core.i32
-    %invalid = adt.variant_get %e {type = !E, tag = @Some, field = 0} : core.i64
-    %node = adt.variant_get %box {type = !Box, tag = @Next, field = 0} : wasm.structref
-    %bytes = adt.variant_get %string {type = !String, tag = @Leaf, field = 0} : wasm.anyref
+    %valid = adt.variant_get %e {type = !E, tag = "Some", field = 0} : core.i32
+    %invalid = adt.variant_get %e {type = !E, tag = "Some", field = 0} : core.i64
+    %node = adt.variant_get %box {type = !Box, tag = "Next", field = 0} : wasm.structref
+    %bytes = adt.variant_get %string {type = !String, tag = "Leaf", field = 0} : wasm.anyref
     wasm.return
   }
 }"#,

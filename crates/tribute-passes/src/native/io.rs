@@ -46,12 +46,10 @@ pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError>
 fn find_read_line_result_type(ctx: &IrContext) -> Option<TypeRef> {
     let adt = Symbol::new("adt");
     let enum_name = Symbol::new("enum");
-    let name_attr = Symbol::new("name");
-    let expected = Symbol::new(READ_LINE_RESULT_TYPE);
     ctx.types().iter().find_map(|(ty, data)| {
         (data.dialect == adt
             && data.name == enum_name
-            && data.attrs.get_symbol(name_attr) == Some(expected))
+            && data.attrs.get_str(ctx, "name") == Some(READ_LINE_RESULT_TYPE))
         .then_some(ty)
     })
 }
@@ -270,7 +268,7 @@ fn variant_region<const N: usize>(
 ) -> RegionRef {
     let variant = adt::VariantNew::operands(fields)
         .r#type(enum_ty)
-        .tag(Symbol::new(tag))
+        .tag(tag)
         .results(result_ty)
         .build(ctx, loc);
     op_region(ctx, loc, variant.op_ref(), variant.result(ctx))
@@ -306,7 +304,7 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                !"std::io::ReadLineResult" = adt.enum<{name = @"std::io::ReadLineResult", variants = [[@ReadLine, [core.bytes]], [@ReadEndOfFile, []], [@ReadInvalidEncoding, []], [@ReadSystem, [core.i32, core.bytes]]]}>
+                !"std::io::ReadLineResult" = adt.enum<{name = "std::io::ReadLineResult", variants = [["ReadLine", [core.bytes]], ["ReadEndOfFile", []], ["ReadInvalidEncoding", []], ["ReadSystem", [core.i32, core.bytes]]]}>
 
                 func.func @caller(%0: core.bytes, %1: core.i1) -> tribute_rt.anyref {
                 ^bb0:
@@ -327,10 +325,10 @@ mod tests {
             output.contains("callee = @__tribute_io_read_line"),
             "{output}"
         );
-        assert!(output.contains("tag = @ReadLine"), "{output}");
-        assert!(output.contains("tag = @ReadEndOfFile"), "{output}");
-        assert!(output.contains("tag = @ReadInvalidEncoding"), "{output}");
-        assert!(output.contains("tag = @ReadSystem"), "{output}");
+        assert!(output.contains("tag = \"ReadLine\""), "{output}");
+        assert!(output.contains("tag = \"ReadEndOfFile\""), "{output}");
+        assert!(output.contains("tag = \"ReadInvalidEncoding\""), "{output}");
+        assert!(output.contains("tag = \"ReadSystem\""), "{output}");
 
         let validation = trunk_ir::validation::validate_value_integrity(&ctx, module);
         assert!(validation.is_ok(), "{:?}", validation.errors);

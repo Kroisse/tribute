@@ -167,6 +167,15 @@ pub fn symbol_ref(input: &mut &str) -> ModalResult<String> {
     }
 }
 
+/// Parse a name: a bare identifier or a quoted string.
+pub fn name_token(input: &mut &str) -> ModalResult<String> {
+    if input.starts_with('"') {
+        string_lit.parse_next(input)
+    } else {
+        ident.map(str::to_owned).parse_next(input)
+    }
+}
+
 /// Parse a block label: ^bbN or ^name
 pub fn block_label<'a>(input: &mut &'a str) -> ModalResult<&'a str> {
     preceded(
@@ -1144,7 +1153,7 @@ mod tests {
 
     #[test]
     fn test_parse_type_with_only_attrs() {
-        let mut input = "adt.typeref<{name = @X}>";
+        let mut input = "adt.typeref<{name = \"X\"}>";
         let raw = raw_type.parse_next(&mut input).expect("should parse");
         let RawType::Concrete { params, attrs, .. } = raw else {
             panic!("expected Concrete")

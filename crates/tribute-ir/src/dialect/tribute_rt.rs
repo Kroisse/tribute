@@ -199,9 +199,10 @@ mod tests {
     fn test_into_raw_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
+        let name_attr = ctx.string_attr("Box");
         let managed_ty = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", Attribute::Symbol(Symbol::new("Box")))
+                .attr("name", name_attr)
                 .build(),
         );
         let ptr_ty = make_ptr_type(&mut ctx);

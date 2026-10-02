@@ -1426,9 +1426,10 @@ fn lower_constructor<'db>(
         ctor.ty,
     );
     let values = super::expr::cast_variant_args(builder, location, values, type_attr, variant);
+    let tag = builder.ir.intern_symbol_text(variant);
     let variant = adt::VariantNew::operands(values)
         .r#type(type_attr)
-        .tag(variant)
+        .tag(tag)
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, variant.op_ref());
@@ -1619,9 +1620,10 @@ fn lower_variant_record<'db>(
         .collect();
     let ordered = super::expr::cast_variant_args(builder, location, ordered, layout, variant);
     let result_ty = expr_type_for_id(builder, id);
+    let tag = builder.ir.intern_symbol_text(variant);
     let value = adt::VariantNew::operands(ordered)
         .r#type(layout)
-        .tag(variant)
+        .tag(tag)
         .results(result_ty)
         .build(builder.ir, location);
     builder.ir.push_op(builder.block, value.op_ref());
