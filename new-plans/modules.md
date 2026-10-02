@@ -100,6 +100,10 @@ Ordinary source function이나 `extern "C"`는 같은 symbol을 사용해도 int
 reserved ABI 문자열만으로 signature 검증을 우회할 수 없다. 이 directive는 일반적인
 symbol uniqueness 규칙을 완화하지 않는다.
 
+`extern "C"` 함수의 IR symbol은 선언한 이름이다. C linkage는 하나의 평평한
+이름공간이므로, 모듈 안에서 선언해도 모듈 경로를 붙이지 않는다. 소스에서는 여전히
+모듈 경로로 그 함수를 가리킨다.
+
 ### Use 문법
 
 ```rust

@@ -126,6 +126,28 @@ fn main() -> Nil {
 }
 
 #[test]
+fn test_native_extern_c_in_module_links_by_declared_name() {
+    let output = compile_and_run_native(
+        "extern_c_in_module.trb",
+        r#"
+mod ffi {
+    pub extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+}
+
+fn main() -> Nil {
+    ffi::__tribute_print_nat(7)
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "7");
+}
+
+#[test]
 fn test_native_function_call() {
     assert_native_output(
         "function_call.trb",

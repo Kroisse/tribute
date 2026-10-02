@@ -75,6 +75,10 @@ pub struct IrLoweringCtx<'db> {
     logical_generated_signatures: HashMap<Symbol, LogicalGeneratedSignature>,
     /// Source declarations collected before logical lowering begins.
     logical_source_functions: HashSet<Symbol>,
+    /// IR symbols of `extern "C"` functions declared inside a module, keyed
+    /// by their qualified name. C linkage has one flat namespace, so they keep
+    /// their declared name.
+    c_symbols: HashMap<Symbol, Symbol>,
     /// Extern declarations synthesized for referenced prelude functions.
     logical_emitted_externs: HashSet<Symbol>,
     /// Ability-level calling-convention requirements.
@@ -145,6 +149,7 @@ impl<'db> IrLoweringCtx<'db> {
             function_types,
             logical_generated_signatures: HashMap::new(),
             logical_source_functions: HashSet::new(),
+            c_symbols: HashMap::new(),
             logical_emitted_externs: HashSet::new(),
             ability_conventions,
             definition_conventions: HashMap::new(),
@@ -321,6 +326,18 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn register_logical_source_function(&mut self, name: Symbol) {
         self.logical_source_functions.insert(name);
+    }
+
+    pub(crate) fn register_c_symbol(&mut self, qualified: Symbol, symbol: Symbol) {
+        if qualified != symbol {
+            self.c_symbols.insert(qualified, symbol);
+        }
+    }
+
+    /// The IR symbol of the function with qualified name `name`: its declared
+    /// name for an `extern "C"` function, the qualified name otherwise.
+    pub(crate) fn function_symbol(&self, name: Symbol) -> Symbol {
+        self.c_symbols.get(&name).copied().unwrap_or(name)
     }
 
     pub(crate) fn is_logical_source_function(&self, name: Symbol) -> bool {
