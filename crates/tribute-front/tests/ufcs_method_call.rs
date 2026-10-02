@@ -53,6 +53,8 @@ struct Pair { x: Nat, y: Nat }
 struct Triple { x: Nat, y: Nat, z: Nat }
 
 pub mod Pair {
+    use super::Triple
+
     pub fn extend(p: Pair, z: Nat) -> Triple {
         Triple { x: p.x, y: p.y, z: z }
     }
@@ -84,12 +86,16 @@ struct B { value: Nat }
 struct C { value: Nat }
 
 pub mod A {
+    use super::B
+
     pub fn to_b(a: A, offset: Nat) -> B {
         B { value: a.value + offset }
     }
 }
 
 pub mod B {
+    use super::C
+
     pub fn to_c(b: B, scale: Nat) -> C {
         C { value: b.value * scale }
     }
@@ -218,10 +224,14 @@ fn test(c: Counter) -> Nat {
 struct Thing { value: Nat }
 
 pub mod A {
+    use super::Thing
+
     pub fn pick(t: Thing) -> Nat { t.value }
 }
 
 pub mod B {
+    use super::Thing
+
     pub fn pick(t: Thing) -> Nat { t.value }
 }
 
@@ -266,6 +276,8 @@ fn test(t: Thing) -> Nat {
 struct Item { value: Nat }
 
 pub mod Outer {
+    use super::Item
+
     pub fn score(i: Item) -> Nat {
         i.value
     }
@@ -422,6 +434,8 @@ struct Pair { x: Nat, y: Nat }
 struct Triple { x: Nat, y: Nat, z: Nat }
 
 pub mod Pair {
+    use super::Triple
+
     pub fn extend(p: Pair, z: Nat) -> Triple {
         Triple { x: p.x, y: p.y, z: z }
     }
@@ -449,6 +463,8 @@ struct Pair { x: Nat, y: Nat }
 struct Triple { x: Nat, y: Nat, z: Nat }
 
 pub mod Pair {
+    use super::Triple
+
     pub fn extend(p: Pair, z: Nat) -> Triple {
         Triple { x: p.x, y: p.y, z: z }
     }

@@ -399,13 +399,14 @@ impl<'db> TdnrResolver<'db> {
                 .unwrap_or_else(|| crate::ast::TypeDefId::synthetic(self.db, name));
         }
 
-        let mut scope = prefix.trim_end_matches("::");
-        while !scope.is_empty() {
+        // Name resolution leaves a bare name only for a declaration of the
+        // current module; the package root holds the rest.
+        let scope = prefix.trim_end_matches("::");
+        if !scope.is_empty() {
             let candidate = Symbol::from_dynamic(&format!("{scope}::{spelling}"));
             if let Some(id) = self.type_identities.get(&candidate) {
                 return *id;
             }
-            scope = scope.rsplit_once("::").map_or("", |(parent, _)| parent);
         }
 
         self.type_identities

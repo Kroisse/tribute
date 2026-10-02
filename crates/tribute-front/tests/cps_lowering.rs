@@ -335,6 +335,8 @@ ability State {
     op get() -> Int
 }
 mod Nested {
+    use super::State
+
     fn main() ->{State} Int { State::get() }
 }
 fn main() -> Nil { }
@@ -844,8 +846,14 @@ fn test_nested_main_is_not_subject_to_entrypoint_diagnostics(db: &salsa::Databas
         db,
         "test.trb",
         r#"
+ability State(s) {
+    op get() -> s
+}
+
 mod Nested {
-    fn main() -> Int { +1 }
+    use super::State
+
+    fn main() ->{State(Int)} Int { State::get() }
 }
 
 fn main() -> Nil { }

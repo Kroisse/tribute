@@ -121,6 +121,8 @@ pub mod Result {
 // These are resolved via TDNR and lowered to arith dialect operations.
 
 pub mod Int {
+    use super::{Result, Ok, Error, String}
+
     /// Errors returned by decimal integer parsing.
     pub enum ParseError {
         InvalidSyntax,
@@ -180,26 +182,26 @@ pub mod Int {
         value: Int,
         negative: Bool,
         overflowed: Bool,
-    ) -> Result(Int, Int::ParseError) {
+    ) -> Result(Int, ParseError) {
         case index == bytes.len() {
             True -> case overflowed {
-                True -> Error(Int::ParseError::OutOfRange)
+                True -> Error(ParseError::OutOfRange)
                 False -> Ok(value)
             }
             False -> {
-                let digit = Int::decimal_digit_or_invalid(bytes.get_or_panic(index))
+                let digit = decimal_digit_or_invalid(bytes.get_or_panic(index))
                 case digit < +0 {
-                    True -> Error(Int::ParseError::InvalidSyntax)
+                    True -> Error(ParseError::InvalidSyntax)
                     False -> case overflowed {
-                        True -> Int::parse_digits(bytes, index + 1, value, negative, True)
-                        False -> case Int::decimal_step_overflows(value, digit, negative) {
-                            True -> Int::parse_digits(bytes, index + 1, value, negative, True)
+                        True -> parse_digits(bytes, index + 1, value, negative, True)
+                        False -> case decimal_step_overflows(value, digit, negative) {
+                            True -> parse_digits(bytes, index + 1, value, negative, True)
                             False -> {
                                 let next = case negative {
                                     True -> value * +10 - digit
                                     False -> value * +10 + digit
                                 }
-                                Int::parse_digits(bytes, index + 1, next, negative, False)
+                                parse_digits(bytes, index + 1, next, negative, False)
                             }
                         }
                     }
@@ -208,22 +210,22 @@ pub mod Int {
         }
     }
 
-    fn parse_after_sign(bytes: Bytes, index: Nat, negative: Bool) -> Result(Int, Int::ParseError) {
+    fn parse_after_sign(bytes: Bytes, index: Nat, negative: Bool) -> Result(Int, ParseError) {
         case index == bytes.len() {
-            True -> Error(Int::ParseError::InvalidSyntax)
-            False -> Int::parse_digits(bytes, index, +0, negative, False)
+            True -> Error(ParseError::InvalidSyntax)
+            False -> parse_digits(bytes, index, +0, negative, False)
         }
     }
 
     /// Parse an optionally signed ASCII decimal integer.
-    pub fn parse(input: String) -> Result(Int, Int::ParseError) {
+    pub fn parse(input: String) -> Result(Int, ParseError) {
         let bytes = input.to_bytes()
         case bytes.len() == 0 {
-            True -> Error(Int::ParseError::InvalidSyntax)
+            True -> Error(ParseError::InvalidSyntax)
             False -> case bytes.get_or_panic(0) {
-                43 -> Int::parse_after_sign(bytes, 1, False)
-                45 -> Int::parse_after_sign(bytes, 1, True)
-                _ -> Int::parse_digits(bytes, 0, +0, False, False)
+                43 -> parse_after_sign(bytes, 1, False)
+                45 -> parse_after_sign(bytes, 1, True)
+                _ -> parse_digits(bytes, 0, +0, False, False)
             }
         }
     }
@@ -260,19 +262,19 @@ pub mod Int {
 
     fn format_positive(value: Int) -> String {
         let quotient = value / +10
-        let digit = Int::positive_digit_string(value % +10)
+        let digit = positive_digit_string(value % +10)
         case quotient == +0 {
             True -> digit
-            False -> Int::format_positive(quotient) <> digit
+            False -> format_positive(quotient) <> digit
         }
     }
 
     fn format_negative(value: Int) -> String {
         let quotient = value / +10
-        let digit = Int::negative_digit_string(value % +10)
+        let digit = negative_digit_string(value % +10)
         case quotient == +0 {
             True -> digit
-            False -> Int::format_negative(quotient) <> digit
+            False -> format_negative(quotient) <> digit
         }
     }
 
@@ -281,8 +283,8 @@ pub mod Int {
         case value == +0 {
             True -> "0"
             False -> case value < +0 {
-                True -> "-" <> Int::format_negative(value)
-                False -> Int::format_positive(value)
+                True -> "-" <> format_negative(value)
+                False -> format_positive(value)
             }
         }
     }
@@ -327,13 +329,15 @@ enum String {
 }
 
 pub mod String {
+    use super::{__tribute_bytes_concat, __tribute_bytes_range_equal}
+
     // Internal depth-first traversal state used to compare rope leaves without
     // flattening. Chunk offsets and remaining lengths always describe a valid
     // contiguous range in `bytes`.
     enum Cursor {
         CursorDone,
-        CursorPending(String, String::Cursor),
-        CursorChunk(Bytes, Nat, Nat, String::Cursor),
+        CursorPending(String, Cursor),
+        CursorChunk(Bytes, Nat, Nat, Cursor),
     }
 
     /// Create an empty string.
@@ -368,54 +372,54 @@ pub mod String {
         }
     }
 
-    fn next_cursor(cursor: String::Cursor) -> String::Cursor {
+    fn next_cursor(cursor: Cursor) -> Cursor {
         case cursor {
-            String::Cursor::CursorDone -> String::Cursor::CursorDone
-            String::Cursor::CursorPending(string, rest) -> case string {
+            Cursor::CursorDone -> Cursor::CursorDone
+            Cursor::CursorPending(string, rest) -> case string {
                 Leaf(bytes) -> {
                     let len = bytes.len()
                     case len == 0 {
-                        True -> String::next_cursor(rest)
-                        False -> String::Cursor::CursorChunk(bytes, 0, len, rest)
+                        True -> next_cursor(rest)
+                        False -> Cursor::CursorChunk(bytes, 0, len, rest)
                     }
                 }
-                Branch(left, right, _) -> String::next_cursor(
-                    String::Cursor::CursorPending(
+                Branch(left, right, _) -> next_cursor(
+                    Cursor::CursorPending(
                         left,
-                        String::Cursor::CursorPending(right, rest)
+                        Cursor::CursorPending(right, rest)
                     )
                 )
             }
-            String::Cursor::CursorChunk(_, _, _, _) -> cursor
+            Cursor::CursorChunk(_, _, _, _) -> cursor
         }
     }
 
-    fn cursors_equal(left: String::Cursor, right: String::Cursor) -> Bool {
+    fn cursors_equal(left: Cursor, right: Cursor) -> Bool {
         case left {
-            String::Cursor::CursorDone -> case right {
-                String::Cursor::CursorDone -> True
-                String::Cursor::CursorPending(_, _) -> String::cursors_equal(
+            Cursor::CursorDone -> case right {
+                Cursor::CursorDone -> True
+                Cursor::CursorPending(_, _) -> cursors_equal(
                     left,
-                    String::next_cursor(right)
+                    next_cursor(right)
                 )
-                String::Cursor::CursorChunk(_, _, _, _) -> False
+                Cursor::CursorChunk(_, _, _, _) -> False
             }
-            String::Cursor::CursorPending(_, _) -> String::cursors_equal(
-                String::next_cursor(left),
+            Cursor::CursorPending(_, _) -> cursors_equal(
+                next_cursor(left),
                 right
             )
-            String::Cursor::CursorChunk(
+            Cursor::CursorChunk(
                 left_bytes,
                 left_offset,
                 left_remaining,
                 left_rest
             ) -> case right {
-                String::Cursor::CursorDone -> False
-                String::Cursor::CursorPending(_, _) -> String::cursors_equal(
+                Cursor::CursorDone -> False
+                Cursor::CursorPending(_, _) -> cursors_equal(
                     left,
-                    String::next_cursor(right)
+                    next_cursor(right)
                 )
-                String::Cursor::CursorChunk(
+                Cursor::CursorChunk(
                     right_bytes,
                     right_offset,
                     right_remaining,
@@ -435,8 +439,8 @@ pub mod String {
                         False -> False
                         True -> {
                             let next_left = case left_remaining == span {
-                                True -> String::next_cursor(left_rest)
-                                False -> String::Cursor::CursorChunk(
+                                True -> next_cursor(left_rest)
+                                False -> Cursor::CursorChunk(
                                     left_bytes,
                                     left_offset + span,
                                     left_remaining - span,
@@ -444,15 +448,15 @@ pub mod String {
                                 )
                             }
                             let next_right = case right_remaining == span {
-                                True -> String::next_cursor(right_rest)
-                                False -> String::Cursor::CursorChunk(
+                                True -> next_cursor(right_rest)
+                                False -> Cursor::CursorChunk(
                                     right_bytes,
                                     right_offset + span,
                                     right_remaining - span,
                                     right_rest
                                 )
                             }
-                            String::cursors_equal(next_left, next_right)
+                            cursors_equal(next_left, next_right)
                         }
                     }
                 }
@@ -461,12 +465,12 @@ pub mod String {
     }
 
     fn rope_equal(left: String, right: String) -> Bool {
-        String::cursors_equal(
-            String::next_cursor(
-                String::Cursor::CursorPending(left, String::Cursor::CursorDone)
+        cursors_equal(
+            next_cursor(
+                Cursor::CursorPending(left, Cursor::CursorDone)
             ),
-            String::next_cursor(
-                String::Cursor::CursorPending(right, String::Cursor::CursorDone)
+            next_cursor(
+                Cursor::CursorPending(right, Cursor::CursorDone)
             )
         )
     }
@@ -484,9 +488,9 @@ pub mod String {
                         0,
                         len
                     )
-                    Branch(_, _, _) -> String::rope_equal(left, right)
+                    Branch(_, _, _) -> rope_equal(left, right)
                 }
-                Branch(_, _, _) -> String::rope_equal(left, right)
+                Branch(_, _, _) -> rope_equal(left, right)
             }
             False -> False
         }
@@ -531,6 +535,8 @@ extern "C" fn __tribute_bytes_slice_or_panic(bytes: Bytes, start: Nat, end: Nat)
 
 /// Bytes module with operations for byte sequences.
 pub mod Bytes {
+    use super::{Option, None, Some, __bytes_get_or_panic, __tribute_bytes_len, __tribute_bytes_concat, __tribute_bytes_range_equal, __tribute_bytes_slice_or_panic}
+
     /// Create an empty byte sequence.
     pub fn empty() -> Bytes { b"" }
 
@@ -644,6 +650,8 @@ pub mod std {
     }
 
     pub mod io {
+        use pkg::{String, abilities}
+
         /// Platform error details reported by an I/O operation.
         pub struct SystemError { code: Int, message: String }
 
