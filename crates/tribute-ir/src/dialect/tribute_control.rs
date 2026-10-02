@@ -8,9 +8,10 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
 
+use crate::dialect::adt;
 use itertools::Itertools;
 use trunk_ir::analysis::AnalysisCache;
-use trunk_ir::dialect::{adt, core};
+use trunk_ir::dialect::core;
 use trunk_ir::op_def::OpDef;
 use trunk_ir::op_interface::{RegionBranchOps, RegionBranchPoint, RegionSuccessor};
 use trunk_ir::op_schema::OpSchema;
@@ -2216,7 +2217,7 @@ fn projection_source_matches_layout(
 }
 
 fn struct_field_type(ctx: &IrContext, layout: TypeRef, field: u32) -> Option<TypeRef> {
-    trunk_ir::dialect::adt::Struct::from_type_ref(ctx, layout)?
+    crate::dialect::adt::Struct::from_type_ref(ctx, layout)?
         .field_type(ctx, usize::try_from(field).ok()?)
 }
 

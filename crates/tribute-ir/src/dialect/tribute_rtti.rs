@@ -6,8 +6,8 @@
 //! declarations, and RC header lowering erases them, so none reaches the
 //! backend-ready boundary.
 
+use crate::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::TypeRef;
-use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::IrContext;
 use trunk_ir::types::{Attribute, Location};
 

@@ -13,9 +13,6 @@ extern crate self as trunk_ir;
 pub mod symbol;
 pub mod symbol_table;
 
-// === ADT layout computation ===
-pub mod adt_layout;
-
 // === Diagnostic types ===
 pub mod diagnostic;
 

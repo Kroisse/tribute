@@ -24,9 +24,9 @@
 
 use tribute_ir::dialect::ability::marker_adt_type_ref;
 use tribute_ir::dialect::ability::{is_evidence_type_ref, is_marker_type_ref};
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::wasm_gc as wasm_gc_dialect;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};

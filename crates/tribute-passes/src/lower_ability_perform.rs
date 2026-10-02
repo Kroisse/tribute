@@ -18,10 +18,11 @@
 //! intermediate best-effort pass: the final `ability-lowered` boundary is
 //! established by `LowerHandleDispatch` after evidence resolution.
 
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, core, func};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};

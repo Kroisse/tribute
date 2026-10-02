@@ -2,9 +2,10 @@
 
 use std::ops::ControlFlow;
 
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::list;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext};
-use trunk_ir::dialect::{adt, cf, func};
+use trunk_ir::dialect::{cf, func};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::helpers::split_block;

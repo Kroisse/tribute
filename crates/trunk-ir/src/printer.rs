@@ -733,7 +733,7 @@ fn generate_auto_aliases(
 
 /// Choose an alias name for a type.
 ///
-/// 1. Try dialect-provided hint (e.g., `name` attribute on adt.struct)
+/// 1. Try dialect-provided hint (e.g., the `name` attribute of a named type)
 /// 2. On conflict, add suffix: `Point`, `Point_1`, `Point_2`, ...
 /// 3. Fallback: `t0`, `t1`, `t2`, ...
 fn choose_alias_name(
@@ -1589,11 +1589,22 @@ mod tests {
     // Auto alias tests
     // ====================================================================
 
-    /// Helper: build an `adt.struct` type with given field list and name.
-    fn make_adt_struct(ctx: &mut IrContext, name: &str, fields: &[(&str, TypeRef)]) -> TypeRef {
-        let fields = fields.iter().map(|(field, ty)| (field.to_string(), *ty));
-        crate::dialect::adt::struct_type(ctx, name.to_owned(), fields, AttributeMap::new())
-            .as_type_ref()
+    inventory::submit!(crate::asm_format::TypeAliasHint {
+        dialect: "alias_test",
+        suggest: |ctx, ty| ctx.get_type(ty).attrs.get_str(ctx, "name"),
+    });
+
+    /// Helper: build a named `alias_test.record` type, which suggests its
+    /// `name` as an alias, with the given named fields.
+    fn make_named_type(ctx: &mut IrContext, name: &str, fields: &[(&str, TypeRef)]) -> TypeRef {
+        let mut builder = TypeDataBuilder::new("alias_test", "record");
+        for (field, ty) in fields {
+            let mut attrs = AttributeMap::new();
+            attrs.insert("name", ctx.string_attr(field));
+            builder = builder.param_with_attrs(*ty, attrs);
+        }
+        let name = ctx.string_attr(name);
+        ctx.intern_type(builder.attr("name", name).build())
     }
 
     /// Helper: build a module with given functions.
@@ -1660,7 +1671,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Create a complex struct type
-        let struct_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
+        let struct_ty = make_named_type(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
 
         // Use it in 3 functions
         let f1 = make_identity_func(&mut ctx, loc, "f1", struct_ty, struct_ty);
@@ -1672,7 +1683,7 @@ mod tests {
 
         // The struct type should be auto-aliased with its name
         assert!(
-            output.contains("!Point = adt.struct<"),
+            output.contains("!Point = alias_test.record<"),
             "Expected auto alias !Point in:\n{output}"
         );
         // The functions should reference the alias
@@ -1710,7 +1721,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
 
-        let struct_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
+        let struct_ty = make_named_type(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
 
         // Manually register this type as an alias
         ctx.register_type_alias(Symbol::from_dynamic("my_point"), struct_ty);
@@ -1723,7 +1734,7 @@ mod tests {
 
         // Should use the manual alias, not auto-generate one
         assert!(
-            output.contains("!my_point = adt.struct<"),
+            output.contains("!my_point = alias_test.record<"),
             "Expected manual alias:\n{output}"
         );
         assert!(
@@ -1738,10 +1749,10 @@ mod tests {
             let mut ctx = IrContext::new();
             let loc = test_location(&mut ctx);
             let i32_ty = make_i32_type(&mut ctx);
-            let alpha_ty = make_adt_struct(&mut ctx, "Alpha", &[("value", i32_ty)]);
-            let inner_ty = make_adt_struct(&mut ctx, "Inner", &[("value", i32_ty)]);
-            let outer_ty = make_adt_struct(&mut ctx, "Outer", &[("inner", inner_ty)]);
-            let zebra_ty = make_adt_struct(&mut ctx, "Zebra", &[("value", i32_ty)]);
+            let alpha_ty = make_named_type(&mut ctx, "Alpha", &[("value", i32_ty)]);
+            let inner_ty = make_named_type(&mut ctx, "Inner", &[("value", i32_ty)]);
+            let outer_ty = make_named_type(&mut ctx, "Outer", &[("inner", inner_ty)]);
+            let zebra_ty = make_named_type(&mut ctx, "Zebra", &[("value", i32_ty)]);
             let aliases = [
                 (Symbol::new("alpha"), alpha_ty),
                 (Symbol::new("a_outer"), outer_ty),
@@ -1789,7 +1800,7 @@ mod tests {
         let loc = test_location(&mut ctx);
         let i32_ty = make_i32_type(&mut ctx);
 
-        let struct_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
+        let struct_ty = make_named_type(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
 
         let f1 = make_identity_func(&mut ctx, loc, "f1", struct_ty, struct_ty);
         let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);
@@ -1812,9 +1823,9 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Type B: a simple struct
-        let b_ty = make_adt_struct(&mut ctx, "Inner", &[("val", i32_ty)]);
+        let b_ty = make_named_type(&mut ctx, "Inner", &[("val", i32_ty)]);
         // Type A: references B
-        let a_ty = make_adt_struct(&mut ctx, "Outer", &[("inner", b_ty), ("extra", i32_ty)]);
+        let a_ty = make_named_type(&mut ctx, "Outer", &[("inner", b_ty), ("extra", i32_ty)]);
 
         // Use both types multiple times
         let f1 = make_identity_func(&mut ctx, loc, "f1", a_ty, a_ty);
@@ -1844,20 +1855,20 @@ mod tests {
         let input = "\
 core.module @test {
   core.module @inner {
-    func.func @f1(%0: adt.struct<InnerOnly(a: core.i32, b: core.i32)>) -> adt.struct<InnerOnly(a: core.i32, b: core.i32)> {
+    func.func @f1(%0: alias_test.record<core.i32 {name = \"a\"}, core.i32 {name = \"b\"}, {name = \"InnerOnly\"}>) -> alias_test.record<core.i32 {name = \"a\"}, core.i32 {name = \"b\"}, {name = \"InnerOnly\"}> {
     ^bb0:
       func.return %0
     }
-    func.func @f2(%0: adt.struct<InnerOnly(a: core.i32, b: core.i32)>) -> adt.struct<InnerOnly(a: core.i32, b: core.i32)> {
+    func.func @f2(%0: alias_test.record<core.i32 {name = \"a\"}, core.i32 {name = \"b\"}, {name = \"InnerOnly\"}>) -> alias_test.record<core.i32 {name = \"a\"}, core.i32 {name = \"b\"}, {name = \"InnerOnly\"}> {
     ^bb0:
       func.return %0
     }
   }
-  func.func @g1(%0: adt.struct<OuterOnly(x: core.i32, y: core.i32)>) -> adt.struct<OuterOnly(x: core.i32, y: core.i32)> {
+  func.func @g1(%0: alias_test.record<core.i32 {name = \"x\"}, core.i32 {name = \"y\"}, {name = \"OuterOnly\"}>) -> alias_test.record<core.i32 {name = \"x\"}, core.i32 {name = \"y\"}, {name = \"OuterOnly\"}> {
   ^bb0:
     func.return %0
   }
-  func.func @g2(%0: adt.struct<OuterOnly(x: core.i32, y: core.i32)>) -> adt.struct<OuterOnly(x: core.i32, y: core.i32)> {
+  func.func @g2(%0: alias_test.record<core.i32 {name = \"x\"}, core.i32 {name = \"y\"}, {name = \"OuterOnly\"}>) -> alias_test.record<core.i32 {name = \"x\"}, core.i32 {name = \"y\"}, {name = \"OuterOnly\"}> {
   ^bb0:
     func.return %0
   }
@@ -1876,8 +1887,8 @@ core.module @test {
         let i32_ty = make_i32_type(&mut ctx);
 
         // Two different struct types with the same name attribute
-        let s1_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty)]);
-        let s2_ty = make_adt_struct(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
+        let s1_ty = make_named_type(&mut ctx, "Point", &[("x", i32_ty)]);
+        let s2_ty = make_named_type(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
 
         let f1 = make_identity_func(&mut ctx, loc, "f1", s1_ty, s1_ty);
         let f2 = make_identity_func(&mut ctx, loc, "f2", s2_ty, s2_ty);
@@ -1903,7 +1914,7 @@ core.module @test {
             let loc = test_location(&mut ctx);
             let i32_ty = make_i32_type(&mut ctx);
             let make_point =
-                |ctx: &mut IrContext, field| make_adt_struct(ctx, "Point", &[(field, i32_ty)]);
+                |ctx: &mut IrContext, field| make_named_type(ctx, "Point", &[(field, i32_ty)]);
             let (alpha_point, zebra_point) = if reverse_interning {
                 let zebra = make_point(&mut ctx, "zebra");
                 let alpha = make_point(&mut ctx, "alpha");
@@ -1925,8 +1936,12 @@ core.module @test {
 
         let output = print_module_with_point_types(false);
         assert_eq!(output, print_module_with_point_types(true));
-        assert!(output.contains("!Point = adt.struct<Point(alpha: core.i32)>"));
-        assert!(output.contains("!Point_1 = adt.struct<Point(zebra: core.i32)>"));
+        assert!(output.contains(
+            r#"!Point = alias_test.record<core.i32 {name = "alpha"}, {name = "Point"}>"#
+        ));
+        assert!(output.contains(
+            r#"!Point_1 = alias_test.record<core.i32 {name = "zebra"}, {name = "Point"}>"#
+        ));
 
         let mut reparsed_ctx = IrContext::new();
         let reparsed =

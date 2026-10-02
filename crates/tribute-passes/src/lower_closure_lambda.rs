@@ -30,10 +30,11 @@ use tribute_core::calling_convention::{
 use tribute_core::{
     get_calling_convention, get_physical_closure_convention, set_calling_convention,
 };
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{adt, core, func};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ir_mapping::IrMapping;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};

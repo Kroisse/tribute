@@ -18,9 +18,9 @@
 use std::collections::hash_map::Entry;
 use std::collections::{HashMap, HashSet};
 
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;

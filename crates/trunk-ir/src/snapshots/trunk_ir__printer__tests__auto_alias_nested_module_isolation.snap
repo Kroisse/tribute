@@ -3,10 +3,10 @@ source: crates/trunk-ir/src/printer.rs
 expression: output
 ---
 core.module @test {
-  !OuterOnly = adt.struct<OuterOnly(x: core.i32, y: core.i32)>
+  !OuterOnly = alias_test.record<core.i32 {name = "x"}, core.i32 {name = "y"}, {name = "OuterOnly"}>
 
   core.module @inner {
-    !InnerOnly = adt.struct<InnerOnly(a: core.i32, b: core.i32)>
+    !InnerOnly = alias_test.record<core.i32 {name = "a"}, core.i32 {name = "b"}, {name = "InnerOnly"}>
 
     func.func @f1(%0: !InnerOnly) -> !InnerOnly {
         func.return %0

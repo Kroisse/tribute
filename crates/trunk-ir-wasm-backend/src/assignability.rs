@@ -131,9 +131,9 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !data = core.array<core.i8, {layout = "bytes_data"}>
-  !bytes = adt.struct<_Bytes(data: !data, offset: core.i32, len: core.i32), {layout = "bytes"}>
-  !closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
-  !view = adt.struct<BytesView(data: !data, start: core.i32, count: core.i32), {layout = "bytes"}>
+  !bytes = adt.struct<!data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
+  !closure = adt.struct<core.i32 {name = "table_idx"}, wasm.anyref {name = "env"}, {name = "_closure", layout = "closure"}>
+  !view = adt.struct<!data {name = "data"}, core.i32 {name = "start"}, core.i32 {name = "count"}, {name = "BytesView", layout = "bytes"}>
   !plain = core.array<core.i8>
 }"#,
         );

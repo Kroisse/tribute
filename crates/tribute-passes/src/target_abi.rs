@@ -17,10 +17,11 @@ use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
     get_physical_closure_convention,
 };
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, effect, tribute_rt};
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{adt, arith, core, func};
+use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::op_interface::IndirectCallLikeOps;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};

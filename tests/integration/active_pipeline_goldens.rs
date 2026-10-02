@@ -130,7 +130,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
             shape.push_str(&format!("<{name}>"));
         }
         // A struct layout's parameters are its fields; its name is its shape.
-        let is_struct = trunk_ir::dialect::adt::Struct::matches(ctx, ty);
+        let is_struct = tribute_ir::dialect::adt::Struct::matches(ctx, ty);
         if !data.params.is_empty() && !is_struct {
             shape.push_str(&format!(
                 "<{}>",

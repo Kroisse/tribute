@@ -6,11 +6,12 @@
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::adt_layout::{get_enum_variants, get_struct_fields};
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::list;
 use trunk_ir::Symbol;
-use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::{BlockData, IrContext, RegionData};
-use trunk_ir::dialect::{adt, arith, scf};
+use trunk_ir::dialect::{arith, scf};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, Location, StringRef};
 

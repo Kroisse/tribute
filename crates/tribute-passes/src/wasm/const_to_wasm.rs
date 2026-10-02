@@ -13,9 +13,9 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef};

@@ -1,8 +1,9 @@
 //! Compiler-wide calling-convention requirements.
 
+use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, core, func};
+use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::types::{Attribute, AttributeMap, StringArg, TypeDataBuilder};

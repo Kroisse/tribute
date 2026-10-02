@@ -2,7 +2,6 @@
 //!
 //! Each module mirrors the corresponding Salsa-based dialect in `crate::dialect`.
 
-pub mod adt;
 pub mod arith;
 pub mod cf;
 pub mod clif;

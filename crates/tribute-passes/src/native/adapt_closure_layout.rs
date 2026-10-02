@@ -9,10 +9,11 @@
 //! It runs after native ownership planning and RC materialization, which
 //! read the semantic layout, and before `func_to_clif`.
 
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rtti;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, core};
+use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{

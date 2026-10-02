@@ -28,13 +28,13 @@ use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
     get_physical_closure_convention,
 };
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
 use tribute_ir::runtime_layout;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::{DialectOp, DialectType};

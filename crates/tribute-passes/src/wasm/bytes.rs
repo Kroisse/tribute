@@ -7,9 +7,10 @@
 //! conversion maps `core.bytes` to the struct, so the view cast that the
 //! lowering inserts folds away.
 
+use tribute_ir::dialect::adt;
 use tribute_ir::runtime_layout::{BYTES, BYTES_DATA, LAYOUT_ATTR};
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{adt, arith, core};
+use trunk_ir::dialect::{arith, core};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::types::{AttributeMap, TypeDataBuilder};

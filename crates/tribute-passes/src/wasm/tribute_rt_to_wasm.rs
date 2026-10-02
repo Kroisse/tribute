@@ -19,9 +19,9 @@
 //! - `tribute_rt.intref` -> `wasm.i31ref`
 //! - `tribute_rt.anyref` -> `wasm.anyref`
 
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::tribute_rt;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};

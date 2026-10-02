@@ -1891,7 +1891,7 @@ core.module @test {
     #[test]
     fn test_roundtrip_type_alias() {
         let input = r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32)>
+  !marker = adt.struct<core.i32 {name = "ability_id"}, core.i32 {name = "prompt_tag"}, {name = "_Marker"}>
 
   func.func @foo(%0: core.array<!marker>) -> core.array<!marker> {
     func.return %0
@@ -2007,7 +2007,7 @@ core.module @test {
     #[test]
     fn test_quoted_type_alias_roundtrip() {
         let input = r#"core.module @test {
-  !"test::MyStruct" = adt.struct<"test::MyStruct"(x: core.i32, y: core.i32)>
+  !"test::MyStruct" = adt.struct<core.i32 {name = "x"}, core.i32 {name = "y"}, {name = "test::MyStruct"}>
 
   func.func @foo(%0: !"test::MyStruct") -> !"test::MyStruct" {
     func.return %0

@@ -7,13 +7,14 @@ use std::collections::{HashMap, HashSet};
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{
     list,
     tribute_control::{self, CompilerIntrinsicDeclaration, OperationDeclaration},
 };
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
-use trunk_ir::dialect::{adt, arith, core, scf};
+use trunk_ir::dialect::{arith, core, scf};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module as IrModule;
@@ -663,7 +664,7 @@ fn prescan_struct_accessor_signatures<'db>(
                 let layout = ctx
                     .get_type(type_name)
                     .unwrap_or_else(|| panic!("missing logical struct layout for accessor"));
-                let layout_fields = trunk_ir::adt_layout::get_struct_fields(ir, layout)
+                let layout_fields = tribute_ir::adt_layout::get_struct_fields(ir, layout)
                     .unwrap_or_else(|| panic!("malformed logical struct layout"));
                 for (index, field) in declaration.fields.iter().enumerate() {
                     let field_name = field.name.unwrap_or_else(|| Symbol::new("_"));
@@ -751,7 +752,7 @@ fn lower_struct_accessors<'db>(
         } else {
             Symbol::from_dynamic(&format!("{}::{}::{}", prefix, declaration.name, field_name))
         };
-        let field_type = trunk_ir::adt_layout::get_struct_fields(ir, layout_type)
+        let field_type = tribute_ir::adt_layout::get_struct_fields(ir, layout_type)
             .and_then(|fields| fields.get(index).map(|(_, ty)| *ty))
             .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
         let entry = ir.create_block(BlockData {
@@ -1518,7 +1519,7 @@ fn lower_record<'db>(
             &type_name.resolved,
             type_name.ty,
         );
-        if trunk_ir::adt_layout::get_enum_variants(builder.ir, layout).is_some() {
+        if tribute_ir::adt_layout::get_enum_variants(builder.ir, layout).is_some() {
             return lower_variant_record(
                 builder,
                 location,
@@ -1567,7 +1568,7 @@ fn lower_record<'db>(
             // The layout owns concrete field types.  `struct_get` needs a
             // result type, obtained from the matching getter expression type
             // only after normal typechecking; use layout metadata directly.
-            let field_types = trunk_ir::adt_layout::get_struct_fields(builder.ir, layout)
+            let field_types = tribute_ir::adt_layout::get_struct_fields(builder.ir, layout)
                 .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
             let get = adt::StructGet::operands(base)
                 .r#type(layout)

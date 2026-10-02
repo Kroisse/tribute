@@ -32,12 +32,12 @@
 //! | `core.ptr`  | 8    | 8         |
 //! | other       | 8    | 8         |
 
-use crate::Symbol;
-use crate::context::IrContext;
-use crate::ops::DialectType;
-use crate::refs::TypeRef;
-use crate::rewrite::type_converter::TypeConverter;
-use crate::types::{Attribute, StringRef};
+use trunk_ir::Symbol;
+use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectType;
+use trunk_ir::refs::TypeRef;
+use trunk_ir::rewrite::type_converter::TypeConverter;
+use trunk_ir::types::{Attribute, StringRef};
 
 /// Memory layout of a struct type.
 #[derive(Debug, Clone)]

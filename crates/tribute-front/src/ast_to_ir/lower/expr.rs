@@ -5,8 +5,8 @@
 
 use super::IrBuilder;
 use crate::ast::{CallingConvention, Expr, ExprKind, ResolvedRef, Stmt, TypeKind, TypedRef};
+use tribute_ir::adt_layout::get_enum_variants;
 use trunk_ir::Symbol;
-use trunk_ir::adt_layout::get_enum_variants;
 use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::types::Location;
 

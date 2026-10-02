@@ -7,9 +7,11 @@ license.workspace = true
 description = "Tribute language-specific IR dialects"
 
 [dependencies]
+derive_more.workspace = true
 inventory.workspace = true
 itertools.workspace = true
 rustc-hash.workspace = true
+smallvec.workspace = true
 tribute-rc.workspace = true
 trunk-ir.workspace = true
 winnow.workspace = true

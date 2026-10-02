@@ -773,7 +773,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = adt.struct<_Marker(ability_id: {field_type}, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {{layout = \"evidence_marker\"}}>
+                        !Marker = adt.struct<{field_type} {{name = \"ability_id\"}}, core.i32 {{name = \"prompt_tag\"}}, core.ptr {{name = \"tr_dispatch_fn\"}}, core.ptr {{name = \"handler_dispatch\"}}, {{name = \"_Marker\", layout = \"evidence_marker\"}}>
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable
@@ -797,7 +797,7 @@ mod tests {
             "wasm.anyref",
             "wasm.structref",
             "wasm.arrayref",
-            "adt.struct<Other()>",
+            r#"adt.struct<{name = "Other"}>"#,
         ] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(
@@ -829,7 +829,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-            !Marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr)>
+            !Marker = adt.struct<core.i32 {{name = "ability_id"}}, core.i32 {{name = "prompt_tag"}}, core.ptr {{name = "tr_dispatch_fn"}}, core.ptr {{name = "handler_dispatch"}}, {{name = "_Marker"}}>
             wasm.func @test(%marker: !Marker) -> core.i32 {{
                 %value = wasm.struct_get %marker {{type_idx = {CLOSURE_STRUCT_IDX}, field_idx = 0}} : core.i32
                 wasm.return %value
