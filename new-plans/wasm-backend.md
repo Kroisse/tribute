@@ -377,6 +377,19 @@ erasure이므로 계속 `anyref`를 사용할 수 있다.
 (type $Point (struct (field f64) (field f64)))
 ```
 
+### Structural GC 타입과 descriptor 필드
+
+사용자 struct와 variant의 GC 타입은 structural이다. 소스 이름이 달라도 필드 표현이
+같으면 같은 GC 타입을 쓴다. 대신 첫 필드에 `i32` [runtime 타입
+descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 표현한다.
+
+- Variant 판별은 descriptor 필드를 비교한다. Variant마다 별개의 GC 타입 index를
+  두고 `ref.test`로 구별하지 않는다.
+- Erased 참조에서 concrete struct로 돌아가는 `ref.cast`는 layout만 확인한다. 같은
+  layout을 쓰는 다른 소스 타입의 값도 통과하며, 소스 타입의 구별은 정적 타입 검사와
+  descriptor가 맡는다.
+- 위 builtin layout은 예약 index를 쓰고 descriptor 필드를 두지 않는다.
+
 ### GC 인덱스 등록의 소유권
 
 GC 연산의 concrete `type_idx`는 해당 연산이 접근하는 레이아웃을 지정한다.
@@ -427,7 +440,7 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 | builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 | 허용 |
 | builtin 레이아웃 인덱스를 갖는 struct (`@bytes`, closure, marker 등) | `structref`, `anyref` | 허용 |
 | `adt.typeref` | `structref`, `anyref` | 허용 |
-| `base_enum`을 가진 concrete variant instance | `structref`, `anyref` | 허용 |
+| `wasm_gc.struct` (사용자 struct와 variant) | `structref`, `anyref` | 허용 |
 | builtin 배열 레이아웃 (Bytes backing array, Evidence array) | `arrayref`, `anyref` | 허용 |
 | `core.array` | `arrayref`, `anyref` | 허용 |
 | 등록 근거가 없는 ADT 표기 (선언 타입 등) | `structref` | 거부 |
@@ -437,8 +450,8 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 
 여기서 "등록"은 backend-ready 경계에서 해당 타입이 concrete GC 인덱스를
 받는지를 뜻한다. 근거가 되는 것은 builtin 레이아웃 인덱스, `adt.typeref`,
-그리고 `base_enum`을 가진 variant instance뿐이며, ADT 이름이나 레이아웃
-모양만으로는 등록을 추론하지 않는다. 추상 참조에서 concrete 타입으로
+그리고 타입 변환이 만든 `wasm_gc.struct`뿐이며, ADT 이름이나 레이아웃 모양만으로는
+등록을 추론하지 않는다. 추상 참조에서 concrete 타입으로
 좁히는 방향은 `wasm.ref_cast`가 필요하므로 검증에서 거부한다.
 
 ---

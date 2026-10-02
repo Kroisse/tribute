@@ -1396,19 +1396,28 @@ adt.struct<@Empty()>
 
 #### Nominal 수준과 structural 수준
 
-Struct 이름과 필드 이름은 nominal layout을 해석하는 단계까지만 의미를 가진다.
-`adt.typeref`를 같은 이름의 layout으로 해석하는 단계, ownership 계획, ABI 검증,
-frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은 필드
-타입 목록과 순서만 사용한다.
+Struct 이름과 필드 이름은 IR에서 nominal layout을 해석하는 단계까지만 의미를
+가진다. `adt.typeref`를 같은 이름의 layout으로 해석하는 단계, ownership 계획, ABI
+검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
+필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime 동작(해제, 값 출력,
+variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡으며, 할당
+operation은 nominal 단계에서 descriptor 참조를 얻는다.
+
+저수준 struct 타입이 갖는 identity는 runtime 동작이 달라지는 경우로 한정한다.
+Layout과 runtime 동작이 같은 두 소스 타입은 같은 저수준 struct를 쓰고
+descriptor로만 구별된다.
 
 - Native는 nominal 해석이 끝난 뒤 `adt.struct`를 이름 없는 `mem.struct<T...>`로
-  내린다. `mem.struct`는 필드 타입만 갖고 자연 정렬 memory layout을 뜻한다. RTTI,
-  RC header, field offset 계산은 이 타입만 읽으며, field 접근이 `clif.load`와
-  `clif.store`의 offset이 될 때 사라진다. Cranelift에는 aggregate 타입이 없다.
-- Wasm은 nominal 해석을 끝내는 ADT lowering에서 `adt.struct`를 이름 없는
-  `wasm_gc.struct<T...>`로 내린다. 필드 타입이 같은 일반 struct는 같은 GC 타입이다.
-  `ref.test`로 구분해야 하는 variant 타입만 구분용 identity 속성을 가진다.
-  Compiler 소유 layout은 [`layout`](#runtime-layout-식별자)으로 식별한다.
+  내린다. `mem.struct`는 필드 타입만 갖고 자연 정렬 memory layout을 뜻한다. 필드
+  타입은 target 표현이며, 해제 동작이 다른 managed 참조(`tribute_rt.anyref`)와
+  unmanaged 포인터(`core.ptr`)는 크기가 같아도 구분한다. RC header와 field offset
+  계산은 이 타입을 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
+  사라진다. Cranelift에는 aggregate 타입이 없다.
+- Wasm은 타입 변환에서 `adt.struct`를 이름 없는 `wasm_gc.struct<T...>`로 바꾼다.
+  함수 signature와 block 인자도 같은 변환을 거치므로 모든 위치가 같은 타입을
+  가진다. 필드 표현이 같은 struct와 variant는 같은 GC 타입이며, 첫 필드의
+  descriptor가 runtime identity를 맡는다. Compiler 소유 layout은
+  [`layout`](#runtime-layout-식별자)으로 식별한다.
 - 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
   reference로 끊겨 있다.
 - `adt.enum`은 `variants` 속성으로 variant별 필드를 표현한다. 저수준 struct를 이용한
