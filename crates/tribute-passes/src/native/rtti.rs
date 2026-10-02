@@ -252,21 +252,18 @@ pub fn generate_rtti(
     }
     descriptor_records::generate(ctx, module_block, records, loc);
 
-    let has_table = !release_indices.is_empty();
-    if has_table {
-        let table = generate_rtti_table(ctx, &release_indices, loc);
-        ctx.push_op(module_block, table);
-    }
-    let deep_release = generate_deep_release_function(ctx, has_table, loc);
+    let table = generate_rtti_table(ctx, &release_indices, loc);
+    ctx.push_op(module_block, table);
+    let deep_release = generate_deep_release_function(ctx, loc);
     ctx.push_op(module_block, deep_release);
 
     Ok(())
 }
 
-/// Declare the RTTI table: one pointer-sized entry per index up to the
-/// largest release index, holding that index's release function or null.
+/// Declare the RTTI table: one pointer-sized entry per index, as long as the
+/// descriptor table, holding that index's release function or null.
 fn generate_rtti_table(ctx: &mut IrContext, release_indices: &[u32], loc: Location) -> OpRef {
-    let max_idx = *release_indices.iter().max().expect("a release index");
+    let max_idx = release_indices.iter().copied().fold(RTTI_FLOAT, u32::max);
     let entries = max_idx as usize + 1;
     let relocs = ctx.create_block(BlockData {
         location: loc,
@@ -302,7 +299,6 @@ fn generate_rtti_table(ctx: &mut IrContext, release_indices: &[u32], loc: Locati
 /// ```text
 /// entry(payload_ptr, alloc_size):
 ///   raw_ptr = payload_ptr - RC_HEADER_SIZE
-///   [with a table]
 ///   release_fn = load ptr from rtti_table[load i32 from raw_ptr + 4]
 ///   release_fn == null ? goto shallow : goto deep
 /// shallow:
@@ -313,7 +309,7 @@ fn generate_rtti_table(ctx: &mut IrContext, release_indices: &[u32], loc: Locati
 ///
 /// A zero size is a dynamic-size signal that only an RTTI release entry can
 /// resolve, so a shallow release of it traps instead of leaking.
-fn generate_deep_release_function(ctx: &mut IrContext, has_table: bool, loc: Location) -> OpRef {
+fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
     let tys = ClifTypes::intern(ctx);
     let new_block = |ctx: &mut IrContext, args: Vec<TypeRef>| {
         ctx.create_block(BlockData {
@@ -359,62 +355,56 @@ fn generate_deep_release_function(ctx: &mut IrContext, has_table: bool, loc: Loc
     let raw_ptr = raw_ptr.result(ctx);
 
     let mut blocks = vec![entry];
-    if has_table {
-        let deep = new_block(ctx, vec![]);
-        let rtti_idx = clif::Load::operands(raw_ptr)
-            .offset(tribute_rt::RTTI_IDX_OFFSET as i32)
-            .results(tys.i32)
-            .build(ctx, loc);
-        push(ctx, entry, rtti_idx.op_ref());
-        let rtti_idx = clif::Uextend::operands(rtti_idx.result(ctx))
-            .results(tys.i64)
-            .build(ctx, loc);
-        push(ctx, entry, rtti_idx.op_ref());
-        let entry_size = iconst(ctx, entry, i64::from(RTTI_TABLE_ENTRY_SIZE), tys.i64);
-        let entry_offset = clif::Imul::operands(rtti_idx.result(ctx), entry_size)
-            .results(tys.i64)
-            .build(ctx, loc);
-        push(ctx, entry, entry_offset.op_ref());
-        let table = clif::SymbolAddr::operands()
-            .sym(Symbol::new(RTTI_TABLE))
-            .results(tys.ptr)
-            .build(ctx, loc);
-        push(ctx, entry, table.op_ref());
-        let entry_addr = clif::Iadd::operands(table.result(ctx), entry_offset.result(ctx))
-            .results(tys.ptr)
-            .build(ctx, loc);
-        push(ctx, entry, entry_addr.op_ref());
-        let release_fn = clif::Load::operands(entry_addr.result(ctx))
-            .offset(0)
-            .results(tys.ptr)
-            .build(ctx, loc);
-        push(ctx, entry, release_fn.op_ref());
-        let null = iconst(ctx, entry, 0, tys.ptr);
-        let is_null = clif::Icmp::operands(release_fn.result(ctx), null)
-            .cond("eq")
-            .results(tys.i8)
-            .build(ctx, loc);
-        push(ctx, entry, is_null.op_ref());
-        let branch = clif::Brif::operands(is_null.result(ctx))
-            .successors(shallow, deep)
-            .build(ctx, loc);
-        push(ctx, entry, branch.op_ref());
+    let deep = new_block(ctx, vec![]);
+    let rtti_idx = clif::Load::operands(raw_ptr)
+        .offset(tribute_rt::RTTI_IDX_OFFSET as i32)
+        .results(tys.i32)
+        .build(ctx, loc);
+    push(ctx, entry, rtti_idx.op_ref());
+    let rtti_idx = clif::Uextend::operands(rtti_idx.result(ctx))
+        .results(tys.i64)
+        .build(ctx, loc);
+    push(ctx, entry, rtti_idx.op_ref());
+    let entry_size = iconst(ctx, entry, i64::from(RTTI_TABLE_ENTRY_SIZE), tys.i64);
+    let entry_offset = clif::Imul::operands(rtti_idx.result(ctx), entry_size)
+        .results(tys.i64)
+        .build(ctx, loc);
+    push(ctx, entry, entry_offset.op_ref());
+    let table = clif::SymbolAddr::operands()
+        .sym(Symbol::new(RTTI_TABLE))
+        .results(tys.ptr)
+        .build(ctx, loc);
+    push(ctx, entry, table.op_ref());
+    let entry_addr = clif::Iadd::operands(table.result(ctx), entry_offset.result(ctx))
+        .results(tys.ptr)
+        .build(ctx, loc);
+    push(ctx, entry, entry_addr.op_ref());
+    let release_fn = clif::Load::operands(entry_addr.result(ctx))
+        .offset(0)
+        .results(tys.ptr)
+        .build(ctx, loc);
+    push(ctx, entry, release_fn.op_ref());
+    let null = iconst(ctx, entry, 0, tys.ptr);
+    let is_null = clif::Icmp::operands(release_fn.result(ctx), null)
+        .cond("eq")
+        .results(tys.i8)
+        .build(ctx, loc);
+    push(ctx, entry, is_null.op_ref());
+    let branch = clif::Brif::operands(is_null.result(ctx))
+        .successors(shallow, deep)
+        .build(ctx, loc);
+    push(ctx, entry, branch.op_ref());
 
-        let release_sig = clif::func_sig(ctx, [tys.ptr], [tys.nil]).as_type_ref();
-        let call = clif::CallIndirect::operands(release_fn.result(ctx), [payload_ptr])
-            .sig(release_sig)
-            .results([tys.nil])
-            .build(ctx, loc);
-        push(ctx, deep, call.op_ref());
-        let ret = clif::Return::operands([]).build(ctx, loc);
-        push(ctx, deep, ret.op_ref());
-        blocks.push(shallow);
-        blocks.push(deep);
-    } else {
-        let jump = clif::Jump::operands([]).successors(shallow).build(ctx, loc);
-        push(ctx, entry, jump.op_ref());
-        blocks.push(shallow);
-    }
+    let release_sig = clif::func_sig(ctx, [tys.ptr], [tys.nil]).as_type_ref();
+    let call = clif::CallIndirect::operands(release_fn.result(ctx), [payload_ptr])
+        .sig(release_sig)
+        .results([tys.nil])
+        .build(ctx, loc);
+    push(ctx, deep, call.op_ref());
+    let ret = clif::Return::operands([]).build(ctx, loc);
+    push(ctx, deep, ret.op_ref());
+    blocks.push(shallow);
+    blocks.push(deep);
 
     let zero = iconst(ctx, shallow, 0, tys.i64);
     let is_dynamic = clif::Icmp::operands(alloc_size, zero)

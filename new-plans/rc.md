@@ -565,7 +565,7 @@ field:   ptr name | u32 name_len | u32 field_kind
 | ---- | ---- |
 | `0` | struct |
 | `1` | variant. `enum_record`가 소속 enum 레코드, `tag_index`가 선언 순서의 variant 번호 |
-| `2` | enum. Index를 받지 않으며 variant 레코드만 가리킨다 |
+| `2` | enum. Index를 받지 않으며, 소속 variant 레코드의 `enum_record`가 이 레코드를 가리킨다 |
 | `3` | compiler 소유 builtin 값(예약 index) |
 
 정수 칸은 target의 native byte order를 따른다. `field_kind`의 하위 8비트는 분류,

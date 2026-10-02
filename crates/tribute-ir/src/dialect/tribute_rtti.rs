@@ -81,7 +81,11 @@ impl FieldKind {
             "bool" => Self::Bool,
             _ => {
                 let (class, width) = text.split_at_checked(1)?;
-                let width = width.parse().ok().filter(|&width| width > 0)?;
+                // Only the canonical spelling `Display` prints.
+                if width.starts_with('0') || !width.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return None;
+                }
+                let width = width.parse().ok()?;
                 match class {
                     "i" => Self::Int {
                         width,
@@ -297,6 +301,14 @@ mod tests {
             (
                 r#"tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "word"]}"#,
                 "unknown field kind \"word\"",
+            ),
+            (
+                r#"tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "i064"]}"#,
+                "unknown field kind \"i064\"",
+            ),
+            (
+                r#"tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "u+8"]}"#,
+                "unknown field kind \"u+8\"",
             ),
             (
                 r#"tribute_rtti.layout {type = !Choice, index = 33, fields = []}"#,
