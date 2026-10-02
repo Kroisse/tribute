@@ -248,12 +248,21 @@ fn instances_use_the_declared_scheme(db: &salsa::DatabaseImpl) {
 /// so they stay out of the scheme instead of quantifying those rows.
 #[salsa_test]
 fn body_relations_stay_out_of_the_scheme(db: &salsa::DatabaseImpl) {
-    let text = "ability State(s) {\n    op get() -> s\n    op set(value: s) -> Nil\n}\n\n\
-                fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {\n    \
-                handle comp() {\n        do result { result }\n        \
-                op State::get() { run_state(fn() { resume init }, init) }\n        \
-                op State::set(v) { run_state(fn() { resume Nil }, v) }\n    }\n}\n\n\
-                fn main() -> Nil { }\n";
+    let text = r#"ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn main() -> Nil { }
+"#;
     let source = SourceCst::from_source_str(db, "signatures.trb", text);
     assert_eq!(errors(db, text), Vec::<String>::new());
     let output = tribute_front::query::type_check_output(db, source).unwrap();
