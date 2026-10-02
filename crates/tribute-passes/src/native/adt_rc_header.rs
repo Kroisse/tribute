@@ -15,8 +15,10 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::adt_layout::{compute_enum_layout, compute_struct_layout, find_variant_layout};
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{
+    compute_enum_layout, compute_struct_layout, find_variant_layout,
+};
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;

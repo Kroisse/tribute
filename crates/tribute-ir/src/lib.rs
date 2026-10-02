@@ -3,7 +3,6 @@
 //! This crate provides dialects specific to the Tribute programming language,
 //! built on top of the trunk-ir infrastructure.
 
-pub mod adt_layout;
 pub mod continuation_frame;
 pub mod dialect;
 pub mod metadata;

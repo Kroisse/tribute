@@ -30,10 +30,10 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
-use tribute_ir::adt_layout::{
+use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, get_enum_variants, get_struct_fields,
 };
-use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
 use trunk_ir::TypeDataBuilder;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
@@ -713,7 +713,7 @@ fn gen_dealloc_and_return(
     loc: Location,
     block: BlockRef,
     payload_ptr: ValueRef,
-    layout: &tribute_ir::adt_layout::StructLayout,
+    layout: &tribute_ir::dialect::adt::layout::StructLayout,
     ptr_ty: TypeRef,
     nil_ty: TypeRef,
     i64_ty: TypeRef,

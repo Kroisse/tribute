@@ -664,7 +664,7 @@ fn prescan_struct_accessor_signatures<'db>(
                 let layout = ctx
                     .get_type(type_name)
                     .unwrap_or_else(|| panic!("missing logical struct layout for accessor"));
-                let layout_fields = tribute_ir::adt_layout::get_struct_fields(ir, layout)
+                let layout_fields = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout)
                     .unwrap_or_else(|| panic!("malformed logical struct layout"));
                 for (index, field) in declaration.fields.iter().enumerate() {
                     let field_name = field.name.unwrap_or_else(|| Symbol::new("_"));
@@ -752,7 +752,7 @@ fn lower_struct_accessors<'db>(
         } else {
             Symbol::from_dynamic(&format!("{}::{}::{}", prefix, declaration.name, field_name))
         };
-        let field_type = tribute_ir::adt_layout::get_struct_fields(ir, layout_type)
+        let field_type = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
             .and_then(|fields| fields.get(index).map(|(_, ty)| *ty))
             .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
         let entry = ir.create_block(BlockData {
@@ -1519,7 +1519,7 @@ fn lower_record<'db>(
             &type_name.resolved,
             type_name.ty,
         );
-        if tribute_ir::adt_layout::get_enum_variants(builder.ir, layout).is_some() {
+        if tribute_ir::dialect::adt::layout::get_enum_variants(builder.ir, layout).is_some() {
             return lower_variant_record(
                 builder,
                 location,
@@ -1568,8 +1568,9 @@ fn lower_record<'db>(
             // The layout owns concrete field types.  `struct_get` needs a
             // result type, obtained from the matching getter expression type
             // only after normal typechecking; use layout metadata directly.
-            let field_types = tribute_ir::adt_layout::get_struct_fields(builder.ir, layout)
-                .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
+            let field_types =
+                tribute_ir::dialect::adt::layout::get_struct_fields(builder.ir, layout)
+                    .unwrap_or_else(|| panic!("prescanned struct layout is malformed"));
             let get = adt::StructGet::operands(base)
                 .r#type(layout)
                 .field(index as u32)

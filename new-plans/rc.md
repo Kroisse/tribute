@@ -79,7 +79,8 @@ Enum:   [tag: i32] [padding] [payload: max(variant sizes)]
 Array:  [length: i64] [elements...]
 ```
 
-Field offsets are computed by `tribute-ir`'s `adt_layout` module at compile time.
+Field offsets are computed at compile time by the `adt` dialect's `layout`
+module in `tribute-ir`.
 
 ### Boxed Primitives
 

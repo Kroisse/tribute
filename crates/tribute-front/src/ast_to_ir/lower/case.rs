@@ -6,8 +6,8 @@
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
-use tribute_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 use tribute_ir::dialect::list;
 use trunk_ir::Symbol;
 use trunk_ir::context::{BlockData, IrContext, RegionData};

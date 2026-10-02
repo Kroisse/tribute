@@ -116,7 +116,7 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
 ///
 /// Returns `None` if the type is not a valid `adt.struct`.
 pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef, TypeRef)>> {
-    let adt_struct = crate::dialect::adt::Struct::from_type_ref(ctx, ty)?;
+    let adt_struct = super::Struct::from_type_ref(ctx, ty)?;
     Some(
         (0..adt_struct.field_count(ctx))
             .map(|index| {

@@ -40,8 +40,8 @@
 //! indexed `wasm` operations before emission.
 
 use tracing::warn;
-use tribute_ir::adt_layout::get_enum_variants;
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::get_enum_variants;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core::{self, IntegerLike};
 use trunk_ir::dialect::wasm as wasm_dialect;

@@ -8,8 +8,8 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
 
-use tribute_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;

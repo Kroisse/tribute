@@ -3279,7 +3279,7 @@ fn main() -> Nil {
     #[salsa_test]
     fn specialized_enum_schemas_and_dependencies_reach_logical_cps(db: &salsa::DatabaseImpl) {
         use tribute_front::ast::{Decl, TypeKind};
-        use tribute_ir::adt_layout::{get_enum_variants, get_struct_fields};
+        use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
         use trunk_ir::{Symbol, TypeRef};
 
         fn alias(ir: &IrContext, name: &str) -> TypeRef {
@@ -3438,7 +3438,7 @@ fn main() -> Nil {}
 
     #[salsa_test]
     fn logical_nominal_layouts_are_published_through_cps(db: &salsa::DatabaseImpl) {
-        use tribute_ir::adt_layout::get_struct_fields;
+        use tribute_ir::dialect::adt::layout::get_struct_fields;
         use tribute_ir::dialect::tribute_control;
         use trunk_ir::{Symbol, TypeRef};
 

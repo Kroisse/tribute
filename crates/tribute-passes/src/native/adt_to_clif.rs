@@ -22,10 +22,10 @@
 
 use tracing::warn;
 
-use tribute_ir::adt_layout::{
+use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
 };
-use tribute_ir::dialect::adt;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;

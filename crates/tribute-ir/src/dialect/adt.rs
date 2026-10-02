@@ -77,6 +77,8 @@ use trunk_ir::types::{
     Attribute, AttributeMap, PARAM_ATTRS_ATTR, StringArg, StringRef, TypeDataBuilder,
 };
 
+pub mod layout;
+
 /// Type attribute holding an `adt.struct`'s name, and the parameter attribute
 /// holding each field's name. Both are strings.
 pub const STRUCT_NAME_ATTR: &str = "name";

@@ -6,8 +6,10 @@
 
 use std::collections::HashMap;
 
-use tribute_ir::adt_layout::{compute_enum_layout, compute_struct_layout, get_struct_fields};
 use tribute_ir::dialect::adt;
+use tribute_ir::dialect::adt::layout::{
+    compute_enum_layout, compute_struct_layout, get_struct_fields,
+};
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectOp;
