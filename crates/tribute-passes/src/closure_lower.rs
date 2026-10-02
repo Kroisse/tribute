@@ -24,13 +24,13 @@ use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use tribute_core::calling_convention::get_physical_closure_environment_index;
-use tribute_core::runtime_layout;
 use tribute_core::{
     CALLING_CONVENTION_ATTR, CallingConvention, get_calling_convention,
     get_physical_closure_convention,
 };
 use tribute_ir::dialect::closure;
 use tribute_ir::dialect::tribute_rt;
+use tribute_ir::runtime_layout;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;

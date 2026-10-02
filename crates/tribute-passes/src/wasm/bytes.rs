@@ -7,7 +7,7 @@
 //! conversion maps `core.bytes` to the struct, so the view cast that the
 //! lowering inserts folds away.
 
-use tribute_core::runtime_layout::{BYTES, BYTES_DATA, LAYOUT_ATTR};
+use tribute_ir::runtime_layout::{BYTES, BYTES_DATA, LAYOUT_ATTR};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, arith, core};
 use trunk_ir::refs::{OpRef, TypeRef};
@@ -119,7 +119,7 @@ fn lower_call(ctx: &mut IrContext, call: OpRef) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tribute_core::runtime_layout::has_runtime_layout;
+    use tribute_ir::runtime_layout::has_runtime_layout;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 

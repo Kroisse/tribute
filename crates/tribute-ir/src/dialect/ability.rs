@@ -223,7 +223,7 @@ inventory::submit! { CallableExitOps::register::<HandleDispatch>() }
 
 // === ADT Type Functions ===
 
-use tribute_core::runtime_layout;
+use crate::runtime_layout;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;

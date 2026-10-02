@@ -5,6 +5,7 @@
 
 pub mod dialect;
 pub mod metadata;
+pub mod runtime_layout;
 
 // Re-export common trunk-ir types for convenience
 pub use trunk_ir::{BlockId, ConversionError, IdVec, Span, Symbol, idvec};
