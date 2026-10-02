@@ -131,6 +131,40 @@ fn main() -> Nil {
     assert_eq!(errors, Vec::<String>::new());
 }
 
+/// A keyword path names its own ability even when the module imports
+/// another ability under the same name.
+#[salsa_test]
+fn keyword_effect_paths_ignore_module_imports(db: &salsa::DatabaseImpl) {
+    let errors = errors(
+        db,
+        r#"
+ability Ask {
+    op ask() -> Nat
+}
+
+mod other {
+    pub ability Ask {
+        op ask() -> Bool
+    }
+}
+
+mod asking {
+    use pkg::other::Ask
+
+    pub fn one() ->{super::Ask} Nat { pkg::Ask::ask() }
+}
+
+fn main() -> Nil {
+    let _ = handle asking::one() {
+        do value { value }
+        op pkg::Ask::ask() { resume 1 }
+    }
+}
+"#,
+    );
+    assert_eq!(errors, Vec::<String>::new());
+}
+
 #[salsa_test]
 fn invalid_keywords_are_reported(db: &salsa::DatabaseImpl) {
     let errors = errors(

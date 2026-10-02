@@ -550,9 +550,9 @@ impl<'db> Resolver<'db> {
         // e.g., after `use abilities::Abort`, rewrite `{Abort}` → `{abilities::Abort}`
         let mut effects = func.effects.clone();
         if let Some(effs) = &mut effects {
+            self.resolve_effect_annotations(effs);
             effs.iter_mut()
                 .for_each(|ann| self.resolve_annotation_paths(ann));
-            self.resolve_effect_annotations(effs);
         }
 
         // Inject ability operations from effect annotations into scope.
@@ -679,9 +679,11 @@ impl<'db> Resolver<'db> {
                 }
             }
             // A path whose first segment the enclosing inline module imports
-            // continues from the import's package-root path.
+            // continues from the import's package-root path. A path keyword
+            // already names its package-root path.
             TypeAnnotationKind::Path(segments) => {
-                if let Some((first, rest)) = segments.split_first()
+                if let Ok(None) = absolute_path(&self.module_path, segments)
+                    && let Some((first, rest)) = segments.split_first()
                     && let Some(target) = self.module_import(*first)
                 {
                     *segments = target.iter().chain(rest).copied().collect();
