@@ -430,9 +430,9 @@ fresh α, β, e
 실제로 요구한 잔여 row가 이미 열려 있으면 그 row를 그대로 callable type에
 기록한다. 본문이 `resume`을 쓰고 잔여 row가 닫혀 있으면, 람다의 row는 그
 label들과 continuation row의 합집합이다. Continuation을 재개하면 그 row의
-effect를 수행하기 때문이다. 잔여 row가 닫혀 있으면 본문에서 확정한 concrete effect만 보존하고,
-람다가 검사된 문맥의 callable
-signature가 제공한 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
+effect를 수행하기 때문이다. 그 밖에 잔여 row가 닫혀 있으면 본문에서 확정한
+concrete effect만 보존하고, 람다가 검사된 문맥의 callable signature가 제공한
+open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
 받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
