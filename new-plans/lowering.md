@@ -175,8 +175,10 @@ dialect conversion:
 arith_to_wasm
 scf_to_wasm
 func_to_wasm
-adt_to_wasm
 ```
+
+`adt` is a Tribute dialect, so `adt_to_wasm` belongs to `tribute-passes`, not
+to this pass group.
 
 Expected boundary: backend-ready Wasm IR contains `wasm.*` plus explicitly
 allowed infrastructure operations.

@@ -30,7 +30,6 @@ trunk-ir-wasm-backend/    # trunk-ir만 의존
 ├── passes/func_to_wasm.rs
 ├── passes/arith_to_wasm.rs
 ├── passes/scf_to_wasm.rs
-├── passes/adt_to_wasm.rs
 └── ...
 
 tribute-passes/           # tribute-ir 의존
@@ -41,6 +40,7 @@ tribute-passes/           # tribute-ir 의존
 │                         #          prompt tag 카운터로 바인딩
 ├── wasm/tribute_rt_to_wasm.rs
 ├── wasm/const_to_wasm.rs
+├── wasm/adt_to_wasm.rs   # adt.* → wasm_gc.*
 ├── wasm/bytes.rs         # bytes layout 타입과 경계 안 bytes 읽기 intrinsic lowering
 ├── wasm/intrinsic_to_wasm.rs
 │                         # 출구 뒤: extern "C" bytes helper를 GC 연산으로 바인딩
