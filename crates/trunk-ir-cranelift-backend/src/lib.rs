@@ -6,7 +6,6 @@
 //! ## Passes
 //!
 //! - `func_to_clif`: Lowers `func.*` operations to `clif.*`
-//! - `adt_to_clif`: Lowers `adt.struct_*` operations to `clif.*` (load/store/call)
 //! - `arith_to_clif`: Lowers `arith.*` operations to `clif.*`
 //!
 //! ## Emission

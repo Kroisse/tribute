@@ -243,9 +243,7 @@ use tribute_front::resolve::ModuleEnv;
 use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
-use trunk_ir_cranelift_backend::passes::{
-    adt_to_clif, arith_to_clif, cf_to_clif, func_to_clif, mem_to_clif,
-};
+use trunk_ir_cranelift_backend::passes::{arith_to_clif, cf_to_clif, func_to_clif, mem_to_clif};
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, emit_module_to_native,
 };
@@ -1378,7 +1376,8 @@ fn prepare_module_to_native(
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
-        adt_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
+        tribute_passes::native::adt_to_clif::lower(ctx, module, type_converter)
+            .map_err(native_conversion_failure)?;
     }
 
     // Phase 2.5 - Lower arith dialect to clif dialect
