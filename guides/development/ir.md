@@ -101,6 +101,11 @@ fn call_indirect<S: FuncSig>(
   Result<(), String>`) for its wrapper, and reserves the entity name
   `verify`. It checks what the schema cannot express and runs only after
   every generated check passed.
+- A type whose data must satisfy rules beyond its generic shape registers
+  `inventory::submit! { TypeVerifier::new::<T>(verify_fn) }`
+  (`trunk_ir::type_verifier`). IR validation runs it on every interned type
+  of that kind; `func.func_sig` and `adt.struct` register theirs this way.
+
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:
 
