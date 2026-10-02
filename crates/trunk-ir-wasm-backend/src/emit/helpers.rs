@@ -58,8 +58,8 @@ pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
 pub(crate) fn has_layout(ctx: &IrContext, ty: TypeRef, layout: &'static str) -> bool {
     ctx.get_type(ty)
         .attrs
-        .get_symbol(trunk_ir::types::LAYOUT_ATTR)
-        == Some(Symbol::new(layout))
+        .get_str(ctx, trunk_ir::types::LAYOUT_ATTR)
+        == Some(layout)
 }
 
 /// The builtin GC type index a type's runtime layout identifier selects.
@@ -67,7 +67,7 @@ pub(crate) fn builtin_layout_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u3
     let layout = ctx
         .get_type(ty)
         .attrs
-        .get_symbol(trunk_ir::types::LAYOUT_ATTR)?;
+        .get_str(ctx, trunk_ir::types::LAYOUT_ATTR)?;
     crate::gc_types::builtin_layout_idx(layout)
 }
 
@@ -80,10 +80,7 @@ pub(crate) fn is_closure_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
 /// The canonical key standing for every type of one builtin runtime layout.
 pub(crate) fn intern_layout_key(ctx: &mut IrContext, layout: &'static str) -> TypeRef {
     let mut attrs = AttributeMap::new();
-    attrs.insert(
-        Symbol::new(trunk_ir::types::LAYOUT_ATTR),
-        Attribute::Symbol(Symbol::new(layout)),
-    );
+    attrs.insert(trunk_ir::types::LAYOUT_ATTR, ctx.string_attr(layout));
     ctx.intern_type(trunk_ir::types::TypeData {
         dialect: Symbol::new("adt"),
         name: Symbol::new("struct"),
@@ -476,13 +473,11 @@ mod tests {
                 .attr("name", Attribute::Symbol(Symbol::new("_closure")))
                 .build(),
         );
+        let closure_layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
         let layout = ctx.intern_type(
             TypeDataBuilder::new("adt", "struct")
                 .attr("name", Attribute::Symbol(Symbol::new("Other")))
-                .attr(
-                    trunk_ir::types::LAYOUT_ATTR,
-                    Attribute::Symbol(Symbol::new(crate::gc_types::CLOSURE_LAYOUT)),
-                )
+                .attr(trunk_ir::types::LAYOUT_ATTR, closure_layout)
                 .build(),
         );
 

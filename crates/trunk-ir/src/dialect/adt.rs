@@ -469,9 +469,9 @@ mod tests {
     fn test_roundtrip_adt_struct() {
         let input = r#"core.module @test {
   !point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>
-  !closure = adt.struct<@"Nested::Closure"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}> {}, @env: core.tuple<core.ptr>), {layout = @closure}>
+  !closure = adt.struct<@"Nested::Closure"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}> {}, @env: core.tuple<core.ptr>), {layout = "closure"}>
   !empty = adt.struct<@Empty()>
-  !nested = adt.struct<@Outer(@inner: adt.struct<@Inner(@a: core.i32), {layout = @closure}> {m = 1})>
+  !nested = adt.struct<@Outer(@inner: adt.struct<@Inner(@a: core.i32), {layout = "closure"}> {m = 1})>
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
@@ -492,9 +492,9 @@ mod tests {
         let printed = print_module(&ctx, module);
         for expected in [
             "!point = adt.struct<@Point(@x: core.i32, @y: core.i32 {k = @v})>",
-            "adt.struct<@\"Nested::Closure\"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}>, @env: core.tuple<core.ptr>), {layout = @closure}>",
+            "adt.struct<@\"Nested::Closure\"(@func_ptr: func.func_sig<(core.i32) -> core.i32, {k = 1}>, @env: core.tuple<core.ptr>), {layout = \"closure\"}>",
             "!empty = adt.struct<@Empty()>",
-            "(@inner: adt.struct<@Inner(@a: core.i32), {layout = @closure}> {m = 1})>",
+            "(@inner: adt.struct<@Inner(@a: core.i32), {layout = \"closure\"}> {m = 1})>",
         ] {
             assert!(printed.contains(expected), "{expected}\n{printed}");
         }

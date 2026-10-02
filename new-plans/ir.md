@@ -1347,21 +1347,22 @@ parameter와 같은 용법). 함수 signature에서는 input과 result 타입이
 ### Runtime layout 식별자
 
 Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으로 식별한다.
-값은 layout 종류를 나타내는 symbol이다.
+값은 layout 종류를 나타내는 문자열(atom)이다. Symbol table의 정의를 가리키지
+않으므로 symbol이 아니다.
 
 | `layout` | 붙는 타입 | 뜻 |
 | --- | --- | --- |
-| `@closure` | canonical closure `adt.struct` | 함수 참조와 environment로 이루어진 closure 저장 |
-| `@evidence_marker` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure |
-| `@evidence` | evidence `core.array` | ability id 순으로 정렬된 marker 배열 |
-| `@bytes` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
-| `@bytes_data` | Wasm bytes backing `core.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
+| `"closure"` | canonical closure `adt.struct` | 함수 참조와 environment로 이루어진 closure 저장 |
+| `"evidence_marker"` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure |
+| `"evidence"` | evidence `core.array` | ability id 순으로 정렬된 marker 배열 |
+| `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
+| `"bytes_data"` | Wasm bytes backing `core.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
 
 - 속성은 저장 layout만 나타낸다. 의미 분류를 physical 이름으로 복제하지 않으며,
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
 - 일반 type 속성처럼 interning identity에 참여한다. `layout`이 없는 같은 모양의
   타입과는 다른 타입이다. Textual form은 일반 type 속성과 같다:
-  `adt.struct<@_closure(@func_ptr: core.ptr, @env: core.ptr), {layout = @closure}>`.
+  `adt.struct<@_closure(@func_ptr: core.ptr, @env: core.ptr), {layout = "closure"}>`.
 - 속성은 그 layout을 만드는 compiler의 canonical 생성자만 붙인다. Frontend와
   소스에서 온 타입은 이 속성을 갖지 않는다. 그래서 사용자 타입이 같은 이름이나
   모양을 가져도 compiler layout으로 취급되지 않는다.
@@ -1381,7 +1382,7 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 ```text
 adt.struct<@Point(@x: core.i32, @y: core.i32)>
 adt.struct<@Node(@value: core.i32 {k = @v}, @next: adt.typeref<{name = @Node}>)>
-adt.struct<@_closure(@func_ptr: core.ptr, @env: core.ptr), {layout = @closure}>
+adt.struct<@_closure(@func_ptr: core.ptr, @env: core.ptr), {layout = "closure"}>
 adt.struct<@Empty()>
 ```
 

@@ -319,8 +319,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = core.array<core.i8, {layout = @bytes_data}>
-  !bytes = adt.struct<@_Bytes(@data: !data, @offset: core.i32, @len: core.i32), {layout = @bytes}>
+  !data = core.array<core.i8, {layout = "bytes_data"}>
+  !bytes = adt.struct<@_Bytes(@data: !data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
     %bytes = wasm_gc.struct_new %zero {type = !bytes} : !bytes
@@ -349,10 +349,10 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !data = core.array<core.i8, {layout = @bytes_data}>
+  !data = core.array<core.i8, {layout = "bytes_data"}>
   !plain = core.array<core.i8>
   !plain_ref = core.ref<core.array<core.i8>>
-  !bytes = adt.struct<@_Bytes(@data: !data, @offset: core.i32, @len: core.i32), {layout = @bytes}>
+  !bytes = adt.struct<@_Bytes(@data: !data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
   !lookalike = adt.struct<@_Bytes(@data: !plain, @offset: core.i32, @len: core.i32)>
 }"#,
         );

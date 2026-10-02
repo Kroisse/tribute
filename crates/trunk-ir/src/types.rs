@@ -666,7 +666,7 @@ pub const PARAM_ATTRS_ATTR: &str = "param_attrs";
 
 /// Reserved type attribute naming a compiler-owned runtime storage layout.
 ///
-/// The value is a symbol whose meaning the defining language layer and the
+/// The value is a string whose meaning the defining language layer and the
 /// implementing target own; TrunkIR does not interpret it.
 pub const LAYOUT_ATTR: &str = "layout";
 

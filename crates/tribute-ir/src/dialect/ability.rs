@@ -366,7 +366,7 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let mut attrs = trunk_ir::types::AttributeMap::new();
     attrs.insert(
         runtime_layout::LAYOUT_ATTR,
-        Symbol::new(runtime_layout::EVIDENCE_MARKER),
+        ctx.string_attr(runtime_layout::EVIDENCE_MARKER),
     );
     trunk_ir::dialect::adt::struct_type(ctx, "_Marker", fields, attrs).as_type_ref()
 }
@@ -375,13 +375,11 @@ pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
 /// evidence runtime layout identifier.
 pub fn evidence_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let marker_ty = marker_adt_type_ref(ctx);
+    let layout = ctx.string_attr(runtime_layout::EVIDENCE);
     ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("core"), Symbol::new("array"))
             .param(marker_ty)
-            .attr(
-                runtime_layout::LAYOUT_ATTR,
-                Attribute::Symbol(Symbol::new(runtime_layout::EVIDENCE)),
-            )
+            .attr(runtime_layout::LAYOUT_ATTR, layout)
             .build(),
     )
 }

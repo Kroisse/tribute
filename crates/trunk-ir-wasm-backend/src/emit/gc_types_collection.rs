@@ -764,7 +764,7 @@ mod tests {
                 let mut ctx = IrContext::new();
                 let producer = if evidence {
                     format!(
-                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : core.array<!Marker, {{layout = @evidence}}>"
+                        "%size = wasm.i32_const {{value = 0}} : core.i32\n%value = wasm.array_new_default %size {{type_idx = {EVIDENCE_IDX}}} : core.array<!Marker, {{layout = \"evidence\"}}>"
                     )
                 } else {
                     format!(
@@ -773,7 +773,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = adt.struct<@_Marker(@ability_id: {field_type}, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {{layout = @evidence_marker}}>
+                        !Marker = adt.struct<@_Marker(@ability_id: {field_type}, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {{layout = \"evidence_marker\"}}>
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable
