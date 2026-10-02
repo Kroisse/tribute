@@ -1075,8 +1075,7 @@ pub struct StringRef(lasso::Spur);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StringArg {
     Ref(StringRef),
-    Static(&'static str),
-    Owned(String),
+    Text(std::borrow::Cow<'static, str>),
 }
 
 impl From<StringRef> for StringArg {
@@ -1087,13 +1086,19 @@ impl From<StringRef> for StringArg {
 
 impl From<&'static str> for StringArg {
     fn from(value: &'static str) -> Self {
-        StringArg::Static(value)
+        StringArg::Text(value.into())
     }
 }
 
 impl From<String> for StringArg {
     fn from(value: String) -> Self {
-        StringArg::Owned(value)
+        StringArg::Text(value.into())
+    }
+}
+
+impl From<std::borrow::Cow<'static, str>> for StringArg {
+    fn from(value: std::borrow::Cow<'static, str>) -> Self {
+        StringArg::Text(value)
     }
 }
 

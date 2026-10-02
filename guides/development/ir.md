@@ -166,9 +166,10 @@ let is_c = ctx.op(op).attributes.get_str(ctx, "abi") == Some("C");
 let value: &str = string_const.value(ctx); // generated accessor
 ```
 
-A builder setter for a string attribute takes a `StringArg`: a `&'static str`,
-an owned `String`, or a `StringRef`. The builder interns text when it creates
-the operation, so `.predicate("slt")` needs no context.
+A builder setter for a string attribute takes a `StringArg`: a `StringRef`,
+or text as a `Cow<'static, str>` (a `&'static str` or an owned `String`).
+The builder interns text when it creates the operation, so
+`.predicate("slt")` needs no context.
 
 A generated string accessor returns the text, like MLIR's `getValue()`.
 `<name>_ref` returns the `StringRef`; use it to copy the

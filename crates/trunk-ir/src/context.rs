@@ -390,8 +390,7 @@ impl IrContext {
     pub fn intern_string_arg(&mut self, arg: StringArg) -> StringRef {
         match arg {
             StringArg::Ref(r) => r,
-            StringArg::Static(text) => self.intern_str(text),
-            StringArg::Owned(text) => self.intern_str(&text),
+            StringArg::Text(text) => self.intern_str(&text),
         }
     }
 
