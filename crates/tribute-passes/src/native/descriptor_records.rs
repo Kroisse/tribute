@@ -1,9 +1,10 @@
 //! Native runtime type descriptor records.
 //!
-//! Native RTTI generation emits one read-only record per RTTI index and the
-//! table `__tribute_type_descriptors` that maps each index to its record, in
-//! the format `new-plans/rc.md` fixes. Records are built while nominal layouts
-//! still carry their names, so lower passes see only the index.
+//! Native RTTI generation emits `__tribute_rtti`, a read-only array holding
+//! one fixed-size record per RTTI index: the index's release function and its
+//! descriptor, in the format `new-plans/rc.md` fixes. Records are built while
+//! nominal layouts still carry their names, so lower passes see only the
+//! index.
 
 use std::collections::HashMap;
 
@@ -19,11 +20,14 @@ use trunk_ir::{BlockRef, OpRef, StringRef, Symbol, TypeRef};
 
 use super::rtti::{RTTI_BOOL, RTTI_FLOAT, RTTI_INT, RTTI_NAT, RTTI_NIL};
 
-/// Name of the data object mapping each RTTI index to its descriptor record.
-pub const DESCRIPTOR_TABLE: &str = "__tribute_type_descriptors";
+/// Name of the RTTI table: one record per RTTI index.
+pub const RTTI_TABLE: &str = "__tribute_rtti";
 
 const POINTER_SIZE: usize = 8;
-const RECORD_SIZE: usize = 40;
+/// Size of one RTTI record.
+pub const RECORD_SIZE: usize = 48;
+/// Offset of the release function pointer in a record.
+pub const RELEASE_FN_OFFSET: usize = 0;
 const FIELD_SIZE: usize = 16;
 
 /// The `kind` word of a descriptor record.
@@ -132,12 +136,13 @@ fn reserved_records() -> [(u32, DescriptorRecord); 5] {
     ]
 }
 
-/// Emit the records of the reserved indices and of `records`, and the
-/// descriptor table that maps each index to its record.
+/// Emit `__tribute_rtti`: the record of every reserved index and of each of
+/// `records`, with the release function `release_fns` names for its index.
 pub fn generate(
     ctx: &mut IrContext,
     module_block: BlockRef,
     records: Vec<(u32, DescriptorRecord)>,
+    release_fns: &HashMap<u32, Symbol>,
     loc: Location,
 ) {
     let mut emitter = Emitter {
@@ -147,19 +152,24 @@ pub fn generate(
         names: HashMap::new(),
         enums: HashMap::new(),
     };
-    let mut table = Vec::new();
-    for (index, record) in reserved_records().into_iter().chain(records) {
-        let symbol = emitter.record(&format!("__tribute_type_record_{index}"), &record);
-        table.push((index, symbol));
-    }
-
-    let entries = table.iter().map(|&(index, _)| index).max().unwrap_or(0) as usize + 1;
-    let relocs = table
+    let records = reserved_records()
         .into_iter()
-        .map(|(index, symbol)| (index as usize * POINTER_SIZE, symbol))
+        .chain(records)
         .collect::<Vec<_>>();
-    emitter.data(DESCRIPTOR_TABLE, vec![0; entries * POINTER_SIZE], relocs);
+    let entries = records.iter().map(|&(index, _)| index).max().unwrap_or(0) as usize + 1;
+    let mut table = vec![0; entries * RECORD_SIZE];
+    let mut relocs = Vec::new();
+    for (index, record) in &records {
+        let base = *index as usize * RECORD_SIZE;
+        if let Some(&release) = release_fns.get(index) {
+            relocs.push((base + RELEASE_FN_OFFSET, clif::RelocTarget::Func(release)));
+        }
+        emitter.write_record(&mut table, &mut relocs, base, *index, record);
+    }
+    emitter.data(RTTI_TABLE, table, relocs);
 }
+
+type Relocs = Vec<(usize, clif::RelocTarget)>;
 
 struct Emitter<'a> {
     ctx: &'a mut IrContext,
@@ -170,16 +180,24 @@ struct Emitter<'a> {
 }
 
 impl Emitter<'_> {
-    /// Emit one record, with its field array, and return its symbol.
-    fn record(&mut self, symbol: &str, record: &DescriptorRecord) -> Symbol {
-        let mut bytes = vec![0; RECORD_SIZE];
-        let mut relocs = Vec::new();
-        put_u32(&mut bytes, 0, record.kind as u32);
-        put_u32(&mut bytes, 4, record.fields.len() as u32);
-        self.put_name(&mut bytes, &mut relocs, 8, 16, &record.name);
+    /// Write the descriptor part of a record at `bytes[base..]`, emitting its
+    /// field array and enum record as separate data. `id` names the field
+    /// array.
+    fn write_record(
+        &mut self,
+        bytes: &mut [u8],
+        relocs: &mut Relocs,
+        base: usize,
+        id: impl std::fmt::Display,
+        record: &DescriptorRecord,
+    ) {
+        put_u32(bytes, base + 8, record.kind as u32);
+        put_u32(bytes, base + 12, record.fields.len() as u32);
+        self.put_name(bytes, relocs, base + 16, base + 24, &record.name);
         if let Some((owner, position)) = record.owner {
-            put_u32(&mut bytes, 20, position);
-            relocs.push((24, self.enum_record(owner)));
+            put_u32(bytes, base + 28, position);
+            let owner = self.enum_record(owner);
+            relocs.push((base + 32, clif::RelocTarget::Data(owner)));
         }
         if !record.fields.is_empty() {
             let mut fields = vec![0; record.fields.len() * FIELD_SIZE];
@@ -189,15 +207,12 @@ impl Emitter<'_> {
                 self.put_name(&mut fields, &mut field_relocs, at, at + 8, name);
                 put_u32(&mut fields, at + 12, kind.record_code());
             }
-            relocs.push((
-                32,
-                self.data(&format!("{symbol}_fields"), fields, field_relocs),
-            ));
+            let fields = self.data(&format!("__tribute_rtti_fields_{id}"), fields, field_relocs);
+            relocs.push((base + 40, clif::RelocTarget::Data(fields)));
         }
-        self.data(symbol, bytes, relocs)
     }
 
-    /// The record of an enum layout, emitted once.
+    /// The record of an enum layout, emitted once outside the table.
     fn enum_record(&mut self, ty: TypeRef) -> Symbol {
         if let Some(&symbol) = self.enums.get(&ty) {
             return symbol;
@@ -210,10 +225,11 @@ impl Emitter<'_> {
             owner: None,
             fields: vec![],
         };
-        let symbol = self.record(
-            &format!("__tribute_type_enum_{}", self.enums.len()),
-            &record,
-        );
+        let id = format!("enum_{}", self.enums.len());
+        let mut bytes = vec![0; RECORD_SIZE];
+        let mut relocs = Vec::new();
+        self.write_record(&mut bytes, &mut relocs, 0, &id, &record);
+        let symbol = self.data(&format!("__tribute_rtti_{id}"), bytes, relocs);
         self.enums.insert(ty, symbol);
         symbol
     }
@@ -223,7 +239,7 @@ impl Emitter<'_> {
     fn put_name(
         &mut self,
         bytes: &mut [u8],
-        relocs: &mut Vec<(usize, Symbol)>,
+        relocs: &mut Relocs,
         pointer: usize,
         length: usize,
         name: &str,
@@ -235,17 +251,17 @@ impl Emitter<'_> {
         let symbol = match self.names.get(name) {
             Some(&symbol) => symbol,
             None => {
-                let symbol_name = format!("__tribute_type_name_{}", self.names.len());
+                let symbol_name = format!("__tribute_rtti_name_{}", self.names.len());
                 let symbol =
                     self.data_with_align(&symbol_name, name.as_bytes().to_vec(), 1, vec![]);
                 self.names.insert(name.to_owned(), symbol);
                 symbol
             }
         };
-        relocs.push((pointer, symbol));
+        relocs.push((pointer, clif::RelocTarget::Data(symbol)));
     }
 
-    fn data(&mut self, name: &str, bytes: Vec<u8>, relocs: Vec<(usize, Symbol)>) -> Symbol {
+    fn data(&mut self, name: &str, bytes: Vec<u8>, relocs: Relocs) -> Symbol {
         self.data_with_align(name, bytes, POINTER_SIZE as u32, relocs)
     }
 
@@ -254,7 +270,7 @@ impl Emitter<'_> {
         name: &str,
         bytes: Vec<u8>,
         align: u32,
-        relocs: Vec<(usize, Symbol)>,
+        relocs: Relocs,
     ) -> Symbol {
         let symbol = Symbol::from_dynamic(name);
         let regions = (!relocs.is_empty()).then(|| self.reloc_region(relocs));
@@ -271,19 +287,27 @@ impl Emitter<'_> {
         symbol
     }
 
-    fn reloc_region(&mut self, relocs: Vec<(usize, Symbol)>) -> trunk_ir::RegionRef {
+    fn reloc_region(&mut self, relocs: Relocs) -> trunk_ir::RegionRef {
         let block = self.ctx.create_block(BlockData {
             location: self.loc,
             args: vec![],
             ops: smallvec![],
             parent_region: None,
         });
-        for (offset, data) in relocs {
-            let reloc: OpRef = clif::DataReloc::operands()
-                .offset(u32::try_from(offset).expect("record offset fits u32"))
-                .data(data)
-                .build(self.ctx, self.loc)
-                .op_ref();
+        for (offset, target) in relocs {
+            let offset = u32::try_from(offset).expect("record offset fits u32");
+            let reloc: OpRef = match target {
+                clif::RelocTarget::Func(func) => clif::FuncReloc::operands()
+                    .offset(offset)
+                    .func(func)
+                    .build(self.ctx, self.loc)
+                    .op_ref(),
+                clif::RelocTarget::Data(data) => clif::DataReloc::operands()
+                    .offset(offset)
+                    .data(data)
+                    .build(self.ctx, self.loc)
+                    .op_ref(),
+            };
             self.ctx.push_op(block, reloc);
         }
         self.ctx.create_region(RegionData {
@@ -351,33 +375,54 @@ mod tests {
 
         let block = module.first_block(&ctx).unwrap();
         let loc = ctx.op(module.op()).location;
-        generate(&mut ctx, block, vec![(5, record)], loc);
+        let release = Symbol::new("__tribute_release_5");
+        generate(
+            &mut ctx,
+            block,
+            vec![(5, record)],
+            &HashMap::from([(5, release)]),
+            loc,
+        );
 
         let data = data_ops(&ctx, module);
-        let variant = data["__tribute_type_record_5"];
-        assert_eq!(u32_at(&ctx, variant, 0), RecordKind::Variant as u32);
-        assert_eq!(u32_at(&ctx, variant, 4), 1);
-        assert_eq!(u32_at(&ctx, variant, 16), 4);
-        assert_eq!(u32_at(&ctx, variant, 20), 1);
-        let owner = reloc_at(&ctx, variant, 24).expect("enum record");
+        let table = data[RTTI_TABLE];
+        assert_eq!(table.bytes(&ctx).len(), 6 * RECORD_SIZE);
+        let base = 5 * RECORD_SIZE;
+        let at = |offset: usize| (base + offset) as u32;
+        assert!(
+            table
+                .relocations(&ctx)
+                .contains(&(at(RELEASE_FN_OFFSET), clif::RelocTarget::Func(release)))
+        );
+        assert_eq!(u32_at(&ctx, table, base + 8), RecordKind::Variant as u32);
+        assert_eq!(u32_at(&ctx, table, base + 12), 1);
+        assert_eq!(u32_at(&ctx, table, base + 24), 4);
+        assert_eq!(u32_at(&ctx, table, base + 28), 1);
+        let owner = reloc_at(&ctx, table, at(32)).expect("enum record");
         let owner = data[&owner.to_string()];
-        assert_eq!(u32_at(&ctx, owner, 0), RecordKind::Enum as u32);
-        assert_eq!(u32_at(&ctx, owner, 4), 0);
-        let name = reloc_at(&ctx, owner, 8).expect("enum name");
+        assert_eq!(u32_at(&ctx, owner, 8), RecordKind::Enum as u32);
+        assert_eq!(u32_at(&ctx, owner, 12), 0);
+        let name = reloc_at(&ctx, owner, 16).expect("enum name");
         assert_eq!(data[&name.to_string()].bytes(&ctx).as_ref(), b"Choice");
-        let fields = reloc_at(&ctx, variant, 32).expect("variant fields");
+        let fields = reloc_at(&ctx, table, at(40)).expect("variant fields");
         assert_eq!(
             u32_at(&ctx, data[&fields.to_string()], 12),
             FieldKind::Dynamic.record_code()
         );
 
-        let table = data[DESCRIPTOR_TABLE];
-        assert_eq!(table.bytes(&ctx).len(), 6 * POINTER_SIZE);
-        for index in 0..6 {
-            assert_eq!(
-                reloc_at(&ctx, table, index * POINTER_SIZE as u32).map(|symbol| symbol.to_string()),
-                Some(format!("__tribute_type_record_{index}"))
-            );
+        // Every reserved index has a record, and none has a release function.
+        for index in 0..5 {
+            let base = index * RECORD_SIZE;
+            assert_eq!(u32_at(&ctx, table, base + 8), RecordKind::Builtin as u32);
+            assert!(reloc_at(&ctx, table, (base + 16) as u32).is_some());
         }
+        assert_eq!(
+            table
+                .relocations(&ctx)
+                .iter()
+                .filter(|(_, target)| matches!(target, clif::RelocTarget::Func(_)))
+                .count(),
+            1
+        );
     }
 }

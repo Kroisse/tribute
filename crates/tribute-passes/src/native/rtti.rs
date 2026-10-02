@@ -98,14 +98,10 @@ pub const RELEASE_FN_PREFIX: &str = "__tribute_release_";
 /// Name of the runtime deallocation function.
 const DEALLOC_FN: &str = "__tribute_dealloc";
 
-/// Name of the data object mapping each RTTI index to its release function.
-pub const RTTI_TABLE: &str = "__tribute_rtti_table";
+pub use super::descriptor_records::RTTI_TABLE;
 
 /// Name of the function that releases an allocation through its RTTI entry.
 pub const DEEP_RELEASE_FN: &str = "__tribute_deep_release";
-
-/// Width of an RTTI table entry: one native function pointer.
-const RTTI_TABLE_ENTRY_SIZE: u32 = 8;
 
 /// Trap code for a dynamically sized release without an RTTI release entry.
 const UNRESOLVED_DYNAMIC_RELEASE_TRAP: &str = "unresolved_dynamic_release";
@@ -217,7 +213,7 @@ pub fn generate_rtti(
     };
 
     let loc = Location::new(ctx.intern_path("<rtti>"), Span::new(0, 0));
-    let mut release_indices = Vec::new();
+    let mut release_fns = HashMap::new();
 
     // `anyref` and `intref` have no static nominal allocation layout. Their
     // release action carries a dynamic-size signal, resolved by the header
@@ -226,7 +222,7 @@ pub fn generate_rtti(
     for (rtti_idx, alloc_size) in primitive_releases {
         let func_op = generate_fixed_release_function(ctx, rtti_idx, alloc_size, loc);
         ctx.push_op(module_block, func_op);
-        release_indices.push(rtti_idx);
+        release_fns.insert(rtti_idx, release_fn_symbol(rtti_idx));
     }
 
     // Sort by rtti_idx for deterministic output
@@ -238,7 +234,7 @@ pub fn generate_rtti(
         let tag = layout.tag_ref(ctx);
         let rtti_idx = layout.index(ctx);
         let fields = layout.field_kinds(ctx);
-        release_indices.push(rtti_idx);
+        release_fns.insert(rtti_idx, release_fn_symbol(rtti_idx));
         let release = descriptor_release(ctx, ty, tag, &fields, type_converter);
         let func_op = generate_release_function(
             ctx,
@@ -250,48 +246,17 @@ pub fn generate_rtti(
         ctx.push_op(module_block, func_op);
         records.push((rtti_idx, DescriptorRecord::of_layout(ctx, ty, tag, fields)));
     }
-    descriptor_records::generate(ctx, module_block, records, loc);
+    descriptor_records::generate(ctx, module_block, records, &release_fns, loc);
 
-    let table = generate_rtti_table(ctx, &release_indices, loc);
-    ctx.push_op(module_block, table);
     let deep_release = generate_deep_release_function(ctx, loc);
     ctx.push_op(module_block, deep_release);
 
     Ok(())
 }
 
-/// Declare the RTTI table: one pointer-sized entry per index, as long as the
-/// descriptor table, holding that index's release function or null.
-fn generate_rtti_table(ctx: &mut IrContext, release_indices: &[u32], loc: Location) -> OpRef {
-    let max_idx = release_indices.iter().copied().fold(RTTI_FLOAT, u32::max);
-    let entries = max_idx as usize + 1;
-    let relocs = ctx.create_block(BlockData {
-        location: loc,
-        args: vec![],
-        ops: smallvec![],
-        parent_region: None,
-    });
-    for &idx in release_indices {
-        let reloc = clif::FuncReloc::operands()
-            .offset(idx * RTTI_TABLE_ENTRY_SIZE)
-            .func(Symbol::from_dynamic(&format!("{RELEASE_FN_PREFIX}{idx}")))
-            .build(ctx, loc);
-        ctx.push_op(relocs, reloc.op_ref());
-    }
-    let relocs = ctx.create_region(RegionData {
-        location: loc,
-        blocks: smallvec![relocs],
-        parent_op: None,
-    });
-    // Zero bytes rather than zero-initialized data, so the table lives in a
-    // data section: macOS linkers reject relocations in zero-fill sections.
-    clif::Data::operands()
-        .sym_name(Symbol::new(RTTI_TABLE))
-        .bytes(vec![0u8; entries * RTTI_TABLE_ENTRY_SIZE as usize].into())
-        .align(RTTI_TABLE_ENTRY_SIZE)
-        .regions(relocs)
-        .build(ctx, loc)
-        .op_ref()
+/// The release function of an RTTI index.
+fn release_fn_symbol(rtti_idx: u32) -> Symbol {
+    Symbol::from_dynamic(&format!("{RELEASE_FN_PREFIX}{rtti_idx}"))
 }
 
 /// Build `__tribute_deep_release(payload_ptr, alloc_size)`.
@@ -299,7 +264,7 @@ fn generate_rtti_table(ctx: &mut IrContext, release_indices: &[u32], loc: Locati
 /// ```text
 /// entry(payload_ptr, alloc_size):
 ///   raw_ptr = payload_ptr - RC_HEADER_SIZE
-///   release_fn = load ptr from rtti_table[load i32 from raw_ptr + 4]
+///   release_fn = load ptr from __tribute_rtti[load i32 from raw_ptr + 4].release_fn
 ///   release_fn == null ? goto shallow : goto deep
 /// shallow:
 ///   alloc_size == 0 ? trap : __tribute_dealloc(raw_ptr, alloc_size)
@@ -365,7 +330,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
         .results(tys.i64)
         .build(ctx, loc);
     push(ctx, entry, rtti_idx.op_ref());
-    let entry_size = iconst(ctx, entry, i64::from(RTTI_TABLE_ENTRY_SIZE), tys.i64);
+    let entry_size = iconst(ctx, entry, descriptor_records::RECORD_SIZE as i64, tys.i64);
     let entry_offset = clif::Imul::operands(rtti_idx.result(ctx), entry_size)
         .results(tys.i64)
         .build(ctx, loc);
@@ -380,7 +345,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
         .build(ctx, loc);
     push(ctx, entry, entry_addr.op_ref());
     let release_fn = clif::Load::operands(entry_addr.result(ctx))
-        .offset(0)
+        .offset(descriptor_records::RELEASE_FN_OFFSET as i32)
         .results(tys.ptr)
         .build(ctx, loc);
     push(ctx, entry, release_fn.op_ref());
