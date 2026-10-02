@@ -100,9 +100,9 @@ Bytes: bytes
 
 Install a compatible Wasmtime release as described in the
 [development prerequisites](../README.md#development-prerequisites). Wasm
-`read_line` is unsupported. Source-level Wasm `fn` and `op` handlers are
-unsupported: their ignored compilation tests fail before emitting a module, so
-these examples make no Wasm ability compilation or execution claim.
+`read_line` is unsupported. Source-level Wasm `fn` handlers, one-shot `op`
+handlers, and handlers that drop their continuation execute in focused tests,
+but these examples make no Wasm ability execution claim.
 
 ## Canonical invalid example
 

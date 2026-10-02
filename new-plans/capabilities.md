@@ -52,11 +52,11 @@ target column is intentionally no stronger than its own evidence.
 
 | Capability | Shared/frontend | Native | WasmGC | Evidence and boundary |
 | --- | --- | --- | --- | --- |
-| Ability declarations, operation calls, and effect rows | **compile-only** | **native-run** | **wasm-run** | Frontend checks are in [`e2e_ability_core.rs`](../tests/integration/e2e_ability_core.rs) and [`lambda_effect_type.rs`](../crates/tribute-front/tests/lambda_effect_type.rs). Native execution is covered by the handler suites. Wasm execution is limited to the two handler forms below. |
+| Ability declarations, operation calls, and effect rows | **compile-only** | **native-run** | **wasm-run** | Frontend checks are in [`e2e_ability_core.rs`](../tests/integration/e2e_ability_core.rs) and [`lambda_effect_type.rs`](../crates/tribute-front/tests/lambda_effect_type.rs). Native execution is covered by the handler suites. Wasm execution is limited to the three handler forms below. |
 | Row-polymorphic effectful callbacks | **compile-only** | **native-run** | **not-yet-verified** | `test_effect_row_poly_higher_order_function`, `test_effect_row_poly_multiple_abilities`, and `test_effect_row_poly_unification_across_call_sites` execute native callbacks with one or more abilities and independently instantiate the row at different call sites in [`e2e_ability_effect_row.rs`](../tests/integration/e2e_ability_effect_row.rs). No focused Wasm evidence was found. |
 | Tail-resumptive `fn` handlers | **compile-only** | **native-run** | **wasm-run** | `test_fn_handler_arm` executes natively in [`e2e_ability_handler.rs`](../tests/integration/e2e_ability_handler.rs). `test_execute_tail_dispatch_ability` runs a `fn` handler with Wasmtime and asserts its output in [`wasm_compilation.rs`](../tests/integration/wasm_compilation.rs). |
 | General `op` handlers and one-shot `resume` | **compile-only** | **native-run** | **wasm-run** | `test_state_set_then_get` and the other State tests execute natively in [`e2e_ability_handler.rs`](../tests/integration/e2e_ability_handler.rs). `test_execute_cps_dispatch_ability` runs `op` arms that resume once with Wasmtime and asserts its output in [`wasm_compilation.rs`](../tests/integration/wasm_compilation.rs). An `op` arm that reinstalls its own handler around `resume`, as in a state-passing `run_state`, loses state updates on Wasm, so that form is **unsupported** there. |
-| Dropped continuations and abort/throw handlers | **compile-only** | **native-run** | **not-yet-verified** | Native early-return, `Never`, Abort, and Throw execution tests are in [`e2e_ability_handler.rs`](../tests/integration/e2e_ability_handler.rs). |
+| Dropped continuations and abort/throw handlers | **compile-only** | **native-run** | **wasm-run** | Native early-return, `Never`, Abort, and Throw execution tests are in [`e2e_ability_handler.rs`](../tests/integration/e2e_ability_handler.rs). `test_execute_handler_that_drops_its_continuation` runs an Abort arm that returns without resuming with Wasmtime and asserts its output in [`wasm_compilation.rs`](../tests/integration/wasm_compilation.rs). |
 | Nested and multiple abilities | **compile-only** | **native-run** | **not-yet-verified** | Native composition, shadowing, and deep nesting execute in [`e2e_ability_nested.rs`](../tests/integration/e2e_ability_nested.rs). No corresponding Wasm execution test was found. |
 | Module-qualified ability paths in inline modules | **compile-only** | **native-run** | **not-yet-verified** | `test_handler_ability_in_module` executes a module-qualified operation call and handler arm in [`e2e_ability_handler.rs`](../tests/integration/e2e_ability_handler.rs). File-module loading remains unsupported, and no focused Wasm evidence was found. |
 
@@ -83,8 +83,8 @@ exact handler form with its observable result asserted.
 The current **wasm-run** language-level claims in this table are String/Bytes
 output through `std::io::print_line`, byte-wise String equality, `Nat`
 ordering comparisons, `Bytes::slice_or_panic`, `Bytes::slice` clamping, and the
-`fn` and one-shot `op` handler forms named above. That evidence does not
-establish general WasmGC parity with native.
+`fn`, one-shot `op`, and continuation-dropping handler forms named above. That
+evidence does not establish general WasmGC parity with native.
 
 ## Diagnostics, LSP, and Compilation Boundaries
 
