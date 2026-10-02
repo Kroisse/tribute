@@ -15,8 +15,7 @@ use crate::gc_types::{BOXED_F64_IDX, FIRST_USER_TYPE_IDX};
 
 fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("adt")
-        && data.attrs.get_symbol("name") == Some(Symbol::new(expected))
+    data.dialect == Symbol::new("adt") && data.attrs.get_str(ctx, "name") == Some(expected)
 }
 
 pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
@@ -280,8 +279,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !A = adt.struct<@A(@value: core.i32)>
-  !B = adt.struct<@B(@value: core.i32)>
+  !A = adt.struct<A(value: core.i32)>
+  !B = adt.struct<B(value: core.i32)>
 
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
@@ -320,7 +319,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !data = core.array<core.i8, {layout = "bytes_data"}>
-  !bytes = adt.struct<@_Bytes(@data: !data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
+  !bytes = adt.struct<_Bytes(data: !data, offset: core.i32, len: core.i32), {layout = "bytes"}>
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
     %bytes = wasm_gc.struct_new %zero {type = !bytes} : !bytes
@@ -352,8 +351,8 @@ mod tests {
   !data = core.array<core.i8, {layout = "bytes_data"}>
   !plain = core.array<core.i8>
   !plain_ref = core.ref<core.array<core.i8>>
-  !bytes = adt.struct<@_Bytes(@data: !data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
-  !lookalike = adt.struct<@_Bytes(@data: !plain, @offset: core.i32, @len: core.i32)>
+  !bytes = adt.struct<_Bytes(data: !data, offset: core.i32, len: core.i32), {layout = "bytes"}>
+  !lookalike = adt.struct<_Bytes(data: !plain, offset: core.i32, len: core.i32)>
 }"#,
         );
         fn alias(ctx: &IrContext, name: &'static str) -> TypeRef {
@@ -384,7 +383,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !A = adt.struct<@A()>
+  !A = adt.struct<A()>
 
   wasm.func @main() -> core.nil {
     %null = wasm.ref_null {heap_type = "anyref"} : wasm.anyref
@@ -416,7 +415,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<@S(@value: core.i32)>
+  !S = adt.struct<S(value: core.i32)>
   !A = core.array<core.i32>
   !B = core.array<core.i32>
 

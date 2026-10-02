@@ -118,13 +118,15 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
         }
         // Physicalization consumes the frame answer type, and the generated
         // frame name only numbers it.
-        if data.attrs.get_symbol("name").is_some_and(|name| {
-            name.with_str(|name| name.starts_with(CPS_CONTINUATION_FRAME_NAME_PREFIX))
-        }) {
+        if data
+            .attrs
+            .get_str(ctx, "name")
+            .is_some_and(|name| name.starts_with(CPS_CONTINUATION_FRAME_NAME_PREFIX))
+        {
             return "Frame".to_owned();
         }
         let mut shape = format!("{}.{}", data.dialect, data.name);
-        if let Some(name) = data.attrs.get_symbol("name") {
+        if let Some(name) = data.attrs.get_text(ctx, "name") {
             shape.push_str(&format!("<{name}>"));
         }
         // A struct layout's parameters are its fields; its name is its shape.

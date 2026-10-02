@@ -191,12 +191,12 @@ fn lower_single_lambda(
     let env_struct_ty = if captures.is_empty() {
         None
     } else {
-        let fields: Vec<(Symbol, TypeRef)> = capture_types
+        let fields: Vec<(String, TypeRef)> = capture_types
             .iter()
             .enumerate()
-            .map(|(i, &ty)| (Symbol::from_dynamic(&format!("_{i}")), ty))
+            .map(|(i, &ty)| (format!("_{i}"), ty))
             .collect();
-        let env_name = Symbol::from_dynamic(&format!("{lifted_name}::env"));
+        let env_name = format!("{lifted_name}::env");
         Some(adt::struct_type(ctx, env_name, fields, AttributeMap::new()).as_type_ref())
     };
 

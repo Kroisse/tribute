@@ -20,7 +20,7 @@ use trunk_ir::transforms::call_graph::{CallGraph, recursive_functions};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::target_abi::{CONSUMED, OWNERSHIP_ATTR};
-use trunk_ir::{BlockRef, OpRef, RegionRef, Symbol, TypeRef, ValueDef, ValueRef};
+use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, Symbol, TypeRef, ValueDef, ValueRef};
 
 mod actions;
 mod cfg;
@@ -191,14 +191,14 @@ impl NativeOwnershipPlan {
                 "managed release type {ty} ({data:?}) has no exact nominal allocation layout"
             )));
         }
-        let name = data.attrs.get_symbol("name").ok_or_else(|| {
+        let name = data.attrs.get_string_ref("name").ok_or_else(|| {
             OwnershipPlanError::new("managed release typeref lacks nominal allocation identity")
         })?;
         let mut layouts = self
             .managed_layouts
             .iter()
             .copied()
-            .filter(|layout| ctx.get_type(*layout).attrs.get_symbol("name") == Some(name));
+            .filter(|layout| ctx.get_type(*layout).attrs.get_string_ref("name") == Some(name));
         let layout = layouts.next().ok_or_else(|| {
             OwnershipPlanError::new("managed release typeref has no planned allocation layout")
         })?;
@@ -475,7 +475,7 @@ fn collect_and_validate_managed_layouts(
     module: Module,
 ) -> Result<HashSet<TypeRef>, OwnershipPlanError> {
     let mut layouts = HashSet::new();
-    let mut nominal_layouts: HashMap<Symbol, Vec<TypeRef>> = HashMap::new();
+    let mut nominal_layouts: HashMap<StringRef, Vec<TypeRef>> = HashMap::new();
     let mut typerefs = HashSet::new();
     let mut pending_typerefs = Vec::new();
     for &(_, ty) in ctx.type_aliases() {
@@ -545,14 +545,15 @@ fn collect_and_validate_managed_layouts(
     });
 
     while let Some(typeref) = pending_typerefs.pop() {
-        let Some(name) = ctx.get_type(typeref).attrs.get_symbol("name") else {
+        let Some(name) = ctx.get_type(typeref).attrs.get_string_ref("name") else {
             return Err(OwnershipPlanError::new(
                 "adt.typeref lacks nominal identity",
             ));
         };
         if !ctx.get_type(typeref).params.is_empty() {
             return Err(OwnershipPlanError::new(format!(
-                "adt.typeref @{name} has unexpected parameters"
+                "adt.typeref {:?} has unexpected parameters",
+                ctx.str(name)
             )));
         }
         if nominal_layouts
@@ -560,7 +561,8 @@ fn collect_and_validate_managed_layouts(
             .is_none_or(|layouts| layouts.len() != 1)
         {
             return Err(OwnershipPlanError::new(format!(
-                "adt.typeref @{name} has no unique native layout"
+                "adt.typeref {:?} has no unique native layout",
+                ctx.str(name)
             )));
         }
         let layout = nominal_layouts[&name][0];
@@ -581,12 +583,12 @@ fn collect_and_validate_managed_layouts(
 fn index_nominal_layout(
     ctx: &IrContext,
     ty: TypeRef,
-    nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
+    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
 ) {
     let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("adt")
         && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
-        && let Some(name) = data.attrs.get_symbol("name")
+        && let Some(name) = data.attrs.get_string_ref("name")
     {
         let layouts = nominal_layouts.entry(name).or_default();
         if !layouts.contains(&ty) {
@@ -600,7 +602,7 @@ fn collect_reachable_type_contract(
     ty: TypeRef,
     typerefs: &mut HashSet<TypeRef>,
     pending_typerefs: &mut Vec<TypeRef>,
-    nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
+    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
     layouts: &mut HashSet<TypeRef>,
     visited_types: &mut HashSet<TypeRef>,
 ) {
@@ -649,7 +651,7 @@ fn collect_reachable_attribute_type_contract(
     attribute: &trunk_ir::Attribute,
     typerefs: &mut HashSet<TypeRef>,
     pending_typerefs: &mut Vec<TypeRef>,
-    nominal_layouts: &mut HashMap<Symbol, Vec<TypeRef>>,
+    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
     layouts: &mut HashSet<TypeRef>,
     visited_types: &mut HashSet<TypeRef>,
 ) {
@@ -669,7 +671,7 @@ fn collect_reachable_attribute_type_contract(
 fn nominal_types_compatible(ctx: &IrContext, left: TypeRef, right: TypeRef) -> bool {
     let identity = |ty| {
         let data = ctx.get_type(ty);
-        (data.dialect == Symbol::new("adt")).then(|| data.attrs.get_symbol("name"))?
+        (data.dialect == Symbol::new("adt")).then(|| data.attrs.get_string_ref("name"))?
     };
     identity(left).is_some() && identity(left) == identity(right)
 }

@@ -871,10 +871,11 @@ impl<'a> Converter<'a> {
         if let Some(frame) = self.frames.get(&answer).copied() {
             return frame;
         }
-        let name = Symbol::from_dynamic(&format!(
+        let name_text = format!(
             "{}{answer:?}",
             tribute_core::calling_convention::CPS_CONTINUATION_FRAME_NAME_PREFIX
-        ));
+        );
+        let name = self.ctx.intern_str(&name_text);
         let reference = cps_continuation_frame_ref_type(self.ctx, name, answer);
         let done = self.done_k_type(answer);
         let evidence = self.evidence_type();
@@ -891,7 +892,8 @@ impl<'a> Converter<'a> {
             dispatch,
         };
         self.frames.insert(answer, frame);
-        self.frame_layout_aliases.push((name, layout));
+        self.frame_layout_aliases
+            .push((Symbol::from_dynamic(&name_text), layout));
         frame
     }
 
@@ -2154,9 +2156,9 @@ impl<'a> Converter<'a> {
         set_calling_convention(self.ctx, adapter.op_ref(), result_convention);
         self.ctx.push_op(self.module_block, adapter.op_ref());
 
-        let empty_env_ty = adt::struct_type::<Symbol>(
+        let empty_env_ty = adt::struct_type::<String>(
             self.ctx,
-            Symbol::from_dynamic(&format!("{adapter_symbol}::env")),
+            format!("{adapter_symbol}::env"),
             [],
             AttributeMap::new(),
         )
@@ -2579,6 +2581,7 @@ impl<'a> Converter<'a> {
             .ctx
             .intern_type(TypeDataBuilder::new("core", "i1").build());
         let state_name = self.fresh_helper("one_shot_state");
+        let state_name = self.ctx.intern_symbol_text(state_name);
         let state_type = adt::struct_type(
             self.ctx,
             state_name,
@@ -4347,7 +4350,7 @@ mod tests {
     fn textual_nested_attribute_types_convert_atomically() {
         let input = r#"core.module @test {
   !callback = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = [core.array<core.i32>, [7, @Callback]], tribute.calling_convention = 0}>
-  !record = adt.struct<@CallbackRecord(@callback: !callback)>
+  !record = adt.struct<CallbackRecord(callback: !callback)>
   tribute_control.func @identity(%value: !record) -> !record convention(direct) {
     tribute_control.return %value
   }
@@ -4355,7 +4358,7 @@ mod tests {
         let (mut ctx, module) = parse(input);
         tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("adt.struct<@CallbackRecord("));
+        assert!(printed.contains("adt.struct<CallbackRecord("));
         assert!(
             printed.contains("closure.closure<func.func_sig<(core.i32) -> core.i32, {metadata"),
             "{printed}"
@@ -4821,7 +4824,7 @@ mod tests {
         );
 
         let malformed_delimiter = r#"core.module @test {
-  !evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @broken() -> core.never attributes {tribute.calling_convention = 2} {
     ability.handle_dispatch {ability_refs = []} {
       ^body(%inner: !evidence):
@@ -4973,7 +4976,7 @@ mod tests {
     #[test]
     fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
         let dispatcher_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
   !general = closure.closure<func.func_sig<(!evidence, tribute_rt.anyref, core.i32, tribute_rt.anyref) -> core.never>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
@@ -4994,7 +4997,7 @@ mod tests {
         );
 
         let wrong_abi_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = 1} {
       func.unreachable
@@ -5019,7 +5022,7 @@ mod tests {
         assert!(text.contains("general dispatcher has the wrong"), "{text}");
 
         let wrong_metadata_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 0} {
       func.unreachable
@@ -5170,10 +5173,8 @@ mod tests {
             let is_one_shot_type = |ty: TypeRef| {
                 ctx.get_type(ty)
                     .attrs
-                    .get_symbol("name")
-                    .is_some_and(|name| {
-                        name.with_str(|text| text.starts_with("__tribute_one_shot_state"))
-                    })
+                    .get_str(ctx, "name")
+                    .is_some_and(|name| name.starts_with("__tribute_one_shot_state"))
             };
             if let Ok(get) = adt::StructGet::from_op(ctx, op)
                 && is_one_shot_type(get.r#type(ctx))
@@ -5907,8 +5908,8 @@ mod tests {
     #[test]
     fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
         let input = r#"core.module @test {
-  !S = adt.struct<@S()>
-  !R = adt.typeref<{name = @S}>
+  !S = adt.struct<S()>
+  !R = adt.typeref<{name = "S"}>
   tribute_control.func @broken(%raw: core.ptr) -> !R convention(direct) {
     %middle = core.unrealized_conversion_cast %raw : core.i64
     %managed = core.unrealized_conversion_cast %middle : !R

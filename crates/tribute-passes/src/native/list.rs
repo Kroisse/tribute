@@ -246,8 +246,8 @@ mod tests {
         assert!(output.contains("adt.struct_new"), "{output}");
         assert!(output.contains("adt.ref_is_null"), "{output}");
         assert!(output.contains("adt.struct_get"), "{output}");
-        assert!(output.contains("@element: core.i32"), "{output}");
-        assert!(output.contains("@element: tribute_rt.anyref"), "{output}");
+        assert!(output.contains("element: core.i32"), "{output}");
+        assert!(output.contains("element: tribute_rt.anyref"), "{output}");
         assert_eq!(output.matches("{field = 0,").count(), 2, "{output}");
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("func.unreachable").count(), 4, "{output}");
@@ -303,8 +303,8 @@ mod tests {
         assert_eq!(output.matches("{field = 1,").count(), 2, "{output}");
         assert_eq!(output.matches("adt.ref_null").count(), 4, "{output}");
         assert!(!output.contains("arith.const"), "{output}");
-        assert!(output.contains("@element: core.i32"), "{output}");
-        assert!(output.contains("@element: tribute_rt.anyref"), "{output}");
+        assert!(output.contains("element: core.i32"), "{output}");
+        assert!(output.contains("element: tribute_rt.anyref"), "{output}");
 
         let validation = trunk_ir::validation::validate_all(&ctx, module, &mut Default::default());
         assert!(validation.is_ok(), "{:?}", validation.errors);

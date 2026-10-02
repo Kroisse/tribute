@@ -462,7 +462,7 @@ impl RewritePattern for StringConstNativePattern {
         // adt_rc_header can compute the correct enum layout.
         let variant_new = adt::VariantNew::operands([bytes_payload])
             .r#type(string_enum_ty)
-            .tag(Symbol::new("Leaf"))
+            .tag("Leaf")
             .results(result_ty)
             .build(ctx, loc);
 
@@ -495,8 +495,8 @@ mod tests {
         parse_test_module(
             ctx,
             r#"core.module @test {
-  !PreludeString = adt.enum<{name = @String, variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}>
-  !UserString = adt.enum<{name = @"user::String", variants = [[@Leaf, [core.bytes]], [@Branch, [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}>
+  !PreludeString = adt.enum<{name = "String", variants = [["Leaf", [core.bytes]], ["Branch", [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}>
+  !UserString = adt.enum<{name = "user::String", variants = [["Leaf", [core.bytes]], ["Branch", [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}>
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "hello"} : tribute_rt.anyref
     func.return

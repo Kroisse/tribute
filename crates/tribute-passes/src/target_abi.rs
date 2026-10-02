@@ -832,10 +832,10 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame result provenance differs from root source result",
         ));
     }
-    let name = reference_data.attrs.get_symbol("name").ok_or_else(|| {
+    let name = reference_data.attrs.get_str(ctx, "name").ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame lacks nominal layout identity")
     })?;
-    let layout = ctx.type_alias_by_name(name).ok_or_else(|| {
+    let layout = ctx.type_alias_by_text(name).ok_or_else(|| {
         TargetAbiError::new("target root bridge: worker frame must have an exact nominal layout")
     })?;
     let layout_struct = adt::Struct::from_type_ref(ctx, layout)
@@ -1651,12 +1651,12 @@ mod tests {
             &format!(
                 r#"core.module @test {{
             !Answer = core.{answer_name}
-            !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {{layout = "evidence_marker"}}>, {{layout = "evidence"}}>
-            !Frame = adt.typeref<{{name = @{frame_name}, tribute.cps_continuation_frame_result = !Answer}}>
+            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {{layout = "evidence_marker"}}>, {{layout = "evidence"}}>
+            !Frame = adt.typeref<{{name = "{frame_name}", tribute.cps_continuation_frame_result = !Answer}}>
             !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
             !Dispatch = closure.closure<func.func_sig<(!Evidence, !Resume, core.i32, core.i32, core.i32, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 1}}>
-            !{frame_name} = adt.struct<@{frame_name}(@done: !Done, @dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
+            !{frame_name} = adt.struct<{frame_name}(done: !Done, dispatch: !Dispatch), {{tribute.cps_continuation_frame_result = !Answer}}>
             func.func @run(%ev: !Evidence, %dispatch: !Dispatch, %resume: !Resume, %payload: tribute_rt.anyref) -> core.never attributes {{tribute.calling_convention = 2}} {{
                 effect.dispatch_cps %ev, %dispatch, %resume, %payload {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @get, answer_type = !Answer}}
             }}
@@ -1749,7 +1749,7 @@ mod tests {
                         inputs[1] =
                             tribute_core::calling_convention::cps_continuation_frame_ref_type(
                                 &mut ctx,
-                                Symbol::new("other_nominal_frame"),
+                                "other_nominal_frame",
                                 answer,
                             );
                         let results = signature.results(&ctx).to_vec();
@@ -1800,7 +1800,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
             !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = 0}>
             !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = 1}>
             func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
@@ -1967,7 +1967,7 @@ mod tests {
             CallingConvention::Cps,
             0,
         );
-        let frame_name = Symbol::new("__tribute_continuation_frame_root_nil");
+        let frame_name = "__tribute_continuation_frame_root_nil";
         let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
             &mut ctx, frame_name, nil,
         );
@@ -1979,7 +1979,7 @@ mod tests {
         let layout = tribute_core::calling_convention::cps_continuation_frame_layout_type(
             &mut ctx, frame_name, nil, done, dispatch,
         );
-        ctx.register_type_alias(frame_name, layout);
+        ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
@@ -2055,10 +2055,10 @@ mod tests {
         let frame_name = ctx
             .get_type(*worker_frame)
             .attrs
-            .get_symbol("name")
+            .get_str(&ctx, "name")
             .unwrap();
         let frame_layout = ctx
-            .type_alias_by_name(frame_name)
+            .type_alias_by_text(frame_name)
             .expect("worker frame must retain its exact nominal layout");
         let fields: Vec<_> = adt::Struct::from_type_ref(&ctx, frame_layout)
             .expect("frame layout must be a valid adt.struct")
@@ -2089,8 +2089,7 @@ mod tests {
         assert!(wrapper_ops.iter().any(|op| {
             adt::StructNew::from_op(&ctx, *op).is_ok()
                 && ctx.op_result_types(*op).first().is_some_and(|ty| {
-                    ctx.get_type(*ty).attrs.get_symbol("name")
-                        == Some(Symbol::new(ROOT_COMPLETION_CELL_NAME))
+                    ctx.get_type(*ty).attrs.get_str(&ctx, "name") == Some(ROOT_COMPLETION_CELL_NAME)
                 })
         }));
         assert!(
@@ -2182,7 +2181,7 @@ mod tests {
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
-  !Evidence = core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
     %nil = core.nil_value : core.nil
     func.return %nil
@@ -2310,7 +2309,7 @@ mod tests {
             let nil = core::nil(&mut ctx).as_type_ref();
             let never = core::never(&mut ctx).as_type_ref();
             let evidence = ability::evidence_adt_type_ref(&mut ctx);
-            let frame_name = Symbol::new("__tribute_malformed_root_frame");
+            let frame_name = "__tribute_malformed_root_frame";
             let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
             let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
                 &mut ctx,
@@ -2319,9 +2318,9 @@ mod tests {
             );
             if malformed_layout {
                 let wrong =
-                    adt::struct_type::<Symbol>(&mut ctx, frame_name, [], AttributeMap::new())
+                    adt::struct_type::<String>(&mut ctx, frame_name, [], AttributeMap::new())
                         .as_type_ref();
-                ctx.register_type_alias(frame_name, wrong);
+                ctx.register_type_alias(Symbol::new(frame_name), wrong);
             }
             let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
             ctx.op_mut(main.op_ref())
@@ -2359,7 +2358,7 @@ mod tests {
         let nil = core::nil(&mut ctx).as_type_ref();
         let never = core::never(&mut ctx).as_type_ref();
         let evidence = ability::evidence_adt_type_ref(&mut ctx);
-        let frame_name = Symbol::new("__tribute_parameterized_dispatch_tag");
+        let frame_name = "__tribute_parameterized_dispatch_tag";
         let frame = tribute_core::calling_convention::cps_continuation_frame_ref_type(
             &mut ctx, frame_name, nil,
         );
@@ -2380,7 +2379,7 @@ mod tests {
         let layout = tribute_core::calling_convention::cps_continuation_frame_layout_type(
             &mut ctx, frame_name, nil, done, dispatch,
         );
-        ctx.register_type_alias(frame_name, layout);
+        ctx.register_type_alias(Symbol::new(frame_name), layout);
         let worker = func::func_sig(&mut ctx, [evidence, frame], [never]).as_type_ref();
         ctx.op_mut(main.op_ref())
             .attributes
@@ -2505,7 +2504,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !semantic = closure.closure<func.func_sig<() -> core.i32>, {tribute.calling_convention = 0}>
-  !_closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref)>
+  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
   func.func @factory(%callback: !semantic) -> core.i32 attributes {tribute.calling_convention = 0} {
     func.unreachable
   }

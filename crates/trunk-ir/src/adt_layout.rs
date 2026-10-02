@@ -37,7 +37,7 @@ use crate::context::IrContext;
 use crate::ops::DialectType;
 use crate::refs::TypeRef;
 use crate::rewrite::type_converter::TypeConverter;
-use crate::types::Attribute;
+use crate::types::{Attribute, StringRef};
 
 /// Memory layout of a struct type.
 #[derive(Debug, Clone)]
@@ -77,7 +77,7 @@ pub struct EnumLayout {
 #[derive(Debug, Clone)]
 pub struct VariantFieldLayout {
     /// Variant name.
-    pub name: Symbol,
+    pub name: StringRef,
     /// Discriminant value (0, 1, 2, ...).
     pub tag_value: u32,
     /// Field offsets relative to `fields_offset`.
@@ -115,15 +115,27 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
 /// Extract struct fields from an arena TypeRef.
 ///
 /// Returns `None` if the type is not a valid `adt.struct`.
-pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, TypeRef)>> {
+pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef, TypeRef)>> {
     let adt_struct = crate::dialect::adt::Struct::from_type_ref(ctx, ty)?;
-    Some(adt_struct.fields(ctx).collect())
+    Some(
+        (0..adt_struct.field_count(ctx))
+            .map(|index| {
+                let name = adt_struct
+                    .field_name_ref(ctx, index)
+                    .expect("field index is in range");
+                let ty = adt_struct
+                    .field_type(ctx, index)
+                    .expect("field index is in range");
+                (name, ty)
+            })
+            .collect(),
+    )
 }
 
 /// Extract enum variants from an arena TypeRef.
 ///
 /// Returns `None` if the type is not `adt.enum`.
-pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, Vec<TypeRef>)>> {
+pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef, Vec<TypeRef>)>> {
     let data = ctx.get_type(ty);
     if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
         return None;
@@ -144,9 +156,9 @@ pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(Symbol, Ve
             "get_enum_variants: variant[{i}] pair too short (len={})",
             pair.len()
         );
-        let Attribute::Symbol(name) = &pair[0] else {
+        let Attribute::String(name) = &pair[0] else {
             panic!(
-                "get_enum_variants: variant[{i}] name expected Symbol, got {:?}",
+                "get_enum_variants: variant[{i}] name expected String, got {:?}",
                 pair[0]
             );
         };
@@ -261,6 +273,6 @@ pub fn compute_enum_layout(
 }
 
 /// Find the variant layout for a given tag name.
-pub fn find_variant_layout(layout: &EnumLayout, tag: Symbol) -> Option<&VariantFieldLayout> {
+pub fn find_variant_layout(layout: &EnumLayout, tag: StringRef) -> Option<&VariantFieldLayout> {
     layout.variant_layouts.iter().find(|v| v.name == tag)
 }

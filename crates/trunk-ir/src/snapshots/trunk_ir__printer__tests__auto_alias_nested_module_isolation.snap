@@ -3,10 +3,10 @@ source: crates/trunk-ir/src/printer.rs
 expression: output
 ---
 core.module @test {
-  !OuterOnly = adt.struct<@OuterOnly(@x: core.i32, @y: core.i32)>
+  !OuterOnly = adt.struct<OuterOnly(x: core.i32, y: core.i32)>
 
   core.module @inner {
-    !InnerOnly = adt.struct<@InnerOnly(@a: core.i32, @b: core.i32)>
+    !InnerOnly = adt.struct<InnerOnly(a: core.i32, b: core.i32)>
 
     func.func @f1(%0: !InnerOnly) -> !InnerOnly {
         func.return %0

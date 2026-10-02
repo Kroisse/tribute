@@ -3,10 +3,10 @@ source: crates/tribute-front/tests/ufcs_method_call.rs
 expression: ir_text
 ---
 core.module @test {
-  !Pair = adt.struct<@Pair(@x: core.i32, @y: core.i32)>
-  !Triple = adt.struct<@Triple(@x: core.i32, @y: core.i32, @z: core.i32)>
-  !Triple_1 = adt.typeref<{name = @Triple}>
-  !Pair_1 = adt.typeref<{name = @Pair}>
+  !Pair = adt.struct<Pair(x: core.i32, y: core.i32)>
+  !Triple = adt.struct<Triple(x: core.i32, y: core.i32, z: core.i32)>
+  !Triple_1 = adt.typeref<{name = "Triple"}>
+  !Pair_1 = adt.typeref<{name = "Pair"}>
   !t0 = tribute_control.func_sig<(!Triple_1) -> core.i32, {tribute.calling_convention = 0}>
   !t1 = tribute_control.func_sig<(!Pair_1) -> core.i32, {tribute.calling_convention = 0}>
 

@@ -92,10 +92,10 @@ pub fn operation_payload_type_ref(
     let fields = fields
         .into_iter()
         .enumerate()
-        .map(|(index, ty)| (Symbol::from_dynamic(&format!("arg{index}")), ty));
+        .map(|(index, ty)| (format!("arg{index}"), ty));
     trunk_ir::dialect::adt::struct_type(
         ctx,
-        Symbol::from_dynamic(&format!("__tribute_ability_payload_{op_idx:08x}")),
+        format!("__tribute_ability_payload_{op_idx:08x}"),
         fields,
         trunk_ir::types::AttributeMap::new(),
     )
@@ -361,7 +361,7 @@ pub fn evidence_runtime_symbols() -> [Symbol; 5] {
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let fields: Vec<_> = MARKER_FIELDS
         .into_iter()
-        .map(|spec| (Symbol::new(spec.symbol_name), spec.type_ref(ctx)))
+        .map(|spec| (spec.symbol_name, spec.type_ref(ctx)))
         .collect();
     let mut attrs = trunk_ir::types::AttributeMap::new();
     attrs.insert(
@@ -404,9 +404,10 @@ mod tests {
     #[test]
     fn evidence_layouts_are_identified_by_layout_not_name() {
         let mut ctx = IrContext::new();
+        let name_attr = ctx.string_attr("_Marker");
         let named_marker = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                .attr("name", Attribute::Symbol(Symbol::new("_Marker")))
+                .attr("name", name_attr)
                 .build(),
         );
         let plain_array = core::array(&mut ctx, named_marker).as_type_ref();
@@ -435,17 +436,14 @@ mod tests {
         assert_eq!(data.name, Symbol::new("struct"));
 
         // Should have name "_Marker"
-        assert_eq!(data.attrs.get_symbol("name"), Some(Symbol::new("_Marker")));
+        assert_eq!(data.attrs.get_str(&ctx, "name"), Some("_Marker"));
 
         // Should have the canonical field layout.
         let marker = trunk_ir::dialect::adt::Struct::from_type_ref(&ctx, marker_ty).unwrap();
         assert_eq!(marker.field_count(&ctx), MARKER_FIELD_COUNT);
         for (idx, spec) in MARKER_FIELDS.into_iter().enumerate() {
             assert_eq!(spec.field.index() as usize, idx);
-            assert_eq!(
-                marker.field_name(&ctx, idx),
-                Some(Symbol::new(spec.symbol_name))
-            );
+            assert_eq!(marker.field_name(&ctx, idx), Some(spec.symbol_name));
         }
     }
 
@@ -523,9 +521,10 @@ mod tests {
         let mut ctx = IrContext::new();
 
         // Non-marker struct should return false
+        let name_attr = ctx.string_attr("OtherStruct");
         let other_struct = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("struct"))
-                .attr("name", Attribute::Symbol(Symbol::new("OtherStruct")))
+                .attr("name", name_attr)
                 .build(),
         );
         assert!(!is_marker_type_ref(&ctx, other_struct));

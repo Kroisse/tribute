@@ -202,7 +202,7 @@ impl RewritePattern for VariantIsPattern {
         };
 
         let enum_ty = variant_is.r#type(ctx);
-        let tag = variant_is.tag(ctx);
+        let tag = variant_is.tag_ref(ctx);
         let tc = rewriter.type_converter();
 
         let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
@@ -211,7 +211,7 @@ impl RewritePattern for VariantIsPattern {
         };
 
         let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
-            warn!("adt_to_clif arena: unknown variant tag {:?}", tag);
+            warn!("adt_to_clif arena: unknown variant tag {:?}", ctx.str(tag));
             return false;
         };
 
@@ -287,7 +287,7 @@ impl RewritePattern for VariantGetPattern {
         };
 
         let enum_ty = variant_get.r#type(ctx);
-        let tag = variant_get.tag(ctx);
+        let tag = variant_get.tag_ref(ctx);
         let field_idx = variant_get.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
@@ -297,7 +297,7 @@ impl RewritePattern for VariantGetPattern {
         };
 
         let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
-            warn!("adt_to_clif arena: unknown variant tag {:?}", tag);
+            warn!("adt_to_clif arena: unknown variant tag {:?}", ctx.str(tag));
             return false;
         };
 
@@ -455,7 +455,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = clif.iconst {value = 0} : core.ptr
-    %1 = adt.struct_get %0 {field = 1, type = adt.struct<@Point(@x: core.i32, @y: core.i32)>} : core.i32
+    %1 = adt.struct_get %0 {field = 1, type = adt.struct<Point(x: core.i32, y: core.i32)>} : core.i32
     func.return %1
   }
 }"#,
@@ -470,7 +470,7 @@ mod tests {
   func.func @test_fn() -> core.nil {
     %0 = clif.iconst {value = 0} : core.ptr
     %1 = clif.iconst {value = 42} : core.i32
-    adt.struct_set %0, %1 {field = 0, type = adt.struct<@Point(@x: core.i32, @y: core.i32)>}
+    adt.struct_set %0, %1 {field = 0, type = adt.struct<Point(x: core.i32, y: core.i32)>}
     func.return
   }
 }"#,
@@ -483,7 +483,7 @@ mod tests {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
-    %0 = adt.ref_null {type = adt.struct<@Env(@x: core.i32)>} : core.ptr
+    %0 = adt.ref_null {type = adt.struct<Env(x: core.i32)>} : core.ptr
     func.return %0
   }
 }"#,
@@ -497,7 +497,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.ptr {
     %0 = clif.iconst {value = 100} : core.ptr
-    %1 = adt.ref_cast %0 {type = adt.struct<@Env(@x: core.i32)>} : core.ptr
+    %1 = adt.ref_cast %0 {type = adt.struct<Env(x: core.i32)>} : core.ptr
     func.return %1
   }
 }"#,
@@ -535,7 +535,7 @@ mod tests {
     }
 
     const VARIANT_IS_ENUM: &str =
-        "adt.enum<{name = @Choice, variants = [[@None, []], [@Some, [core.i32]]]}>";
+        "adt.enum<{name = \"Choice\", variants = [[\"None\", []], [\"Some\", [core.i32]]]}>";
 
     #[test]
     fn test_variant_is_widens_icmp_to_result_type() {
@@ -543,7 +543,7 @@ mod tests {
             r#"core.module @test {{
   func.func @test_fn() -> core.i32 {{
     %0 = clif.iconst {{value = 42}} : core.ptr
-    %1 = adt.variant_is %0 {{tag = @Some, type = {VARIANT_IS_ENUM}}} : core.i32
+    %1 = adt.variant_is %0 {{tag = "Some", type = {VARIANT_IS_ENUM}}} : core.i32
     func.return %1
   }}
 }}"#
@@ -559,7 +559,7 @@ mod tests {
             r#"core.module @test {{
   func.func @test_fn() -> core.i1 {{
     %0 = clif.iconst {{value = 42}} : core.ptr
-    %1 = adt.variant_is %0 {{tag = @Some, type = {VARIANT_IS_ENUM}}} : core.i1
+    %1 = adt.variant_is %0 {{tag = "Some", type = {VARIANT_IS_ENUM}}} : core.i1
     func.return %1
   }}
 }}"#

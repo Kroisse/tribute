@@ -495,7 +495,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Array = core.array<core.i32>
-  !Struct = adt.struct<@Struct(@value: core.i32)>
+  !Struct = adt.struct<Struct(value: core.i32)>
   wasm.func @typeref(%table_index: core.i32, %value: adt.typeref) -> core.nil {
     wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
   }
@@ -535,7 +535,7 @@ mod tests {
     fn rejects_unregistered_adt_struct_as_structref_tail_argument() {
         assert_rejects_tail_signature(
             r#"core.module @test {
-  !Struct = adt.struct<@Struct(@value: core.i32)>
+  !Struct = adt.struct<Struct(value: core.i32)>
   wasm.func @caller(%table_index: core.i32, %value: !Struct) -> core.nil {
     wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.structref) -> core.nil>, table = 0, type_idx = 0}
   }
@@ -549,7 +549,7 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = adt.struct<@_Marker(), {layout = "evidence_marker"}>
+  !Marker = adt.struct<_Marker(), {layout = "evidence_marker"}>
   !Evidence = core.array<!Marker, {layout = "evidence"}>
   !Plain = core.array<!Marker>
 }"#,
@@ -575,13 +575,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = @String}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = @Leaf}>
-  !Closure = adt.struct<@_closure(), {layout = "closure"}>
-  !Marker = adt.struct<@_Marker(), {layout = "evidence_marker"}>
+  !String = adt.enum<{name = "String"}>
+  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
+  !Closure = adt.struct<_closure(), {layout = "closure"}>
+  !Marker = adt.struct<_Marker(), {layout = "evidence_marker"}>
   !Evidence = core.array<!Marker, {layout = "evidence"}>
   !Data = core.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<@_Bytes(@data: !Data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
+  !Bytes = adt.struct<_Bytes(data: !Data, offset: core.i32, len: core.i32), {layout = "bytes"}>
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
   wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %typeref: adt.typeref, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
@@ -606,11 +606,11 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = adt.struct<@_Marker(), {layout = "evidence_marker"}>
+  !Marker = adt.struct<_Marker(), {layout = "evidence_marker"}>
   !Evidence = core.array<!Marker, {layout = "evidence"}>
   !Array = core.array<core.i32>
   !Data = core.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<@_Bytes(@data: !Data, @offset: core.i32, @len: core.i32), {layout = "bytes"}>
+  !Bytes = adt.struct<_Bytes(data: !Data, offset: core.i32, len: core.i32), {layout = "bytes"}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
   wasm.func @caller(%bytes: !Bytes, %evidence: !Evidence, %array: !Array, %erased: adt.struct) -> core.nil {
     wasm.call %bytes {callee = @byAny}
@@ -629,7 +629,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !TagOnly = adt.enum<{{is_variant = true, variant_tag = @Leaf}}>
+  !TagOnly = adt.enum<{{is_variant = true, variant_tag = "Leaf"}}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
     wasm.call %value {{callee = @byAny}}
@@ -666,12 +666,12 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !String = adt.enum<{{name = @String}}>
-  !Leaf = adt.enum<{{base_enum = !String, is_variant = true, variant_tag = @Leaf}}>
-  !TagOnly = adt.enum<{{is_variant = true, variant_tag = @Leaf}}>
-  !Unregistered = adt.struct<@Unregistered(@value: core.i32)>
+  !String = adt.enum<{{name = "String"}}>
+  !Leaf = adt.enum<{{base_enum = !String, is_variant = true, variant_tag = "Leaf"}}>
+  !TagOnly = adt.enum<{{is_variant = true, variant_tag = "Leaf"}}>
+  !Unregistered = adt.struct<Unregistered(value: core.i32)>
   !Data = core.array<core.i8, {{layout = "bytes_data"}}>
-  !Bytes = adt.struct<@_Bytes(@data: !Data, @offset: core.i32, @len: core.i32), {{layout = "bytes"}}>
+  !Bytes = adt.struct<_Bytes(data: !Data, offset: core.i32, len: core.i32), {{layout = "bytes"}}>
   wasm.func @callee(%value: {parameter_ty}) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
     wasm.call %value {{callee = @callee}}
@@ -696,8 +696,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = @String}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = @Leaf}>
+  !String = adt.enum<{name = "String"}>
+  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
   wasm.func @produces(%leaf: !Leaf) -> !Leaf { wasm.return %leaf }
   wasm.func @caller(%leaf: !Leaf) -> core.nil {
     %value = wasm.call %leaf {callee = @produces} : wasm.structref
@@ -712,8 +712,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = @String}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = @Leaf}>
+  !String = adt.enum<{name = "String"}>
+  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
   wasm.func @produces(%value: wasm.structref) -> wasm.structref { wasm.return %value }
   wasm.func @caller(%value: wasm.structref) -> core.nil {
     %leaf = wasm.call %value {callee = @produces} : !Leaf

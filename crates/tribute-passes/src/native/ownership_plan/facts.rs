@@ -320,8 +320,8 @@ pub(super) fn is_internal_closure_layout(
     matches!(
         fields.as_slice(),
         [(code_name, code_ty), (environment_name, environment_ty)]
-            if *code_name == Symbol::new("func_ptr")
-                && *environment_name == Symbol::new("env")
+            if ctx.str(*code_name) == "func_ptr"
+                && ctx.str(*environment_name) == "env"
                 && is_core_i32_type(ctx, *code_ty)
                 && is_anyref_type(ctx, *environment_ty)
     )
@@ -411,7 +411,7 @@ fn validate_projection_contract(
             .ok_or_else(|| OwnershipPlanError::new("variant_get has invalid layout"))?;
         let fields = variants
             .iter()
-            .find(|(tag, _)| *tag == get.tag(ctx))
+            .find(|(tag, _)| *tag == get.tag_ref(ctx))
             .map(|(_, fields)| fields)
             .ok_or_else(|| OwnershipPlanError::new("variant_get tag is stale"))?;
         let field_ty = fields

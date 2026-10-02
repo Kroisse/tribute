@@ -795,8 +795,8 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Named = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref)>
-  !Layout = adt.struct<@Other(@code: core.i32), {layout = "closure"}>
+  !Named = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
+  !Layout = adt.struct<Other(code: core.i32), {layout = "closure"}>
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| {
@@ -836,7 +836,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "core.array<adt.struct<@_Marker(@ability_id: core.i32, @prompt_tag: core.i32, @tr_dispatch_fn: core.ptr, @handler_dispatch: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
+        "core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {
@@ -1423,7 +1423,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-  !_closure = adt.struct<@_closure(@func_ptr: core.i32, @env: tribute_rt.anyref)>
+  !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref)>
   !expected = closure.closure<func.func_sig<({evidence}, core.i32, core.i32) -> core.never>, {{tribute.calling_convention = 2}}>
   !actual = closure.closure<func.func_sig<({evidence}, core.i32, core.i1) -> core.never>, {{tribute.calling_convention = 2}}>
   !outer = closure.closure<func.func_sig<({evidence}, core.i32, !expected) -> core.never>, {{tribute.calling_convention = 2}}>

@@ -12,7 +12,7 @@ use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::context::{BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{adt, arith, scf};
 use trunk_ir::refs::{BlockRef, TypeRef, ValueRef};
-use trunk_ir::types::{Attribute, Location};
+use trunk_ir::types::{Attribute, Location, StringRef};
 
 use crate::ast::{LiteralPattern, NodeId, Pattern, PatternKind, ResolvedRef, TypedRef};
 
@@ -154,7 +154,7 @@ enum ConstructorLayout {
 /// field types.
 struct VariantLayout {
     ty: TypeRef,
-    tag: Symbol,
+    tag: StringRef,
     fields: Vec<TypeRef>,
 }
 
@@ -178,14 +178,17 @@ fn logical_constructor_pattern<'p, 'db>(
     let ty = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
     let (layout, names) = match get_struct_fields(ir, ty) {
         Some(fields) => {
-            let (names, fields) = fields.into_iter().unzip();
+            let (names, fields) = fields
+                .into_iter()
+                .map(|(name, ty)| (Symbol::from_dynamic(ir.str(name)), ty))
+                .unzip();
             (ConstructorLayout::Struct { ty, fields }, names)
         }
         None => {
             let fields = get_enum_variants(ir, ty)
                 .expect("logical constructor layout must be a struct or an enum")
                 .into_iter()
-                .find_map(|(tag, fields)| (tag == variant).then_some(fields))
+                .find_map(|(tag, fields)| (variant == ir.str(tag)).then_some(fields))
                 .expect("resolved logical enum variant must exist");
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
@@ -196,7 +199,7 @@ fn logical_constructor_pattern<'p, 'db>(
             (
                 ConstructorLayout::Variant(VariantLayout {
                     ty,
-                    tag: variant,
+                    tag: ir.intern_symbol_text(variant),
                     fields,
                 }),
                 names,

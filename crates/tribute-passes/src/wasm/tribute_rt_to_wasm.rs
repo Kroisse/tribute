@@ -39,7 +39,7 @@ fn f64_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "f64").build())
 }
 
-/// Get the BoxedF64 struct type: `adt.struct<@_BoxedF64(@value: core.f64)>`
+/// Get the BoxedF64 struct type: `adt.struct<_BoxedF64(value: core.f64)>`
 fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
     adt::struct_type(ctx, "_BoxedF64", [("value", f64_ty)], AttributeMap::new()).as_type_ref()
