@@ -264,6 +264,12 @@ impl DialectType for Struct {
     }
 }
 
+inventory::submit! {
+    crate::type_verifier::TypeVerifier::new::<Struct>(|ctx, ty| {
+        Struct::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
+    })
+}
+
 impl From<Struct> for TypeRef {
     fn from(ty: Struct) -> Self {
         ty.0

@@ -27,12 +27,14 @@ pub mod op_interface;
 
 // === Textual assembly format hooks ===
 pub mod asm_format;
+mod registry;
 
 // === Operation and type utilities ===
 pub mod op_def;
 pub mod op_schema;
 pub mod ops;
 pub mod type_constraint;
+pub mod type_verifier;
 
 // === IR core structures ===
 pub mod callable;

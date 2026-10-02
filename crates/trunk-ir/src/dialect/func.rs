@@ -612,6 +612,12 @@ inventory::submit! {
     IndirectCallLikeOps::register::<TailCallIndirect>()
 }
 
+inventory::submit! {
+    crate::type_verifier::TypeVerifier::new::<FuncSig>(|ctx, ty| {
+        FuncSig::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
+    })
+}
+
 /// Attach an exact callable contract to a `func` indirect transfer.
 ///
 /// Returns `false` without mutation when the operation is not a `func`
