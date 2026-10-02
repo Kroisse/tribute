@@ -693,8 +693,9 @@ impl<'db> IrLoweringCtx<'db> {
         ability_name: Symbol,
         params: &[TypeRef],
     ) -> TypeRef {
+        let ability_name = ir.intern_symbol_text(ability_name);
         let mut builder = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-            .attr("name", Attribute::Symbol(ability_name));
+            .attr("name", Attribute::String(ability_name));
         for &p in params {
             builder = builder.param(p);
         }

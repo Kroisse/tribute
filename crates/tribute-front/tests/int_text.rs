@@ -446,15 +446,15 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         4,
         "repeats must dedupe within each instance"
     );
-    assert_eq!(declarations[0].op_name, Symbol::new("bounce"));
-    assert_eq!(declarations[0].kind, Symbol::new("op"));
-    assert_eq!(declarations[1].op_name, Symbol::new("echo"));
-    assert_eq!(declarations[1].kind, Symbol::new("fn"));
+    assert_eq!(ir.str(declarations[0].op_name), "bounce");
+    assert_eq!(ir.str(declarations[0].kind), "op");
+    assert_eq!(ir.str(declarations[1].op_name), "echo");
+    assert_eq!(ir.str(declarations[1].kind), "fn");
     assert_eq!(declarations[0].ability_ref, declarations[1].ability_ref);
-    assert_eq!(declarations[2].op_name, Symbol::new("bounce"));
-    assert_eq!(declarations[2].kind, Symbol::new("op"));
-    assert_eq!(declarations[3].op_name, Symbol::new("echo"));
-    assert_eq!(declarations[3].kind, Symbol::new("fn"));
+    assert_eq!(ir.str(declarations[2].op_name), "bounce");
+    assert_eq!(ir.str(declarations[2].kind), "op");
+    assert_eq!(ir.str(declarations[3].op_name), "echo");
+    assert_eq!(ir.str(declarations[3].kind), "fn");
     assert_eq!(declarations[2].ability_ref, declarations[3].ability_ref);
     assert_ne!(
         declarations[0].ability_ref, declarations[2].ability_ref,

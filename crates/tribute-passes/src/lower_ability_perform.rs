@@ -6,12 +6,12 @@
 //! ```text
 //! // Input:
 //! ability.perform %evidence, %dispatch, %resume, [%args...]
-//!   { ability_ref: @State, op_name: @get }
+//!   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
 //!
 //! // Output:
 //! %payload = pack %args into the canonical operation product
 //! effect.dispatch_cps %evidence, %dispatch, %resume, %payload
-//!   { ability_ref: @State, op_name: @get }
+//!   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
 //! ```
 //!
 //! Uses `PatternApplicator` for declarative op-level rewriting. This is an
@@ -19,7 +19,6 @@
 //! established by `LowerHandleDispatch` after evidence resolution.
 
 use tribute_ir::dialect::adt;
-use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -29,6 +28,7 @@ use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     PatternApplicator, PatternRewriter, RewritePattern, RewriteScope, TypeConverter,
 };
+use trunk_ir::types::StringRef;
 
 use tribute_core::calling_convention::CLOSURE_ENVIRONMENT_INDEX_ATTR;
 use tribute_ir::dialect::ability;
@@ -105,7 +105,7 @@ impl RewritePattern for LowerPerformPattern {
 
         let location = ctx.op(op).location;
         let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
-        let op_name_sym = ctx.op(op).attributes.get_symbol("op_name").unwrap();
+        let op_name = ctx.op(op).attributes.get_string_ref("op_name").unwrap();
 
         // Operands: [evidence, exact dispatch, exact resume, ...values]
         let evidence_val = operands[0];
@@ -125,7 +125,7 @@ impl RewritePattern for LowerPerformPattern {
             rewriter,
             location,
             ability_ref_type,
-            op_name_sym,
+            op_name,
             value_operands,
             t.anyref,
         );
@@ -136,7 +136,7 @@ impl RewritePattern for LowerPerformPattern {
         let dispatch_op =
             effect::DispatchCps::operands(evidence_val, dispatch_val, resume_val, shift_value_val)
                 .ability_ref(ability_ref_type)
-                .op_name(op_name_sym)
+                .op_name(op_name)
                 .answer_type(answer_type)
                 .build(ctx, location);
         rewriter.insert_op(dispatch_op.op_ref());
@@ -163,7 +163,7 @@ impl RewritePattern for LowerCallPattern {
 
         let location = ctx.op(op).location;
         let ability_ref_type = ctx.op(op).attributes.get_type("ability_ref").unwrap();
-        let op_name_sym = ctx.op(op).attributes.get_symbol("op_name").unwrap();
+        let op_name = ctx.op(op).attributes.get_string_ref("op_name").unwrap();
         let result_types = ctx.op_result_types(op).to_vec();
         let [result_type] = result_types.as_slice() else {
             return false;
@@ -187,7 +187,7 @@ impl RewritePattern for LowerCallPattern {
             rewriter,
             location,
             ability_ref_type,
-            op_name_sym,
+            op_name,
             value_operands,
             t.anyref,
         );
@@ -195,7 +195,7 @@ impl RewritePattern for LowerCallPattern {
         // === 3. Dispatch through target-independent effect ABI ===
         let dispatch_op = effect::DispatchTail::operands(evidence_val, shift_value_val)
             .ability_ref(ability_ref_type)
-            .op_name(op_name_sym)
+            .op_name(op_name)
             .results(t.anyref)
             .build(ctx, location);
         rewriter.insert_op(dispatch_op.op_ref());
@@ -224,7 +224,7 @@ fn pack_payload(
     rewriter: &mut PatternRewriter<'_>,
     location: trunk_ir::types::Location,
     ability_ref: TypeRef,
-    op_name: Symbol,
+    op_name: StringRef,
     values: &[ValueRef],
     anyref: TypeRef,
 ) -> ValueRef {
@@ -291,6 +291,7 @@ fn enclosing_callable_evidence(ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
 mod tests {
     use super::*;
     use tribute_ir::continuation_frame;
+    use trunk_ir::Symbol;
     use trunk_ir::context::IrContext;
     use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
@@ -357,7 +358,7 @@ mod tests {
   func.func @test_fn(%ev: {ev_ty}) -> core.never {{
     %dispatch = arith.const {{value = 0}} : tribute_rt.anyref
     %resume = arith.const {{value = 1}} : tribute_rt.anyref
-    ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @get}}
+    ability.perform %ev, %dispatch, %resume {{ability_ref = core.ability_ref<{{name = "State"}}>, op_name = "get"}}
   }}
 }}"#
             ),
@@ -388,7 +389,7 @@ mod tests {
     %val = arith.const {{value = 42}} : core.i32
     %dispatch = arith.const {{value = 0}} : tribute_rt.anyref
     %resume = arith.const {{value = 1}} : tribute_rt.anyref
-    ability.perform %ev, %dispatch, %resume, %val {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @set}}
+    ability.perform %ev, %dispatch, %resume, %val {{ability_ref = core.ability_ref<{{name = "State"}}>, op_name = "set"}}
   }}
 }}"#
             ),
@@ -425,7 +426,7 @@ mod tests {
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
     %msg = arith.const {{value = 1}} : tribute_rt.anyref
-    %result = ability.call %msg {{ability_ref = core.ability_ref<{{name = @Console}}>, op_name = @print}} : tribute_rt.anyref
+    %result = ability.call %msg {{ability_ref = core.ability_ref<{{name = "Console"}}>, op_name = "print"}} : tribute_rt.anyref
     func.return %result
   }}
 }}"#
@@ -466,7 +467,7 @@ mod tests {
                     r#"core.module @test {{
   !Evidence = {evidence}
   func.func @test_fn({params}) -> core.i32 {attributes} {{
-    %result = ability.call {{ability_ref = core.ability_ref<{{name = @Counter}}>, op_name = @next}} : core.i32
+    %result = ability.call {{ability_ref = core.ability_ref<{{name = "Counter"}}>, op_name = "next"}} : core.i32
     func.return %result
   }}
 }}"#
@@ -489,7 +490,7 @@ mod tests {
             &format!(
                 r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> core.i32 attributes {{tribute.calling_convention = 1}} {{
-    %result = ability.call {{ability_ref = core.ability_ref<{{name = @Counter}}>, op_name = @next}} : core.i32
+    %result = ability.call {{ability_ref = core.ability_ref<{{name = "Counter"}}>, op_name = "next"}} : core.i32
     func.return %result
   }}
 }}"#
@@ -517,7 +518,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @test_fn(%k: tribute_rt.anyref) -> core.never {
-    ability.perform %k {ability_ref = core.ability_ref<{name = @State}>, op_name = @get}
+    ability.perform %k {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"}
   }
 }"#,
         );
@@ -541,7 +542,7 @@ mod tests {
             r#"core.module @test {{
   func.func @test_fn(%ev: {ev_ty}) -> tribute_rt.anyref attributes {{tribute.calling_convention = 1}} {{
     %k = arith.const {{value = 0}} : tribute_rt.anyref
-    %result = ability.perform %ev, %k {{ability_ref = core.ability_ref<{{name = @State}}>, op_name = @get}} : tribute_rt.anyref
+    %result = ability.perform %ev, %k {{ability_ref = core.ability_ref<{{name = "State"}}>, op_name = "get"}} : tribute_rt.anyref
     func.return %result
   }}
 }}"#

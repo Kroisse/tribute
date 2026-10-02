@@ -175,7 +175,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   func.func @run(%k: tribute_rt.anyref) -> tribute_rt.anyref {
-    %result = ability.perform %k {ability_ref = core.ability_ref<{name = @State}>, op_name = @get} : tribute_rt.anyref
+    %result = ability.perform %k {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"} : tribute_rt.anyref
     func.return %result
   }
 }"#,

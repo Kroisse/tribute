@@ -1842,7 +1842,7 @@ mod tests {
             %resume = adt.ref_null {type = !Resume} : !Resume
             %product = adt.struct_new {type = !Payload} : !Payload
             %payload = core.unrealized_conversion_cast %product : tribute_rt.anyref
-            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, answer_type = core.nil}
+            effect.dispatch_cps %evidence, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = core.nil}
         "#,
         );
         run_wasm_target_pipeline(&mut ctx, module).unwrap();
@@ -2745,12 +2745,12 @@ fn main() -> Nil {
         let throw = frontend
             .operation_declarations
             .iter()
-            .position(|declaration| declaration.op_name == trunk_ir::Symbol::new("throw"))
+            .position(|declaration| frontend.context.str(declaration.op_name) == "throw")
             .expect("prelude Throw declaration");
         let next = frontend
             .operation_declarations
             .iter()
-            .position(|declaration| declaration.op_name == trunk_ir::Symbol::new("next"))
+            .position(|declaration| frontend.context.str(declaration.op_name) == "next")
             .expect("source Counter declaration");
         assert!(
             throw < next,

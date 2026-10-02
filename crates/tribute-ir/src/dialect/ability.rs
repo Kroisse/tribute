@@ -11,13 +11,13 @@ mod ability {
     ///
     /// ```text
     /// ability.perform %evidence, %dispatch, %resume, [%args...]
-    ///   { ability_ref: @State, op_name: @get }
+    ///   { ability_ref: core.ability_ref<{name = "State"}>, op_name: "get" }
     /// ```
     ///
     /// This final form is resultless and lowers to `effect.dispatch_cps`.
     fn perform(
         ability_ref: Attr<Type>,
-        op_name: Attr<Symbol>,
+        op_name: Attr<String>,
         evidence: Value<_>,
         dispatch: Value<_>,
         resume: Value<_>,
@@ -52,11 +52,11 @@ mod ability {
     ///
     /// ```text
     /// %result = ability.call %args...
-    ///   { ability_ref = @State, op_name = @get }
+    ///   { ability_ref = core.ability_ref<{name = "State"}>, op_name = "get" }
     /// ```
     ///
     /// Lowered to: evidence lookup → tr_dispatch_fn(op_idx, value) → result.
-    fn call(ability_ref: Attr<Type>, op_name: Attr<Symbol>, values: Variadic<_>) -> Value<_> {}
+    fn call(ability_ref: Attr<Type>, op_name: Attr<String>, values: Variadic<_>) -> Value<_> {}
 }
 
 // === Hash-Based Dispatch ===
@@ -67,7 +67,7 @@ mod ability {
 /// operation name. Both shift sites and handler dispatch use this function,
 /// ensuring they always agree on the op index regardless of handler
 /// registration order.
-pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u32 {
+pub fn compute_op_idx(ability_ref: Option<&str>, op_name: Option<&str>) -> u32 {
     use std::hash::{Hash, Hasher};
 
     let mut hasher = rustc_hash::FxHasher::default();
@@ -84,11 +84,10 @@ pub fn compute_op_idx(ability_ref: Option<Symbol>, op_name: Option<Symbol>) -> u
 pub fn operation_payload_type_ref(
     ctx: &mut trunk_ir::IrContext,
     ability_ref: trunk_ir::TypeRef,
-    op_name: Symbol,
+    op_name: StringRef,
     fields: impl IntoIterator<Item = trunk_ir::TypeRef>,
 ) -> trunk_ir::TypeRef {
-    let ability_name = ctx.get_type(ability_ref).attrs.get_symbol("name");
-    let op_idx = compute_op_idx(ability_name, Some(op_name));
+    let op_idx = compute_op_idx(ability_name(ctx, ability_ref), Some(ctx.str(op_name)));
     let fields = fields
         .into_iter()
         .enumerate()
@@ -127,8 +126,8 @@ pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
 }
 
 /// Return the source-level ability name attached to an ability reference type.
-pub fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<Symbol> {
-    ctx.get_type(ability_ref).attrs.get_symbol("name")
+pub fn ability_name(ctx: &IrContext, ability_ref: TypeRef) -> Option<&str> {
+    ctx.get_type(ability_ref).attrs.get_str(ctx, "name")
 }
 
 /// Build an `arith.const` for the stable runtime ability ID.
@@ -174,7 +173,7 @@ impl CallableExitModel for Perform {
         if !ctx.op_has_regions(self.op_ref())
             && ctx.op_operands(self.op_ref()).len() >= 3
             && data.attributes.get_type("ability_ref").is_some()
-            && data.attributes.get_symbol("op_name").is_some()
+            && data.attributes.get_string_ref("op_name").is_some()
         {
             Ok(())
         } else {
@@ -228,7 +227,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::refs::TypeRef;
-use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location, StringRef, TypeDataBuilder};
 
 /// Canonical field identifiers for the `_Marker` ADT used by ability evidence.
 #[repr(u32)]

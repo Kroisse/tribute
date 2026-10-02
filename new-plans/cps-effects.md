@@ -14,7 +14,7 @@ pipeline 조합은 [implementation.md](implementation.md#직접형-제어-소유
 ## 직접형 호출 대상과 제어 경계
 
 모든 ability operation invocation은 typechecking이 확정한
-`operation_kind = @fn | @op`를 가진 `tribute_control.perform`이다. 일반 callable도
+`operation_kind = "fn" | "op"`를 가진 `tribute_control.perform`이다. 일반 callable도
 `tribute_control.func`, `lambda`, `func_ref`, `call`, `call_indirect`, `return`을
 사용한다. Operation kind와 callable convention은 typechecking 결과이며
 frontend나 conversion이 body 형상에서 추론하거나 재분류하지 않는다.
@@ -145,8 +145,8 @@ builder를 재사용하되 `tribute_control` 전용 graph pattern은
 `tribute_control_to_cps`가 소유한다.
 
 같은 legalization에서 각 `tribute_control.perform`을 typecheck된
-`operation_kind`에 따라 변환한다. `@fn`은 suffix를 capture하지 않고
-`ability.call`을, `@op`은 `ability.perform`과 필요한 `ability.handle_dispatch`
+`operation_kind`에 따라 변환한다. `"fn"`은 suffix를 capture하지 않고
+`ability.call`을, `"op"`은 `ability.perform`과 필요한 `ability.handle_dispatch`
 표면을 만든다. 이 pass는 `effect.dispatch_*`나 `effect.extend`를 만들지 않는다.
 이 결정은 `CallableAbi`에 encode하지 않으며 pass가 operation kind를 추론하거나
 변경해서는 안 된다.
@@ -165,9 +165,9 @@ operation을 왼쪽에서 오른쪽으로 소비한다:
 - `tribute_control.call` 또는 `call_indirect`의 convention이 `Cps`이면 현재
   suffix continuation을 공급한다. `Direct`와 `EvidenceDirect` call result는
   일반 suffix로 흐른다.
-- `tribute_control.perform`은 검증된 `operation_kind`만으로 분기한다. `@fn`이면
+- `tribute_control.perform`은 검증된 `operation_kind`만으로 분기한다. `"fn"`이면
   suffix를 capture하지 않고 `ability.call`을 만들며 반환된 operation result가
-  일반 suffix로 흐른다. `@op`이면 현재 suffix와 일치하는 dynamic handle
+  일반 suffix로 흐른다. `"op"`이면 현재 suffix와 일치하는 dynamic handle
   boundary까지 선택된 모든 enclosing structured exit를 capture한 뒤
   `ability.perform`을 만든다. 후속 `lower_ability_perform`이 각각
   `effect.dispatch_tail`과 `effect.dispatch_cps`로 낮춘다. Operand packing은
@@ -298,13 +298,13 @@ payload, closure environment와 dispatch closure field에 쓰는 일반 `anyref`
 
 ### `fn` operation: direct dispatch
 
-직접형 입력은 위 규칙의 `operation_kind = @fn` perform이며,
+직접형 입력은 위 규칙의 `operation_kind = "fn"` perform이며,
 `tribute_control_to_cps`는 continuation을 만들지 않고 기존 `ability.call`
 경로로 내린다:
 
 ```text
 %result = ability.call %arg
-  { ability_ref = @Logger, op_name = @log }
+  { ability_ref = core.ability_ref<{name = "Logger"}>, op_name = "log" }
 ```
 
 `lower_ability_perform`은 enclosing callable의 exact `EvidenceDirect`/`Cps`
@@ -324,7 +324,7 @@ Convention이 없거나 slot/type이 잘못되면 lower하지 않고 ability bou
 %product = pack %args into the canonical operation payload product
 %payload = cast %product to anyref
 effect.dispatch_cps %ev, %dispatch, %resume, %payload
-  { ability_ref = @State, op_name = @get, answer_type = R }
+  { ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = R }
 ```
 
 필수 `answer_type: Type`은 `ContinuationFrame<R>`의 의미적 `R`이다. 호출 결과,
@@ -378,7 +378,7 @@ Effect point 이후의 코드는 이미 `%continuation` closure 안에 있으므
 `ability.perform` 이후의 같은 function-body ops는 dead code가 된다.
 
 이 lowering은 source kind를 재분류하지 않는다. 일반 `op` handler가 실제로
-항상 tail-resumptive인지 분석하여 tail path로 최적화하는 작업은 표준 `@op`
+항상 tail-resumptive인지 분석하여 tail path로 최적화하는 작업은 표준 `"op"`
 semantic lowering 이후의 별도 IR optimization이다.
 
 ### Root `main` delimiter
@@ -444,7 +444,7 @@ Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는
 
 ```text
 %ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %handler_dispatch
-  { ability_ref = @State }
+  { ability_ref = core.ability_ref<{name = "State"}> }
 ```
 
 Concrete Marker layout은 backend가 소유한다. Native는
