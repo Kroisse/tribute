@@ -5,8 +5,8 @@ expression: ir_text
 core.module @test {
   !t0 = tribute_control.func_sig<() -> tribute_rt.anyref, {tribute.calling_convention = 2}>
   !t1 = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 2}>
-  !t2 = core.ability_ref<tribute_rt.anyref, {name = "State"}>
-  !t3 = core.ability_ref<core.i32, {name = "State"}>
+  !t2 = core.ability_ref<tribute_rt.anyref, {instance = "ability_2_5_State_11_bound_1_1_1", name = "State"}>
+  !t3 = core.ability_ref<core.i32, {instance = "ability_2_5_State_3_int", name = "State"}>
 
   tribute_control.func @"Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @counter() -> core.i32 convention(cps) {

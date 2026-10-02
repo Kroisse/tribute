@@ -102,6 +102,11 @@ pub fn operation_payload_type_ref(
 }
 
 /// Compute the stable runtime ability ID for an ability reference type.
+///
+/// The frontend records the source-level instance key as the `instance`
+/// type attribute, and the ID is derived from it so later type conversions of
+/// the reference's parameters cannot change it. A reference without that key
+/// (hand-written IR) falls back to the parameters' structural hash.
 pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
     use std::hash::{Hash, Hasher};
 
@@ -116,13 +121,21 @@ pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
 
     let mut hasher = rustc_hash::FxHasher::default();
     name.hash(&mut hasher);
-    data.params.len().hash(&mut hasher);
-
-    for &param in data.params.iter() {
-        hash_type(ctx, param).hash(&mut hasher);
+    if let Some(instance) = ability_instance(ctx, ability_ref) {
+        instance.hash(&mut hasher);
+    } else {
+        data.params.len().hash(&mut hasher);
+        for &param in data.params.iter() {
+            hash_type(ctx, param).hash(&mut hasher);
+        }
     }
 
     hasher.finish() as u32
+}
+
+/// Return the source-level instance key attached to an ability reference type.
+pub fn ability_instance(ctx: &IrContext, ability_ref: TypeRef) -> Option<&str> {
+    ctx.get_type(ability_ref).attrs.get_str(ctx, "instance")
 }
 
 /// Return the source-level ability name attached to an ability reference type.

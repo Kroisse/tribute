@@ -934,10 +934,17 @@ lookup은 GC Evidence reference와 concrete Marker reference를 사용한다.
 
 ### Runtime identity와 ordering
 
-`ability::compute_ability_id`는 canonical ability name과 구체 type parameter의
-구조적 hash로 `u32` runtime key를 만든다. Marker의 `i32` slot에 같은 bit pattern을
+`ability::compute_ability_id`는 canonical ability name과 ability instance key의
+hash로 `u32` runtime key를 만든다. Marker의 `i32` slot에 같은 bit pattern을
 저장하며, call-site와 handler 설치가 같은 함수를 사용한다. Type parameter가 다른
-ability instance는 별도 key를 가진다. Runtime array는 이 key로 정렬하고 binary
+ability instance는 별도 key를 가진다.
+
+Instance key는 frontend가 typecheck된 source type argument에서 만들어
+`core.ability_ref`의 type 속성 `instance`(문자열)에 기록한다. Lowering된 표현
+타입에서 만들지 않는다. 표현이 같은 source 타입(`Int`와 `Nat`)이나 모양이 같은
+서로 다른 nominal 타입도 별도 instance다. `core.ability_ref`의 type parameter는
+이 identity에 참여하지 않으므로, 이후 단계의 타입 변환이 parameter를 바꾸어도
+runtime key는 변하지 않는다. Runtime array는 이 key로 정렬하고 binary
 search로 가장 가까운 설치된 handler를 선택한다. 표준 ability와 사용자 ability에
 별도 연속 번호 대역을 예약하지 않는다.
 

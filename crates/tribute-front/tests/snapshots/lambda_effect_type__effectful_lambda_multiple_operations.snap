@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/lambda_effect_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !t0 = core.ability_ref<core.i32, {name = "State"}>
+  !t0 = core.ability_ref<core.i32, {instance = "ability_2_5_State_3_int", name = "State"}>
   !t1 = tribute_control.func_sig<() -> core.i32, {tribute.calling_convention = 2}>
 
   tribute_control.func @run_with_state(%0: !t1) -> core.i32 convention(cps) {
