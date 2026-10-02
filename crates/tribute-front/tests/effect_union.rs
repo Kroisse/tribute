@@ -216,6 +216,49 @@ fn handled(comp: fn() ->{{e}} Nil) ->{{}} Nil {{
     );
 }
 
+/// Calls joined into a closed row are each checked against it: a second
+/// call cannot hide the effects another call leaves unhandled.
+#[salsa_test]
+fn joined_calls_cannot_leak_effects_into_a_closed_row(db: &salsa::DatabaseImpl) {
+    for calls in [
+        "handled(ping)\n    handled(fn() { other() })",
+        "handled(fn() { other() })\n    handled(ping)",
+    ] {
+        let source = SourceCst::from_source_str(
+            db,
+            "joined_calls.trb",
+            &format!(
+                r#"
+ability Ping {{ op ping() -> Nil }}
+ability Other {{ op other() -> Nil }}
+fn ping() ->{{Ping}} Nil {{ Ping::ping() }}
+fn other() ->{{Other}} Nil {{ Other::other() }}
+fn handled(comp: fn() ->{{e, Ping}} Nil) ->{{e}} Nil {{
+    handle comp() {{
+        do value {{ value }}
+        op Ping::ping() {{ resume Nil }}
+    }}
+}}
+fn main() ->{{}} Nil {{
+    {calls}
+}}
+"#
+            ),
+        );
+        let _ = checked(db, source);
+        let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+            .into_iter()
+            .map(|diagnostic| diagnostic.inner.message.clone())
+            .collect();
+        assert!(
+            errors
+                .iter()
+                .any(|message| message.contains("expected `{}`, found `{Other")),
+            "{calls}: {errors:?}"
+        );
+    }
+}
+
 #[salsa_test]
 fn relay_preserves_writer_argument_through_nested_lambda(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(
