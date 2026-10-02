@@ -568,7 +568,12 @@ field:   ptr name | u32 name_len | u32 field_kind
 | `2` | enum. Index를 받지 않으며 variant 레코드만 가리킨다 |
 | `3` | compiler 소유 builtin 값(예약 index) |
 
-`field_kind`의 하위 8비트는 분류, 그다음 8비트는 scalar의 bit 폭이다.
+정수 칸은 target의 native byte order를 따른다. `field_kind`의 하위 8비트는 분류,
+그다음 8비트는 scalar의 bit 폭이다. 분류는 ownership 계획이 의미 타입으로 정한다.
+Managed 판정을 받은 타입은 managed 참조나 동적 값이고, `Int`·`Nat`·`Bool`·`Float`는
+각자의 scalar 분류다. 부호 정보가 없는 `core` 정수는 부호 없는 정수로 기록한다.
+그 밖의 unmanaged 포인터, 코드 참조, runtime buffer는 따라가지 않는 unmanaged
+포인터로 기록한다.
 
 | 분류 | 뜻 |
 | ---- | ---- |
