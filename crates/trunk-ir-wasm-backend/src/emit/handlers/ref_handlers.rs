@@ -142,7 +142,7 @@ mod tests {
         let bytes_ty =
             crate::emit::helpers::intern_layout_key(&mut ctx, crate::gc_types::BYTES_LAYOUT);
         let null = wasm_dialect::RefNull::operands()
-            .heap_type(Symbol::new("anyref"))
+            .heap_type("anyref")
             .type_idx(None)
             .results(anyref_ty)
             .build(&mut ctx, location);

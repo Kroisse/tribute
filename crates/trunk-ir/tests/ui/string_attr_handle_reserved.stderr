@@ -1,0 +1,7 @@
+error: string attribute `op` would generate `op_ref`, which is reserved for the operation wrapper's own method; rename the attribute
+ --> tests/ui/string_attr_handle_reserved.rs:2:5
+  |
+2 |     #[trunk_ir::dialect]
+  |     ^^^^^^^^^^^^^^^^^^^^
+  |
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)

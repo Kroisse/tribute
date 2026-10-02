@@ -249,7 +249,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.import_func {module = @env, name = @run, sym_name = @run, type = wasm.func_sig<(core.i32) -> core.i32>}
+  wasm.import_func {module = "env", name = "run", sym_name = @run, type = wasm.func_sig<(core.i32) -> core.i32>}
   wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<(core.i32) -> core.i32>}
   wasm.func {abi = "C", sym_name = @c_helper, type = wasm.func_sig<(core.i32) -> core.i32>} {
     ^bb0(%value: core.i32):
@@ -349,7 +349,7 @@ mod tests {
         // The element segment is a late container: its child `wasm.ref_func` use
         // must not be hidden by the container's own lack of a symbol attribute.
         let element = r#"core.module @test {
-  wasm.table {reftype = @funcref, min = 1, max = 1}
+  wasm.table {reftype = "funcref", min = 1, max = 1}
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @helper} : wasm.funcref
   }

@@ -7,13 +7,13 @@
 use tracing::debug;
 
 use trunk_ir::IrContext;
-use trunk_ir::Symbol;
 use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::types::Attribute;
+use trunk_ir::{StringRef, Symbol};
 use wasm_encoder::{ExportKind, RefType, ValType};
 
 use crate::{CompilationError, CompilationResult};
@@ -33,15 +33,15 @@ pub(crate) struct FunctionDef {
 #[derive(Debug)]
 pub(crate) struct ImportFuncDef {
     pub sym: Symbol,
-    pub module: Symbol,
-    pub name: Symbol,
+    pub module: StringRef,
+    pub name: StringRef,
     /// wasm.func_sig TypeRef
     pub func_type: TypeRef,
 }
 
 #[derive(Debug)]
 pub(crate) struct ExportDef {
-    pub name: String,
+    pub name: StringRef,
     pub kind: ExportKind,
     pub target: ExportTarget,
 }
@@ -133,8 +133,8 @@ pub(crate) fn extract_import_def(
     ctx: &IrContext,
     import_op: wasm_dialect::ImportFunc,
 ) -> CompilationResult<ImportFuncDef> {
-    let module = import_op.module(ctx);
-    let name = import_op.name(ctx);
+    let module = import_op.module_ref(ctx);
+    let name = import_op.name_ref(ctx);
     let sym = qualified_name(ctx, import_op.op_ref()).unwrap_or_else(|| import_op.sym_name(ctx));
     let ty = import_op.r#type(ctx);
 
@@ -156,7 +156,7 @@ pub(crate) fn extract_export_func(
     ctx: &IrContext,
     export_op: wasm_dialect::ExportFunc,
 ) -> CompilationResult<ExportDef> {
-    let name = export_op.name(ctx).to_owned();
+    let name = export_op.name_ref(ctx);
     let func = export_op.func(ctx);
     Ok(ExportDef {
         name,
@@ -169,7 +169,7 @@ pub(crate) fn extract_export_memory(
     ctx: &IrContext,
     export_op: wasm_dialect::ExportMemory,
 ) -> CompilationResult<ExportDef> {
-    let name = export_op.name(ctx).to_owned();
+    let name = export_op.name_ref(ctx);
     let index = export_op.index(ctx);
     Ok(ExportDef {
         name,
@@ -214,15 +214,14 @@ pub(crate) fn extract_table_def(
     ctx: &IrContext,
     table_op: wasm_dialect::Table,
 ) -> CompilationResult<TableDef> {
-    let reftype_sym = table_op.reftype(ctx);
-    let reftype = reftype_sym.with_str(|s| match s {
+    let reftype = match table_op.reftype(ctx) {
         "funcref" => Ok(RefType::FUNCREF),
         "externref" => Ok(RefType::EXTERNREF),
         other => Err(CompilationError::invalid_attribute(format!(
             "reftype: {}",
             other
         ))),
-    })?;
+    }?;
     let min = table_op.min(ctx);
     let max = table_op.max(ctx);
     Ok(TableDef { reftype, min, max })
@@ -262,8 +261,7 @@ pub(crate) fn extract_global_def(
     ctx: &IrContext,
     global_op: wasm_dialect::Global,
 ) -> CompilationResult<GlobalDef> {
-    let valtype_sym = global_op.valtype(ctx);
-    let valtype = valtype_sym.with_str(|s| match s {
+    let valtype = match global_op.valtype(ctx) {
         "i32" => Ok(ValType::I32),
         "i64" => Ok(ValType::I64),
         "f32" => Ok(ValType::F32),
@@ -275,7 +273,7 @@ pub(crate) fn extract_global_def(
             "valtype: {}",
             other
         ))),
-    })?;
+    }?;
     let mutable = global_op.mutable(ctx);
     let op_data = ctx.op(global_op.op_ref());
     let init = match op_data.attributes.get("init") {
@@ -310,8 +308,8 @@ mod tests {
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let malformed = ctx.intern_type(TypeDataBuilder::new("wasm", "func_sig").build());
         let import = wasm_dialect::ImportFunc::operands()
-            .module(Symbol::new("env"))
-            .name(Symbol::new("run"))
+            .module("env")
+            .name("run")
             .sym_name(Symbol::new("run"))
             .r#type(malformed)
             .build(&mut ctx, location);

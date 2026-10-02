@@ -67,9 +67,9 @@ mod clif {
     fn fneg(operand: Value<_>) -> Value<_> {}
 
     // Comparisons
-    fn icmp(cond: Attr<Symbol>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn icmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
-    fn fcmp(cond: Attr<Symbol>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+    fn fcmp(cond: Attr<String>, lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
 
     // Bitwise
     fn band(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
@@ -94,7 +94,7 @@ mod clif {
 
     fn br_table(table: Attr<_>, index: Value<_>) {}
 
-    fn trap(code: Attr<Symbol>) {}
+    fn trap(code: Attr<String>) {}
 
     fn return_call(callee: Attr<Symbol>, args: Variadic<_>) {}
 
@@ -111,7 +111,7 @@ mod clif {
     fn store(offset: Attr<i32>, value: Value<_>, addr: Value<_>) {}
 
     fn atomic_rmw(
-        op: Attr<Symbol>,
+        bin_op: Attr<String>,
         offset: Attr<i32>,
         addr: Value<_>,
         value: Value<_>,

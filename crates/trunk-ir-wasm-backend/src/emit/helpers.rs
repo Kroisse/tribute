@@ -378,7 +378,7 @@ pub(crate) fn attr_heap_type(
             })?;
             Ok(HeapType::Concrete(idx))
         }
-        Some(Attribute::Symbol(sym)) => sym.with_str(symbol_to_abstract_heap_type),
+        Some(Attribute::String(name)) => symbol_to_abstract_heap_type(ctx.str(*name)),
         Some(Attribute::Type(ty)) => {
             let data = ctx.get_type(*ty);
             if data.dialect == Symbol::new("wasm") {

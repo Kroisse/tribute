@@ -1288,6 +1288,12 @@ func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv
 Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
 정수, 부동소수점, 문자열, bytes, symbol, type, location, list, dictionary.
 
+Symbol 값은 symbol table의 정의를 가리키는 참조에만 쓴다(`callee = @foo`). 참조가
+아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
+type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
+`predicate = "slt"`로 쓴다. 그래서 텍스트의 `@`는 언제나 참조를 뜻하고, 속성을 훑어
+참조를 일반적으로 찾을 수 있다.
+
 문자열 값은 그 속성을 가진 `IrContext`의 문자열 pool에 uniquing되며, 속성은 pool
 handle만 담는다(MLIR에서 `StringAttr`가 `MLIRContext`에 uniquing되는 것과 같다).
 같은 context 안에서 같은 내용의 문자열은 같은 handle을 가지므로 속성의 identity와

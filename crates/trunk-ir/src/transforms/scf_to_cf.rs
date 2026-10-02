@@ -578,7 +578,7 @@ impl SwitchDispatch<'_> {
                 ctx.push_op(current_block, case_const.op_ref());
 
                 let cmp = arith::Cmpi::operands(discriminant, case_const.result(ctx))
-                    .predicate(Symbol::new("eq"))
+                    .predicate("eq")
                     .build(ctx, loc);
                 ctx.push_op(current_block, cmp.op_ref());
 

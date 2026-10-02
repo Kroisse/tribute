@@ -385,7 +385,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, has_table: bool, loc: Loc
         push(ctx, entry, release_fn.op_ref());
         let null = iconst(ctx, entry, 0, tys.ptr);
         let is_null = clif::Icmp::operands(release_fn.result(ctx), null)
-            .cond(Symbol::new("eq"))
+            .cond("eq")
             .results(tys.i8)
             .build(ctx, loc);
         push(ctx, entry, is_null.op_ref());
@@ -412,7 +412,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, has_table: bool, loc: Loc
 
     let zero = iconst(ctx, shallow, 0, tys.i64);
     let is_dynamic = clif::Icmp::operands(alloc_size, zero)
-        .cond(Symbol::new("eq"))
+        .cond("eq")
         .results(tys.i8)
         .build(ctx, loc);
     push(ctx, shallow, is_dynamic.op_ref());
@@ -430,7 +430,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, has_table: bool, loc: Loc
     push(ctx, dealloc, ret.op_ref());
 
     let trap = clif::Trap::operands()
-        .code(Symbol::new(UNRESOLVED_DYNAMIC_RELEASE_TRAP))
+        .code(UNRESOLVED_DYNAMIC_RELEASE_TRAP)
         .build(ctx, loc);
     push(ctx, unresolved, trap.op_ref());
     blocks.push(dealloc);
@@ -665,7 +665,7 @@ fn generate_release_function_for_struct(
             .build(ctx, loc);
         ctx.push_op(check_block, null_const.op_ref());
         let is_null = clif::Icmp::operands(load.result(ctx), null_const.result(ctx))
-            .cond(Symbol::new("eq"))
+            .cond("eq")
             .results(i8_ty)
             .build(ctx, loc);
         ctx.push_op(check_block, is_null.op_ref());
@@ -948,7 +948,7 @@ fn generate_release_function_for_enum(
                 .build(ctx, loc);
             ctx.push_op(chk_block, null_const.op_ref());
             let is_null = clif::Icmp::operands(load_op.result(ctx), null_const.result(ctx))
-                .cond(Symbol::new("eq"))
+                .cond("eq")
                 .results(i8_ty)
                 .build(ctx, loc);
             ctx.push_op(chk_block, is_null.op_ref());
@@ -995,7 +995,7 @@ fn generate_release_function_for_enum(
             .build(ctx, loc);
         ctx.push_op(check_block, expected.op_ref());
         let cmp_op = clif::Icmp::operands(tag_val, expected.result(ctx))
-            .cond(Symbol::new("eq"))
+            .cond("eq")
             .results(i8_ty)
             .build(ctx, loc);
         ctx.push_op(check_block, cmp_op.op_ref());
@@ -1017,7 +1017,7 @@ fn generate_release_function_for_enum(
         .build(ctx, loc);
     ctx.push_op(entry_block, expected.op_ref());
     let cmp_op = clif::Icmp::operands(tag_val, expected.result(ctx))
-        .cond(Symbol::new("eq"))
+        .cond("eq")
         .results(i8_ty)
         .build(ctx, loc);
     ctx.push_op(entry_block, cmp_op.op_ref());

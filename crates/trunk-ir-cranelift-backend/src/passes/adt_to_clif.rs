@@ -24,7 +24,6 @@
 use tracing::warn;
 
 use super::arith_to_clif::finalize_cmp;
-use trunk_ir::Symbol;
 use trunk_ir::adt_layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
 };
@@ -237,7 +236,7 @@ impl RewritePattern for VariantIsPattern {
             .results(i32_ty)
             .build(ctx, loc);
         let cmp_op = clif::Icmp::operands(tag_val, expected.result(ctx))
-            .cond(Symbol::new("eq"))
+            .cond("eq")
             .results(i8_ty)
             .build(ctx, loc);
 
@@ -414,7 +413,7 @@ impl RewritePattern for RefIsNullPattern {
             .results(ptr_ty)
             .build(ctx, loc);
         let icmp_op = clif::Icmp::operands(ref_val, null_op.result(ctx))
-            .cond(Symbol::new("eq"))
+            .cond("eq")
             .results(i8_ty)
             .build(ctx, loc);
         rewriter.insert_op(null_op.op_ref());

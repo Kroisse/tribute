@@ -255,7 +255,7 @@ fn tag_equals(
         .results(i32_ty)
         .build(ctx, loc);
     let comparison = arith::Cmpi::operands(tag, constant.result(ctx))
-        .predicate(Symbol::new("eq"))
+        .predicate("eq")
         .build(ctx, loc);
     (constant, comparison)
 }

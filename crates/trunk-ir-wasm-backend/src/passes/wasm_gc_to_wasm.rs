@@ -216,8 +216,10 @@ impl RewritePattern for LowerTypedGcPattern {
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::RefNull::from_op(ctx, op) {
             let target = old.target_type(ctx);
+            let heap_type = ctx.get_type(target).name;
+            let heap_type = heap_type.with_str(|name| ctx.intern_str(name));
             let new = wasm::RefNull::operands()
-                .heap_type(ctx.get_type(target).name)
+                .heap_type(heap_type)
                 .type_idx(self.index(target))
                 .results(old.result_ty(ctx))
                 .build(ctx, loc);
@@ -385,7 +387,7 @@ mod tests {
   !A = adt.struct<@A()>
 
   wasm.func @main() -> core.nil {
-    %null = wasm.ref_null {heap_type = @anyref} : wasm.anyref
+    %null = wasm.ref_null {heap_type = "anyref"} : wasm.anyref
     %concrete = wasm_gc.ref_cast %null {target_type = !A} : !A
     %abstract = wasm_gc.ref_cast %null {target_type = wasm.anyref} : wasm.anyref
     wasm.return

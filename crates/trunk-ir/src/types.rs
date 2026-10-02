@@ -1070,6 +1070,38 @@ impl Default for PathInterner {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct StringRef(lasso::Spur);
 
+/// A string attribute value given to an operation builder: a pooled handle,
+/// or text the builder interns when it creates the operation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StringArg {
+    Ref(StringRef),
+    Text(std::borrow::Cow<'static, str>),
+}
+
+impl From<StringRef> for StringArg {
+    fn from(value: StringRef) -> Self {
+        StringArg::Ref(value)
+    }
+}
+
+impl From<&'static str> for StringArg {
+    fn from(value: &'static str) -> Self {
+        StringArg::Text(value.into())
+    }
+}
+
+impl From<String> for StringArg {
+    fn from(value: String) -> Self {
+        StringArg::Text(value.into())
+    }
+}
+
+impl From<std::borrow::Cow<'static, str>> for StringArg {
+    fn from(value: std::borrow::Cow<'static, str>) -> Self {
+        StringArg::Text(value)
+    }
+}
+
 /// Deduplicating pool for string attribute values, owned by an `IrContext`.
 ///
 /// Strings are stored in an arena and freed with the pool.

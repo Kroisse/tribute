@@ -200,7 +200,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
 
     // Create wasm.table for closure functions
     let table_op = wasm_dialect::Table::operands()
-        .reftype(Symbol::new("funcref"))
+        .reftype("funcref")
         .min(table_size)
         .max(Some(table_size))
         .build(ctx, location);

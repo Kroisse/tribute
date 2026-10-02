@@ -101,12 +101,12 @@ The builder infers result types the declaration fixes:
 
 ```rust
 // fn cmpi<T: IntegerLike>(
-//     predicate: Attr<Symbol>,
+//     predicate: Attr<String>,
 //     lhs: Value<T>,
 //     rhs: Value<T>,
 // ) -> Value<I1> {}
 let cmp = arith::Cmpi::operands(lhs, rhs)
-    .predicate(Symbol::new("slt"))
+    .predicate("slt")
     .build(ctx, location);
 ```
 

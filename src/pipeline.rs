@@ -2488,7 +2488,7 @@ fn main() -> Nil {
 
   func.func @done(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (){done_call_conv}>}} {{
     %expected = arith.const {{value = 3}} : core.i32
-    %ok = arith.cmpi %value, %expected {{predicate = @eq}} : core.i1
+    %ok = arith.cmpi %value, %expected {{predicate = "eq"}} : core.i1
     scf.if %ok {{
       scf.yield
     }} {{

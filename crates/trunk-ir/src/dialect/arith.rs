@@ -71,10 +71,10 @@ mod arith {
     fn negf<T: FloatLike>(operand: Value<T>) -> Value<T> {}
 
     // Comparisons
-    fn cmpi<T: IntegerLike>(predicate: Attr<Symbol>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
+    fn cmpi<T: IntegerLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     #[verify]
-    fn cmpf<T: FloatLike>(predicate: Attr<Symbol>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
+    fn cmpf<T: FloatLike>(predicate: Attr<String>, lhs: Value<T>, rhs: Value<T>) -> Value<I1> {}
 
     // Bitwise (integer-only)
     fn and<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
@@ -148,7 +148,7 @@ impl crate::ops::Verify for Const {
 impl crate::ops::Verify for Cmpf {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
         let predicate = self.predicate(ctx);
-        if predicate.with_str(|name| SUPPORTED_CMPF_PREDICATES.contains(&name)) {
+        if SUPPORTED_CMPF_PREDICATES.contains(&predicate) {
             return Ok(());
         }
         Err(format!(

@@ -271,13 +271,13 @@ impl RewritePattern for ArithIntrinsicPattern {
             }
             ArithMapping::CmpI(predicate) => {
                 let cmp = arith::Cmpi::operands(lhs, rhs)
-                    .predicate(Symbol::new(predicate))
+                    .predicate(*predicate)
                     .build(ctx, loc);
                 rewriter.replace_op(cmp.op_ref());
             }
             ArithMapping::CmpF(predicate) => {
                 let cmp = arith::Cmpf::operands(lhs, rhs)
-                    .predicate(Symbol::new(predicate))
+                    .predicate(*predicate)
                     .build(ctx, loc);
                 rewriter.replace_op(cmp.op_ref());
             }
@@ -356,11 +356,11 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         let result_op = match mapping {
             ArithMapping::BinaryOp(op_fn) => op_fn(ctx, loc, lhs, rhs),
             ArithMapping::CmpI(predicate) => arith::Cmpi::operands(lhs, rhs)
-                .predicate(Symbol::new(predicate))
+                .predicate(*predicate)
                 .build(ctx, loc)
                 .op_ref(),
             ArithMapping::CmpF(predicate) => arith::Cmpf::operands(lhs, rhs)
-                .predicate(Symbol::new(predicate))
+                .predicate(*predicate)
                 .build(ctx, loc)
                 .op_ref(),
         };

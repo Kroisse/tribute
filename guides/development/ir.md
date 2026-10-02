@@ -56,7 +56,7 @@ fn addi<T: IntegerLike>(lhs: Value<T>, rhs: Value<T>) -> Value<T> {}
 fn i32_add(lhs: Value<I32>, rhs: Value<I32>) -> Value<I32> {}
 
 fn cmpi<T: IntegerLike>(
-    predicate: Attr<Symbol>,
+    predicate: Attr<String>,
     lhs: Value<T>,
     rhs: Value<T>,
 ) -> Value<I1> {}
@@ -100,7 +100,7 @@ declarations above:
 ```rust
 let sum = arith::Addi::operands(lhs, rhs).build(ctx, loc); // result is `T`
 let cmp = arith::Cmpi::operands(lhs, rhs) // or `Op::operands()` without operands
-    .predicate(Symbol::new("slt"))          // attributes by name
+    .predicate("slt")                      // attributes by name
     .build(ctx, loc);                       // result is `core.i1`
 let resumed = Resume::operands(token, value).build(ctx, loc); // `T::Answer`
 ```
@@ -166,8 +166,13 @@ let is_c = ctx.op(op).attributes.get_str(ctx, "abi") == Some("C");
 let value: &str = string_const.value(ctx); // generated accessor
 ```
 
+A builder setter for a string attribute takes a `StringArg`: a `StringRef`,
+or text as a `Cow<'static, str>` (a `&'static str` or an owned `String`).
+The builder interns text when it creates the operation, so
+`.predicate("slt")` needs no context.
+
 A generated string accessor returns the text, like MLIR's `getValue()`.
-`<name>_ref` returns the `StringRef`, like `getValueAttr()`; use it to copy the
+`<name>_ref` returns the `StringRef`; use it to copy the
 value into another operation without borrowing the context or interning
 again:
 

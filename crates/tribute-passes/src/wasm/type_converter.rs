@@ -483,7 +483,7 @@ pub fn wasm_type_converter(ctx: &mut IrContext) -> TypeConverter {
             && is_type(ctx, to_ty, Symbol::new("wasm"), Symbol::new("anyref"))
         {
             let null_op = wasm_dialect::RefNull::operands()
-                .heap_type(Symbol::new("anyref"))
+                .heap_type("anyref")
                 .type_idx(None)
                 .results(anyref_ty)
                 .build(ctx, location);
