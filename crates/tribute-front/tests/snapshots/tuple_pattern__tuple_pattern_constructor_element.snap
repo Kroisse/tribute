@@ -8,7 +8,7 @@ core.module @test {
   !Item_1 = adt.typeref<{name = "Item"}>
   !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat_1 = adt.typeref<{name = "__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat"}>
 
-  tribute_control.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
+  tribute_control.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @first(%0: !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat_1) -> core.i32 convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat} : !Item_1
       %2 = adt.variant_is %1 {tag = "Number", type = !Item} : core.i1
@@ -29,7 +29,7 @@ core.module @test {
           %13 = adt.variant_cast %12 {tag = "Number", type = !Item} : !Item
           %14 = adt.variant_get %13 {field = 0, tag = "Number", type = !Item} : core.i32
           %15 = adt.struct_get %0 {field = 1, type = !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat} : core.i32
-          %16 = tribute_control.call %14, %15 {callee = @"Nat::+"} : core.i32
+          %16 = tribute_control.call %14, %15 {callee = @"std::Nat::+"} : core.i32
           scf.yield %16
       } {
           %17 = arith.const {value = 0} : core.i32

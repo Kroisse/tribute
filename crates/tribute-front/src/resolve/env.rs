@@ -80,6 +80,11 @@ pub struct ModuleEnv<'db> {
     library: HashMap<Symbol, Binding<'db>>,
     /// First segments of the namespaces the prelude and the compiler supply.
     library_roots: HashSet<Symbol>,
+    /// The package path of each library name, e.g. `Option` → `std::Option`.
+    library_paths: HashMap<Symbol, Vec<Symbol>>,
+    /// Library namespaces under their short first segment, e.g. `Option` →
+    /// `std::Option` and `List` → `std::collections::List`.
+    library_namespaces: HashMap<Symbol, Symbol>,
 }
 
 impl<'db> ModuleEnv<'db> {
@@ -138,10 +143,27 @@ impl<'db> ModuleEnv<'db> {
         }
     }
 
-    /// Add a name the prelude or the compiler supplies to every module.
-    pub fn add_library(&mut self, name: Symbol, binding: Binding<'db>) {
+    /// Add a name the prelude or the compiler supplies to every module,
+    /// declared at the package path `path`.
+    pub fn add_library(&mut self, name: Symbol, binding: Binding<'db>, path: Vec<Symbol>) {
         self.library.entry(name).or_insert(binding.clone());
+        self.library_paths.entry(name).or_insert(path);
         self.add_import_if_absent(name, binding);
+    }
+
+    /// Let `alias` start a path into the library namespace `namespace`.
+    pub fn add_library_namespace(&mut self, alias: Symbol, namespace: Symbol) {
+        self.library_namespaces.entry(alias).or_insert(namespace);
+    }
+
+    /// The package path a library name is declared at.
+    pub fn library_path(&self, name: Symbol) -> Option<&[Symbol]> {
+        self.library_paths.get(&name).map(Vec::as_slice)
+    }
+
+    /// The library namespace a path starting with `alias` continues in.
+    pub fn library_namespace(&self, alias: Symbol) -> Option<Symbol> {
+        self.library_namespaces.get(&alias).copied()
     }
 
     /// Mark the namespaces under `root` as supplied to every module.
@@ -259,16 +281,24 @@ impl<'db> ModuleEnv<'db> {
     ///
     /// Self takes precedence: user definitions shadow prelude.
     /// This is used to inject prelude bindings into user code's environment.
-    pub fn merge(&mut self, other: &ModuleEnv<'db>) {
-        // Add other's definitions as imports (so they don't override user
-        // definitions) that every module sees.
-        for (name, binding) in other.iter_definitions() {
-            self.add_library(name, binding.clone());
+    ///
+    /// `other` declares the library package `package`, whose root items every
+    /// module sees under their short names, and whose namespaces a path may
+    /// enter by their first segment below the package root.
+    pub fn merge(&mut self, other: &ModuleEnv<'db>, package: Symbol) {
+        for (name, binding) in other.iter_namespace(package) {
+            self.add_library(name, binding.clone(), vec![package, name]);
         }
 
-        // Add other's namespaces
+        let prefix = format!("{package}::");
         for (ns, bindings) in other.iter_namespaces() {
             self.add_library_root(namespace_root(ns));
+            let spelling = ns.to_string();
+            if let Some(rest) = spelling.strip_prefix(&prefix) {
+                let alias = rest.split("::").next().unwrap_or_default();
+                let namespace = Symbol::from_dynamic(&format!("{prefix}{alias}"));
+                self.add_library_namespace(Symbol::from_dynamic(alias), namespace);
+            }
             for (name, binding) in bindings {
                 self.add_to_namespace_if_absent(ns, name, binding.clone());
             }

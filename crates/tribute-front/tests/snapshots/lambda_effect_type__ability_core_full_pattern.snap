@@ -8,11 +8,11 @@ core.module @test {
   !t2 = core.ability_ref<tribute_rt.anyref, {name = "State"}>
   !t3 = core.ability_ref<core.i32, {name = "State"}>
 
-  tribute_control.func @"Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
+  tribute_control.func @"std::Int::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 convention(direct)
   tribute_control.func @counter() -> core.i32 convention(cps) {
       %0 = tribute_control.perform {ability_ref = !t3, op_name = "get", operation_kind = "op"} : core.i32
       %1 = arith.const {value = 1} : core.i32
-      %2 = tribute_control.call %0, %1 {callee = @"Int::+"} : core.i32
+      %2 = tribute_control.call %0, %1 {callee = @"std::Int::+"} : core.i32
       %3 = tribute_control.perform %2 {ability_ref = !t3, op_name = "set", operation_kind = "op"} : core.nil
       tribute_control.return %0
   }

@@ -7,19 +7,19 @@ core.module @test {
   !t0 = tribute_control.func_sig<(core.f64, core.f64) -> core.i1, {tribute.calling_convention = 0}>
   !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool_1 = adt.typeref<{name = "__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool"}>
 
-  tribute_control.func @"Float::=="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
-  tribute_control.func @"Float::!="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
-  tribute_control.func @"Float::<"(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
-  tribute_control.func @"Float::<="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
-  tribute_control.func @"Float::>"(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
-  tribute_control.func @"Float::>="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"std::Float::=="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"std::Float::!="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"std::Float::<"(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"std::Float::<="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"std::Float::>"(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
+  tribute_control.func @"std::Float::>="(%arg0: core.f64, %arg1: core.f64) -> core.i1 convention(direct)
   tribute_control.func @comparisons(%0: core.f64, %1: core.f64) -> !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool_1 convention(direct) {
-      %2 = tribute_control.call %0, %1 {callee = @"Float::=="} : core.i1
-      %3 = tribute_control.call %0, %1 {callee = @"Float::!="} : core.i1
-      %4 = tribute_control.call %0, %1 {callee = @"Float::<"} : core.i1
-      %5 = tribute_control.call %0, %1 {callee = @"Float::<="} : core.i1
-      %6 = tribute_control.call %0, %1 {callee = @"Float::>"} : core.i1
-      %7 = tribute_control.call %0, %1 {callee = @"Float::>="} : core.i1
+      %2 = tribute_control.call %0, %1 {callee = @"std::Float::=="} : core.i1
+      %3 = tribute_control.call %0, %1 {callee = @"std::Float::!="} : core.i1
+      %4 = tribute_control.call %0, %1 {callee = @"std::Float::<"} : core.i1
+      %5 = tribute_control.call %0, %1 {callee = @"std::Float::<="} : core.i1
+      %6 = tribute_control.call %0, %1 {callee = @"std::Float::>"} : core.i1
+      %7 = tribute_control.call %0, %1 {callee = @"std::Float::>="} : core.i1
       %8 = adt.struct_new %2, %3, %4, %5, %6, %7 {type = !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool} : !__logical_tuple_tuple_7_1_6_4_bool_4_bool_4_bool_4_bool_4_bool_4_bool_1
       tribute_control.return %8
   }

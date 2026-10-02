@@ -2004,7 +2004,7 @@ fn assert_nested_argument_shape(function: &str) {
     assert_in_order(function, &["callee = @read", "callee = @add_one"]);
 }
 fn assert_exact_integer_addition(function: &str) -> &'static str {
-    let callee = ["callee = @\"Int::+\"", "callee = @\"Nat::+\""]
+    let callee = ["callee = @\"std::Int::+\"", "callee = @\"std::Nat::+\""]
         .into_iter()
         .find(|callee| function.contains(callee))
         .unwrap_or_else(|| {

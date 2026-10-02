@@ -31,14 +31,14 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
         trunk_ir::Symbol::new("prelude"),
     )?;
 
-    let prelude_ast = parsed.module(db);
+    let prelude_ast = &tribute_front::resolve::library_package_module(parsed.module(db));
     let prelude_span_map = parsed.span_map(db).clone();
 
     // Build env for name resolution merging
     let env = tribute_front::resolve::build_env(db, prelude_ast);
 
     // Resolve prelude with its own env
-    let resolved_prelude = tribute_front::resolve::resolve_with_env(
+    let resolved_prelude = tribute_front::resolve::resolve_library_with_env(
         db,
         prelude_ast,
         env.clone(),
@@ -76,7 +76,10 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     // Build env, merging prelude bindings so operator names resolve
     let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
-        env.merge(&p.env);
+        env.merge(
+            &p.env,
+            trunk_ir::Symbol::new(tribute_front::resolve::LIBRARY_PACKAGE),
+        );
     }
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 
@@ -157,7 +160,10 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
 
     let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
-        env.merge(&p.env);
+        env.merge(
+            &p.env,
+            trunk_ir::Symbol::new(tribute_front::resolve::LIBRARY_PACKAGE),
+        );
     }
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 
@@ -189,7 +195,10 @@ fn tdnr_function_summary_inner(
 
     let mut env = tribute_front::resolve::build_env(db, ast);
     if let Some(ref p) = prelude {
-        env.merge(&p.env);
+        env.merge(
+            &p.env,
+            trunk_ir::Symbol::new(tribute_front::resolve::LIBRARY_PACKAGE),
+        );
     }
     let resolved = tribute_front::resolve::resolve_with_env(db, ast, env, span_map.clone());
 

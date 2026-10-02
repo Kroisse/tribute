@@ -1,6 +1,6 @@
 //! Lower intrinsic operator calls to arith dialect operations.
 //!
-//! This pass transforms `func.call @"Int::(+)"(a, b)` → `arith.addi(a, b)`, etc.
+//! This pass transforms `func.call @"std::Int::(+)"(a, b)` → `arith.addi(a, b)`, etc.
 //! It runs in the shared pipeline before backend-specific lowering, handling
 //! arithmetic and comparison intrinsics declared in the prelude for Int, Nat, and Float.
 
@@ -28,7 +28,7 @@ use trunk_ir::walk::{WalkAction, walk_op};
 
 /// Lower intrinsic arithmetic/comparison calls to arith dialect operations.
 ///
-/// Direct calls are rewritten inline (e.g. `func.call @"Int::+"(a,b)` →
+/// Direct calls are rewritten inline (e.g. `func.call @"std::Int::+"(a,b)` →
 /// `arith.addi`). Intrinsic `func.func` declarations — which originally
 /// contain only `func.unreachable` — are given a real body so they remain
 /// valid when used as first-class values (closures, `func.constant`, etc.).
@@ -163,70 +163,78 @@ impl ArithIntrinsicPattern {
         }
 
         // --- Int (signed) ---
-        binary!("Int::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
+        binary!("std::Int::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
+        binary!("std::Int::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
+        binary!("std::Int::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::/", |ctx, loc, l, r| arith::Divsi::operands(l, r)
+        binary!("std::Int::/", |ctx, loc, l, r| arith::Divsi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Int::%", |ctx, loc, l, r| arith::Remsi::operands(l, r)
+        binary!("std::Int::%", |ctx, loc, l, r| arith::Remsi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        cmpi!("Int::==", "eq");
-        cmpi!("Int::!=", "ne");
-        cmpi!("Int::<", "slt");
-        cmpi!("Int::<=", "sle");
-        cmpi!("Int::>", "sgt");
-        cmpi!("Int::>=", "sge");
+        cmpi!("std::Int::==", "eq");
+        cmpi!("std::Int::!=", "ne");
+        cmpi!("std::Int::<", "slt");
+        cmpi!("std::Int::<=", "sle");
+        cmpi!("std::Int::>", "sgt");
+        cmpi!("std::Int::>=", "sge");
 
         // --- Nat (unsigned) ---
-        binary!("Nat::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
+        binary!("std::Nat::+", |ctx, loc, l, r| arith::Addi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
+        binary!("std::Nat::-", |ctx, loc, l, r| arith::Subi::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
+        binary!("std::Nat::*", |ctx, loc, l, r| arith::Muli::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::/", |ctx, loc, l, r| arith::Divui::operands(l, r)
+        binary!("std::Nat::/", |ctx, loc, l, r| arith::Divui::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        binary!("Nat::%", |ctx, loc, l, r| arith::Remui::operands(l, r)
+        binary!("std::Nat::%", |ctx, loc, l, r| arith::Remui::operands(l, r)
             .build(ctx, loc)
             .op_ref());
-        cmpi!("Nat::==", "eq");
-        cmpi!("Nat::!=", "ne");
-        cmpi!("Nat::<", "ult");
-        cmpi!("Nat::<=", "ule");
-        cmpi!("Nat::>", "ugt");
-        cmpi!("Nat::>=", "uge");
+        cmpi!("std::Nat::==", "eq");
+        cmpi!("std::Nat::!=", "ne");
+        cmpi!("std::Nat::<", "ult");
+        cmpi!("std::Nat::<=", "ule");
+        cmpi!("std::Nat::>", "ugt");
+        cmpi!("std::Nat::>=", "uge");
 
         // --- Float ---
-        binary!("Float::+", |ctx, loc, l, r| arith::Addf::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("Float::-", |ctx, loc, l, r| arith::Subf::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("Float::*", |ctx, loc, l, r| arith::Mulf::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        binary!("Float::/", |ctx, loc, l, r| arith::Divf::operands(l, r)
-            .build(ctx, loc)
-            .op_ref());
-        cmpf!("Float::==", "oeq");
-        cmpf!("Float::!=", "une");
-        cmpf!("Float::<", "olt");
-        cmpf!("Float::<=", "ole");
-        cmpf!("Float::>", "ogt");
-        cmpf!("Float::>=", "oge");
+        binary!("std::Float::+", |ctx, loc, l, r| arith::Addf::operands(
+            l, r
+        )
+        .build(ctx, loc)
+        .op_ref());
+        binary!("std::Float::-", |ctx, loc, l, r| arith::Subf::operands(
+            l, r
+        )
+        .build(ctx, loc)
+        .op_ref());
+        binary!("std::Float::*", |ctx, loc, l, r| arith::Mulf::operands(
+            l, r
+        )
+        .build(ctx, loc)
+        .op_ref());
+        binary!("std::Float::/", |ctx, loc, l, r| arith::Divf::operands(
+            l, r
+        )
+        .build(ctx, loc)
+        .op_ref());
+        cmpf!("std::Float::==", "oeq");
+        cmpf!("std::Float::!=", "une");
+        cmpf!("std::Float::<", "olt");
+        cmpf!("std::Float::<=", "ole");
+        cmpf!("std::Float::>", "ogt");
+        cmpf!("std::Float::>=", "oge");
 
         Self {
             map,
@@ -415,7 +423,7 @@ fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: Symbol, mapping: &Arith
             result.dialect == operand.dialect
                 && result.name == operand.name
                 && symbol.with_str(|symbol| {
-                    if symbol.starts_with("Float::") {
+                    if symbol.starts_with("std::Float::") {
                         operand_is_f64
                     } else {
                         operand_is_i32
@@ -448,8 +456,8 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
+                func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -462,7 +470,7 @@ mod tests {
         let output = print_module(&ctx, module.op());
         // The declaration should still exist with a real body (not erased)
         assert!(
-            output.contains(r#"@"Nat::+""#),
+            output.contains(r#"@"std::Nat::+""#),
             "func decl should not be erased:\n{output}"
         );
         // Body should contain arith.addi, not func.unreachable
@@ -488,8 +496,8 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"Int::=="(%0: core.i32, %1: core.i32) -> core.i1
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Int::=="} {
+                func.func @"std::Int::=="(%0: core.i32, %1: core.i32) -> core.i1
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Int::=="} {
                 ^bb0:
                     func.unreachable
                 }
@@ -517,11 +525,11 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+                func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"}
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"Nat::+"} : core.i32
+                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
                     func.return %2
                 }
             }
@@ -532,7 +540,7 @@ mod tests {
         let after = print_module(&ctx, module.op());
 
         assert!(after.contains("arith.addi"), "{after}");
-        assert!(!after.contains(r#"@"Nat::+""#), "{after}");
+        assert!(!after.contains(r#"@"std::Nat::+""#), "{after}");
     }
 
     #[test]
@@ -542,11 +550,11 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+                func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"}
                 func.func @user() -> func.func_sig<(core.i32, core.i32) -> core.i32> {
                 ^bb0:
-                    %f = func.constant {func_ref = @"Nat::+"} : func.func_sig<(core.i32, core.i32) -> core.i32>
+                    %f = func.constant {func_ref = @"std::Nat::+"} : func.func_sig<(core.i32, core.i32) -> core.i32>
                     func.return %f
                 }
             }
@@ -557,7 +565,7 @@ mod tests {
         let after = print_module(&ctx, module.op());
 
         assert!(
-            after.contains(r#"func.func @"Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 attributes {abi = "intrinsic"}"#)
+            after.contains(r#"func.func @"std::Nat::+"(%arg0: core.i32, %arg1: core.i32) -> core.i32 attributes {abi = "intrinsic"}"#)
                 && !after.contains(COMPILER_INTRINSIC_ATTR),
             "a declaration referenced as a value keeps its binding without the identity:\n{after}"
         );
@@ -570,8 +578,8 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"Nat::+"(%0: core.f64, %1: core.f64) -> core.f64
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
+                func.func @"std::Nat::+"(%0: core.f64, %1: core.f64) -> core.f64
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -591,14 +599,14 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
                     attributes {abi = "intrinsic"} {
                 ^bb0:
                     func.return %0
                 }
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"Nat::+"} : core.i32
+                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
                     func.return %2
                 }
             }
@@ -617,14 +625,14 @@ mod tests {
             &mut ctx,
             r#"
             core.module @test {
-                func.func @"Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
+                func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
-                    %2 = func.call %0, %1 {callee = @"Nat::+"} : core.i32
+                    %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
                     func.return %2
                 }
             }
@@ -641,7 +649,7 @@ mod tests {
         );
         // The intrinsic decl should still exist (for first-class usage)
         assert!(
-            output.contains(r#"@"Nat::+""#),
+            output.contains(r#"@"std::Nat::+""#),
             "intrinsic decl should still exist:\n{output}"
         );
     }

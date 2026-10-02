@@ -104,6 +104,9 @@ pub struct Resolver<'db> {
     /// package-root path it names. An import is visible only in the body of
     /// the module that declares it.
     module_imports: Vec<HashMap<Symbol, Vec<Symbol>>>,
+    /// How many leading segments of `module_path` are the package root:
+    /// zero for a user package, one for the prelude inside its `std` module.
+    package_depth: usize,
 }
 
 impl<'db> Resolver<'db> {
@@ -119,7 +122,15 @@ impl<'db> Resolver<'db> {
             effect_ops: HashMap::new(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
+            package_depth: 0,
         }
+    }
+
+    /// Resolve a package whose root is the module at the first
+    /// `package_depth` segments of every module path.
+    pub fn with_package_depth(mut self, package_depth: usize) -> Self {
+        self.package_depth = package_depth;
+        self
     }
 
     /// Enter a new local scope.
@@ -209,7 +220,7 @@ impl<'db> Resolver<'db> {
                     .split("::")
                     .map(Symbol::from_dynamic)
                     .collect();
-                match absolute_path(&self.module_path, &segments) {
+                match absolute_path(self.package_depth, &self.module_path, &segments) {
                     Ok(Some(path)) => {
                         let binding = if path.is_empty() {
                             self.env.lookup(sym)
@@ -289,22 +300,45 @@ impl<'db> Resolver<'db> {
         if let Some(imported) = self.imported_namespace(namespace) {
             return Some(imported);
         }
-        if self.module_path.is_empty() {
-            return Some(namespace);
-        }
         let spelling = namespace.to_string();
-        let first = Symbol::from_dynamic(spelling.split("::").next().unwrap_or_default());
-        let nested = Symbol::from_dynamic(&format!(
-            "{}::{namespace}",
-            self.module_path.iter().format("::")
-        ));
-        if self.env.has_namespace(nested) || self.defined_in_module(first) {
-            Some(nested)
-        } else if self.env.is_library_root(first) {
-            Some(namespace)
+        let (first, rest) = spelling.split_once("::").unwrap_or((&spelling, ""));
+        let first = Symbol::from_dynamic(first);
+        if self.module_path.is_empty() {
+            if self.env.has_namespace(namespace) || self.env.has_definition(first) {
+                return Some(namespace);
+            }
         } else {
-            None
+            let nested = Symbol::from_dynamic(&format!(
+                "{}::{namespace}",
+                self.module_path.iter().format("::")
+            ));
+            if self.env.has_namespace(nested) || self.defined_in_module(first) {
+                return Some(nested);
+            }
         }
+        if let Some(library) = self.env.library_namespace(first) {
+            let mut path = library.to_string();
+            if !rest.is_empty() {
+                path.push_str("::");
+                path.push_str(rest);
+            }
+            return Some(Symbol::from_dynamic(&path));
+        }
+        (self.module_path.is_empty() || self.env.is_library_root(first)).then_some(namespace)
+    }
+
+    /// The package path a path starting with a library namespace alias
+    /// continues to, e.g. `Option::Some` → `std::Option::Some`.
+    fn library_namespace_path(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
+        let (first, rest) = path.split_first()?;
+        let namespace = self.env.library_namespace(*first)?.to_string();
+        Some(
+            namespace
+                .split("::")
+                .map(Symbol::from_dynamic)
+                .chain(rest.iter().copied())
+                .collect(),
+        )
     }
 
     /// The binding a package-root path names.
@@ -348,15 +382,30 @@ impl<'db> Resolver<'db> {
                     ann.kind = TypeAnnotationKind::Path(path);
                 } else if let Some(target) = self.module_import(*name) {
                     ann.kind = TypeAnnotationKind::Path(target.to_vec());
-                } else if self.env.lookup_library(*name).is_some() {
-                    ann.kind = TypeAnnotationKind::Path(vec![*name]);
+                } else if let Some(path) = self.env.library_path(*name) {
+                    ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 } else {
                     self.report_unresolved_annotation(ann.id, *name);
                     ann.kind = TypeAnnotationKind::Error;
                 }
             }
+            // At the package root a name the package does not declare or
+            // import comes from the prelude.
+            TypeAnnotationKind::Named(name) => {
+                let local = name.with_str(|spelling| {
+                    spelling.starts_with(|c: char| c.is_ascii_lowercase())
+                        || TypeKind::from_primitive_name(spelling).is_some()
+                });
+                if !local
+                    && !self.env.has_definition(*name)
+                    && self.env.get_use_path(*name).is_none()
+                    && let Some(path) = self.env.library_path(*name)
+                {
+                    ann.kind = TypeAnnotationKind::Path(path.to_vec());
+                }
+            }
             TypeAnnotationKind::Path(segments) => {
-                match absolute_path(&self.module_path, segments) {
+                match absolute_path(self.package_depth, &self.module_path, segments) {
                     Ok(Some(path)) if !path.is_empty() => *segments = path,
                     Ok(Some(_)) => {
                         Diagnostic::new(
@@ -371,7 +420,15 @@ impl<'db> Resolver<'db> {
                         .accumulate(self.db);
                         ann.kind = TypeAnnotationKind::Error;
                     }
-                    Ok(None) if self.module_path.is_empty() => {}
+                    Ok(None) if self.module_path.is_empty() => {
+                        let first = segments[0];
+                        if !self.env.has_namespace(first)
+                            && !self.env.has_definition(first)
+                            && let Some(path) = self.library_namespace_path(segments)
+                        {
+                            *segments = path;
+                        }
+                    }
                     Ok(None) => {
                         let (&first, rest) = segments.split_first().expect("a path has a segment");
                         if let Some(target) = self.module_import(first) {
@@ -379,6 +436,8 @@ impl<'db> Resolver<'db> {
                         } else if self.defined_in_module(first) {
                             *segments =
                                 self.module_path.iter().chain(&*segments).copied().collect();
+                        } else if let Some(path) = self.library_namespace_path(segments) {
+                            *segments = path;
                         } else if !self.env.is_library_root(first) {
                             let path =
                                 Symbol::from_dynamic(&segments.iter().format("::").to_string());
@@ -411,9 +470,7 @@ impl<'db> Resolver<'db> {
             TypeAnnotationKind::Tuple(elements) => elements
                 .iter_mut()
                 .for_each(|element| self.resolve_annotation_paths(element)),
-            TypeAnnotationKind::Named(_)
-            | TypeAnnotationKind::Infer
-            | TypeAnnotationKind::Error => {}
+            TypeAnnotationKind::Infer | TypeAnnotationKind::Error => {}
         }
     }
 
@@ -820,13 +877,14 @@ impl<'db> Resolver<'db> {
     /// reported, since it would otherwise leave the import as a module
     /// placeholder.
     fn resolve_use_target(&self, u: &UseDecl) -> Option<Vec<Symbol>> {
-        let message = if let Err(error) = absolute_path(&self.module_path, &u.path) {
-            error.to_string()
-        } else if let Some(target) = self.use_target(&u.path) {
-            return Some(target);
-        } else {
-            format!("unresolved import `{}`", u.path.iter().format("::"))
-        };
+        let message =
+            if let Err(error) = absolute_path(self.package_depth, &self.module_path, &u.path) {
+                error.to_string()
+            } else if let Some(target) = self.use_target(&u.path) {
+                return Some(target);
+            } else {
+                format!("unresolved import `{}`", u.path.iter().format("::"))
+            };
         Diagnostic::new(
             message,
             self.span_map.get_or_default(u.id),
@@ -858,13 +916,17 @@ impl<'db> Resolver<'db> {
             };
             found || self.env.has_namespace(full)
         };
-        match absolute_path(&self.module_path, path) {
+        match absolute_path(self.package_depth, &self.module_path, path) {
             Ok(Some(path)) => return names(&path).then_some(path),
             Err(_) => return None,
             Ok(None) => {}
         }
         if self.module_path.is_empty() {
-            return names(path).then(|| path.to_vec());
+            if names(path) {
+                return Some(path.to_vec());
+            }
+            let library = self.library_namespace_path(path)?;
+            return names(&library).then_some(library);
         }
         // An inline module's path starts from one of its imports, the module
         // itself, or a namespace the prelude supplies.
@@ -877,6 +939,11 @@ impl<'db> Resolver<'db> {
         let nested: Vec<Symbol> = self.module_path.iter().chain(path).copied().collect();
         if names(&nested) {
             return Some(nested);
+        }
+        if let Some(library) = self.library_namespace_path(path)
+            && names(&library)
+        {
+            return Some(library);
         }
         let library = path
             .first()
