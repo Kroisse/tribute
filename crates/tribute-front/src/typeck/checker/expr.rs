@@ -401,29 +401,41 @@ impl<'db> TypeChecker<'db> {
                 // by the contextual callable contract. An infer-only local
                 // lambda therefore stays closed when its body is pure.
                 let accumulated = ctx.current_effect();
-                let inferred_effect = if accumulated.rest(self.db()).is_none() {
-                    EffectRow::new(
+                ctx.pop_scope();
+                let resume_effect = ctx.exit_lambda();
+                let inferred_effect = match (accumulated.rest(self.db()), resume_effect) {
+                    // Resuming performs the continuation's effects, so a closed
+                    // local row joins the continuation row instead of naming
+                    // its tail.
+                    (None, Some(resume_effect)) => {
+                        let mut effects = resume_effect.effects(self.db()).to_vec();
+                        for effect in accumulated.effects(self.db()) {
+                            if !effects.contains(effect) {
+                                effects.push(effect.clone());
+                            }
+                        }
+                        EffectRow::new(self.db(), effects, resume_effect.rest(self.db()))
+                    }
+                    (None, None) => EffectRow::new(
                         self.db(),
                         accumulated.effects(self.db()),
                         expected_effect
                             .and_then(|effect| effect.rest(self.db()).map(|_| ctx.fresh_row_var())),
-                    )
-                } else {
-                    accumulated
+                    ),
+                    (Some(_), _) => accumulated,
                 };
-
-                ctx.pop_scope();
-                let resume_effect = ctx.exit_lambda();
 
                 // Restore the outer context's effect
                 ctx.set_current_effect(outer_effect);
 
-                // A `resume` selects the effect row of the captured continuation,
-                // but ordinary calls in this lambda have already accumulated in
-                // `inferred_effect`. Keep that latent row as the lambda's
-                // signature and constrain it to the continuation row so solving
-                // retains both the continuation identity and local effects.
-                if let Some(resume_effect) = resume_effect {
+                // A `resume` selects the effect row of the captured continuation.
+                // An open local row keeps its latent tail as the lambda's
+                // signature and is constrained to the continuation row so
+                // solving retains both the continuation identity and local
+                // effects.
+                if let Some(resume_effect) = resume_effect
+                    && accumulated.rest(self.db()).is_some()
+                {
                     ctx.constrain_row_eq_at(
                         inferred_effect,
                         resume_effect,

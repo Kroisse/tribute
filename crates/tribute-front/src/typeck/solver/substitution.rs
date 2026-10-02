@@ -1,8 +1,8 @@
 //! Solver substitutions and binder-aware generalization.
 
 use super::{
-    EffectRow, HashMap, RowSubst, SmallVec, Type, TypeKind, TypeParam, TypeSubst, UniVarId,
-    map_effect_row_type_args,
+    EffectRow, EffectVar, HashMap, RowSubst, SmallVec, Type, TypeKind, TypeParam, TypeSubst,
+    UniVarId, map_effect_row_type_args,
 };
 
 impl<'db> TypeSubst<'db> {
@@ -515,6 +515,20 @@ impl<'db> RowSubst<'db> {
     /// Look up a row variable.
     pub fn get(&self, var: u64) -> Option<EffectRow<'db>> {
         self.map.get(&var).copied()
+    }
+
+    /// Make `var` the representative of the bare open row it resolves to,
+    /// so finalized types name `var` instead of the solver's alias. A row
+    /// that resolved to concrete effects or no tail is left unchanged.
+    pub(crate) fn make_representative(&mut self, db: &'db dyn salsa::Database, var: EffectVar) {
+        let resolved = self.apply(db, EffectRow::open(db, var));
+        if let Some(alias) = resolved.rest(db)
+            && alias != var
+            && resolved.effects(db).is_empty()
+        {
+            self.map.remove(&var.id);
+            self.map.insert(alias.id, EffectRow::open(db, var));
+        }
     }
 
     /// Apply substitution to an effect row.

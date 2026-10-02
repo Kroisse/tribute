@@ -8,7 +8,8 @@
 //! The type checker uses a two-level context system:
 //!
 //! - `ModuleTypeEnv`: Module-level type information (function signatures, constructors, type defs).
-//!   Declaration collection initializes it; function checking publishes solved schemes.
+//!   Declaration collection initializes it; function checking only reads it, since each
+//!   module-level function's declared signature is its final scheme.
 //!
 //! - `FunctionInferenceContext`: Per-function type inference state (local variables, constraints,
 //!   type variable counters). Each function gets its own context, ensuring type inference is
@@ -42,12 +43,6 @@ use super::{
     DefinitionIdentity, PreludeExports, StringType, WellKnownType, WellKnownTypeKey, WellKnownTypes,
 };
 use crate::ast::CallingConvention;
-
-struct FunctionRebinding<'db> {
-    scheme: TypeScheme<'db>,
-    types: Vec<Option<usize>>,
-    rows: Vec<Option<usize>>,
-}
 
 /// Result of module type checking.
 pub struct ModuleCheckResult<'db> {
@@ -83,6 +78,28 @@ pub struct ModuleCheckResult<'db> {
     pub well_known_types: WellKnownTypes<'db>,
 }
 
+/// What checking one module-level function produces: its body's node
+/// metadata, keyed by nodes only that function owns. Function checking only
+/// reads the module environment, so the module merges these results in any
+/// order.
+#[derive(Default)]
+pub(crate) struct FunctionCheck<'db> {
+    pub(super) node_types: HashMap<NodeId, Type<'db>>,
+    pub(super) function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
+    pub(super) local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
+    pub(super) handler_operations:
+        HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    pub(super) perform_operations:
+        HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    pub(super) lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    pub(super) exhaustive_cases: Vec<NodeId>,
+    /// Quantifiers owned by generalized local schemes in this function. They
+    /// remain separate from exported function schemes.
+    pub(super) local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
+    /// Case scrutinees whose exhaustiveness diagnostics were already reported.
+    pub(super) exhaustiveness_reported: HashSet<NodeId>,
+}
+
 /// Type checking mode.
 #[derive(Clone, Debug)]
 #[allow(dead_code)]
@@ -107,19 +124,13 @@ pub struct TypeChecker<'db> {
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
     node_types: HashMap<NodeId, Type<'db>>,
-    function_rebindings: HashMap<(FuncDefId<'db>, TypeScheme<'db>), FunctionRebinding<'db>>,
     function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
     local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
     /// Exact handler operation instances collected from each checked function.
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
-    /// Quantifiers owned by generalized local schemes in the function currently
-    /// being finalized. They remain separate from exported function schemes.
-    local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
     exhaustive_cases: Vec<NodeId>,
-    /// Case scrutinees whose exhaustiveness diagnostics were already reported.
-    exhaustiveness_reported: HashSet<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
     effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
     signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
@@ -174,13 +185,10 @@ impl<'db> TypeChecker<'db> {
             node_types: HashMap::new(),
             function_instances: HashMap::new(),
             local_instances: HashMap::new(),
-            function_rebindings: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             lambda_signatures: HashMap::new(),
-            local_generalizations: HashMap::new(),
             exhaustive_cases: Vec::new(),
-            exhaustiveness_reported: HashSet::new(),
             effect_annotation_origins: HashMap::new(),
             signature_row_names: HashMap::new(),
             signature_type_names: HashMap::new(),
@@ -292,58 +300,10 @@ impl<'db> TypeChecker<'db> {
         // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
         let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
         node_types.sort_by_key(|(id, _)| *id);
-        let db = self.env.db();
         let mut function_instances: Vec<_> = self.function_instances.into_iter().collect();
         function_instances.sort_by_key(|(id, _)| *id);
         let mut local_instances: Vec<_> = self.local_instances.into_iter().collect();
         local_instances.sort_by_key(|(id, _)| *id);
-        let mut next_row = function_instances
-            .iter()
-            .flat_map(|(_, instance)| {
-                crate::ast::collect_effect_vars(db, instance.callable)
-                    .into_iter()
-                    .chain(instance.row_arguments.iter().filter_map(|row| row.rest(db)))
-            })
-            .map(|var| var.id)
-            .max()
-            .unwrap_or(0)
-            + 1;
-        for (_, instance) in &mut function_instances {
-            if let Some(FunctionRebinding {
-                scheme,
-                types,
-                rows,
-            }) = self
-                .function_rebindings
-                .get(&(instance.function, instance.scheme))
-            {
-                instance.type_arguments = types
-                    .iter()
-                    .map(|source| {
-                        source
-                            .and_then(|index| instance.type_arguments.get(index).copied())
-                            .unwrap_or_else(|| Type::new(db, crate::ast::TypeKind::Error))
-                    })
-                    .collect();
-                let old_rows = &instance.row_arguments;
-                instance.row_arguments = rows
-                    .iter()
-                    .map(|source| {
-                        source
-                            .and_then(|source| old_rows.get(source).copied())
-                            .unwrap_or_else(|| {
-                                let row = crate::ast::EffectRow::open(
-                                    db,
-                                    crate::ast::EffectVar { id: next_row },
-                                );
-                                next_row += 1;
-                                row
-                            })
-                    })
-                    .collect();
-                instance.scheme = *scheme;
-            }
-        }
         let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
         handler_operations.sort_by_key(|(id, _)| *id);
         let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();
@@ -397,7 +357,11 @@ impl<'db> TypeChecker<'db> {
     /// Type check a declaration.
     fn check_decl(&mut self, decl: &Decl<ResolvedRef<'db>>) -> Decl<TypedRef<'db>> {
         match decl {
-            Decl::Function(func) => Decl::Function(self.check_func_decl(func)),
+            Decl::Function(func) => {
+                let (func, checked) = self.check_func_decl(func);
+                self.merge_function(checked);
+                Decl::Function(func)
+            }
             // These declarations contain no expressions to check.
             Decl::ExternFunction(e) => Decl::ExternFunction(e.clone()),
             Decl::Struct(s) => Decl::Struct(s.clone()),
@@ -406,6 +370,17 @@ impl<'db> TypeChecker<'db> {
             Decl::Use(u) => Decl::Use(u.clone()),
             Decl::Module(m) => Decl::Module(self.check_module_decl(m)),
         }
+    }
+
+    /// Merge one function's results into the module's.
+    fn merge_function(&mut self, checked: FunctionCheck<'db>) {
+        self.node_types.extend(checked.node_types);
+        self.function_instances.extend(checked.function_instances);
+        self.local_instances.extend(checked.local_instances);
+        self.handler_operations.extend(checked.handler_operations);
+        self.perform_operations.extend(checked.perform_operations);
+        self.lambda_signatures.extend(checked.lambda_signatures);
+        self.exhaustive_cases.extend(checked.exhaustive_cases);
     }
 
     /// Type check a module declaration.

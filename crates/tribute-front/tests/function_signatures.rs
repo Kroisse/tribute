@@ -172,3 +172,106 @@ fn root_main_reports_unhandled_and_undeclared_effects(db: &salsa::DatabaseImpl) 
         .is_empty()
     );
 }
+
+const POLYMORPHIC: [&str; 3] = [
+    "fn id(x: a) -> a { x }\n\n",
+    "fn apply(f: fn(a) ->{e} b, x: a) ->{e} b { f(x) }\n\n",
+    "fn twice(n: Nat) -> Nat {\n    apply(fn(m) { id(m) + m }, id(n))\n}\n\n",
+];
+
+/// The checked schemes and every call's instance, keyed by name.
+fn checked_signatures(db: &dyn salsa::Database, text: &str) -> (Vec<String>, Vec<String>) {
+    let source = SourceCst::from_source_str(db, "signatures.trb", text);
+    assert_eq!(errors(db, text), Vec::<String>::new());
+    let output = tribute_front::query::type_check_output(db, source).unwrap();
+    let mut schemes: Vec<_> = output
+        .function_types(db)
+        .iter()
+        .map(|(name, scheme)| format!("{name}: {scheme:?}"))
+        .collect();
+    schemes.sort();
+    let mut instances: Vec<_> = output
+        .expression_types(db)
+        .function_instances
+        .iter()
+        .map(|(_, instance)| {
+            format!(
+                "{} {:?} {:?} {:?} {:?}",
+                instance.function.qualified(db),
+                instance.scheme,
+                instance.type_arguments,
+                instance.row_arguments,
+                instance.callable,
+            )
+        })
+        .collect();
+    instances.sort();
+    (schemes, instances)
+}
+
+/// Each function is checked against declarations alone, so the order of the
+/// declarations changes neither a scheme nor a call's instance.
+#[salsa_test]
+fn declaration_order_does_not_change_schemes_or_instances(db: &salsa::DatabaseImpl) {
+    let main = "fn main() -> Nil {\n    let _ = twice(1)\n}\n";
+    let [id, apply, twice] = POLYMORPHIC;
+    let forward = checked_signatures(db, &format!("{id}{apply}{twice}{main}"));
+    let backward = checked_signatures(db, &format!("{main}{twice}{apply}{id}"));
+    assert_eq!(forward, backward);
+}
+
+/// A call instantiates the callee's declared scheme, which checking the
+/// callee's body never replaces.
+#[salsa_test]
+fn instances_use_the_declared_scheme(db: &salsa::DatabaseImpl) {
+    let text = format!(
+        "{}{}{}fn main() -> Nil {{\n    let _ = twice(1)\n}}\n",
+        POLYMORPHIC[0], POLYMORPHIC[1], POLYMORPHIC[2]
+    );
+    let source = SourceCst::from_source_str(db, "signatures.trb", &text);
+    assert_eq!(errors(db, &text), Vec::<String>::new());
+    let output = tribute_front::query::type_check_output(db, source).unwrap();
+    let instances = &output.expression_types(db).function_instances;
+    assert!(instances.len() >= 4, "{instances:?}");
+    for (_, instance) in instances {
+        let name = instance.function.qualified(db);
+        let (_, scheme) = output
+            .function_types(db)
+            .iter()
+            .find(|(candidate, _)| *candidate == name)
+            .unwrap_or_else(|| panic!("no scheme for {name}"));
+        assert_eq!(instance.scheme, *scheme, "{name}");
+    }
+}
+
+/// A handler's relations over the signature rows only define body-local rows,
+/// so they stay out of the scheme instead of quantifying those rows.
+#[salsa_test]
+fn body_relations_stay_out_of_the_scheme(db: &salsa::DatabaseImpl) {
+    let text = r#"ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn main() -> Nil { }
+"#;
+    let source = SourceCst::from_source_str(db, "signatures.trb", text);
+    assert_eq!(errors(db, text), Vec::<String>::new());
+    let output = tribute_front::query::type_check_output(db, source).unwrap();
+    let (_, scheme) = output
+        .function_types(db)
+        .iter()
+        .find(|(name, _)| *name == trunk_ir::Symbol::new("run_state"))
+        .unwrap();
+    assert_eq!(scheme.effect_params(db).len(), 1);
+    assert!(scheme.row_unions(db).is_empty());
+    assert!(scheme.row_removals(db).is_empty());
+}

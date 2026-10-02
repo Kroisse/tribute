@@ -227,18 +227,51 @@ the accumulated body requirements are the actual side. Ability argument counts
 come from the exact ability declaration, regardless of row merge order.
 
 Unsolved union relations survive substitution and deferred method resolution.
-Generalization retains the relations in the type scheme and quantifies their
-variables together with the body. Instantiation freshens the body and relations
-with one shared mapping. Variables connected to the surrounding environment or
-an unresolved producer are not independently generalized. Handler subtraction
-must not reintroduce its consumed instance into the outward row.
+Generalization of a local scheme retains the relations in the type scheme and
+quantifies their variables together with the body. Instantiation freshens the
+body and relations with one shared mapping. Variables connected to the
+surrounding environment or an unresolved producer are not independently
+generalized. Handler subtraction must not reintroduce its consumed instance into
+the outward row.
 
 Handler의 차집합도 지연 가능한 semantic 제약이다. `RowRemoval(source, removed,
 result)`는 `result = source − removed`를 뜻한다. 제거 대상은 닫힌 exact ability
 instance 집합이며, source의 열린 tail에서 나중에 드러나는 label에도 적용한다.
-타입 인자가 아직 미정이라 제거 여부가 모호하면 관계를 남긴다. 일반화와
-인스턴스화는 이 관계를 합집합 관계와 함께 보존한다. 결과가 비어 있다는 이유로
-source 자체를 빈 row로 닫아서는 안 된다.
+타입 인자가 아직 미정이라 제거 여부가 모호하면 관계를 남긴다. 지역 스킴의
+일반화와 인스턴스화는 이 관계를 합집합 관계와 함께 보존한다. 결과가 비어 있다는
+이유로 source 자체를 빈 row로 닫아서는 안 된다.
+
+### 모듈 수준 함수의 관계
+
+모듈 수준 함수의 스킴은 선언 시그니처이며, annotation이 만든 합집합 관계만
+담는다. 본문 검사가 남긴 관계는 스킴에 옮기지 않는다. 본문을 검사한 뒤
+시그니처의 row 변수를 rigid로 두고 남은 관계를 해소한다:
+
+- 원천 row가 명시한 label만 제거하는 차집합의 결과는 원천의 tail을 그대로
+  남긴다. 한 row는 같은 label을 한 번만 담으므로 tail에는 제거한 label이 없다.
+- 선언된 합집합이 덮는 tail들의 합집합은 그 합집합의 결과이다. 덮는다는 것은
+  모든 tail이 선언된 결과 또는 원천이고, 결과가 포함되거나 원천이 모두
+  포함된다는 뜻이다.
+
+이렇게 해소된 관계는 본문 지역 row만 정한다. 해소되지 않은 채 시그니처 row를
+제약하는 관계는 모든 호출자를 제약하므로 오류이다. 시그니처가 그 제약을 직접
+적어야 한다:
+
+```rust
+// Error: 본문이 Ping만 처리하므로 `e`가 Ping 외의 effect를 담을 수 없게 된다
+fn handled(comp: fn() ->{e} Nil) ->{} Nil {
+    handle comp() { do v { v } op Ping::ping() { resume Nil } }
+}
+
+// OK: 처리하는 effect를 row에 적는다
+fn handled(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
+    handle comp() { do v { v } op Ping::ping() { resume Nil } }
+}
+```
+
+Row 단일화는 시그니처 row 변수를 별칭의 대표로 유지한다. 열린 두 row를 맞출 때
+한쪽이 시그니처 row이고 다른 쪽이 label을 더하지 않으면, 새 변수를 만들지 않고
+다른 쪽을 시그니처 row에 묶는다.
 
 Effect 집합 equality는 양방향 후보 검사를 끝낸 뒤에 확정된 타입 치환을 적용한다.
 한쪽 순회에서 먼저 찾은 대응의 치환으로 다른 쪽의 모호성을 없애서는 안 되며,
@@ -395,9 +428,11 @@ fresh α, β, e
 
 람다 본문을 검사할 때의 누적기는 항상 닫힌 빈 row `{}`에서 시작한다. 본문이
 실제로 요구한 잔여 row가 이미 열려 있으면 그 row를 그대로 callable type에
-기록한다. 잔여 row가 닫혀 있으면 본문에서 확정한 concrete effect만 보존하고,
-람다가 검사된 문맥의 callable
-signature가 제공한 open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
+기록한다. 본문이 `resume`을 쓰고 잔여 row가 닫혀 있으면, 람다의 row는 그
+label들과 continuation row의 합집합이다. Continuation을 재개하면 그 row의
+effect를 수행하기 때문이다. 그 밖에 잔여 row가 닫혀 있으면 본문에서 확정한
+concrete effect만 보존하고, 람다가 검사된 문맥의 callable signature가 제공한
+open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
 받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
@@ -709,7 +744,8 @@ fn example() -> Int {
 **추론 범위**: 타입 추론은 **함수 본문 내부에서만** 동작한다. 각 함수는
 독립적으로 타입 체크되며, 함수 간에 타입 변수가 공유되지 않는다. 호출하는 쪽은
 피호출 함수의 선언 시그니처만 사용하므로, 검사 순서와 자기 재귀는 결과에 영향을
-주지 않는다.
+주지 않는다. 함수 검사는 선언 수집이 만든 모듈 환경을 읽기만 하고, 그 함수의
+본문 metadata만 결과로 낸다.
 
 ### Effect Annotation 규칙
 
