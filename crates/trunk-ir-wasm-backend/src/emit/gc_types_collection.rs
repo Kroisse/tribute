@@ -10,9 +10,8 @@ use tracing::debug;
 use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
-use trunk_ir::dialect::adt;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::{DialectOp, DialectType};
+use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::types::TypeData;
 use wasm_encoder::{FieldType, StorageType, ValType};
@@ -110,23 +109,24 @@ fn register_type(
 /// The runtime layout identifier selects the layout; it does not validate fields.
 fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()> {
     let invalid = || CompilationError::type_error("Marker declaration differs from builtin layout");
-    let Some(marker) = adt::Struct::from_type_ref(ctx, ty) else {
+    if !helpers::is_type(ctx, ty, "adt", "struct") {
         return Err(invalid());
-    };
+    }
+    let marker = ctx.get_type(ty);
     let GcTypeDef::Struct(expected) = &gc_types::builtin_types()[MARKER_IDX as usize] else {
         unreachable!("Marker is a builtin struct")
     };
-    if marker.field_count(ctx) != expected.len() {
+    if marker.params.len() != expected.len() {
         return Err(invalid());
     }
-    for (((name, ty), expected), role) in marker.fields(ctx).zip(expected).zip([
+    for (((ty, attrs), expected), role) in marker.params_with_attrs().zip(expected).zip([
         "ability_id",
         "prompt_tag",
         "tr_dispatch_fn",
         "handler_dispatch",
     ]) {
         let field_type = ctx.get_type(ty);
-        if name != Symbol::new(role)
+        if attrs.get_str(ctx, "name") != Some(role)
             || !field_type.params.is_empty()
             || !field_type.attrs.is_empty()
             || !(helpers::is_type(ctx, ty, "core", "i32")
