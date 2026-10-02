@@ -128,10 +128,6 @@ pub extern "C" fn __tribute_next_tag() -> i32 {
 // Debug I/O (temporary — for e2e test verification)
 // =============================================================================
 
-unsafe extern "C" {
-    fn write(fd: i32, buf: *const core::ffi::c_void, count: usize) -> isize;
-}
-
 /// Print a signed 32-bit integer to stdout, followed by a newline.
 ///
 /// Matches Tribute's `Int` type which maps to `core.i32` in TrunkIR.
@@ -142,8 +138,8 @@ pub extern "C" fn __tribute_print_int(value: i32) {
     let mut buf = itoa::Buffer::new();
     let s = buf.format(value);
     unsafe {
-        write(1, s.as_ptr().cast(), s.len());
-        write(1, b"\n".as_ptr().cast(), 1);
+        libc::write(libc::STDOUT_FILENO, s.as_ptr().cast(), s.len());
+        libc::write(libc::STDOUT_FILENO, b"\n".as_ptr().cast(), 1);
     }
 }
 
@@ -157,8 +153,8 @@ pub extern "C" fn __tribute_print_nat(value: u32) {
     let mut buf = itoa::Buffer::new();
     let s = buf.format(value);
     unsafe {
-        write(1, s.as_ptr().cast(), s.len());
-        write(1, b"\n".as_ptr().cast(), 1);
+        libc::write(libc::STDOUT_FILENO, s.as_ptr().cast(), s.len());
+        libc::write(libc::STDOUT_FILENO, b"\n".as_ptr().cast(), 1);
     }
 }
 
@@ -172,8 +168,8 @@ pub extern "C" fn __tribute_print_float(value: f64) {
     let mut buf = zmij::Buffer::new();
     let s = buf.format(value);
     unsafe {
-        write(1, s.as_ptr().cast(), s.len());
-        write(1, b"\n".as_ptr().cast(), 1);
+        libc::write(libc::STDOUT_FILENO, s.as_ptr().cast(), s.len());
+        libc::write(libc::STDOUT_FILENO, b"\n".as_ptr().cast(), 1);
     }
 }
 
@@ -193,7 +189,13 @@ pub struct TributeBytes {
 
 fn write_stdout_all(bytes: &[u8]) {
     let _ = write_all_with(bytes, |remaining| {
-        let written = unsafe { write(1, remaining.as_ptr().cast(), remaining.len()) };
+        let written = unsafe {
+            libc::write(
+                libc::STDOUT_FILENO,
+                remaining.as_ptr().cast(),
+                remaining.len(),
+            )
+        };
         if written >= 0 {
             Ok(written as usize)
         } else {
