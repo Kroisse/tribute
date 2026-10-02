@@ -539,7 +539,9 @@ mod tests {
         // Evidence keeps its layout identifier instead of erasing to arrayref.
         let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
 
-        assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[1]), evidence);
+        // The descriptor field precedes the source fields.
+        assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[2]), evidence);
+        assert_eq!(struct_get.field_idx(&ctx), 2);
         assert_eq!(struct_get.result_ty(&ctx), evidence);
         assert_eq!(
             ctx.get_type(struct_get.r#type(&ctx))
