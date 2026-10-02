@@ -1380,8 +1380,8 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 `adt.struct`는 이름 있는 nominal struct layout이다. 이름과 필드 이름을 항상 가지며
 전용 textual 문법을 쓴다. 이름은 식별자(`[A-Za-z_][A-Za-z0-9_]*`)면 그대로 쓰고,
 아니면 따옴표 문자열로 쓴다(`adt.struct<"Nested::Closure"(…)>`, `"0": core.i32`).
-Struct·enum 이름과 필드·variant 이름은 타입 이름공간의 이름이며 symbol table의
-정의가 아니므로 `@`를 붙이지 않는다.
+Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol table의 정의가
+아니므로 `@`를 붙이지 않는다.
 
 ```text
 adt.struct<Point(x: core.i32, y: core.i32)>
@@ -1431,12 +1431,8 @@ descriptor로만 구별된다.
   [`layout`](#runtime-layout-식별자)으로 식별한다.
 - 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
   reference로 끊겨 있다.
-- `adt.enum`은 type 속성 `name`(문자열)과 `variants` 속성으로 variant별 필드를
-  표현한다. `variants`는 `[["Some", [T]], ["None", []]]`처럼 variant 이름(문자열)과
-  필드 타입 list의 쌍을 선언 순서로 담는다. `adt.variant_*` operation의 `tag`와
-  Wasm variant 타입의 `variant_tag`는 이 variant 이름 문자열이다. `adt.typeref`의
-  `name`(문자열)은 같은 이름의 layout을 가리키는 타입 이름공간의 참조다. 저수준
-  struct를 이용한 enum 표현은 별도로 정한다.
+- `adt.enum`은 `variants` 속성으로 variant별 필드를 표현한다. 저수준 struct를 이용한
+  enum 표현은 별도로 정한다.
 
 ### `func.func_sig` function type
 
