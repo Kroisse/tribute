@@ -102,11 +102,8 @@ unsafe fn quarantine_push(base: *mut u8, total_size: usize) {
 fn write_stderr(msg: &[u8]) {
     #[cfg(unix)]
     {
-        unsafe extern "C" {
-            fn write(fd: i32, buf: *const u8, count: usize) -> isize;
-        }
         unsafe {
-            write(2, msg.as_ptr(), msg.len());
+            libc::write(libc::STDERR_FILENO, msg.as_ptr().cast(), msg.len());
         }
     }
     #[cfg(windows)]

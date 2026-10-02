@@ -52,7 +52,7 @@ jobs:
         uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
           # Pinned so compiler upgrades show up only in the PR that bumps it.
-          toolchain: 1.98.1
+          toolchain: 1.99.0
           cache: true
           # Only main saves caches; PRs restore them without evicting main's.
           cache-save-if: ${{ github.ref == 'refs/heads/main' && matrix.mode == 'simulation' }}

@@ -4,7 +4,10 @@
 //! Functions are keyed by root-qualified name. Reachability roots include:
 //! - The root module's `main` or `_start`
 //! - Functions referenced by `wasm.export_func`
-//! - Functions with `abi` attribute (externally callable)
+//! - Function definitions with an `abi` attribute (externally callable)
+//!
+//! A bodyless `abi` declaration is an import, not a root: it stays only while
+//! something reachable references it.
 //! - Custom entry points from configuration, by qualified name
 //!
 //! Follows the [`CallGraph`] edges of `func.call`, `func.tail_call`, and
@@ -146,12 +149,12 @@ fn run(
 }
 
 /// Whether `name` is a reachability root: the root `main` or `_start`, a
-/// function with an `abi` attribute (externally callable), or a configured
-/// extra entry point.
+/// function definition with an `abi` attribute (externally callable), or a
+/// configured extra entry point.
 fn is_root(ctx: &IrContext, name: Symbol, op: OpRef, config: &GlobalDceConfig) -> bool {
     name == Symbol::new("main")
         || name == Symbol::new("_start")
-        || ctx.op(op).attributes.contains_key("abi")
+        || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
         || name.with_str(|name| config.extra_entry_points.iter().any(|extra| extra == name))
 }
 
@@ -479,6 +482,27 @@ mod tests {
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 0);
+        assert_eq!(count_funcs(&ctx, module), 2);
+    }
+
+    #[test]
+    fn unreferenced_abi_declarations_are_removed() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @used() -> core.i32 attributes {abi = "C"}
+  func.func @unused() -> core.i32 attributes {abi = "C"}
+  func.func @exported() -> core.i32 attributes {abi = "C"} {
+    %value = func.call {callee = @used} : core.i32
+    func.return %value
+  }
+}"#,
+        );
+
+        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
+
+        assert_eq!(result.removed_functions, [Symbol::new("unused")]);
         assert_eq!(count_funcs(&ctx, module), 2);
     }
 
