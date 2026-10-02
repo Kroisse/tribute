@@ -103,10 +103,10 @@ fn write_stderr(msg: &[u8]) {
     #[cfg(unix)]
     {
         unsafe extern "C" {
-            fn write(fd: i32, buf: *const u8, count: usize) -> isize;
+            fn write(fd: i32, buf: *const core::ffi::c_void, count: usize) -> isize;
         }
         unsafe {
-            write(2, msg.as_ptr(), msg.len());
+            write(2, msg.as_ptr().cast(), msg.len());
         }
     }
     #[cfg(windows)]
