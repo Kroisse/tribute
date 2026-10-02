@@ -239,6 +239,14 @@ impl<'db> ModuleEnv<'db> {
         self.namespaces.contains_key(&namespace)
     }
 
+    /// Check whether the package declares `name` at its root: an item, a
+    /// namespace, or a module, which may define no namespace entries.
+    pub fn declares(&self, name: Symbol) -> bool {
+        self.has_definition(name)
+            || self.has_namespace(name)
+            || matches!(self.imports.get(&name), Some(Binding::Module { path }) if path[..] == [name])
+    }
+
     /// Iterate over all imports.
     pub fn iter_imports(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.imports.iter().map(|(k, v)| (*k, v))

@@ -79,3 +79,36 @@ fn main() -> Nil {
     );
     assert_eq!(errors, Vec::<String>::new());
 }
+
+/// An empty package-root module hides the library item of the same name,
+/// although it defines no namespace entries.
+#[salsa_test]
+fn empty_root_module_shadows_a_library_name(db: &salsa::DatabaseImpl) {
+    let call = |annotation: &str| {
+        format!(
+            "mod Option {{}}\n\nfn f(o: {annotation}) -> Nat {{ 0 }}\n\n\
+             fn main() -> Nil {{\n    let _ = f(Some(1))\n}}\n"
+        )
+    };
+    assert_eq!(
+        errors(db, &call("Option(Nat)")),
+        ["type error at call site in function 'main': \
+             expected `Option(Nat)`, found `std::Option(Nat)`"]
+    );
+    assert_eq!(
+        errors(db, &call("Option::Option(Nat)")),
+        ["type error at call site in function 'main': \
+             expected `Option::Option(Nat)`, found `std::Option(Nat)`"]
+    );
+    assert_eq!(
+        errors(
+            db,
+            "mod Option {}\n\nfn main() -> Nil {\n    let _ = Option::Some(1)\n}\n"
+        ),
+        ["unresolved name `Option::Some`; did you mean `Some`?"]
+    );
+    assert_eq!(
+        errors(db, "mod Option {}\n\nuse Option::Some\n"),
+        ["unresolved import `Option::Some`"]
+    );
+}

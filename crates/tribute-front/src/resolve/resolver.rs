@@ -304,7 +304,7 @@ impl<'db> Resolver<'db> {
         let (first, rest) = spelling.split_once("::").unwrap_or((&spelling, ""));
         let first = Symbol::from_dynamic(first);
         if self.module_path.is_empty() {
-            if self.env.has_namespace(namespace) || self.env.has_definition(first) {
+            if self.env.has_namespace(namespace) || self.env.declares(first) {
                 return Some(namespace);
             }
         } else {
@@ -397,7 +397,7 @@ impl<'db> Resolver<'db> {
                         || TypeKind::from_primitive_name(spelling).is_some()
                 });
                 if !local
-                    && !self.env.has_definition(*name)
+                    && !self.env.declares(*name)
                     && self.env.get_use_path(*name).is_none()
                     && let Some(path) = self.env.library_path(*name)
                 {
@@ -422,8 +422,7 @@ impl<'db> Resolver<'db> {
                     }
                     Ok(None) if self.module_path.is_empty() => {
                         let first = segments[0];
-                        if !self.env.has_namespace(first)
-                            && !self.env.has_definition(first)
+                        if !self.env.declares(first)
                             && let Some(path) = self.library_namespace_path(segments)
                         {
                             *segments = path;
@@ -924,6 +923,9 @@ impl<'db> Resolver<'db> {
         if self.module_path.is_empty() {
             if names(path) {
                 return Some(path.to_vec());
+            }
+            if self.env.declares(*path.first()?) {
+                return None;
             }
             let library = self.library_namespace_path(path)?;
             return names(&library).then_some(library);

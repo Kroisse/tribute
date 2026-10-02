@@ -91,8 +91,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         // unless the package declares the first segment itself.
         let path = match path.split_first() {
             Some((first, rest))
-                if !env.has_namespace(*first)
-                    && !env.has_definition(*first)
+                if !env.declares(*first)
                     && let Some(library) = env.library_namespace(*first) =>
             {
                 library
