@@ -41,7 +41,7 @@ pub(crate) struct ImportFuncDef {
 
 #[derive(Debug)]
 pub(crate) struct ExportDef {
-    pub name: String,
+    pub name: StringRef,
     pub kind: ExportKind,
     pub target: ExportTarget,
 }
@@ -156,7 +156,7 @@ pub(crate) fn extract_export_func(
     ctx: &IrContext,
     export_op: wasm_dialect::ExportFunc,
 ) -> CompilationResult<ExportDef> {
-    let name = export_op.name(ctx).to_owned();
+    let name = export_op.name_ref(ctx);
     let func = export_op.func(ctx);
     Ok(ExportDef {
         name,
@@ -169,7 +169,7 @@ pub(crate) fn extract_export_memory(
     ctx: &IrContext,
     export_op: wasm_dialect::ExportMemory,
 ) -> CompilationResult<ExportDef> {
-    let name = export_op.name(ctx).to_owned();
+    let name = export_op.name_ref(ctx);
     let index = export_op.index(ctx);
     Ok(ExportDef {
         name,

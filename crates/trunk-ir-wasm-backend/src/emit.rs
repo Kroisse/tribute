@@ -432,17 +432,18 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
 
     debug!("Processing {} exports...", module_info.exports.len());
     for export in module_info.exports.iter() {
-        debug!("  export: {:?} -> {:?}", export.name, export.target);
+        let name = ctx.str(export.name);
+        debug!("  export: {name:?} -> {:?}", export.target);
         match &export.target {
             ExportTarget::Func(sym) => {
                 let Some(index) = module_info.func_indices.get(sym) else {
                     debug!("  function not found: {:?}", sym);
                     return Err(CompilationError::function_not_found(&sym.to_string()));
                 };
-                export_section.export(export.name.as_str(), export.kind, *index);
+                export_section.export(name, export.kind, *index);
             }
             ExportTarget::Memory(index) => {
-                export_section.export(export.name.as_str(), export.kind, *index);
+                export_section.export(name, export.kind, *index);
             }
         }
     }
