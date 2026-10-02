@@ -958,9 +958,10 @@ fn lower_extern<'db>(
     let name = ctx.qualify_name(decl.name);
     let function = tribute_control::func_declaration(ir, location, name, callable);
     if let Some(identity) = ctx.compiler_intrinsic(decl.id) {
+        let identity_text = ir.intern_symbol_text(identity);
         ir.op_mut(function.op_ref()).attributes.insert(
             Symbol::new(tribute_control::COMPILER_INTRINSIC_ATTR),
-            Attribute::Symbol(identity),
+            Attribute::String(identity_text),
         );
         declarations
             .compiler_intrinsics

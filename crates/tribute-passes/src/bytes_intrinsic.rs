@@ -55,8 +55,8 @@ pub(crate) fn lower_get_or_panic(
         .copied()
         .filter(|&op| {
             func::Func::matches(ctx, op)
-                && ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
-                    == Some(Symbol::new(BYTES_GET_OR_PANIC))
+                && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
+                    == Some(BYTES_GET_OR_PANIC)
         })
         .collect();
     if declarations.is_empty() {
@@ -177,7 +177,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i64) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @read(%bytes: core.bytes, %index: core.i64) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "__bytes_get_or_panic"}
 }"#,
         );
 
@@ -192,7 +192,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
     %byte = func.call %bytes, %index {callee = @read} : core.i32
     %f = func.constant {func_ref = @read} : func.func_sig<(core.bytes, core.i32) -> core.i32>
@@ -214,7 +214,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
     %ok = func.call %bytes, %index {callee = @read} : core.i32
     %bad = func.call %bytes {callee = @read} : core.i32

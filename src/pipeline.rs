@@ -3156,7 +3156,7 @@ fn main() -> Nil {
             let logical = trunk_ir::printer::print_module(&frontend.context, frontend.module.op());
             assert!(
                 logical.contains(
-                    r#"tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic""#
+                    r#"tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic""#
                 ),
                 "the concrete declaration must carry its exact intrinsic identity:\n{logical}"
             );
@@ -3793,7 +3793,10 @@ mod Nested {
                         ctx.op(op).attributes.get_str(&ctx, "abi"),
                         Some("intrinsic")
                     );
-                    ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
+                    ctx.op(op)
+                        .attributes
+                        .get_str(&ctx, COMPILER_INTRINSIC_ATTR)
+                        .map(str::to_owned)
                 })
             })
         };
@@ -3805,7 +3808,7 @@ mod Nested {
         );
         assert_eq!(
             identity("__bytes_get_or_panic"),
-            Some(Some(trunk_ir::Symbol::new("__bytes_get_or_panic"))),
+            Some(Some("__bytes_get_or_panic".to_owned())),
             "bytes lowering consumes its identity inside the target boundary"
         );
     }

@@ -382,10 +382,10 @@ pub fn func_declaration(
 
 impl Func {
     /// Return the optional semantic identity attached by the trusted frontend registry.
-    pub fn compiler_intrinsic_identity(&self, ctx: &IrContext) -> Option<Symbol> {
+    pub fn compiler_intrinsic_identity<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
         ctx.op(self.op_ref())
             .attributes
-            .get_symbol(COMPILER_INTRINSIC_ATTR)
+            .get_str(ctx, COMPILER_INTRINSIC_ATTR)
     }
 }
 
@@ -4905,7 +4905,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
-    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"}
 }"#,
         );
         let function = control_op(&ctx, module, "func");
@@ -4952,7 +4952,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   tribute_control.func @read(%value: core.i32) -> core.i32 convention(evidence_direct)
-    attributes {tribute.compiler_intrinsic = @read}
+    attributes {tribute.compiler_intrinsic = "read"}
 }"#,
         );
         let function = control_op(&ctx, module, "func");
@@ -4976,7 +4976,7 @@ mod tests {
             r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {tribute.calling_convention = 0}>
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
-    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"}
   tribute_control.func @caller(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
     %callee = tribute_control.func_ref {func_ref = @"Nat::+"} : !F
     %result = tribute_control.call_indirect %callee, %left, %right : core.i32
@@ -5004,9 +5004,9 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   tribute_control.func @"Int::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
-    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Int::+"}
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Int::+"}
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
-    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"} {
     tribute_control.return %left
   }
 }"#,

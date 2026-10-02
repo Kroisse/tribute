@@ -99,7 +99,7 @@ mod tests {
     fn verified_identity_selects_calls_and_consumes_the_declaration() {
         let printed = lower_text(
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @__bytes_get_or_panic}
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
     %byte = func.call %bytes, %index {callee = @read} : core.i32
     func.return %byte
