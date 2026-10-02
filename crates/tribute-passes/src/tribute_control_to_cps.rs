@@ -29,7 +29,7 @@ use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
-use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 use trunk_ir::{OperationDataBuilder, Symbol};
 
 pub const PRE_CPS_BOUNDARY: &str = "tribute-control-pre-cps";
@@ -701,8 +701,8 @@ struct HandlerArmInfo {
     op: OpRef,
     value: ValueRef,
     ability_ref: TypeRef,
-    op_name: Symbol,
-    kind: Symbol,
+    op_name: StringRef,
+    general: bool,
     params: Vec<TypeRef>,
     has_resume_token: bool,
 }
@@ -2475,7 +2475,7 @@ impl<'a> Converter<'a> {
         )?;
         self.ctx.push_op(block, foreign_op);
         let switch_block = self.make_block(location, &[]);
-        for arm in arms.iter().filter(|arm| arm.kind == Symbol::new("op")) {
+        for arm in arms.iter().filter(|arm| arm.general) {
             let case_block = self.make_block(location, &[]);
             let same_prompt = arith::Cmpi::operands(args[2], local_prompt)
                 .predicate("eq")
@@ -2532,8 +2532,8 @@ impl<'a> Converter<'a> {
             self.ctx.push_op(case_block, choose.op_ref());
             let case_region = self.single_block_region(location, case_block);
             let op_index = ability::compute_op_idx(
-                self.ctx.get_type(arm.ability_ref).attrs.get_symbol("name"),
-                Some(arm.op_name),
+                ability::ability_name(self.ctx, arm.ability_ref),
+                Some(self.ctx.str(arm.op_name)),
             );
             let case = scf::Case::operands()
                 .value(Attribute::Int(op_index as i128))
@@ -2762,7 +2762,7 @@ impl<'a> Converter<'a> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol("op_name")
+            .get_string_ref("op_name")
             .expect("pre-CPS validation checked perform operation");
         let evidence = self.current_evidence(source, flow)?;
         let frame = flow.exit_k.ok_or_else(|| {
@@ -2855,9 +2855,9 @@ impl<'a> Converter<'a> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol("op_name")
+            .get_string_ref("op_name")
             .unwrap();
-        let kind = self.ctx.op(source).attributes.get_symbol("kind").unwrap();
+        let general = self.ctx.op(source).attributes.get_str(self.ctx, "kind") == Some("op");
         let operation_result = self
             .ctx
             .op(source)
@@ -2893,10 +2893,10 @@ impl<'a> Converter<'a> {
             mapping.insert(old, new);
         }
         let evidence = self.ctx.block_args(block)[0];
-        let convention = if kind == Symbol::new("fn") {
-            CallingConvention::EvidenceDirect
-        } else {
+        let convention = if general {
             CallingConvention::Cps
+        } else {
+            CallingConvention::EvidenceDirect
         };
         let flow = Flow {
             convention,
@@ -2934,7 +2934,7 @@ impl<'a> Converter<'a> {
             value: lambda.result(self.ctx),
             ability_ref,
             op_name,
-            kind,
+            general,
             params: converted_args,
             has_resume_token,
         })
@@ -3010,10 +3010,7 @@ impl<'a> Converter<'a> {
         };
 
         let switch_block = self.make_block(location, &[]);
-        let selected: Vec<_> = arms
-            .iter()
-            .filter(|arm| (arm.kind == Symbol::new("op")) == general)
-            .collect();
+        let selected: Vec<_> = arms.iter().filter(|arm| arm.general == general).collect();
         for arm in selected {
             let case_block = self.make_block(location, &[]);
             let mut call_args = vec![evidence];
@@ -3059,8 +3056,8 @@ impl<'a> Converter<'a> {
             }
             let case_region = self.single_block_region(location, case_block);
             let op_index = ability::compute_op_idx(
-                self.ctx.get_type(arm.ability_ref).attrs.get_symbol("name"),
-                Some(arm.op_name),
+                ability::ability_name(self.ctx, arm.ability_ref),
+                Some(self.ctx.str(arm.op_name)),
             );
             let case = scf::Case::operands()
                 .value(Attribute::Int(op_index as i128))
@@ -3498,9 +3495,9 @@ impl<'a> Converter<'a> {
                         .ctx
                         .op(source)
                         .attributes
-                        .get_symbol("operation_kind")
+                        .get_str(self.ctx, "operation_kind")
                         .expect("pre-CPS validation checked operation kind");
-                    if kind == Symbol::new("fn") {
+                    if kind == "fn" {
                         let evidence = self.current_evidence(source, flow)?;
                         let _ = evidence;
                         let args: Vec<_> = self
@@ -3520,7 +3517,7 @@ impl<'a> Converter<'a> {
                             .ctx
                             .op(source)
                             .attributes
-                            .get_symbol("op_name")
+                            .get_string_ref("op_name")
                             .expect("pre-CPS validation checked perform operation");
                         let call = ability::Call::operands(args)
                             .ability_ref(ability_ref)
@@ -3963,7 +3960,7 @@ mod tests {
     }
 
     fn operation_declarations(
-        ctx: &IrContext,
+        ctx: &mut IrContext,
         operations: &[(&str, &str)],
     ) -> Vec<tribute_control::OperationDeclaration> {
         let i32_type = ctx
@@ -3983,15 +3980,14 @@ mod tests {
                     .find_map(|(ty, data)| {
                         (data.dialect == Symbol::new("core")
                             && data.name == Symbol::new("ability_ref")
-                            && data.attrs.get_symbol("name")
-                                == Some(Symbol::from_dynamic(ability_name)))
+                            && data.attrs.get_str(ctx, "name") == Some(ability_name))
                         .then_some(ty)
                     })
                     .unwrap_or_else(|| panic!("test module declares {ability_name}"));
                 tribute_control::OperationDeclaration::new(
                     ability_ref,
-                    Symbol::from_dynamic(op_name),
-                    Symbol::new("op"),
+                    ctx.intern_str(op_name),
+                    ctx.intern_str("op"),
                     [i32_type],
                     i32_type,
                 )
@@ -4978,7 +4974,7 @@ mod tests {
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
   !general = closure.closure<func.func_sig<(!evidence, tribute_rt.anyref, core.i32, tribute_rt.anyref) -> core.never>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = @State}>]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -5003,7 +4999,7 @@ mod tests {
     %general = closure.lambda(%inner: !evidence) -> core.never {tribute.calling_convention = 2} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = @State}>]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -5028,7 +5024,7 @@ mod tests {
     %general = closure.lambda(%inner: !evidence, %continuation: tribute_rt.anyref, %op_idx: core.i32, %payload: tribute_rt.anyref) -> core.never {tribute.calling_convention = 1} {
       func.unreachable
     }
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = @State}>]} {
+    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -5066,13 +5062,13 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -5106,8 +5102,8 @@ mod tests {
             .unwrap();
         let declarations = [tribute_control::OperationDeclaration::new(
             ability_ref.unwrap(),
-            Symbol::new("get"),
-            Symbol::new("op"),
+            ctx.intern_str("get"),
+            ctx.intern_str("op"),
             vec![i32_type],
             i32_type,
         )];
@@ -5213,18 +5209,18 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^get(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
       }
-      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @set, operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "set", operation_result_type = core.i32} {
         ^set(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %fallback = arith.const {value = 9} : core.i32
           tribute_control.yield %fallback
@@ -5253,15 +5249,15 @@ mod tests {
         let declarations = [
             tribute_control::OperationDeclaration::new(
                 ability_ref,
-                Symbol::new("get"),
-                Symbol::new("op"),
+                ctx.intern_str("get"),
+                ctx.intern_str("op"),
                 [i32_type],
                 i32_type,
             ),
             tribute_control::OperationDeclaration::new(
                 ability_ref,
-                Symbol::new("set"),
-                Symbol::new("op"),
+                ctx.intern_str("set"),
+                ctx.intern_str("op"),
                 [i32_type],
                 i32_type,
             ),
@@ -5336,7 +5332,7 @@ mod tests {
   tribute_control.func @branch(%input: core.i32) -> core.i32 convention(cps) {
     %condition = arith.const {value = true} : core.i1
     %selected = scf.if %condition : core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield %performed
     } {
       %fallback = arith.const {value = 7} : core.i32
@@ -5366,8 +5362,8 @@ mod tests {
             .unwrap();
         let declarations = [tribute_control::OperationDeclaration::new(
             ability_ref,
-            Symbol::new("get"),
-            Symbol::new("op"),
+            ctx.intern_str("get"),
+            ctx.intern_str("op"),
             vec![i32_type],
             i32_type,
         )];
@@ -5405,10 +5401,10 @@ mod tests {
       tribute_control.return %selected
     }
     scf.if %condition {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield
     } {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @set, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "set", operation_kind = "op"} : core.i32
       scf.yield
     }
     tribute_control.return %input
@@ -5434,15 +5430,15 @@ mod tests {
         let declarations = [
             tribute_control::OperationDeclaration::new(
                 ability_ref,
-                Symbol::new("get"),
-                Symbol::new("op"),
+                ctx.intern_str("get"),
+                ctx.intern_str("op"),
                 [i32_type],
                 i32_type,
             ),
             tribute_control::OperationDeclaration::new(
                 ability_ref,
-                Symbol::new("set"),
-                Symbol::new("op"),
+                ctx.intern_str("set"),
+                ctx.intern_str("op"),
                 [i32_type],
                 i32_type,
             ),
@@ -5582,7 +5578,7 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @broken(%input: core.i32, %condition: core.i1) -> core.i32 convention(cps) {
     %left, %right = scf.if %condition : core.i32, core.i32 {
-      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
       scf.yield %performed, %input
     } {
       scf.yield %input, %input
@@ -5610,8 +5606,8 @@ mod tests {
             .unwrap();
         let declarations = [tribute_control::OperationDeclaration::new(
             ability_ref,
-            Symbol::new("get"),
-            Symbol::new("op"),
+            ctx.intern_str("get"),
+            ctx.intern_str("op"),
             [i32_type],
             i32_type,
         )];
@@ -5961,25 +5957,25 @@ mod tests {
   tribute_control.func @nested_same(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
         tribute_control.yield %performed
       } {
         ^inner_completion(%value: core.i32):
           tribute_control.yield %value
       } {
-        tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+        tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
           ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.yield %resumed
         }
       }
-      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^outer_completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -5989,7 +5985,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        let declarations = operation_declarations(&ctx, &[("State", "get")]);
+        let declarations = operation_declarations(&mut ctx, &[("State", "get")]);
         tribute_control_to_cps(
             &mut ctx,
             module,
@@ -6007,25 +6003,25 @@ mod tests {
   tribute_control.func @nested_cross(%input: core.i32) -> core.i32 convention(cps) {
     %outer = tribute_control.handle : core.i32 {
       %inner = tribute_control.handle : core.i32 {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @Console}>, op_name = @read, operation_kind = @op} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "Console"}>, op_name = "read", operation_kind = "op"} : core.i32
         tribute_control.yield %performed
       } {
         ^inner_completion(%value: core.i32):
           tribute_control.yield %value
       } {
-        tribute_control.handler {ability_ref = core.ability_ref<{name = @Console}>, kind = @op, op_name = @read, operation_result_type = core.i32} {
+        tribute_control.handler {ability_ref = core.ability_ref<{name = "Console"}>, kind = "op", op_name = "read", operation_result_type = core.i32} {
           ^inner_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
             %resumed = tribute_control.resume %token, %argument : core.i32
             tribute_control.yield %resumed
         }
       }
-      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+      %performed = tribute_control.perform %inner {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
       tribute_control.yield %performed
     } {
       ^outer_completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = @State}>, kind = @op, op_name = @get, operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = "State"}>, kind = "op", op_name = "get", operation_result_type = core.i32} {
         ^outer_arm(%argument: core.i32, %token: tribute_control.resume_token<core.i32, core.i32>):
           %resumed = tribute_control.resume %token, %argument : core.i32
           tribute_control.yield %resumed
@@ -6035,7 +6031,8 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        let declarations = operation_declarations(&ctx, &[("State", "get"), ("Console", "read")]);
+        let declarations =
+            operation_declarations(&mut ctx, &[("State", "get"), ("Console", "read")]);
         tribute_control_to_cps(
             &mut ctx,
             module,
@@ -6051,14 +6048,14 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @abortable(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %never = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @Abort}>, op_name = @abort, operation_kind = @op} : core.never
+      %never = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "Abort"}>, op_name = "abort", operation_kind = "op"} : core.never
       %unreachable_suffix = arith.const {value = 99} : core.i32
       tribute_control.yield %unreachable_suffix
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = @Abort}>, kind = @op, op_name = @abort, operation_result_type = core.never} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = "Abort"}>, kind = "op", op_name = "abort", operation_result_type = core.never} {
         ^arm(%argument: core.i32):
           %fallback = arith.const {value = 7} : core.i32
           tribute_control.yield %fallback
@@ -6094,8 +6091,8 @@ mod tests {
             .unwrap();
         let declarations = [tribute_control::OperationDeclaration::new(
             ability_ref,
-            Symbol::new("abort"),
-            Symbol::new("op"),
+            ctx.intern_str("abort"),
+            ctx.intern_str("op"),
             vec![i32_type],
             never_type,
         )];
@@ -6194,13 +6191,13 @@ mod tests {
         let input = r#"core.module @test {
   tribute_control.func @read(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
-      %value = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @Reader}>, op_name = @read, operation_kind = @fn} : core.i32
+      %value = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "Reader"}>, op_name = "read", operation_kind = "fn"} : core.i32
       tribute_control.yield %value
     } {
       ^completion(%value: core.i32):
         tribute_control.yield %value
     } {
-      tribute_control.handler {ability_ref = core.ability_ref<{name = @Reader}>, kind = @fn, op_name = @read, operation_result_type = core.i32} {
+      tribute_control.handler {ability_ref = core.ability_ref<{name = "Reader"}>, kind = "fn", op_name = "read", operation_result_type = core.i32} {
         ^arm(%argument: core.i32):
           tribute_control.yield %argument
       }
@@ -6227,8 +6224,8 @@ mod tests {
             .unwrap();
         let declarations = [tribute_control::OperationDeclaration::new(
             ability_ref,
-            Symbol::new("read"),
-            Symbol::new("fn"),
+            ctx.intern_str("read"),
+            ctx.intern_str("fn"),
             vec![i32_type],
             i32_type,
         )];
@@ -6284,7 +6281,7 @@ mod tests {
     %choice = arith.const {value = 0} : core.i32
     scf.switch %choice {
       scf.case {value = 0} {
-        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = @State}>, op_name = @get, operation_kind = @op} : core.i32
+        %performed = tribute_control.perform %input {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", operation_kind = "op"} : core.i32
         scf.yield
       }
       scf.default {
@@ -6313,8 +6310,8 @@ mod tests {
             .unwrap();
         let declarations = [tribute_control::OperationDeclaration::new(
             ability_ref,
-            Symbol::new("get"),
-            Symbol::new("op"),
+            ctx.intern_str("get"),
+            ctx.intern_str("op"),
             vec![i32_type],
             i32_type,
         )];

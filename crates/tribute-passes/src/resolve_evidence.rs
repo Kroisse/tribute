@@ -333,15 +333,17 @@ mod tests {
     #[test]
     fn test_compute_ability_id() {
         let mut ctx = IrContext::new();
+        let state = ctx.intern_str("State");
+        let console = ctx.intern_str("Console");
 
         let state_ref = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::String(state))
                 .build(),
         );
         let console_ref = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::Symbol(Symbol::new("Console")))
+                .attr("name", Attribute::String(console))
                 .build(),
         );
 
@@ -351,7 +353,7 @@ mod tests {
         // Same ability should have same ID (interning gives same TypeRef)
         let state_ref2 = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::String(state))
                 .build(),
         );
         let state_id2 = ability::compute_ability_id(&ctx, state_ref2);
@@ -364,19 +366,20 @@ mod tests {
     #[test]
     fn test_compute_ability_id_with_type_params() {
         let mut ctx = IrContext::new();
+        let state = ctx.intern_str("State");
 
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
 
         let state_i32 = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::String(state))
                 .param(i32_ty)
                 .build(),
         );
 
         let state_no_params = ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::Symbol(Symbol::new("State")))
+                .attr("name", Attribute::String(state))
                 .build(),
         );
 
@@ -402,7 +405,7 @@ mod tests {
     #[test]
     fn final_handle_dispatch_extends_each_ability_pair_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref<{name = @State}>, core.ability_ref<{name = @Console}>]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref<{name = "State"}>, core.ability_ref<{name = "Console"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -450,7 +453,7 @@ mod tests {
     fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
         let input = final_dispatch_fixture(
             r#"%fresh = effect.fresh_prompt_tag : core.i32
-    ability.handle_dispatch %ev, %fresh, %tr, %handler {ability_refs = [core.ability_ref<{name = @State}>]} {
+    ability.handle_dispatch %ev, %fresh, %tr, %handler {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -629,7 +632,7 @@ mod tests {
         let input = final_dispatch_fixture(
             r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^body(%inner: !evidence):
-        effect.dispatch_cps %inner, %tr, %handler, %tr2 {ability_ref = core.ability_ref<{name = @State}>, op_name = @get}
+        effect.dispatch_cps %inner, %tr, %handler, %tr2 {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"}
     }"#,
         );
         let mut ctx = IrContext::new();

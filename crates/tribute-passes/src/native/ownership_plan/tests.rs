@@ -414,7 +414,7 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
     %tr = mem.null : core.ptr
-    %extended = effect.extend %evidence, %prompt, %tr, %closure {ability_ref = core.ability_ref<{name = @State}>} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %tr, %closure {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
     func.return
   }
 }"#,
@@ -478,7 +478,7 @@ fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %tr = adt.struct_new %code, %env {type = !_closure} : !_closure
     %handler = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %extended = effect.extend %evidence, %prompt, %tr, %handler {ability_ref = core.ability_ref<{name = @State}>} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %tr, %handler {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
     func.return
   }
 }"#,

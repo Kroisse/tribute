@@ -627,8 +627,8 @@ Callable operation의 physical lowering은
 ```text
 %result = tribute_control.perform %arg0, ... {
   ability_ref = !State,
-  op_name = @get,
-  operation_kind = @op
+  op_name = "get",
+  operation_kind = "op"
 } : ResultType
 ```
 
@@ -636,8 +636,8 @@ Callable operation의 physical lowering은
   값은 logical type을 유지하며 tuple packing과 erasure는 conversion이 담당한다.
 - **결과:** logical operation result 하나만 만든다. Source `Never` result는
   `core.never`이며 physical `Never` control carrier를 선택하지 않는다.
-- **속성:** `ability_ref: Type`, `op_name: Symbol`,
-  `operation_kind: Symbol`이 필수다. `operation_kind`는 정확히 `fn` 또는 `op`이며
+- **속성:** `ability_ref: Type`, `op_name: String`,
+  `operation_kind: String`이 필수다. `operation_kind`는 정확히 `fn` 또는 `op`이며
   typecheck된 operation declaration에서 복사한다. 이는 body나 use site에서
   추론하는 lowering hint가 아니라 source-semantic metadata다. 모든 source
   ability invocation이 이 operation을 사용하며 shared conversion은 kind를
@@ -645,9 +645,9 @@ Callable operation의 physical lowering은
 - **영역과 block argument:** 없다.
 - **종결자:** 아니다. 직접형 IR에서 이 operation은 terminator가 아니다.
 - **의미:** 선언된 kind로 source operation을 호출한다.
-  `operation_kind = @fn`이면 선택된 handler result가 직접형 평가를 자동으로
+  `operation_kind = "fn"`이면 선택된 handler result가 직접형 평가를 자동으로
   resume한다. Shared conversion은 continuation을 capture하지 않고 기존 tail
-  dispatch 경로를 사용한다. `operation_kind = @op`이면 일치하는 handler가
+  dispatch 경로를 사용한다. `operation_kind = "op"`이면 일치하는 handler가
   resume할 수 있으며, 이 경우 operation 뒤에서 실행을 계속하고 `%result`가
   결과가 된다. Resume하지 않으면 선택된 general handler가 일치하는 handle을
   완료하고 겉으로 보이는 suffix는 평가하지 않는다. Source `op -> Never`는
@@ -665,8 +665,8 @@ Callable operation의 physical lowering은
   계약의 kind별 형상을 적용한다.
 - **소유권과 값 흐름:** operand는 일반 SSA use다. 이 operation은
   source-visible continuation value를 만들지 않으며 continuation 구성은 shared
-  CPS conversion이 소유한다. `@fn`에는 continuation 없는 `ability.call`/tail
-  dispatch를, `@op`에는 suffix continuation을 받는 `ability.perform`/CPS
+  CPS conversion이 소유한다. `"fn"`에는 continuation 없는 `ability.call`/tail
+  dispatch를, `"op"`에는 suffix continuation을 받는 `ability.perform`/CPS
   dispatch를 만든다. `op -> Never`에는 대신 기존 ability/effect ABI가 요구하는
   실제 zero-capture reject continuation을 공급하며 그 body는
   `func.unreachable`이다. 이 continuation은 source suffix를 capture하지 않는다.
@@ -732,8 +732,8 @@ Frontend는 항상 completion region을 materialize한다. Source에 `do` arm이
 ```text
 tribute_control.handler {
   ability_ref = !State,
-  op_name = @get,
-  kind = @op,
+  op_name = "get",
+  kind = "op",
   operation_result_type = ResultType
 } (%arg0: Arg0Type, ..., %resume:
     tribute_control.resume_token<ResultType, AnswerType>) {
@@ -744,7 +744,7 @@ tribute_control.handler {
 
 - **피연산자와 결과:** 없다. Surrounding `tribute_control.handle`이 소유하는
   declarative entry다.
-- **속성:** `ability_ref: Type`, `op_name: Symbol`, `kind: Symbol`,
+- **속성:** `ability_ref: Type`, `op_name: String`, `kind: String`,
   `operation_result_type: Type`이 필수다. `kind`는 정확히 `fn` 또는 `op`이다.
 - **영역:** block 하나를 가진 실행 가능한 `body` region 하나만 있다.
 - **Block argument:** source operation argument가 declaration 순서와 logical
@@ -840,7 +840,7 @@ logical continuation으로 region을 lower한다:
    continuation을 받는다. 선택된 branch만 평가한다.
 3. Handle body는 delimiter continuation을 받는다. Body가 정상 완료되면
    `completion`에 들어간 뒤 enclosing continuation을 실행한다.
-4. `operation_kind = @fn`인 perform은 continuation을 capture하지 않는다.
+4. `operation_kind = "fn"`인 perform은 continuation을 capture하지 않는다.
    Shared conversion이 tail path로 dispatch하며 자동으로 resume된 operation
    result는 일반적인 남은 block suffix로 흐른다.
 5. Resumptive general handler의 resume token은 중단된 body continuation을
@@ -1293,7 +1293,9 @@ Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `un
 Symbol 값은 symbol table의 정의를 가리키는 참조에만 쓴다(`callee = @foo`). 참조가
 아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
-`predicate = "slt"`로 쓴다. 그래서 텍스트의 `@`는 언제나 참조를 뜻하고, 속성을 훑어
+`predicate = "slt"`로 쓴다. Ability 이름(`core.ability_ref`의 `name`)과 operation
+이름(`op_name`), operation kind(`"fn"`, `"op"`)도 symbol table의 정의가 아니므로
+문자열이다. 그래서 텍스트의 `@`는 언제나 참조를 뜻하고, 속성을 훑어
 참조를 일반적으로 찾을 수 있다.
 
 문자열 값은 그 속성을 가진 `IrContext`의 문자열 pool에 uniquing되며, 속성은 pool

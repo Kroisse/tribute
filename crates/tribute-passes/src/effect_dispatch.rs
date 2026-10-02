@@ -13,13 +13,12 @@ use tribute_ir::dialect::ability::{self, compute_op_idx};
 use crate::target_abi::physical_parameter_attrs;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{closure, effect, tribute_rt};
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{PatternRewriter, TypeConverter};
-use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 
 pub(crate) fn i32_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
@@ -42,11 +41,14 @@ fn insert_op_idx(
     ctx: &mut IrContext,
     loc: Location,
     ability_ref: TypeRef,
-    op_name: Symbol,
+    op_name: StringRef,
     rewriter: &mut PatternRewriter<'_>,
 ) -> ValueRef {
     let i32_ty = i32_type(ctx);
-    let op_idx = compute_op_idx(ability::ability_name(ctx, ability_ref), Some(op_name));
+    let op_idx = compute_op_idx(
+        ability::ability_name(ctx, ability_ref),
+        Some(ctx.str(op_name)),
+    );
     let constant = arith::Const::operands()
         .value(Attribute::Int(op_idx as i128))
         .results(i32_ty)
@@ -94,7 +96,7 @@ pub(crate) fn is_valid_tail_dispatch(
     if operands.len() != 2
         || results.len() != 1
         || ctx.op(op).attributes.get_type("ability_ref").is_none()
-        || ctx.op(op).attributes.get_symbol("op_name").is_none()
+        || ctx.op(op).attributes.get_string_ref("op_name").is_none()
     {
         return false;
     }
@@ -123,7 +125,7 @@ pub(crate) fn lower_tail_dispatch(
         ctx,
         loc,
         dispatch_op.ability_ref(ctx),
-        dispatch_op.op_name(ctx),
+        dispatch_op.op_name_ref(ctx),
         rewriter,
     );
     let (function, env) = insert_closure_parts(ctx, loc, dispatch_closure, rewriter);
@@ -175,7 +177,7 @@ pub(crate) fn is_valid_cps_dispatch(
     if !ctx.op_result_types(op).is_empty()
         || ctx.op(op).attributes.get_type("answer_type").is_none()
         || ctx.op(op).attributes.get_type("ability_ref").is_none()
-        || ctx.op(op).attributes.get_symbol("op_name").is_none()
+        || ctx.op(op).attributes.get_string_ref("op_name").is_none()
         || ctx.op_operands(op).len() != 4
     {
         return false;
@@ -209,7 +211,7 @@ pub(crate) fn lower_cps_dispatch(
         ctx,
         loc,
         dispatch_op.ability_ref(ctx),
-        dispatch_op.op_name(ctx),
+        dispatch_op.op_name_ref(ctx),
         rewriter,
     );
     let (function, env) = insert_closure_parts(ctx, loc, dispatch_op.dispatch(ctx), rewriter);

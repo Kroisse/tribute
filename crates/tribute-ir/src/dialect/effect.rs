@@ -33,7 +33,7 @@ mod effect {
     /// while the backend chooses the concrete lookup and callable layout.
     fn dispatch_tail(
         ability_ref: Attr<Type>,
-        op_name: Attr<Symbol>,
+        op_name: Attr<String>,
         evidence: Value<_>,
         payload: Value<_>,
     ) -> Value<_> {
@@ -47,7 +47,7 @@ mod effect {
     /// transfer.
     fn dispatch_cps(
         ability_ref: Attr<Type>,
-        op_name: Attr<Symbol>,
+        op_name: Attr<String>,
         answer_type: Attr<Type>,
         evidence: Value<_>,
         dispatch: Value<_>,
@@ -67,7 +67,7 @@ impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
         let data = ctx.op(self.op_ref());
         if ctx.op_operands(self.op_ref()).len() == 4
             && data.attributes.get_type("ability_ref").is_some()
-            && data.attributes.get_symbol("op_name").is_some()
+            && data.attributes.get_string_ref("op_name").is_some()
             && data.attributes.get_type("answer_type").is_some()
         {
             Ok(())
@@ -100,9 +100,10 @@ mod tests {
     }
 
     fn ability_ref(ctx: &mut IrContext, name: &str) -> trunk_ir::TypeRef {
+        let name = ctx.intern_str(name);
         ctx.intern_type(
             TypeDataBuilder::new(Symbol::new("core"), Symbol::new("ability_ref"))
-                .attr("name", Attribute::Symbol(Symbol::from_dynamic(name)))
+                .attr("name", Attribute::String(name))
                 .build(),
         )
     }
@@ -162,12 +163,12 @@ mod tests {
 
         let tail = super::DispatchTail::operands(evidence, payload)
             .ability_ref(ability)
-            .op_name(Symbol::new("print"))
+            .op_name("print")
             .results(anyref_ty)
             .build(&mut ctx, loc);
         let cps = super::DispatchCps::operands(evidence, dispatch, resume, payload)
             .ability_ref(ability)
-            .op_name(Symbol::new("get"))
+            .op_name("get")
             .answer_type(anyref_ty)
             .build(&mut ctx, loc);
 
@@ -179,14 +180,14 @@ mod tests {
         assert_eq!(tail_wrapper.evidence(&ctx), evidence);
         assert_eq!(tail_wrapper.payload(&ctx), payload);
         assert_eq!(tail_wrapper.ability_ref(&ctx), ability);
-        assert_eq!(tail_wrapper.op_name(&ctx), Symbol::new("print"));
+        assert_eq!(tail_wrapper.op_name(&ctx), "print");
         assert_eq!(cps_wrapper.dispatch(&ctx), dispatch);
         assert_eq!(cps_wrapper.resume(&ctx), resume);
-        assert_eq!(cps_wrapper.op_name(&ctx), Symbol::new("get"));
+        assert_eq!(cps_wrapper.op_name(&ctx), "get");
 
         let tail_printed = print_op(&ctx, tail.op_ref());
         assert!(tail_printed.contains("effect.dispatch_tail"));
         assert!(tail_printed.contains("ability_ref"));
-        assert!(tail_printed.contains("op_name = @print"));
+        assert!(tail_printed.contains("op_name = \"print\""));
     }
 }

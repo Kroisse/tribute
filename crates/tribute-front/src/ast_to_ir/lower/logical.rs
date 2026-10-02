@@ -64,6 +64,7 @@ struct PerformMetadata<'a, 'db> {
 impl<'db> Declarations<'db> {
     fn record(
         &mut self,
+        ir: &IrContext,
         declaration: OperationDeclaration,
         location: Location,
         db: &dyn salsa::Database,
@@ -76,7 +77,7 @@ impl<'db> Declarations<'db> {
                 Diagnostic::new(
                     format!(
                         "conflicting instantiated declaration for ability operation {}",
-                        declaration.op_name
+                        ir.str(declaration.op_name)
                     ),
                     location.span,
                     DiagnosticSeverity::Error,
@@ -1013,6 +1014,13 @@ fn expr_type(builder: &mut IrBuilder<'_, '_>, expr: &Expr<TypedRef<'_>>) -> Type
         .unwrap_or_else(|| panic!("missing typechecked expression type"))
 }
 
+fn operation_kind_text(kind: OpDeclKind) -> &'static str {
+    match kind {
+        OpDeclKind::Fn => "fn",
+        OpDeclKind::Op => "op",
+    }
+}
+
 fn call_operation_metadata<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     declarations: &Declarations<'db>,
@@ -1090,11 +1098,8 @@ fn call_operation_metadata<'db>(
         ability_ref,
         OperationDeclaration::new(
             ability_ref,
-            operation,
-            Symbol::new(match kind {
-                OpDeclKind::Fn => "fn",
-                OpDeclKind::Op => "op",
-            }),
+            builder.ir.intern_symbol_text(operation),
+            builder.ir.intern_str(operation_kind_text(kind)),
             parameters,
             result,
         ),
@@ -2038,16 +2043,10 @@ fn lower_call<'db>(
                         .operands(values)
                         .result(declaration.result_type)
                         .attr("ability_ref", Attribute::Type(ability_ref))
-                        .attr("op_name", Attribute::Symbol(operation))
-                        .attr(
-                            "operation_kind",
-                            Attribute::Symbol(Symbol::new(match kind {
-                                OpDeclKind::Fn => "fn",
-                                OpDeclKind::Op => "op",
-                            })),
-                        )
+                        .attr("op_name", Attribute::String(declaration.op_name))
+                        .attr("operation_kind", Attribute::String(declaration.kind))
                 });
-                declarations.record(declaration, location, builder.db());
+                declarations.record(builder.ir, declaration, location, builder.db());
                 let value = result(builder.ir, perform);
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
@@ -2409,17 +2408,16 @@ fn lower_handler<'db>(
         .map(|ty| ctx.convert_logical_type(ir, ty))
         .collect();
     let operation_result = ctx.convert_logical_type(ir, expected_result);
+    let op_name = ir.intern_symbol_text(operation);
+    let kind_name = ir.intern_str(operation_kind_text(kind));
     let declaration = OperationDeclaration::new(
         ability_ref,
-        operation,
-        Symbol::new(match kind {
-            OpDeclKind::Fn => "fn",
-            OpDeclKind::Op => "op",
-        }),
+        op_name,
+        kind_name,
         parameter_types.clone(),
         operation_result,
     );
-    declarations.record(declaration, location, ctx.db);
+    declarations.record(ir, declaration, location, ctx.db);
     let is_never = ir.get_type(operation_result).dialect == Symbol::new("core")
         && ir.get_type(operation_result).name == Symbol::new("never");
     let mut block_args: Vec<_> = parameter_types
@@ -2486,14 +2484,8 @@ fn lower_handler<'db>(
     op(ir, table, location, "handler", |builder| {
         builder
             .attr("ability_ref", Attribute::Type(ability_ref))
-            .attr("op_name", Attribute::Symbol(operation))
-            .attr(
-                "kind",
-                Attribute::Symbol(Symbol::new(match kind {
-                    OpDeclKind::Fn => "fn",
-                    OpDeclKind::Op => "op",
-                })),
-            )
+            .attr("op_name", Attribute::String(op_name))
+            .attr("kind", Attribute::String(kind_name))
             .attr("operation_result_type", Attribute::Type(operation_result))
             .region(region)
     });
@@ -2536,8 +2528,8 @@ mod tests {
         let parameter = ctx.adt_typeref(&mut ir, Symbol::new("String"));
         let declaration = OperationDeclaration::new(
             parameter,
-            Symbol::new("throw"),
-            Symbol::new("op"),
+            ir.intern_str("throw"),
+            ir.intern_str("op"),
             [parameter],
             parameter,
         );
@@ -2556,8 +2548,8 @@ mod tests {
 
         let mismatch = OperationDeclaration::new(
             parameter,
-            Symbol::new("throw"),
-            Symbol::new("op"),
+            declaration.op_name,
+            declaration.kind,
             [],
             parameter,
         );

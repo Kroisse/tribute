@@ -487,7 +487,7 @@ named definition의 worker convention은 검사된 metadata에서 별도로 계�
 ### 변환 범위
 
 모든 함수를 Cps convention으로 바꾸지는 않는다. `Cps` callable 호출과
-typechecked `operation_kind = @op` 지점은 남은 계산을 continuation으로 전달한다:
+typechecked `operation_kind = "op"` 지점은 남은 계산을 continuation으로 전달한다:
 
 ```text
 생략 annotation의 semantic type       → open row, indirect call은 Cps
@@ -514,7 +514,7 @@ fn map(xs: List(a), f: fn(a) ->{e} b) ->{e} List(b)
 ### Operation kind와 dispatch
 
 `fn` operation은 pre-CPS frontend IR에서
-`tribute_control.perform { operation_kind = @fn }`이다. Shared CPS conversion은
+`tribute_control.perform { operation_kind = "fn" }`이다. Shared CPS conversion은
 continuation을 capture하지 않고 `ability.call`을 만든다. Shared dispatch lowering이
 이를 `effect.dispatch_tail`로 바꾸고 target이 evidence lookup과 ordinary indirect
 call로 내린다. 이것은 선언된 operation kind의 의미이며 body-shape optimization이
