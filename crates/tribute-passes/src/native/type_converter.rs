@@ -332,62 +332,6 @@ fn box_primitive(
     }
 }
 
-/// Check if a type is a pointer-like reference type in arena native representation.
-pub fn is_ptr_like(ctx: &IrContext, ty: TypeRef, evidence_ty: TypeRef, ptr_ty: TypeRef) -> bool {
-    if ty == ptr_ty {
-        return true;
-    }
-
-    let data = ctx.get_type(ty);
-
-    // adt.struct, adt.enum, adt.typeref, or variant instance (adt.*)
-    if data.dialect == Symbol::new("adt") {
-        // Check for typeref
-        if data.name == Symbol::new("typeref") {
-            return true;
-        }
-        // Check for struct or enum types
-        if data.name == Symbol::new("struct") {
-            return true;
-        }
-        if data.attrs.contains_key("variants") {
-            return true;
-        }
-        // Check for variant instance (has is_variant=true)
-        if data.attrs.get_bool("is_variant") == Some(true) {
-            return true;
-        }
-    }
-
-    // core.bytes (heap-allocated Bytes struct)
-    if data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes") {
-        return true;
-    }
-
-    // core.array — but NOT evidence arrays
-    if data.dialect == Symbol::new("core") && data.name == Symbol::new("array") && ty != evidence_ty
-    {
-        return true;
-    }
-
-    // tribute_rt.intref (anyref is NOT ptr-like; it has distinct RC semantics)
-    if data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("intref") {
-        return true;
-    }
-
-    // closure.closure
-    if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
-        return true;
-    }
-
-    // func.func_sig (function pointers)
-    if data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig") {
-        return true;
-    }
-
-    false
-}
-
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.
 fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);

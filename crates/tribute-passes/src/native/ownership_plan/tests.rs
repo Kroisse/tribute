@@ -1272,26 +1272,7 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
 }
 
 #[test]
-fn semantic_closure_values_are_managed_by_the_typed_contract() {
-    let (ctx, _module, plan) = build(
-        r#"core.module @test {
-  !Closure = closure.closure<func.func_sig<(core.i32) -> core.i32>>
-  func.func @identity(%closure: !Closure) -> !Closure {
-    func.return %closure
-  }
-}"#,
-    );
-    let function = plan.function(Symbol::new("identity")).unwrap();
-    let body = ctx.op_region(function.operation(), 0).unwrap();
-    let entry = ctx.region(body).blocks[0];
-    assert!(plan.is_managed_type(&ctx, ctx.value_ty(ctx.block_args(entry)[0])));
-    assert_eq!(function.entries(), [EntryOwnership::Retained]);
-    assert_eq!(count(function, ActionKind::EntryAcquire), 1);
-    assert_eq!(count(function, ActionKind::ReturnTransfer), 1);
-}
-
-#[test]
-fn semantic_closure_release_uses_its_compiler_generated_allocation_layout() {
+fn closure_release_uses_its_compiler_generated_allocation_layout() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -1312,6 +1293,7 @@ fn semantic_closure_release_uses_its_compiler_generated_allocation_layout() {
 }"#,
     );
     crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
+    crate::closure_lower::finalize_closure_storage_layout(&mut ctx, module);
 
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");

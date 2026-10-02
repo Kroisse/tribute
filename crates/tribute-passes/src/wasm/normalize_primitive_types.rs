@@ -98,18 +98,7 @@ fn convert_primitive_type(ctx: &mut IrContext, ty: TypeRef) -> Option<TypeRef> {
         return Some(i31ref_ty);
     }
 
-    // closure.closure -> adt.struct(name="_closure")
-    if is_type(ctx, ty, "closure", "closure") {
-        return Some(closure_adt_type(ctx));
-    }
-
     None
-}
-
-/// Create the canonical Closure ADT type in arena IR.
-/// Delegates to the shared constructor in type_converter to ensure identical TypeRef.
-fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
-    crate::wasm::type_converter::closure_adt_type(ctx)
 }
 
 // ============================================================================

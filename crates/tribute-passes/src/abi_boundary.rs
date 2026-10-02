@@ -106,6 +106,10 @@ pub enum ViolationKind {
     /// A referenced C declaration that the target does not bind.
     #[display("unsatisfiable runtime binding {_0}")]
     UnsatisfiableRuntimeBinding(String),
+    /// A root `main` that is not the parameterless `Nil` wrapper with the
+    /// platform convention.
+    #[display("malformed root entry")]
+    MalformedRootEntry,
 }
 
 /// A single boundary exit violation.
@@ -143,6 +147,7 @@ pub fn verify_boundary_exit(
         verifier.check_op(op, &functions);
     }
     verifier.check_runtime_bindings(&ops, &functions, target);
+    verifier.check_root_entry(&functions);
     verifier.violations
 }
 
@@ -211,6 +216,32 @@ impl<'a> Verifier<'a> {
                 ViolationKind::UnsatisfiableRuntimeBinding(name.clone()),
                 Some(declaration),
                 format!("C declaration @{name} is referenced but {target:?} does not bind it"),
+            );
+        }
+    }
+
+    /// Report a root `main` that is not a parameterless `Nil` definition with
+    /// the platform convention.
+    fn check_root_entry(&mut self, functions: &SymbolTable) {
+        let ctx = self.ctx;
+        let Some(main) = functions.resolve(Symbol::new("main")) else {
+            return;
+        };
+        let Ok(function) = func::Func::from_op(ctx, main) else {
+            return;
+        };
+        let well_formed = ctx.op_has_regions(main)
+            && func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some_and(|signature| {
+                signature.inputs(ctx).is_empty()
+                    && signature.call_conv(ctx) == Some(func::CallConv::Platform)
+                    && matches!(signature.results(ctx), [result] if core::Nil::matches(ctx, *result))
+            });
+        if !well_formed {
+            self.report(
+                ViolationKind::MalformedRootEntry,
+                Some(main),
+                "root main must be a parameterless Nil definition with the platform convention"
+                    .to_owned(),
             );
         }
     }
@@ -449,7 +480,7 @@ mod tests {
   func.func @__tribute_unbound_helper(%bytes: core.bytes) -> core.nil attributes {abi = "C"}
   func.func @user_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @unused_bridge(%value: core.i32) -> core.i32 attributes {abi = "C"}
-  func.func @main(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
+  func.func @worker(%ev: core.ptr, %bytes: core.bytes) -> core.i32 {
     %printed = func.call %bytes {callee = @__tribute_unbound_helper} : core.nil
     %len = func.call %bytes {callee = @__tribute_bytes_len} : core.i32
     %id = func.call %len {callee = @user_bridge} : core.i32
@@ -685,6 +716,48 @@ mod tests {
   }}
 }}"#
         )
+    }
+
+    #[test]
+    fn the_root_entry_is_a_parameterless_nil_wrapper() {
+        let entry = |header: &str, attributes: &str, body: &str| {
+            format!(
+                r#"core.module @test {{
+  func.func @main{header}{attributes} {{
+    {body}
+  }}
+}}"#
+            )
+        };
+        assert_eq!(kinds(&entry("() -> core.nil", "", "func.return")), []);
+        for malformed in [
+            entry("()", "", "func.return"),
+            entry("(%value: core.i32) -> core.nil", "", "func.return"),
+            entry(
+                "() -> core.i32",
+                "",
+                "%zero = arith.const {value = 0} : core.i32\n    func.return %zero",
+            ),
+            entry(
+                "()",
+                " attributes {type = func.func_sig<() -> (), {call_conv = @tail}>}",
+                "func.return",
+            ),
+        ] {
+            assert_eq!(
+                kinds(&malformed),
+                [ViolationKind::MalformedRootEntry],
+                "{malformed}"
+            );
+        }
+        assert_eq!(
+            kinds(
+                r#"core.module @test {
+  func.func @main() -> core.nil attributes {abi = "C"}
+}"#
+            ),
+            [ViolationKind::MalformedRootEntry]
+        );
     }
 
     #[test]

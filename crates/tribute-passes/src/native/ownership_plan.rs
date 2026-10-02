@@ -8,7 +8,6 @@ use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
 
-use tribute_ir::dialect::closure;
 use trunk_ir::adt_layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
@@ -186,13 +185,6 @@ impl NativeOwnershipPlan {
         if self.managed_layouts.contains(&ty) {
             return Ok(ty);
         }
-        if closure::Closure::matches(ctx, ty) {
-            return self.closure_layout.ok_or_else(|| {
-                OwnershipPlanError::new(
-                    "semantic closure release has no compiler-generated allocation layout",
-                )
-            });
-        }
         let data = ctx.get_type(ty);
         if data.dialect != Symbol::new("adt") || data.name != Symbol::new("typeref") {
             return Err(OwnershipPlanError::new(format!(
@@ -319,7 +311,6 @@ fn is_typed_managed_reference(
     }
     let data = ctx.get_type(ty);
     (data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref"))
-        || (data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure"))
         || (data.dialect == Symbol::new("tribute_rt")
             && (data.name == Symbol::new("anyref") || data.name == Symbol::new("intref")))
 }
@@ -690,37 +681,11 @@ fn types_compatible(
     managed_layouts: &HashSet<TypeRef>,
 ) -> bool {
     actual == expected
-        || closure_layout_compatible(ctx, actual, expected, managed_layouts)
-        || closure_layout_compatible(ctx, expected, actual, managed_layouts)
         || (is_typed_managed_reference(ctx, actual, managed_layouts)
             && is_typed_managed_reference(ctx, expected, managed_layouts)
             && (is_anyref_type(ctx, actual)
                 || is_anyref_type(ctx, expected)
                 || nominal_types_compatible(ctx, actual, expected)))
-}
-
-fn closure_layout_compatible(
-    ctx: &IrContext,
-    actual: TypeRef,
-    expected: TypeRef,
-    managed_layouts: &HashSet<TypeRef>,
-) -> bool {
-    let actual_data = ctx.get_type(actual);
-    if actual_data.dialect != Symbol::new("closure")
-        || actual_data.name != Symbol::new("closure")
-        || !managed_layouts.contains(&expected)
-    {
-        return false;
-    }
-    let Some(fields) = get_struct_fields(ctx, expected) else {
-        return false;
-    };
-    matches!(fields.as_slice(), [(_, code), (_, env)] if {
-        let code = ctx.get_type(*code);
-        code.dialect == Symbol::new("core")
-            && code.name == Symbol::new("i32")
-            && is_anyref_type(ctx, *env)
-    })
 }
 
 fn build_rtti_plan(

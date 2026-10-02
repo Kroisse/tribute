@@ -1221,8 +1221,9 @@ arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의�
 unrealized cast, 대상 함수의 signature와 다른 타입의 `func.constant`도 위반으로
 보고한다. 매개변수 ownership 계약도 검사한다. `call_conv = @tail`인 signature의
 입력에 `tribute.ownership = @consumed`가 없거나, `tribute.ownership` 값이
-`@consumed`가 아니면 위반이다. 위반이 하나라도 있으면 target dialect lowering에 들어가기 전에 컴파일이
-실패한다. 이 검증은 build 구성과 관계없이 항상 수행한다.
+`@consumed`가 아니면 위반이다. Root `main`이 있으면 그것이 매개변수가 없고 결과가
+`Nil`이며 platform 규약을 따르는 정의인지도 검사한다. 위반이 하나라도 있으면
+target dialect lowering에 들어가기 전에 컴파일이 실패한다. 이 검증은 build 구성과 관계없이 항상 수행한다.
 
 #### Unrealized cast
 

@@ -16,7 +16,7 @@ use trunk_ir::dialect::func;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{PassError, PassManager, pass_fn};
-use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef};
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, TypeConverter,
 };
@@ -329,25 +329,6 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
 // =============================================================================
 
 // =============================================================================
-// MainExports (arena version)
-// =============================================================================
-
-/// Tracks whether the `main` function was found and its type info.
-struct MainExports {
-    saw_main: bool,
-    main_param_types: Vec<TypeRef>,
-}
-
-impl MainExports {
-    fn new() -> Self {
-        Self {
-            saw_main: false,
-            main_param_types: Vec::new(),
-        }
-    }
-}
-
-// =============================================================================
 // MemoryPlan (arena version)
 // =============================================================================
 
@@ -380,14 +361,15 @@ impl ArenaMemoryPlan {
 /// them; the lowerer only exports what the module already declares.
 struct WasmLowerer {
     memory_plan: ArenaMemoryPlan,
-    main_exports: MainExports,
+    /// Whether the module defines the root `main`.
+    saw_main: bool,
 }
 
 impl WasmLowerer {
     fn new() -> Self {
         Self {
             memory_plan: ArenaMemoryPlan::new(),
-            main_exports: MainExports::new(),
+            saw_main: false,
         }
     }
 
@@ -453,13 +435,7 @@ impl WasmLowerer {
             return;
         }
 
-        self.main_exports.saw_main = true;
-
-        if let Some(fn_ty) = data.attributes.get_type("type")
-            && let Some(function) = wasm_dialect::FuncSig::from_type_ref(ctx, fn_ty)
-        {
-            self.main_exports.main_param_types = function.inputs(ctx).to_vec();
-        }
+        self.saw_main = true;
     }
 
     /// Append module-level extra ops (memory and `_start` exports).
@@ -479,13 +455,10 @@ impl WasmLowerer {
             self.memory_plan.has_exported_memory = true;
         }
 
-        // The root bridge leaves a parameterless wrapper `main` that nothing
-        // references, so it is the WASI command entry itself.
-        if self.main_exports.saw_main {
-            assert!(
-                self.main_exports.main_param_types.is_empty(),
-                "Wasm entrypoint: root `main` must have no hidden parameters after the entry bridge"
-            );
+        // The boundary exit verifies that the root `main` is the parameterless
+        // wrapper that nothing references, so it is the WASI command entry
+        // itself.
+        if self.saw_main {
             let name = ctx.intern_str("_start");
             let export_op = wasm_dialect::ExportFunc::operands()
                 .name(name)
@@ -500,6 +473,7 @@ impl WasmLowerer {
 mod tests {
     use super::*;
     use trunk_ir::context::{BlockData, RegionData};
+    use trunk_ir::refs::TypeRef;
     use trunk_ir::smallvec::smallvec;
     use trunk_ir::types::TypeDataBuilder;
 
@@ -593,33 +567,13 @@ mod tests {
     }
 
     #[test]
-    fn resultless_evidence_main_preserves_inputs_and_reaches_body_validation() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            "core.module @m { wasm.func {sym_name = @main, type = wasm.func_sig<(wasm.arrayref) -> ()>} {} }",
-        );
-        let main = module.ops(&ctx)[0];
-        let mut lowerer = WasmLowerer::new();
-        lowerer.scan_wasm_func(&ctx, main);
-        let evidence = intern_type(&mut ctx, "wasm", "arrayref");
-        assert_eq!(lowerer.main_exports.main_param_types, [evidence]);
-        let before = print_module(&ctx, module.op());
-        let error = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module)
-            .err()
-            .expect("bodyless emission remains unsupported");
-        assert!(error.to_string().contains("entry block"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
-    }
-
-    #[test]
     fn wasm_start_exports_parameterless_main() {
         let mut ctx = IrContext::new();
         let module = empty_module_with_block(&mut ctx);
         let location = Location::new(PathRef::from_u32(0), Span::default());
         let module_block = module.first_block(&ctx).expect("module body block");
         let mut lowerer = WasmLowerer::new();
-        lowerer.main_exports.saw_main = true;
+        lowerer.saw_main = true;
 
         lowerer.append_extra_ops(&mut ctx, module_block, location);
 
@@ -639,21 +593,6 @@ mod tests {
                 .all(|op| wasm_dialect::Func::from_op(&ctx, op).is_err()),
             "no separate start function"
         );
-    }
-
-    #[test]
-    #[should_panic(expected = "must have no hidden parameters")]
-    fn wasm_start_rejects_main_with_hidden_parameters() {
-        let mut ctx = IrContext::new();
-        let module = empty_module_with_block(&mut ctx);
-        let location = Location::new(PathRef::from_u32(0), Span::default());
-        let module_block = module.first_block(&ctx).expect("module body block");
-        let evidence_ty = intern_type(&mut ctx, "wasm", "arrayref");
-        let mut lowerer = WasmLowerer::new();
-        lowerer.main_exports.saw_main = true;
-        lowerer.main_exports.main_param_types = vec![evidence_ty];
-
-        lowerer.append_extra_ops(&mut ctx, module_block, location);
     }
 
     #[test]
@@ -814,13 +753,12 @@ mod tests {
 
         assert!(lowerer.memory_plan.has_memory);
         assert!(lowerer.memory_plan.has_exported_memory);
-        assert!(lowerer.main_exports.saw_main);
-        assert_eq!(lowerer.main_exports.main_param_types, vec![i32_ty]);
+        assert!(lowerer.saw_main);
 
         ctx.op_mut(main.op_ref()).attributes.remove("sym_name");
-        lowerer.main_exports.saw_main = false;
+        lowerer.saw_main = false;
         lowerer.scan_wasm_func(&ctx, main.op_ref());
-        assert!(!lowerer.main_exports.saw_main);
+        assert!(!lowerer.saw_main);
     }
 
     #[test]
