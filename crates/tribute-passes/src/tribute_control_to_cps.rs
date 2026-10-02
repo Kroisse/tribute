@@ -871,10 +871,11 @@ impl<'a> Converter<'a> {
         if let Some(frame) = self.frames.get(&answer).copied() {
             return frame;
         }
-        let name = Symbol::from_dynamic(&format!(
+        let name_text = format!(
             "{}{answer:?}",
             tribute_core::calling_convention::CPS_CONTINUATION_FRAME_NAME_PREFIX
-        ));
+        );
+        let name = self.ctx.intern_str(&name_text);
         let reference = cps_continuation_frame_ref_type(self.ctx, name, answer);
         let done = self.done_k_type(answer);
         let evidence = self.evidence_type();
@@ -891,7 +892,8 @@ impl<'a> Converter<'a> {
             dispatch,
         };
         self.frames.insert(answer, frame);
-        self.frame_layout_aliases.push((name, layout));
+        self.frame_layout_aliases
+            .push((Symbol::from_dynamic(&name_text), layout));
         frame
     }
 

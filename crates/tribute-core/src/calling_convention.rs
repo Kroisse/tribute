@@ -5,7 +5,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{adt, core, func};
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::{OpRef, TypeRef};
-use trunk_ir::types::{Attribute, AttributeMap, TypeDataBuilder};
+use trunk_ir::types::{Attribute, AttributeMap, StringRef, TypeDataBuilder};
 
 pub const CALLING_CONVENTION_ATTR: &str = "tribute.calling_convention";
 /// Result type carried by a private immutable CPS continuation frame.
@@ -98,13 +98,12 @@ pub fn cps_done_type(ctx: &mut IrContext, result: TypeRef) -> TypeRef {
 /// Its paired layout may recursively use this reference.
 pub fn cps_continuation_frame_ref_type(
     ctx: &mut IrContext,
-    name: Symbol,
+    name: StringRef,
     result: TypeRef,
 ) -> TypeRef {
-    let name = name.with_str(|name| ctx.string_attr(name));
     ctx.intern_type(
         TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-            .attr("name", name)
+            .attr("name", Attribute::String(name))
             .attr(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result))
             .build(),
     )
@@ -122,14 +121,13 @@ pub fn cps_continuation_frame_result_type(ctx: &IrContext, frame: TypeRef) -> Op
 /// Make the exact immutable layout for [`cps_continuation_frame_ref_type`].
 pub fn cps_continuation_frame_layout_type(
     ctx: &mut IrContext,
-    name: Symbol,
+    name: StringRef,
     result: TypeRef,
     done: TypeRef,
     dispatch: TypeRef,
 ) -> TypeRef {
     let mut attrs = AttributeMap::new();
     attrs.insert(CPS_CONTINUATION_FRAME_RESULT_ATTR, Attribute::Type(result));
-    let name = name.with_str(|name| ctx.intern_str(name));
     adt::struct_type(ctx, name, [("done", done), ("dispatch", dispatch)], attrs).as_type_ref()
 }
 
@@ -336,17 +334,12 @@ mod tests {
         let evidence = ctx.intern_type(TypeDataBuilder::new("ability", "evidence").build());
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let anyref = ctx.intern_type(TypeDataBuilder::new("tribute_rt", "anyref").build());
-        let frame =
-            cps_continuation_frame_ref_type(&mut ctx, Symbol::new("ContinuationFrameI32"), i32_ty);
+        let frame_name = ctx.intern_str("ContinuationFrameI32");
+        let frame = cps_continuation_frame_ref_type(&mut ctx, frame_name, i32_ty);
         let done = cps_done_type(&mut ctx, i32_ty);
         let dispatch = cps_dispatch_type(&mut ctx, evidence, frame, anyref, i32_ty);
-        let layout = cps_continuation_frame_layout_type(
-            &mut ctx,
-            Symbol::new("ContinuationFrameI32"),
-            i32_ty,
-            done,
-            dispatch,
-        );
+        let layout =
+            cps_continuation_frame_layout_type(&mut ctx, frame_name, i32_ty, done, dispatch);
         let completion = cps_completion_type(&mut ctx, evidence, i32_ty, frame);
         let resume_exact = cps_resume_exact_type(&mut ctx, evidence, i32_ty, frame);
         let resume = cps_resume_type(&mut ctx, evidence, frame, anyref);

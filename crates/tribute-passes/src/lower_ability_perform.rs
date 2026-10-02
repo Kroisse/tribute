@@ -311,7 +311,7 @@ mod tests {
         );
         let evidence = ability::evidence_adt_type_ref(ctx);
         let anyref = tribute_rt::anyref(ctx).as_type_ref();
-        let frame_name = Symbol::new("test_frame");
+        let frame_name = ctx.intern_str("test_frame");
         let frame = cps_continuation_frame_ref_type(ctx, frame_name, answer);
         let done = cps_done_type(ctx, answer);
         let dispatch = cps_dispatch_type(ctx, evidence, frame, anyref, answer);
@@ -320,7 +320,7 @@ mod tests {
                 .unwrap()
                 .inputs(ctx)[1];
         let layout = cps_continuation_frame_layout_type(ctx, frame_name, answer, done, dispatch);
-        ctx.register_type_alias(frame_name, layout);
+        ctx.register_type_alias(Symbol::new("test_frame"), layout);
         let mut performs = Vec::new();
         let _ = trunk_ir::walk::walk_op::<()>(ctx, module.op(), &mut |op| {
             if ability::Perform::matches(ctx, op) {
