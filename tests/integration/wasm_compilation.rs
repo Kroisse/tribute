@@ -667,11 +667,16 @@ fn run(value: Nat) -> Nat {
     }
 }
 
-fn main() ->{std::io::Io} Nil {
-    case run(0) + run(1) {
-        108 -> std::io::print_line("ok")
-        _ -> std::io::print_line("unexpected")
+fn check(ok: Bool) ->{std::io::Io} Nil {
+    case ok {
+        True -> std::io::print_line("ok")
+        False -> std::io::print_line("unexpected")
     }
+}
+
+fn main() ->{std::io::Io} Nil {
+    check(run(0) == 7)
+    check(run(1) == 101)
 }
 "#;
     let source = SourceCst::from_source_str(db, "aborting_handler.trb", code);
@@ -686,7 +691,7 @@ fn main() ->{std::io::Io} Nil {
         "wasmtime failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
-    assert_eq!(output.stdout, b"ok\n");
+    assert_eq!(output.stdout, b"ok\nok\n");
 }
 
 const BYTES_SLICES: &str = r#"

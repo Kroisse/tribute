@@ -101,8 +101,8 @@ Bytes: bytes
 Install a compatible Wasmtime release as described in the
 [development prerequisites](../README.md#development-prerequisites). Wasm
 `read_line` is unsupported. Source-level Wasm `fn` handlers, one-shot `op`
-handlers, and handlers that drop their continuation execute in focused tests,
-but these examples make no Wasm ability execution claim.
+handlers, and Abort handlers that drop their continuation execute in focused
+tests, but these examples make no Wasm ability execution claim.
 
 ## Canonical invalid example
 
@@ -132,8 +132,10 @@ Current boundaries relevant to these files:
   Wasm lowering; general collection APIs are unsupported on all targets.
 - Inline modules have native execution evidence, but file-module loading,
   package compilation, and separate Tribute-module linking are unsupported.
-- String/Bytes output through `std::io::print_line` is the only current
-  language-level Wasm execution claim.
+- Language-level Wasm execution is limited to the forms the
+  [capability matrix](../new-plans/capabilities.md) lists as **wasm-run**:
+  String/Bytes output, String equality, `Nat` comparisons, Bytes slicing, and
+  the `fn`, one-shot `op`, and Abort handler forms.
 
 ### Regression fixture
 
