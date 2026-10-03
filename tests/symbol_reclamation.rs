@@ -1,5 +1,10 @@
 //! Names interned while compiling are released once nothing refers to them.
 //!
+//! A compilation's names are released with its database and IR context. A
+//! database that stays alive across edits, as a language server's does, still
+//! keeps the names of earlier revisions: Salsa-interned definition ids hold
+//! them until the database is dropped.
+//!
 //! The dynamic symbol set is process-wide, so this file holds a single test:
 //! a second test running in the same process would change the count.
 
@@ -12,6 +17,9 @@ use tribute::pipeline::{
 use tribute::{Rope, SourceCst, TributeDatabaseImpl};
 use tribute_passes::abi_boundary::TargetKind;
 use trunk_ir::symbol::live_dynamic_symbols;
+
+/// The number of names in [`program`] that are unique to its round.
+const NAMES_PER_ROUND: usize = 6;
 
 /// A program whose names are unique to `round` and too long to be inline.
 fn program(round: usize) -> String {
@@ -59,7 +67,7 @@ fn compile_from_scratch(round: usize) -> usize {
 }
 
 #[test]
-fn dynamic_symbols_do_not_accumulate() {
+fn dynamic_symbols_are_released_with_their_database() {
     // Repeated compilations, each on its own database.
     compile_from_scratch(0);
     let settled = live_dynamic_symbols();
@@ -77,8 +85,8 @@ fn dynamic_symbols_do_not_accumulate() {
     }
 
     // Repeated edits of one document in one database, as a language server
-    // makes them. Results of earlier revisions are replaced, but Salsa keeps
-    // interned definition ids, and so their names, while the database lives.
+    // makes them. Each edit renames every definition, and the database keeps
+    // the previous names: Salsa-interned definition ids hold them.
     let mut db = TributeDatabaseImpl::default();
     let rope = Rope::from_str(&program(100));
     let tree = parse_with_thread_local(&rope, None);
@@ -94,12 +102,10 @@ fn dynamic_symbols_do_not_accumulate() {
         drop(result);
         after_edit.push(live_dynamic_symbols());
     }
-    let first = after_edit[0];
-    let last = after_edit[after_edit.len() - 1];
-    let per_edit = (last - first) / (after_edit.len() - 1);
+    let growth = after_edit[after_edit.len() - 1] - after_edit[0];
     assert!(
-        per_edit < first / 8,
-        "an edit retains {per_edit} names; one revision uses {first}: {after_edit:?}"
+        growth <= NAMES_PER_ROUND * (after_edit.len() - 1),
+        "an edit retains more than its own names: {after_edit:?}"
     );
     drop(db);
     assert_eq!(
