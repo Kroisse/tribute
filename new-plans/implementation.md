@@ -359,8 +359,8 @@ resumption을 만들지 않으며 `resume_token` block argument도 받지 않는
 ### Evidence와 dispatch의 소유권
 
 Evidence는 ability identity를 key로 하는 불변 Marker 배열이며 같은 ability의
-가려진 marker를 연결로 유지한다. Shared effect ABI는
-명시적 evidence operand와 `effect.extend`, `effect.dispatch_tail`,
+가려진 marker를 연결로 유지한다. Shared effect ABI는 명시적 evidence operand와
+`effect.extend`, `effect.mask`, `effect.dup`, `effect.dispatch_tail`,
 `effect.dispatch_cps`만 사용하며 concrete marker field나 runtime layout을 선택하지
 않는다. Native는 runtime pointer를, WasmGC는 GC array/struct reference를 사용한다.
 Target별 field layout, runtime 함수와 dispatch signature는
