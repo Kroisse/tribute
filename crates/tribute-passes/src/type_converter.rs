@@ -466,8 +466,8 @@ mod tests {
             .expect("Wasm target consumes nominal recovery");
         assert_eq!(
             (
-                ctx.op(wasm_result.ops[0]).dialect,
-                ctx.op(wasm_result.ops[0]).name
+                ctx.op(wasm_result.ops[0]).dialect.clone(),
+                ctx.op(wasm_result.ops[0]).name.clone()
             ),
             (Symbol::new("wasm_gc"), Symbol::new("ref_cast"))
         );

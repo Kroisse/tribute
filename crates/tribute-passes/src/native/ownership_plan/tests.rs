@@ -920,10 +920,12 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
         let original = ctx
             .op(projection)
             .attributes
-            .get(key)
+            .get(key.clone())
             .expect("projection attribute")
             .clone();
-        ctx.op_mut(projection).attributes.insert(key, invalid);
+        ctx.op_mut(projection)
+            .attributes
+            .insert(key.clone(), invalid);
         let before = print_module(&ctx, module.op());
         assert!(production_plan(&ctx, module).is_err());
         assert_eq!(print_module(&ctx, module.op()), before);

@@ -105,7 +105,7 @@ impl RewritePattern for LowerClosureNewArena {
         let result_ty = ctx.op_result_types(op)[0];
         let Some(target_ty) = self
             .functions
-            .resolve(func_ref)
+            .resolve(func_ref.clone())
             .and_then(|target| func::Func::from_op(ctx, target).ok())
             .map(|target| target.r#type(ctx))
         else {
@@ -644,7 +644,7 @@ pub(crate) fn substitute_module_types(
                 for (index, argument) in args.into_iter().enumerate() {
                     let mut attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
-                        attrs.insert(*name, physicalizer.convert_attribute(value.clone()));
+                        attrs.insert(name.clone(), physicalizer.convert_attribute(value.clone()));
                     }
                     if attrs != argument.attrs {
                         block_attribute_updates.push((block, index, attrs));
@@ -728,7 +728,7 @@ impl<'a, F: Fn(&IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> 
         let attributes: Vec<_> = data
             .attrs
             .iter()
-            .map(|(name, value)| (*name, self.convert_attribute(value.clone())))
+            .map(|(name, value)| (name.clone(), self.convert_attribute(value.clone())))
             .collect();
         converted.attrs.clear();
         converted.attrs.extend(attributes);

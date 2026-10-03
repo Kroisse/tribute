@@ -322,7 +322,7 @@ impl RewritePattern for VariantNewPattern {
 /// - `base_enum = Type` - the base enum type
 fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: StringRef) -> TypeRef {
     let base_data = ctx.get_type(base_type);
-    let dialect = base_data.dialect;
+    let dialect = base_data.dialect.clone();
 
     // For adt.typeref types, extract the actual type name from the name attribute
     // Use full path to avoid collisions (e.g., mod_a::Expr$Add vs mod_b::Expr$Add)
@@ -990,7 +990,7 @@ mod tests {
                 if data.dialect != wasm_gc_dialect::DIALECT_NAME() {
                     return None;
                 }
-                match data.name {
+                match data.name.clone() {
                     name if name == Symbol::new("struct_new")
                         || name == Symbol::new("struct_get") =>
                     {

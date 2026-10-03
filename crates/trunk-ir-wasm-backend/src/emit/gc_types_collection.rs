@@ -375,8 +375,8 @@ pub(crate) fn collect_gc_types(
             for &block in ctx.region(region).blocks.iter() {
                 for &op in ctx.block(block).ops.iter() {
                     let op_data = ctx.op(op);
-                    let dialect = op_data.dialect;
-                    let name = op_data.name;
+                    let dialect = op_data.dialect.clone();
+                    let name = op_data.name.clone();
 
                     // Recurse into nested core.module operations
                     if dialect == core_dialect && name == module_name {

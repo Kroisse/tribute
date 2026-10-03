@@ -165,18 +165,18 @@ pub(crate) fn dispose_bodyless_declarations(
     imports: &[ImportFuncDef],
     references: &[ResolvedReference],
 ) -> CompilationResult<()> {
-    let mut bound: HashSet<Symbol> = imports.iter().map(|import| import.sym).collect();
+    let mut bound: HashSet<Symbol> = imports.iter().map(|import| import.sym.clone()).collect();
     let mut definitions = HashSet::new();
     let mut declarations = HashSet::new();
     // Validate every shape before removing anything from the emission list.
     for func in funcs.iter() {
         match function_body(ctx, func)? {
             CallableBody::Declaration => {
-                declarations.insert(func.name);
+                declarations.insert(func.name.clone());
             }
             CallableBody::Definition { .. } => {
                 definitions.insert(func.op);
-                bound.insert(func.name);
+                bound.insert(func.name.clone());
             }
         }
     }
@@ -186,7 +186,7 @@ pub(crate) fn dispose_bodyless_declarations(
         if bound.contains(&reference.symbol) {
             continue;
         }
-        let symbol = reference.symbol;
+        let symbol = reference.symbol.clone();
         let kind = reference.kind.describe();
         if declarations.contains(&symbol) {
             return Err(CompilationError::invalid_module(format!(

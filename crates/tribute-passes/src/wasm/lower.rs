@@ -305,7 +305,7 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
     if let Some(body_region) = ctx.op_region(func_op, 0) {
         for &block in ctx.region(body_region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
-                let dialect = ctx.op(op).dialect;
+                let dialect = ctx.op(op).dialect.clone();
                 if dialect != Symbol::new("wasm") {
                     error!(
                         "Found non-wasm operation in function body: {}.{}",

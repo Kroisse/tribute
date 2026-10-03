@@ -95,7 +95,7 @@ fn collect_clif_function_signatures(
                     .unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
                 let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
                     .expect("schema-verified clif.func_sig");
-                if functions.insert(name, signature).is_some() {
+                if functions.insert(name.clone(), signature).is_some() {
                     errors.push(format!(
                         "clif.func @{name} has a duplicate symbol definition"
                     ));

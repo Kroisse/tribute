@@ -59,8 +59,8 @@ impl Pass for LowerListIntrinsics {
                 continue;
             };
             let name = Symbol::from_dynamic(function.sym_name(ctx));
-            intrinsic_declarations.all.insert(name);
-            if is_prepend_intrinsic(name)
+            intrinsic_declarations.all.insert(name.clone());
+            if is_prepend_intrinsic(name.clone())
                 && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
                     == Some(PREPEND_INTRINSIC)
                 && {
@@ -112,7 +112,7 @@ impl RewritePattern for PrependCallPattern {
             return false;
         };
         let callee = call.callee(ctx);
-        let Some(base_declaration) = intrinsic_declaration(callee) else {
+        let Some(base_declaration) = intrinsic_declaration(callee.clone()) else {
             return false;
         };
         // The frontend keeps generic extern declarations unmangled while

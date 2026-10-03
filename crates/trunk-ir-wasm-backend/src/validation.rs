@@ -82,8 +82,8 @@ fn validate_operation(
     errors: &mut Vec<String>,
 ) {
     let op_data = ctx.op(op);
-    let dialect = op_data.dialect;
-    let name = op_data.name;
+    let dialect = op_data.dialect.clone();
+    let name = op_data.name.clone();
 
     // Check dialect - must be wasm (with specific exceptions)
     if !is_allowed_dialect(ctx, op, depth) {
@@ -127,7 +127,7 @@ fn resolve_wasm_callee(
     symbols: &SymbolTable,
     name: Symbol,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
-    let found = *symbols.definitions_of(name).first()?;
+    let found = *symbols.definitions_of(name.clone()).first()?;
     if symbols.resolve(name).is_none()
         || (!wasm_dialect::Func::matches(ctx, found)
             && !wasm_dialect::ImportFunc::matches(ctx, found))

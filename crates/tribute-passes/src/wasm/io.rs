@@ -176,8 +176,8 @@ fn incompatible(ctx: &IrContext, op: OpRef, reason: String) -> ConversionError {
     let data = ctx.op(op);
     let conflict = IllegalOp {
         op,
-        dialect: data.dialect,
-        name: data.name,
+        dialect: data.dialect.clone(),
+        name: data.name.clone(),
         legality: LegalityCheck::Illegal,
         reason: None,
     }

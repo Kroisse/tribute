@@ -111,7 +111,8 @@ impl<'a> PrintState<'a> {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.get_type(ty);
-        if let Some(format) = crate::asm_format::lookup_type_asm_format(data.dialect, data.name)
+        if let Some(format) =
+            crate::asm_format::lookup_type_asm_format(data.dialect.clone(), data.name.clone())
             && let Some(result) = (format.print_fn)(&mut TypePrintHelper { state: self, f }, ty)
         {
             return result;
@@ -214,7 +215,7 @@ impl<'a> PrintState<'a> {
             if index > 0 {
                 f.write_str(", ")?;
             }
-            write_attribute_key(f, *key)?;
+            write_attribute_key(f, key.clone())?;
             f.write_str(" = ")?;
             self.write_attribute(f, value)?;
         }
@@ -245,7 +246,7 @@ impl<'a> PrintState<'a> {
                 write_escaped_bytes(f, bytes)?;
                 f.write_char('"')
             }
-            Attribute::SymbolRef(sym) => write_symbol(f, *sym),
+            Attribute::SymbolRef(sym) => write_symbol(f, sym.clone()),
             Attribute::Type(ty) => self.write_type(f, *ty),
             Attribute::List(list) => {
                 f.write_char('[')?;
@@ -859,8 +860,8 @@ fn print_operation(
     indent: usize,
 ) -> fmt::Result {
     let data = state.ctx.op(op);
-    let dialect = data.dialect;
-    let name = data.name;
+    let dialect = data.dialect.clone();
+    let name = data.name.clone();
 
     // Check for special ops
     let is_module = dialect == crate::Symbol::new("core") && name == crate::Symbol::new("module");
@@ -1057,7 +1058,7 @@ fn print_module_op(
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write_attribute_key(f, *key)?;
+            write_attribute_key(f, key.clone())?;
             f.write_str(" = ")?;
             expanded.write_attribute(f, val)?;
         }
@@ -1768,7 +1769,7 @@ mod tests {
             ];
 
             if reverse_registration {
-                for &(name, ty) in aliases.iter().rev() {
+                for (name, ty) in aliases.iter().cloned().rev() {
                     ctx.register_type_alias(name, ty);
                 }
             } else {

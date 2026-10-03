@@ -22,9 +22,13 @@ salsa = { workspace = true, optional = true }
 rustc-hash.workspace = true
 serde.workspace = true
 smallvec.workspace = true
+string_cache.workspace = true
 tracing.workspace = true
 trunk-ir-macros.workspace = true
 winnow.workspace = true
+
+[build-dependencies]
+string_cache_codegen.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

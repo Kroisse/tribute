@@ -493,24 +493,24 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
         assert_eq!(
-            (parameter.dialect, parameter.name),
+            (parameter.dialect.clone(), parameter.name.clone()),
             (Symbol::new("core"), Symbol::new("i32"))
         );
         assert_eq!(
-            (result.dialect, result.name),
+            (result.dialect.clone(), result.name.clone()),
             (Symbol::new("core"), Symbol::new("i32"))
         );
     }
     let ability = ir.get_type(declarations[0].ability_ref);
     assert_eq!(
-        (ability.dialect, ability.name),
+        (ability.dialect.clone(), ability.name.clone()),
         (Symbol::new("core"), Symbol::new("ability_ref"))
     );
     assert_eq!(ability.params.len(), 1);
     assert_eq!(
         (
-            ir.get_type(ability.params[0]).dialect,
-            ir.get_type(ability.params[0]).name
+            ir.get_type(ability.params[0]).dialect.clone(),
+            ir.get_type(ability.params[0]).name.clone()
         ),
         (Symbol::new("core"), Symbol::new("i32"))
     );
@@ -518,8 +518,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     assert_eq!(bool_ability.params.len(), 1);
     assert_eq!(
         (
-            ir.get_type(bool_ability.params[0]).dialect,
-            ir.get_type(bool_ability.params[0]).name
+            ir.get_type(bool_ability.params[0]).dialect.clone(),
+            ir.get_type(bool_ability.params[0]).name.clone()
         ),
         (Symbol::new("core"), Symbol::new("i1"))
     );
@@ -528,11 +528,11 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
         assert_eq!(
-            (parameter.dialect, parameter.name),
+            (parameter.dialect.clone(), parameter.name.clone()),
             (Symbol::new("core"), Symbol::new("i1"))
         );
         assert_eq!(
-            (result.dialect, result.name),
+            (result.dialect.clone(), result.name.clone()),
             (Symbol::new("core"), Symbol::new("i1"))
         );
     }

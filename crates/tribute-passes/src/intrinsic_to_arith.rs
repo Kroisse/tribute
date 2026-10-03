@@ -48,7 +48,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
                     .get_str(ctx, COMPILER_INTRINSIC_ATTR)
                     .is_some_and(|identity| symbol == identity)
                     && intrinsic_map.get(&symbol).is_some_and(|mapping| {
-                        exact_signature(ctx, function.r#type(ctx), symbol, mapping)
+                        exact_signature(ctx, function.r#type(ctx), symbol.clone(), mapping)
                     }))
                 .then_some(symbol)
             })
@@ -87,7 +87,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         for value in ctx.op(op).attributes.values() {
             if let Attribute::SymbolRef(reference) = value
-                && let Some(target) = symbols.resolve(*reference)
+                && let Some(target) = symbols.resolve(reference.clone())
                 && target != op
             {
                 referenced.insert(target);

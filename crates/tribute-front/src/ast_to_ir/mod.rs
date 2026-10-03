@@ -127,8 +127,8 @@ pub fn registered_compiler_intrinsics<V>(
                 crate::ast::Decl::ExternFunction(function)
                     if function.abi == Symbol::new("intrinsic") =>
                 {
-                    let symbol = crate::qualified_symbol(prefix, function.name);
-                    if is_supported_compiler_intrinsic(symbol) {
+                    let symbol = crate::qualified_symbol(prefix, function.name.clone());
+                    if is_supported_compiler_intrinsic(symbol.clone()) {
                         result.insert(function.id, symbol);
                     } else {
                         unsupported.push(UnsupportedCompilerIntrinsic {
@@ -139,7 +139,7 @@ pub fn registered_compiler_intrinsics<V>(
                 }
                 crate::ast::Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(prefix, module.name);
+                        let saved = crate::push_prefix(prefix, module.name.clone());
                         collect(body, prefix, result, unsupported);
                         prefix.truncate(saved);
                     }

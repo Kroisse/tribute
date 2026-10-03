@@ -87,7 +87,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 let dialect = Symbol::from_dynamic(dialect);
                 let name = Symbol::from_dynamic(name);
                 let params = self.build_params(params)?;
-                let attrs = self.build_type_attrs(dialect, name, attrs)?;
+                let attrs = self.build_type_attrs(dialect.clone(), name.clone(), attrs)?;
 
                 let mut builder = TypeDataBuilder::new(dialect, name);
                 for (ty, param_attrs) in params {
@@ -582,11 +582,11 @@ impl<'a> ArenaIrBuilder<'a> {
             if bt != pt {
                 let (bd, bn) = {
                     let d = self.ctx.get_type(bt);
-                    (d.dialect, d.name)
+                    (d.dialect.clone(), d.name.clone())
                 };
                 let (pd, pn) = {
                     let d = self.ctx.get_type(pt);
-                    (d.dialect, d.name)
+                    (d.dialect.clone(), d.name.clone())
                 };
                 return Err(ParseError {
                     message: format!(
@@ -1058,7 +1058,7 @@ core.module @test {
         let aliases: std::collections::HashMap<_, _> = ctx
             .type_aliases()
             .iter()
-            .map(|&(name, ty)| (name.to_string(), ty))
+            .map(|(name, ty)| (name.to_string(), *ty))
             .collect();
         let sig = func::FuncSig::from_type_ref(&ctx, aliases["sig"]).unwrap();
         assert_eq!(

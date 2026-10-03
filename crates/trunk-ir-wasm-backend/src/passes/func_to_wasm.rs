@@ -68,7 +68,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     let table_indices: HashMap<Symbol, u32> = sorted_funcs
         .iter()
         .enumerate()
-        .map(|(idx, sym)| (*sym, idx as u32))
+        .map(|(idx, sym)| (sym.clone(), idx as u32))
         .collect();
 
     let table_size = sorted_funcs.len() as u32;
@@ -168,7 +168,7 @@ fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<Symbol> {
 
     // Deduplicate while preserving order
     let mut seen = std::collections::HashSet::new();
-    funcs.retain(|sym| seen.insert(*sym));
+    funcs.retain(|sym| seen.insert(sym.clone()));
 
     funcs
 }
@@ -211,7 +211,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
         .iter()
         .map(|func_sym| {
             wasm_dialect::RefFunc::operands()
-                .func_name(*func_sym)
+                .func_name(func_sym.clone())
                 .results(funcref_ty)
                 .build(ctx, location)
                 .op_ref()
@@ -278,7 +278,7 @@ fn convert_nested_callable_type(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -312,8 +312,8 @@ fn convert_nested_callable_attributes(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
-                if skip(*key) {
+                key.clone(),
+                if skip(key.clone()) {
                     value.clone()
                 } else {
                     convert_nested_callable_attribute(ctx, value, converter)?
@@ -350,7 +350,7 @@ fn convert_type_to_wasm(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })

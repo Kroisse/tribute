@@ -1069,7 +1069,7 @@ impl<'a> Converter<'a> {
             boundary,
             dispatch_args[1],
             factory_args[0],
-            symbol,
+            symbol.clone(),
             DispatchFactoryArgs {
                 prefix: &[],
                 suffix: &[],
@@ -1101,7 +1101,7 @@ impl<'a> Converter<'a> {
         self.ctx.push_op(factory_block, ret.op_ref());
         let factory_region = self.single_block_region(location, factory_block);
         let factory = func::Func::operands()
-            .sym_name(symbol)
+            .sym_name(symbol.clone())
             .r#type(factory_type)
             .regions(factory_region)
             .build(self.ctx, location);
@@ -1172,7 +1172,7 @@ impl<'a> Converter<'a> {
     fn convert_attrs(&mut self, attrs: &AttributeMap) -> Vec<(Symbol, Attribute)> {
         attrs
             .iter()
-            .map(|(key, value)| (*key, self.convert_attribute(value)))
+            .map(|(key, value)| (key.clone(), self.convert_attribute(value)))
             .collect()
     }
 
@@ -1230,7 +1230,7 @@ impl<'a> Converter<'a> {
         let attrs: Vec<_> = data
             .attrs
             .iter()
-            .map(|(key, value)| (*key, self.convert_attribute(value)))
+            .map(|(key, value)| (key.clone(), self.convert_attribute(value)))
             .collect();
         if params == data.params.as_slice()
             && attrs
@@ -1360,8 +1360,8 @@ impl<'a> Converter<'a> {
             ));
         }
         let location = data.location;
-        let dialect = data.dialect;
-        let name = data.name;
+        let dialect = data.dialect.clone();
+        let name = data.name.clone();
         let operands: Vec<_> = self
             .ctx
             .op_operands(source)
@@ -1379,7 +1379,7 @@ impl<'a> Converter<'a> {
             ));
         }
 
-        let mut builder = OperationDataBuilder::new(location, dialect, name);
+        let mut builder = OperationDataBuilder::new(location, dialect.clone(), name.clone());
         for operand in operands {
             builder = builder.operand(operand);
         }
@@ -2028,7 +2028,7 @@ impl<'a> Converter<'a> {
         );
         let result_ty = self.convert_type(target.source_result);
         let call = func::Call::operands(args)
-            .callee(target.symbol)
+            .callee(target.symbol.clone())
             .results([result_ty])
             .build(self.ctx, location);
         set_calling_convention(self.ctx, call.op_ref(), target.convention);
@@ -2165,7 +2165,7 @@ impl<'a> Converter<'a> {
         let region = self.single_block_region(location, block);
         let adapter_symbol = self.fresh_helper("func_ref_adapter");
         let adapter = func::Func::operands()
-            .sym_name(adapter_symbol)
+            .sym_name(adapter_symbol.clone())
             .r#type(adapter_ty)
             .regions(region)
             .build(self.ctx, location);
@@ -2363,7 +2363,7 @@ impl<'a> Converter<'a> {
             answer_type,
             factory_args[0],
             factory_args[1],
-            symbol,
+            symbol.clone(),
             factory_args[2],
             factory_args[3..].to_vec(),
         )?;
@@ -2372,7 +2372,7 @@ impl<'a> Converter<'a> {
         self.ctx.push_op(factory_block, ret.op_ref());
         let region = self.single_block_region(location, factory_block);
         let factory = func::Func::operands()
-            .sym_name(symbol)
+            .sym_name(symbol.clone())
             .r#type(factory_type)
             .regions(region)
             .build(self.ctx, location);
@@ -2487,7 +2487,7 @@ impl<'a> Converter<'a> {
             answer_type,
             completion,
             parent_dispatch,
-            factory,
+            factory.clone(),
             &[],
             &factory_suffix_args,
         )?;
@@ -2523,7 +2523,7 @@ impl<'a> Converter<'a> {
                     body_type,
                     answer_type,
                     completion,
-                    factory,
+                    factory.clone(),
                     DispatchFactoryArgs {
                         prefix: &[],
                         suffix: &factory_suffix_args,
@@ -3292,8 +3292,8 @@ impl<'a> Converter<'a> {
         while index < source_ops.len() {
             let source = source_ops[index];
             let location = self.ctx.op(source).location;
-            let dialect = self.ctx.op(source).dialect;
-            let name = self.ctx.op(source).name;
+            let dialect = self.ctx.op(source).dialect.clone();
+            let name = self.ctx.op(source).name.clone();
             if dialect == Symbol::new("scf") && name == Symbol::new("yield") {
                 if flow.preserve_scf_yield {
                     let cloned = self.clone_plain_op(source, mapping)?;
@@ -3367,7 +3367,7 @@ impl<'a> Converter<'a> {
                         .get_symbol_ref("callee")
                         .expect("pre-CPS validation checked direct callee");
                     let target = self
-                        .current_func(target_symbol)
+                        .current_func(target_symbol.clone())
                         .expect("pre-CPS validation resolved direct callee in this module");
                     if target.convention == CallingConvention::Cps {
                         if flow.convention != CallingConvention::Cps {
@@ -3752,7 +3752,7 @@ fn collect_callable_graph(ctx: &IrContext, symbols: &SymbolTable) -> HashMap<Sym
             let convention = tribute_control::func_sig_convention(ctx, logical_type)
                 .expect("pre-CPS validation checked callable convention");
             (
-                symbol,
+                symbol.clone(),
                 CallableInfo {
                     symbol,
                     convention: convert_convention(convention),
@@ -3772,7 +3772,7 @@ fn verify_candidate_or_restore_aliases(
 ) -> Result<(), TributeControlToCpsError> {
     if let Err(error) = verify_tribute_control_post_cps(ctx, candidate, analyses) {
         for (name, ty) in source_aliases {
-            ctx.register_type_alias(*name, *ty);
+            ctx.register_type_alias(name.clone(), *ty);
         }
         ctx.remove_op(candidate.op());
         return Err(error);
@@ -3845,9 +3845,9 @@ pub fn tribute_control_to_cps(
         converted_aliases.extend(
             source_aliases
                 .iter()
-                .map(|(name, ty)| (*name, converter.convert_type(*ty))),
+                .map(|(name, ty)| (name.clone(), converter.convert_type(*ty))),
         );
-        converted_aliases.extend(converter.frame_layout_aliases.iter().copied());
+        converted_aliases.extend(converter.frame_layout_aliases.iter().cloned());
     }
     let new_region = ctx.create_region(RegionData {
         location: ctx.region(source_region).location,
@@ -3861,7 +3861,7 @@ pub fn tribute_control_to_cps(
         .build(ctx, module_location);
     let candidate: Module = temp_module.into();
     for (name, ty) in &converted_aliases {
-        ctx.register_type_alias(*name, *ty);
+        ctx.register_type_alias(name.clone(), *ty);
     }
     verify_candidate_or_restore_aliases(ctx, candidate, &source_aliases, analyses)?;
 
@@ -3873,7 +3873,7 @@ pub fn tribute_control_to_cps(
         ctx.detach_region(new_region);
         ctx.push_op_region(module.op(), source_region);
         for (name, ty) in &source_aliases {
-            ctx.register_type_alias(*name, *ty);
+            ctx.register_type_alias(name.clone(), *ty);
         }
         return Err(error);
     }
@@ -4784,9 +4784,9 @@ mod tests {
         let (mut ctx, candidate) = parse(input);
         let before = print_module(&ctx, candidate.op());
         let source_aliases = ctx.type_aliases().to_vec();
-        let (alias_name, source_type) = source_aliases[0];
+        let (alias_name, source_type) = source_aliases[0].clone();
         let converted_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        ctx.register_type_alias(alias_name, converted_type);
+        ctx.register_type_alias(alias_name.clone(), converted_type);
 
         let error = verify_candidate_or_restore_aliases(
             &mut ctx,
@@ -4796,7 +4796,10 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.boundary, POST_CPS_BOUNDARY);
-        assert_eq!(ctx.type_alias_by_name(alias_name), Some(source_type));
+        assert_eq!(
+            ctx.type_alias_by_name(alias_name.clone()),
+            Some(source_type)
+        );
         assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
         assert_eq!(ctx.type_alias_by_type(converted_type), None);
         assert_eq!(print_module(&ctx, candidate.op()), before);

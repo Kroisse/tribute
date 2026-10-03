@@ -75,12 +75,12 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         .iter_imports()
         .filter_map(|(name, binding)| {
             // Library names come through their package paths, not a `use`.
-            if env.lookup_library(name) == Some(binding) {
+            if env.lookup_library(name.clone()) == Some(binding) {
                 return None;
             }
             let path = match binding {
                 Binding::Module { path } => Some(path),
-                _ => env.get_use_path(name),
+                _ => env.get_use_path(name.clone()),
             }?;
             (path.len() >= 2).then(|| (name, path.clone()))
         })
@@ -91,19 +91,19 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         // unless the package declares the first segment itself.
         let path = match path.split_first() {
             Some((first, rest))
-                if !env.declares(*first)
-                    && let Some(library) = env.library_namespace(*first) =>
+                if !env.declares(first.clone())
+                    && let Some(library) = env.library_namespace(first.clone()) =>
             {
                 library
                     .to_string()
                     .split("::")
                     .map(Symbol::from_dynamic)
-                    .chain(rest.iter().copied())
+                    .chain(rest.iter().cloned())
                     .collect()
             }
             _ => path,
         };
-        let target_name = *path.last().unwrap();
+        let target_name = path.last().unwrap().clone();
         let ns = Symbol::from_dynamic(
             &path[..path.len() - 1]
                 .iter()
@@ -127,7 +127,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
                 .join("::"),
         );
         for (op_name, op_binding) in env.collect_namespace(qualified_ns) {
-            env.add_to_namespace_if_absent(import_name, op_name, op_binding);
+            env.add_to_namespace_if_absent(import_name.clone(), op_name, op_binding);
         }
 
         // Replace the Module placeholder with the actual binding
@@ -171,7 +171,7 @@ pub const LIBRARY_PACKAGE: &str = "std";
 pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<UnresolvedName> {
     Module {
         id: module.id,
-        name: module.name,
+        name: module.name.clone(),
         decls: vec![Decl::Module(crate::ast::ModuleDecl {
             id: module.id,
             name: Symbol::new(LIBRARY_PACKAGE),
@@ -218,7 +218,7 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEn
     let collections = Symbol::new("std::collections");
     let list = Symbol::new("List");
     if matches!(
-        env.lookup_qualified(collections, list),
+        env.lookup_qualified(collections.clone(), list.clone()),
         None | Some(Binding::Module { .. })
     ) {
         env.add_to_namespace(
@@ -247,35 +247,35 @@ fn collect_definition<'db>(
 ) {
     match decl {
         Decl::Function(func) => {
-            let qualified = qualified_symbol(prefix, func.name);
+            let qualified = qualified_symbol(prefix, func.name.clone());
             let id = FuncDefId::new(db, qualified);
-            env.add_function(func.name, id);
+            env.add_function(func.name.clone(), id);
         }
 
         Decl::ExternFunction(func) => {
-            let qualified = qualified_symbol(prefix, func.name);
+            let qualified = qualified_symbol(prefix, func.name.clone());
             let id = FuncDefId::new(db, qualified);
-            env.add_function(func.name, id);
+            env.add_function(func.name.clone(), id);
         }
 
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
-            let qualified = qualified_symbol(prefix, s.name);
-            let type_def_id = TypeDefId::source(db, qualified, s.id);
+            let qualified = qualified_symbol(prefix, s.name.clone());
+            let type_def_id = TypeDefId::source(db, qualified.clone(), s.id);
             let ctor_id = CtorId::new(db, qualified);
-            env.add_type(s.name, type_def_id);
-            env.add_constructor(s.name, ctor_id, None, s.fields.len());
+            env.add_type(s.name.clone(), type_def_id);
+            env.add_constructor(s.name.clone(), ctor_id, None, s.fields.len());
 
             // Register field accessors in struct's namespace
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
-            let saved = push_prefix(prefix, s.name);
+            let saved = push_prefix(prefix, s.name.clone());
             for field in &s.fields {
-                if let Some(field_name) = field.name {
-                    let field_qualified = qualified_symbol(prefix, field_name);
+                if let Some(field_name) = field.name.clone() {
+                    let field_qualified = qualified_symbol(prefix, field_name.clone());
                     let func_id = FuncDefId::new(db, field_qualified);
                     let binding = Binding::Function { id: func_id };
                     // Add to namespace (e.g., Point::x)
-                    env.add_to_namespace(s.name, field_name, binding);
+                    env.add_to_namespace(s.name.clone(), field_name, binding);
                 }
             }
             prefix.truncate(saved);
@@ -283,26 +283,26 @@ fn collect_definition<'db>(
 
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
-            let qualified = qualified_symbol(prefix, e.name);
+            let qualified = qualified_symbol(prefix, e.name.clone());
             let type_def_id = TypeDefId::source(db, qualified, e.id);
-            env.add_type(e.name, type_def_id);
+            env.add_type(e.name.clone(), type_def_id);
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
-                let variant_qualified = qualified_symbol(prefix, variant.name);
+                let variant_qualified = qualified_symbol(prefix, variant.name.clone());
                 let variant_id = CtorId::new(db, variant_qualified);
                 let binding = Binding::Constructor {
                     id: variant_id,
-                    tag: Some(variant.name),
+                    tag: Some(variant.name.clone()),
                     arity: variant.fields.len(),
                 };
                 // Add to namespace (e.g., Option::Some)
-                env.add_to_namespace(e.name, variant.name, binding.clone());
+                env.add_to_namespace(e.name.clone(), variant.name.clone(), binding.clone());
                 // Also add directly for unqualified access (e.g., Some)
                 env.add_constructor(
-                    variant.name,
+                    variant.name.clone(),
                     variant_id,
-                    Some(variant.name),
+                    Some(variant.name.clone()),
                     variant.fields.len(),
                 );
             }
@@ -310,27 +310,27 @@ fn collect_definition<'db>(
 
         Decl::Ability(a) => {
             // Create AbilityId for this ability
-            let qualified = qualified_symbol(prefix, a.name);
+            let qualified = qualified_symbol(prefix, a.name.clone());
             let ability_id = AbilityId::source(db, qualified);
 
             // Register the ability itself (for handler pattern resolution)
-            env.add_ability(a.name, ability_id);
+            env.add_ability(a.name.clone(), ability_id);
 
             // Ability operations are added to the ability's namespace
             for op in &a.operations {
                 let binding = Binding::AbilityOp {
                     ability: ability_id,
-                    op: op.name,
+                    op: op.name.clone(),
                     kind: op.kind,
                 };
-                env.add_to_namespace(a.name, op.name, binding);
+                env.add_to_namespace(a.name.clone(), op.name.clone(), binding);
             }
         }
 
         Decl::Use(u) => {
             // Import the last segment of the path
-            if let Some(&name) = u.path.last() {
-                let import_name = u.alias.unwrap_or(name);
+            if let Some(name) = u.path.last().cloned() {
+                let import_name = u.alias.clone().unwrap_or(name);
                 // A path keyword names a package-root path; the resolver
                 // reports a keyword that names none.
                 let module: Vec<Symbol> = prefix
@@ -351,7 +351,7 @@ fn collect_definition<'db>(
             // then register them under the module's namespace
             if let Some(body) = &m.body {
                 // Build nested module path by appending current module name
-                let saved = push_prefix(prefix, m.name);
+                let saved = push_prefix(prefix, m.name.clone());
 
                 // Collect inner declarations into a temporary environment
                 let mut inner_env = ModuleEnv::new();
@@ -364,7 +364,7 @@ fn collect_definition<'db>(
                 // Register each inner definition under the module's namespace
                 // e.g., `mod Foo { fn bar() {} }` makes `Foo::bar` available
                 for (name, binding) in inner_env.iter_definitions() {
-                    env.add_to_namespace(m.name, name, binding.clone());
+                    env.add_to_namespace(m.name.clone(), name, binding.clone());
                 }
 
                 // Also transfer any nested namespaces
@@ -373,7 +373,7 @@ fn collect_definition<'db>(
                     // Create qualified namespace path: Foo::Bar
                     let qualified_ns = Symbol::from_dynamic(&format!("{}::{}", m.name, inner_ns));
                     for (name, binding) in inner_bindings {
-                        env.add_to_namespace(qualified_ns, name, binding.clone());
+                        env.add_to_namespace(qualified_ns.clone(), name, binding.clone());
                     }
                     // Also add the inner namespace itself under the module
                     // so Foo::Bar resolves to the Bar namespace
@@ -381,16 +381,21 @@ fn collect_definition<'db>(
                     // (`Point` and `Point::x`, `Error` and `Error::Variant`).
                     // Preserve the type binding already transferred above.
                     env.add_to_namespace_if_absent(
-                        m.name,
-                        inner_ns,
+                        m.name.clone(),
+                        inner_ns.clone(),
                         Binding::Module {
-                            path: vec![m.name, inner_ns],
+                            path: vec![m.name.clone(), inner_ns],
                         },
                     );
                 }
 
                 // Register the module itself as a namespace binding
-                env.add_import(m.name, Binding::Module { path: vec![m.name] });
+                env.add_import(
+                    m.name.clone(),
+                    Binding::Module {
+                        path: vec![m.name.clone()],
+                    },
+                );
             }
         }
     }

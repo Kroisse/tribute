@@ -413,7 +413,13 @@ impl RewritePattern for InlineCallSite {
             return false;
         };
 
-        if !should_inline(&self.graph, &self.config, &self.recursive, ctx, callee) {
+        if !should_inline(
+            &self.graph,
+            &self.config,
+            &self.recursive,
+            ctx,
+            callee.clone(),
+        ) {
             return false;
         }
 
@@ -943,7 +949,7 @@ mod pass {
         let body = ctx.op_region(func_op, 0).unwrap();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op)
-                && ctx.op(op).attributes.get_symbol_ref("callee") == Some(target)
+                && ctx.op(op).attributes.get_symbol_ref("callee") == Some(target.clone())
             {
                 count += 1;
             }

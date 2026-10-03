@@ -187,7 +187,7 @@ impl AttrKind for SymbolRef {
 
     fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> Symbol {
         match attr {
-            Attribute::SymbolRef(symbol) => *symbol,
+            Attribute::SymbolRef(symbol) => symbol.clone(),
             _ => panic!("expected SymbolRef attribute"),
         }
     }
@@ -340,7 +340,7 @@ impl<'ctx, V: AttrKind + ?Sized> Iterator for DictIter<'ctx, V> {
     fn next(&mut self) -> Option<Self::Item> {
         self.entries
             .next()
-            .map(|(key, attr)| (*key, V::read(self.ctx, attr)))
+            .map(|(key, attr)| (key.clone(), V::read(self.ctx, attr)))
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {

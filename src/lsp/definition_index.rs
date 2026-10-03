@@ -108,15 +108,15 @@ impl ResolvedTarget {
     /// Get the name of the target.
     pub fn name(&self) -> Symbol {
         match self {
-            ResolvedTarget::Local { name, .. } => *name,
-            ResolvedTarget::Function { name } => *name,
-            ResolvedTarget::Constructor { variant, .. } => *variant,
-            ResolvedTarget::Type { name } => *name,
-            ResolvedTarget::Ability { name } => *name,
-            ResolvedTarget::AbilityOp { op, .. } => *op,
-            ResolvedTarget::Unresolved { name } => *name,
-            ResolvedTarget::Field { name, .. } => *name,
-            ResolvedTarget::Other { name } => *name,
+            ResolvedTarget::Local { name, .. } => name.clone(),
+            ResolvedTarget::Function { name } => name.clone(),
+            ResolvedTarget::Constructor { variant, .. } => variant.clone(),
+            ResolvedTarget::Type { name } => name.clone(),
+            ResolvedTarget::Ability { name } => name.clone(),
+            ResolvedTarget::AbilityOp { op, .. } => op.clone(),
+            ResolvedTarget::Unresolved { name } => name.clone(),
+            ResolvedTarget::Field { name, .. } => name.clone(),
+            ResolvedTarget::Other { name } => name.clone(),
         }
     }
 
@@ -169,7 +169,7 @@ impl<'db> AstDefinitionIndex<'db> {
         // Build name index
         let mut by_name = BTreeMap::<_, Vec<_>>::new();
         for (i, def) in definitions.iter().enumerate() {
-            by_name.entry(def.name).or_default().push(i);
+            by_name.entry(def.name.clone()).or_default().push(i);
         }
 
         Self::new(db, definitions, references, by_name)
@@ -393,29 +393,35 @@ impl<'db> AstDefinitionIndex<'db> {
                 if let Some(local_id) = def.local_id {
                     ResolvedTarget::Local {
                         id: local_id,
-                        name: def.name,
+                        name: def.name.clone(),
                     }
                 } else {
                     // Fallback for locals without LocalId
-                    ResolvedTarget::Unresolved { name: def.name }
+                    ResolvedTarget::Unresolved {
+                        name: def.name.clone(),
+                    }
                 }
             }
-            DefinitionKind::Function => ResolvedTarget::Function { name: def.name },
-            DefinitionKind::Struct | DefinitionKind::Enum => {
-                ResolvedTarget::Type { name: def.name }
-            }
-            DefinitionKind::EnumVariant { owner } => ResolvedTarget::Constructor {
-                type_name: *owner,
-                variant: def.name,
+            DefinitionKind::Function => ResolvedTarget::Function {
+                name: def.name.clone(),
             },
-            DefinitionKind::Ability => ResolvedTarget::Ability { name: def.name },
+            DefinitionKind::Struct | DefinitionKind::Enum => ResolvedTarget::Type {
+                name: def.name.clone(),
+            },
+            DefinitionKind::EnumVariant { owner } => ResolvedTarget::Constructor {
+                type_name: owner.clone(),
+                variant: def.name.clone(),
+            },
+            DefinitionKind::Ability => ResolvedTarget::Ability {
+                name: def.name.clone(),
+            },
             DefinitionKind::AbilityOp { owner } => ResolvedTarget::AbilityOp {
-                ability: *owner,
-                op: def.name,
+                ability: owner.clone(),
+                op: def.name.clone(),
             },
             DefinitionKind::Field { owner } => ResolvedTarget::Field {
-                owner: *owner,
-                name: def.name,
+                owner: owner.clone(),
+                name: def.name.clone(),
             },
         }
     }
@@ -489,7 +495,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     }
 
     fn collect_extern_func(&mut self, func: &ExternFuncDecl) {
-        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
+        self.add_definition(func.id, func.name.clone(), DefinitionKind::Function, None);
 
         for param in &func.params {
             self.collect_param(param);
@@ -499,22 +505,24 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn collect_param(&mut self, param: &ParamDecl) {
         self.add_definition(
             param.id,
-            param.name,
+            param.name.clone(),
             DefinitionKind::Parameter,
             param.local_id,
         );
     }
 
     fn collect_struct(&mut self, s: &StructDecl) {
-        self.add_definition(s.id, s.name, DefinitionKind::Struct, None);
+        self.add_definition(s.id, s.name.clone(), DefinitionKind::Struct, None);
 
         // Add field definitions
         for field in &s.fields {
-            if let Some(name) = field.name {
+            if let Some(name) = field.name.clone() {
                 self.add_definition(
                     field.id,
                     name,
-                    DefinitionKind::Field { owner: s.name },
+                    DefinitionKind::Field {
+                        owner: s.name.clone(),
+                    },
                     None,
                 );
             }
@@ -522,28 +530,32 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     }
 
     fn collect_enum(&mut self, e: &EnumDecl) {
-        self.add_definition(e.id, e.name, DefinitionKind::Enum, None);
+        self.add_definition(e.id, e.name.clone(), DefinitionKind::Enum, None);
 
         // Add variant definitions
         for variant in &e.variants {
             self.add_definition(
                 variant.id,
-                variant.name,
-                DefinitionKind::EnumVariant { owner: e.name },
+                variant.name.clone(),
+                DefinitionKind::EnumVariant {
+                    owner: e.name.clone(),
+                },
                 None,
             );
         }
     }
 
     fn collect_ability(&mut self, a: &AbilityDecl) {
-        self.add_definition(a.id, a.name, DefinitionKind::Ability, None);
+        self.add_definition(a.id, a.name.clone(), DefinitionKind::Ability, None);
 
         // Add operation definitions with owner for disambiguation
         for op in &a.operations {
             self.add_definition(
                 op.id,
-                op.name,
-                DefinitionKind::AbilityOp { owner: a.name },
+                op.name.clone(),
+                DefinitionKind::AbilityOp {
+                    owner: a.name.clone(),
+                },
                 None,
             );
         }
@@ -557,14 +569,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         match resolved {
             ResolvedRef::Local { id, name } => ResolvedTarget::Local {
                 id: *id,
-                name: *name,
+                name: name.clone(),
             },
             ResolvedRef::Function { id } => ResolvedTarget::Function {
                 name: id.name(self.db),
             },
             ResolvedRef::Constructor { id, variant } => ResolvedTarget::Constructor {
                 type_name: id.name(self.db),
-                variant: *variant,
+                variant: variant.clone(),
             },
             ResolvedRef::TypeDef { id } => ResolvedTarget::Type {
                 name: id.name(self.db),
@@ -574,7 +586,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             },
             ResolvedRef::AbilityOp { ability, op, .. } => ResolvedTarget::AbilityOp {
                 ability: ability.name(self.db),
-                op: *op,
+                op: op.clone(),
             },
             ResolvedRef::Ability { id } => ResolvedTarget::Type {
                 name: id.name(self.db),
@@ -596,7 +608,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
     }
 
     fn visit_func_decl(&mut self, func: &'ast FuncDecl<TypedRef<'db>>) {
-        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
+        self.add_definition(func.id, func.name.clone(), DefinitionKind::Function, None);
         for param in &func.params {
             self.collect_param(param);
         }
@@ -609,7 +621,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
             for param in params {
                 self.add_definition(
                     param.id,
-                    param.name,
+                    param.name.clone(),
                     DefinitionKind::Parameter,
                     param.local_id,
                 );
@@ -624,14 +636,19 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
         // shadowed variables apart.
         match pattern.kind.as_ref() {
             PatternKind::Bind { name, local_id } | PatternKind::As { name, local_id, .. } => {
-                self.add_definition(pattern.id, *name, DefinitionKind::Local, *local_id);
+                self.add_definition(pattern.id, name.clone(), DefinitionKind::Local, *local_id);
             }
             PatternKind::ListRest {
                 rest: Some(name),
                 rest_local_id,
                 ..
             } => {
-                self.add_definition(pattern.id, *name, DefinitionKind::Local, *rest_local_id);
+                self.add_definition(
+                    pattern.id,
+                    name.clone(),
+                    DefinitionKind::Local,
+                    *rest_local_id,
+                );
             }
             _ => {}
         }
@@ -641,7 +658,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
         // Shorthand `{ name }` binds `name` (no LocalId available); the field
         // id gives each binding its own span.
         if field.pattern.is_none() {
-            self.add_definition(field.id, field.name, DefinitionKind::Local, None);
+            self.add_definition(field.id, field.name.clone(), DefinitionKind::Local, None);
         }
         walk_field_pattern(self, field);
     }
@@ -792,7 +809,7 @@ mod tests {
 
         // Find the definition of "foo"
         let foo_sym = trunk_ir::Symbol::new("foo");
-        let foo_def = index.definition_of(&db, foo_sym);
+        let foo_def = index.definition_of(&db, foo_sym.clone());
         assert!(foo_def.is_some(), "Should find definition of 'foo'");
 
         // Find references to "foo" (should have 2: foo + foo)
@@ -1112,7 +1129,7 @@ fn unwrap(opt: Option) -> Int {
         let x_sym = trunk_ir::Symbol::new("x");
 
         // Get all references to 'x'
-        let all_refs = index.references_of(&db, x_sym);
+        let all_refs = index.references_of(&db, x_sym.clone());
         assert_eq!(all_refs.len(), 2, "Expected 2 references to 'x'");
 
         // Get the two different definitions
@@ -1128,7 +1145,7 @@ fn unwrap(opt: Option) -> Int {
             if let Some(local_id) = def.local_id {
                 let target = ResolvedTarget::Local {
                     id: local_id,
-                    name: x_sym,
+                    name: x_sym.clone(),
                 };
                 let refs = index.references_of_target(&db, &target);
                 assert_eq!(

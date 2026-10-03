@@ -214,10 +214,13 @@ impl RewritePattern for NormalizeIndirectCallPattern {
             "normalize_primitive_types: {}.{} signature normalized",
             data.dialect, data.name
         );
-        let mut builder =
-            trunk_ir::context::OperationDataBuilder::new(data.location, data.dialect, data.name)
-                .operands(ctx.op_operands(op).to_vec())
-                .results(new_result_types);
+        let mut builder = trunk_ir::context::OperationDataBuilder::new(
+            data.location,
+            data.dialect.clone(),
+            data.name.clone(),
+        )
+        .operands(ctx.op_operands(op).to_vec())
+        .results(new_result_types);
         for (key, value) in data.attributes.clone() {
             builder = builder.attr(key, value);
         }
@@ -274,8 +277,8 @@ impl RewritePattern for NormalizeOpResultPattern {
 
         // Skip operations already handled by other patterns
         let data = ctx.op(op);
-        let dialect = data.dialect;
-        let name = data.name;
+        let dialect = data.dialect.clone();
+        let name = data.name.clone();
         if dialect == Symbol::new("func")
             && (name == Symbol::new("func") || name == Symbol::new("call"))
         {

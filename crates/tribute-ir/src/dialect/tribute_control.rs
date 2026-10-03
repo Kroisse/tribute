@@ -618,7 +618,7 @@ fn print_extra_attributes(
         .attributes
         .iter()
         .filter(|(key, _)| !excluded.contains(key))
-        .map(|(key, value)| (*key, value.clone()))
+        .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     if attrs.is_empty() {
         return Ok(());
@@ -1853,7 +1853,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(symbol)
+                .definitions_of(symbol.clone())
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -1896,7 +1896,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(symbol)
+                .definitions_of(symbol.clone())
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -2327,7 +2327,7 @@ fn compiler_intrinsic_map<'a>(
     let mut map = HashMap::new();
     let mut previous = None;
     for declaration in declarations {
-        let key = (declaration.symbol, declaration.identity);
+        let key = (declaration.symbol.clone(), declaration.identity.clone());
         if previous.is_some_and(|previous| previous > key) {
             push_type_error(
                 errors,
@@ -2344,7 +2344,10 @@ fn compiler_intrinsic_map<'a>(
                 ),
             );
         }
-        if map.insert(declaration.symbol, declaration).is_some() {
+        if map
+            .insert(declaration.symbol.clone(), declaration)
+            .is_some()
+        {
             push_type_error(
                 errors,
                 format!(
@@ -3690,7 +3693,7 @@ mod tests {
         walk_region_ops(ctx, body, &mut |op| {
             let data = ctx.op(op);
             if data.dialect == Symbol::new("tribute_control") {
-                names.insert(data.name);
+                names.insert(data.name.clone());
                 assert_eq!(data.location.span, Span::new(7, 19));
             }
         });
@@ -5220,11 +5223,11 @@ mod tests {
                         .attributes
                         .get_str(&ctx, "sym_name")
                         .map(Symbol::from_dynamic)
-                        == Some(symbol)
+                        == Some(symbol.clone())
                 })
                 .unwrap();
             CompilerIntrinsicDeclaration::new(
-                symbol,
+                symbol.clone(),
                 symbol,
                 ctx.op(function).attributes.get_type("type").unwrap(),
             )

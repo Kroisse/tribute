@@ -230,7 +230,7 @@ mod tests {
             );
             let attrs = signature
                 .non_reserved_attrs(&ctx)
-                .map(|(key, value)| (*key, value.clone()))
+                .map(|(key, value)| (key.clone(), value.clone()))
                 .collect::<trunk_ir::AttributeMap>();
             assert_eq!(
                 attrs.get("nested"),

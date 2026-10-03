@@ -54,7 +54,7 @@ fn collect_module(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let nested = Module::new(module.id, Some(module.name), body.clone());
+                    let nested = Module::new(module.id, Some(module.name.clone()), body.clone());
                     collect_module(db, &nested, span_map, entries);
                 }
             }

@@ -240,7 +240,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 rest: true,
             },
             PatternKind::Variant { ctor, fields } => {
-                let ResolvedRef::Constructor { id, variant } = ctor.resolved else {
+                let ResolvedRef::Constructor { id, variant } = ctor.resolved.clone() else {
                     self.saw_error = true;
                     return Pat::Wild;
                 };
@@ -257,7 +257,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
             PatternKind::Record {
                 type_name, fields, ..
             } => {
-                let ResolvedRef::Constructor { id, variant } = type_name.resolved else {
+                let ResolvedRef::Constructor { id, variant } = type_name.resolved.clone() else {
                     self.saw_error = true;
                     return Pat::Wild;
                 };
@@ -298,11 +298,11 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         else {
             return None;
         };
-        let (type_id, name) = (*type_id, *name);
+        let (type_id, name) = (*type_id, name.clone());
         let family = match self.family_ids.get(&name) {
             Some(family) => *family,
             None => {
-                let family = self.family(name, id)?;
+                let family = self.family(name.clone(), id)?;
                 let family_id = FamilyId(self.families.len());
                 self.families.push(family);
                 self.family_types.push(type_id);
@@ -321,14 +321,16 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
     fn family(&self, name: Symbol, id: CtorId<'db>) -> Option<Family> {
         let db = self.checker.db();
         // Test for an enum first: a variant may share its enum's name.
-        if let Some(variants) = self.checker.env.lookup_enum_variants(name) {
+        if let Some(variants) = self.checker.env.lookup_enum_variants(name.clone()) {
             // Variants are registered in the enum's module, not under the enum.
             let variants = variants
                 .iter()
-                .map(|&variant| {
+                .map(|variant| {
+                    let variant = variant.clone();
                     let qualified = name
+                        .clone()
                         .parent_path()
-                        .map_or(variant, |module| module.join_path(variant));
+                        .map_or(variant.clone(), |module| module.join_path(variant.clone()));
                     let (arity, _) = self.constructor_shape(CtorId::new(db, qualified))?;
                     Some(VariantInfo {
                         name: variant,

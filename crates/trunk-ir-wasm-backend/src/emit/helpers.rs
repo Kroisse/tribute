@@ -264,7 +264,7 @@ pub(crate) fn type_to_valtype(
     } else if is_type(ctx, ty, "wasm", "func_sig") {
         Ok(ValType::Ref(RefType::FUNCREF))
     } else if ctx.get_type(ty).dialect == Symbol::new("wasm") {
-        let name = ctx.get_type(ty).name;
+        let name = ctx.get_type(ty).name.clone();
         if name == Symbol::new("structref") {
             Ok(ValType::Ref(RefType {
                 nullable: true,
@@ -379,7 +379,7 @@ pub(crate) fn attr_heap_type(
         Some(Attribute::Type(ty)) => {
             let data = ctx.get_type(*ty);
             if data.dialect == Symbol::new("wasm") {
-                let name = data.name;
+                let name = data.name.clone();
                 name.with_str(symbol_to_abstract_heap_type)
             } else {
                 Err(CompilationError::from(
@@ -445,7 +445,7 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and Int → checked u32 conversion
 pub(crate) fn attr_u32(attrs: &AttributeMap, key: Symbol) -> CompilationResult<u32> {
-    match attrs.get(key) {
+    match attrs.get(&key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",

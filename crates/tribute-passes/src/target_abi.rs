@@ -221,7 +221,7 @@ pub fn lower_cps_signatures_to_physical(
         }
         let op_attributes: Vec<_> = converted_attributes
             .iter()
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for (name, value) in op_attributes {
             if func::Func::matches(converter.ctx, op) && name == Symbol::new("type") {
@@ -231,7 +231,7 @@ pub fn lower_cps_signatures_to_physical(
             converted_attributes.insert(name, converted);
         }
         for (name, value) in converted_attributes {
-            if original_attributes.get(name) != Some(&value) {
+            if original_attributes.get(name.clone()) != Some(&value) {
                 attributes.push((op, name, value));
             }
         }
@@ -254,7 +254,8 @@ pub fn lower_cps_signatures_to_physical(
                 {
                     let mut converted_attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
-                        converted_attrs.insert(*name, converter.convert_attribute(value.clone())?);
+                        converted_attrs
+                            .insert(name.clone(), converter.convert_attribute(value.clone())?);
                     }
                     if converted_attrs != argument.attrs {
                         block_attributes.push((block, index, converted_attrs));
@@ -466,7 +467,7 @@ pub fn compose_root_entry_bridge(
         .attributes
         .insert("sym_name", Attribute::String(root_main_name));
     for &op in &top_level_ops {
-        rewrite_symbol_refs(ctx, op, main, root_main);
+        rewrite_symbol_refs(ctx, op, main.clone(), root_main.clone());
     }
 
     let entry = ctx.create_block(BlockData {
@@ -581,7 +582,7 @@ fn build_cps_root_call(
         parent_op: None,
     });
     let done_function = func::Func::operands()
-        .sym_name(root_done_k)
+        .sym_name(root_done_k.clone())
         .r#type(done_function_ty)
         .regions(done_region)
         .build(ctx, location);
@@ -616,7 +617,7 @@ fn build_cps_root_call(
         parent_op: None,
     });
     let dispatch_function = func::Func::operands()
-        .sym_name(root_dispatch)
+        .sym_name(root_dispatch.clone())
         .r#type(dispatch_function_ty)
         .regions(dispatch_region)
         .build(ctx, location);
@@ -1047,8 +1048,8 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol)
         return;
     }
     for key in [Symbol::new("callee"), Symbol::new("func_ref")] {
-        if ctx.op(op).attributes.get_symbol_ref(key) == Some(old) {
-            ctx.op_mut(op).attributes.insert(key, new);
+        if ctx.op(op).attributes.get_symbol_ref(key.clone()) == Some(old.clone()) {
+            ctx.op_mut(op).attributes.insert(key, new.clone());
         }
     }
     let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
@@ -1057,7 +1058,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol)
         for block in blocks {
             let nested_ops = ctx.block(block).ops.clone();
             for nested in nested_ops {
-                rewrite_symbol_refs(ctx, nested, old, new);
+                rewrite_symbol_refs(ctx, nested, old.clone(), new.clone());
             }
         }
     }
@@ -1295,7 +1296,7 @@ fn function_for_symbol(
     symbol: Symbol,
     functions: &HashMap<Symbol, FunctionIdentity>,
 ) -> Result<FunctionIdentity, TargetAbiError> {
-    function_for_symbol_optional(symbol, functions)
+    function_for_symbol_optional(symbol.clone(), functions)
         .ok_or_else(|| TargetAbiError::new(format!("target ABI: unknown callable `{symbol}`")))
 }
 
@@ -1576,7 +1577,7 @@ impl<'a> PhysicalTypeConverter<'a> {
     ) -> Result<AttributeMap, TargetAbiError> {
         let attributes = callable
             .non_reserved_attrs(self.ctx)
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect::<Vec<_>>();
         attributes
             .into_iter()
@@ -1588,7 +1589,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         let attributes: Vec<_> = data
             .attrs
             .iter()
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for (name, value) in attributes {
             data.attrs.insert(name, self.convert_attribute(value)?);

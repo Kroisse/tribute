@@ -174,7 +174,7 @@ impl<'db> TypeKind<'db> {
     pub fn string(db: &'db dyn salsa::Database) -> Self {
         let name = Symbol::new("String");
         Self::Named {
-            id: TypeDefId::synthetic(db, name),
+            id: TypeDefId::synthetic(db, name.clone()),
             name,
             args: vec![],
         }
@@ -657,7 +657,7 @@ pub fn annotation_to_effect<'db>(
 ) -> Option<Effect<'db>> {
     match &annotation.kind {
         TypeAnnotationKind::Named(name) if !is_type_variable(name) => {
-            let qualified = crate::qualified_symbol(&mut prefix.to_owned(), *name);
+            let qualified = crate::qualified_symbol(&mut prefix.to_owned(), name.clone());
             let ability_id = super::AbilityId::source(db, qualified);
             Some(Effect {
                 ability_id,
@@ -674,7 +674,7 @@ pub fn annotation_to_effect<'db>(
         TypeAnnotationKind::App { ctor, args } => {
             let qualified = match &ctor.kind {
                 TypeAnnotationKind::Named(n) if !is_type_variable(n) => {
-                    crate::qualified_symbol(&mut prefix.to_owned(), *n)
+                    crate::qualified_symbol(&mut prefix.to_owned(), n.clone())
                 }
                 TypeAnnotationKind::Path(path) => ability_path(path)?,
                 _ => return None,

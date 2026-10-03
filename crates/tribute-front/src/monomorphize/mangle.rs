@@ -59,7 +59,7 @@ fn write_type_mangled(
         TypeKind::Nil => f.write_str("Nil"),
         TypeKind::Never => f.write_str("Never"),
         TypeKind::Named { id, name, args } => {
-            nominal_mangle_base(db, *id, *name).with_str(|s| f.write_str(s))?;
+            nominal_mangle_base(db, *id, name.clone()).with_str(|s| f.write_str(s))?;
             if !args.is_empty() {
                 f.write_str("$0$")?;
                 write_type_mangled_list(db, args, f)?;
@@ -204,21 +204,25 @@ mod tests {
             &db,
             TypeKind::Named {
                 id: crate::ast::TypeDefId::builtin_list(&db),
-                name,
+                name: name.clone(),
                 args: vec![int_ty],
             },
         );
         let source = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1)),
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    name.clone(),
+                    crate::ast::NodeId::from_raw(1),
+                ),
                 name,
                 args: vec![int_ty],
             },
         );
 
         assert_eq!(
-            mangle_name(&db, base, &[builtin]).to_string(),
+            mangle_name(&db, base.clone(), &[builtin]).to_string(),
             "identity$BuiltinList$0$Int$1"
         );
         assert_eq!(
@@ -241,7 +245,7 @@ mod tests {
                     Symbol::new("A::Thing"),
                     crate::ast::NodeId::from_raw(1),
                 ),
-                name,
+                name: name.clone(),
                 args: vec![int_ty],
             },
         );
@@ -259,7 +263,7 @@ mod tests {
         );
 
         assert_eq!(
-            mangle_name(&db, base, &[a_thing]).to_string(),
+            mangle_name(&db, base.clone(), &[a_thing]).to_string(),
             "identity$A::Thing$0$Int$1"
         );
         assert_eq!(
@@ -338,7 +342,7 @@ mod tests {
             (Type::new(&db, TypeKind::Never), "Never"),
         ];
         for (ty, expected_suffix) in types {
-            let result = mangle_name(&db, base, &[ty]);
+            let result = mangle_name(&db, base.clone(), &[ty]);
             assert_eq!(result.to_string(), format!("f${expected_suffix}"));
         }
     }

@@ -33,7 +33,7 @@ impl FuncSignature {
         ir: &mut IrContext,
         name: Symbol,
     ) -> Option<Self> {
-        if let Some(signature) = ctx.lookup_logical_generated_signature(name) {
+        if let Some(signature) = ctx.lookup_logical_generated_signature(name.clone()) {
             return Some(Self {
                 param_types: signature.param_types.clone(),
                 return_type: signature.return_type,
@@ -161,12 +161,12 @@ pub(super) fn get_or_create_logical_tuple_type<'db>(
         .collect();
     let tuple_name = ctx.logical_tuple_name(*ast_ty);
 
-    if let Some(struct_ty) = ctx.get_type(tuple_name) {
+    if let Some(struct_ty) = ctx.get_type(tuple_name.clone()) {
         return Some((tuple_name, struct_ty));
     }
 
-    let struct_ty = ctx.adt_struct_type(ir, tuple_name, &ir_fields);
-    ctx.register_type(tuple_name, struct_ty);
+    let struct_ty = ctx.adt_struct_type(ir, tuple_name.clone(), &ir_fields);
+    ctx.register_type(tuple_name.clone(), struct_ty);
     Some((tuple_name, struct_ty))
 }
 

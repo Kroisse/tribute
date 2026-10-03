@@ -51,7 +51,7 @@ pub fn convert_signature_components<'a>(
         .map(|(key, value)| {
             let converted = convert_attribute_types(ctx, converter, value);
             attrs_changed |= converted != *value;
-            (*key, converted)
+            (key.clone(), converted)
         })
         .collect();
     let changed = inputs != old_inputs || results != old_results;

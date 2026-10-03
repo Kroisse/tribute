@@ -105,7 +105,7 @@ impl SymbolTable {
     /// definition in traversal order.
     pub fn duplicates(&self) -> Vec<(Symbol, &[OpRef])> {
         let mut duplicates: Vec<_> = self.iter().filter(|(_, ops)| ops.len() > 1).collect();
-        duplicates.sort_unstable_by_key(|&(name, _)| name);
+        duplicates.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
         duplicates
     }
 
@@ -113,13 +113,13 @@ impl SymbolTable {
     pub fn iter(&self) -> impl Iterator<Item = (Symbol, &[OpRef])> + '_ {
         self.definitions
             .iter()
-            .map(|(&name, ops)| (name, ops.as_slice()))
+            .map(|(name, ops)| (name.clone(), ops.as_slice()))
     }
 
     /// Every collected definition, including each duplicate of a name.
     pub fn all_definitions(&self) -> impl Iterator<Item = (Symbol, OpRef)> + '_ {
         self.iter()
-            .flat_map(|(name, ops)| ops.iter().map(move |&op| (name, op)))
+            .flat_map(|(name, ops)| ops.iter().map(move |&op| (name.clone(), op)))
     }
 }
 
@@ -257,7 +257,7 @@ mod tests {
         );
         let table = SymbolTable::collect(&ctx, module);
         let twice = Symbol::from_dynamic("outer::twice");
-        assert_eq!(table.resolve(twice), None);
+        assert_eq!(table.resolve(twice.clone()), None);
         let duplicates = table.duplicates();
         assert_eq!(duplicates.len(), 1);
         assert_eq!(duplicates[0].0, twice);
@@ -308,8 +308,8 @@ mod tests {
             .iter()
             .map(|(name, ops)| (name, ops.to_vec()))
             .collect();
-        names.sort_unstable_by_key(|&(name, _)| name);
-        expected.sort_unstable_by_key(|&(name, _)| name);
+        names.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
+        expected.sort_unstable_by(|(a, _), (b, _)| a.cmp(b));
         assert_eq!(names, expected);
     }
 }

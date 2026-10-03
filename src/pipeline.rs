@@ -434,7 +434,7 @@ fn prepare_frontend_details<'db>(
 
         let merged_ast = tribute_front::ast::Module::<TypedRef<'db>>::new(
             user_module.id,
-            user_module.name,
+            user_module.name.clone(),
             merged_decls,
         );
 
@@ -3273,7 +3273,7 @@ fn main() -> Nil {
         fn alias(ir: &IrContext, name: &str) -> TypeRef {
             let name = Symbol::from_dynamic(name);
             let ty = ir
-                .type_alias_by_name(name)
+                .type_alias_by_name(name.clone())
                 .expect("dependency layout is published");
             assert!(
                 ir.get_type(ty)
@@ -3432,7 +3432,7 @@ fn main() -> Nil {}
 
         fn layout(ir: &IrContext, name: Symbol, kind: &str) -> TypeRef {
             let ty = ir
-                .type_alias_by_name(name)
+                .type_alias_by_name(name.clone())
                 .expect("published nominal layout");
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
@@ -3930,7 +3930,7 @@ fn main() ->{std::io::Io} Nil {
                 .expect("Wasm lowering");
 
             let mut sites = std::collections::BTreeSet::new();
-            for &(name, ty) in ctx.type_aliases() {
+            for (name, ty) in ctx.type_aliases().iter().cloned() {
                 if !type_tree_all(&ctx, ty, &not_core_bytes) {
                     sites.insert(format!("alias !{name}"));
                 }

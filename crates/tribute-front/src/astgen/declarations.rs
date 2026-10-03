@@ -435,7 +435,7 @@ fn lower_type_path(ctx: &mut AstLoweringCtx<'_>, node: Node) -> TypeAnnotation {
     if segments.len() == 1 {
         TypeAnnotation {
             id,
-            kind: TypeAnnotationKind::Named(segments[0]),
+            kind: TypeAnnotationKind::Named(segments[0].clone()),
         }
     } else {
         TypeAnnotation {

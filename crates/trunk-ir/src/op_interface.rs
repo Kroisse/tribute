@@ -80,7 +80,7 @@ impl PureOps {
     /// Check if an arena operation is pure (no side effects, safe to remove if unused).
     pub fn is_pure(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
-        REGISTRY.lookup(data.dialect, data.name)
+        REGISTRY.lookup(data.dialect.clone(), data.name.clone())
     }
 
     /// Check if an arena operation is pure and eligible for DCE removal.
@@ -198,7 +198,7 @@ impl IsolatedFromAboveOps {
     /// Check if an arena operation's regions are isolated from above.
     pub fn is_isolated(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
-        ISOLATED_REGISTRY.lookup(data.dialect, data.name)
+        ISOLATED_REGISTRY.lookup(data.dialect.clone(), data.name.clone())
     }
 }
 
@@ -441,7 +441,7 @@ impl CallableOwnerOps {
     pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::func::FuncSig>> {
         let data = ctx.op(op);
         CALLABLE_OWNER_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| (registration.signature)(ctx, op))
     }
 }
@@ -557,7 +557,7 @@ impl CallableExitOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn CallableExit> {
         let data = ctx.op(op);
         CALLABLE_EXIT_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn CallableExit)
     }
 
@@ -637,7 +637,7 @@ impl CallLikeOps {
     pub fn callee(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
         let data = ctx.op(op);
         CALL_LIKE_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .and_then(|registration| (registration.callee)(ctx, op))
     }
 }
@@ -778,7 +778,7 @@ impl IndirectCallLikeOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn IndirectCallLike> {
         let data = ctx.op(op);
         INDIRECT_CALL_LIKE_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn IndirectCallLike)
     }
 
@@ -888,7 +888,7 @@ impl BranchOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn Branch> {
         let data = ctx.op(op);
         BRANCH_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn Branch)
     }
 }
@@ -1026,7 +1026,7 @@ impl RegionBranchOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranch> {
         let data = ctx.op(op);
         REGION_BRANCH_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn RegionBranch)
     }
 
@@ -1163,7 +1163,7 @@ impl RegionBranchTerminatorOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranchTerminator> {
         let data = ctx.op(op);
         REGION_BRANCH_TERMINATOR_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn RegionBranchTerminator)
     }
 }

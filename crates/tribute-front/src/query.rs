@@ -152,7 +152,7 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
         .decls
         .iter()
         .filter_map(|decl| match decl {
-            Decl::Function(f) => Some(f.name),
+            Decl::Function(f) => Some(f.name.clone()),
             _ => None,
         })
         .collect()

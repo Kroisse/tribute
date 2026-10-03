@@ -116,7 +116,7 @@ pub fn ability_definitions_from_schemas<'db>(
             let operations = operations
                 .iter()
                 .cloned()
-                .map(|operation| (operation.name, operation))
+                .map(|operation| (operation.name.clone(), operation))
                 .collect();
             (
                 *id,

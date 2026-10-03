@@ -234,7 +234,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 assert_eq!(index.is_generic(*id), generic);
                 match entry.source {
                     NominalDeclaration::Struct(s) => {
-                        assert_eq!(*id, TypeDefId::source(db, name, s.id));
+                        assert_eq!(*id, TypeDefId::source(db, name.clone(), s.id));
                         assert_eq!(entry.constructors.len(), 1);
                         assert_eq!(entry.constructors[0].id.qualified(db), name);
                         assert_eq!(entry.constructors[0].node, s.id);
@@ -363,12 +363,12 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 _ => None,
             })
             .unwrap();
-        let hidden_id = TypeDefId::source(db, hidden_decl.name, hidden_decl.id);
+        let hidden_id = TypeDefId::source(db, hidden_decl.name.clone(), hidden_decl.id);
         let hidden = Type::new(
             db,
             TypeKind::Named {
                 id: hidden_id,
-                name: hidden_decl.name,
+                name: hidden_decl.name.clone(),
                 args: vec![Type::new(db, TypeKind::BoundVar { index: 0 })],
             },
         );

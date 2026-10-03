@@ -92,8 +92,8 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
                 if !Self::matches(ctx, op) {
                     return Err(#crate_path::ops::ConversionError::WrongOperation {
                         expected: #full_name,
-                        actual_dialect: ctx.op(op).dialect,
-                        actual_name: ctx.op(op).name,
+                        actual_dialect: ctx.op(op).dialect.clone(),
+                        actual_name: ctx.op(op).name.clone(),
                     });
                 }
                 Ok(Self(op))

@@ -24,6 +24,8 @@ itertools = "0.14"
 itoa = "1"
 inventory = "0.3"
 lasso = "0.7"
+string_cache = { version = "0.11", default-features = false }
+string_cache_codegen = "0.11"
 libc = "0.2"
 lsp-server = "0.10"
 lsp-types = "0.97"

@@ -68,7 +68,7 @@ fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> Cal
             return ControlFlow::Continue(WalkAction::Skip);
         }
         ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
-            graph.module_references.insert(reference);
+            graph.module_references.insert(reference.clone());
             graph.address_taken.insert(reference);
         });
         ControlFlow::Continue(WalkAction::Advance)
@@ -77,11 +77,11 @@ fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> Cal
         if let &[op] = ops
             && func::Func::matches(ctx, op)
         {
-            graph.func_ops.insert(name, op);
+            graph.func_ops.insert(name.clone(), op);
         }
         for &op in ops.iter().filter(|&&op| func::Func::matches(ctx, op)) {
             for region in ctx.op_regions(op) {
-                collect_calls(ctx, region, name, &mut graph);
+                collect_calls(ctx, region, name.clone(), &mut graph);
             }
         }
     }
@@ -97,11 +97,15 @@ fn collect_calls(ctx: &IrContext, region: RegionRef, caller: Symbol, graph: &mut
         }
         let mut callee = CallLikeOps::callee(ctx, op);
         ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
-            if callee == Some(reference) {
+            if callee == Some(reference.clone()) {
                 callee = None;
-                record_call(graph, caller, reference);
+                record_call(graph, caller.clone(), reference);
             } else {
-                graph.edges.entry(caller).or_default().insert(reference);
+                graph
+                    .edges
+                    .entry(caller.clone())
+                    .or_default()
+                    .insert(reference.clone());
                 graph.address_taken.insert(reference);
             }
         });
@@ -110,8 +114,16 @@ fn collect_calls(ctx: &IrContext, region: RegionRef, caller: Symbol, graph: &mut
 }
 
 fn record_call(graph: &mut CallGraph, caller: Symbol, callee: Symbol) {
-    graph.edges.entry(caller).or_default().insert(callee);
-    graph.calls.entry(caller).or_default().insert(callee);
+    graph
+        .edges
+        .entry(caller.clone())
+        .or_default()
+        .insert(callee.clone());
+    graph
+        .calls
+        .entry(caller)
+        .or_default()
+        .insert(callee.clone());
     *graph.call_site_count.entry(callee).or_insert(0) += 1;
 }
 
@@ -138,7 +150,7 @@ pub fn tarjan_scc(graph: &CallGraph) -> HashMap<Symbol, u32> {
 
 fn scc_over(graph: &CallGraph, edges: &Edges) -> HashMap<Symbol, u32> {
     let mut state = TarjanState::default();
-    for &v in graph.func_ops.keys() {
+    for v in graph.func_ops.keys().cloned() {
         if !state.index.contains_key(&v) {
             strongconnect(v, &mut state, graph, edges);
         }
@@ -166,15 +178,15 @@ pub fn directly_recursive_functions(graph: &CallGraph) -> HashSet<Symbol> {
 fn cyclic_functions(graph: &CallGraph, edges: &Edges) -> HashSet<Symbol> {
     let scc_ids = scc_over(graph, edges);
     let mut by_scc: HashMap<u32, Vec<Symbol>> = HashMap::new();
-    for (&v, &id) in &scc_ids {
-        by_scc.entry(id).or_default().push(v);
+    for (v, &id) in &scc_ids {
+        by_scc.entry(id).or_default().push(v.clone());
     }
     let mut result = HashSet::new();
     for members in by_scc.into_values() {
         if members.len() > 1 {
             result.extend(members);
         } else {
-            let v = members[0];
+            let v = members[0].clone();
             if edges.get(&v).is_some_and(|s| s.contains(&v)) {
                 result.insert(v);
             }
@@ -201,27 +213,27 @@ struct TarjanState {
 fn strongconnect(v: Symbol, state: &mut TarjanState, graph: &CallGraph, edges: &Edges) {
     let v_index = state.next_index;
     state.next_index += 1;
-    state.index.insert(v, v_index);
-    state.lowlink.insert(v, v_index);
-    state.stack.push(v);
-    state.on_stack.insert(v);
+    state.index.insert(v.clone(), v_index);
+    state.lowlink.insert(v.clone(), v_index);
+    state.stack.push(v.clone());
+    state.on_stack.insert(v.clone());
 
     if let Some(successors) = edges.get(&v) {
-        let successors: Vec<Symbol> = successors.iter().copied().collect();
+        let successors: Vec<Symbol> = successors.iter().cloned().collect();
         for w in successors {
             // Skip external callees (not defined in this module).
             if !graph.func_ops.contains_key(&w) {
                 continue;
             }
             if !state.index.contains_key(&w) {
-                strongconnect(w, state, graph, edges);
+                strongconnect(w.clone(), state, graph, edges);
                 let w_low = state.lowlink[&w];
                 let v_low = state.lowlink[&v];
-                state.lowlink.insert(v, v_low.min(w_low));
+                state.lowlink.insert(v.clone(), v_low.min(w_low));
             } else if state.on_stack.contains(&w) {
                 let w_idx = state.index[&w];
                 let v_low = state.lowlink[&v];
-                state.lowlink.insert(v, v_low.min(w_idx));
+                state.lowlink.insert(v.clone(), v_low.min(w_idx));
             }
         }
     }
@@ -235,7 +247,7 @@ fn strongconnect(v: Symbol, state: &mut TarjanState, graph: &CallGraph, edges: &
                 .pop()
                 .expect("stack non-empty while popping SCC");
             state.on_stack.remove(&w);
-            state.scc_id.insert(w, scc_id);
+            state.scc_id.insert(w.clone(), scc_id);
             if w == v {
                 break;
             }
@@ -462,10 +474,13 @@ mod tests {
         let [called, captured, listed] = ["called", "captured", "listed"].map(Symbol::new);
         assert_eq!(
             g.edges[&Symbol::new("holder")],
-            HashSet::from([called, captured, listed])
+            HashSet::from([called.clone(), captured.clone(), listed.clone()])
         );
         // `callee` is a call only on an operation registered as a direct call.
-        assert_eq!(g.address_taken, HashSet::from([called, captured, listed]));
+        assert_eq!(
+            g.address_taken,
+            HashSet::from([called.clone(), captured, listed])
+        );
         assert_eq!(g.call_site_count, HashMap::from([(called, 1)]));
     }
 
@@ -494,7 +509,7 @@ mod tests {
         let [make, body, looping] = ["make", "body", "looping"].map(Symbol::new);
         assert_eq!(
             recursive_functions(&g),
-            HashSet::from([make, body, looping])
+            HashSet::from([make, body, looping.clone()])
         );
         assert_eq!(directly_recursive_functions(&g), HashSet::from([looping]));
     }
@@ -518,9 +533,9 @@ mod tests {
 
         let g = build_call_graph(&ctx, module);
         let exported = Symbol::new("exported");
-        assert_eq!(g.module_references, HashSet::from([exported]));
-        assert_eq!(g.address_taken, HashSet::from([exported]));
-        assert_eq!(g.call_site_count, HashMap::from([(exported, 1)]));
+        assert_eq!(g.module_references, HashSet::from([exported.clone()]));
+        assert_eq!(g.address_taken, HashSet::from([exported.clone()]));
+        assert_eq!(g.call_site_count, HashMap::from([(exported.clone(), 1)]));
         assert!(!g.edges.contains_key(&exported));
     }
 

@@ -134,7 +134,7 @@ pub fn verify_boundary_exit(
     target: TargetKind,
 ) -> Vec<BoundaryViolation> {
     let mut verifier = Verifier::new(ctx);
-    for &(name, ty) in ctx.type_aliases() {
+    for (name, ty) in ctx.type_aliases().iter().cloned() {
         verifier.check_type(ty, None, &format!("alias !{name}"));
     }
     let mut ops = Vec::new();
@@ -273,7 +273,7 @@ impl<'a> Verifier<'a> {
         }
         for (name, value) in data.attributes.iter() {
             let context = format!("{op_name} attribute {name}");
-            self.check_attribute_name(*name, Some(op), &context);
+            self.check_attribute_name(name.clone(), Some(op), &context);
             self.check_attribute(value, Some(op), &context);
         }
         for &ty in ctx.op_result_types(op) {
@@ -286,7 +286,7 @@ impl<'a> Verifier<'a> {
                     self.check_type(argument.ty, Some(op), &context);
                     for (name, value) in argument.attrs.iter() {
                         let context = format!("{context} attribute {name}");
-                        self.check_attribute_name(*name, Some(op), &context);
+                        self.check_attribute_name(name.clone(), Some(op), &context);
                         self.check_attribute(value, Some(op), &context);
                     }
                 }
@@ -300,7 +300,7 @@ impl<'a> Verifier<'a> {
         if let Ok(constant) = func::Constant::from_op(ctx, op) {
             let target = constant.func_ref(ctx);
             let expected = functions
-                .resolve(target)
+                .resolve(target.clone())
                 .and_then(|function| func::Func::from_op(ctx, function).ok())
                 .map(|function| function.r#type(ctx));
             if expected.is_none() || ctx.op_result_types(op) != [expected.unwrap()] {
@@ -363,7 +363,7 @@ impl<'a> Verifier<'a> {
             Attribute::Dict(entries) => {
                 for (name, value) in entries.iter() {
                     let location = format!("{location} key {name}");
-                    if let Some(kind) = classify_attribute_name(*name) {
+                    if let Some(kind) = classify_attribute_name(name.clone()) {
                         found.push((kind, location.clone()));
                     }
                     self.attribute_violations(value, &location, found);
@@ -413,7 +413,7 @@ impl<'a> Verifier<'a> {
         }
         for (name, value) in data.attrs.iter() {
             let location = format!(" type attribute {name}");
-            if let Some(kind) = classify_attribute_name(*name) {
+            if let Some(kind) = classify_attribute_name(name.clone()) {
                 found.push((kind, location.clone()));
             }
             self.attribute_violations(value, &location, &mut found);
@@ -435,7 +435,7 @@ fn ownership_violations(ctx: &IrContext, signature: func::FuncSig) -> Vec<TypeVi
     let mut found = Vec::new();
     for (index, attrs) in signature.input_attrs(ctx).enumerate() {
         let location = format!(" input {index}");
-        match attrs.get(ownership) {
+        match attrs.get(ownership.clone()) {
             Some(Attribute::String(mode)) if ctx.str(*mode) == crate::target_abi::CONSUMED => {}
             Some(Attribute::String(mode)) => found.push((
                 ViolationKind::UnknownOwnership(ctx.str(*mode).to_owned()),

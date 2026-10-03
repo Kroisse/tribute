@@ -62,8 +62,10 @@ pub fn monomorphize_functions<'db>(
     if !errors.is_empty() {
         return Err(errors);
     }
-    let fn_types_vec: Vec<(Symbol, TypeScheme<'db>)> =
-        function_types.iter().map(|(k, v)| (*k, *v)).collect();
+    let fn_types_vec: Vec<(Symbol, TypeScheme<'db>)> = function_types
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
 
     // === Function monomorphization ===
 
@@ -521,11 +523,11 @@ fn build_rewrite_map<'db>(
         let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
             .iter()
             .map(|type_args| {
-                let mangled = mangle::mangle_name(db, qualified, type_args);
+                let mangled = mangle::mangle_name(db, qualified.clone(), type_args);
                 (type_args.clone(), mangled)
             })
             .collect();
-        entries.sort_by_key(|e| e.1);
+        entries.sort_by_key(|e| e.1.clone());
         rewrite_map.insert(*func_id, entries);
     }
 

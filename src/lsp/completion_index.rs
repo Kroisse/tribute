@@ -84,28 +84,28 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
         match decl {
             Decl::Function(func) => {
                 items.push(AstCompletionItem {
-                    name: func.name,
+                    name: func.name.clone(),
                     kind: CompletionKind::Function,
                     detail: None,
                 });
             }
             Decl::Struct(s) => {
                 items.push(AstCompletionItem {
-                    name: s.name,
+                    name: s.name.clone(),
                     kind: CompletionKind::Struct,
                     detail: None,
                 });
             }
             Decl::Enum(e) => {
                 items.push(AstCompletionItem {
-                    name: e.name,
+                    name: e.name.clone(),
                     kind: CompletionKind::Enum,
                     detail: None,
                 });
                 // Add variant constructors
                 for variant in &e.variants {
                     items.push(AstCompletionItem {
-                        name: variant.name,
+                        name: variant.name.clone(),
                         kind: CompletionKind::Constructor,
                         detail: Some(format!("{}::{}", e.name, variant.name)),
                     });
@@ -113,21 +113,21 @@ pub fn completion_items(db: &dyn salsa::Database, source: SourceCst) -> Vec<AstC
             }
             Decl::ExternFunction(func) => {
                 items.push(AstCompletionItem {
-                    name: func.name,
+                    name: func.name.clone(),
                     kind: CompletionKind::Function,
                     detail: None,
                 });
             }
             Decl::Ability(a) => {
                 items.push(AstCompletionItem {
-                    name: a.name,
+                    name: a.name.clone(),
                     kind: CompletionKind::Ability,
                     detail: None,
                 });
             }
             Decl::Use(use_decl) => {
                 if let Some(ability) = AbilityId::builtin_from_path(db, &use_decl.path) {
-                    let name = use_decl.alias.unwrap_or_else(|| ability.name(db));
+                    let name = use_decl.alias.clone().unwrap_or_else(|| ability.name(db));
                     if !items.iter().any(|item| item.name == name) {
                         items.push(AstCompletionItem {
                             name,
@@ -203,7 +203,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
         match decl {
             Decl::Function(func) => {
                 symbols.push(DocumentSymbolInfo {
-                    name: func.name,
+                    name: func.name.clone(),
                     kind: SymbolKind::Function,
                     span: span_map.get_or_default(func.id),
                     children: vec![],
@@ -214,7 +214,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     .fields
                     .iter()
                     .filter_map(|f| {
-                        f.name.map(|name| DocumentSymbolInfo {
+                        f.name.clone().map(|name| DocumentSymbolInfo {
                             name,
                             kind: SymbolKind::Field,
                             span: span_map.get_or_default(f.id),
@@ -224,7 +224,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     .collect();
 
                 symbols.push(DocumentSymbolInfo {
-                    name: s.name,
+                    name: s.name.clone(),
                     kind: SymbolKind::Struct,
                     span: span_map.get_or_default(s.id),
                     children,
@@ -235,7 +235,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     .variants
                     .iter()
                     .map(|v| DocumentSymbolInfo {
-                        name: v.name,
+                        name: v.name.clone(),
                         kind: SymbolKind::Variant,
                         span: span_map.get_or_default(v.id),
                         children: vec![],
@@ -243,7 +243,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     .collect();
 
                 symbols.push(DocumentSymbolInfo {
-                    name: e.name,
+                    name: e.name.clone(),
                     kind: SymbolKind::Enum,
                     span: span_map.get_or_default(e.id),
                     children,
@@ -254,7 +254,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     .operations
                     .iter()
                     .map(|op| DocumentSymbolInfo {
-                        name: op.name,
+                        name: op.name.clone(),
                         kind: SymbolKind::Function,
                         span: span_map.get_or_default(op.id),
                         children: vec![],
@@ -262,7 +262,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
                     .collect();
 
                 symbols.push(DocumentSymbolInfo {
-                    name: a.name,
+                    name: a.name.clone(),
                     kind: SymbolKind::Ability,
                     span: span_map.get_or_default(a.id),
                     children,
@@ -270,7 +270,7 @@ pub fn document_symbols(db: &dyn salsa::Database, source: SourceCst) -> Vec<Docu
             }
             Decl::ExternFunction(func) => {
                 symbols.push(DocumentSymbolInfo {
-                    name: func.name,
+                    name: func.name.clone(),
                     kind: SymbolKind::Function,
                     span: span_map.get_or_default(func.id),
                     children: vec![],
@@ -353,7 +353,7 @@ pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<F
                 .iter()
                 .map(|p| {
                     let ty_str = p.ty.as_ref().map(print_type_annotation);
-                    (p.name, ty_str)
+                    (p.name.clone(), ty_str)
                 })
                 .collect();
 
@@ -369,7 +369,7 @@ pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<F
             });
 
             signatures.push(FunctionSignature {
-                name: func.name,
+                name: func.name.clone(),
                 params,
                 return_ty,
                 effects,
@@ -656,7 +656,7 @@ mod tests {
         for callee in ["r#case", "case"] {
             let sig = find_callee_signature(&signatures, callee);
             assert_eq!(
-                sig.map(|sig| sig.name),
+                sig.map(|sig| sig.name.clone()),
                 Some(trunk_ir::Symbol::new("case")),
                 "{callee}"
             );

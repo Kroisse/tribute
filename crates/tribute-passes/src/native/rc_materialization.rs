@@ -172,7 +172,7 @@ fn allocation_size_for_type(
     // fallback and is not inferred from physical definitions.
     let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("tribute_rt")
-        && matches!(data.name, name if name == Symbol::new("anyref") || name == Symbol::new("intref"))
+        && matches!(data.name.clone(), name if name == Symbol::new("anyref") || name == Symbol::new("intref"))
     {
         return Ok(0);
     }

@@ -155,7 +155,7 @@ impl<'db> TypeChecker<'db> {
         if let [Decl::Module(package)] = decls.as_slice()
             && let Some(body) = &package.body
         {
-            crate::push_prefix(&mut prefix, package.name);
+            crate::push_prefix(&mut prefix, package.name.clone());
             decls = body;
         }
         let declaration = decls.iter().find_map(|decl| match decl {
@@ -317,7 +317,7 @@ impl<'db> TypeChecker<'db> {
         ModuleCheckResult {
             module: Module {
                 id: module.id,
-                name: module.name,
+                name: module.name.clone(),
                 decls,
             },
             function_types,
@@ -393,7 +393,7 @@ impl<'db> TypeChecker<'db> {
         module: &crate::ast::ModuleDecl<ResolvedRef<'db>>,
     ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
         // Push module name to prefix
-        let prev_len = crate::push_prefix(&mut self.prefix, module.name);
+        let prev_len = crate::push_prefix(&mut self.prefix, module.name.clone());
 
         let body = module
             .body
@@ -405,7 +405,7 @@ impl<'db> TypeChecker<'db> {
 
         crate::ast::ModuleDecl {
             id: module.id,
-            name: module.name,
+            name: module.name.clone(),
             is_pub: module.is_pub,
             body,
         }

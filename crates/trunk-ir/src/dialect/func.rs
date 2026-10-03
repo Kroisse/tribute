@@ -795,7 +795,7 @@ fn print_func(
                 **k != crate::Symbol::new("sym_name")
                     && (preserve_type || **k != crate::Symbol::new("type"))
             })
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect()
     };
     if !extra_attrs.is_empty() {

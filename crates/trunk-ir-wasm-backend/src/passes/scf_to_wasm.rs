@@ -123,8 +123,8 @@ fn validate_structured_control(
                 let data = ctx.op(op);
                 return ControlFlow::Break(ConversionError::new(SCF_TO_WASM_BOUNDARY, vec![IllegalOp {
                     op,
-                    dialect: data.dialect,
-                    name: data.name,
+                    dialect: data.dialect.clone(),
+                    name: data.name.clone(),
                     legality: LegalityCheck::Illegal,
                     reason: Some("Never control requires one unused result, final block position, and terminal region successors".into()),
                 }]));
@@ -154,8 +154,8 @@ pub fn validate_lowerable_switches(ctx: &IrContext, module: Module) -> Result<()
             vec![
                 IllegalOp {
                     op,
-                    dialect: data.dialect,
-                    name: data.name,
+                    dialect: data.dialect.clone(),
+                    name: data.name.clone(),
                     legality: LegalityCheck::Illegal,
                     reason: None,
                 }

@@ -79,7 +79,7 @@ fn convert_nested_callable_type(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -113,7 +113,7 @@ fn convert_type_to_clif(
         let results = shared.results(ctx).to_vec();
         let type_attrs = shared
             .non_reserved_attrs(ctx)
-            .map(|(key, value)| (*key, value.clone()))
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<Vec<_>>();
         let attrs = type_attrs
             .into_iter()
@@ -144,7 +144,7 @@ fn convert_type_to_clif(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })

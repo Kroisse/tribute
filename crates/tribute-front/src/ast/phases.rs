@@ -55,12 +55,12 @@ impl UnresolvedName {
 
     /// Returns the final name segment (e.g. `"println"` from `"std::io::println"`).
     pub fn name(&self) -> Symbol {
-        self.qualified.last_segment()
+        self.qualified.clone().last_segment()
     }
 
     /// Returns the namespace prefix, if any (e.g. `"std::io"` from `"std::io::println"`).
     pub fn namespace(&self) -> Option<Symbol> {
-        self.qualified.parent_path()
+        self.qualified.clone().parent_path()
     }
 }
 
@@ -113,7 +113,7 @@ impl LocalId {
 #[salsa::interned(debug)]
 pub struct FuncDefId<'db> {
     /// The fully qualified name (e.g., `"foo::bar::func_name"`).
-    #[returns(copy)]
+    #[returns(clone)]
     pub qualified: Symbol,
 }
 
@@ -152,7 +152,7 @@ pub struct TypeDefId<'db> {
     #[returns(copy)]
     pub origin: TypeOrigin,
     /// The fully qualified name (e.g., `"std::option::Option"`).
-    #[returns(copy)]
+    #[returns(clone)]
     pub qualified: Symbol,
 }
 
@@ -198,7 +198,7 @@ impl<'db> TypeDefId<'db> {
 #[salsa::interned(debug)]
 pub struct CtorId<'db> {
     /// The fully qualified name (e.g., `"std::option::Some"`).
-    #[returns(copy)]
+    #[returns(clone)]
     pub qualified: Symbol,
 }
 
@@ -234,7 +234,7 @@ pub struct AbilityId<'db> {
     #[returns(copy)]
     pub origin: AbilityOrigin,
     /// The fully qualified name (e.g., `"std::state::State"`).
-    #[returns(copy)]
+    #[returns(clone)]
     pub qualified: Symbol,
 }
 

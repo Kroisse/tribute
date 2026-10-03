@@ -81,7 +81,7 @@ pub fn extract_type_name_from_type<'db>(
         return Some(Symbol::new(name));
     }
     match kind {
-        TypeKind::Named { name, .. } => Some(*name),
+        TypeKind::Named { name, .. } => Some(name.clone()),
         TypeKind::App { ctor, .. } => extract_type_name_from_type(db, *ctor),
         _ => None,
     }
@@ -190,7 +190,7 @@ impl<'db> ModuleTypeEnv<'db> {
             db,
             TypeKind::Named {
                 id: TypeDefId::builtin_list(db),
-                name: list_name,
+                name: list_name.clone(),
                 args: vec![list_arg],
             },
         );
@@ -427,20 +427,20 @@ impl<'db> ModuleTypeEnv<'db> {
             self.constructor_types.insert(*id, *scheme);
         }
         for (name, scheme) in exports.type_defs(self.db) {
-            self.type_defs.insert(*name, *scheme);
+            self.type_defs.insert(name.clone(), *scheme);
         }
         for (id, info) in exports.struct_fields(self.db) {
             self.struct_fields.insert(*id, info.clone());
         }
         for (name, variants) in exports.enum_variants(self.db) {
-            self.enum_variants.insert(*name, variants.clone());
+            self.enum_variants.insert(name.clone(), variants.clone());
         }
         for (id, names) in exports.constructor_field_names(self.db) {
             self.constructor_field_names.insert(*id, names.clone());
         }
         for (name, entries) in exports.method_index(self.db) {
             self.method_index
-                .entry(*name)
+                .entry(name.clone())
                 .or_default()
                 .extend(entries.iter().copied());
         }
@@ -453,7 +453,10 @@ impl<'db> ModuleTypeEnv<'db> {
                 AbilityInfo {
                     id: *ability,
                     type_params: type_params.clone(),
-                    operations: operations.iter().map(|op| (op.name, op.clone())).collect(),
+                    operations: operations
+                        .iter()
+                        .map(|op| (op.name.clone(), op.clone()))
+                        .collect(),
                 },
             );
         }
@@ -517,7 +520,11 @@ impl<'db> ModuleTypeEnv<'db> {
     ///
     /// Results are sorted alphabetically by name for deterministic output.
     pub fn export_type_defs(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
-        let mut result: Vec<_> = self.type_defs.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut result: Vec<_> = self
+            .type_defs
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result
     }
@@ -545,7 +552,7 @@ impl<'db> ModuleTypeEnv<'db> {
         let mut result: Vec<_> = self
             .enum_variants
             .iter()
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result
@@ -574,7 +581,7 @@ impl<'db> ModuleTypeEnv<'db> {
         let mut result: Vec<_> = self
             .method_index
             .iter()
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result
@@ -754,12 +761,12 @@ impl<'db> ModuleTypeEnv<'db> {
         prefix: &str,
     ) -> Type<'db> {
         let id = self
-            .lookup_type_def_in_scope(name, prefix)
+            .lookup_type_def_in_scope(name.clone(), prefix)
             .and_then(|scheme| match scheme.body(self.db).kind(self.db) {
                 TypeKind::Named { id, .. } => Some(*id),
                 _ => None,
             })
-            .unwrap_or_else(|| TypeDefId::synthetic(self.db, name));
+            .unwrap_or_else(|| TypeDefId::synthetic(self.db, name.clone()));
         self.named_type_with_id(id, name, args)
     }
 
@@ -806,8 +813,8 @@ mod tests {
     fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
         let name = Symbol::new("String");
-        let user_id = TypeDefId::source(db, name, NodeId::from_raw(1));
-        let user_ty = env.named_type_with_id(user_id, name, vec![]);
+        let user_id = TypeDefId::source(db, name.clone(), NodeId::from_raw(1));
+        let user_ty = env.named_type_with_id(user_id, name.clone(), vec![]);
         env.register_type_def(name, TypeScheme::mono(db, user_ty));
 
         let string_ty = env.string_type();
@@ -837,7 +844,7 @@ mod tests {
         let exported = env.export_function_types();
 
         // Should be sorted alphabetically by name
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(
             names,
             vec![
@@ -1006,7 +1013,7 @@ mod tests {
         let exported = env.export_type_defs();
 
         // Should be sorted alphabetically by name
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(
             names,
             vec![
@@ -1060,7 +1067,7 @@ mod tests {
         let exported = env.export_enum_variants();
 
         // Should be sorted alphabetically by enum name
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(
             names,
             vec![
@@ -1090,9 +1097,9 @@ mod tests {
         let second = env.export_function_types();
         let third = env.export_function_types();
 
-        let first_names: Vec<_> = first.iter().map(|(n, _)| *n).collect();
-        let second_names: Vec<_> = second.iter().map(|(n, _)| *n).collect();
-        let third_names: Vec<_> = third.iter().map(|(n, _)| *n).collect();
+        let first_names: Vec<_> = first.iter().map(|(n, _)| n.clone()).collect();
+        let second_names: Vec<_> = second.iter().map(|(n, _)| n.clone()).collect();
+        let third_names: Vec<_> = third.iter().map(|(n, _)| n.clone()).collect();
 
         assert_eq!(first_names, second_names);
         assert_eq!(second_names, third_names);
@@ -1146,7 +1153,7 @@ mod tests {
         }
 
         let exported = env.export_method_index();
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(
             names,
             vec![
@@ -1279,15 +1286,23 @@ mod tests {
         let first = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1)),
-                name,
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    name.clone(),
+                    crate::ast::NodeId::from_raw(1),
+                ),
+                name: name.clone(),
                 args: vec![],
             },
         );
         let second = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(2)),
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    name.clone(),
+                    crate::ast::NodeId::from_raw(2),
+                ),
                 name,
                 args: vec![],
             },

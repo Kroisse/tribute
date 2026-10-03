@@ -301,7 +301,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     pub(crate) fn non_resumptive_resume_op(&self, local: LocalId) -> Option<(Symbol, Symbol)> {
-        self.non_resumptive_resume_locals.get(&local).copied()
+        self.non_resumptive_resume_locals.get(&local).cloned()
     }
 
     pub(crate) fn mark_module_value_reported(&mut self, node: NodeId) -> bool {
@@ -1543,7 +1543,7 @@ mod tests {
         // Bind by name
         let name = Symbol::new("x");
         let ty2 = ctx.bool_type();
-        ctx.bind_local_by_name(name, ty2);
+        ctx.bind_local_by_name(name.clone(), ty2);
 
         assert_eq!(ctx.lookup_local_by_name(name), Some(ty2));
     }
@@ -1573,14 +1573,14 @@ mod tests {
 
         // Create a polymorphic constructor: forall a. a -> Option(a)
         let type_name = Symbol::new("Option");
-        let ctor_id = CtorId::new(db, type_name);
+        let ctor_id = CtorId::new(db, type_name.clone());
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let result_ty = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, type_name),
-                name: type_name,
+                id: TypeDefId::synthetic(db, type_name.clone()),
+                name: type_name.clone(),
                 args: vec![bound_var],
             },
         );

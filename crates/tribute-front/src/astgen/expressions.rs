@@ -722,7 +722,7 @@ fn lower_handler_operation_path(
     let op_node = node.child_by_field_name("operation")?;
     let op_text = ctx.node_text(&op_node).to_string();
     let op_symbol = Symbol::from_dynamic(&op_text);
-    let op_name = op_symbol.last_segment();
+    let op_name = op_symbol.clone().last_segment();
     let ability_sym = op_symbol
         .parent_path()
         .unwrap_or_else(|| Symbol::from_dynamic("_"));

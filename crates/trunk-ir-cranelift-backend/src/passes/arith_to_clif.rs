@@ -192,7 +192,7 @@ impl RewritePattern for ArithBinOpPattern {
             return false;
         };
         let loc = ctx.op(op).location;
-        let name = data.name;
+        let name = data.name.clone();
 
         let new_op = if name == Symbol::new("addi") {
             clif::Iadd::operands(lhs, rhs)
@@ -404,7 +404,7 @@ impl RewritePattern for ArithBitwisePattern {
             return false;
         }
 
-        let name = data.name;
+        let name = data.name.clone();
         let is_bitwise = name == Symbol::new("and")
             || name == Symbol::new("or")
             || name == Symbol::new("xor")

@@ -81,7 +81,7 @@ impl Attribute {
     /// Extract the inner `Symbol` if this is `Attribute::SymbolRef`.
     pub fn as_symbol_ref(&self) -> Option<Symbol> {
         match self {
-            Attribute::SymbolRef(s) => Some(*s),
+            Attribute::SymbolRef(s) => Some(s.clone()),
             _ => None,
         }
     }
@@ -172,7 +172,7 @@ impl Attribute {
     /// inside lists and dictionaries, in printing order.
     pub fn visit_symbol_refs(&self, f: &mut impl FnMut(Symbol)) {
         match self {
-            Attribute::SymbolRef(symbol) => f(*symbol),
+            Attribute::SymbolRef(symbol) => f(symbol.clone()),
             Attribute::List(items) => {
                 for item in items {
                     item.visit_symbol_refs(f);
@@ -206,7 +206,7 @@ impl Attribute {
             ),
             Attribute::Dict(dict) => Attribute::Dict(
                 dict.iter()
-                    .map(|(key, value)| Ok((*key, value.try_map_types(f)?)))
+                    .map(|(key, value)| Ok((key.clone(), value.try_map_types(f)?)))
                     .collect::<Result<_, _>>()?,
             ),
             Attribute::Unit
@@ -334,24 +334,24 @@ pub struct AttributeMap(Vec<(Symbol, Attribute)>);
 
 /// A key accepted by [`AttributeMap::get`].
 pub trait AttributeKey {
-    fn lookup_symbol(self) -> Option<Symbol>;
+    fn matches(&self, key: &Symbol) -> bool;
 }
 
 impl AttributeKey for Symbol {
-    fn lookup_symbol(self) -> Option<Symbol> {
-        Some(self)
+    fn matches(&self, key: &Symbol) -> bool {
+        self == key
     }
 }
 
 impl AttributeKey for &Symbol {
-    fn lookup_symbol(self) -> Option<Symbol> {
-        Some(*self)
+    fn matches(&self, key: &Symbol) -> bool {
+        *self == key
     }
 }
 
 impl AttributeKey for &str {
-    fn lookup_symbol(self) -> Option<Symbol> {
-        Symbol::lookup(self)
+    fn matches(&self, key: &Symbol) -> bool {
+        key.as_str() == *self
     }
 }
 
@@ -361,13 +361,12 @@ impl AttributeMap {
     }
 
     fn position(&self, key: impl AttributeKey) -> Option<usize> {
-        let symbol = key.lookup_symbol()?;
-        self.0.iter().position(|(key, _)| *key == symbol)
+        self.0
+            .iter()
+            .position(|(existing, _)| key.matches(existing))
     }
 
-    /// Return the attribute associated with a symbol or already-interned string.
-    ///
-    /// A missing string key is not added to the global symbol interner.
+    /// Return the attribute associated with a symbol or its text.
     pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
         let index = self.position(key)?;
         Some(&self.0[index].1)
@@ -449,7 +448,7 @@ impl AttributeMap {
     ) -> Option<Attribute> {
         let key = key.into();
         let value = value.into();
-        if let Some(index) = self.position(key) {
+        if let Some(index) = self.position(&key) {
             return Some(std::mem::replace(&mut self.0[index].1, value));
         }
         // Most maps hold one or two entries. A `Vec`'s first push reserves
@@ -1309,19 +1308,20 @@ mod tests {
 
         let mut attrs = AttributeMap::new();
         let answer = Symbol::new("answer");
-        attrs.insert(answer, Attribute::Int(42));
+        attrs.insert(answer.clone(), Attribute::Int(42));
 
         assert_eq!(attrs.get("answer"), Some(&Attribute::Int(42)));
-        assert_eq!(attrs.get(answer), Some(&Attribute::Int(42)));
+        assert_eq!(attrs.get(&answer), Some(&Attribute::Int(42)));
         assert_eq!(get_by_symbol(&attrs, &answer), Some(&Attribute::Int(42)));
         assert!(attrs.contains_key("answer"));
-        assert_eq!(attrs.keys().copied().collect::<Vec<_>>(), vec![answer]);
+        assert_eq!(
+            attrs.keys().cloned().collect::<Vec<_>>(),
+            vec![answer.clone()]
+        );
 
         let missing = "__trunk_ir_attribute_map_missing_key__";
-        assert_eq!(Symbol::lookup(missing), None);
         assert_eq!(attrs.get(missing), None);
         assert!(!attrs.contains_key(missing));
-        assert_eq!(Symbol::lookup(missing), None);
 
         assert_eq!(attrs.remove(answer), Some(Attribute::Int(42)));
         assert!(attrs.is_empty());
@@ -1377,26 +1377,26 @@ mod tests {
     fn attribute_map_later_entries_replace_earlier_ones() {
         let key = Symbol::new("key");
         let mut attrs = AttributeMap::new();
-        assert_eq!(attrs.insert(key, Attribute::Int(1)), None);
+        assert_eq!(attrs.insert(key.clone(), Attribute::Int(1)), None);
         assert_eq!(
-            attrs.insert(key, Attribute::Int(2)),
+            attrs.insert(key.clone(), Attribute::Int(2)),
             Some(Attribute::Int(1))
         );
         assert_eq!(attrs.len(), 1);
-        assert_eq!(attrs.get(key), Some(&Attribute::Int(2)));
+        assert_eq!(attrs.get(&key), Some(&Attribute::Int(2)));
 
         let collected: AttributeMap = [
-            (key, Attribute::Int(1)),
+            (key.clone(), Attribute::Int(1)),
             (Symbol::new("other"), Attribute::Unit),
-            (key, Attribute::Int(3)),
+            (key.clone(), Attribute::Int(3)),
         ]
         .into_iter()
         .collect();
         assert_eq!(collected.len(), 2);
-        assert_eq!(collected.get(key), Some(&Attribute::Int(3)));
+        assert_eq!(collected.get(&key), Some(&Attribute::Int(3)));
 
         let mut extended = collected.clone();
-        extended.extend([(key, Attribute::Int(4))]);
+        extended.extend([(key.clone(), Attribute::Int(4))]);
         assert_eq!(extended.get(key), Some(&Attribute::Int(4)));
         assert_eq!(extended.len(), 2);
     }

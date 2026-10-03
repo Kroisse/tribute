@@ -559,8 +559,8 @@ fn collect_wasm_ops_from_region(
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
             let op_data = ctx.op(op);
-            let dialect = op_data.dialect;
-            let name = op_data.name;
+            let dialect = op_data.dialect.clone();
+            let name = op_data.name.clone();
 
             if dialect == core_dialect && name == module_name {
                 for nested_region in ctx.op_regions(op) {
@@ -648,20 +648,21 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
 
     // Build function type lookup map
     for func in &info.funcs {
-        info.func_types.insert(func.name, func.func_type);
+        info.func_types.insert(func.name.clone(), func.func_type);
     }
     for import in &info.imports {
-        info.func_types.insert(import.sym, import.func_type);
+        info.func_types.insert(import.sym.clone(), import.func_type);
     }
 
     // Build function index map
     for (index, import_def) in info.imports.iter().enumerate() {
-        info.func_indices.insert(import_def.sym, index as u32);
+        info.func_indices
+            .insert(import_def.sym.clone(), index as u32);
     }
     let import_count = info.imports.len() as u32;
     for (index, func_def) in info.funcs.iter().enumerate() {
         info.func_indices
-            .insert(func_def.name, import_count + index as u32);
+            .insert(func_def.name.clone(), import_count + index as u32);
     }
 
     // Collect functions referenced via ref.func
@@ -898,7 +899,7 @@ fn emit_op_nested(
         ));
     }
 
-    let name = op_data.name;
+    let name = op_data.name.clone();
     let operands = ctx.op_operands(op);
 
     debug!("emit_op: wasm.{}", name);

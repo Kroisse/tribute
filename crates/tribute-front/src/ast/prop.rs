@@ -765,7 +765,7 @@ fn all_vars_bound(expr: &Expr<UnresolvedName>, bound: &[Symbol]) -> bool {
                         }
                         // After the let, the bound name enters scope.
                         if let PatternKind::Bind { name, .. } = pattern.kind.as_ref() {
-                            scope.push(*name);
+                            scope.push(name.clone());
                         }
                     }
                     Stmt::Expr { expr, .. } => {
@@ -779,7 +779,7 @@ fn all_vars_bound(expr: &Expr<UnresolvedName>, bound: &[Symbol]) -> bool {
         }
         ExprKind::Lambda { params, body } => {
             let mut scope = bound.to_vec();
-            scope.extend(params.iter().map(|p| p.name));
+            scope.extend(params.iter().map(|p| p.name.clone()));
             all_vars_bound(body, &scope)
         }
         ExprKind::Call { callee, args } => {

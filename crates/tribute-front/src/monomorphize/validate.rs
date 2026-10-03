@@ -51,21 +51,21 @@ pub(super) fn validate<'db>(
         for decl in decls {
             match decl {
                 Decl::Function(func) => {
-                    let name = crate::qualified_symbol(prefix, func.name);
+                    let name = crate::qualified_symbol(prefix, func.name.clone());
                     functions.insert(FuncDefId::new(db, name), func);
                 }
                 Decl::Struct(decl) => {
-                    let name = crate::qualified_symbol(prefix, decl.name);
+                    let name = crate::qualified_symbol(prefix, decl.name.clone());
                     let owner = crate::ast::TypeDefId::source(db, name, decl.id);
                     for field in &decl.fields {
-                        if let Some(name) = field.name {
+                        if let Some(name) = field.name.clone() {
                             fields.insert((owner, name));
                         }
                     }
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(prefix, module.name);
+                        let saved = crate::push_prefix(prefix, module.name.clone());
                         declarations(db, body, prefix, functions, fields);
                         prefix.truncate(saved);
                     }
@@ -153,13 +153,13 @@ pub(super) fn validate<'db>(
                 errors.push(fail(InstanceErrorKind::MissingInstance));
                 continue;
             };
-            let known_declaration = match instance.origin {
+            let known_declaration = match instance.origin.clone() {
                 crate::typeck::FunctionInstanceOrigin::Declaration => {
                     schemes.get(&target.qualified(db)) == Some(&instance.scheme)
                 }
                 crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field } => {
                     let mut prefix = owner.qualified(db).to_string();
-                    fields.contains(&(owner, field))
+                    fields.contains(&(owner, field.clone()))
                         && target.qualified(db) == crate::qualified_symbol(&mut prefix, field)
                 }
             };

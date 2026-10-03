@@ -40,8 +40,8 @@ fn prepare_root<'db>(
     let packet = Type::new(
         db,
         TypeKind::Named {
-            id: TypeDefId::source(db, packet_decl.name, packet_decl.id),
-            name: packet_decl.name,
+            id: TypeDefId::source(db, packet_decl.name.clone(), packet_decl.id),
+            name: packet_decl.name.clone(),
             args: vec![Type::new(db, TypeKind::Nat)],
         },
     );
@@ -202,7 +202,7 @@ fn main() -> Nil { marker() }
         .unwrap();
     assert_eq!(
         id.origin(db),
-        TypeDefId::source(db, original.name, original.id).origin(db)
+        TypeDefId::source(db, original.name.clone(), original.id).origin(db)
     );
 }
 

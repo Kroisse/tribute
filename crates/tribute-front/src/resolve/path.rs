@@ -6,7 +6,7 @@ use trunk_ir::Symbol;
 use crate::keywords::PATH_KEYWORDS;
 
 /// Why a path's keywords do not denote a module.
-#[derive(Clone, Copy, Debug, Display, PartialEq, Eq)]
+#[derive(Clone, Debug, Display, PartialEq, Eq)]
 pub(crate) enum PathKeywordError {
     #[display("`super` at the package root has no parent module")]
     SuperAtRoot,
@@ -35,11 +35,15 @@ pub(crate) fn absolute_path(
     module_path: &[Symbol],
     path: &[Symbol],
 ) -> Result<Option<Vec<Symbol>>, PathKeywordError> {
-    let Some((&first, rest)) = path.split_first() else {
+    let Some((first, rest)) = path.split_first() else {
         return Ok(None);
     };
-    if let Some(&misplaced) = rest.iter().find(|segment| keyword(**segment).is_some()) {
-        return Err(PathKeywordError::Misplaced(misplaced));
+    let first = first.clone();
+    if let Some(misplaced) = rest
+        .iter()
+        .find(|segment| keyword((*segment).clone()).is_some())
+    {
+        return Err(PathKeywordError::Misplaced(misplaced.clone()));
     }
     let mut base = match keyword(first) {
         None => return Ok(None),

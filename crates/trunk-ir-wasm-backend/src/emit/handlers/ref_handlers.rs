@@ -168,7 +168,7 @@ mod tests {
     fn resolve_callee_reports_missing_symbols() {
         let found = Symbol::new("found");
         let module_info = ModuleInfo {
-            func_indices: HashMap::from([(found, 7)]),
+            func_indices: HashMap::from([(found.clone(), 7)]),
             ..ModuleInfo::default()
         };
 

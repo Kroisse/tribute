@@ -119,7 +119,7 @@ pub struct IrLoweringCtx<'db> {
 
 /// The functions that compare a scrutinee with a `String` or `Bytes` literal
 /// pattern, by their qualified names.
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(crate) struct LiteralEqualities {
     pub string: Option<Symbol>,
     pub bytes: Option<Symbol>,
@@ -176,7 +176,7 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     pub(crate) fn compiler_intrinsic(&self, declaration: NodeId) -> Option<Symbol> {
-        self.compiler_intrinsics.get(&declaration).copied()
+        self.compiler_intrinsics.get(&declaration).cloned()
     }
 
     pub(crate) fn with_literal_equalities(mut self, literal_equalities: LiteralEqualities) -> Self {
@@ -185,7 +185,7 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     pub(crate) fn literal_equalities(&self) -> LiteralEqualities {
-        self.literal_equalities
+        self.literal_equalities.clone()
     }
 
     /// Get the current module path.
@@ -307,7 +307,7 @@ impl<'db> IrLoweringCtx<'db> {
         };
         if let Some(existing) = self
             .logical_generated_signatures
-            .insert(name, signature.clone())
+            .insert(name.clone(), signature.clone())
         {
             assert!(
                 existing.param_types == signature.param_types
@@ -338,7 +338,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// The IR symbol of the function with qualified name `name`: its declared
     /// name for an `extern "C"` function, the qualified name otherwise.
     pub(crate) fn function_symbol(&self, name: Symbol) -> Symbol {
-        self.c_symbols.get(&name).copied().unwrap_or(name)
+        self.c_symbols.get(&name).cloned().unwrap_or(name)
     }
 
     pub(crate) fn is_logical_source_function(&self, name: Symbol) -> bool {
@@ -475,7 +475,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// Used to get the effect type of lambda expressions.
     pub fn resolve_adt_type(&self, ty: crate::ast::Type<'db>) -> Option<TypeRef> {
         match ty.kind(self.db) {
-            TypeKind::Named { name, .. } => self.get_type(*name),
+            TypeKind::Named { name, .. } => self.get_type(name.clone()),
             _ => None,
         }
     }
@@ -493,7 +493,11 @@ impl<'db> IrLoweringCtx<'db> {
             .scopes
             .iter()
             .rev()
-            .flat_map(|scope| scope.iter().map(|(&id, &(name, value))| (id, name, value)))
+            .flat_map(|scope| {
+                scope
+                    .iter()
+                    .map(|(&id, (name, value))| (id, name.clone(), *value))
+            })
             .collect();
         bindings.sort_unstable_by_key(|(local_id, _, _)| local_id.raw());
         bindings.into_iter()
@@ -564,8 +568,8 @@ impl<'db> IrLoweringCtx<'db> {
                     })
                     .collect::<Vec<_>>();
                 let name = self.logical_tuple_name(ty);
-                let layout = self.adt_struct_type(ir, name, &fields);
-                ir.register_type_alias(name, layout);
+                let layout = self.adt_struct_type(ir, name.clone(), &fields);
+                ir.register_type_alias(name.clone(), layout);
                 self.adt_typeref(ir, name)
             }
             TypeKind::App { ctor, .. } => self.convert_logical_type(ir, *ctor),
@@ -609,7 +613,7 @@ impl<'db> IrLoweringCtx<'db> {
             }
             TypeKind::UniVar { id } => self.logical_univar_key(*id),
             TypeKind::Named { id, name, args } => {
-                let mut parts = vec![self.logical_nominal_key(*id, *name)];
+                let mut parts = vec![self.logical_nominal_key(*id, name.clone())];
                 parts.extend(args.iter().map(|arg| self.logical_type_key(*arg)));
                 logical_key("named", parts)
             }
@@ -849,7 +853,7 @@ impl<'db> IrLoweringCtx<'db> {
         ability_name: Symbol,
         arguments: &[crate::ast::Type<'db>],
     ) -> TypeRef {
-        let instance = self.ability_instance_key(ability_name, arguments);
+        let instance = self.ability_instance_key(ability_name.clone(), arguments);
         let params: Vec<_> = arguments
             .iter()
             .map(|arg| self.convert_logical_type(ir, *arg))
@@ -875,7 +879,7 @@ impl<'db> IrLoweringCtx<'db> {
         let name = ir.intern_symbol_text(name);
         let fields: Vec<_> = fields
             .iter()
-            .map(|&(field, ty)| (ir.intern_symbol_text(field), ty))
+            .map(|(field, ty)| (ir.intern_symbol_text(field.clone()), *ty))
             .collect();
         adt::struct_type(ir, name, fields, AttributeMap::new()).as_type_ref()
     }
@@ -894,7 +898,7 @@ impl<'db> IrLoweringCtx<'db> {
                 let field_attrs: Vec<Attribute> =
                     field_types.iter().map(|t| Attribute::Type(*t)).collect();
                 Attribute::List(vec![
-                    Attribute::String(ir.intern_symbol_text(*variant_name)),
+                    Attribute::String(ir.intern_symbol_text(variant_name.clone())),
                     Attribute::List(field_attrs),
                 ])
             })
@@ -923,7 +927,7 @@ impl<'db> IrLoweringCtx<'db> {
                 let field_attrs: Vec<Attribute> =
                     field_types.iter().map(|ty| Attribute::Type(*ty)).collect();
                 Attribute::List(vec![
-                    Attribute::String(ir.intern_symbol_text(*variant_name)),
+                    Attribute::String(ir.intern_symbol_text(variant_name.clone())),
                     Attribute::List(field_attrs),
                 ])
             })
@@ -1041,7 +1045,7 @@ mod tests {
             args: vec![],
         };
         let open = |id, effects| EffectRow::new(&db, effects, Some(EffectVar { id }));
-        let key = |row| ctx.ability_instance_key(ability, &[func_type(&db, vec![], row)]);
+        let key = |row| ctx.ability_instance_key(ability.clone(), &[func_type(&db, vec![], row)]);
 
         assert_eq!(key(open(3, vec![])), key(open(9, vec![])));
         assert_eq!(
@@ -1054,6 +1058,7 @@ mod tests {
         );
 
         let shared = |a, b| {
+            let ability = ability.clone();
             let inner = func_type(&db, vec![], open(a, vec![]));
             ctx.ability_instance_key(ability, &[func_type(&db, vec![inner], open(b, vec![]))])
         };
@@ -1102,7 +1107,7 @@ mod tests {
             named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("a::Box"))),
             named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("b::Box"))),
         ]
-        .map(|arg| ctx.ability_instance_key(ability, &[arg]));
+        .map(|arg| ctx.ability_instance_key(ability.clone(), &[arg]));
         let distinct: HashSet<_> = keys.iter().collect();
         assert_eq!(distinct.len(), keys.len(), "{keys:#?}");
     }
@@ -1195,29 +1200,29 @@ mod tests {
         );
 
         let nominal_name = Symbol::new("Nested::Forward");
-        ctx.declare_logical_nominal(nominal_name);
+        ctx.declare_logical_nominal(nominal_name.clone());
         let forward = AstType::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, nominal_name),
+                id: crate::ast::TypeDefId::synthetic(&db, nominal_name.clone()),
                 name: Symbol::new("Forward"),
                 args: vec![],
             },
         );
         assert_eq!(
             ctx.convert_logical_type(&mut ir, forward),
-            ctx.adt_typeref(&mut ir, nominal_name)
+            ctx.adt_typeref(&mut ir, nominal_name.clone())
         );
 
         // A source declaration named List must not capture the builtin type,
         // including when it occurs recursively inside a callable or tuple.
         let list_name = Symbol::new("List");
-        ctx.declare_logical_nominal(list_name);
+        ctx.declare_logical_nominal(list_name.clone());
         let source_list = AstType::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, list_name),
-                name: list_name,
+                id: crate::ast::TypeDefId::synthetic(&db, list_name.clone()),
+                name: list_name.clone(),
                 args: vec![],
             },
         );
@@ -1225,7 +1230,7 @@ mod tests {
             &db,
             TypeKind::Named {
                 id: crate::ast::TypeDefId::builtin_list(&db),
-                name: list_name,
+                name: list_name.clone(),
                 args: vec![int],
             },
         );
@@ -1262,7 +1267,7 @@ mod tests {
 
         let generated = Symbol::new("Forward::value");
         ctx.register_logical_generated_signature(
-            generated,
+            generated.clone(),
             vec![i32_ty],
             i32_ty,
             CallingConvention::Direct,
@@ -1271,7 +1276,7 @@ mod tests {
         // no-op; a conflicting signature remains fail-closed in the lowering
         // context rather than being silently replaced.
         ctx.register_logical_generated_signature(
-            generated,
+            generated.clone(),
             vec![i32_ty],
             i32_ty,
             CallingConvention::Direct,
@@ -1284,7 +1289,7 @@ mod tests {
         assert_eq!(generated_signature.convention, CallingConvention::Direct);
 
         let source_function = Symbol::new("Forward::run");
-        ctx.register_logical_source_function(source_function);
+        ctx.register_logical_source_function(source_function.clone());
         assert!(ctx.is_logical_source_function(source_function));
         assert!(ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
         assert!(!ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
@@ -1498,7 +1503,7 @@ mod tests {
         let scheme = TypeScheme::new(&db, vec![], vec![], body);
 
         let mut ft = HashMap::new();
-        ft.insert(name, scheme);
+        ft.insert(name.clone(), scheme);
 
         let ctx = IrLoweringCtx::new(
             &db,

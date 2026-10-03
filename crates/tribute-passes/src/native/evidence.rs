@@ -438,8 +438,8 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
 
     for op in ops {
         let op_data = ctx.op(op);
-        let dialect = op_data.dialect;
-        let name = op_data.name;
+        let dialect = op_data.dialect.clone();
+        let name = op_data.name.clone();
         let loc = op_data.location;
 
         // --- adt.ref_null with evidence type → func.call @__tribute_evidence_empty ---

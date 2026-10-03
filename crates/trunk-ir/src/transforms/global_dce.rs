@@ -94,11 +94,11 @@ fn run(
         functions().filter(|&(_, op)| is_candidate(op)).collect();
 
     let mut roots: HashSet<Symbol> = functions()
-        .filter(|&(name, op)| !is_candidate(op) || is_root(ctx, name, op, config))
+        .filter(|(name, op)| !is_candidate(*op) || is_root(ctx, name.clone(), *op, config))
         .map(|(name, _)| name)
         .collect();
     let graph = analyses.require::<CallGraph>(ctx, module.op());
-    roots.extend(&graph.module_references);
+    roots.extend(graph.module_references.iter().cloned());
     let reachable = compute_reachable(&graph, roots);
 
     // A function containing a reachable function definition is kept with it.
@@ -187,11 +187,16 @@ fn compute_reachable(graph: &CallGraph, roots: HashSet<Symbol>) -> HashSet<Symbo
     let mut worklist: VecDeque<Symbol> = roots.into_iter().collect();
 
     while let Some(func) = worklist.pop_front() {
-        if !reachable.insert(func) {
+        if !reachable.insert(func.clone()) {
             continue;
         }
         if let Some(callees) = graph.edges.get(&func) {
-            worklist.extend(callees.iter().filter(|callee| !reachable.contains(*callee)));
+            worklist.extend(
+                callees
+                    .iter()
+                    .filter(|callee| !reachable.contains(*callee))
+                    .cloned(),
+            );
         }
     }
 
