@@ -483,9 +483,15 @@ reads a marker directly.
 Empty evidence is represented in high-level IR as an empty `core.array<Marker>`
 or null evidence placeholder, and backend lowering turns that into the target
 runtime representation. Native lowering maps it to `__tribute_evidence_empty()`.
+<!-- markdownlint-disable-next-line MD033 -->
+<a id="evidence-lookup"></a>
 When a handler for the same `ability_id` is nested inside an outer handler,
 evidence extension replaces the existing marker so lookup resolves to the
-nearest handler.
+nearest handler. 이 표현은 operation이 row의 명시 label에서 왔는지 row 변수의
+tail에서 왔는지 구별하지 못한다. Tail에 속한 operation이 effect-polymorphic
+함수가 설치한 handler에 도달하는 것은 이 표현의 한계이며, dispatch가 보장하는
+계약이 아니다. 타입 수준의 계약은
+[type-inference.md](type-inference.md#모듈-수준-함수의-관계)를 따른다.
 
 두 target의 effect lowering은 같은 evidence runtime helper ABI를 호출한다.
 아래는 native 표기이며, Wasm은 `ptr` evidence 대신 GC evidence 배열 참조를,
