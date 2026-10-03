@@ -34,6 +34,7 @@ use std::collections::{HashMap, HashSet};
 
 use trunk_ir::{Span, Symbol};
 
+use crate::SortedMap;
 use crate::ast::{
     Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef, UniVarId,
 };
@@ -54,20 +55,20 @@ pub struct ModuleCheckResult<'db> {
     /// layout construction.
     pub constructor_types: Vec<(crate::ast::CtorId<'db>, TypeScheme<'db>)>,
     /// Node types for IR lowering (NodeId → monomorphic type).
-    pub node_types: Vec<(NodeId, Type<'db>)>,
+    pub node_types: SortedMap<NodeId, Type<'db>>,
     /// Exact instantiated types selected for direct call callees.
-    pub function_instances: Vec<(NodeId, super::FunctionInstance<'db>)>,
-    pub local_instances: Vec<(NodeId, super::LocalCallableInstance<'db>)>,
+    pub function_instances: SortedMap<NodeId, super::FunctionInstance<'db>>,
+    pub local_instances: SortedMap<NodeId, super::LocalCallableInstance<'db>>,
     /// Non-identity evidence selections of calls and resumes.
-    pub evidence_plans: Vec<(NodeId, Vec<super::EvidenceStep<'db>>)>,
+    pub evidence_plans: SortedMap<NodeId, Vec<super::EvidenceStep<'db>>>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
     /// Exact semantic operation instances for handler arms.
-    pub handler_operations: Vec<(NodeId, crate::typeck::InstantiatedHandlerOperation<'db>)>,
+    pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     /// Exact semantic operation instances for ability-operation calls.
-    pub perform_operations: Vec<(NodeId, crate::typeck::InstantiatedPerformOperation<'db>)>,
+    pub perform_operations: SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     /// Fully solved source-callable signatures for lambda expressions.
-    pub lambda_signatures: Vec<(NodeId, crate::typeck::LambdaSignature<'db>)>,
+    pub lambda_signatures: SortedMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     /// Case expression nodes whose coverage was proved exhaustive.
     pub exhaustive_cases: Vec<NodeId>,
     /// Resolved ability operation schemas retained for source-logical IR
@@ -311,22 +312,6 @@ impl<'db> TypeChecker<'db> {
         let ability_definitions = self.env.export_ability_defs();
         let well_known_types = self.env.well_known_types();
 
-        // Convert node_types HashMap to Vec for Salsa compatibility
-        // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
-        let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
-        node_types.sort_by_key(|(id, _)| *id);
-        let mut function_instances: Vec<_> = self.function_instances.into_iter().collect();
-        function_instances.sort_by_key(|(id, _)| *id);
-        let mut local_instances: Vec<_> = self.local_instances.into_iter().collect();
-        local_instances.sort_by_key(|(id, _)| *id);
-        let mut evidence_plans: Vec<_> = self.evidence_plans.into_iter().collect();
-        evidence_plans.sort_by_key(|(id, _)| *id);
-        let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
-        handler_operations.sort_by_key(|(id, _)| *id);
-        let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();
-        perform_operations.sort_by_key(|(id, _)| *id);
-        let mut lambda_signatures: Vec<_> = self.lambda_signatures.into_iter().collect();
-        lambda_signatures.sort_by_key(|(id, _)| *id);
         self.exhaustive_cases.sort();
 
         ModuleCheckResult {
@@ -337,14 +322,14 @@ impl<'db> TypeChecker<'db> {
             },
             function_types,
             constructor_types,
-            node_types,
-            function_instances,
-            local_instances,
-            evidence_plans,
+            node_types: self.node_types.into_iter().collect(),
+            function_instances: self.function_instances.into_iter().collect(),
+            local_instances: self.local_instances.into_iter().collect(),
+            evidence_plans: self.evidence_plans.into_iter().collect(),
             ability_conventions,
-            handler_operations,
-            perform_operations,
-            lambda_signatures,
+            handler_operations: self.handler_operations.into_iter().collect(),
+            perform_operations: self.perform_operations.into_iter().collect(),
+            lambda_signatures: self.lambda_signatures.into_iter().collect(),
             exhaustive_cases: self.exhaustive_cases,
             ability_definitions,
             well_known_types,

@@ -34,6 +34,7 @@ pub use context::{
     receiver_type_matches,
 };
 
+use crate::SortedMap;
 use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;
 pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
@@ -263,26 +264,26 @@ impl<'db> EvidenceStep<'db> {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ExpressionTypeMetadata<'db> {
-    pub node_types: Vec<(NodeId, Type<'db>)>,
-    pub function_instances: Vec<(NodeId, FunctionInstance<'db>)>,
-    pub local_instances: Vec<(NodeId, LocalCallableInstance<'db>)>,
+    pub node_types: SortedMap<NodeId, Type<'db>>,
+    pub function_instances: SortedMap<NodeId, FunctionInstance<'db>>,
+    pub local_instances: SortedMap<NodeId, LocalCallableInstance<'db>>,
     /// Non-identity evidence selections of calls, resumes, and handle
     /// installations, keyed by their expressions.
-    pub evidence_plans: Vec<(NodeId, Vec<EvidenceStep<'db>>)>,
+    pub evidence_plans: SortedMap<NodeId, Vec<EvidenceStep<'db>>>,
 }
 
 /// Constructor declarations and exact schemes for cloned enum variants.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ConstructorTypeMetadata<'db> {
     pub schemes: Vec<(CtorId<'db>, TypeScheme<'db>)>,
-    pub specialized_enum_variants: Vec<(NodeId, TypeScheme<'db>)>,
+    pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
 }
 
 impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<'db> {
     fn from(schemes: Vec<(CtorId<'db>, TypeScheme<'db>)>) -> Self {
         Self {
             schemes,
-            specialized_enum_variants: Vec::new(),
+            specialized_enum_variants: SortedMap::default(),
         }
     }
 }
@@ -308,14 +309,14 @@ pub struct TypeCheckOutput<'db> {
     #[returns(deref)]
     pub ability_definitions: Vec<AbilitySchema<'db>>,
     /// Exact semantic operation instances for handler arms.
-    #[returns(deref)]
-    pub handler_operations: Vec<(NodeId, InstantiatedHandlerOperation<'db>)>,
+    #[returns(ref)]
+    pub handler_operations: SortedMap<NodeId, InstantiatedHandlerOperation<'db>>,
     /// Exact semantic operation instances for ability-operation calls.
-    #[returns(deref)]
-    pub perform_operations: Vec<(NodeId, InstantiatedPerformOperation<'db>)>,
+    #[returns(ref)]
+    pub perform_operations: SortedMap<NodeId, InstantiatedPerformOperation<'db>>,
     /// Fully solved callable signatures for lambda expressions.
-    #[returns(deref)]
-    pub lambda_signatures: Vec<(NodeId, LambdaSignature<'db>)>,
+    #[returns(ref)]
+    pub lambda_signatures: SortedMap<NodeId, LambdaSignature<'db>>,
     /// Case expressions which type checking proved exhaustive.
     #[returns(deref)]
     pub exhaustive_cases: Vec<NodeId>,

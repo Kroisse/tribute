@@ -265,18 +265,22 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         span_map: checked.span_map(db).clone(),
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono.metadata.specialized_enum_variants,
-        node_types: mono.metadata.node_types,
-        local_instances: mono.metadata.local_instances,
+        specialized_enum_variants: mono
+            .metadata
+            .specialized_enum_variants
+            .into_iter()
+            .collect(),
+        node_types: mono.metadata.node_types.into_iter().collect(),
+        local_instances: mono.metadata.local_instances.into_iter().collect(),
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
-        handler_operations: mono.metadata.handler_operations,
-        perform_operations: mono.metadata.perform_operations,
-        lambda_signatures: mono.metadata.lambda_signatures,
+        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
+        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
+        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
         exhaustive_cases: mono.metadata.exhaustive_cases,
-        evidence_plans: mono.metadata.evidence_plans,
+        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: std::collections::HashMap::new(),
     }
@@ -362,18 +366,22 @@ fn lower_specialized_source(
         span_map: checked.span_map(db).clone(),
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono.metadata.specialized_enum_variants,
-        node_types: mono.metadata.node_types,
-        local_instances: mono.metadata.local_instances,
+        specialized_enum_variants: mono
+            .metadata
+            .specialized_enum_variants
+            .into_iter()
+            .collect(),
+        node_types: mono.metadata.node_types.into_iter().collect(),
+        local_instances: mono.metadata.local_instances.into_iter().collect(),
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
-        handler_operations: mono.metadata.handler_operations,
-        perform_operations: mono.metadata.perform_operations,
-        lambda_signatures: mono.metadata.lambda_signatures,
+        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
+        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
+        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
         exhaustive_cases: mono.metadata.exhaustive_cases,
-        evidence_plans: mono.metadata.evidence_plans,
+        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: std::collections::HashMap::new(),
     }

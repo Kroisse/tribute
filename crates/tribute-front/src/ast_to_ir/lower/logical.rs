@@ -20,6 +20,7 @@ use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::types::{Attribute, Location};
 
+use crate::SortedMap;
 use crate::ast::{
     Arm, CallingConvention, CtorId, Decl, EffectRow, Expr, ExprKind, ExternFuncDecl, FuncDecl,
     HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind,
@@ -38,19 +39,14 @@ struct Declarations<'db> {
     values: Vec<OperationDeclaration>,
     compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
     schemas: std::collections::HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
-    handler_operations: std::collections::HashMap<
-        crate::ast::NodeId,
-        crate::typeck::InstantiatedHandlerOperation<'db>,
-    >,
-    perform_operations: std::collections::HashMap<
-        crate::ast::NodeId,
-        crate::typeck::InstantiatedPerformOperation<'db>,
-    >,
-    lambda_signatures:
-        std::collections::HashMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
+    handler_operations:
+        SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    perform_operations:
+        SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    lambda_signatures: SortedMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: std::collections::HashSet<crate::ast::NodeId>,
-    evidence_plans: HashMap<crate::ast::NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
-    local_instances: HashMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    evidence_plans: SortedMap<crate::ast::NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
+    local_instances: SortedMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
     local_callables: local_callables::Plan<'db>,
 }
 
@@ -520,7 +516,7 @@ fn prescan_logical_nominal_layouts<'db>(
     prefix: &mut String,
     well_known_types: &mut super::decl::WellKnownTypePrescan,
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
-    specialized_enum_variants: &HashMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
+    specialized_enum_variants: &SortedMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
 ) {
     for declaration in declarations {
         match declaration {
@@ -2579,7 +2575,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
         let location = Location::new(path, Span::new(0, 0));
         let block = ir.create_block(BlockData {
