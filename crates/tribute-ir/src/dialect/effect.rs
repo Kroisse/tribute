@@ -29,6 +29,13 @@ mod effect {
     ) -> Value<_> {
     }
 
+    /// Remove the top handler of one ability from the evidence, exposing the
+    /// handler it shadows.
+    fn mask(ability_ref: Attr<Type>, evidence: Value<_>) -> Value<_> {}
+
+    /// Push a copy of the top handler of one ability onto the evidence.
+    fn dup(ability_ref: Attr<Type>, evidence: Value<_>) -> Value<_> {}
+
     /// Dispatch a tail-resumptive `fn` ability operation.
     ///
     /// The operation carries ability identity and operation name as attributes,
@@ -60,6 +67,8 @@ mod effect {
 }
 
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Extend>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Mask>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Dup>() }
 
 impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
     fn verify_callable_exit(

@@ -1,7 +1,8 @@
 //! Evidence runtime lowering for the native backend.
 //!
 //! Target evidence lowering declares the native runtime ABI and lowers
-//! `effect.extend`, `effect.dispatch_tail`, and `effect.dispatch_cps` to runtime
+//! `effect.extend`, `effect.mask`, `effect.dup`, `effect.dispatch_tail`, and
+//! `effect.dispatch_cps` to runtime
 //! calls and closure transfers. Empty evidence arrays become calls to
 //! `__tribute_evidence_empty`.
 //!
@@ -97,6 +98,8 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
             &[ptr_ty, i32_ty, i32_ty, ptr_ty, ptr_ty][..],
             ptr_ty,
         ),
+        (evidence_abi::MASK, &[ptr_ty, i32_ty][..], ptr_ty),
+        (evidence_abi::DUP, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::LOOKUP_HANDLER, &[ptr_ty, i32_ty][..], ptr_ty),
     ] {
@@ -142,6 +145,8 @@ fn native_effect_abi_target() -> ConversionTarget {
         .legal_op("func", "func")
         .recursive_legal_op("func", "func")
         .illegal_op("effect", "extend")
+        .illegal_op("effect", "mask")
+        .illegal_op("effect", "dup")
         .illegal_op("effect", "dispatch_tail")
         .illegal_op("effect", "dispatch_cps")
 }
@@ -153,6 +158,7 @@ fn lower_effect_abi_to_native(
     PatternApplicator::new(TypeConverter::new())
         .with_target(native_effect_abi_target())
         .add_pattern(LowerEffectExtendToNative)
+        .add_pattern(LowerEffectStackOpToNative)
         .add_pattern(LowerEffectDispatchTailToNative)
         .add_pattern(LowerEffectDispatchCpsToNative)
         .apply_partial_conversion(ctx, func_op, "native-evidence-effect-abi")?;
@@ -276,17 +282,63 @@ impl RewritePattern for LowerEffectExtendToNative {
             .results([ptr_ty])
             .build(ctx, loc);
         rewriter.insert_op(extend_call.op_ref());
-        // Uses keep the declared evidence type until native type conversion.
-        let evidence_ty = ctx.op_result_types(op)[0];
-        let mut extended = extend_call.result(ctx);
-        if evidence_ty != ptr_ty {
-            let cast = core::UnrealizedConversionCast::operands(extended)
-                .results(evidence_ty)
-                .build(ctx, loc);
-            rewriter.insert_op(cast.op_ref());
-            extended = cast.result(ctx);
-        }
-        rewriter.erase_op(vec![extended]);
+        replace_with_runtime_call_result(ctx, op, extend_call, rewriter);
+        true
+    }
+}
+
+/// Replace `op` with the `core.ptr` evidence handle `call` returns.
+///
+/// Uses keep the declared evidence type until native type conversion.
+fn replace_with_runtime_call_result(
+    ctx: &mut IrContext,
+    op: OpRef,
+    call: func::Call,
+    rewriter: &mut PatternRewriter<'_>,
+) {
+    let evidence_ty = ctx.op_result_types(op)[0];
+    let mut evidence = call.result(ctx);
+    if evidence_ty != ctx.value_ty(evidence) {
+        let cast = core::UnrealizedConversionCast::operands(evidence)
+            .results(evidence_ty)
+            .build(ctx, ctx.op(op).location);
+        rewriter.insert_op(cast.op_ref());
+        evidence = cast.result(ctx);
+    }
+    rewriter.erase_op(vec![evidence]);
+}
+
+/// `effect.mask` / `effect.dup` → the runtime call of the same name.
+struct LowerEffectStackOpToNative;
+
+impl RewritePattern for LowerEffectStackOpToNative {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let (helper, ability_ref, evidence) = if let Ok(mask) = effect::Mask::from_op(ctx, op) {
+            (
+                evidence_abi::MASK,
+                mask.ability_ref(ctx),
+                mask.evidence(ctx),
+            )
+        } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
+            (evidence_abi::DUP, dup.ability_ref(ctx), dup.evidence(ctx))
+        } else {
+            return false;
+        };
+
+        let loc = ctx.op(op).location;
+        let ptr_ty = core_ptr_type(ctx);
+        let ability_id = effect_dispatch::insert_ability_id(ctx, loc, ability_ref, rewriter);
+        let call = func::Call::operands([evidence, ability_id])
+            .callee(Symbol::new(helper))
+            .results([ptr_ty])
+            .build(ctx, loc);
+        rewriter.insert_op(call.op_ref());
+        replace_with_runtime_call_result(ctx, op, call, rewriter);
         true
     }
 }
@@ -519,7 +571,7 @@ mod tests {
             "core.module @test { func.func @user() -> core.i32 }",
         );
         prepare_native_evidence_runtime(&mut ctx, module);
-        assert_eq!(module.ops(&ctx).len(), 6);
+        assert_eq!(module.ops(&ctx).len(), 8);
         for (name, params, result) in [
             (evidence_abi::EMPTY, &[][..], "core.ptr"),
             (
@@ -532,6 +584,12 @@ mod tests {
                 &["core.ptr", "core.i32", "core.i32", "core.ptr", "core.ptr"][..],
                 "core.ptr",
             ),
+            (
+                evidence_abi::MASK,
+                &["core.ptr", "core.i32"][..],
+                "core.ptr",
+            ),
+            (evidence_abi::DUP, &["core.ptr", "core.i32"][..], "core.ptr"),
             (
                 evidence_abi::LOOKUP_TR,
                 &["core.ptr", "core.i32"][..],
@@ -596,7 +654,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @external(%ev: !evidence) -> !marker
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
@@ -625,6 +683,62 @@ mod tests {
             "body-bearing function was not transformed:\n{after}"
         );
         assert!(after.contains("__tribute_evidence_lookup_tr"));
+    }
+
+    #[test]
+    fn mask_and_dup_call_the_runtime_with_the_ability_id() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
+  !evidence = core.array<!marker, {layout = "evidence"}>
+  func.func @select(%ev: !evidence) -> !evidence {
+    %masked = effect.mask %ev {ability_ref = core.ability_ref<{name = "State"}>} : !evidence
+    %dup = effect.dup %masked {ability_ref = core.ability_ref<{name = "State"}>} : !evidence
+    func.return %dup
+  }
+}"#,
+        );
+
+        lower_evidence_to_native(&mut ctx, module);
+
+        let select = func_by_name_recursive(&ctx, module, "select");
+        let entry = ctx.region(select.body(&ctx)).blocks[0];
+        let calls: Vec<_> = ctx
+            .block(entry)
+            .ops
+            .iter()
+            .filter_map(|&op| func::Call::from_op(&ctx, op).ok())
+            .collect();
+        let callees: Vec<_> = calls.iter().map(|call| call.callee(&ctx)).collect();
+        assert_eq!(
+            callees,
+            [
+                Symbol::new(evidence_abi::MASK),
+                Symbol::new(evidence_abi::DUP)
+            ]
+        );
+        let ability_ids: Vec<_> = calls
+            .iter()
+            .map(|call| ctx.op_operands(call.op_ref())[1])
+            .map(|id| match ctx.value_def(id) {
+                trunk_ir::refs::ValueDef::OpResult(op, _) => {
+                    trunk_ir::dialect::arith::Const::from_op(&ctx, op)
+                        .expect("ability id is a constant")
+                        .value(&ctx)
+                        .clone()
+                }
+                def => panic!("ability id is not an operation result: {def:?}"),
+            })
+            .collect();
+        assert_eq!(ability_ids[0], ability_ids[1]);
+        assert_eq!(
+            ctx.op_operands(calls[0].op_ref())[0],
+            entry_arg(&ctx, select, 0)
+        );
+        let ir_text = print_module(&ctx, module.op());
+        assert!(!ir_text.contains("effect."), "{ir_text}");
     }
 
     #[test]

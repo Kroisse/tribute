@@ -350,7 +350,7 @@ user-defined type은 그 뒤에 배치된다:
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
 | 3 | `_closure { table_idx: i32, env: anyref }` |
-| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref }` |
+| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref, shadowed: anyref }` |
 | 5 | `Evidence` array |
 | 6+ | user-defined structs, arrays, variants, closures |
 
