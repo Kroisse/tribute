@@ -328,9 +328,8 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 .map(|variant| {
                     let variant = variant.clone();
                     let qualified = name
-                        .clone()
                         .parent_path()
-                        .map_or(variant.clone(), |module| module.join_path(variant.clone()));
+                        .map_or(variant.clone(), |module| module.join_path(&variant));
                     let (arity, _) = self.constructor_shape(CtorId::new(db, qualified))?;
                     Some(VariantInfo {
                         name: variant,

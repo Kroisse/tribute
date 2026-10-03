@@ -55,12 +55,12 @@ impl UnresolvedName {
 
     /// Returns the final name segment (e.g. `"println"` from `"std::io::println"`).
     pub fn name(&self) -> Symbol {
-        self.qualified.clone().last_segment()
+        self.qualified.last_segment()
     }
 
     /// Returns the namespace prefix, if any (e.g. `"std::io"` from `"std::io::println"`).
     pub fn namespace(&self) -> Option<Symbol> {
-        self.qualified.clone().parent_path()
+        self.qualified.parent_path()
     }
 }
 
@@ -119,7 +119,7 @@ pub struct FuncDefId<'db> {
 impl<'db> FuncDefId<'db> {
     /// Returns the unqualified function name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).clone().last_segment()
+        self.qualified(db).last_segment()
     }
 }
 
@@ -181,7 +181,7 @@ impl<'db> TypeDefId<'db> {
 
     /// Returns the unqualified type name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).clone().last_segment()
+        self.qualified(db).last_segment()
     }
 }
 
@@ -202,7 +202,7 @@ pub struct CtorId<'db> {
 impl<'db> CtorId<'db> {
     /// Returns the unqualified constructor name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).clone().last_segment()
+        self.qualified(db).last_segment()
     }
 }
 
@@ -268,7 +268,7 @@ impl<'db> AbilityId<'db> {
 
     /// Returns the unqualified ability name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).clone().last_segment()
+        self.qualified(db).last_segment()
     }
 }
 
