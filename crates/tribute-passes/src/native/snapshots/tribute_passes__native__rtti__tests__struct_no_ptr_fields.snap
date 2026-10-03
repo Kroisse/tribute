@@ -19,44 +19,8 @@ core.module @test {
       %4 = clif.call %2, %3 {callee = @__tribute_dealloc} : core.nil
       clif.return
   }
-  clif.data {align = 1, bytes = b"Bytes", sym_name = @__tribute_rtti_name_0}
-  clif.data {align = 1, bytes = b"Bool", sym_name = @__tribute_rtti_name_1}
-  clif.data {align = 1, bytes = b"0", sym_name = @__tribute_rtti_name_2}
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x06\0\0\0", sym_name = @__tribute_rtti_fields_1} {
-      clif.data_reloc {data = @__tribute_rtti_name_2, offset = 0}
-  }
-  clif.data {align = 1, bytes = b"Nat", sym_name = @__tribute_rtti_name_3}
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x04 \0\0", sym_name = @__tribute_rtti_fields_2} {
-      clif.data_reloc {data = @__tribute_rtti_name_2, offset = 0}
-  }
-  clif.data {align = 1, bytes = b"Int", sym_name = @__tribute_rtti_name_4}
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x03 \0\0", sym_name = @__tribute_rtti_fields_3} {
-      clif.data_reloc {data = @__tribute_rtti_name_2, offset = 0}
-  }
-  clif.data {align = 1, bytes = b"Float", sym_name = @__tribute_rtti_name_5}
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x05@\0\0", sym_name = @__tribute_rtti_fields_4} {
-      clif.data_reloc {data = @__tribute_rtti_name_2, offset = 0}
-  }
-  clif.data {align = 1, bytes = b"Test", sym_name = @__tribute_rtti_name_6}
-  clif.data {align = 1, bytes = b"x", sym_name = @__tribute_rtti_name_7}
-  clif.data {align = 1, bytes = b"y", sym_name = @__tribute_rtti_name_8}
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x01\0\0\0\x04 \0\0\0\0\0\0\0\0\0\0\x01\0\0\0\x04 \0\0", sym_name = @__tribute_rtti_fields_5} {
-      clif.data_reloc {data = @__tribute_rtti_name_7, offset = 0}
-      clif.data_reloc {data = @__tribute_rtti_name_8, offset = 16}
-  }
-  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\x04\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0\0\0\0\0\0\0\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x02\0\0\0\0\0\0\0\0\0\0\0\x04\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", sym_name = @__tribute_rtti} {
-      clif.data_reloc {data = @__tribute_rtti_name_0, offset = 16}
-      clif.data_reloc {data = @__tribute_rtti_name_1, offset = 64}
-      clif.data_reloc {data = @__tribute_rtti_fields_1, offset = 88}
-      clif.data_reloc {data = @__tribute_rtti_name_3, offset = 112}
-      clif.data_reloc {data = @__tribute_rtti_fields_2, offset = 136}
-      clif.data_reloc {data = @__tribute_rtti_name_4, offset = 160}
-      clif.data_reloc {data = @__tribute_rtti_fields_3, offset = 184}
-      clif.data_reloc {data = @__tribute_rtti_name_5, offset = 208}
-      clif.data_reloc {data = @__tribute_rtti_fields_4, offset = 232}
-      clif.func_reloc {func = @__tribute_release_5, offset = 240}
-      clif.data_reloc {data = @__tribute_rtti_name_6, offset = 256}
-      clif.data_reloc {data = @__tribute_rtti_fields_5, offset = 280}
+  clif.data {align = 8, bytes = b"\0\0\0\0\0\0\0\0\x03\0\0\0\0\0\0\08\x01\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0=\x01\0\0\x04\0\0\0\0\0\0\0\0\0\0\0\xf0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0B\x01\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\xfc\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0E\x01\0\0\x03\0\0\0\0\0\0\0\0\0\0\0\x08\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x03\0\0\0\x01\0\0\0H\x01\0\0\x05\0\0\0\0\0\0\0\0\0\0\0\x14\x01\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\x02\0\0\0M\x01\0\0\x04\0\0\0\0\0\0\0\0\0\0\0 \x01\0\0\0\0\0\0A\x01\0\0\x01\0\0\0\x06\0\0\0A\x01\0\0\x01\0\0\0\x04 \0\0A\x01\0\0\x01\0\0\0\x03 \0\0A\x01\0\0\x01\0\0\0\x05@\0\0Q\x01\0\0\x01\0\0\0\x04 \0\0R\x01\0\0\x01\0\0\0\x04 \0\0BytesBool0NatIntFloatTestxy", sym_name = @__tribute_rtti} {
+      clif.func_reloc {func = @__tribute_release_5, offset = 200}
   }
   clif.func {sym_name = @__tribute_deep_release, type = clif.func_sig<(core.ptr, core.i64) -> core.nil>} {
     ^bb0(%0: core.ptr, %1: core.i64):
@@ -64,7 +28,7 @@ core.module @test {
       %3 = clif.isub %0, %2 : core.ptr
       %4 = clif.load %3 {offset = 4} : core.i32
       %5 = clif.uextend %4 : core.i64
-      %6 = clif.iconst {value = 48} : core.i64
+      %6 = clif.iconst {value = 40} : core.i64
       %7 = clif.imul %5, %6 : core.i64
       %8 = clif.symbol_addr {sym = @__tribute_rtti} : core.ptr
       %9 = clif.iadd %8, %7 : core.ptr

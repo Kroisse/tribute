@@ -1,8 +1,9 @@
 //! Native runtime type descriptor records.
 //!
-//! Native RTTI generation emits `__tribute_rtti`, a read-only array holding
-//! one fixed-size record per RTTI index: the index's release function and its
-//! descriptor, in the format `new-plans/rc.md` fixes. Records are built while
+//! Native RTTI generation emits `__tribute_rtti`, one read-only data object
+//! holding a fixed-size record per RTTI index, the index's release function
+//! and its descriptor, followed by the enum records, field arrays, and names
+//! the records address by offset, in the format `new-plans/rc.md` fixes. Records are built while
 //! nominal layouts still carry their names, so lower passes see only the
 //! index.
 
@@ -25,10 +26,10 @@ pub const RTTI_TABLE: &str = "__tribute_rtti";
 
 const POINTER_SIZE: usize = 8;
 /// Size of one RTTI record.
-pub const RECORD_SIZE: usize = 48;
+pub const RECORD_SIZE: usize = 40;
 /// Offset of the release function pointer in a record.
 pub const RELEASE_FN_OFFSET: usize = 0;
-const FIELD_SIZE: usize = 16;
+const FIELD_SIZE: usize = 12;
 
 /// The `kind` word of a descriptor record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -137,7 +138,8 @@ fn reserved_records() -> [(u32, DescriptorRecord); 5] {
 }
 
 /// Emit `__tribute_rtti`: the record of every reserved index and of each of
-/// `records`, with the release function `release_fns` names for its index.
+/// `records`, with the release function `release_fns` names for its index,
+/// followed by the enum records, field arrays, and names they refer to.
 pub fn generate(
     ctx: &mut IrContext,
     module_block: BlockRef,
@@ -145,177 +147,171 @@ pub fn generate(
     release_fns: &HashMap<u32, Symbol>,
     loc: Location,
 ) {
-    let mut emitter = Emitter {
-        ctx,
-        module_block,
-        loc,
-        names: HashMap::new(),
-        enums: HashMap::new(),
-    };
     let records = reserved_records()
         .into_iter()
         .chain(records)
         .collect::<Vec<_>>();
     let entries = records.iter().map(|&(index, _)| index).max().unwrap_or(0) as usize + 1;
-    let mut table = vec![0; entries * RECORD_SIZE];
+
+    // Enum records follow the index records, then the field arrays, then the
+    // names, so every reference is an offset known before writing.
+    let mut enums = Vec::<(TypeRef, DescriptorRecord)>::new();
+    for (_, record) in &records {
+        if let Some((owner, _)) = record.owner
+            && !enums.iter().any(|(ty, _)| *ty == owner)
+        {
+            let name = adt::nominal_name(ctx, owner)
+                .expect("an enum layout has a nominal name")
+                .to_owned();
+            enums.push((
+                owner,
+                DescriptorRecord {
+                    kind: RecordKind::Enum,
+                    name,
+                    owner: None,
+                    fields: vec![],
+                },
+            ));
+        }
+    }
+    let enum_base = entries * RECORD_SIZE;
+    let fields_base = enum_base + enums.len() * RECORD_SIZE;
+    let field_count = records
+        .iter()
+        .map(|(_, record)| record.fields.len())
+        .sum::<usize>();
+    let mut layout = Layout {
+        bytes: vec![0; fields_base + field_count * FIELD_SIZE],
+        next_fields: fields_base,
+        names: HashMap::new(),
+        name_bytes: Vec::new(),
+        names_base: fields_base + field_count * FIELD_SIZE,
+    };
+
+    let enum_offsets = enums
+        .iter()
+        .enumerate()
+        .map(|(position, (ty, _))| (*ty, enum_base + position * RECORD_SIZE))
+        .collect::<HashMap<_, _>>();
+    for (position, (_, record)) in enums.iter().enumerate() {
+        layout.write_record(enum_base + position * RECORD_SIZE, record, &enum_offsets);
+    }
     let mut relocs = Vec::new();
     for (index, record) in &records {
         let base = *index as usize * RECORD_SIZE;
         if let Some(&release) = release_fns.get(index) {
-            relocs.push((base + RELEASE_FN_OFFSET, clif::RelocTarget::Func(release)));
+            relocs.push((base + RELEASE_FN_OFFSET, release));
         }
-        emitter.write_record(&mut table, &mut relocs, base, *index, record);
+        layout.write_record(base, record, &enum_offsets);
     }
-    emitter.data(RTTI_TABLE, table, relocs);
+
+    let mut bytes = layout.bytes;
+    bytes.extend(layout.name_bytes);
+    let relocs = reloc_region(ctx, relocs, loc);
+    // Zero bytes rather than zero-initialized data, so the table lives in a
+    // data section: macOS linkers reject relocations in zero-fill sections.
+    let table = clif::Data::operands()
+        .sym_name(Symbol::new(RTTI_TABLE))
+        .bytes(bytes.into())
+        .align(POINTER_SIZE as u32)
+        .regions(relocs)
+        .build(ctx, loc);
+    ctx.push_op(module_block, table.op_ref());
 }
 
-type Relocs = Vec<(usize, clif::RelocTarget)>;
-
-struct Emitter<'a> {
-    ctx: &'a mut IrContext,
-    module_block: BlockRef,
-    loc: Location,
-    names: HashMap<String, Symbol>,
-    enums: HashMap<TypeRef, Symbol>,
+/// The bytes of `__tribute_rtti` while it is being written.
+struct Layout {
+    bytes: Vec<u8>,
+    /// Offset of the next unwritten field array.
+    next_fields: usize,
+    /// Offset of each distinct name, relative to `names_base`.
+    names: HashMap<String, usize>,
+    name_bytes: Vec<u8>,
+    names_base: usize,
 }
 
-impl Emitter<'_> {
-    /// Write the descriptor part of a record at `bytes[base..]`, emitting its
-    /// field array and enum record as separate data. `id` names the field
-    /// array.
+impl Layout {
+    /// Write the descriptor part of a record at `base`, with its field array.
     fn write_record(
         &mut self,
-        bytes: &mut [u8],
-        relocs: &mut Relocs,
         base: usize,
-        id: impl std::fmt::Display,
         record: &DescriptorRecord,
+        enum_offsets: &HashMap<TypeRef, usize>,
     ) {
-        put_u32(bytes, base + 8, record.kind as u32);
-        put_u32(bytes, base + 12, record.fields.len() as u32);
-        self.put_name(bytes, relocs, base + 16, base + 24, &record.name);
+        put_u32(&mut self.bytes, base + 8, record.kind as u32);
+        put_u32(&mut self.bytes, base + 12, record.fields.len() as u32);
+        self.put_name(base + 16, &record.name);
         if let Some((owner, position)) = record.owner {
-            put_u32(bytes, base + 28, position);
-            let owner = self.enum_record(owner);
-            relocs.push((base + 32, clif::RelocTarget::Data(owner)));
+            put_u32(&mut self.bytes, base + 24, position);
+            put_offset(&mut self.bytes, base + 28, enum_offsets[&owner]);
         }
         if !record.fields.is_empty() {
-            let mut fields = vec![0; record.fields.len() * FIELD_SIZE];
-            let mut field_relocs = Vec::new();
+            let fields = self.next_fields;
+            self.next_fields += record.fields.len() * FIELD_SIZE;
+            put_offset(&mut self.bytes, base + 32, fields);
             for (position, (name, kind)) in record.fields.iter().enumerate() {
-                let at = position * FIELD_SIZE;
-                self.put_name(&mut fields, &mut field_relocs, at, at + 8, name);
-                put_u32(&mut fields, at + 12, kind.record_code());
+                let at = fields + position * FIELD_SIZE;
+                self.put_name(at, name);
+                put_u32(&mut self.bytes, at + 8, kind.record_code());
             }
-            let fields = self.data(&format!("__tribute_rtti_fields_{id}"), fields, field_relocs);
-            relocs.push((base + 40, clif::RelocTarget::Data(fields)));
         }
     }
 
-    /// The record of an enum layout, emitted once outside the table.
-    fn enum_record(&mut self, ty: TypeRef) -> Symbol {
-        if let Some(&symbol) = self.enums.get(&ty) {
-            return symbol;
-        }
-        let record = DescriptorRecord {
-            kind: RecordKind::Enum,
-            name: adt::nominal_name(self.ctx, ty)
-                .expect("an enum layout has a nominal name")
-                .to_owned(),
-            owner: None,
-            fields: vec![],
-        };
-        let id = format!("enum_{}", self.enums.len());
-        let mut bytes = vec![0; RECORD_SIZE];
-        let mut relocs = Vec::new();
-        self.write_record(&mut bytes, &mut relocs, 0, &id, &record);
-        let symbol = self.data(&format!("__tribute_rtti_{id}"), bytes, relocs);
-        self.enums.insert(ty, symbol);
-        symbol
-    }
-
-    /// Point `bytes[pointer]` at the UTF-8 bytes of `name` and store its
-    /// length at `bytes[length]`. An empty name stays a null pointer.
-    fn put_name(
-        &mut self,
-        bytes: &mut [u8],
-        relocs: &mut Relocs,
-        pointer: usize,
-        length: usize,
-        name: &str,
-    ) {
-        put_u32(bytes, length, name.len() as u32);
+    /// Store the offset and length of `name` at `at` and `at + 4`. An empty
+    /// name has no offset.
+    fn put_name(&mut self, at: usize, name: &str) {
+        put_u32(&mut self.bytes, at + 4, name.len() as u32);
         if name.is_empty() {
             return;
         }
-        let symbol = match self.names.get(name) {
-            Some(&symbol) => symbol,
+        let relative = match self.names.get(name) {
+            Some(&relative) => relative,
             None => {
-                let symbol_name = format!("__tribute_rtti_name_{}", self.names.len());
-                let symbol =
-                    self.data_with_align(&symbol_name, name.as_bytes().to_vec(), 1, vec![]);
-                self.names.insert(name.to_owned(), symbol);
-                symbol
+                let relative = self.name_bytes.len();
+                self.name_bytes.extend_from_slice(name.as_bytes());
+                self.names.insert(name.to_owned(), relative);
+                relative
             }
         };
-        relocs.push((pointer, clif::RelocTarget::Data(symbol)));
+        put_offset(&mut self.bytes, at, self.names_base + relative);
     }
+}
 
-    fn data(&mut self, name: &str, bytes: Vec<u8>, relocs: Relocs) -> Symbol {
-        self.data_with_align(name, bytes, POINTER_SIZE as u32, relocs)
+fn reloc_region(
+    ctx: &mut IrContext,
+    relocs: Vec<(usize, Symbol)>,
+    loc: Location,
+) -> Option<trunk_ir::RegionRef> {
+    if relocs.is_empty() {
+        return None;
     }
+    let block = ctx.create_block(BlockData {
+        location: loc,
+        args: vec![],
+        ops: smallvec![],
+        parent_region: None,
+    });
+    for (offset, func) in relocs {
+        let reloc: OpRef = clif::FuncReloc::operands()
+            .offset(u32::try_from(offset).expect("record offset fits u32"))
+            .func(func)
+            .build(ctx, loc)
+            .op_ref();
+        ctx.push_op(block, reloc);
+    }
+    Some(ctx.create_region(RegionData {
+        location: loc,
+        blocks: smallvec![block],
+        parent_op: None,
+    }))
+}
 
-    fn data_with_align(
-        &mut self,
-        name: &str,
-        bytes: Vec<u8>,
-        align: u32,
-        relocs: Relocs,
-    ) -> Symbol {
-        let symbol = Symbol::from_dynamic(name);
-        let regions = (!relocs.is_empty()).then(|| self.reloc_region(relocs));
-        // Zero bytes rather than zero-initialized data, so the object lives in
-        // a data section: macOS linkers reject relocations in zero-fill
-        // sections.
-        let data = clif::Data::operands()
-            .sym_name(symbol)
-            .bytes(bytes.into())
-            .align(align)
-            .regions(regions)
-            .build(self.ctx, self.loc);
-        self.ctx.push_op(self.module_block, data.op_ref());
-        symbol
-    }
-
-    fn reloc_region(&mut self, relocs: Relocs) -> trunk_ir::RegionRef {
-        let block = self.ctx.create_block(BlockData {
-            location: self.loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        for (offset, target) in relocs {
-            let offset = u32::try_from(offset).expect("record offset fits u32");
-            let reloc: OpRef = match target {
-                clif::RelocTarget::Func(func) => clif::FuncReloc::operands()
-                    .offset(offset)
-                    .func(func)
-                    .build(self.ctx, self.loc)
-                    .op_ref(),
-                clif::RelocTarget::Data(data) => clif::DataReloc::operands()
-                    .offset(offset)
-                    .data(data)
-                    .build(self.ctx, self.loc)
-                    .op_ref(),
-            };
-            self.ctx.push_op(block, reloc);
-        }
-        self.ctx.create_region(RegionData {
-            location: self.loc,
-            blocks: smallvec![block],
-            parent_op: None,
-        })
-    }
+fn put_offset(bytes: &mut [u8], at: usize, offset: usize) {
+    put_u32(
+        bytes,
+        at,
+        u32::try_from(offset).expect("RTTI offset fits u32"),
+    );
 }
 
 fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
@@ -325,32 +321,8 @@ fn put_u32(bytes: &mut [u8], at: usize, value: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use trunk_ir::Symbol;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
-    use trunk_ir::rewrite::Module;
-
-    fn data_ops(ctx: &IrContext, module: Module) -> HashMap<String, clif::Data> {
-        module
-            .ops(ctx)
-            .iter()
-            .filter_map(|&op| clif::Data::from_op(ctx, op).ok())
-            .map(|data| (data.sym_name(ctx).to_string(), data))
-            .collect()
-    }
-
-    fn u32_at(ctx: &IrContext, data: clif::Data, at: usize) -> u32 {
-        u32::from_le_bytes(data.bytes(ctx)[at..at + 4].try_into().unwrap())
-    }
-
-    fn reloc_at(ctx: &IrContext, data: clif::Data, at: u32) -> Option<Symbol> {
-        data.relocations(ctx)
-            .into_iter()
-            .find_map(|(offset, target)| match target {
-                clif::RelocTarget::Data(symbol) if offset == at => Some(symbol),
-                _ => None,
-            })
-    }
 
     #[test]
     fn variant_records_point_at_their_enum_record() {
@@ -384,45 +356,47 @@ mod tests {
             loc,
         );
 
-        let data = data_ops(&ctx, module);
-        let table = data[RTTI_TABLE];
-        assert_eq!(table.bytes(&ctx).len(), 6 * RECORD_SIZE);
-        let base = 5 * RECORD_SIZE;
-        let at = |offset: usize| (base + offset) as u32;
-        assert!(
-            table
-                .relocations(&ctx)
-                .contains(&(at(RELEASE_FN_OFFSET), clif::RelocTarget::Func(release)))
-        );
-        assert_eq!(u32_at(&ctx, table, base + 8), RecordKind::Variant as u32);
-        assert_eq!(u32_at(&ctx, table, base + 12), 1);
-        assert_eq!(u32_at(&ctx, table, base + 24), 4);
-        assert_eq!(u32_at(&ctx, table, base + 28), 1);
-        let owner = reloc_at(&ctx, table, at(32)).expect("enum record");
-        let owner = data[&owner.to_string()];
-        assert_eq!(u32_at(&ctx, owner, 8), RecordKind::Enum as u32);
-        assert_eq!(u32_at(&ctx, owner, 12), 0);
-        let name = reloc_at(&ctx, owner, 16).expect("enum name");
-        assert_eq!(data[&name.to_string()].bytes(&ctx).as_ref(), b"Choice");
-        let fields = reloc_at(&ctx, table, at(40)).expect("variant fields");
+        let table = module
+            .ops(&ctx)
+            .iter()
+            .find_map(|&op| clif::Data::from_op(&ctx, op).ok())
+            .expect("one RTTI data object");
+        assert_eq!(table.sym_name(&ctx), RTTI_TABLE);
         assert_eq!(
-            u32_at(&ctx, data[&fields.to_string()], 12),
-            FieldKind::Dynamic.record_code()
+            table.relocations(&ctx),
+            [((5 * RECORD_SIZE + RELEASE_FN_OFFSET) as u32, release)],
+            "only the release function is relocated"
         );
+        let bytes = table.bytes(&ctx).to_vec();
+        let word = |at: usize| u32::from_le_bytes(bytes[at..at + 4].try_into().unwrap());
+        let text = |at: usize| {
+            let (offset, len) = (word(at) as usize, word(at + 4) as usize);
+            std::str::from_utf8(&bytes[offset..offset + len]).unwrap()
+        };
 
-        // Every reserved index has a record, and none has a release function.
+        let variant = 5 * RECORD_SIZE;
+        assert_eq!(word(variant + 8), RecordKind::Variant as u32);
+        assert_eq!(word(variant + 12), 1);
+        assert_eq!(text(variant + 16), "Some");
+        assert_eq!(word(variant + 24), 1);
+        let owner = word(variant + 28) as usize;
+        assert_eq!(
+            owner,
+            6 * RECORD_SIZE,
+            "the enum record follows the index records"
+        );
+        assert_eq!(word(owner + 8), RecordKind::Enum as u32);
+        assert_eq!(word(owner + 12), 0);
+        assert_eq!(text(owner + 16), "Choice");
+        let fields = word(variant + 32) as usize;
+        assert_eq!(text(fields), "0");
+        assert_eq!(word(fields + 8), FieldKind::Dynamic.record_code());
+
+        // Every reserved index has a named builtin record.
         for index in 0..5 {
             let base = index * RECORD_SIZE;
-            assert_eq!(u32_at(&ctx, table, base + 8), RecordKind::Builtin as u32);
-            assert!(reloc_at(&ctx, table, (base + 16) as u32).is_some());
+            assert_eq!(word(base + 8), RecordKind::Builtin as u32);
+            assert!(!text(base + 16).is_empty());
         }
-        assert_eq!(
-            table
-                .relocations(&ctx)
-                .iter()
-                .filter(|(_, target)| matches!(target, clif::RelocTarget::Func(_)))
-                .count(),
-            1
-        );
     }
 }
