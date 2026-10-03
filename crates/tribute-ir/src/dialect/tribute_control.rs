@@ -92,9 +92,21 @@ mod tribute_control {
 
     fn func_ref(func_ref: Attr<SymbolRef>) -> Value<impl FuncSig> {}
 
-    fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Value<_> {}
+    #[verify]
+    fn call(
+        callee: Attr<SymbolRef>,
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        args: Variadic<_>,
+    ) -> Value<_> {
+    }
 
-    fn call_indirect<S: FuncSig>(callee: Value<S>, args: Values<S::Inputs>) -> Value<S::Result> {}
+    #[verify]
+    fn call_indirect<S: FuncSig>(
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        callee: Value<S>,
+        args: Values<S::Inputs>,
+    ) -> Value<S::Result> {
+    }
 
     fn r#return(value: Value<_>) {}
 
@@ -107,7 +119,8 @@ mod tribute_control {
     ) -> Value<_> {
     }
 
-    fn handle() -> Value<_> {
+    #[verify]
+    fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
         #[region(body)]
         {}
         #[region(completion)]
@@ -126,9 +139,162 @@ mod tribute_control {
         {}
     }
 
-    fn resume<T: ResumeToken>(resume_token: Value<T>, value: Value<T::Input>) -> Value<T::Answer> {}
+    #[verify]
+    fn resume<T: ResumeToken>(
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        resume_token: Value<T>,
+        value: Value<T::Input>,
+    ) -> Value<T::Answer> {
+    }
 
     fn r#yield(value: Value<_>) {}
+}
+
+/// Attribute that selects the evidence a call, `resume`, or handle body
+/// receives from the evidence of the code around it.
+pub const EVIDENCE_PLAN_ATTR: &str = "evidence_plan";
+
+/// One element of an `evidence_plan`: `{mask = instance}` or `{dup = instance}`,
+/// where the instance is an exact `core.ability_ref` type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EvidenceStep {
+    /// Hide the top handler of the instance, uncovering the one beneath.
+    Mask(TypeRef),
+    /// Stack one more copy of the top handler of the instance.
+    Dup(TypeRef),
+}
+
+impl EvidenceStep {
+    /// The `core.ability_ref` instance this step changes.
+    pub fn instance(self) -> TypeRef {
+        match self {
+            Self::Mask(instance) | Self::Dup(instance) => instance,
+        }
+    }
+
+    fn keyword(self) -> &'static str {
+        match self {
+            Self::Mask(_) => "mask",
+            Self::Dup(_) => "dup",
+        }
+    }
+
+    /// Decode one plan element, or say why it is malformed.
+    pub fn from_attribute(ctx: &IrContext, attr: &Attribute) -> Result<Self, String> {
+        let Attribute::Dict(entries) = attr else {
+            return Err("evidence_plan element must be a dictionary".into());
+        };
+        let Ok((key, value)) = entries.iter().exactly_one() else {
+            return Err(format!(
+                "evidence_plan element must have exactly one entry, found {}",
+                entries.len()
+            ));
+        };
+        let instance = match value {
+            Attribute::Type(instance) if is_ability_ref(ctx, *instance) => *instance,
+            _ => {
+                return Err(format!(
+                    "evidence_plan {key} must name a core.ability_ref type"
+                ));
+            }
+        };
+        key.with_str(|key| match key {
+            "mask" => Ok(Self::Mask(instance)),
+            "dup" => Ok(Self::Dup(instance)),
+            other => Err(format!(
+                "evidence_plan element must be mask or dup, found {other}"
+            )),
+        })
+    }
+
+    pub fn to_attribute(self) -> Attribute {
+        let mut entries = AttributeMap::new();
+        entries.insert(
+            Symbol::new(self.keyword()),
+            Attribute::Type(self.instance()),
+        );
+        Attribute::Dict(entries)
+    }
+
+    /// The `evidence_plan` value for these steps, or `None` for an empty
+    /// plan, which is written by omitting the attribute.
+    pub fn plan_attribute(steps: impl IntoIterator<Item = Self>) -> Option<Attribute> {
+        let steps: Vec<_> = steps.into_iter().map(Self::to_attribute).collect();
+        (!steps.is_empty()).then_some(Attribute::List(steps))
+    }
+}
+
+impl trunk_ir::attr_kind::AttrKind for EvidenceStep {
+    const KIND: trunk_ir::op_schema::AttributeKind =
+        trunk_ir::op_schema::AttributeKind::Dict(&trunk_ir::op_schema::AttributeKind::Type);
+    type Out<'ctx> = EvidenceStep;
+    type In = EvidenceStep;
+
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> EvidenceStep {
+        Self::from_attribute(ctx, attr)
+            .unwrap_or_else(|error| panic!("unverified evidence_plan element: {error}"))
+    }
+
+    fn write(_: &mut IrContext, value: EvidenceStep) -> Attribute {
+        value.to_attribute()
+    }
+}
+
+fn is_ability_ref(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.get_type(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref")
+}
+
+/// Check the shape of an operation's `evidence_plan`. Whether the selection
+/// matches the effect rows is typechecking's responsibility.
+fn verify_evidence_plan(ctx: &IrContext, op: OpRef, mask_only: bool) -> Result<(), String> {
+    let Some(plan) = ctx.op(op).attributes.get(EVIDENCE_PLAN_ATTR) else {
+        return Ok(());
+    };
+    let Attribute::List(items) = plan else {
+        return Err("evidence_plan must be a list".into());
+    };
+    if items.is_empty() {
+        return Err("evidence_plan must not be empty; omit it to keep the evidence".into());
+    }
+    let mut seen = HashSet::new();
+    for item in items.iter() {
+        let step = EvidenceStep::from_attribute(ctx, item)?;
+        if mask_only && matches!(step, EvidenceStep::Dup(_)) {
+            return Err("a handle's evidence_plan may only mask".into());
+        }
+        if !seen.insert(step.instance()) {
+            return Err(format!(
+                "evidence_plan names ability instance {} more than once",
+                step.instance()
+            ));
+        }
+    }
+    Ok(())
+}
+
+impl trunk_ir::ops::Verify for Call {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), false)
+    }
+}
+
+impl trunk_ir::ops::Verify for CallIndirect {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), false)
+    }
+}
+
+impl trunk_ir::ops::Verify for Resume {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), false)
+    }
+}
+
+impl trunk_ir::ops::Verify for Handle {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), true)
+    }
 }
 
 /// Why a name-matching source signature does not satisfy its storage contract.
@@ -5506,5 +5672,110 @@ mod tests {
         });
         assert_eq!(calls.len(), 1);
         assert!(direct_call_reenters_enclosing_func(&ctx, calls[0]));
+    }
+
+    /// `VALID_CONTROL_MODULE` with evidence selections on its call, indirect
+    /// call, handle, and resume.
+    fn evidence_plan_module(call: &str, handle: &str) -> String {
+        VALID_CONTROL_MODULE
+            .replacen(
+                "\n\n",
+                "\n  !state = core.ability_ref<{name = \"State\"}>\n  !log = core.ability_ref<{name = \"Log\"}>\n\n",
+                1,
+            )
+            .replace(
+                "{callee = @id}",
+                &format!("{{callee = @id, evidence_plan = {call}}}"),
+            )
+            .replace(
+                "%function, %value : core.i32",
+                "%function, %value {evidence_plan = [{dup = !state}]} : core.i32",
+            )
+            .replace(
+                "tribute_control.handle : core.i32",
+                &format!("tribute_control.handle {{evidence_plan = {handle}}} : core.i32"),
+            )
+            .replace(
+                "%token, %argument : core.i32",
+                "%token, %argument {evidence_plan = [{mask = !log}]} : core.i32",
+            )
+    }
+
+    #[test]
+    fn evidence_plans_validate_and_round_trip() {
+        let (ctx, module) = parse_fixture(&evidence_plan_module(
+            "[{mask = !state}, {dup = !log}]",
+            "[{mask = !state}]",
+        ));
+        let result = validate_local(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+
+        let call = Call::from_op(&ctx, control_op(&ctx, module, "call")).unwrap();
+        let state = ctx.get_type(match call.evidence_plan(&ctx).unwrap().next() {
+            Some(EvidenceStep::Mask(state)) => state,
+            other => panic!("expected a leading mask, found {other:?}"),
+        });
+        assert_eq!(state.attrs.get_str(&ctx, "name"), Some("State"));
+        let steps: Vec<_> = call.evidence_plan(&ctx).unwrap().collect();
+        assert!(matches!(
+            steps[..],
+            [EvidenceStep::Mask(_), EvidenceStep::Dup(_)]
+        ));
+
+        let printed = assert_round_trip(&ctx, module);
+        assert!(
+            printed.contains("evidence_plan = [{mask = !state}, {dup = !log}]"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn evidence_plan_verifier_rejects_malformed_selections() {
+        for (call, handle, expected) in [
+            ("[]", "[{mask = !state}]", "evidence_plan must not be empty"),
+            (
+                "[{mask = !state}, {dup = !state}]",
+                "[{mask = !state}]",
+                "names ability instance",
+            ),
+            (
+                "[{keep = !state}]",
+                "[{mask = !state}]",
+                "must be mask or dup, found keep",
+            ),
+            (
+                "[{mask = core.i32}]",
+                "[{mask = !state}]",
+                "evidence_plan mask must name a core.ability_ref type",
+            ),
+            (
+                "[{mask = !state, dup = !log}]",
+                "[{mask = !state}]",
+                "must have exactly one entry, found 2",
+            ),
+            (
+                "[{mask = !state}]",
+                "[{dup = !state}]",
+                "a handle's evidence_plan may only mask",
+            ),
+        ] {
+            let (ctx, module) = parse_fixture(&evidence_plan_module(call, handle));
+            let result = validate_local(&ctx, module);
+            let op = if handle.contains("dup") {
+                control_op(&ctx, module, "handle")
+            } else {
+                control_op(&ctx, module, "call")
+            };
+            assert_op_diagnostics(&result, op, &[expected]);
+            assert_eq!(result.errors.len(), 1, "{call} {handle}: {result}");
+        }
+    }
+
+    #[test]
+    fn evidence_plan_elements_must_be_type_dictionaries() {
+        let (ctx, module) = parse_fixture(&evidence_plan_module("[1]", "[{mask = !state}]"));
+        let result = validate_local(&ctx, module);
+        assert_eq!(result.errors.len(), 1, "{result}");
+        assert_eq!(result.errors[0].op, Some(control_op(&ctx, module, "call")));
     }
 }

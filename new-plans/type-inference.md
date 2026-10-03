@@ -322,7 +322,10 @@ callee 선언 row의 명시 `L`과, callee의 tail 인스턴스가 명시한 `L`
 | 2 | Callee의 명시 `L`과 tail의 `L`이 모두 caller의 명시 `L`이다 | `g: fn(fn() ->{e} Nil) ->{State \| e} Nil`을 `e := {State \| e'}`로 호출 |
 
 `k = 2`는 [중복 처리](#기본-규칙)로 대입한 row에서는 보이지 않으므로, 이 선택은
-병합한 row가 아니라 인스턴스화에서 계산한다. Caller row가 명시하지 않은 label과
+병합한 row가 아니라 인스턴스화에서 계산한다. `k = 0`이 가리기가 되는 것은 callee의
+tail 인스턴스가 caller의 tail로 이어질 때뿐이다. Tail이 닫혔거나 풀이 뒤에도 제약이
+없는 row 변수로 남으면(제약 없는 변수는 빈 row로 인스턴스화한 것과 같다) callee가
+caller tail의 handler에 닿는 자리가 없으므로 그대로 전달한다. Caller row가 명시하지 않은 label과
 handler marker가 없는 ambient `Io`는 그대로 전달한다. 이 결과는 typechecking이
 각 호출에 확정하는 metadata이며 이후 단계는 signature나 본문 형상에서 다시
 계산하지 않는다. 표현과 lowering은

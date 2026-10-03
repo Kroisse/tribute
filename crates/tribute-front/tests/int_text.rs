@@ -276,6 +276,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         perform_operations: mono.metadata.perform_operations,
         lambda_signatures: mono.metadata.lambda_signatures,
         exhaustive_cases: mono.metadata.exhaustive_cases,
+        evidence_plans: mono.metadata.evidence_plans,
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: std::collections::HashMap::new(),
     }
@@ -372,6 +373,7 @@ fn lower_specialized_source(
         perform_operations: mono.metadata.perform_operations,
         lambda_signatures: mono.metadata.lambda_signatures,
         exhaustive_cases: mono.metadata.exhaustive_cases,
+        evidence_plans: mono.metadata.evidence_plans,
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: std::collections::HashMap::new(),
     }
@@ -448,6 +450,12 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         perform_operations: checked.perform_operations(db).iter().cloned().collect(),
         lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
         exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+        evidence_plans: checked
+            .expression_types(db)
+            .evidence_plans
+            .iter()
+            .cloned()
+            .collect(),
         well_known_types: *checked.well_known_types(db),
         compiler_intrinsics: std::collections::HashMap::new(),
     }

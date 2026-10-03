@@ -127,6 +127,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         perform_operations,
         lambda_signatures: result.lambda_signatures.into_iter().collect(),
         exhaustive_cases: result.exhaustive_cases.into_iter().collect(),
+        evidence_plans: result.evidence_plans.into_iter().collect(),
         well_known_types: result.well_known_types,
         compiler_intrinsics,
     }
