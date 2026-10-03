@@ -744,9 +744,9 @@ fn expr_depth(expr: &Expr<UnresolvedName>) -> usize {
 /// each one is bound by an enclosing `let` in the same tree.
 ///
 /// Returns `true` if every `Var` references a name from `bound`.
-fn all_vars_bound(expr: &Expr<UnresolvedName>, bound: &[Symbol]) -> bool {
+fn all_vars_bound<'a>(expr: &'a Expr<UnresolvedName>, bound: &[&'a Symbol]) -> bool {
     match expr.kind.as_ref() {
-        ExprKind::Var(name) => bound.contains(&name.name()),
+        ExprKind::Var(name) => bound.contains(&&name.name()),
         ExprKind::BinOp { lhs, rhs, .. } => {
             all_vars_bound(lhs, bound) && all_vars_bound(rhs, bound)
         }
@@ -765,7 +765,7 @@ fn all_vars_bound(expr: &Expr<UnresolvedName>, bound: &[Symbol]) -> bool {
                         }
                         // After the let, the bound name enters scope.
                         if let PatternKind::Bind { name, .. } = pattern.kind.as_ref() {
-                            scope.push(name.clone());
+                            scope.push(name);
                         }
                     }
                     Stmt::Expr { expr, .. } => {
@@ -779,7 +779,7 @@ fn all_vars_bound(expr: &Expr<UnresolvedName>, bound: &[Symbol]) -> bool {
         }
         ExprKind::Lambda { params, body } => {
             let mut scope = bound.to_vec();
-            scope.extend(params.iter().map(|p| p.name.clone()));
+            scope.extend(params.iter().map(|p| &p.name));
             all_vars_bound(body, &scope)
         }
         ExprKind::Call { callee, args } => {
