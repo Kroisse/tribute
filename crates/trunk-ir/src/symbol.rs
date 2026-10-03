@@ -33,7 +33,7 @@ pub struct Symbol(SymbolAtom);
 
 impl std::hash::Hash for Symbol {
     fn hash<H: std::hash::Hasher>(&self, state: &mut H) {
-        self.as_str().hash(state);
+        self.0.hash(state);
     }
 }
 
