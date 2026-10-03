@@ -95,6 +95,10 @@ fn call_indirect<S: FuncSig>(
   takes an iterator. For `Attr<[String]>` the accessor yields `&str` and
   `<name>_ref` yields the `StringRef`s, as for a single string. `String` is
   the only kind the macro recognizes by name, to generate `<name>_ref`.
+- `Attr<Dict<V>>` (`attr_kind::Dict`) is a dictionary whose every value has
+  kind `V`. Its accessor returns a view with `get(key)`, `len()`, and
+  `iter()` in key order, and its builder setter takes the
+  `(Symbol, value)` entries.
 - Regions and successors are declared in the body: `#[region(name)] {}`,
   `#[region(name?)] {}` for an optional last region such as the body of an
   external function, and `#[successor(name)] {}`.

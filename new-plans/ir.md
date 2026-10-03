@@ -121,7 +121,8 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
   검사하는 값 영역, accessor가 돌려주는 값, builder가 받는 값을 스스로
   정의하며, 정의 문법은 종류의 이름을 해석하지 않는다. 새 종류는 그 타입을
   정의하는 것으로 추가된다. `[K]`는 모든 원소가 종류 `K`인 목록 종류이고,
-  원소 종류는 이름 있는 종류여야 한다. `_`는 모든 attribute 값을 받는다.
+  원소 종류는 이름 있는 종류여야 한다. `Dict<V>`는 모든 값이 종류 `V`인
+  dictionary 종류다. `_`는 모든 attribute 값을 받는다.
   문자열 종류만 예외로, 정의 문법이 알아보고 pool handle을 돌려주는 accessor를
   하나 더 만든다.
 - 결과는 `-> Value<C>`(accessor `result`) 또는 `-> Variadic<C>` /
