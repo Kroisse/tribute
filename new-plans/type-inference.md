@@ -327,6 +327,14 @@ callee 선언 row의 명시 `L`과, callee의 tail 인스턴스가 명시한 `L`
 단계는 signature나 본문 형상에서 다시 계산하지 않는다. 표현과 lowering은
 [cps-effects.md](cps-effects.md#row-directed-evidence)를 따른다.
 
+이 규칙은 callee row의 tail이 row 변수 하나일 때를 정의한다. 선언 row가 여러 row
+변수의 합집합인 callee(`fn both(f: fn() ->{e1} a, g: fn() ->{e2} b) ->{e1, e2}`)에서는
+callee가 각 tail에 넘길 handler를 ability별 marker 순서 하나로 구별할 수 없다. 이런
+callee의 tail 인스턴스에 caller의 명시 label이 들어가면 `k`는 그 label이 들어간 tail
+수와 무관하게 1로 두고 그대로 전달한다. 각 tail이 같은 instance의 서로 다른
+handler를 받아야 하는 경우, 즉 한 tail에는 caller의 명시 label이, 다른 tail에는
+caller tail의 같은 instance가 들어가는 경우의 dispatch는 보장하지 않는다.
+
 Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 바깥 그대로
 본다. Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
 operation과 호출은 handle 바깥의 handler를 본다. `resume`의 handler 선택은
