@@ -22,7 +22,7 @@ use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
 use crate::symbol::Symbol;
 use crate::symbol_table::SymbolTable;
-use crate::walk::{WalkAction, walk_region};
+use crate::walk::{WalkAction, walk_op, walk_region};
 
 type Edges = HashMap<Symbol, HashSet<Symbol>>;
 
@@ -40,9 +40,12 @@ pub struct CallGraph {
     pub calls: HashMap<Symbol, HashSet<Symbol>>,
     /// Function name (possibly qualified) → its defining `func.func` op.
     pub func_ops: HashMap<Symbol, OpRef>,
-    /// Functions whose address some function body takes: referenced other
-    /// than as the callee of a direct call.
+    /// Functions whose address is taken: referenced other than as the callee
+    /// of a direct call in a function body. Includes `module_references`.
     pub address_taken: HashSet<Symbol>,
+    /// Functions referenced by an operation outside every function
+    /// definition, such as an export.
+    pub module_references: HashSet<Symbol>,
     /// Callee → number of static direct-call sites across the whole module.
     /// Address references are *not* counted here (they are tracked in
     /// `address_taken`).
@@ -55,11 +58,21 @@ pub struct CallGraph {
 /// name has no entry in `func_ops`, but calls in each of its bodies are still
 /// recorded.
 pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
-    call_graph_over(ctx, &SymbolTable::collect(ctx, module))
+    call_graph_over(ctx, module.op(), &SymbolTable::collect(ctx, module))
 }
 
-fn call_graph_over(ctx: &IrContext, symbols: &SymbolTable) -> CallGraph {
+fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> CallGraph {
     let mut graph = CallGraph::default();
+    let _ = walk_op::<()>(ctx, module, &mut |op| {
+        if func::Func::matches(ctx, op) {
+            return ControlFlow::Continue(WalkAction::Skip);
+        }
+        ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
+            graph.module_references.insert(reference);
+            graph.address_taken.insert(reference);
+        });
+        ControlFlow::Continue(WalkAction::Advance)
+    });
     for (name, ops) in symbols.iter() {
         if let &[op] = ops
             && func::Func::matches(ctx, op)
@@ -107,7 +120,7 @@ fn record_call(graph: &mut CallGraph, caller: Symbol, callee: Symbol) {
 impl Analysis for CallGraph {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
         let symbols = ctx.get::<SymbolTable>(target)?;
-        Ok(call_graph_over(ctx.ir(), &symbols))
+        Ok(call_graph_over(ctx.ir(), target, &symbols))
     }
 }
 
@@ -484,6 +497,31 @@ mod tests {
             HashSet::from([make, body, looping])
         );
         assert_eq!(directly_recursive_functions(&g), HashSet::from([looping]));
+    }
+
+    #[test]
+    fn a_reference_outside_functions_takes_the_address() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  test.table {entries = [@exported]}
+  func.func @exported() {
+    func.return
+  }
+  func.func @main() {
+    func.call {callee = @exported}
+    func.return
+  }
+}"#,
+        );
+
+        let g = build_call_graph(&ctx, module);
+        let exported = Symbol::new("exported");
+        assert_eq!(g.module_references, HashSet::from([exported]));
+        assert_eq!(g.address_taken, HashSet::from([exported]));
+        assert_eq!(g.call_site_count, HashMap::from([(exported, 1)]));
+        assert!(!g.edges.contains_key(&exported));
     }
 
     #[test]
