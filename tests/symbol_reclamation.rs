@@ -102,9 +102,10 @@ fn dynamic_symbols_are_released_with_their_database() {
         drop(result);
         after_edit.push(live_dynamic_symbols());
     }
+    // A definition's qualified name can be retained next to its plain name.
     let growth = after_edit[after_edit.len() - 1] - after_edit[0];
     assert!(
-        growth <= NAMES_PER_ROUND * (after_edit.len() - 1),
+        growth <= 2 * NAMES_PER_ROUND * (after_edit.len() - 1),
         "an edit retains more than its own names: {after_edit:?}"
     );
     drop(db);
