@@ -597,7 +597,8 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 ```
 
 - **형상:** declaration 순서의 source argument, source-logical result 하나,
-  `callee: Symbol`을 가지며 region이 없는 non-terminator다.
+  `callee: Symbol`, 선택적 [`evidence_plan`](#evidence-선택-속성)을 가지며 region이
+  없는 non-terminator다.
 - **의미:** named source callable을 직접 호출한다.
 - **검증:** local verifier는 attribute와 resolved operand/result를 검사한다.
   Whole-IR verifier는 callee `tribute_control.func`의 arity/type을 맞춘다.
@@ -612,12 +613,31 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 ```
 
 - **형상:** `tribute_control.func_sig` callee, source argument, callee type의
-  source-logical result 하나를 가지며 attribute/region이 없는 non-terminator다.
+  source-logical result 하나와 선택적 [`evidence_plan`](#evidence-선택-속성)을 가지며
+  region이 없는 non-terminator다.
 - **의미:** lambda, `func_ref`, parameter 또는 capture로 얻은 callable을 호출한다.
 - **검증:** local verifier는 callee signature와 argument/result type을 맞춘다.
 - **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
   evidence, `ContinuationFrame<R>`는 없다.
 - **위치:** callee와 argument를 포함한 source indirect-call span이다.
+
+#### Evidence 선택 속성
+
+`evidence_plan`은 호출이 callee에게 넘길 evidence를 caller evidence에서 고르는
+선택이며 [type-inference.md](type-inference.md#호출의-evidence-선택)가 정한 값을
+typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`이 가질 수 있다.
+
+```text
+{evidence_plan = [mask(core.ability_ref<{name = "State"}>), dup(...)]}
+```
+
+- 원소는 `mask` 또는 `dup`과 exact ability instance의 쌍이며 순서대로 적용한다.
+  한 instance는 한 번만 나온다.
+- 속성이 없으면 그대로 전달한다. 빈 목록은 쓰지 않는다.
+- Verifier는 원소 형상과 instance 중복만 검사한다. Row 정보는 IR에 없으므로
+  선택의 옳고 그름은 typechecking이 책임진다.
+- CPS legalization은 만든 호출에 속성을 옮기고, `resolve_evidence`가
+  `effect.mask`/`effect.dup`으로 만든다([cps-effects.md](cps-effects.md#row-directed-evidence)).
 
 #### `tribute_control.return`
 
@@ -802,7 +822,7 @@ tribute_control.handler {
 - **피연산자:** 정확히 두 개다. `%resume`은
   `resume_token<InputType, AnswerType>`이고 `%value`는 `InputType`이다.
 - **결과:** `AnswerType` 하나만 만든다.
-- **속성과 영역:** 없다.
+- **속성과 영역:** 선택적 [`evidence_plan`](#evidence-선택-속성)만 가지며 region은 없다.
 - **종결자:** 아니다. `resume` 뒤의 strict work는 enclosing region에
   명시적으로 남으며 resumed computation이 반환한 뒤에만 실행된다.
 - **의미:** lexical하게 가장 가까운 enclosing general handler의 one-shot
@@ -862,8 +882,10 @@ logical continuation으로 region을 lower한다:
    suffix를 계속 실행한다. Arm이 resume하지 않으면 yield가 일치하는 handle을
    직접 완료하고 중단된 suffix와 completion region을 건너뛴다. Source
    `op -> Never` arm은 token을 받지 않으며 이 non-resuming path만 취할 수 있다.
-6. Nested handle은 자체 delimiter를 설치한다. Perform은 dynamic하게 설치된
-   handler 중 가장 가까운 일치 handler가 처리한다. Resume하면 perform과 해당
+6. Nested handle은 자체 delimiter를 설치한다. Perform은 둘러싼 callable 또는
+   handle body row의 명시 label에 묶인 handler가 처리하며, row tail로 들어온
+   operation은 그 사이에 설치된 handler를 지나친다
+   ([type-inference.md](type-inference.md#모듈-수준-함수의-관계)). Resume하면 perform과 해당
    handler 사이에서 선택된 모든 structured frame에 다시 진입한다. Resume하지
    않고 완료하면 그 frame을 포기한다.
 
@@ -1382,8 +1404,8 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 | `layout` | 붙는 타입 | 뜻 |
 | --- | --- | --- |
 | `"closure"` | canonical closure `adt.struct` | 함수 참조와 environment로 이루어진 closure 저장 |
-| `"evidence_marker"` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure |
-| `"evidence"` | evidence `core.array` | ability id 순으로 정렬된 marker 배열 |
+| `"evidence_marker"` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure, 가린 marker |
+| `"evidence"` | evidence `core.array` | ability id 순으로 정렬된 가장 위 marker 배열 |
 | `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
 | `"bytes_data"` | Wasm bytes backing `core.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
 
