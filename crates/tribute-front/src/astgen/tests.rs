@@ -149,14 +149,14 @@ fn test_struct_declaration() {
     assert!(
         struct_decl.fields[0]
             .name
-            .map(|s| s == "x")
-            .unwrap_or(false)
+            .as_ref()
+            .is_some_and(|s| *s == "x")
     );
     assert!(
         struct_decl.fields[1]
             .name
-            .map(|s| s == "y")
-            .unwrap_or(false)
+            .as_ref()
+            .is_some_and(|s| *s == "y")
     );
 }
 
@@ -1355,7 +1355,10 @@ fn test_use_path_keyword_prefixes() {
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>();
-            (path.join("::"), use_decl.alias.map(|a| a.to_string()))
+            (
+                path.join("::"),
+                use_decl.alias.clone().map(|a| a.to_string()),
+            )
         })
         .collect();
 
@@ -2300,7 +2303,7 @@ fn test_extern_function_with_abi() {
     assert_eq!(func.abi.to_string(), "intrinsic");
     assert_eq!(func.params.len(), 1);
     assert_eq!(func.params[0].name.to_string(), "bytes");
-    assert!(matches!(func.return_ty.kind, TypeAnnotationKind::Named(n) if n == "Int"));
+    assert!(matches!(func.return_ty.kind.clone(), TypeAnnotationKind::Named(n) if n == "Int"));
 }
 
 #[test]
@@ -2333,7 +2336,7 @@ fn test_extern_function_no_return_type() {
     };
     assert_eq!(func.name.to_string(), "__print_line");
     // Omitted return type defaults to Nil
-    assert!(matches!(func.return_ty.kind, TypeAnnotationKind::Named(n) if n == "Nil"));
+    assert!(matches!(func.return_ty.kind.clone(), TypeAnnotationKind::Named(n) if n == "Nil"));
 }
 
 #[test]

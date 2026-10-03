@@ -34,7 +34,7 @@ inventory::collect!(TypeAliasHint);
 /// Query all registered `TypeAliasHint`s to find a suggested name for the given type.
 pub fn suggest_type_alias_name(ctx: &IrContext, ty: TypeRef) -> Option<&str> {
     let data = ctx.get_type(ty);
-    let dialect = data.dialect;
+    let dialect = data.dialect.clone();
     for hint in inventory::iter::<TypeAliasHint> {
         if dialect.with_str(|s| s == hint.dialect)
             && let Some(name) = (hint.suggest)(ctx, ty)

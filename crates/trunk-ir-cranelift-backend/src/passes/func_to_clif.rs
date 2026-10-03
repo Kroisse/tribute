@@ -79,7 +79,7 @@ fn convert_nested_callable_type(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -113,7 +113,7 @@ fn convert_type_to_clif(
         let results = shared.results(ctx).to_vec();
         let type_attrs = shared
             .non_reserved_attrs(ctx)
-            .map(|(key, value)| (*key, value.clone()))
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<Vec<_>>();
         let attrs = type_attrs
             .into_iter()
@@ -144,7 +144,7 @@ fn convert_type_to_clif(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -234,7 +234,7 @@ impl RewritePattern for FuncCallPattern {
             return false;
         };
 
-        let callee = call_op.callee(ctx);
+        let callee = call_op.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
             op,
@@ -351,7 +351,7 @@ impl RewritePattern for FuncTailCallPattern {
             return false;
         };
 
-        let callee = tail_call.callee(ctx);
+        let callee = tail_call.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
             op,
@@ -474,7 +474,7 @@ impl RewritePattern for FuncConstantPattern {
             return false;
         };
 
-        let func_ref = const_op.func_ref(ctx);
+        let func_ref = const_op.func_ref(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
             && self.functions.get(&func_ref).copied() != Some(result)
@@ -856,7 +856,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(ty, Symbol::new("core"), Symbol::new("array"))
+                .is_dialect(ty, "core", "array")
                 .then_some(ptr_ty)
         });
 

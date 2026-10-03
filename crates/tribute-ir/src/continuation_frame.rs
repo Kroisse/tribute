@@ -33,7 +33,7 @@ pub fn ref_type(ctx: &mut IrContext, name: impl Into<StringArg>, result: TypeRef
 pub fn result_type(ctx: &IrContext, frame: TypeRef) -> Option<TypeRef> {
     let data = ctx.get_type(frame);
     (data.dialect == Symbol::new("adt")
-        && matches!(data.name, name if name == Symbol::new("typeref") || name == Symbol::new("struct")))
+        && (data.name == Symbol::new("typeref") || data.name == Symbol::new("struct")))
     .then(|| data.attrs.get_type(RESULT_ATTR))
     .flatten()
 }

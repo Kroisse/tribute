@@ -51,7 +51,7 @@ pub fn convert_signature_components<'a>(
         .map(|(key, value)| {
             let converted = convert_attribute_types(ctx, converter, value);
             attrs_changed |= converted != *value;
-            (*key, converted)
+            (key.clone(), converted)
         })
         .collect();
     let changed = inputs != old_inputs || results != old_results;
@@ -299,10 +299,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -346,10 +343,7 @@ mod tests {
     fn i32_to_i64_converter(i32_ty: TypeRef, i64_ty: TypeRef) -> TypeConverter {
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |ctx, ty| {
-            if ctx
-                .types()
-                .is_dialect(ty, Symbol::new("core"), Symbol::new("i32"))
-            {
+            if ctx.types().is_dialect(ty, "core", "i32") {
                 Some(i64_ty)
             } else {
                 None
@@ -620,7 +614,7 @@ mod result_list_tests {
                 );
                 assert_eq!(
                     ctx.get_type(converted).attrs.get_symbol_ref("tag"),
-                    Some(Symbol::new("keep"))
+                    Some(&Symbol::new("keep"))
                 );
             }
         }

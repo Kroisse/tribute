@@ -349,9 +349,9 @@ fn planner_selects_liveness_only_from_field_borrow_policy() {
     .unwrap();
     assert_eq!(liveness.computed_views(), (true, true));
     assert_ne!(
-        preserved.function(Symbol::new("load")).unwrap().actions(),
+        preserved.function(&Symbol::new("load")).unwrap().actions(),
         field_borrows
-            .function(Symbol::new("load"))
+            .function(&Symbol::new("load"))
             .unwrap()
             .actions()
     );

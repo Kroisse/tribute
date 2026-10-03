@@ -199,7 +199,7 @@ pub fn generate(
     let mut relocs = Vec::new();
     for (index, record) in &records {
         let base = *index as usize * RECORD_SIZE;
-        if let Some(&release) = release_fns.get(index) {
+        if let Some(release) = release_fns.get(index).cloned() {
             relocs.push((base + RELEASE_FN_OFFSET, release));
         }
         layout.write_record(base, record, &enum_offsets);
@@ -352,7 +352,7 @@ mod tests {
             &mut ctx,
             block,
             vec![(5, record)],
-            &HashMap::from([(5, release)]),
+            &HashMap::from([(5, release.clone())]),
             loc,
         );
 

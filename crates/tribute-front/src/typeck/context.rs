@@ -81,7 +81,7 @@ pub fn extract_type_name_from_type<'db>(
         return Some(Symbol::new(name));
     }
     match kind {
-        TypeKind::Named { name, .. } => Some(*name),
+        TypeKind::Named { name, .. } => Some(name.clone()),
         TypeKind::App { ctor, .. } => extract_type_name_from_type(db, *ctor),
         _ => None,
     }
@@ -190,7 +190,7 @@ impl<'db> ModuleTypeEnv<'db> {
             db,
             TypeKind::Named {
                 id: TypeDefId::builtin_list(db),
-                name: list_name,
+                name: list_name.clone(),
                 args: vec![list_arg],
             },
         );
@@ -247,10 +247,10 @@ impl<'db> ModuleTypeEnv<'db> {
     /// `None` if no candidates or ambiguous (multiple matches).
     pub fn lookup_method(
         &self,
-        method_name: Symbol,
+        method_name: &Symbol,
         receiver_ty: Type<'db>,
     ) -> Option<&MethodEntry<'db>> {
-        let candidates = self.method_index.get(&method_name)?;
+        let candidates = self.method_index.get(method_name)?;
         let mut iter = candidates
             .iter()
             .filter(|entry| receiver_type_matches(self.db, entry, receiver_ty));
@@ -317,12 +317,12 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Look up a type definition.
-    pub fn lookup_type_def(&self, name: Symbol) -> Option<TypeScheme<'db>> {
-        self.type_defs.get(&name).copied()
+    pub fn lookup_type_def(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
+        self.type_defs.get(name).copied()
     }
 
     /// Look up a type definition from a lexical module scope.
-    pub fn lookup_type_def_in_scope(&self, name: Symbol, prefix: &str) -> Option<TypeScheme<'db>> {
+    pub fn lookup_type_def_in_scope(&self, name: &Symbol, prefix: &str) -> Option<TypeScheme<'db>> {
         let spelling = name.to_string();
         if spelling.contains("::") {
             return self.lookup_type_def(name);
@@ -333,7 +333,7 @@ impl<'db> ModuleTypeEnv<'db> {
         let scope = prefix.trim_end_matches("::");
         if !scope.is_empty() {
             let candidate = Symbol::from_dynamic(&format!("{scope}::{spelling}"));
-            if let Some(scheme) = self.lookup_type_def(candidate) {
+            if let Some(scheme) = self.lookup_type_def(&candidate) {
                 return Some(scheme);
             }
         }
@@ -356,11 +356,11 @@ impl<'db> ModuleTypeEnv<'db> {
     pub fn lookup_struct_field(
         &self,
         struct_id: TypeDefId<'db>,
-        field_name: Symbol,
+        field_name: &Symbol,
     ) -> Option<(&[TypeParam], Type<'db>)> {
         let (type_params, fields) = self.struct_fields.get(&struct_id)?;
         for (name, ty) in fields {
-            if *name == field_name {
+            if *name == *field_name {
                 return Some((type_params.as_slice(), *ty));
             }
         }
@@ -373,8 +373,8 @@ impl<'db> ModuleTypeEnv<'db> {
     }
 
     /// Look up enum variants by enum name.
-    pub fn lookup_enum_variants(&self, enum_name: Symbol) -> Option<&[Symbol]> {
-        self.enum_variants.get(&enum_name).map(|v| v.as_slice())
+    pub fn lookup_enum_variants(&self, enum_name: &Symbol) -> Option<&[Symbol]> {
+        self.enum_variants.get(enum_name).map(|v| v.as_slice())
     }
 
     /// Field names of a constructor in declaration order, or `None` if its
@@ -392,11 +392,11 @@ impl<'db> ModuleTypeEnv<'db> {
     pub fn lookup_ability_op(
         &self,
         ability: AbilityId<'db>,
-        op: Symbol,
+        op: &Symbol,
     ) -> Option<&AbilityOpInfo<'db>> {
         self.ability_defs
             .get(&ability)
-            .and_then(|info| info.operations.get(&op))
+            .and_then(|info| info.operations.get(op))
     }
 
     /// Debug: print all registered constructors.
@@ -427,20 +427,20 @@ impl<'db> ModuleTypeEnv<'db> {
             self.constructor_types.insert(*id, *scheme);
         }
         for (name, scheme) in exports.type_defs(self.db) {
-            self.type_defs.insert(*name, *scheme);
+            self.type_defs.insert(name.clone(), *scheme);
         }
         for (id, info) in exports.struct_fields(self.db) {
             self.struct_fields.insert(*id, info.clone());
         }
         for (name, variants) in exports.enum_variants(self.db) {
-            self.enum_variants.insert(*name, variants.clone());
+            self.enum_variants.insert(name.clone(), variants.clone());
         }
         for (id, names) in exports.constructor_field_names(self.db) {
             self.constructor_field_names.insert(*id, names.clone());
         }
         for (name, entries) in exports.method_index(self.db) {
             self.method_index
-                .entry(*name)
+                .entry(name.clone())
                 .or_default()
                 .extend(entries.iter().copied());
         }
@@ -453,7 +453,10 @@ impl<'db> ModuleTypeEnv<'db> {
                 AbilityInfo {
                     id: *ability,
                     type_params: type_params.clone(),
-                    operations: operations.iter().map(|op| (op.name, op.clone())).collect(),
+                    operations: operations
+                        .iter()
+                        .map(|op| (op.name.clone(), op.clone()))
+                        .collect(),
                 },
             );
         }
@@ -479,7 +482,7 @@ impl<'db> ModuleTypeEnv<'db> {
         let mut result: Vec<_> = self
             .function_types
             .iter()
-            .map(|(id, scheme)| (id.qualified(self.db), *scheme))
+            .map(|(id, scheme)| (id.qualified(self.db).clone(), *scheme))
             .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result
@@ -517,7 +520,11 @@ impl<'db> ModuleTypeEnv<'db> {
     ///
     /// Results are sorted alphabetically by name for deterministic output.
     pub fn export_type_defs(&self) -> Vec<(Symbol, TypeScheme<'db>)> {
-        let mut result: Vec<_> = self.type_defs.iter().map(|(k, v)| (*k, *v)).collect();
+        let mut result: Vec<_> = self
+            .type_defs
+            .iter()
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result
     }
@@ -545,7 +552,7 @@ impl<'db> ModuleTypeEnv<'db> {
         let mut result: Vec<_> = self
             .enum_variants
             .iter()
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result
@@ -574,7 +581,7 @@ impl<'db> ModuleTypeEnv<'db> {
         let mut result: Vec<_> = self
             .method_index
             .iter()
-            .map(|(k, v)| (*k, v.clone()))
+            .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
         result.sort_by(|(a, _), (b, _)| a.with_str(|a| b.with_str(|b| a.cmp(b))));
         result
@@ -754,12 +761,12 @@ impl<'db> ModuleTypeEnv<'db> {
         prefix: &str,
     ) -> Type<'db> {
         let id = self
-            .lookup_type_def_in_scope(name, prefix)
+            .lookup_type_def_in_scope(&name, prefix)
             .and_then(|scheme| match scheme.body(self.db).kind(self.db) {
                 TypeKind::Named { id, .. } => Some(*id),
                 _ => None,
             })
-            .unwrap_or_else(|| TypeDefId::synthetic(self.db, name));
+            .unwrap_or_else(|| TypeDefId::synthetic(self.db, name.clone()));
         self.named_type_with_id(id, name, args)
     }
 
@@ -806,8 +813,8 @@ mod tests {
     fn string_type_fallback_ignores_user_string(db: &dyn salsa::Database) {
         let mut env = ModuleTypeEnv::new(db);
         let name = Symbol::new("String");
-        let user_id = TypeDefId::source(db, name, NodeId::from_raw(1));
-        let user_ty = env.named_type_with_id(user_id, name, vec![]);
+        let user_id = TypeDefId::source(db, name.clone(), NodeId::from_raw(1));
+        let user_ty = env.named_type_with_id(user_id, name.clone(), vec![]);
         env.register_type_def(name, TypeScheme::mono(db, user_ty));
 
         let string_ty = env.string_type();
@@ -837,7 +844,7 @@ mod tests {
         let exported = env.export_function_types();
 
         // Should be sorted alphabetically by name
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(
             names,
             vec![
@@ -969,7 +976,7 @@ mod tests {
         let ability_keys = |ids: Vec<AbilityId<'_>>| {
             ids.into_iter()
                 .filter(|id| id.name(db) == Symbol::new("Audit"))
-                .map(|id| (id.qualified(db), id.origin(db)))
+                .map(|id| (id.qualified(db).clone(), id.origin(db)))
                 .collect::<Vec<_>>()
         };
         assert_eq!(
@@ -1006,7 +1013,7 @@ mod tests {
         let exported = env.export_type_defs();
 
         // Should be sorted alphabetically by name
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(
             names,
             vec![
@@ -1060,7 +1067,7 @@ mod tests {
         let exported = env.export_enum_variants();
 
         // Should be sorted alphabetically by enum name
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(
             names,
             vec![
@@ -1090,9 +1097,9 @@ mod tests {
         let second = env.export_function_types();
         let third = env.export_function_types();
 
-        let first_names: Vec<_> = first.iter().map(|(n, _)| *n).collect();
-        let second_names: Vec<_> = second.iter().map(|(n, _)| *n).collect();
-        let third_names: Vec<_> = third.iter().map(|(n, _)| *n).collect();
+        let first_names: Vec<_> = first.iter().map(|(n, _)| n.clone()).collect();
+        let second_names: Vec<_> = second.iter().map(|(n, _)| n.clone()).collect();
+        let third_names: Vec<_> = third.iter().map(|(n, _)| n.clone()).collect();
 
         assert_eq!(first_names, second_names);
         assert_eq!(second_names, third_names);
@@ -1146,7 +1153,7 @@ mod tests {
         }
 
         let exported = env.export_method_index();
-        let names: Vec<_> = exported.iter().map(|(name, _)| *name).collect();
+        let names: Vec<_> = exported.iter().map(|(name, _)| name.clone()).collect();
         assert_eq!(
             names,
             vec![
@@ -1279,15 +1286,23 @@ mod tests {
         let first = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1)),
-                name,
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    name.clone(),
+                    crate::ast::NodeId::from_raw(1),
+                ),
+                name: name.clone(),
                 args: vec![],
             },
         );
         let second = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(2)),
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    name.clone(),
+                    crate::ast::NodeId::from_raw(2),
+                ),
                 name,
                 args: vec![],
             },
@@ -1306,14 +1321,14 @@ mod tests {
         let foo = named(db, "Foo");
         let ft = func(db, &[foo], Type::new(db, TypeKind::Int));
         env.register_method(Symbol::new("bar"), method_entry(db, "bar", ft));
-        assert!(env.lookup_method(Symbol::new("bar"), foo).is_some());
+        assert!(env.lookup_method(&Symbol::new("bar"), foo).is_some());
     }
 
     #[salsa_test]
     fn test_lookup_method_no_match(db: &dyn salsa::Database) {
         let env = ModuleTypeEnv::new(db);
         assert!(
-            env.lookup_method(Symbol::new("x"), named(db, "Foo"))
+            env.lookup_method(&Symbol::new("x"), named(db, "Foo"))
                 .is_none()
         );
     }
@@ -1333,7 +1348,7 @@ mod tests {
             method_entry(db, "m2", func(db, &[foo], float)),
         );
         // Two candidates with same receiver → ambiguous → None
-        assert!(env.lookup_method(Symbol::new("m"), foo).is_none());
+        assert!(env.lookup_method(&Symbol::new("m"), foo).is_none());
     }
 
     // =========================================================================

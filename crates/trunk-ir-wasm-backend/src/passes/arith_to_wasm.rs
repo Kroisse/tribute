@@ -179,7 +179,7 @@ impl RewritePattern for ArithBinOpPattern {
             return false;
         };
         let loc = ctx.op(op).location;
-        let name = data.name;
+        let name = data.name.clone();
         // Division reads the unspecified upper bits of a narrow integer.
         if is_narrow(ctx, result_ty)
             && ["divsi", "divui", "remsi", "remui"]
@@ -617,7 +617,7 @@ impl RewritePattern for ArithBitwisePattern {
             return false;
         }
 
-        let name = data.name;
+        let name = data.name.clone();
         let is_bitwise = name == Symbol::new("and")
             || name == Symbol::new("or")
             || name == Symbol::new("xor")

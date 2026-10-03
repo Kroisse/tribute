@@ -395,7 +395,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(call) = clif::Call::from_op(ctx, op) {
             let callee_sym = call.callee(ctx);
             let func_ref = self
-                .func_ref(callee_sym)
+                .func_ref(callee_sym.clone())
                 .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
 
             let operands = ctx.op_operands(op);
@@ -533,9 +533,9 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(sym_addr) = clif::SymbolAddr::from_op(ctx, op) {
             let sym = sym_addr.sym(ctx);
             // Check function refs first, then data refs
-            let val = if let Some(func_ref) = self.func_ref(sym) {
+            let val = if let Some(func_ref) = self.func_ref(sym.clone()) {
                 self.builder.ins().func_addr(self.ptr_ty, func_ref)
-            } else if let Some(gv) = self.data_ref(sym) {
+            } else if let Some(gv) = self.data_ref(sym.clone()) {
                 self.builder.ins().symbol_value(self.ptr_ty, gv)
             } else {
                 return Err(CompilationError::codegen(format!(
@@ -558,7 +558,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(rc) = clif::ReturnCall::from_op(ctx, op) {
             let callee_sym = rc.callee(ctx);
             let func_ref = self
-                .func_ref(callee_sym)
+                .func_ref(callee_sym.clone())
                 .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
 
             let operands = ctx.op_operands(op);

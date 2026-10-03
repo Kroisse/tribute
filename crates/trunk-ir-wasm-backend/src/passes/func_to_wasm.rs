@@ -68,7 +68,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     let table_indices: HashMap<Symbol, u32> = sorted_funcs
         .iter()
         .enumerate()
-        .map(|(idx, sym)| (*sym, idx as u32))
+        .map(|(idx, sym)| (sym.clone(), idx as u32))
         .collect();
 
     let table_size = sorted_funcs.len() as u32;
@@ -82,9 +82,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern {
-            table_indices: table_indices.clone(),
-        });
+        .add_pattern(FuncConstantPattern { table_indices });
     applicator.apply_partial(ctx, module);
 
     // 4. Add wasm.table and wasm.elem to the module
@@ -168,7 +166,7 @@ fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<Symbol> {
 
     // Deduplicate while preserving order
     let mut seen = std::collections::HashSet::new();
-    funcs.retain(|sym| seen.insert(*sym));
+    funcs.retain(|sym| seen.insert(sym.clone()));
 
     funcs
 }
@@ -178,7 +176,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
         for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
             if let Ok(const_op) = func::Constant::from_op(ctx, op) {
-                refs.push(const_op.func_ref(ctx));
+                refs.push(const_op.func_ref(ctx).clone());
             }
 
             // Recurse into nested regions
@@ -211,7 +209,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
         .iter()
         .map(|func_sym| {
             wasm_dialect::RefFunc::operands()
-                .func_name(*func_sym)
+                .func_name(func_sym.clone())
                 .results(funcref_ty)
                 .build(ctx, location)
                 .op_ref()
@@ -278,7 +276,7 @@ fn convert_nested_callable_type(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -312,8 +310,8 @@ fn convert_nested_callable_attributes(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
-                if skip(*key) {
+                key.clone(),
+                if skip(key.clone()) {
                     value.clone()
                 } else {
                     convert_nested_callable_attribute(ctx, value, converter)?
@@ -350,7 +348,7 @@ fn convert_type_to_wasm(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -462,7 +460,7 @@ impl RewritePattern for FuncCallPattern {
         let result_types: Vec<TypeRef> = rewriter.result_types(ctx, op);
 
         let new_op = wasm_dialect::Call::operands(args)
-            .callee(callee)
+            .callee(callee.clone())
             .results(result_types)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -565,7 +563,7 @@ impl RewritePattern for FuncTailCallPattern {
         let args: Vec<_> = ctx.op_operands(op).to_vec();
 
         let new_op = wasm_dialect::ReturnCall::operands(args)
-            .callee(callee)
+            .callee(callee.clone())
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
@@ -686,7 +684,7 @@ impl RewritePattern for FuncConstantPattern {
         // They are collected by collect_func_constant_refs before pattern application.
         let table_idx = self
             .table_indices
-            .get(&func_ref)
+            .get(func_ref)
             .copied()
             .expect("All func.constant must be registered in table");
 
@@ -1038,14 +1036,10 @@ mod tests {
         let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
-            .then_some(anyref_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
-            .then_some(f64_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "float")).then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
 
@@ -1095,14 +1089,10 @@ mod tests {
         let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
-            .then_some(anyref_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
-            .then_some(f64_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "float")).then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
 
@@ -1201,7 +1191,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(ty, Symbol::new("adt"), Symbol::new("typeref"))
+                .is_dialect(ty, "adt", "typeref")
                 .then_some(structref_ty)
         });
         lower(&mut ctx, module, type_converter);

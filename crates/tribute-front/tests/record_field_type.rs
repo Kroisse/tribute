@@ -73,7 +73,7 @@ fn declared_struct_id<'db>(
             _ => None,
         })
         .unwrap_or_else(|| panic!("missing struct {name}"));
-    TypeDefId::source(db, structure.name, structure.id)
+    TypeDefId::source(db, structure.name.clone(), structure.id)
 }
 
 fn node_type<'db>(

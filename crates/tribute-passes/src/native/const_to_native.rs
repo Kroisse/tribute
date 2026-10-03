@@ -247,7 +247,7 @@ fn declare_rodata(
             }
         };
         let data = clif::Data::operands()
-            .sym_name(sym)
+            .sym_name(sym.clone())
             .bytes(content.as_slice().into())
             .align(1)
             .regions(None)
@@ -385,7 +385,7 @@ impl RewritePattern for BytesConstNativePattern {
 
         let content: Vec<u8> = bytes_const.value(ctx).to_vec();
 
-        let Some(data_sym) = self.content_to_symbol.get(&content).copied() else {
+        let Some(data_sym) = self.content_to_symbol.get(&content).cloned() else {
             return false;
         };
 
@@ -434,7 +434,7 @@ impl RewritePattern for StringConstNativePattern {
 
         let content = string_const.value(ctx).as_bytes();
         let content_len = content.len() as u64;
-        let Some(data_sym) = self.content_to_symbol.get(content).copied() else {
+        let Some(data_sym) = self.content_to_symbol.get(content).cloned() else {
             return false;
         };
 

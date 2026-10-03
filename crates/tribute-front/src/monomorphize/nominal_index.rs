@@ -62,19 +62,19 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
         for decl in decls {
             let (name, node, declaration) = match decl {
                 Decl::Struct(s) => (
-                    s.name,
+                    s.name.clone(),
                     s.id,
                     Declaration {
                         source: NominalDeclaration::Struct(s),
                         constructors: vec![Constructor {
                             node: s.id,
-                            id: CtorId::new(db, crate::qualified_symbol(prefix, s.name)),
+                            id: CtorId::new(db, crate::qualified_symbol(prefix, &s.name)),
                             fields: s.fields.len(),
                         }],
                     },
                 ),
                 Decl::Enum(e) => (
-                    e.name,
+                    e.name.clone(),
                     e.id,
                     Declaration {
                         source: NominalDeclaration::Enum(e),
@@ -83,7 +83,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                             .iter()
                             .map(|v| Constructor {
                                 node: v.id,
-                                id: CtorId::new(db, crate::qualified_symbol(prefix, v.name)),
+                                id: CtorId::new(db, crate::qualified_symbol(prefix, &v.name)),
                                 fields: v.fields.len(),
                             })
                             .collect(),
@@ -91,7 +91,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                 ),
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
-                        let saved = crate::push_prefix(prefix, m.name);
+                        let saved = crate::push_prefix(prefix, &m.name);
                         self.collect(db, body, prefix);
                         prefix.truncate(saved);
                     }
@@ -99,7 +99,7 @@ impl<'ast, 'db> NominalIndex<'ast, 'db> {
                 }
                 _ => continue,
             };
-            let id = TypeDefId::source(db, crate::qualified_symbol(prefix, name), node);
+            let id = TypeDefId::source(db, crate::qualified_symbol(prefix, &name), node);
             self.declarations.insert(id, declaration);
         }
     }

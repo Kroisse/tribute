@@ -8,8 +8,11 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
   regions, and types
 - **`OpRef`**, **`ValueRef`**, **`BlockRef`**, **`RegionRef`**, **`TypeRef`**
   — Arena references to IR entities
-- **`Symbol`** — Interned identifier (4 bytes, O(1) comparison).
-  Qualified paths via `ModulePathExt` trait in `tribute-ir`.
+- **`Symbol`** — Interned name (8 bytes, O(1) equality, `Clone` but not
+  `Copy`). Take `&Symbol` where the name is only read, and clone it only to
+  store it. Names of at most 7 bytes are inline, trunk-ir's own declared names
+  are static, and other names are reference-counted and released with their
+  last symbol. Qualified paths via `ModulePathExt` trait in `tribute-ir`.
 
 ## Dialect Organization
 

@@ -95,7 +95,7 @@ fn collect_clif_function_signatures(
                     .unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
                 let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
                     .expect("schema-verified clif.func_sig");
-                if functions.insert(name, signature).is_some() {
+                if functions.insert(name.clone(), signature).is_some() {
                     errors.push(format!(
                         "clif.func @{name} has a duplicate symbol definition"
                     ));
@@ -334,7 +334,7 @@ fn validate_clif_region(
                     errors.push("clif.call requires a symbol callee".into());
                     continue;
                 };
-                if let Some(signature) = functions.get(&name) {
+                if let Some(signature) = functions.get(name) {
                     check_value_types(
                         ctx,
                         op,
@@ -366,7 +366,7 @@ fn validate_clif_region(
                     errors.push("clif.return_call requires a symbol callee".into());
                     continue;
                 };
-                if let Some(signature) = functions.get(&callee) {
+                if let Some(signature) = functions.get(callee) {
                     check_value_types(
                         ctx,
                         op,
@@ -476,10 +476,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);

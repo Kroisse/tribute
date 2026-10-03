@@ -301,7 +301,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     pub(crate) fn non_resumptive_resume_op(&self, local: LocalId) -> Option<(Symbol, Symbol)> {
-        self.non_resumptive_resume_locals.get(&local).copied()
+        self.non_resumptive_resume_locals.get(&local).cloned()
     }
 
     pub(crate) fn mark_module_value_reported(&mut self, node: NodeId) -> bool {
@@ -435,16 +435,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Look up a local variable by name.
     ///
     /// Searches from innermost to outermost scope.
-    pub fn lookup_local_by_name(&mut self, name: Symbol) -> Option<Type<'db>> {
+    pub fn lookup_local_by_name(&mut self, name: &Symbol) -> Option<Type<'db>> {
         self.local_scheme_by_name(name)
             .map(|scheme| self.instantiate_scheme(scheme))
     }
 
-    fn local_scheme_by_name(&self, name: Symbol) -> Option<TypeScheme<'db>> {
+    fn local_scheme_by_name(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
         self.name_scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(&name).copied())
+            .find_map(|scope| scope.get(name).copied())
     }
 
     // =========================================================================
@@ -568,7 +568,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &mut self,
         node: NodeId,
         local: LocalId,
-        name: Symbol,
+        name: &Symbol,
     ) -> Option<Type<'db>> {
         let scheme = if local.is_unresolved() {
             None
@@ -700,7 +700,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// Look up a type definition.
-    pub fn lookup_type_def(&self, name: Symbol) -> Option<TypeScheme<'db>> {
+    pub fn lookup_type_def(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
         self.env.lookup_type_def(name)
     }
 
@@ -915,8 +915,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.annotation_type_parameters.insert(name, ty);
     }
 
-    pub(crate) fn annotation_type_parameter(&self, name: Symbol) -> Option<Type<'db>> {
-        self.annotation_type_parameters.get(&name).copied()
+    pub(crate) fn annotation_type_parameter(&self, name: &Symbol) -> Option<Type<'db>> {
+        self.annotation_type_parameters.get(name).copied()
     }
 
     pub(crate) fn annotation_type_parameters(&self) -> impl Iterator<Item = Type<'db>> + '_ {
@@ -1543,9 +1543,9 @@ mod tests {
         // Bind by name
         let name = Symbol::new("x");
         let ty2 = ctx.bool_type();
-        ctx.bind_local_by_name(name, ty2);
+        ctx.bind_local_by_name(name.clone(), ty2);
 
-        assert_eq!(ctx.lookup_local_by_name(name), Some(ty2));
+        assert_eq!(ctx.lookup_local_by_name(&name), Some(ty2));
     }
 
     #[salsa_test]
@@ -1573,14 +1573,14 @@ mod tests {
 
         // Create a polymorphic constructor: forall a. a -> Option(a)
         let type_name = Symbol::new("Option");
-        let ctor_id = CtorId::new(db, type_name);
+        let ctor_id = CtorId::new(db, type_name.clone());
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let result_ty = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, type_name),
-                name: type_name,
+                id: TypeDefId::synthetic(db, type_name.clone()),
+                name: type_name.clone(),
                 args: vec![bound_var],
             },
         );

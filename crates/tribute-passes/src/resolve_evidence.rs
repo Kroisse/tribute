@@ -214,7 +214,7 @@ fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
             trunk_ir::OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("__tribute_next_tag"))),
+                    Attribute::String(ctx.intern_str("__tribute_next_tag")),
                 )
                 .attr("type", Attribute::Type(func_ty))
                 .attr("abi", ctx.string_attr("C"))

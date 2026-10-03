@@ -204,9 +204,9 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             db,
             ast,
             tribute_front::resolve::build_env(db, ast),
-            parsed.span_map(db).clone(),
+            parsed.span_map(db),
         ),
-        parsed.span_map(db).clone(),
+        parsed.span_map(db),
     );
     let mut typed = checked.module(db).clone();
     tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
@@ -262,7 +262,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
-        span_map: checked.span_map(db).clone(),
+        span_map: checked.span_map(db),
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
         specialized_enum_variants: mono
@@ -305,9 +305,9 @@ fn lower_specialized_source(
             db,
             ast,
             tribute_front::resolve::build_env(db, ast),
-            parsed.span_map(db).clone(),
+            parsed.span_map(db),
         ),
-        parsed.span_map(db).clone(),
+        parsed.span_map(db),
     );
     let mut typed = checked.module(db).clone();
     tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
@@ -363,7 +363,7 @@ fn lower_specialized_source(
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
-        span_map: checked.span_map(db).clone(),
+        span_map: checked.span_map(db),
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
         specialized_enum_variants: mono
@@ -410,15 +410,14 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
 fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
     let ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
     let resolved = tribute_front::resolve::resolve_with_env(
         db,
         ast,
         tribute_front::resolve::build_env(db, ast),
         span_map,
     );
-    let checked =
-        tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone());
+    let checked = tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
     let mut typed = checked.module(db).clone();
     tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
     let mut ir = IrContext::new();
@@ -430,7 +429,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .iter()
             .cloned()
             .collect(),
-        span_map: checked.span_map(db).clone(),
+        span_map: checked.span_map(db),
         function_types: checked.function_types(db).iter().cloned().collect(),
         constructor_types: checked
             .constructor_types(db)
@@ -493,24 +492,24 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
         assert_eq!(
-            (parameter.dialect, parameter.name),
+            (parameter.dialect.clone(), parameter.name.clone()),
             (Symbol::new("core"), Symbol::new("i32"))
         );
         assert_eq!(
-            (result.dialect, result.name),
+            (result.dialect.clone(), result.name.clone()),
             (Symbol::new("core"), Symbol::new("i32"))
         );
     }
     let ability = ir.get_type(declarations[0].ability_ref);
     assert_eq!(
-        (ability.dialect, ability.name),
+        (ability.dialect.clone(), ability.name.clone()),
         (Symbol::new("core"), Symbol::new("ability_ref"))
     );
     assert_eq!(ability.params.len(), 1);
     assert_eq!(
         (
-            ir.get_type(ability.params[0]).dialect,
-            ir.get_type(ability.params[0]).name
+            ir.get_type(ability.params[0]).dialect.clone(),
+            ir.get_type(ability.params[0]).name.clone()
         ),
         (Symbol::new("core"), Symbol::new("i32"))
     );
@@ -518,8 +517,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     assert_eq!(bool_ability.params.len(), 1);
     assert_eq!(
         (
-            ir.get_type(bool_ability.params[0]).dialect,
-            ir.get_type(bool_ability.params[0]).name
+            ir.get_type(bool_ability.params[0]).dialect.clone(),
+            ir.get_type(bool_ability.params[0]).name.clone()
         ),
         (Symbol::new("core"), Symbol::new("i1"))
     );
@@ -528,11 +527,11 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
         assert_eq!(
-            (parameter.dialect, parameter.name),
+            (parameter.dialect.clone(), parameter.name.clone()),
             (Symbol::new("core"), Symbol::new("i1"))
         );
         assert_eq!(
-            (result.dialect, result.name),
+            (result.dialect.clone(), result.name.clone()),
             (Symbol::new("core"), Symbol::new("i1"))
         );
     }

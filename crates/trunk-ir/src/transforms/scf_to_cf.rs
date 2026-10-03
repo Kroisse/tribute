@@ -148,11 +148,11 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef, plan: &ScfToCfPlan) {
 
 /// Check if an op is an scf control-flow op (if/loop/switch).
 fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
-    let d = ctx.op(op).dialect;
+    let d = ctx.op(op).dialect.clone();
     if d != Symbol::new("scf") {
         return false;
     }
-    let n = ctx.op(op).name;
+    let n = ctx.op(op).name.clone();
     n == Symbol::new("if") || n == Symbol::new("loop") || n == Symbol::new("switch")
 }
 
@@ -777,10 +777,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -807,8 +804,8 @@ mod tests {
     fn collect_op_names(ctx: &IrContext, region: RegionRef) -> Vec<String> {
         let mut names = Vec::new();
         let _ = crate::walk::walk_region::<()>(ctx, region, &mut |op| {
-            let d = ctx.op(op).dialect;
-            let n = ctx.op(op).name;
+            let d = ctx.op(op).dialect.clone();
+            let n = ctx.op(op).name.clone();
             d.with_str(|ds| n.with_str(|ns| names.push(format!("{ds}.{ns}"))));
             ControlFlow::Continue(WalkAction::Advance)
         });
@@ -1062,10 +1059,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let fn_ty = fn_type(&mut ctx);
         let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("external"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("external")))
             .attr("type", Attribute::Type(fn_ty))
             .build(&mut ctx);
         let func_op = ctx.create_op(func_data);

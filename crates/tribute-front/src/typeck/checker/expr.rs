@@ -221,10 +221,16 @@ impl<'db> TypeChecker<'db> {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
 
                 // Try to look up the method as a struct field accessor
-                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, *method) {
-                    self.record_field_instance(ctx, expr.id, receiver_ty, *method, result_ty);
+                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, method) {
+                    self.record_field_instance(
+                        ctx,
+                        expr.id,
+                        receiver_ty,
+                        method.clone(),
+                        result_ty,
+                    );
                     result_ty
-                } else if let Some(entry) = self.env.lookup_method(*method, receiver_ty) {
+                } else if let Some(entry) = self.env.lookup_method(method, receiver_ty) {
                     // UFCS method found — record for conversion phase and extract return type
                     let func_id = entry.func_id;
                     let callee_ty = ctx
@@ -281,7 +287,7 @@ impl<'db> TypeChecker<'db> {
                     ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
                         node_id: expr.id,
                         receiver_ty,
-                        method: *method,
+                        method: method.clone(),
                         result_ty,
                         arg_types,
                     });
@@ -390,7 +396,7 @@ impl<'db> TypeChecker<'db> {
                     if let Some(local_id) = param.local_id {
                         ctx.bind_local(local_id, *ty);
                     }
-                    ctx.bind_local_by_name(param.name, *ty);
+                    ctx.bind_local_by_name(param.name.clone(), *ty);
                 }
 
                 let body_ty = match &mode {
@@ -866,10 +872,16 @@ impl<'db> TypeChecker<'db> {
                 args,
             } => {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
-                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, *method) {
-                    self.record_field_instance(ctx, expr.id, receiver_ty, *method, result_ty);
+                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, method) {
+                    self.record_field_instance(
+                        ctx,
+                        expr.id,
+                        receiver_ty,
+                        method.clone(),
+                        result_ty,
+                    );
                     result_ty
-                } else if let Some(entry) = self.env.lookup_method(*method, receiver_ty) {
+                } else if let Some(entry) = self.env.lookup_method(method, receiver_ty) {
                     let callee_ty = ctx
                         .instantiate_function_reference(expr.id, entry.func_id)
                         .unwrap_or_else(|| ctx.fresh_type_var());
@@ -902,7 +914,7 @@ impl<'db> TypeChecker<'db> {
                     ctx.record_deferred_method(crate::typeck::func_context::DeferredMethodCall {
                         node_id: expr.id,
                         receiver_ty,
-                        method: *method,
+                        method: method.clone(),
                         result_ty,
                         arg_types,
                     });
@@ -1064,14 +1076,14 @@ impl<'db> TypeChecker<'db> {
             spread.is_some(),
         );
 
-        let written: Vec<Symbol> = fields.iter().map(|(name, _)| *name).collect();
+        let written: Vec<Symbol> = fields.iter().map(|(name, _)| name.clone()).collect();
         let (_, _, variant_field_tys) =
             self.constructor_field_shape(ctx, record_id, type_name, &written);
         for ((field_name, field_expr), variant_field_ty) in fields.iter().zip(variant_field_tys) {
             // Struct fields are read from the struct declaration; a named
             // variant's fields are its constructor instance's parameters.
             if let Some(expected_field_ty) = self
-                .lookup_struct_field_type(ctx, struct_ty, *field_name)
+                .lookup_struct_field_type(ctx, struct_ty, field_name)
                 .or(variant_field_ty)
             {
                 let field_ty = self.infer_expr_with_expected(ctx, field_expr, expected_field_ty);
@@ -1113,12 +1125,15 @@ impl<'db> TypeChecker<'db> {
             return;
         }
 
-        let declared: Vec<Symbol> = declared_fields.iter().map(|(name, _)| *name).collect();
+        let declared: Vec<Symbol> = declared_fields
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
         self.report_field_shape(
             record_id,
             format_args!("struct `{}`", id.qualified(self.db())),
             &declared,
-            fields.iter().map(|(name, _)| *name),
+            fields.iter().map(|(name, _)| name.clone()),
             has_spread,
         );
     }
@@ -1137,7 +1152,7 @@ impl<'db> TypeChecker<'db> {
     ) {
         let is_variant = matches!(
             result.kind(self.db()),
-            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(*name).is_some()
+            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(name).is_some()
         );
         if !is_variant || !ctx.mark_record_shape_checked(record_id) {
             return;
@@ -1165,7 +1180,7 @@ impl<'db> TypeChecker<'db> {
             record_id,
             format_args!("variant `{qualified}`"),
             declared,
-            fields.iter().map(|(name, _)| *name),
+            fields.iter().map(|(name, _)| name.clone()),
             has_spread,
         );
     }
@@ -1185,7 +1200,7 @@ impl<'db> TypeChecker<'db> {
         for name in written {
             if !declared.contains(&name) {
                 self.report_type_error(node, format!("unknown field `{name}` for {owner}"));
-            } else if !seen.insert(name) {
+            } else if !seen.insert(name.clone()) {
                 self.report_type_error(node, format!("duplicate field `{name}`"));
             }
         }
@@ -1248,7 +1263,7 @@ impl<'db> TypeChecker<'db> {
     ) {
         let name = match resolved {
             ResolvedRef::TypeDef { id } => id.qualified(self.db()),
-            ResolvedRef::Local { id, name } if !id.is_unresolved() => *name,
+            ResolvedRef::Local { id, name } if !id.is_unresolved() => name,
             _ => return,
         };
         if ctx.mark_record_shape_checked(pattern_id) {
@@ -1318,14 +1333,14 @@ impl<'db> TypeChecker<'db> {
         };
         let is_variant = matches!(
             result.kind(self.db()),
-            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(*name).is_some()
+            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(name).is_some()
         );
         let kind = if is_variant { "variant" } else { "struct" };
         self.report_field_shape(
             pattern_id,
             format_args!("{kind} `{qualified}`"),
             declared,
-            written.iter().copied(),
+            written.iter().cloned(),
             omits_rest,
         );
     }
@@ -1372,7 +1387,7 @@ impl<'db> TypeChecker<'db> {
                     ctx.lookup_local(*id)
                 };
                 by_id
-                    .or_else(|| ctx.lookup_local_by_name(*name))
+                    .or_else(|| ctx.lookup_local_by_name(name))
                     .unwrap_or_else(|| ctx.fresh_type_var())
             }
             ResolvedRef::Function { id } => node
@@ -1399,7 +1414,7 @@ impl<'db> TypeChecker<'db> {
             }
             ResolvedRef::AbilityOp { ability, op, .. } => {
                 // Look up the ability operation signature from the module type env
-                if let Some(op_info) = self.env.lookup_ability_op(*ability, *op) {
+                if let Some(op_info) = self.env.lookup_ability_op(*ability, op) {
                     // Create a function type from the operation signature
                     // The effect row contains this ability (with a row variable tail for polymorphism)
 
@@ -1479,7 +1494,7 @@ impl<'db> TypeChecker<'db> {
         let ResolvedRef::Local { id, name } = resolved else {
             unreachable!("local-reference inference requires a local reference");
         };
-        ctx.lookup_local_reference(node, *id, *name)
+        ctx.lookup_local_reference(node, *id, name)
             .unwrap_or_else(|| ctx.fresh_type_var())
     }
 
@@ -1676,17 +1691,17 @@ impl<'db> TypeChecker<'db> {
         else {
             return;
         };
-        let Some((parameters, field_ty)) = self.env.lookup_struct_field(*owner, field) else {
+        let Some((parameters, field_ty)) = self.env.lookup_struct_field(*owner, &field) else {
             return;
         };
         let mut prefix = owner.qualified(self.db()).to_string();
         let function =
-            crate::ast::FuncDefId::new(self.db(), crate::qualified_symbol(&mut prefix, field));
+            crate::ast::FuncDefId::new(self.db(), crate::qualified_symbol(&mut prefix, &field));
         let receiver_template = Type::new(
             self.db(),
             TypeKind::Named {
                 id: *owner,
-                name: owner.qualified(self.db()),
+                name: owner.qualified(self.db()).clone(),
                 args: (0..parameters.len())
                     .map(|index| {
                         Type::new(
@@ -1736,7 +1751,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         receiver_ty: Type<'db>,
-        field_name: Symbol,
+        field_name: &Symbol,
     ) -> Option<Type<'db>> {
         // Extract struct declaration identity from receiver type.
         let struct_id = match receiver_ty.kind(self.db()) {
@@ -1879,7 +1894,12 @@ impl<'db> TypeChecker<'db> {
                 },
                 fields: fields
                     .iter()
-                    .map(|(name, expr)| (*name, self.check_expr_with_ctx(ctx, expr, Mode::Infer)))
+                    .map(|(name, expr)| {
+                        (
+                            name.clone(),
+                            self.check_expr_with_ctx(ctx, expr, Mode::Infer),
+                        )
+                    })
                     .collect(),
                 spread: spread
                     .as_ref()
@@ -1913,7 +1933,7 @@ impl<'db> TypeChecker<'db> {
                     // Unresolved — keep as MethodCall
                     ExprKind::MethodCall {
                         receiver: converted_receiver,
-                        method: *method,
+                        method: method.clone(),
                         args: args
                             .iter()
                             .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))
@@ -2014,7 +2034,7 @@ impl<'db> TypeChecker<'db> {
                     if let Some(local_id) = param.local_id {
                         ctx.bind_local(local_id, *ty);
                     }
-                    ctx.bind_local_by_name(param.name, *ty);
+                    ctx.bind_local_by_name(param.name.clone(), *ty);
                 }
 
                 let body_mode = ctx
@@ -2096,7 +2116,7 @@ impl<'db> TypeChecker<'db> {
                 self.infer_var_with_ctx(ctx, node_id, resolved)
             }
             (Some(node), ResolvedRef::Local { id, name }) => ctx
-                .lookup_local_reference(node, *id, *name)
+                .lookup_local_reference(node, *id, name)
                 .unwrap_or_else(|| ctx.fresh_type_var()),
             (Some(node), _) => ctx
                 .get_function_reference_type(node)
@@ -2372,7 +2392,7 @@ impl<'db> TypeChecker<'db> {
                 ctx.bind_local_scheme(local_id, scheme);
                 ctx.record_local_binding_owner(local_id, scope);
             }
-            ctx.bind_local_scheme_by_name(name, scheme);
+            ctx.bind_local_scheme_by_name(name.clone(), scheme);
             let_schemes.push(LetSchemeBinding {
                 name,
                 local_id,
@@ -2399,7 +2419,7 @@ impl<'db> TypeChecker<'db> {
         match &*pattern.kind {
             PatternKind::Bind { name, local_id } => {
                 bindings.push(PatternBinding {
-                    name: *name,
+                    name: name.clone(),
                     local_id: *local_id,
                     scope: pattern.id,
                     ty: resolve(ty),
@@ -2434,7 +2454,7 @@ impl<'db> TypeChecker<'db> {
                         );
                     } else {
                         bindings.push(PatternBinding {
-                            name: field.name,
+                            name: field.name.clone(),
                             local_id: None,
                             scope: field.id,
                             ty: field_ty,
@@ -2458,7 +2478,7 @@ impl<'db> TypeChecker<'db> {
                 }
                 if let Some(name) = rest {
                     bindings.push(PatternBinding {
-                        name: *name,
+                        name: name.clone(),
                         local_id: *rest_local_id,
                         scope: pattern.id,
                         ty: resolve(ty),
@@ -2472,7 +2492,7 @@ impl<'db> TypeChecker<'db> {
             } => {
                 let resolved_ty = resolve(ty);
                 bindings.push(PatternBinding {
-                    name: *name,
+                    name: name.clone(),
                     local_id: *local_id,
                     scope: pattern.id,
                     ty: resolved_ty,
@@ -2563,7 +2583,7 @@ impl<'db> TypeChecker<'db> {
                 fields,
                 rest,
             } => {
-                let written: Vec<Symbol> = fields.iter().map(|field| field.name).collect();
+                let written: Vec<Symbol> = fields.iter().map(|field| field.name.clone()).collect();
                 let (_, result, field_tys) =
                     self.constructor_field_shape(ctx, pattern.id, type_name, &written);
                 self.validate_record_pattern_with_ctx(
@@ -2601,7 +2621,7 @@ impl<'db> TypeChecker<'db> {
                 if let Some(id) = local_id {
                     ctx.bind_local(*id, ty);
                 }
-                ctx.bind_local_by_name(*name, ty);
+                ctx.bind_local_by_name(name.clone(), ty);
             }
             PatternKind::Tuple(pats) => {
                 if let TypeKind::Tuple(elem_tys) = ty.kind(self.db()) {
@@ -2646,7 +2666,7 @@ impl<'db> TypeChecker<'db> {
                         self.bind_pattern_vars_with_ctx(ctx, pat, field_ty);
                     } else {
                         // Shorthand { name } - bind the field name directly
-                        ctx.bind_local_by_name(field.name, field_ty);
+                        ctx.bind_local_by_name(field.name.clone(), field_ty);
                     }
                 }
             }
@@ -2678,7 +2698,7 @@ impl<'db> TypeChecker<'db> {
                 name,
                 local_id,
             } => {
-                ctx.bind_local_by_name(*name, ty);
+                ctx.bind_local_by_name(name.clone(), ty);
                 if let Some(local_id) = local_id {
                     ctx.bind_local(*local_id, ty);
                 }
@@ -2697,7 +2717,7 @@ impl<'db> TypeChecker<'db> {
         let kind = match &*pattern.kind {
             PatternKind::Wildcard => PatternKind::Wildcard,
             PatternKind::Bind { name, local_id } => PatternKind::Bind {
-                name: *name,
+                name: name.clone(),
                 local_id: *local_id,
             },
             PatternKind::Literal(lit) => PatternKind::Literal(lit.clone()),
@@ -2749,7 +2769,7 @@ impl<'db> TypeChecker<'db> {
                     .iter()
                     .map(|p| self.convert_pattern_with_ctx(ctx, p))
                     .collect(),
-                rest: *rest,
+                rest: rest.clone(),
                 rest_local_id: *rest_local_id,
             },
             PatternKind::As {
@@ -2758,7 +2778,7 @@ impl<'db> TypeChecker<'db> {
                 local_id,
             } => PatternKind::As {
                 pattern: self.convert_pattern_with_ctx(ctx, pattern),
-                name: *name,
+                name: name.clone(),
                 local_id: *local_id,
             },
             PatternKind::Error => PatternKind::Error,
@@ -2775,7 +2795,7 @@ impl<'db> TypeChecker<'db> {
         type_name: &ResolvedRef<'db>,
         fields: &[FieldPattern<V>],
     ) -> Vec<Option<Type<'db>>> {
-        let written: Vec<Symbol> = fields.iter().map(|field| field.name).collect();
+        let written: Vec<Symbol> = fields.iter().map(|field| field.name.clone()).collect();
         self.constructor_field_shape(ctx, pattern_id, type_name, &written)
             .2
     }
@@ -2802,7 +2822,7 @@ impl<'db> TypeChecker<'db> {
     ) -> FieldPattern<TypedRef<'db>> {
         FieldPattern {
             id: fp.id,
-            name: fp.name,
+            name: fp.name.clone(),
             pattern: fp
                 .pattern
                 .as_ref()
@@ -2819,7 +2839,7 @@ impl<'db> TypeChecker<'db> {
     ) -> FieldPattern<TypedRef<'db>> {
         FieldPattern {
             id: fp.id,
-            name: fp.name,
+            name: fp.name.clone(),
             pattern: fp
                 .pattern
                 .as_ref()
@@ -2855,7 +2875,7 @@ impl<'db> TypeChecker<'db> {
         let kind = match &*pattern.kind {
             PatternKind::Wildcard => PatternKind::Wildcard,
             PatternKind::Bind { name, local_id } => PatternKind::Bind {
-                name: *name,
+                name: name.clone(),
                 local_id: *local_id,
             },
             PatternKind::Literal(lit) => PatternKind::Literal(lit.clone()),
@@ -2961,7 +2981,7 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .map(|p| self.convert_pattern_with_expected_ctx(ctx, p, elem_ty))
                         .collect(),
-                    rest: *rest,
+                    rest: rest.clone(),
                     rest_local_id: *rest_local_id,
                 }
             }
@@ -2971,7 +2991,7 @@ impl<'db> TypeChecker<'db> {
                 local_id,
             } => PatternKind::As {
                 pattern: self.convert_pattern_with_expected_ctx(ctx, pattern, expected),
-                name: *name,
+                name: name.clone(),
                 local_id: *local_id,
             },
             PatternKind::Error => PatternKind::Error,
@@ -3014,7 +3034,7 @@ impl<'db> TypeChecker<'db> {
                     ctx,
                     HandlerOperationRequest {
                         ability,
-                        op: *op,
+                        op: op.clone(),
                         syntax_kind: OpDeclKind::Fn,
                         params,
                         arm_id: arm.id,
@@ -3025,7 +3045,7 @@ impl<'db> TypeChecker<'db> {
                 (
                     HandlerKind::Fn {
                         ability: self.convert_ref_with_ctx(ctx, None, ability),
-                        op: *op,
+                        op: op.clone(),
                         params: params
                             .iter()
                             .map(|p| self.convert_pattern_with_ctx(ctx, p))
@@ -3047,7 +3067,7 @@ impl<'db> TypeChecker<'db> {
                     ctx,
                     HandlerOperationRequest {
                         ability,
-                        op: *op,
+                        op: op.clone(),
                         syntax_kind: OpDeclKind::Op,
                         params,
                         arm_id: arm.id,
@@ -3067,7 +3087,7 @@ impl<'db> TypeChecker<'db> {
                         ctx.record_non_resumptive_resume(
                             k_local_id,
                             operation.ability.name(self.db()),
-                            *op,
+                            op.clone(),
                         );
                         ctx.bind_local(k_local_id, ctx.error_type());
                     } else {
@@ -3090,7 +3110,7 @@ impl<'db> TypeChecker<'db> {
                 (
                     HandlerKind::Op {
                         ability: self.convert_ref_with_ctx(ctx, None, ability),
-                        op: *op,
+                        op: op.clone(),
                         params: params
                             .iter()
                             .map(|p| self.convert_pattern_with_ctx(ctx, p))
@@ -3158,7 +3178,7 @@ impl<'db> TypeChecker<'db> {
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
-        let Some(op_info) = self.env.lookup_ability_op(ability_id, op) else {
+        let Some(op_info) = self.env.lookup_ability_op(ability_id, &op) else {
             if ctx.mark_handler_error(arm_id, "unknown operation") {
                 Diagnostic::new(
                     format!("unknown handler operation '{}'", op),
@@ -3373,10 +3393,9 @@ impl<'db> TypeChecker<'db> {
             return ty;
         }
         let ty = match &ann.kind {
-            TypeAnnotationKind::Named(name) if ctx.annotation_type_parameter(*name).is_some() => {
-                ctx.annotation_type_parameter(*name)
-                    .expect("known signature parameter")
-            }
+            TypeAnnotationKind::Named(name) if ctx.annotation_type_parameter(name).is_some() => ctx
+                .annotation_type_parameter(name)
+                .expect("known signature parameter"),
             TypeAnnotationKind::Named(name) => {
                 if *name == "Int" {
                     ctx.int_type()
@@ -3395,7 +3414,7 @@ impl<'db> TypeChecker<'db> {
                 } else if *name == "Never" {
                     ctx.never_type()
                 } else {
-                    ctx.named_type_in_scope(*name, vec![], self.current_prefix())
+                    ctx.named_type_in_scope(name.clone(), vec![], self.current_prefix())
                 }
             }
             TypeAnnotationKind::Path(parts) => ctx.path_type(parts),
@@ -3406,7 +3425,7 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .map(|a| self.annotation_to_type_with_ctx(ctx, a))
                         .collect();
-                    ctx.named_type_with_id(*id, *name, arg_types)
+                    ctx.named_type_with_id(*id, name.clone(), arg_types)
                 } else {
                     ctx.error_type()
                 }
@@ -3425,7 +3444,7 @@ impl<'db> TypeChecker<'db> {
                 for ability in abilities {
                     let row = match &ability.kind {
                         TypeAnnotationKind::Named(name) if crate::ast::is_type_variable(name) => {
-                            ctx.annotation_row(*name)
+                            ctx.annotation_row(name.clone())
                         }
                         TypeAnnotationKind::Infer => ctx.fresh_row_var(),
                         _ => continue,
@@ -3488,7 +3507,10 @@ impl<'db> TypeChecker<'db> {
             ResolvedRef::TypeDef { id } => {
                 // TypeDef might be an ability reference in handler context
                 // Create an AbilityId with the same qualified name
-                Some(AbilityId::source(self.db(), id.qualified(self.db())))
+                Some(AbilityId::source(
+                    self.db(),
+                    id.qualified(self.db()).clone(),
+                ))
             }
             // Other reference types are not abilities
             _ => None,
@@ -3691,9 +3713,9 @@ mod tests {
                 id: ability_id,
                 type_params: vec![],
                 operations: HashMap::from([(
-                    get,
+                    get.clone(),
                     AbilityOpInfo {
-                        name: get,
+                        name: get.clone(),
                         kind: OpDeclKind::Op,
                         param_types: vec![],
                         return_type: Type::new(db, TypeKind::Nat),
@@ -3716,9 +3738,9 @@ mod tests {
         let do_arm = HandlerArm {
             id: NodeId::from_raw(1),
             kind: HandlerKind::Do {
-                binding: bind_pattern(2, name, LocalId::new(1)),
+                binding: bind_pattern(2, name.clone(), LocalId::new(1)),
             },
-            body: local_expr(3, name, LocalId::new(1)),
+            body: local_expr(3, name.clone(), LocalId::new(1)),
         };
         let converted_do = checker.convert_handler_arm_with_ctx(&mut ctx, &do_arm, &handle_ctx);
         assert!(matches!(
@@ -3735,7 +3757,7 @@ mod tests {
                 params: vec![],
                 resume_local_id: None,
             },
-            body: local_expr(5, name, LocalId::UNRESOLVED),
+            body: local_expr(5, name.clone(), LocalId::UNRESOLVED),
         };
         let converted_op = checker.convert_handler_arm_with_ctx(&mut ctx, &op_arm, &handle_ctx);
         assert!(
@@ -3777,18 +3799,18 @@ mod tests {
                 type_params: vec![],
                 operations: HashMap::from([
                     (
-                        nat_op,
+                        nat_op.clone(),
                         AbilityOpInfo {
-                            name: nat_op,
+                            name: nat_op.clone(),
                             kind: OpDeclKind::Op,
                             param_types: vec![nat_ty],
                             return_type: Type::new(db, TypeKind::Nil),
                         },
                     ),
                     (
-                        bool_op,
+                        bool_op.clone(),
                         AbilityOpInfo {
-                            name: bool_op,
+                            name: bool_op.clone(),
                             kind: OpDeclKind::Op,
                             param_types: vec![bool_ty],
                             return_type: Type::new(db, TypeKind::Nil),
@@ -3816,10 +3838,10 @@ mod tests {
             kind: HandlerKind::Op {
                 ability: ability.clone(),
                 op,
-                params: vec![bind_pattern(id + 1, name, local_id)],
+                params: vec![bind_pattern(id + 1, name.clone(), local_id)],
                 resume_local_id: None,
             },
-            body: local_expr(id + 2, name, local_id),
+            body: local_expr(id + 2, name.clone(), local_id),
         };
 
         let nat_arm = checker.convert_handler_arm_with_ctx(
@@ -3843,7 +3865,7 @@ mod tests {
         ));
         assert!(ctx.lookup_local(LocalId::new(10)).is_none());
         assert!(ctx.lookup_local(LocalId::new(20)).is_none());
-        assert!(ctx.lookup_local_by_name(name).is_none());
+        assert!(ctx.lookup_local_by_name(&name).is_none());
     }
 
     // =========================================================================

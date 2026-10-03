@@ -89,7 +89,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symb
 
                 // Check if this is a ref_func
                 if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, op) {
-                    ref_funcs.insert(ref_func_op.func_name(ctx));
+                    ref_funcs.insert(ref_func_op.func_name(ctx).clone());
                 }
             }
         }

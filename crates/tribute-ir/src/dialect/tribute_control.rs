@@ -533,7 +533,7 @@ pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, Type
 pub fn func_declaration(
     ctx: &mut IrContext,
     location: Location,
-    sym_name: Symbol,
+    sym_name: &Symbol,
     func_sig_type: TypeRef,
 ) -> Func {
     let data = trunk_ir::OperationDataBuilder::new(
@@ -618,7 +618,7 @@ fn print_extra_attributes(
         .attributes
         .iter()
         .filter(|(key, _)| !excluded.contains(key))
-        .map(|(key, value)| (*key, value.clone()))
+        .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     if attrs.is_empty() {
         return Ok(());
@@ -2327,7 +2327,7 @@ fn compiler_intrinsic_map<'a>(
     let mut map = HashMap::new();
     let mut previous = None;
     for declaration in declarations {
-        let key = (declaration.symbol, declaration.identity);
+        let key = (declaration.symbol.clone(), declaration.identity.clone());
         if previous.is_some_and(|previous| previous > key) {
             push_type_error(
                 errors,
@@ -2344,7 +2344,10 @@ fn compiler_intrinsic_map<'a>(
                 ),
             );
         }
-        if map.insert(declaration.symbol, declaration).is_some() {
+        if map
+            .insert(declaration.symbol.clone(), declaration)
+            .is_some()
+        {
             push_type_error(
                 errors,
                 format!(
@@ -2865,7 +2868,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
         if is_control_op(ctx, current, "func") {
-            return qualified_name(ctx, current) == Some(callee);
+            return qualified_name(ctx, current) == Some(callee.clone());
         }
         owner = parent_op(ctx, current);
     }
@@ -3690,7 +3693,7 @@ mod tests {
         walk_region_ops(ctx, body, &mut |op| {
             let data = ctx.op(op);
             if data.dialect == Symbol::new("tribute_control") {
-                names.insert(data.name);
+                names.insert(data.name.clone());
                 assert_eq!(data.location.span, Span::new(7, 19));
             }
         });
@@ -3829,7 +3832,7 @@ mod tests {
         ));
         assert_eq!(
             ctx.op(declaration).attributes.get_symbol_ref("metadata"),
-            Some(Symbol::new("declaration"))
+            Some(&Symbol::new("declaration"))
         );
 
         let inline = r#"core.module @test {
@@ -5220,11 +5223,11 @@ mod tests {
                         .attributes
                         .get_str(&ctx, "sym_name")
                         .map(Symbol::from_dynamic)
-                        == Some(symbol)
+                        == Some(symbol.clone())
                 })
                 .unwrap();
             CompilerIntrinsicDeclaration::new(
-                symbol,
+                symbol.clone(),
                 symbol,
                 ctx.op(function).attributes.get_type("type").unwrap(),
             )

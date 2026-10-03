@@ -114,7 +114,9 @@ impl FoldDispatchPattern {
         let mut table = HashMap::new();
         for (dialect, op_name, fold) in folds {
             assert!(
-                table.insert((dialect, op_name), fold).is_none(),
+                table
+                    .insert((dialect.clone(), op_name.clone()), fold)
+                    .is_none(),
                 "duplicate canonicalize fold for {dialect}.{op_name}",
             );
         }
@@ -145,7 +147,7 @@ impl RewritePattern for FoldDispatchPattern {
     ) -> bool {
         let key = {
             let data = ctx.op(op);
-            (data.dialect, data.name)
+            (data.dialect.clone(), data.name.clone())
         };
         let Some(fold) = self.table.get(&key).copied() else {
             return false;

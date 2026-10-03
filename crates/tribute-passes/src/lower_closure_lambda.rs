@@ -223,7 +223,7 @@ fn lower_single_lambda(
         .as_type_ref();
 
     let func_op = func::Func::operands()
-        .sym_name(lifted_name)
+        .sym_name(lifted_name.clone())
         .r#type(func_ty)
         .regions(func_body_region)
         .build(ctx, location);
@@ -499,10 +499,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
             .region(module_region)
             .build(ctx);
         let module_ref = ctx.create_op(module_op);

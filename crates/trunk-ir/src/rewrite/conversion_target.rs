@@ -179,7 +179,7 @@ impl ConversionTarget {
             "dialect `{dialect}` is already registered as illegal"
         );
         assert!(
-            self.legal_dialects.insert(dialect),
+            self.legal_dialects.insert(dialect.clone()),
             "dialect `{dialect}` is already registered as legal"
         );
     }
@@ -192,7 +192,7 @@ impl ConversionTarget {
             "dialect `{dialect}` is already registered as legal"
         );
         assert!(
-            self.illegal_dialects.insert(dialect),
+            self.illegal_dialects.insert(dialect.clone()),
             "dialect `{dialect}` is already registered as illegal"
         );
     }
@@ -207,7 +207,7 @@ impl ConversionTarget {
             key.1
         );
         assert!(
-            self.legal_ops.insert(key),
+            self.legal_ops.insert(key.clone()),
             "operation `{}.{}` is already registered as legal",
             key.0,
             key.1
@@ -224,7 +224,7 @@ impl ConversionTarget {
             key.1
         );
         assert!(
-            self.illegal_ops.insert(key),
+            self.illegal_ops.insert(key.clone()),
             "operation `{}.{}` is already registered as illegal",
             key.0,
             key.1
@@ -245,7 +245,7 @@ impl ConversionTarget {
             key.1
         );
         assert!(
-            self.recursive_legal_ops.insert(key),
+            self.recursive_legal_ops.insert(key.clone()),
             "operation `{}.{}` is already registered as recursively legal",
             key.0,
             key.1
@@ -290,7 +290,7 @@ impl ConversionTarget {
             key.1
         );
         assert!(
-            self.recursive_dynamic_ops.insert(key),
+            self.recursive_dynamic_ops.insert(key.clone()),
             "operation `{}.{}` is already registered as dynamically recursively legal",
             key.0,
             key.1
@@ -358,7 +358,7 @@ impl ConversionTarget {
     /// 6. Default: Unknown.
     pub fn is_legal(&self, ctx: &IrContext, op: OpRef) -> LegalityCheck {
         let data = ctx.op(op);
-        let key = (data.dialect, data.name);
+        let key = (data.dialect.clone(), data.name.clone());
 
         // 1. Operation dynamic rule.
         if let Some(check) = self.dynamic_ops.get(&key)
@@ -404,7 +404,7 @@ impl ConversionTarget {
     /// Check whether a legal operation makes its nested regions recursively legal.
     pub fn is_recursively_legal(&self, ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
-        let key = (data.dialect, data.name);
+        let key = (data.dialect.clone(), data.name.clone());
 
         if self.recursive_dynamic_ops.contains(&key)
             && let Some(check) = self.dynamic_ops.get(&key)
@@ -452,8 +452,8 @@ impl ConversionTarget {
                 let data = ctx.op(op);
                 failures.push(IllegalOp {
                     op,
-                    dialect: data.dialect,
-                    name: data.name,
+                    dialect: data.dialect.clone(),
+                    name: data.name.clone(),
                     legality,
                     reason: None,
                 });

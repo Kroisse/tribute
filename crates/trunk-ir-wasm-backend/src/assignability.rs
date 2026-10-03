@@ -137,10 +137,7 @@ mod tests {
   !plain = core.array<core.i8>
 }"#,
         );
-        let alias = |name: &'static str| {
-            ctx.type_alias_by_name(Symbol::new(name))
-                .expect("fixture alias")
-        };
+        let alias = |name: &'static str| ctx.type_alias_by_text(name).expect("fixture alias");
 
         assert!(is_wasm_physical_argument_assignable(
             &ctx,

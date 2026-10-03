@@ -371,7 +371,7 @@ impl Data {
         reloc_ops(ctx, self.op_ref())
             .map(|op| {
                 let reloc = FuncReloc::from_op(ctx, op).expect("verified clif.data relocations");
-                (reloc.offset(ctx), reloc.func(ctx))
+                (reloc.offset(ctx), reloc.func(ctx).clone())
             })
             .collect()
     }
