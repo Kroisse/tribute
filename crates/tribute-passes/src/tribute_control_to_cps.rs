@@ -5711,7 +5711,9 @@ mod tests {
         crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let physical = adapter_type(&ctx);
-        let consumed = || crate::target_abi::physical_parameter_attrs(CallingConvention::Cps);
+        let contract =
+            crate::target_abi::physical_parameter_attrs(&mut ctx, CallingConvention::Cps);
+        let consumed = || contract.clone();
         let mut marked_consumed = marked;
         marked_consumed.extend(consumed());
         assert_eq!(
@@ -6185,7 +6187,7 @@ mod tests {
         );
         assert!(printed.contains("func.unreachable"));
         assert!(!printed.contains("value = 99"));
-        assert!(!printed.contains("@consumed"));
+        assert!(!printed.contains("tribute.ownership"));
         assert!(!printed.contains("adt.struct_set"));
         assert!(!printed.contains("adt.ref_null"));
     }
@@ -6244,7 +6246,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("ability.call"));
         assert!(!printed.contains("ability.perform"));
-        assert!(!printed.contains("@consumed"));
+        assert!(!printed.contains("tribute.ownership"));
         assert!(!printed.contains("adt.struct_set"));
         assert!(printed.contains("tribute.calling_convention = 1"));
         let mut indirect_calls = Vec::new();

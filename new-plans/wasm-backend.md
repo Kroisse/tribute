@@ -95,7 +95,7 @@ Effect lowering은 target별로 수행한다. Shared ability lowering은 `effect
 native와 같은
 [evidence runtime ABI](cps-effects.md#handle-evidence-extension--handler-closures)의
 몸체 없는 helper 선언을 `func.call`로 호출한다. Canonical closure layout은 `adt.struct_get`으로
-풀고, semantic role에 맞게 `func.call_indirect` 또는 `call_conv = @tail`
+풀고, semantic role에 맞게 `func.call_indirect` 또는 `call_conv = "tail"`
 signature의 proper-tail `func.tail_call_indirect`를 만든다. 이 lowering은 `wasm.*`
 operation을 만들지 않고 `tribute.calling_convention`을 읽거나 쓰지 않는다.
 

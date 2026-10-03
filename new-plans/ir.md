@@ -1154,7 +1154,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   environment를 뺀 타입은 경계 안에서만 쓰며, 함수 참조의 타입으로 경계를 넘지 않는다.
 - **기계 호출 규약:** 기계 호출 규약은 physical `func.func_sig`의 `call_conv` type
   속성이 소유한다. 경계는 CPS signature를 물리화할 때 target과 무관하게 그 signature에
-  `call_conv = @tail`을 일괄 부여하며, 속성이 없으면 platform 규약이다. `call_conv`는
+  `call_conv = "tail"`을 일괄 부여하며, 속성이 없으면 platform 규약이다. `call_conv`는
   type identity에 참여하고 함수 정의, 직접 호출의 피호출자, 간접 호출 signature가 모두
   같은 signature에서 읽는다. 기계 규약을 구별하는 target은 이 값을 target signature로
   옮기고, 기계 규약이 없는 target은 이를 무시하고 target signature에서 버린다.
@@ -1167,7 +1167,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   [rc.md](rc.md#proper-tail-ownership-transfer)) 중 callable 계약이 요구하는
   것은 exact physical signature의 일부로 표현한다. 그래서 직접 정의와
   exact indirect signature 모두에서 같은 계약을 읽을 수 있다. 인코딩은 signature의
-  [타입 매개변수 속성](#타입-매개변수-속성) `tribute.ownership = @consumed`이며,
+  [타입 매개변수 속성](#타입-매개변수-속성) `tribute.ownership = "consumed"`이며,
   경계가 물리 CPS callable의 모든 입력에 붙인다. 표시가 없는 managed 매개변수는
   retained 계약을 가진다.
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 명시적
@@ -1220,9 +1220,9 @@ arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의�
 `tribute.*` 속성은 분류되지 않은 metadata로 보고한다. 새 언어 전용 속성은 금지 또는
 보존 중 하나로 분류된 뒤에만 출구를 넘을 수 있다. 입력과 결과 타입이 같은
 unrealized cast, 대상 함수의 signature와 다른 타입의 `func.constant`도 위반으로
-보고한다. 매개변수 ownership 계약도 검사한다. `call_conv = @tail`인 signature의
-입력에 `tribute.ownership = @consumed`가 없거나, `tribute.ownership` 값이
-`@consumed`가 아니면 위반이다. Root `main`이 있으면 그것이 매개변수가 없고 결과가
+보고한다. 매개변수 ownership 계약도 검사한다. `call_conv = "tail"`인 signature의
+입력에 `tribute.ownership = "consumed"`가 없거나, `tribute.ownership` 값이
+`"consumed"`가 아니면 위반이다. Root `main`이 있으면 그것이 매개변수가 없고 결과가
 `Nil`이며 platform 규약을 따르는 정의인지도 검사한다. 위반이 하나라도 있으면
 target dialect lowering에 들어가기 전에 컴파일이 실패한다. 이 검증은 build 구성과 관계없이 항상 수행한다.
 
@@ -1262,7 +1262,7 @@ core.i32
 core.tuple<core.i32, core.ptr {k = @v}>
 core.ref<core.i32, {nullable = true}>
 adt.typeref<{name = "Point"}>
-func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv = @tail}>
+func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
 ```
 
 - 매개변수도 속성도 없는 타입은 이름만 쓴다.
@@ -1295,7 +1295,9 @@ Symbol 값은 symbol table의 정의를 가리키는 참조에만 쓴다(`callee
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
 `predicate = "slt"`로 쓴다. Ability 이름(`core.ability_ref`의 `name`)과 operation
 이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity
-(`tribute.compiler_intrinsic`)도 symbol table의 정의가 아니므로 문자열이다.
+(`tribute.compiler_intrinsic`)도 symbol table의 정의가 아니므로 문자열이다. 기계 호출
+규약(`call_conv = "tail"`), 매개변수 ownership 계약(`tribute.ownership = "consumed"`),
+block 인자의 binding 이름(`bind_name`)도 같은 이유로 문자열이다.
 
 정의의 이름(`sym_name`)도 문자열이다. 정의는 symbol table에 자기 이름을 등록할 뿐
 다른 정의를 가리키지 않으므로 참조가 아니다(MLIR의 `sym_name`도 `StringAttr`다).
@@ -1461,7 +1463,7 @@ result may carry its parameter attributes, and the remaining type attributes
 come last inside the brackets:
 
 ```text
-func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>
+func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
 ```
 
 TrunkIR recognizes a parenthesized multi-result list so it can diagnose it, but

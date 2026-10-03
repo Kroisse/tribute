@@ -494,7 +494,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
                 let mut attrs = AttributeMap::new();
                 if !is_default_name {
-                    attrs.insert("bind_name", Symbol::from_dynamic(name));
+                    attrs.insert("bind_name", self.ctx.string_attr(name));
                 }
                 block_arg_data.push(BlockArgData { ty, attrs });
                 arg_names.push(name.to_string());

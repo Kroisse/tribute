@@ -839,7 +839,7 @@ mod tests {
         );
         assert!(output.contains("func.tail_call_indirect"), "{output}");
         assert!(output.contains("signature"), "{output}");
-        assert!(output.contains("call_conv = @tail"), "{output}");
+        assert!(output.contains("call_conv = \"tail\""), "{output}");
         assert!(
             !output.contains("tribute.calling_convention"),
             "the native tail must not recreate semantic convention metadata: {output}"

@@ -1180,7 +1180,7 @@ mod tests {
 
     #[test]
     fn test_parse_function_type_parameter_attributes() {
-        let mut input = "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = @tail}>";
+        let mut input = "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = \"tail\"}>";
         let raw = raw_type.parse_next(&mut input).expect("should parse");
         let RawType::Function {
             inputs,

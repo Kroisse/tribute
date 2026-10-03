@@ -380,14 +380,9 @@ fn exact_physical_call_contract(
     if environment_index > args.len() {
         return None;
     }
+    let environment_attrs = crate::target_abi::physical_parameter_attrs(ctx, convention);
     let signature = callable.rebuild(ctx, |inputs, _| {
-        inputs.insert(
-            environment_index,
-            (
-                environment,
-                crate::target_abi::physical_parameter_attrs(convention),
-            ),
-        );
+        inputs.insert(environment_index, (environment, environment_attrs));
     });
     Some(PhysicalCallContract {
         environment_index,

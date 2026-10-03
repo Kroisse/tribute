@@ -100,7 +100,7 @@ pub enum ViolationKind {
     /// A proper-tail signature input without the consumed ownership contract.
     #[display("tail signature input without the consumed ownership contract")]
     UnconsumedTailInput,
-    /// A parameter ownership contract other than `@consumed`.
+    /// A parameter ownership contract other than `"consumed"`.
     #[display("unknown ownership contract {_0}")]
     UnknownOwnership(String),
     /// A referenced C declaration that the target does not bind.
@@ -430,16 +430,16 @@ impl<'a> Verifier<'a> {
 /// Violations of the parameter ownership contract `signature` states.
 fn ownership_violations(ctx: &IrContext, signature: func::FuncSig) -> Vec<TypeViolation> {
     let ownership = Symbol::new(crate::target_abi::OWNERSHIP_ATTR);
-    let consumed = Symbol::new(crate::target_abi::CONSUMED);
     let tail = signature.call_conv(ctx) == Some(func::CallConv::Tail);
     let mut found = Vec::new();
     for (index, attrs) in signature.input_attrs(ctx).enumerate() {
         let location = format!(" input {index}");
         match attrs.get(ownership) {
-            Some(Attribute::Symbol(mode)) if *mode == consumed => {}
-            Some(Attribute::Symbol(mode)) => {
-                found.push((ViolationKind::UnknownOwnership(mode.to_string()), location))
-            }
+            Some(Attribute::String(mode)) if ctx.str(*mode) == crate::target_abi::CONSUMED => {}
+            Some(Attribute::String(mode)) => found.push((
+                ViolationKind::UnknownOwnership(ctx.str(*mode).to_owned()),
+                location,
+            )),
             Some(other) => found.push((
                 ViolationKind::UnknownOwnership(format!("{other:?}")),
                 location,
@@ -527,12 +527,12 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>, tribute.definition.source = @here} {
+  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>, tribute.definition.source = @here} {
     func.return
   }
-  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>
-    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>}
+  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
+    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
   }
 }"#,
         );
@@ -680,12 +680,12 @@ mod tests {
   func.func @never() -> core.never {
     func.unreachable
   }
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
     func.return
   }
   func.func @caller(%value: core.i32) {
     %same = core.unrealized_conversion_cast %value : core.i32
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
     func.return
   }
 }"#,
@@ -697,9 +697,8 @@ mod tests {
 
     #[test]
     fn reference_calling_convention_must_match_its_target() {
-        let tail =
-            "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>";
-        let platform = "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> ()>";
+        let tail = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>";
+        let platform = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> ()>";
         assert_eq!(
             kinds(&reference_module(tail, platform)),
             [ViolationKind::ReferenceSignatureMismatch]
@@ -749,7 +748,7 @@ mod tests {
             ),
             entry(
                 "()",
-                " attributes {type = func.func_sig<() -> (), {call_conv = @tail}>}",
+                " attributes {type = func.func_sig<() -> (), {call_conv = \"tail\"}>}",
                 "func.return",
             ),
         ] {
@@ -771,7 +770,7 @@ mod tests {
 
     #[test]
     fn the_ownership_contract_must_be_complete_and_known() {
-        let unmarked_tail = "func.func_sig<(core.i32) -> (), {call_conv = @tail}>";
+        let unmarked_tail = "func.func_sig<(core.i32) -> (), {call_conv = \"tail\"}>";
         assert_eq!(
             kinds(&reference_module(unmarked_tail, unmarked_tail)),
             [
@@ -779,7 +778,7 @@ mod tests {
                 ViolationKind::UnconsumedTailInput,
             ]
         );
-        let borrowed = "func.func_sig<(core.i32 {tribute.ownership = @borrowed}) -> ()>";
+        let borrowed = "func.func_sig<(core.i32 {tribute.ownership = \"borrowed\"}) -> ()>";
         assert_eq!(
             kinds(&reference_module(borrowed, borrowed)),
             [
@@ -787,7 +786,7 @@ mod tests {
                 ViolationKind::UnknownOwnership("borrowed".to_owned()),
             ]
         );
-        let consumed = "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> ()>";
+        let consumed = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> ()>";
         let unmarked = "func.func_sig<(core.i32) -> ()>";
         assert_eq!(
             kinds(&reference_module(consumed, unmarked)),
@@ -956,7 +955,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#

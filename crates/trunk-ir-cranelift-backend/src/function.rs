@@ -878,13 +878,10 @@ mod tests {
         let i32_ty = make_core_type(&mut ctx, "i32");
         let platform = clif::func_sig(&mut ctx, [i32_ty], []).as_type_ref();
         let mut attrs = trunk_ir::AttributeMap::new();
-        func::CallConv::Tail.set_in(&mut attrs);
+        func::CallConv::Tail.set_in(&mut ctx, &mut attrs);
         let tail = clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs).as_type_ref();
         let mut malformed_attrs = trunk_ir::AttributeMap::new();
-        malformed_attrs.insert(
-            Symbol::new(func::CALL_CONV_ATTR),
-            trunk_ir::Attribute::Symbol(Symbol::new("fast")),
-        );
+        malformed_attrs.insert(Symbol::new(func::CALL_CONV_ATTR), ctx.string_attr("fast"));
         let malformed =
             clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], malformed_attrs).as_type_ref();
 

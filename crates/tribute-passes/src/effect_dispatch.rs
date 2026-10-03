@@ -146,7 +146,7 @@ pub(crate) fn cps_dispatch_signature(ctx: &mut IrContext) -> TypeRef {
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
     let closure_ty = crate::closure_lower::closure_struct_type_ref(ctx);
     let i32_ty = i32_type(ctx);
-    let contract = physical_parameter_attrs(CallingConvention::Cps);
+    let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
     func::func_sig_with_param_attrs(
         ctx,
         [

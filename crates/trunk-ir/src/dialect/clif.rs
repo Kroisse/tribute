@@ -244,7 +244,7 @@ impl FuncSig {
 
     /// The machine calling convention, or `None` if `call_conv` is malformed.
     pub fn call_conv(self, ctx: &crate::IrContext) -> Option<crate::dialect::func::CallConv> {
-        crate::dialect::func::CallConv::from_attrs(&ctx.get_type(self.0).attrs)
+        crate::dialect::func::CallConv::from_attrs(ctx, &ctx.get_type(self.0).attrs)
     }
 
     pub fn non_reserved_attrs(
