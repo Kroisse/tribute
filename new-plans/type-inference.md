@@ -194,9 +194,10 @@ fn bar() ->{State(Int), State(Int)} Nil
 ```
 
 **이유**: Tribute는 한 ability instance의 여러 occurrence나 handler 인스턴스를
-구별하는 의미론을 정의하지 않는다. Row는 instance의 집합이며, `State::get()`이
-참조하는 handler는 그 instance 하나로 정해진다. 중복을 허용하려면 occurrence의
-순서나 이름으로 handler를 고르는 규칙이 함께 필요하다.
+구별하는 의미론을 정의하지 않는다. Row는 instance의 집합이며, operation은 자기
+instance만 가리킨다. 같은 instance의 handler가 중첩되면 `State::get()`은 가장
+가까운 handler로 가고, 바깥 handler를 따로 가리킬 방법은 없다. 중복을 허용하려면
+occurrence의 순서나 이름으로 handler를 고르는 규칙이 함께 필요하다.
 
 **향후 확장**: 동일 ability의 여러 인스턴스가 필요한 경우, effect row에서 이름을 붙일 수 있다:
 
