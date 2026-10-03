@@ -129,7 +129,10 @@ fn collect_op(
                     attribute,
                 )));
             };
-            references.push(ResolvedReference { symbol, kind });
+            references.push(ResolvedReference {
+                symbol: symbol.clone(),
+                kind,
+            });
         }
         None => {
             for owned in FUNCTION_SYMBOL_ATTRIBUTES {

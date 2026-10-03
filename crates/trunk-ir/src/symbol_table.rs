@@ -85,7 +85,7 @@ impl SymbolTable {
     /// The unique definition named by a root-qualified reference.
     ///
     /// Returns `None` for an unknown name or one defined more than once.
-    pub fn resolve(&self, reference: Symbol) -> Option<OpRef> {
+    pub fn resolve(&self, reference: &Symbol) -> Option<OpRef> {
         match self.definitions_of(reference) {
             &[op] => Some(op),
             _ => None,
@@ -97,8 +97,8 @@ impl SymbolTable {
     ///
     /// For diagnostics that continue after [`Self::duplicates`] has already
     /// been reported; lowering must use [`Self::resolve`].
-    pub fn definitions_of(&self, reference: Symbol) -> &[OpRef] {
-        self.definitions.get(&reference).map_or(&[], |ops| ops)
+    pub fn definitions_of(&self, reference: &Symbol) -> &[OpRef] {
+        self.definitions.get(reference).map_or(&[], |ops| ops)
     }
 
     /// Qualified names defined more than once, sorted by name, with every
@@ -210,14 +210,14 @@ mod tests {
 
         for name in ["top", "outer::same", "outer::inner::same"] {
             let op = table
-                .resolve(Symbol::from_dynamic(name))
+                .resolve(&Symbol::from_dynamic(name))
                 .unwrap_or_else(|| panic!("{name} must resolve"));
             assert_eq!(qualified_name(&ctx, op), Some(Symbol::from_dynamic(name)));
         }
         // A reference is never resolved relative to a nested module.
-        assert_eq!(table.resolve(Symbol::new("same")), None);
+        assert_eq!(table.resolve(&Symbol::new("same")), None);
         assert!(table.duplicates().is_empty());
-        assert_eq!(table.definitions_of(Symbol::new("same")), &[]);
+        assert_eq!(table.definitions_of(&Symbol::new("same")), &[]);
     }
 
     #[test]
@@ -235,8 +235,12 @@ mod tests {
         for (name, op) in table.all_definitions() {
             assert_eq!(qualified_name(&ctx, op), Some(name));
         }
-        assert!(table.resolve(Symbol::from_dynamic("outer::same")).is_some());
-        assert!(table.resolve(Symbol::new("same")).is_none());
+        assert!(
+            table
+                .resolve(&Symbol::from_dynamic("outer::same"))
+                .is_some()
+        );
+        assert!(table.resolve(&Symbol::new("same")).is_none());
     }
 
     #[test]
@@ -257,12 +261,12 @@ mod tests {
         );
         let table = SymbolTable::collect(&ctx, module);
         let twice = Symbol::from_dynamic("outer::twice");
-        assert_eq!(table.resolve(twice.clone()), None);
+        assert_eq!(table.resolve(&twice), None);
         let duplicates = table.duplicates();
         assert_eq!(duplicates.len(), 1);
         assert_eq!(duplicates[0].0, twice);
         assert_eq!(duplicates[0].1.len(), 2);
-        assert_eq!(table.definitions_of(twice), duplicates[0].1);
+        assert_eq!(table.definitions_of(&twice), duplicates[0].1);
         assert_eq!(table.all_definitions().count(), 2);
     }
 
@@ -284,7 +288,7 @@ mod tests {
         );
         let table = SymbolTable::collect(&ctx, module);
         let hidden = table
-            .resolve(Symbol::from_dynamic("outer::hidden"))
+            .resolve(&Symbol::from_dynamic("outer::hidden"))
             .expect("a definition nested in a function body is still collected");
         assert_eq!(
             qualified_name(&ctx, hidden),

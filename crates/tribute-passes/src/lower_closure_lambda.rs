@@ -501,7 +501,7 @@ mod tests {
         let module_op = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
             )
             .region(module_region)
             .build(ctx);

@@ -85,7 +85,7 @@ fn collect_effect(
         entries.push(BuiltinSymbolEntry {
             span: span_map.get_or_default(ability_annotation.id),
             name: ability.name(db),
-            qualified: ability.qualified(db),
+            qualified: ability.qualified(db).clone(),
         });
     }
 }

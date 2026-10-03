@@ -130,6 +130,18 @@ macro_rules! symbols {
     };
 }
 
+impl PartialEq<&Symbol> for Symbol {
+    fn eq(&self, other: &&Symbol) -> bool {
+        self == *other
+    }
+}
+
+impl PartialEq<Symbol> for &Symbol {
+    fn eq(&self, other: &Symbol) -> bool {
+        *self == other
+    }
+}
+
 // Convenient comparison with &str
 impl PartialEq<str> for Symbol {
     fn eq(&self, other: &str) -> bool {

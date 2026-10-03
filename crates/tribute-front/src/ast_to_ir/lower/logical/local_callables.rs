@@ -73,12 +73,16 @@ impl<'db> Plan<'db> {
                 let parameters = match &*callee.kind {
                     ExprKind::Var(reference) => match reference.resolved {
                         ResolvedRef::Function { id } => {
-                            FuncSignature::lookup_logical(ctx, ir, id.qualified(ctx.db))
+                            FuncSignature::lookup_logical(ctx, ir, &id.qualified(ctx.db).clone())
                                 .map(|signature| signature.param_types)
                         }
                         ResolvedRef::Local { id, .. } if named.contains_key(&id) => {
-                            FuncSignature::lookup_logical(ctx, ir, named[&id].qualified(ctx.db))
-                                .map(|signature| signature.param_types)
+                            FuncSignature::lookup_logical(
+                                ctx,
+                                ir,
+                                &named[&id].qualified(ctx.db).clone(),
+                            )
+                            .map(|signature| signature.param_types)
                         }
                         _ => match reference.ty.kind(ctx.db) {
                             TypeKind::Func { params, .. } => Some(

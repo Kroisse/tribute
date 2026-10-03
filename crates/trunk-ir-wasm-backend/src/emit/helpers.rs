@@ -444,8 +444,8 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and Int → checked u32 conversion
-pub(crate) fn attr_u32(attrs: &AttributeMap, key: Symbol) -> CompilationResult<u32> {
-    match attrs.get(&key) {
+pub(crate) fn attr_u32(attrs: &AttributeMap, key: &Symbol) -> CompilationResult<u32> {
+    match attrs.get(key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
                 "attribute '{}' value {} out of u32 range",

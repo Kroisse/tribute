@@ -382,10 +382,10 @@ pub fn function_signatures(db: &dyn salsa::Database, source: SourceCst) -> Vec<F
 }
 
 /// Find a function signature by name.
-pub fn find_signature(
-    signatures: &[FunctionSignature],
-    name: Symbol,
-) -> Option<&FunctionSignature> {
+pub fn find_signature<'a>(
+    signatures: &'a [FunctionSignature],
+    name: &Symbol,
+) -> Option<&'a FunctionSignature> {
     signatures.iter().find(|s| s.name == name)
 }
 
@@ -395,7 +395,7 @@ pub fn find_callee_signature<'a>(
     callee: &str,
 ) -> Option<&'a FunctionSignature> {
     let name = Symbol::from_dynamic(&tribute_front::keywords::unraw(callee));
-    find_signature(signatures, name)
+    find_signature(signatures, &name)
 }
 
 #[cfg(test)]
@@ -640,10 +640,10 @@ mod tests {
         let signatures = function_signatures(&db, source);
         assert_eq!(signatures.len(), 2);
 
-        let foo = find_signature(&signatures, trunk_ir::Symbol::new("foo"));
+        let foo = find_signature(&signatures, &trunk_ir::Symbol::new("foo"));
         assert!(foo.is_some());
 
-        let baz = find_signature(&signatures, trunk_ir::Symbol::new("baz"));
+        let baz = find_signature(&signatures, &trunk_ir::Symbol::new("baz"));
         assert!(baz.is_none());
     }
 

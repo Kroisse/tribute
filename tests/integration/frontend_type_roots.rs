@@ -121,7 +121,7 @@ fn prepare_root<'db>(
         typed.lambda_signatures(db).clone(),
         typed.exhaustive_cases(db).to_vec(),
         *typed.well_known_types(db),
-        typed.span_map(db).clone(),
+        typed.span_map(db),
     );
     let prepared = prepare_frontend_for_lowering(db, input, source);
     let errors = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, input, source);

@@ -244,7 +244,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                     self.saw_error = true;
                     return Pat::Wild;
                 };
-                let Some((ctor, arity)) = self.constructor(id, variant) else {
+                let Some((ctor, arity)) = self.constructor(id, &variant) else {
                     self.unanalyzable = true;
                     return Pat::Wild;
                 };
@@ -261,7 +261,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                     self.saw_error = true;
                     return Pat::Wild;
                 };
-                let Some((ctor, arity)) = self.constructor(id, variant) else {
+                let Some((ctor, arity)) = self.constructor(id, &variant) else {
                     self.unanalyzable = true;
                     return Pat::Wild;
                 };
@@ -289,7 +289,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
     }
 
     /// The matrix constructor for a source constructor, with its arity.
-    fn constructor(&mut self, id: CtorId<'db>, variant: Symbol) -> Option<(Ctor, usize)> {
+    fn constructor(&mut self, id: CtorId<'db>, variant: &Symbol) -> Option<(Ctor, usize)> {
         let db = self.checker.db();
         let (arity, result) = self.constructor_shape(id)?;
         let TypeKind::Named {
@@ -313,7 +313,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         let index = self.families[family.0]
             .variants
             .iter()
-            .position(|info| info.name == variant)?;
+            .position(|info| info.name == *variant)?;
         Some((Ctor::Variant { family, index }, arity))
     }
 
@@ -321,7 +321,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
     fn family(&self, name: Symbol, id: CtorId<'db>) -> Option<Family> {
         let db = self.checker.db();
         // Test for an enum first: a variant may share its enum's name.
-        if let Some(variants) = self.checker.env.lookup_enum_variants(name.clone()) {
+        if let Some(variants) = self.checker.env.lookup_enum_variants(&name) {
             // Variants are registered in the enum's module, not under the enum.
             let variants = variants
                 .iter()
@@ -340,7 +340,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 .collect::<Option<_>>()?;
             return Some(Family { variants });
         }
-        if id.qualified(db) != name {
+        if *id.qualified(db) != name {
             return None;
         }
         let (arity, _) = self.constructor_shape(id)?;

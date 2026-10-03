@@ -834,7 +834,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
                 )
                 .region(module_region)
                 .build(ctx);
@@ -1121,7 +1121,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
                 )
                 .region(module_region)
                 .build(&mut ctx);

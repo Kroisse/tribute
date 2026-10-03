@@ -155,7 +155,7 @@ impl<'db> TypeChecker<'db> {
         if let [Decl::Module(package)] = decls.as_slice()
             && let Some(body) = &package.body
         {
-            crate::push_prefix(&mut prefix, package.name.clone());
+            crate::push_prefix(&mut prefix, &package.name);
             decls = body;
         }
         let declaration = decls.iter().find_map(|decl| match decl {
@@ -163,8 +163,8 @@ impl<'db> TypeChecker<'db> {
             Decl::Enum(decl) if decl.name == name => Some(decl.id),
             _ => None,
         })?;
-        let qualified = crate::qualified_symbol(&mut prefix, name);
-        let ty = self.env.lookup_type_def(qualified)?.body(self.db());
+        let qualified = crate::qualified_symbol(&mut prefix, &name);
+        let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
             definition: DefinitionIdentity::new(
@@ -181,7 +181,7 @@ impl<'db> TypeChecker<'db> {
         let string = self.prelude_well_known_type(module, StringType);
         let equality = |ty: Type<'db>| {
             self.env
-                .lookup_method(Symbol::new("=="), ty)
+                .lookup_method(&Symbol::new("=="), ty)
                 .map(|entry| entry.func_id)
         };
         WellKnownTypes {
@@ -222,7 +222,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Create a FuncDefId from the current prefix and function name.
-    pub(crate) fn func_def_id(&self, name: Symbol) -> FuncDefId<'db> {
+    pub(crate) fn func_def_id(&self, name: &Symbol) -> FuncDefId<'db> {
         FuncDefId::new(
             self.db(),
             crate::qualified_symbol(&mut self.prefix.clone(), name),
@@ -393,7 +393,7 @@ impl<'db> TypeChecker<'db> {
         module: &crate::ast::ModuleDecl<ResolvedRef<'db>>,
     ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
         // Push module name to prefix
-        let prev_len = crate::push_prefix(&mut self.prefix, module.name.clone());
+        let prev_len = crate::push_prefix(&mut self.prefix, &module.name);
 
         let body = module
             .body

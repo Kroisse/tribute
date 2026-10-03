@@ -533,7 +533,7 @@ pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, Type
 pub fn func_declaration(
     ctx: &mut IrContext,
     location: Location,
-    sym_name: Symbol,
+    sym_name: &Symbol,
     func_sig_type: TypeRef,
 ) -> Func {
     let data = trunk_ir::OperationDataBuilder::new(
@@ -1853,7 +1853,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(symbol.clone())
+                .definitions_of(symbol)
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -1896,7 +1896,7 @@ fn validate_symbol_use(
                 return;
             };
             let Some(target) = funcs
-                .definitions_of(symbol.clone())
+                .definitions_of(symbol)
                 .first()
                 .copied()
                 .filter(|&target| is_control_op(ctx, target, "func"))
@@ -2868,7 +2868,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
         if is_control_op(ctx, current, "func") {
-            return qualified_name(ctx, current) == Some(callee);
+            return qualified_name(ctx, current) == Some(callee.clone());
         }
         owner = parent_op(ctx, current);
     }
@@ -3832,7 +3832,7 @@ mod tests {
         ));
         assert_eq!(
             ctx.op(declaration).attributes.get_symbol_ref("metadata"),
-            Some(Symbol::new("declaration"))
+            Some(&Symbol::new("declaration"))
         );
 
         let inline = r#"core.module @test {

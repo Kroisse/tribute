@@ -125,9 +125,9 @@ fn enclosing_wasm_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<wasm_
 fn resolve_wasm_callee(
     ctx: &IrContext,
     symbols: &SymbolTable,
-    name: Symbol,
+    name: &Symbol,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
-    let found = *symbols.definitions_of(name.clone()).first()?;
+    let found = *symbols.definitions_of(name).first()?;
     if symbols.resolve(name).is_none()
         || (!wasm_dialect::Func::matches(ctx, found)
             && !wasm_dialect::ImportFunc::matches(ctx, found))
@@ -555,7 +555,7 @@ mod tests {
 }"#,
         );
         let alias = |ctx: &IrContext, name: &str| {
-            ctx.type_alias_by_name(trunk_ir::Symbol::from_dynamic(name))
+            ctx.type_alias_by_name(&trunk_ir::Symbol::from_dynamic(name))
                 .unwrap()
         };
         let evidence = alias(&ctx, "Evidence");

@@ -640,7 +640,7 @@ mod tests {
             (
                 "`fields` is not an `adt.struct` attribute",
                 TypeDataBuilder::new("adt", "struct")
-                    .attr("name", p.clone())
+                    .attr("name", p)
                     .attr("fields", Attribute::List(vec![]))
                     .build(),
             ),

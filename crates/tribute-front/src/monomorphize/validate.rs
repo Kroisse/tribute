@@ -51,11 +51,11 @@ pub(super) fn validate<'db>(
         for decl in decls {
             match decl {
                 Decl::Function(func) => {
-                    let name = crate::qualified_symbol(prefix, func.name.clone());
+                    let name = crate::qualified_symbol(prefix, &func.name);
                     functions.insert(FuncDefId::new(db, name), func);
                 }
                 Decl::Struct(decl) => {
-                    let name = crate::qualified_symbol(prefix, decl.name.clone());
+                    let name = crate::qualified_symbol(prefix, &decl.name);
                     let owner = crate::ast::TypeDefId::source(db, name, decl.id);
                     for field in &decl.fields {
                         if let Some(name) = field.name.clone() {
@@ -65,7 +65,7 @@ pub(super) fn validate<'db>(
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(prefix, module.name.clone());
+                        let saved = crate::push_prefix(prefix, &module.name);
                         declarations(db, body, prefix, functions, fields);
                         prefix.truncate(saved);
                     }
@@ -86,10 +86,10 @@ pub(super) fn validate<'db>(
     let mut queue: Vec<_> = functions
         .iter()
         .filter(|(id, func)| {
-            id.qualified(db) == Symbol::new("main")
+            *id.qualified(db) == Symbol::new("main")
                 || (func.is_pub
                     && schemes
-                        .get(&id.qualified(db))
+                        .get(id.qualified(db))
                         .is_some_and(|scheme| scheme.type_params(db).is_empty()))
         })
         .map(|(id, _)| (*id, Vec::new()))
@@ -155,12 +155,12 @@ pub(super) fn validate<'db>(
             };
             let known_declaration = match instance.origin.clone() {
                 crate::typeck::FunctionInstanceOrigin::Declaration => {
-                    schemes.get(&target.qualified(db)) == Some(&instance.scheme)
+                    schemes.get(target.qualified(db)) == Some(&instance.scheme)
                 }
                 crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field } => {
                     let mut prefix = owner.qualified(db).to_string();
                     fields.contains(&(owner, field.clone()))
-                        && target.qualified(db) == crate::qualified_symbol(&mut prefix, field)
+                        && *target.qualified(db) == crate::qualified_symbol(&mut prefix, &field)
                 }
             };
             if instance.function != *target || !known_declaration {

@@ -182,12 +182,12 @@ pub struct SymbolRef;
 
 impl AttrKind for SymbolRef {
     const KIND: AttributeKind = AttributeKind::SymbolRef;
-    type Out<'ctx> = Symbol;
+    type Out<'ctx> = &'ctx Symbol;
     type In = Symbol;
 
-    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> Symbol {
+    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> &'ctx Symbol {
         match attr {
-            Attribute::SymbolRef(symbol) => symbol.clone(),
+            Attribute::SymbolRef(symbol) => symbol,
             _ => panic!("expected SymbolRef attribute"),
         }
     }

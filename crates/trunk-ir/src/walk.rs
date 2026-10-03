@@ -206,7 +206,7 @@ mod tests {
             .region(inner_region)
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("test_fn"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("test_fn"))),
             )
             .attr("type", Attribute::Type(func_ty))
             .build(&mut ctx);

@@ -79,9 +79,9 @@ impl std::error::Error for IntegerOutOfRange {}
 
 impl Attribute {
     /// Extract the inner `Symbol` if this is `Attribute::SymbolRef`.
-    pub fn as_symbol_ref(&self) -> Option<Symbol> {
+    pub fn as_symbol_ref(&self) -> Option<&Symbol> {
         match self {
-            Attribute::SymbolRef(s) => Some(s.clone()),
+            Attribute::SymbolRef(s) => Some(s),
             _ => None,
         }
     }
@@ -414,7 +414,7 @@ impl AttributeMap {
         self.get_string_ref(key).map(|s| ctx.str(s))
     }
 
-    pub fn get_symbol_ref(&self, key: impl AttributeKey) -> Option<Symbol> {
+    pub fn get_symbol_ref(&self, key: impl AttributeKey) -> Option<&Symbol> {
         self.get(key).and_then(Attribute::as_symbol_ref)
     }
 
@@ -948,9 +948,9 @@ impl TypeInterner {
     }
 
     /// Check if this type matches the given dialect and name.
-    pub fn is_dialect(&self, r: TypeRef, dialect: Symbol, name: Symbol) -> bool {
+    pub fn is_dialect(&self, r: TypeRef, dialect: &Symbol, name: &Symbol) -> bool {
         let data = self.get(r);
-        data.dialect == dialect && data.name == name
+        data.dialect == *dialect && data.name == *name
     }
 
     /// Iterate over all interned types, yielding `(TypeRef, &TypeData)` pairs.
@@ -1395,7 +1395,7 @@ mod tests {
         assert_eq!(collected.len(), 2);
         assert_eq!(collected.get(&key), Some(&Attribute::Int(3)));
 
-        let mut extended = collected.clone();
+        let mut extended = collected;
         extended.extend([(key.clone(), Attribute::Int(4))]);
         assert_eq!(extended.get(key), Some(&Attribute::Int(4)));
         assert_eq!(extended.len(), 2);

@@ -657,7 +657,7 @@ pub fn annotation_to_effect<'db>(
 ) -> Option<Effect<'db>> {
     match &annotation.kind {
         TypeAnnotationKind::Named(name) if !is_type_variable(name) => {
-            let qualified = crate::qualified_symbol(&mut prefix.to_owned(), name.clone());
+            let qualified = crate::qualified_symbol(&mut prefix.to_owned(), name);
             let ability_id = super::AbilityId::source(db, qualified);
             Some(Effect {
                 ability_id,
@@ -674,7 +674,7 @@ pub fn annotation_to_effect<'db>(
         TypeAnnotationKind::App { ctor, args } => {
             let qualified = match &ctor.kind {
                 TypeAnnotationKind::Named(n) if !is_type_variable(n) => {
-                    crate::qualified_symbol(&mut prefix.to_owned(), n.clone())
+                    crate::qualified_symbol(&mut prefix.to_owned(), n)
                 }
                 TypeAnnotationKind::Path(path) => ability_path(path)?,
                 _ => return None,

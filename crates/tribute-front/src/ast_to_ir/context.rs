@@ -289,13 +289,13 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Look up a function's type scheme by name.
-    pub fn lookup_function_type(&self, name: Symbol) -> Option<&TypeScheme<'db>> {
-        self.function_types.get(&name)
+    pub fn lookup_function_type(&self, name: &Symbol) -> Option<&TypeScheme<'db>> {
+        self.function_types.get(name)
     }
 
     pub(crate) fn register_logical_generated_signature(
         &mut self,
-        name: Symbol,
+        name: &Symbol,
         param_types: Vec<TypeRef>,
         return_type: TypeRef,
         convention: CallingConvention,
@@ -320,9 +320,9 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn lookup_logical_generated_signature(
         &self,
-        name: Symbol,
+        name: &Symbol,
     ) -> Option<&LogicalGeneratedSignature> {
-        self.logical_generated_signatures.get(&name)
+        self.logical_generated_signatures.get(name)
     }
 
     pub(crate) fn register_logical_source_function(&mut self, name: Symbol) {
@@ -341,8 +341,8 @@ impl<'db> IrLoweringCtx<'db> {
         self.c_symbols.get(&name).cloned().unwrap_or(name)
     }
 
-    pub(crate) fn is_logical_source_function(&self, name: Symbol) -> bool {
-        self.logical_source_functions.contains(&name)
+    pub(crate) fn is_logical_source_function(&self, name: &Symbol) -> bool {
+        self.logical_source_functions.contains(name)
     }
 
     /// Returns true exactly once for each prelude declaration that must be
@@ -368,8 +368,8 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Look up a function definition and derive its ABI convention.
-    pub(crate) fn function_calling_convention(&self, name: Symbol) -> Option<CallingConvention> {
-        if let Some(convention) = self.definition_conventions.get(&name) {
+    pub(crate) fn function_calling_convention(&self, name: &Symbol) -> Option<CallingConvention> {
+        if let Some(convention) = self.definition_conventions.get(name) {
             return Some(*convention);
         }
         let scheme = self.lookup_function_type(name)?;
@@ -406,18 +406,18 @@ impl<'db> IrLoweringCtx<'db> {
     /// - `["test"]` + `"print_line"` → `"print_line"` (top-level, unchanged)
     /// - `"Nested::Box::value"` → `"Nested::Box::value"` (already qualified,
     ///   returned unchanged)
-    pub fn qualify_name(&self, name: Symbol) -> Symbol {
+    pub fn qualify_name(&self, name: &Symbol) -> Symbol {
         // Synthetic monomorphized declarations already carry their resolved
         // source path. Adding the current module again would change the
         // identity used by convention lookup and logical declaration emission.
         if name.with_str(|text| text.contains("::")) {
-            return name;
+            return name.clone();
         }
         // Skip the first segment (top-level module name from filename).
         // Only nested module segments contribute to the qualified name.
         let nested: Vec<_> = self.module_path.iter().skip(1).collect();
         if nested.is_empty() {
-            return name;
+            return name.clone();
         }
         let mut prefix = nested
             .iter()
@@ -460,8 +460,8 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Get a registered type by name.
-    pub fn get_type(&self, name: Symbol) -> Option<TypeRef> {
-        self.type_map.get(&name).copied()
+    pub fn get_type(&self, name: &Symbol) -> Option<TypeRef> {
+        self.type_map.get(name).copied()
     }
 
     /// Mark a nominal source type as known before its layout is complete.
@@ -475,7 +475,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// Used to get the effect type of lambda expressions.
     pub fn resolve_adt_type(&self, ty: crate::ast::Type<'db>) -> Option<TypeRef> {
         match ty.kind(self.db) {
-            TypeKind::Named { name, .. } => self.get_type(name.clone()),
+            TypeKind::Named { name, .. } => self.get_type(name),
             _ => None,
         }
     }
@@ -524,9 +524,9 @@ impl<'db> IrLoweringCtx<'db> {
                 if self.get_type(id.qualified(self.db)).is_some()
                     || self
                         .logical_nominal_declarations
-                        .contains(&id.qualified(self.db)) =>
+                        .contains(id.qualified(self.db)) =>
             {
-                self.adt_typeref(ir, id.qualified(self.db))
+                self.adt_typeref(ir, &id.qualified(self.db).clone())
             }
             TypeKind::Named { .. } => self.anyref_type(ir),
             TypeKind::Func { params, result, .. } => {
@@ -568,9 +568,9 @@ impl<'db> IrLoweringCtx<'db> {
                     })
                     .collect::<Vec<_>>();
                 let name = self.logical_tuple_name(ty);
-                let layout = self.adt_struct_type(ir, name.clone(), &fields);
+                let layout = self.adt_struct_type(ir, &name, &fields);
                 ir.register_type_alias(name.clone(), layout);
-                self.adt_typeref(ir, name)
+                self.adt_typeref(ir, &name)
             }
             TypeKind::App { ctor, .. } => self.convert_logical_type(ir, *ctor),
             TypeKind::Continuation { arg, result, .. } => {
@@ -613,7 +613,7 @@ impl<'db> IrLoweringCtx<'db> {
             }
             TypeKind::UniVar { id } => self.logical_univar_key(*id),
             TypeKind::Named { id, name, args } => {
-                let mut parts = vec![self.logical_nominal_key(*id, name.clone())];
+                let mut parts = vec![self.logical_nominal_key(*id, name)];
                 parts.extend(args.iter().map(|arg| self.logical_type_key(*arg)));
                 logical_key("named", parts)
             }
@@ -653,7 +653,11 @@ impl<'db> IrLoweringCtx<'db> {
     /// Unlike [`Self::logical_type_key`], this keys nominal arguments by their
     /// qualified declaration and function arguments by their effect rows, so
     /// it distinguishes every distinct source instance.
-    fn ability_instance_key(&self, ability: Symbol, arguments: &[crate::ast::Type<'db>]) -> String {
+    fn ability_instance_key(
+        &self,
+        ability: &Symbol,
+        arguments: &[crate::ast::Type<'db>],
+    ) -> String {
         let mut row_vars = Vec::new();
         let mut parts = vec![ability.with_str(str::to_owned)];
         parts.extend(
@@ -783,7 +787,7 @@ impl<'db> IrLoweringCtx<'db> {
         logical_key("row", effects)
     }
 
-    fn logical_nominal_key(&self, id: crate::ast::TypeDefId<'db>, name: Symbol) -> String {
+    fn logical_nominal_key(&self, id: crate::ast::TypeDefId<'db>, name: &Symbol) -> String {
         let origin = match id.origin(self.db) {
             crate::ast::TypeOrigin::Source(_) => "source".into(),
             crate::ast::TypeOrigin::Builtin(crate::ast::BuiltinType::List) => "builtin_list".into(),
@@ -850,10 +854,10 @@ impl<'db> IrLoweringCtx<'db> {
     pub fn ability_ref_type(
         &self,
         ir: &mut IrContext,
-        ability_name: Symbol,
+        ability_name: &Symbol,
         arguments: &[crate::ast::Type<'db>],
     ) -> TypeRef {
-        let instance = self.ability_instance_key(ability_name.clone(), arguments);
+        let instance = self.ability_instance_key(ability_name, arguments);
         let params: Vec<_> = arguments
             .iter()
             .map(|arg| self.convert_logical_type(ir, *arg))
@@ -873,13 +877,13 @@ impl<'db> IrLoweringCtx<'db> {
     pub fn adt_struct_type(
         &self,
         ir: &mut IrContext,
-        name: Symbol,
+        name: &Symbol,
         fields: &[(Symbol, TypeRef)],
     ) -> TypeRef {
         let name = ir.intern_symbol_text(name);
         let fields: Vec<_> = fields
             .iter()
-            .map(|(field, ty)| (ir.intern_symbol_text(field.clone()), *ty))
+            .map(|(field, ty)| (ir.intern_symbol_text(field), *ty))
             .collect();
         adt::struct_type(ir, name, fields, AttributeMap::new()).as_type_ref()
     }
@@ -888,7 +892,7 @@ impl<'db> IrLoweringCtx<'db> {
     pub fn adt_enum_type(
         &self,
         ir: &mut IrContext,
-        name: Symbol,
+        name: &Symbol,
         variants: &[(Symbol, Vec<TypeRef>)],
     ) -> TypeRef {
         let name = ir.intern_symbol_text(name);
@@ -898,7 +902,7 @@ impl<'db> IrLoweringCtx<'db> {
                 let field_attrs: Vec<Attribute> =
                     field_types.iter().map(|t| Attribute::Type(*t)).collect();
                 Attribute::List(vec![
-                    Attribute::String(ir.intern_symbol_text(variant_name.clone())),
+                    Attribute::String(ir.intern_symbol_text(variant_name)),
                     Attribute::List(field_attrs),
                 ])
             })
@@ -916,7 +920,7 @@ impl<'db> IrLoweringCtx<'db> {
     pub fn adt_enum_type_with_definition(
         &self,
         ir: &mut IrContext,
-        name: Symbol,
+        name: &Symbol,
         variants: &[(Symbol, Vec<TypeRef>)],
         definition: crate::typeck::DefinitionIdentity,
     ) -> TypeRef {
@@ -927,7 +931,7 @@ impl<'db> IrLoweringCtx<'db> {
                 let field_attrs: Vec<Attribute> =
                     field_types.iter().map(|ty| Attribute::Type(*ty)).collect();
                 Attribute::List(vec![
-                    Attribute::String(ir.intern_symbol_text(variant_name.clone())),
+                    Attribute::String(ir.intern_symbol_text(variant_name)),
                     Attribute::List(field_attrs),
                 ])
             })
@@ -954,7 +958,7 @@ impl<'db> IrLoweringCtx<'db> {
     }
 
     /// Create an `adt.typeref` type — a reference to a named type.
-    pub fn adt_typeref(&self, ir: &mut IrContext, name: Symbol) -> TypeRef {
+    pub fn adt_typeref(&self, ir: &mut IrContext, name: &Symbol) -> TypeRef {
         let name = ir.intern_symbol_text(name);
         ir.intern_type(
             TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
@@ -1045,7 +1049,7 @@ mod tests {
             args: vec![],
         };
         let open = |id, effects| EffectRow::new(&db, effects, Some(EffectVar { id }));
-        let key = |row| ctx.ability_instance_key(ability.clone(), &[func_type(&db, vec![], row)]);
+        let key = |row| ctx.ability_instance_key(&ability, &[func_type(&db, vec![], row)]);
 
         assert_eq!(key(open(3, vec![])), key(open(9, vec![])));
         assert_eq!(
@@ -1060,7 +1064,7 @@ mod tests {
         let shared = |a, b| {
             let ability = ability.clone();
             let inner = func_type(&db, vec![], open(a, vec![]));
-            ctx.ability_instance_key(ability, &[func_type(&db, vec![inner], open(b, vec![]))])
+            ctx.ability_instance_key(&ability, &[func_type(&db, vec![inner], open(b, vec![]))])
         };
         assert_eq!(shared(1, 1), shared(5, 5));
         assert_ne!(shared(1, 1), shared(1, 2));
@@ -1107,7 +1111,7 @@ mod tests {
             named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("a::Box"))),
             named(crate::ast::TypeDefId::synthetic(&db, Symbol::new("b::Box"))),
         ]
-        .map(|arg| ctx.ability_instance_key(ability.clone(), &[arg]));
+        .map(|arg| ctx.ability_instance_key(&ability, &[arg]));
         let distinct: HashSet<_> = keys.iter().collect();
         assert_eq!(distinct.len(), keys.len(), "{keys:#?}");
     }
@@ -1196,7 +1200,7 @@ mod tests {
         let tuple_name = ctx.logical_tuple_name(tuple);
         assert_eq!(
             ctx.convert_logical_type(&mut ir, tuple),
-            ctx.adt_typeref(&mut ir, tuple_name)
+            ctx.adt_typeref(&mut ir, &tuple_name)
         );
 
         let nominal_name = Symbol::new("Nested::Forward");
@@ -1211,7 +1215,7 @@ mod tests {
         );
         assert_eq!(
             ctx.convert_logical_type(&mut ir, forward),
-            ctx.adt_typeref(&mut ir, nominal_name.clone())
+            ctx.adt_typeref(&mut ir, &nominal_name)
         );
 
         // A source declaration named List must not capture the builtin type,
@@ -1247,7 +1251,7 @@ mod tests {
         let list_signature =
             tribute_ir::dialect::tribute_control::FuncSig::from_type_ref(&ir, callable_ir).unwrap();
         let anyref = ctx.anyref_type(&mut ir);
-        let nominal_list = ctx.adt_typeref(&mut ir, list_name);
+        let nominal_list = ctx.adt_typeref(&mut ir, &list_name);
         assert_eq!(list_signature.inputs(&ir), &[anyref, nominal_list]);
         assert_eq!(list_signature.result(&ir), anyref);
         let tuple = AstType::new(&db, TypeKind::Tuple(vec![builtin_list, source_list]));
@@ -1267,7 +1271,7 @@ mod tests {
 
         let generated = Symbol::new("Forward::value");
         ctx.register_logical_generated_signature(
-            generated.clone(),
+            &generated,
             vec![i32_ty],
             i32_ty,
             CallingConvention::Direct,
@@ -1276,13 +1280,13 @@ mod tests {
         // no-op; a conflicting signature remains fail-closed in the lowering
         // context rather than being silently replaced.
         ctx.register_logical_generated_signature(
-            generated.clone(),
+            &generated,
             vec![i32_ty],
             i32_ty,
             CallingConvention::Direct,
         );
         let generated_signature = ctx
-            .lookup_logical_generated_signature(generated)
+            .lookup_logical_generated_signature(&generated)
             .expect("generated logical signature must be retained");
         assert_eq!(generated_signature.param_types, vec![i32_ty]);
         assert_eq!(generated_signature.return_type, i32_ty);
@@ -1290,13 +1294,13 @@ mod tests {
 
         let source_function = Symbol::new("Forward::run");
         ctx.register_logical_source_function(source_function.clone());
-        assert!(ctx.is_logical_source_function(source_function));
+        assert!(ctx.is_logical_source_function(&source_function));
         assert!(ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
         assert!(!ctx.mark_logical_extern_emitted(Symbol::new("prelude::id")));
 
         ctx.enter_module(Symbol::new("Nested"));
         assert_eq!(
-            ctx.qualify_name(Symbol::new("run")),
+            ctx.qualify_name(&Symbol::new("run")),
             Symbol::new("Nested::run")
         );
         ctx.exit_module();
@@ -1335,7 +1339,7 @@ mod tests {
         );
         assert_eq!(
             ctx.convert_logical_type(&mut ir, applied_forward),
-            ctx.adt_typeref(&mut ir, nominal_name)
+            ctx.adt_typeref(&mut ir, &nominal_name)
         );
 
         let evidence_callable = AstType::new(
@@ -1514,7 +1518,7 @@ mod tests {
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
-        assert_eq!(ctx.lookup_function_type(name), Some(&scheme));
-        assert_eq!(ctx.lookup_function_type(Symbol::new("missing")), None);
+        assert_eq!(ctx.lookup_function_type(&name), Some(&scheme));
+        assert_eq!(ctx.lookup_function_type(&Symbol::new("missing")), None);
     }
 }

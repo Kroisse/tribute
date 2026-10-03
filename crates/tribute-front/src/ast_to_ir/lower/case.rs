@@ -200,7 +200,7 @@ fn logical_constructor_pattern<'p, 'db>(
             (
                 ConstructorLayout::Variant(VariantLayout {
                     ty,
-                    tag: ir.intern_symbol_text(variant),
+                    tag: ir.intern_symbol_text(&variant),
                     fields,
                 }),
                 names,

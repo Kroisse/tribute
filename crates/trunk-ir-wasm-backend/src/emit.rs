@@ -1111,10 +1111,10 @@ fn set_result_local(
     Ok(())
 }
 
-fn resolve_callee(path: Symbol, module_info: &ModuleInfo) -> CompilationResult<u32> {
+fn resolve_callee(path: &Symbol, module_info: &ModuleInfo) -> CompilationResult<u32> {
     module_info
         .func_indices
-        .get(&path)
+        .get(path)
         .copied()
         .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
 }

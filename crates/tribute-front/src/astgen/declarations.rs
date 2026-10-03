@@ -113,7 +113,7 @@ fn lower_function(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Decl<Unres
 
     if is_extern {
         // For extern functions, return type defaults to Nil when omitted.
-        let extern_return_ty = return_ty.clone().unwrap_or_else(|| TypeAnnotation {
+        let extern_return_ty = return_ty.unwrap_or_else(|| TypeAnnotation {
             id,
             kind: TypeAnnotationKind::Named(Symbol::new("Nil")),
         });

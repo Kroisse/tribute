@@ -127,7 +127,7 @@ mod tests {
         let module = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
             )
             .region(region)
             .build(ctx);
@@ -239,7 +239,7 @@ mod tests {
                     Attribute::List(vec![Attribute::Type(i64)]),
                 ])),
             );
-            assert_eq!(attrs.get_symbol_ref("tag"), Some(Symbol::new("keep")),);
+            assert_eq!(attrs.get_symbol_ref("tag"), Some(&Symbol::new("keep")));
             assert_eq!(ctx.get_type(function.r#type(&ctx)).attrs.len(), 4);
             assert_eq!(
                 ctx.op(module.ops(&ctx)[0]).attributes.get("custom"),

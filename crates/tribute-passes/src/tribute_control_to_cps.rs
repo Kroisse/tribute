@@ -367,7 +367,7 @@ fn verify_physical_callable_graph(
                 });
                 return;
             };
-            let Some((func_ty, convention)) = signatures.get(&callee) else {
+            let Some((func_ty, convention)) = signatures.get(callee) else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
                     location: Some(data.location),
@@ -423,7 +423,7 @@ fn verify_physical_callable_graph(
         } else if data.dialect == Symbol::new("func") && data.name == Symbol::new("call") {
             let callee = data.attributes.get_symbol_ref("callee");
             if let Some(callee) = callee {
-                match signatures.get(&callee) {
+                match signatures.get(callee) {
                     Some((_, target_convention)) if *target_convention == op_convention => {}
                     Some(_) => failures.push(BoundaryFailure {
                         op: Some(op),
@@ -780,8 +780,8 @@ impl<'a> Converter<'a> {
         }
     }
 
-    fn current_func(&self, symbol: Symbol) -> Option<CallableInfo> {
-        self.funcs.get(&symbol).cloned()
+    fn current_func(&self, symbol: &Symbol) -> Option<CallableInfo> {
+        self.funcs.get(symbol).cloned()
     }
 
     fn malformed_source(
@@ -1935,7 +1935,7 @@ impl<'a> Converter<'a> {
             .collect();
         let evidence = self.evidence_type();
         let frame = self.frame_types(result).reference;
-        let abi = CallableAbi::new(convention, source_param_types.clone(), result);
+        let abi = CallableAbi::new(convention, source_param_types, result);
         let params = abi.lowered_params(evidence, frame);
         let body_source = self.ctx.op_region(source, 0).ok_or_else(|| {
             self.malformed_source(source, "tribute_control.lambda requires a body region")
@@ -2363,7 +2363,7 @@ impl<'a> Converter<'a> {
             answer_type,
             factory_args[0],
             factory_args[1],
-            symbol.clone(),
+            &symbol,
             factory_args[2],
             factory_args[3..].to_vec(),
         )?;
@@ -2453,7 +2453,7 @@ impl<'a> Converter<'a> {
         answer_type: TypeRef,
         completion: ValueRef,
         parent_dispatch: ValueRef,
-        factory: Symbol,
+        factory: &Symbol,
         local_prompt: ValueRef,
         factory_args: Vec<ValueRef>,
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
@@ -2597,7 +2597,7 @@ impl<'a> Converter<'a> {
             .ctx
             .intern_type(TypeDataBuilder::new("core", "i1").build());
         let state_name = self.fresh_helper("one_shot_state");
-        let state_name = self.ctx.intern_symbol_text(state_name);
+        let state_name = self.ctx.intern_symbol_text(&state_name);
         let state_type = adt::struct_type(
             self.ctx,
             state_name,
@@ -3365,9 +3365,10 @@ impl<'a> Converter<'a> {
                         .op(source)
                         .attributes
                         .get_symbol_ref("callee")
-                        .expect("pre-CPS validation checked direct callee");
+                        .expect("pre-CPS validation checked direct callee")
+                        .clone();
                     let target = self
-                        .current_func(target_symbol.clone())
+                        .current_func(&target_symbol)
                         .expect("pre-CPS validation resolved direct callee in this module");
                     if target.convention == CallingConvention::Cps {
                         if flow.convention != CallingConvention::Cps {
@@ -3602,7 +3603,7 @@ impl<'a> Converter<'a> {
         let qualified =
             qualified_name(self.ctx, source).expect("pre-CPS validation checked function symbol");
         let info = self
-            .current_func(qualified)
+            .current_func(&qualified)
             .expect("validated function is present in the callable graph");
         let physical_type = self.physical_function_type(logical_type);
         if !self.ctx.op_has_regions(source) {
@@ -3610,7 +3611,7 @@ impl<'a> Converter<'a> {
                 OperationDataBuilder::new(location, Symbol::new("func"), Symbol::new("func"))
                     .attr(
                         "sym_name",
-                        Attribute::String(self.ctx.intern_symbol_text(symbol)),
+                        Attribute::String(self.ctx.intern_symbol_text(&symbol)),
                     )
                     .attr("type", Attribute::Type(physical_type));
             for (key, value) in self.convert_attrs(&self.ctx.op(source).attributes.clone()) {
@@ -4796,10 +4797,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(error.boundary, POST_CPS_BOUNDARY);
-        assert_eq!(
-            ctx.type_alias_by_name(alias_name.clone()),
-            Some(source_type)
-        );
+        assert_eq!(ctx.type_alias_by_name(&alias_name), Some(source_type));
         assert_eq!(ctx.type_alias_by_type(source_type), Some(alias_name));
         assert_eq!(ctx.type_alias_by_type(converted_type), None);
         assert_eq!(print_module(&ctx, candidate.op()), before);

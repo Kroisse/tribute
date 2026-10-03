@@ -97,8 +97,8 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
     .collect()
 });
 
-fn is_supported_compiler_intrinsic(identity: Symbol) -> bool {
-    SUPPORTED_COMPILER_INTRINSICS.contains(&identity)
+fn is_supported_compiler_intrinsic(identity: &Symbol) -> bool {
+    SUPPORTED_COMPILER_INTRINSICS.contains(identity)
 }
 
 /// An unsupported directive and its source declaration for diagnostics.
@@ -127,8 +127,8 @@ pub fn registered_compiler_intrinsics<V>(
                 crate::ast::Decl::ExternFunction(function)
                     if function.abi == Symbol::new("intrinsic") =>
                 {
-                    let symbol = crate::qualified_symbol(prefix, function.name.clone());
-                    if is_supported_compiler_intrinsic(symbol.clone()) {
+                    let symbol = crate::qualified_symbol(prefix, &function.name);
+                    if is_supported_compiler_intrinsic(&symbol) {
                         result.insert(function.id, symbol);
                     } else {
                         unsupported.push(UnsupportedCompilerIntrinsic {
@@ -139,7 +139,7 @@ pub fn registered_compiler_intrinsics<V>(
                 }
                 crate::ast::Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(prefix, module.name.clone());
+                        let saved = crate::push_prefix(prefix, &module.name);
                         collect(body, prefix, result, unsupported);
                         prefix.truncate(saved);
                     }
@@ -217,13 +217,13 @@ mod tests {
 
     #[test]
     fn compiler_intrinsic_registry_is_explicit() {
-        assert!(is_supported_compiler_intrinsic(Symbol::new(
+        assert!(is_supported_compiler_intrinsic(&Symbol::new(
             "std::Float::=="
         )));
-        assert!(is_supported_compiler_intrinsic(Symbol::new(
+        assert!(is_supported_compiler_intrinsic(&Symbol::new(
             "std::io::__tribute_io_read_line"
         )));
-        assert!(!is_supported_compiler_intrinsic(Symbol::new(
+        assert!(!is_supported_compiler_intrinsic(&Symbol::new(
             "user_intrinsic"
         )));
     }

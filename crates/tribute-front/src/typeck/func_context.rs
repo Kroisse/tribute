@@ -435,16 +435,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Look up a local variable by name.
     ///
     /// Searches from innermost to outermost scope.
-    pub fn lookup_local_by_name(&mut self, name: Symbol) -> Option<Type<'db>> {
+    pub fn lookup_local_by_name(&mut self, name: &Symbol) -> Option<Type<'db>> {
         self.local_scheme_by_name(name)
             .map(|scheme| self.instantiate_scheme(scheme))
     }
 
-    fn local_scheme_by_name(&self, name: Symbol) -> Option<TypeScheme<'db>> {
+    fn local_scheme_by_name(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
         self.name_scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(&name).copied())
+            .find_map(|scope| scope.get(name).copied())
     }
 
     // =========================================================================
@@ -568,7 +568,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &mut self,
         node: NodeId,
         local: LocalId,
-        name: Symbol,
+        name: &Symbol,
     ) -> Option<Type<'db>> {
         let scheme = if local.is_unresolved() {
             None
@@ -700,7 +700,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// Look up a type definition.
-    pub fn lookup_type_def(&self, name: Symbol) -> Option<TypeScheme<'db>> {
+    pub fn lookup_type_def(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
         self.env.lookup_type_def(name)
     }
 
@@ -915,8 +915,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.annotation_type_parameters.insert(name, ty);
     }
 
-    pub(crate) fn annotation_type_parameter(&self, name: Symbol) -> Option<Type<'db>> {
-        self.annotation_type_parameters.get(&name).copied()
+    pub(crate) fn annotation_type_parameter(&self, name: &Symbol) -> Option<Type<'db>> {
+        self.annotation_type_parameters.get(name).copied()
     }
 
     pub(crate) fn annotation_type_parameters(&self) -> impl Iterator<Item = Type<'db>> + '_ {
@@ -1545,7 +1545,7 @@ mod tests {
         let ty2 = ctx.bool_type();
         ctx.bind_local_by_name(name.clone(), ty2);
 
-        assert_eq!(ctx.lookup_local_by_name(name), Some(ty2));
+        assert_eq!(ctx.lookup_local_by_name(&name), Some(ty2));
     }
 
     #[salsa_test]

@@ -18,7 +18,7 @@ pub(super) fn cast_variant_args<'db>(
     location: Location,
     args: Vec<ValueRef>,
     enum_ty: TypeRef,
-    variant: Symbol,
+    variant: &Symbol,
 ) -> Vec<ValueRef> {
     let field_types = get_enum_variants(builder.ir, enum_ty)
         .and_then(|variants| {

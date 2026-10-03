@@ -231,7 +231,8 @@ pub fn monomorphize_functions<'db>(
             .struct_constructors
             .into_iter()
             .map(|(owner, arguments, scheme)| {
-                let name = mangle::mangle_type_name(db, owner, owner.qualified(db), &arguments);
+                let name =
+                    mangle::mangle_type_name(db, owner, owner.qualified(db).clone(), &arguments);
                 (CtorId::new(db, name), scheme)
             })
             .collect();
@@ -516,14 +517,14 @@ fn build_rewrite_map<'db>(
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
-        let Some(_scheme) = scheme_map.get(&qualified) else {
+        let Some(_scheme) = scheme_map.get(qualified) else {
             continue;
         };
 
         let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
             .iter()
             .map(|type_args| {
-                let mangled = mangle::mangle_name(db, qualified.clone(), type_args);
+                let mangled = mangle::mangle_name(db, qualified, type_args);
                 (type_args.clone(), mangled)
             })
             .collect();

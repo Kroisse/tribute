@@ -139,7 +139,7 @@ impl RewritePattern for NormalizeCallPattern {
         let args: Vec<_> = call_op.args(ctx).to_vec();
 
         let new_op = func::Call::operands(args)
-            .callee(callee)
+            .callee(callee.clone())
             .results([new_result_ty])
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());

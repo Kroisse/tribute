@@ -391,7 +391,7 @@ impl IrContext {
         match arg {
             StringArg::Ref(r) => r,
             StringArg::Text(text) => self.intern_str(&text),
-            StringArg::Symbol(symbol) => self.intern_symbol_text(symbol),
+            StringArg::Symbol(symbol) => self.intern_symbol_text(&symbol),
         }
     }
 
@@ -399,7 +399,7 @@ impl IrContext {
     ///
     /// For names that reach the IR as symbols, such as frontend declaration
     /// names, but are stored as string attributes.
-    pub fn intern_symbol_text(&mut self, symbol: Symbol) -> StringRef {
+    pub fn intern_symbol_text(&mut self, symbol: &Symbol) -> StringRef {
         symbol.with_str(|text| self.intern_str(text))
     }
 
@@ -498,14 +498,14 @@ impl IrContext {
     }
 
     /// Look up a type alias by name.
-    pub fn type_alias_by_name(&self, name: Symbol) -> Option<TypeRef> {
-        self.type_alias_by_name.get(&name).copied()
+    pub fn type_alias_by_name(&self, name: &Symbol) -> Option<TypeRef> {
+        self.type_alias_by_name.get(name).copied()
     }
 
     /// Look up a type alias by the text of its name, such as a nominal
     /// type's string name.
     pub fn type_alias_by_text(&self, name: &str) -> Option<TypeRef> {
-        self.type_alias_by_name(Symbol::from_dynamic(name))
+        self.type_alias_by_name(&Symbol::from_dynamic(name))
     }
 
     /// Look up an alias name for a given type (reverse lookup for printer).
@@ -2403,7 +2403,7 @@ mod tests {
         )
         .attr(
             "sym_name",
-            Attribute::String(ctx.intern_symbol_text(Symbol::new(new_name))),
+            Attribute::String(ctx.intern_symbol_text(&Symbol::new(new_name))),
         )
         .attr("type", func_ty)
         .region(cloned_region)

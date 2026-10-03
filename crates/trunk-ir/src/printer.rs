@@ -215,7 +215,7 @@ impl<'a> PrintState<'a> {
             if index > 0 {
                 f.write_str(", ")?;
             }
-            write_attribute_key(f, key.clone())?;
+            write_attribute_key(f, key)?;
             f.write_str(" = ")?;
             self.write_attribute(f, value)?;
         }
@@ -246,7 +246,7 @@ impl<'a> PrintState<'a> {
                 write_escaped_bytes(f, bytes)?;
                 f.write_char('"')
             }
-            Attribute::SymbolRef(sym) => write_symbol(f, sym.clone()),
+            Attribute::SymbolRef(sym) => write_symbol(f, sym),
             Attribute::Type(ty) => self.write_type(f, *ty),
             Attribute::List(list) => {
                 f.write_char('[')?;
@@ -362,7 +362,7 @@ impl<'a, 'ctx> TypePrintHelper<'a, 'ctx> {
 
     /// Write `@name`, quoting it when needed.
     pub fn write_symbol(&mut self, symbol: crate::Symbol) -> fmt::Result {
-        write_symbol(&mut *self.f, symbol)
+        write_symbol(&mut *self.f, &symbol)
     }
 
     /// Write a name as a bare identifier, or as a quoted string when it is not
@@ -581,7 +581,7 @@ fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
 }
 
 /// Write a dictionary key bare when the reader accepts it, otherwise quoted.
-fn write_attribute_key(f: &mut dyn Write, key: crate::symbol::Symbol) -> fmt::Result {
+fn write_attribute_key(f: &mut dyn Write, key: &crate::symbol::Symbol) -> fmt::Result {
     key.with_str(|s| {
         if crate::parser::raw::is_bare_attribute_key(s) {
             f.write_str(s)
@@ -610,7 +610,7 @@ fn write_name(f: &mut dyn Write, name: &str) -> fmt::Result {
     }
 }
 
-fn write_symbol(f: &mut dyn Write, sym: crate::symbol::Symbol) -> fmt::Result {
+fn write_symbol(f: &mut dyn Write, sym: &crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| write_symbol_text(f, s))
 }
 
@@ -1058,7 +1058,7 @@ fn print_module_op(
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write_attribute_key(f, key.clone())?;
+            write_attribute_key(f, key)?;
             f.write_str(" = ")?;
             expanded.write_attribute(f, val)?;
         }
@@ -1189,7 +1189,7 @@ mod tests {
             }}"
             );
             let module = crate::parser::parse_module(&mut ctx, &input).unwrap();
-            let callable = ctx.type_alias_by_name(Symbol::new("callable")).unwrap();
+            let callable = ctx.type_alias_by_name(&Symbol::new("callable")).unwrap();
             let expanded_result = if result == "()" { "()" } else { "core.i32" };
             assert_eq!(
                 print_type(&ctx, callable),
@@ -1564,7 +1564,7 @@ mod tests {
 
         // Empty symbol (should quote)
         out.clear();
-        write_symbol(&mut out, Symbol::from_dynamic("")).unwrap();
+        write_symbol(&mut out, &Symbol::from_dynamic("")).unwrap();
         assert_eq!(out, r#"@"""#);
 
         // Float infinity (should not append .0)

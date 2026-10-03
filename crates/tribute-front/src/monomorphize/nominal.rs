@@ -190,9 +190,9 @@ mod tests {
             db,
             ast,
             crate::resolve::build_env(db, ast),
-            parsed.span_map(db).clone(),
+            parsed.span_map(db),
         );
-        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone())
+        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db))
     }
 
     #[salsa_test]
@@ -229,7 +229,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 let (id, entry) = index
                     .declarations
                     .iter()
-                    .find(|(id, _)| id.qualified(db) == name)
+                    .find(|(id, _)| *id.qualified(db) == name)
                     .unwrap();
                 assert_eq!(index.is_generic(*id), generic);
                 match entry.source {
@@ -329,8 +329,12 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         assert!(
             matches!(result.kind(db), TypeKind::Named { id, args, .. } if id == owner && args == &[int])
         );
-        let name =
-            super::super::mangle::mangle_type_name(db, *owner, owner.qualified(db), arguments);
+        let name = super::super::mangle::mangle_type_name(
+            db,
+            *owner,
+            owner.qualified(db).clone(),
+            arguments,
+        );
         assert_eq!(name, Symbol::new("nested::Holder$Int"));
         let declarations = specialize::generate_struct_specializations_with_index(
             db,

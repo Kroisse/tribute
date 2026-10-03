@@ -113,14 +113,13 @@ impl LocalId {
 #[salsa::interned(debug)]
 pub struct FuncDefId<'db> {
     /// The fully qualified name (e.g., `"foo::bar::func_name"`).
-    #[returns(clone)]
     pub qualified: Symbol,
 }
 
 impl<'db> FuncDefId<'db> {
     /// Returns the unqualified function name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).last_segment()
+        self.qualified(db).clone().last_segment()
     }
 }
 
@@ -152,7 +151,6 @@ pub struct TypeDefId<'db> {
     #[returns(copy)]
     pub origin: TypeOrigin,
     /// The fully qualified name (e.g., `"std::option::Option"`).
-    #[returns(clone)]
     pub qualified: Symbol,
 }
 
@@ -183,7 +181,7 @@ impl<'db> TypeDefId<'db> {
 
     /// Returns the unqualified type name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).last_segment()
+        self.qualified(db).clone().last_segment()
     }
 }
 
@@ -198,14 +196,13 @@ impl<'db> TypeDefId<'db> {
 #[salsa::interned(debug)]
 pub struct CtorId<'db> {
     /// The fully qualified name (e.g., `"std::option::Some"`).
-    #[returns(clone)]
     pub qualified: Symbol,
 }
 
 impl<'db> CtorId<'db> {
     /// Returns the unqualified constructor name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).last_segment()
+        self.qualified(db).clone().last_segment()
     }
 }
 
@@ -234,7 +231,6 @@ pub struct AbilityId<'db> {
     #[returns(copy)]
     pub origin: AbilityOrigin,
     /// The fully qualified name (e.g., `"std::state::State"`).
-    #[returns(clone)]
     pub qualified: Symbol,
 }
 
@@ -272,7 +268,7 @@ impl<'db> AbilityId<'db> {
 
     /// Returns the unqualified ability name (last segment).
     pub fn name(self, db: &'db dyn salsa::Database) -> Symbol {
-        self.qualified(db).last_segment()
+        self.qualified(db).clone().last_segment()
     }
 }
 

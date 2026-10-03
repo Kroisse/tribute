@@ -221,9 +221,7 @@ impl<'db> TypeChecker<'db> {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
 
                 // Try to look up the method as a struct field accessor
-                if let Some(result_ty) =
-                    self.lookup_struct_field_type(ctx, receiver_ty, method.clone())
-                {
+                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, method) {
                     self.record_field_instance(
                         ctx,
                         expr.id,
@@ -232,7 +230,7 @@ impl<'db> TypeChecker<'db> {
                         result_ty,
                     );
                     result_ty
-                } else if let Some(entry) = self.env.lookup_method(method.clone(), receiver_ty) {
+                } else if let Some(entry) = self.env.lookup_method(method, receiver_ty) {
                     // UFCS method found — record for conversion phase and extract return type
                     let func_id = entry.func_id;
                     let callee_ty = ctx
@@ -874,9 +872,7 @@ impl<'db> TypeChecker<'db> {
                 args,
             } => {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
-                if let Some(result_ty) =
-                    self.lookup_struct_field_type(ctx, receiver_ty, method.clone())
-                {
+                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, method) {
                     self.record_field_instance(
                         ctx,
                         expr.id,
@@ -885,7 +881,7 @@ impl<'db> TypeChecker<'db> {
                         result_ty,
                     );
                     result_ty
-                } else if let Some(entry) = self.env.lookup_method(method.clone(), receiver_ty) {
+                } else if let Some(entry) = self.env.lookup_method(method, receiver_ty) {
                     let callee_ty = ctx
                         .instantiate_function_reference(expr.id, entry.func_id)
                         .unwrap_or_else(|| ctx.fresh_type_var());
@@ -1087,7 +1083,7 @@ impl<'db> TypeChecker<'db> {
             // Struct fields are read from the struct declaration; a named
             // variant's fields are its constructor instance's parameters.
             if let Some(expected_field_ty) = self
-                .lookup_struct_field_type(ctx, struct_ty, field_name.clone())
+                .lookup_struct_field_type(ctx, struct_ty, field_name)
                 .or(variant_field_ty)
             {
                 let field_ty = self.infer_expr_with_expected(ctx, field_expr, expected_field_ty);
@@ -1156,7 +1152,7 @@ impl<'db> TypeChecker<'db> {
     ) {
         let is_variant = matches!(
             result.kind(self.db()),
-            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(name.clone()).is_some()
+            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(name).is_some()
         );
         if !is_variant || !ctx.mark_record_shape_checked(record_id) {
             return;
@@ -1267,7 +1263,7 @@ impl<'db> TypeChecker<'db> {
     ) {
         let name = match resolved {
             ResolvedRef::TypeDef { id } => id.qualified(self.db()),
-            ResolvedRef::Local { id, name } if !id.is_unresolved() => name.clone(),
+            ResolvedRef::Local { id, name } if !id.is_unresolved() => name,
             _ => return,
         };
         if ctx.mark_record_shape_checked(pattern_id) {
@@ -1337,7 +1333,7 @@ impl<'db> TypeChecker<'db> {
         };
         let is_variant = matches!(
             result.kind(self.db()),
-            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(name.clone()).is_some()
+            TypeKind::Named { name, .. } if self.env.lookup_enum_variants(name).is_some()
         );
         let kind = if is_variant { "variant" } else { "struct" };
         self.report_field_shape(
@@ -1391,7 +1387,7 @@ impl<'db> TypeChecker<'db> {
                     ctx.lookup_local(*id)
                 };
                 by_id
-                    .or_else(|| ctx.lookup_local_by_name(name.clone()))
+                    .or_else(|| ctx.lookup_local_by_name(name))
                     .unwrap_or_else(|| ctx.fresh_type_var())
             }
             ResolvedRef::Function { id } => node
@@ -1418,7 +1414,7 @@ impl<'db> TypeChecker<'db> {
             }
             ResolvedRef::AbilityOp { ability, op, .. } => {
                 // Look up the ability operation signature from the module type env
-                if let Some(op_info) = self.env.lookup_ability_op(*ability, op.clone()) {
+                if let Some(op_info) = self.env.lookup_ability_op(*ability, op) {
                     // Create a function type from the operation signature
                     // The effect row contains this ability (with a row variable tail for polymorphism)
 
@@ -1498,7 +1494,7 @@ impl<'db> TypeChecker<'db> {
         let ResolvedRef::Local { id, name } = resolved else {
             unreachable!("local-reference inference requires a local reference");
         };
-        ctx.lookup_local_reference(node, *id, name.clone())
+        ctx.lookup_local_reference(node, *id, name)
             .unwrap_or_else(|| ctx.fresh_type_var())
     }
 
@@ -1695,20 +1691,17 @@ impl<'db> TypeChecker<'db> {
         else {
             return;
         };
-        let Some((parameters, field_ty)) = self.env.lookup_struct_field(*owner, field.clone())
-        else {
+        let Some((parameters, field_ty)) = self.env.lookup_struct_field(*owner, &field) else {
             return;
         };
         let mut prefix = owner.qualified(self.db()).to_string();
-        let function = crate::ast::FuncDefId::new(
-            self.db(),
-            crate::qualified_symbol(&mut prefix, field.clone()),
-        );
+        let function =
+            crate::ast::FuncDefId::new(self.db(), crate::qualified_symbol(&mut prefix, &field));
         let receiver_template = Type::new(
             self.db(),
             TypeKind::Named {
                 id: *owner,
-                name: owner.qualified(self.db()),
+                name: owner.qualified(self.db()).clone(),
                 args: (0..parameters.len())
                     .map(|index| {
                         Type::new(
@@ -1758,7 +1751,7 @@ impl<'db> TypeChecker<'db> {
         &self,
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         receiver_ty: Type<'db>,
-        field_name: Symbol,
+        field_name: &Symbol,
     ) -> Option<Type<'db>> {
         // Extract struct declaration identity from receiver type.
         let struct_id = match receiver_ty.kind(self.db()) {
@@ -2123,7 +2116,7 @@ impl<'db> TypeChecker<'db> {
                 self.infer_var_with_ctx(ctx, node_id, resolved)
             }
             (Some(node), ResolvedRef::Local { id, name }) => ctx
-                .lookup_local_reference(node, *id, name.clone())
+                .lookup_local_reference(node, *id, name)
                 .unwrap_or_else(|| ctx.fresh_type_var()),
             (Some(node), _) => ctx
                 .get_function_reference_type(node)
@@ -3185,7 +3178,7 @@ impl<'db> TypeChecker<'db> {
             }
             return self.invalid_handler_operation(ctx, op, syntax_kind, params.len());
         };
-        let Some(op_info) = self.env.lookup_ability_op(ability_id, op.clone()) else {
+        let Some(op_info) = self.env.lookup_ability_op(ability_id, &op) else {
             if ctx.mark_handler_error(arm_id, "unknown operation") {
                 Diagnostic::new(
                     format!("unknown handler operation '{}'", op),
@@ -3400,12 +3393,9 @@ impl<'db> TypeChecker<'db> {
             return ty;
         }
         let ty = match &ann.kind {
-            TypeAnnotationKind::Named(name)
-                if ctx.annotation_type_parameter(name.clone()).is_some() =>
-            {
-                ctx.annotation_type_parameter(name.clone())
-                    .expect("known signature parameter")
-            }
+            TypeAnnotationKind::Named(name) if ctx.annotation_type_parameter(name).is_some() => ctx
+                .annotation_type_parameter(name)
+                .expect("known signature parameter"),
             TypeAnnotationKind::Named(name) => {
                 if *name == "Int" {
                     ctx.int_type()
@@ -3517,7 +3507,10 @@ impl<'db> TypeChecker<'db> {
             ResolvedRef::TypeDef { id } => {
                 // TypeDef might be an ability reference in handler context
                 // Create an AbilityId with the same qualified name
-                Some(AbilityId::source(self.db(), id.qualified(self.db())))
+                Some(AbilityId::source(
+                    self.db(),
+                    id.qualified(self.db()).clone(),
+                ))
             }
             // Other reference types are not abilities
             _ => None,
@@ -3872,7 +3865,7 @@ mod tests {
         ));
         assert!(ctx.lookup_local(LocalId::new(10)).is_none());
         assert!(ctx.lookup_local(LocalId::new(20)).is_none());
-        assert!(ctx.lookup_local_by_name(name).is_none());
+        assert!(ctx.lookup_local_by_name(&name).is_none());
     }
 
     // =========================================================================

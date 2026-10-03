@@ -75,12 +75,12 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         .iter_imports()
         .filter_map(|(name, binding)| {
             // Library names come through their package paths, not a `use`.
-            if env.lookup_library(name.clone()) == Some(binding) {
+            if env.lookup_library(&name) == Some(binding) {
                 return None;
             }
             let path = match binding {
                 Binding::Module { path } => Some(path),
-                _ => env.get_use_path(name.clone()),
+                _ => env.get_use_path(&name),
             }?;
             (path.len() >= 2).then(|| (name, path.clone()))
         })
@@ -92,7 +92,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         let path = match path.split_first() {
             Some((first, rest))
                 if !env.declares(first.clone())
-                    && let Some(library) = env.library_namespace(first.clone()) =>
+                    && let Some(library) = env.library_namespace(first) =>
             {
                 library
                     .to_string()
@@ -113,7 +113,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
         );
 
         // Look up the actual binding in the namespace
-        let Some(binding) = env.lookup_qualified(ns, target_name).cloned() else {
+        let Some(binding) = env.lookup_qualified(&ns, &target_name).cloned() else {
             continue;
         };
 
@@ -126,7 +126,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
                 .collect::<Vec<_>>()
                 .join("::"),
         );
-        for (op_name, op_binding) in env.collect_namespace(qualified_ns) {
+        for (op_name, op_binding) in env.collect_namespace(&qualified_ns) {
             env.add_to_namespace_if_absent(import_name.clone(), op_name, op_binding);
         }
 
@@ -185,7 +185,7 @@ pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<Unresol
 /// their short names, then re-resolve the package's own imports, which may
 /// name library items.
 pub fn merge_library<'db>(env: &mut ModuleEnv<'db>, library: &ModuleEnv<'db>) {
-    env.merge(library, Symbol::new(LIBRARY_PACKAGE));
+    env.merge(library, &Symbol::new(LIBRARY_PACKAGE));
     resolve_use_imports(env);
 }
 
@@ -218,7 +218,7 @@ fn inject_builtin_bindings<'db>(db: &'db dyn salsa::Database, env: &mut ModuleEn
     let collections = Symbol::new("std::collections");
     let list = Symbol::new("List");
     if matches!(
-        env.lookup_qualified(collections.clone(), list.clone()),
+        env.lookup_qualified(&collections, &list),
         None | Some(Binding::Module { .. })
     ) {
         env.add_to_namespace(
@@ -247,20 +247,20 @@ fn collect_definition<'db>(
 ) {
     match decl {
         Decl::Function(func) => {
-            let qualified = qualified_symbol(prefix, func.name.clone());
+            let qualified = qualified_symbol(prefix, &func.name);
             let id = FuncDefId::new(db, qualified);
             env.add_function(func.name.clone(), id);
         }
 
         Decl::ExternFunction(func) => {
-            let qualified = qualified_symbol(prefix, func.name.clone());
+            let qualified = qualified_symbol(prefix, &func.name);
             let id = FuncDefId::new(db, qualified);
             env.add_function(func.name.clone(), id);
         }
 
         Decl::Struct(s) => {
             // Struct is both a type and a constructor
-            let qualified = qualified_symbol(prefix, s.name.clone());
+            let qualified = qualified_symbol(prefix, &s.name);
             let type_def_id = TypeDefId::source(db, qualified.clone(), s.id);
             let ctor_id = CtorId::new(db, qualified);
             env.add_type(s.name.clone(), type_def_id);
@@ -268,10 +268,10 @@ fn collect_definition<'db>(
 
             // Register field accessors in struct's namespace
             // e.g., struct Point { x: Int, y: Int } → Point::x, Point::y functions
-            let saved = push_prefix(prefix, s.name.clone());
+            let saved = push_prefix(prefix, &s.name);
             for field in &s.fields {
                 if let Some(field_name) = field.name.clone() {
-                    let field_qualified = qualified_symbol(prefix, field_name.clone());
+                    let field_qualified = qualified_symbol(prefix, &field_name);
                     let func_id = FuncDefId::new(db, field_qualified);
                     let binding = Binding::Function { id: func_id };
                     // Add to namespace (e.g., Point::x)
@@ -283,13 +283,13 @@ fn collect_definition<'db>(
 
         Decl::Enum(e) => {
             // Enum is a type, and each variant is a constructor
-            let qualified = qualified_symbol(prefix, e.name.clone());
+            let qualified = qualified_symbol(prefix, &e.name);
             let type_def_id = TypeDefId::source(db, qualified, e.id);
             env.add_type(e.name.clone(), type_def_id);
 
             // Add each variant as a constructor in the enum's namespace
             for variant in &e.variants {
-                let variant_qualified = qualified_symbol(prefix, variant.name.clone());
+                let variant_qualified = qualified_symbol(prefix, &variant.name);
                 let variant_id = CtorId::new(db, variant_qualified);
                 let binding = Binding::Constructor {
                     id: variant_id,
@@ -310,7 +310,7 @@ fn collect_definition<'db>(
 
         Decl::Ability(a) => {
             // Create AbilityId for this ability
-            let qualified = qualified_symbol(prefix, a.name.clone());
+            let qualified = qualified_symbol(prefix, &a.name);
             let ability_id = AbilityId::source(db, qualified);
 
             // Register the ability itself (for handler pattern resolution)
@@ -351,7 +351,7 @@ fn collect_definition<'db>(
             // then register them under the module's namespace
             if let Some(body) = &m.body {
                 // Build nested module path by appending current module name
-                let saved = push_prefix(prefix, m.name.clone());
+                let saved = push_prefix(prefix, &m.name);
 
                 // Collect inner declarations into a temporary environment
                 let mut inner_env = ModuleEnv::new();
@@ -429,7 +429,7 @@ mod tests {
         let env = build_env(db, input.module(db));
 
         // Math::add should be accessible
-        let math_add = env.lookup_qualified(Symbol::new("Math"), Symbol::new("add"));
+        let math_add = env.lookup_qualified(&Symbol::new("Math"), &Symbol::new("add"));
         assert!(math_add.is_some(), "Math::add should be in namespace");
         assert!(
             matches!(math_add, Some(Binding::Function { .. })),
@@ -437,14 +437,14 @@ mod tests {
         );
 
         // "add" should NOT be directly accessible (not leaked to parent scope)
-        let add_direct = env.lookup(Symbol::new("add"));
+        let add_direct = env.lookup(&Symbol::new("add"));
         assert!(
             add_direct.is_none(),
             "add should not be leaked to parent scope"
         );
 
         // "Math" itself should be accessible as a module binding
-        let math_module = env.lookup(Symbol::new("Math"));
+        let math_module = env.lookup(&Symbol::new("Math"));
         assert!(math_module.is_some(), "Math should be accessible");
         assert!(
             matches!(math_module, Some(Binding::Module { .. })),
@@ -457,11 +457,11 @@ mod tests {
         let env = build_env(db, input.module(db));
 
         // Types::Point should be accessible as a constructor
-        let types_point = env.lookup_qualified(Symbol::new("Types"), Symbol::new("Point"));
+        let types_point = env.lookup_qualified(&Symbol::new("Types"), &Symbol::new("Point"));
         assert!(types_point.is_some(), "Types::Point should be in namespace");
 
         // "Point" should NOT be directly accessible
-        let point_direct = env.lookup(Symbol::new("Point"));
+        let point_direct = env.lookup(&Symbol::new("Point"));
         assert!(
             point_direct.is_none(),
             "Point should not be leaked to parent scope"
@@ -473,20 +473,20 @@ mod tests {
         let env = build_env(db, input.module(db));
 
         // Types::Color should be accessible
-        let types_color = env.lookup_qualified(Symbol::new("Types"), Symbol::new("Color"));
+        let types_color = env.lookup_qualified(&Symbol::new("Types"), &Symbol::new("Color"));
         assert!(types_color.is_some(), "Types::Color should be in namespace");
 
         // Types::Red should also be accessible (variant is in module's namespace)
-        let types_red = env.lookup_qualified(Symbol::new("Types"), Symbol::new("Red"));
+        let types_red = env.lookup_qualified(&Symbol::new("Types"), &Symbol::new("Red"));
         assert!(types_red.is_some(), "Types::Red should be in namespace");
 
         // "Color" and "Red" should NOT be directly accessible
         assert!(
-            env.lookup(Symbol::new("Color")).is_none(),
+            env.lookup(&Symbol::new("Color")).is_none(),
             "Color should not be leaked"
         );
         assert!(
-            env.lookup(Symbol::new("Red")).is_none(),
+            env.lookup(&Symbol::new("Red")).is_none(),
             "Red should not be leaked"
         );
     }
@@ -497,22 +497,22 @@ mod tests {
 
         // All should be accessible via Utils::
         assert!(
-            env.lookup_qualified(Symbol::new("Utils"), Symbol::new("helper"))
+            env.lookup_qualified(&Symbol::new("Utils"), &Symbol::new("helper"))
                 .is_some()
         );
         assert!(
-            env.lookup_qualified(Symbol::new("Utils"), Symbol::new("another"))
+            env.lookup_qualified(&Symbol::new("Utils"), &Symbol::new("another"))
                 .is_some()
         );
         assert!(
-            env.lookup_qualified(Symbol::new("Utils"), Symbol::new("Data"))
+            env.lookup_qualified(&Symbol::new("Utils"), &Symbol::new("Data"))
                 .is_some()
         );
 
         // None should be directly accessible
-        assert!(env.lookup(Symbol::new("helper")).is_none());
-        assert!(env.lookup(Symbol::new("another")).is_none());
-        assert!(env.lookup(Symbol::new("Data")).is_none());
+        assert!(env.lookup(&Symbol::new("helper")).is_none());
+        assert!(env.lookup(&Symbol::new("another")).is_none());
+        assert!(env.lookup(&Symbol::new("Data")).is_none());
     }
 
     #[salsa::tracked]
@@ -520,8 +520,8 @@ mod tests {
         let env = build_env(db, input.module(db));
 
         // Both A::foo and B::foo should exist
-        let a_foo = env.lookup_qualified(Symbol::new("A"), Symbol::new("foo"));
-        let b_foo = env.lookup_qualified(Symbol::new("B"), Symbol::new("foo"));
+        let a_foo = env.lookup_qualified(&Symbol::new("A"), &Symbol::new("foo"));
+        let b_foo = env.lookup_qualified(&Symbol::new("B"), &Symbol::new("foo"));
 
         assert!(a_foo.is_some(), "A::foo should exist");
         assert!(b_foo.is_some(), "B::foo should exist");
@@ -540,14 +540,14 @@ mod tests {
 
         // Outer::Inner should exist
         assert!(
-            env.lookup_qualified(Symbol::new("Outer"), Symbol::new("Inner"))
+            env.lookup_qualified(&Symbol::new("Outer"), &Symbol::new("Inner"))
                 .is_some(),
             "Outer::Inner should exist"
         );
 
         // Outer::Variant should exist (enum variants are hoisted to module namespace)
         assert!(
-            env.lookup_qualified(Symbol::new("Outer"), Symbol::new("Variant"))
+            env.lookup_qualified(&Symbol::new("Outer"), &Symbol::new("Variant"))
                 .is_some(),
             "Outer::Variant should exist"
         );
@@ -555,7 +555,7 @@ mod tests {
         // Outer::Inner::Variant should exist
         let qualified_ns = Symbol::from_dynamic("Outer::Inner");
         assert!(
-            env.lookup_qualified(qualified_ns, Symbol::new("Variant"))
+            env.lookup_qualified(&qualified_ns, &Symbol::new("Variant"))
                 .is_some(),
             "Outer::Inner::Variant should exist"
         );
@@ -567,20 +567,20 @@ mod tests {
 
         // foo should still be directly accessible
         assert!(
-            env.lookup(Symbol::new("foo")).is_some(),
+            env.lookup(&Symbol::new("foo")).is_some(),
             "foo should be accessible"
         );
 
         // M::bar should be accessible
         assert!(
-            env.lookup_qualified(Symbol::new("M"), Symbol::new("bar"))
+            env.lookup_qualified(&Symbol::new("M"), &Symbol::new("bar"))
                 .is_some(),
             "M::bar should be accessible"
         );
 
         // bar should not be directly accessible
         assert!(
-            env.lookup(Symbol::new("bar")).is_none(),
+            env.lookup(&Symbol::new("bar")).is_none(),
             "bar should not be directly accessible"
         );
     }
@@ -780,7 +780,7 @@ mod tests {
 
         let env = build_env(db, &module);
         assert!(matches!(
-            env.lookup_qualified(Symbol::new("std::io"), Symbol::new("SystemError")),
+            env.lookup_qualified(&Symbol::new("std::io"), &Symbol::new("SystemError")),
             Some(Binding::Constructor { .. })
         ));
     }
@@ -810,7 +810,7 @@ mod tests {
     fn verify_extern_function_registered(db: &dyn salsa::Database, input: TestModuleInput) {
         let env = build_env(db, input.module(db));
 
-        let binding = env.lookup(Symbol::new("__bytes_len"));
+        let binding = env.lookup(&Symbol::new("__bytes_len"));
         assert!(binding.is_some(), "__bytes_len should be registered");
         assert!(
             matches!(binding, Some(Binding::Function { .. })),
@@ -856,7 +856,7 @@ mod tests {
         let env = build_env(db, input.module(db));
 
         // Point::x should be registered as a function
-        let point_x = env.lookup_qualified(Symbol::new("Point"), Symbol::new("x"));
+        let point_x = env.lookup_qualified(&Symbol::new("Point"), &Symbol::new("x"));
         assert!(
             point_x.is_some(),
             "Point::x accessor should be in namespace"
@@ -867,7 +867,7 @@ mod tests {
         );
 
         // Point::y should be registered as a function
-        let point_y = env.lookup_qualified(Symbol::new("Point"), Symbol::new("y"));
+        let point_y = env.lookup_qualified(&Symbol::new("Point"), &Symbol::new("y"));
         assert!(
             point_y.is_some(),
             "Point::y accessor should be in namespace"

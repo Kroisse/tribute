@@ -14,7 +14,7 @@ pub(crate) enum PathKeywordError {
     Misplaced(Symbol),
 }
 
-fn keyword(segment: Symbol) -> Option<&'static str> {
+fn keyword(segment: &Symbol) -> Option<&'static str> {
     segment.with_str(|name| {
         PATH_KEYWORDS
             .iter()
@@ -41,11 +41,11 @@ pub(crate) fn absolute_path(
     let first = first.clone();
     if let Some(misplaced) = rest
         .iter()
-        .find(|segment| keyword((*segment).clone()).is_some())
+        .find(|segment| keyword(&(*segment).clone()).is_some())
     {
         return Err(PathKeywordError::Misplaced(misplaced.clone()));
     }
-    let mut base = match keyword(first) {
+    let mut base = match keyword(&first) {
         None => return Ok(None),
         Some("pkg") => module_path[..package_depth].to_vec(),
         Some("self") => module_path.to_vec(),

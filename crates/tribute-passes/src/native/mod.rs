@@ -53,7 +53,7 @@ pub(crate) fn build_extern_func(
     let data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
         .attr(
             "sym_name",
-            Attribute::String(ctx.intern_symbol_text(Symbol::from_dynamic(name))),
+            Attribute::String(ctx.intern_symbol_text(&Symbol::from_dynamic(name))),
         )
         .attr("type", Attribute::Type(func_ty))
         .attr("abi", ctx.string_attr("C"))

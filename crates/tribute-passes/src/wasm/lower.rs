@@ -583,7 +583,7 @@ mod tests {
             .iter()
             .copied()
             .filter_map(|op| wasm_dialect::ExportFunc::from_op(&ctx, op).ok())
-            .map(|export| (export.name(&ctx), export.func(&ctx)))
+            .map(|export| (export.name(&ctx), export.func(&ctx).clone()))
             .collect();
         assert_eq!(exports, [("_start", Symbol::new("main"))]);
         assert!(

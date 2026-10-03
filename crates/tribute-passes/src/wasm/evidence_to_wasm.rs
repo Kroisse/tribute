@@ -1294,7 +1294,7 @@ mod tests {
         let mut calls = Vec::new();
         let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
             if let Ok(call) = func::Call::from_op(&ctx, op) {
-                calls.push((call.callee(&ctx), ctx.op_operands(op).len()));
+                calls.push((call.callee(&ctx).clone(), ctx.op_operands(op).len()));
             }
             std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
         });

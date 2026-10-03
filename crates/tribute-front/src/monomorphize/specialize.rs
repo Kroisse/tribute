@@ -53,18 +53,18 @@ pub(super) fn generate_specializations<'db>(
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
-        let func = func_decls.get(&qualified).copied();
-        let extern_function = extern_functions.get(&qualified).copied();
+        let func = func_decls.get(qualified).copied();
+        let extern_function = extern_functions.get(qualified).copied();
         if func.is_none() && extern_function.is_none() {
             continue;
         }
-        let Some(scheme) = scheme_map.get(&qualified) else {
+        let Some(scheme) = scheme_map.get(qualified) else {
             continue;
         };
         let origins = func.map(semantic_node_ids);
 
         for type_args in type_arg_sets {
-            let mangled = mangle_name(db, qualified.clone(), type_args);
+            let mangled = mangle_name(db, qualified, type_args);
             let specialized_scheme = scheme
                 .to_builder(db)
                 .map_types(db, |ty| {
@@ -172,7 +172,7 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
         }
 
         for type_args in type_arg_sets {
-            let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
+            let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
             let specialized = specialize_struct_decl(db, decl, type_args, mangled.clone());
             entries.push((mangled, specialized));
         }
@@ -212,7 +212,7 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
         }
 
         for type_args in type_arg_sets {
-            let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
+            let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
             let specialized = specialize_enum_decl(db, decl, type_args, mangled.clone());
             entries.push((mangled, specialized));
         }
@@ -448,12 +448,12 @@ fn collect_func_decls_inner<'a, 'db>(
     for decl in decls {
         match decl {
             Decl::Function(func) => {
-                let qualified = crate::qualified_symbol(prefix, func.name.clone());
+                let qualified = crate::qualified_symbol(prefix, &func.name);
                 map.insert(qualified, func);
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
-                    let len = crate::push_prefix(prefix, m.name.clone());
+                    let len = crate::push_prefix(prefix, &m.name);
                     collect_func_decls_inner(body, prefix, map);
                     prefix.truncate(len);
                 }
@@ -480,11 +480,11 @@ fn collect_extern_function_decls_inner<'a, 'db>(
     for decl in decls {
         match decl {
             Decl::ExternFunction(func) => {
-                declarations.insert(crate::qualified_symbol(prefix, func.name.clone()), func);
+                declarations.insert(crate::qualified_symbol(prefix, &func.name), func);
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let len = crate::push_prefix(prefix, module.name.clone());
+                    let len = crate::push_prefix(prefix, &module.name);
                     collect_extern_function_decls_inner(body, prefix, declarations);
                     prefix.truncate(len);
                 }
@@ -813,7 +813,7 @@ mod tests {
             body,
         };
 
-        let mangled = mangle_name(&db, Symbol::new("identity"), &[int]);
+        let mangled = mangle_name(&db, &Symbol::new("identity"), &[int]);
         let specialized = specialize_func_decl(&db, &func, &[int], mangled);
 
         assert_eq!(specialized.name.to_string(), "identity$Int");
@@ -1177,7 +1177,7 @@ mod tests {
             ],
         };
 
-        let mangled = mangle_name(&db, Symbol::new("Pair"), &[int, bool_ty]);
+        let mangled = mangle_name(&db, &Symbol::new("Pair"), &[int, bool_ty]);
         let specialized = specialize_struct_decl(&db, &decl, &[int, bool_ty], mangled);
 
         assert_eq!(specialized.name.to_string(), "Pair$Int$Bool");
@@ -1237,7 +1237,7 @@ mod tests {
             ],
         };
 
-        let mangled = mangle_name(&db, Symbol::new("Option"), &[int]);
+        let mangled = mangle_name(&db, &Symbol::new("Option"), &[int]);
         let specialized = specialize_enum_decl(&db, &decl, &[int], mangled);
 
         assert_eq!(specialized.name.to_string(), "Option$Int");

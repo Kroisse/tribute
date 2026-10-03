@@ -602,8 +602,8 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
     // undeclared. A found but invalid or duplicated declaration is Some(None),
     // so compatibility cannot hide malformed known contracts.
     let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
-        let found = *symbols.definitions_of(name.clone()).first()?;
-        if symbols.resolve(name).is_none() || !func::Func::matches(ctx, found) {
+        let found = *symbols.definitions_of(&name).first()?;
+        if symbols.resolve(&name).is_none() || !func::Func::matches(ctx, found) {
             return Some(None);
         }
         Some(
@@ -655,7 +655,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
                 let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     return;
                 };
-                let Some(signature) = resolve(name) else {
+                let Some(signature) = resolve(name.clone()) else {
                     return;
                 };
                 let Some(signature) = signature else {
@@ -1221,7 +1221,7 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
-        if let Some(&expected) = signatures.get(&callee_sym) {
+        if let Some(&expected) = signatures.get(callee_sym) {
             let actual = ctx.op_operands(op).len();
             if actual != expected {
                 ctx.report_warning(
@@ -2109,7 +2109,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("func_b"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("func_b"))),
                 )
                 .attr("type", Attribute::Type(wasm_func_ty))
                 .region(body_b)

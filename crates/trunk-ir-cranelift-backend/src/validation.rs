@@ -334,7 +334,7 @@ fn validate_clif_region(
                     errors.push("clif.call requires a symbol callee".into());
                     continue;
                 };
-                if let Some(signature) = functions.get(&name) {
+                if let Some(signature) = functions.get(name) {
                     check_value_types(
                         ctx,
                         op,
@@ -366,7 +366,7 @@ fn validate_clif_region(
                     errors.push("clif.return_call requires a symbol callee".into());
                     continue;
                 };
-                if let Some(signature) = functions.get(&callee) {
+                if let Some(signature) = functions.get(callee) {
                     check_value_types(
                         ctx,
                         op,
@@ -478,7 +478,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
                 )
                 .region(region)
                 .build(ctx);

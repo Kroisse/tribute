@@ -94,7 +94,7 @@ fn run(
         functions().filter(|&(_, op)| is_candidate(op)).collect();
 
     let mut roots: HashSet<Symbol> = functions()
-        .filter(|(name, op)| !is_candidate(*op) || is_root(ctx, name.clone(), *op, config))
+        .filter(|(name, op)| !is_candidate(*op) || is_root(ctx, name, *op, config))
         .map(|(name, _)| name)
         .collect();
     let graph = analyses.require::<CallGraph>(ctx, module.op());
@@ -142,9 +142,9 @@ fn run(
 /// Whether `name` is a reachability root: the root `main` or `_start`, a
 /// function definition with an `abi` attribute (externally callable), or a
 /// configured extra entry point.
-fn is_root(ctx: &IrContext, name: Symbol, op: OpRef, config: &GlobalDceConfig) -> bool {
-    name == Symbol::new("main")
-        || name == Symbol::new("_start")
+fn is_root(ctx: &IrContext, name: &Symbol, op: OpRef, config: &GlobalDceConfig) -> bool {
+    *name == Symbol::new("main")
+        || *name == Symbol::new("_start")
         || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
         || name.with_str(|name| config.extra_entry_points.iter().any(|extra| extra == name))
 }
@@ -303,7 +303,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
                 )
                 .region(region)
                 .build(ctx);
@@ -510,7 +510,7 @@ mod tests {
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("extern_fn"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("extern_fn"))),
             )
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
@@ -580,7 +580,7 @@ mod tests {
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("extern_fn"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("extern_fn"))),
             )
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
@@ -625,7 +625,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("nested"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("nested"))),
                 )
                 .region(nested_region)
                 .build(&mut ctx);
@@ -674,7 +674,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("nested"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("nested"))),
                 )
                 .region(nested_region)
                 .build(&mut ctx);

@@ -357,7 +357,7 @@ mod tests {
 }"#,
         );
         fn alias(ctx: &IrContext, name: &'static str) -> TypeRef {
-            ctx.type_alias_by_name(Symbol::new(name))
+            ctx.type_alias_by_name(&Symbol::new(name))
                 .expect("fixture alias")
         }
 

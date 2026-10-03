@@ -10,7 +10,7 @@ use tribute_front::keywords::source_name;
 use trunk_ir::Symbol;
 
 /// A name as written in source: raw when it is a keyword.
-fn spelled(name: Symbol) -> String {
+fn spelled(name: &Symbol) -> String {
     name.with_str(|name| source_name(name).into_owned())
 }
 
@@ -25,7 +25,7 @@ pub fn format_ast_signature(
     let mut label_parts = Vec::with_capacity(sig.params.len());
 
     for (name, ty_str) in &sig.params {
-        let name = spelled(name.clone());
+        let name = spelled(name);
         let label = if let Some(ty) = ty_str {
             format!("{}: {}", name, ty)
         } else {
@@ -43,7 +43,7 @@ pub fn format_ast_signature(
     // Build the full signature label
     let params_str = label_parts.join(", ");
     let return_str = sig.return_ty.as_deref().unwrap_or("_");
-    let name = spelled(sig.name.clone());
+    let name = spelled(&sig.name);
     let signature_label = if let Some(effects) = &sig.effects {
         format!(
             "fn {}({}) ->{{{}}} {}",

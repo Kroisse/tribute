@@ -105,7 +105,7 @@ impl RewritePattern for LowerClosureNewArena {
         let result_ty = ctx.op_result_types(op)[0];
         let Some(target_ty) = self
             .functions
-            .resolve(func_ref.clone())
+            .resolve(func_ref)
             .and_then(|target| func::Func::from_op(ctx, target).ok())
             .map(|target| target.r#type(ctx))
         else {
@@ -114,7 +114,7 @@ impl RewritePattern for LowerClosureNewArena {
 
         // %funcref = func.constant @func_ref : <target's exact signature>
         let constant_op = func::Constant::operands()
-            .func_ref(func_ref)
+            .func_ref(func_ref.clone())
             .results(target_ty)
             .build(ctx, loc);
         let funcref = ctx.op_result(constant_op.op_ref(), 0);

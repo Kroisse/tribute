@@ -907,7 +907,7 @@ mod tests {
                 &db,
                 TypeKind::Named {
                     id,
-                    name: id.qualified(&db),
+                    name: id.qualified(&db).clone(),
                     args: vec![int],
                 },
             );

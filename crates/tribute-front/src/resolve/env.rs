@@ -157,13 +157,13 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// The package path a library name is declared at.
-    pub fn library_path(&self, name: Symbol) -> Option<&[Symbol]> {
-        self.library_paths.get(&name).map(Vec::as_slice)
+    pub fn library_path(&self, name: &Symbol) -> Option<&[Symbol]> {
+        self.library_paths.get(name).map(Vec::as_slice)
     }
 
     /// The library namespace a path starting with `alias` continues in.
-    pub fn library_namespace(&self, alias: Symbol) -> Option<Symbol> {
-        self.library_namespaces.get(&alias).cloned()
+    pub fn library_namespace(&self, alias: &Symbol) -> Option<Symbol> {
+        self.library_namespaces.get(alias).cloned()
     }
 
     /// Mark the namespaces under `root` as supplied to every module.
@@ -172,13 +172,13 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// A name the prelude or the compiler supplies to every module.
-    pub fn lookup_library(&self, name: Symbol) -> Option<&Binding<'db>> {
-        self.library.get(&name)
+    pub fn lookup_library(&self, name: &Symbol) -> Option<&Binding<'db>> {
+        self.library.get(name)
     }
 
     /// Whether namespaces under `root` are supplied to every module.
-    pub fn is_library_root(&self, root: Symbol) -> bool {
-        self.library_roots.contains(&root)
+    pub fn is_library_root(&self, root: &Symbol) -> bool {
+        self.library_roots.contains(root)
     }
 
     /// Add a qualified name to a namespace only if it doesn't already exist.
@@ -196,40 +196,40 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Look up an unqualified name.
-    pub fn lookup(&self, name: Symbol) -> Option<&Binding<'db>> {
+    pub fn lookup(&self, name: &Symbol) -> Option<&Binding<'db>> {
         // First check local definitions
-        if let Some(b) = self.definitions.get(&name) {
+        if let Some(b) = self.definitions.get(name) {
             return Some(b);
         }
         // Then check imports
-        self.imports.get(&name)
+        self.imports.get(name)
     }
 
     /// Check whether a name is defined locally, excluding imports.
-    pub fn has_definition(&self, name: Symbol) -> bool {
-        self.definitions.contains_key(&name)
+    pub fn has_definition(&self, name: &Symbol) -> bool {
+        self.definitions.contains_key(name)
     }
 
     /// Look up a qualified path (e.g., "List::map").
-    pub fn lookup_qualified(&self, namespace: Symbol, name: Symbol) -> Option<&Binding<'db>> {
-        self.namespaces.get(&namespace)?.get(&name)
+    pub fn lookup_qualified(&self, namespace: &Symbol, name: &Symbol) -> Option<&Binding<'db>> {
+        self.namespaces.get(namespace)?.get(name)
     }
 
     /// Iterate over all bindings in a namespace.
     pub fn iter_namespace(
         &self,
-        namespace: Symbol,
+        namespace: &Symbol,
     ) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.namespaces
-            .get(&namespace)
+            .get(namespace)
             .into_iter()
             .flat_map(|bindings| bindings.iter().map(|(k, v)| (k.clone(), v)))
     }
 
     /// Collect all bindings in a namespace (owned, avoids borrow issues).
-    pub fn collect_namespace(&self, namespace: Symbol) -> Vec<(Symbol, Binding<'db>)> {
+    pub fn collect_namespace(&self, namespace: &Symbol) -> Vec<(Symbol, Binding<'db>)> {
         self.namespaces
-            .get(&namespace)
+            .get(namespace)
             .map(|bindings| {
                 bindings
                     .iter()
@@ -240,15 +240,15 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Check whether a namespace exists.
-    pub fn has_namespace(&self, namespace: Symbol) -> bool {
-        self.namespaces.contains_key(&namespace)
+    pub fn has_namespace(&self, namespace: &Symbol) -> bool {
+        self.namespaces.contains_key(namespace)
     }
 
     /// Check whether the package declares `name` at its root: an item, a
     /// namespace, or a module, which may define no namespace entries.
     pub fn declares(&self, name: Symbol) -> bool {
-        self.has_definition(name.clone())
-            || self.has_namespace(name.clone())
+        self.has_definition(&name)
+            || self.has_namespace(&name)
             || matches!(self.imports.get(&name), Some(Binding::Module { path }) if path[..] == [name])
     }
 
@@ -264,8 +264,8 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Get the original `use` path for an import name.
-    pub fn get_use_path(&self, name: Symbol) -> Option<&Vec<Symbol>> {
-        self.use_paths.get(&name)
+    pub fn get_use_path(&self, name: &Symbol) -> Option<&Vec<Symbol>> {
+        self.use_paths.get(name)
     }
 
     /// Iterate over all definitions in this environment.
@@ -298,14 +298,14 @@ impl<'db> ModuleEnv<'db> {
     /// `other` declares the library package `package`, whose root items every
     /// module sees under their short names, and whose namespaces a path may
     /// enter by their first segment below the package root.
-    pub fn merge(&mut self, other: &ModuleEnv<'db>, package: Symbol) {
-        for (name, binding) in other.iter_namespace(package.clone()) {
+    pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
+        for (name, binding) in other.iter_namespace(package) {
             self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
         }
 
         let prefix = format!("{package}::");
         for (ns, bindings) in other.iter_namespaces() {
-            self.add_library_root(namespace_root(ns.clone()));
+            self.add_library_root(namespace_root(&ns));
             let spelling = ns.to_string();
             if let Some(rest) = spelling.strip_prefix(&prefix) {
                 let alias = rest.split("::").next().unwrap_or_default();
@@ -320,7 +320,7 @@ impl<'db> ModuleEnv<'db> {
 }
 
 /// The first segment of a qualified namespace.
-fn namespace_root(namespace: Symbol) -> Symbol {
+fn namespace_root(namespace: &Symbol) -> Symbol {
     // Interning inside `with_str` would re-enter the interner.
     let spelling = namespace.to_string();
     Symbol::from_dynamic(spelling.split("::").next().unwrap_or_default())

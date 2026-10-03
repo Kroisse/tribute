@@ -527,7 +527,7 @@ impl ActionPlanner<'_> {
                 .attributes
                 .get_symbol_ref("callee")
                 .ok_or_else(|| OwnershipPlanError::new("direct call lacks callee identity"))?;
-            if !self.definitions.contains_key(&callee) {
+            if !self.definitions.contains_key(callee) {
                 if args
                     .iter()
                     .any(|&value| is_managed_value(self.ir, value, self.managed_layouts))
@@ -538,7 +538,7 @@ impl ActionPlanner<'_> {
                 }
                 return Ok(());
             }
-            let callee_op = self.definitions[&callee];
+            let callee_op = self.definitions[callee];
             let signature = self
                 .ir
                 .op(callee_op)
@@ -548,7 +548,7 @@ impl ActionPlanner<'_> {
                 .ok_or_else(|| OwnershipPlanError::new("direct callee lacks exact signature"))?;
             validate_call_contract(self.ir, op, signature, args, self.managed_layouts)?;
             self.entry_contracts
-                .get(&callee)
+                .get(callee)
                 .cloned()
                 .ok_or_else(|| OwnershipPlanError::new("callee has no trusted entry contract"))?
         };

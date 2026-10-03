@@ -301,7 +301,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
                 )
                 .region(region)
                 .build(ctx);
@@ -348,7 +348,7 @@ mod tests {
         tc.add_conversion(move |ctx, ty| {
             if ctx
                 .types()
-                .is_dialect(ty, Symbol::new("core"), Symbol::new("i32"))
+                .is_dialect(ty, &Symbol::new("core"), &Symbol::new("i32"))
             {
                 Some(i64_ty)
             } else {
@@ -620,7 +620,7 @@ mod result_list_tests {
                 );
                 assert_eq!(
                     ctx.get_type(converted).attrs.get_symbol_ref("tag"),
-                    Some(Symbol::new("keep"))
+                    Some(&Symbol::new("keep"))
                 );
             }
         }

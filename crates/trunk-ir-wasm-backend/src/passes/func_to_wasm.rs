@@ -82,9 +82,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern {
-            table_indices: table_indices.clone(),
-        });
+        .add_pattern(FuncConstantPattern { table_indices });
     applicator.apply_partial(ctx, module);
 
     // 4. Add wasm.table and wasm.elem to the module
@@ -178,7 +176,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
         for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
             if let Ok(const_op) = func::Constant::from_op(ctx, op) {
-                refs.push(const_op.func_ref(ctx));
+                refs.push(const_op.func_ref(ctx).clone());
             }
 
             // Recurse into nested regions
@@ -462,7 +460,7 @@ impl RewritePattern for FuncCallPattern {
         let result_types: Vec<TypeRef> = rewriter.result_types(ctx, op);
 
         let new_op = wasm_dialect::Call::operands(args)
-            .callee(callee)
+            .callee(callee.clone())
             .results(result_types)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -565,7 +563,7 @@ impl RewritePattern for FuncTailCallPattern {
         let args: Vec<_> = ctx.op_operands(op).to_vec();
 
         let new_op = wasm_dialect::ReturnCall::operands(args)
-            .callee(callee)
+            .callee(callee.clone())
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
@@ -686,7 +684,7 @@ impl RewritePattern for FuncConstantPattern {
         // They are collected by collect_func_constant_refs before pattern application.
         let table_idx = self
             .table_indices
-            .get(&func_ref)
+            .get(func_ref)
             .copied()
             .expect("All func.constant must be registered in table");
 
@@ -1039,12 +1037,12 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
+                .is_dialect(ty, &Symbol::new("tribute_rt"), &Symbol::new("anyref")))
             .then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
             (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
+                .is_dialect(ty, &Symbol::new("tribute_rt"), &Symbol::new("float")))
             .then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
@@ -1096,12 +1094,12 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
+                .is_dialect(ty, &Symbol::new("tribute_rt"), &Symbol::new("anyref")))
             .then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
             (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
+                .is_dialect(ty, &Symbol::new("tribute_rt"), &Symbol::new("float")))
             .then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
@@ -1201,7 +1199,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(ty, Symbol::new("adt"), Symbol::new("typeref"))
+                .is_dialect(ty, &Symbol::new("adt"), &Symbol::new("typeref"))
                 .then_some(structref_ty)
         });
         lower(&mut ctx, module, type_converter);

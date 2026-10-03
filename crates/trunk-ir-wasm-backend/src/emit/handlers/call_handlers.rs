@@ -86,7 +86,7 @@ pub(crate) fn handle_call_indirect(
     let attrs = &ctx.op(op).attributes;
     let table_index = attrs
         .get("table")
-        .map(|_| attr_u32(attrs, Symbol::new("table")))
+        .map(|_| attr_u32(attrs, &Symbol::new("table")))
         .transpose()?
         .unwrap_or(0);
 
@@ -143,7 +143,7 @@ pub(crate) fn handle_return_call_indirect(
         .op(op)
         .attributes
         .get("table")
-        .map(|_| attr_u32(&ctx.op(op).attributes, Symbol::new("table")))
+        .map(|_| attr_u32(&ctx.op(op).attributes, &Symbol::new("table")))
         .transpose()?
         .unwrap_or(0);
     let table_index_value = IndirectCallLikeOps::callee(ctx, op).ok_or_else(|| {

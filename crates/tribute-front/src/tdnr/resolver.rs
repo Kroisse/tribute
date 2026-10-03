@@ -97,7 +97,7 @@ impl<'db> TdnrResolver<'db> {
             if let [Decl::Module(root)] = decls.as_slice()
                 && let Some(body) = &root.body
             {
-                crate::push_prefix(&mut package, root.name.clone());
+                crate::push_prefix(&mut package, &root.name);
                 decls = body;
             }
             self.string_type = decls.iter().find_map(|decl| {
@@ -107,7 +107,7 @@ impl<'db> TdnrResolver<'db> {
                     _ => return None,
                 };
                 (name == "String").then(|| {
-                    let qualified = crate::qualified_symbol(&mut package.clone(), name);
+                    let qualified = crate::qualified_symbol(&mut package.clone(), &name);
                     Type::new(
                         self.db,
                         TypeKind::Named {
@@ -133,20 +133,20 @@ impl<'db> TdnrResolver<'db> {
         for decl in decls {
             match decl {
                 Decl::Struct(struct_decl) => {
-                    let qualified = qualified_symbol(prefix, struct_decl.name.clone());
+                    let qualified = qualified_symbol(prefix, &struct_decl.name);
                     let id =
                         crate::ast::TypeDefId::source(self.db, qualified.clone(), struct_decl.id);
                     self.type_identities.insert(qualified, id);
                 }
                 Decl::Enum(enum_decl) => {
-                    let qualified = qualified_symbol(prefix, enum_decl.name.clone());
+                    let qualified = qualified_symbol(prefix, &enum_decl.name);
                     let id =
                         crate::ast::TypeDefId::source(self.db, qualified.clone(), enum_decl.id);
                     self.type_identities.insert(qualified, id);
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = push_prefix(prefix, module.name.clone());
+                        let saved = push_prefix(prefix, &module.name);
                         self.collect_type_identities(body, prefix);
                         prefix.truncate(saved);
                     }
@@ -181,7 +181,7 @@ impl<'db> TdnrResolver<'db> {
                     let func_name = func.name.clone();
 
                     // Create FuncDefId with qualified name
-                    let qualified = qualified_symbol(prefix, func_name.clone());
+                    let qualified = qualified_symbol(prefix, &func_name);
                     let func_id = FuncDefId::new(self.db, qualified);
 
                     // Build function type from parameter and return type annotations
@@ -202,7 +202,7 @@ impl<'db> TdnrResolver<'db> {
                     let struct_name = s.name.clone();
 
                     // Push struct name to build qualified field accessor names
-                    let saved = push_prefix(prefix, struct_name.clone());
+                    let saved = push_prefix(prefix, &struct_name);
 
                     for field in &s.fields {
                         let Some(field_name) = field.name.clone() else {
@@ -210,7 +210,7 @@ impl<'db> TdnrResolver<'db> {
                         };
 
                         // Create synthetic FuncDefId for the accessor
-                        let field_qualified = qualified_symbol(prefix, field_name.clone());
+                        let field_qualified = qualified_symbol(prefix, &field_name);
                         let func_id = FuncDefId::new(self.db, field_qualified);
 
                         // Build accessor function type: fn(self: StructType) -> FieldType
@@ -270,7 +270,7 @@ impl<'db> TdnrResolver<'db> {
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
                         // Build nested module path by appending current module name
-                        let saved = push_prefix(prefix, m.name.clone());
+                        let saved = push_prefix(prefix, &m.name);
                         self.index_decls(body, prefix);
                         prefix.truncate(saved);
                     }
@@ -469,7 +469,7 @@ impl<'db> TdnrResolver<'db> {
         else {
             return;
         };
-        let Some(entry) = self.lookup_method(self.get_expr_type(receiver), method.clone()) else {
+        let Some(entry) = self.lookup_method(self.get_expr_type(receiver), method) else {
             return;
         };
         let callee_ref = TypedRef {
@@ -595,10 +595,10 @@ impl<'db> TdnrResolver<'db> {
     fn lookup_method(
         &self,
         receiver_ty: Option<Type<'db>>,
-        method: Symbol,
+        method: &Symbol,
     ) -> Option<&MethodEntry<'db>> {
         let receiver_ty = receiver_ty?;
-        let candidates = self.method_index.get(&method)?;
+        let candidates = self.method_index.get(method)?;
 
         let mut iter = candidates
             .iter()
@@ -613,7 +613,7 @@ impl<'db> TdnrResolver<'db> {
 
 impl<'db> VisitMut<TypedRef<'db>> for TdnrResolver<'db> {
     fn visit_module_decl_mut(&mut self, module: &mut ModuleDecl<TypedRef<'db>>) {
-        let saved = push_prefix(&mut self.current_prefix, module.name.clone());
+        let saved = push_prefix(&mut self.current_prefix, &module.name);
         walk_module_decl_mut(self, module);
         self.current_prefix.truncate(saved);
     }
@@ -1107,7 +1107,7 @@ mod tests {
             },
         ));
 
-        let result = resolver.lookup_method(receiver_ty, method_name);
+        let result = resolver.lookup_method(receiver_ty, &method_name);
         result.is_some()
     }
 
@@ -1174,7 +1174,7 @@ mod tests {
             },
         ));
 
-        let result = resolver.lookup_method(receiver_ty, method_name);
+        let result = resolver.lookup_method(receiver_ty, &method_name);
         // Should be None due to ambiguity
         result.is_none()
     }
@@ -1200,7 +1200,7 @@ mod tests {
             },
         ));
 
-        let result = resolver.lookup_method(receiver_ty, Symbol::new("nonexistent"));
+        let result = resolver.lookup_method(receiver_ty, &Symbol::new("nonexistent"));
         result.is_none()
     }
 
@@ -1255,7 +1255,7 @@ mod tests {
             },
         );
 
-        let result = resolver.lookup_method(Some(app_ty), method_name);
+        let result = resolver.lookup_method(Some(app_ty), &method_name);
         result.is_some()
     }
 

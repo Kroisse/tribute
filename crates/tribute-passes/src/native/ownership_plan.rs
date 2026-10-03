@@ -177,10 +177,10 @@ impl NativeOwnershipPlan {
         &self.rtti_types
     }
 
-    pub fn function(&self, symbol: Symbol) -> Option<&FunctionOwnershipPlan> {
+    pub fn function(&self, symbol: &Symbol) -> Option<&FunctionOwnershipPlan> {
         self.functions
             .iter()
-            .find(|function| function.symbol == symbol)
+            .find(|function| function.symbol == *symbol)
     }
 
     pub fn is_managed_type(&self, ctx: &IrContext, ty: TypeRef) -> bool {
@@ -925,7 +925,7 @@ fn value_is_borrowed(
         }
         if let Ok(call) = func::Call::from_op(ctx, op) {
             return summaries
-                .get(&call.callee(ctx))
+                .get(call.callee(ctx))
                 .and_then(|entries| entries.get(index))
                 == Some(&EntryOwnership::Borrowed);
         }

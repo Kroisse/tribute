@@ -69,7 +69,7 @@ impl<'db> TypeChecker<'db> {
                     else {
                         continue;
                     };
-                    let Some(scheme) = self.env.lookup_type_def(target) else {
+                    let Some(scheme) = self.env.lookup_type_def(&target) else {
                         continue;
                     };
                     let name = import
@@ -83,12 +83,12 @@ impl<'db> TypeChecker<'db> {
                     }) {
                         continue;
                     }
-                    let qualified = crate::qualified_symbol(&mut self.prefix, name);
+                    let qualified = crate::qualified_symbol(&mut self.prefix, &name);
                     self.env.register_type_def(qualified, scheme);
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(&mut self.prefix, module.name.clone());
+                        let saved = crate::push_prefix(&mut self.prefix, &module.name);
                         self.collect_type_imports(body);
                         self.prefix.truncate(saved);
                     }
@@ -123,7 +123,7 @@ impl<'db> TypeChecker<'db> {
                     // For inline modules, recursively collect from nested declarations
                     if let Some(body) = &m.body {
                         // Push module name to prefix
-                        let prev_len = crate::push_prefix(&mut self.prefix, m.name.clone());
+                        let prev_len = crate::push_prefix(&mut self.prefix, &m.name);
                         // Create a temporary module to reuse collect_declarations
                         let inner_module = Module {
                             id: m.id,
@@ -144,14 +144,14 @@ impl<'db> TypeChecker<'db> {
         for decl in decls {
             match decl {
                 Decl::Struct(s) => {
-                    self.predeclare_nominal_type(s.name.clone(), s.id, &s.type_params);
+                    self.predeclare_nominal_type(&s.name.clone(), s.id, &s.type_params);
                 }
                 Decl::Enum(e) => {
-                    self.predeclare_nominal_type(e.name.clone(), e.id, &e.type_params);
+                    self.predeclare_nominal_type(&e.name.clone(), e.id, &e.type_params);
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(&mut self.prefix, module.name.clone());
+                        let saved = crate::push_prefix(&mut self.prefix, &module.name);
                         self.predeclare_nominal_types(body);
                         self.prefix.truncate(saved);
                     }
@@ -163,7 +163,7 @@ impl<'db> TypeChecker<'db> {
 
     fn predeclare_nominal_type(
         &mut self,
-        name: Symbol,
+        name: &Symbol,
         declaration: crate::ast::NodeId,
         params: &[crate::ast::TypeParamDecl],
     ) {
@@ -254,7 +254,7 @@ impl<'db> TypeChecker<'db> {
             .build(self.db());
 
         // Register the function with its FuncDefId
-        let func_id = self.func_def_id(func.name.clone());
+        let func_id = self.func_def_id(&func.name.clone());
         if let Some(origins) = effect_origins {
             self.effect_annotation_origins.insert(func_id, origins);
         }
@@ -325,7 +325,7 @@ impl<'db> TypeChecker<'db> {
             .build(self.db());
 
         // Register the extern function with its FuncDefId
-        let func_id = self.func_def_id(func.name.clone());
+        let func_id = self.func_def_id(&func.name.clone());
         self.env.register_function(func_id, scheme);
 
         // Register as UFCS method candidate if function has parameters
@@ -338,7 +338,7 @@ impl<'db> TypeChecker<'db> {
     /// Collect a struct definition.
     fn collect_struct_def(&mut self, s: &StructDecl) {
         let name = s.name.clone();
-        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
+        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), &name);
         let type_params: Vec<TypeParam> = s
             .type_params
             .iter()
@@ -411,7 +411,7 @@ impl<'db> TypeChecker<'db> {
     /// Collect an enum definition.
     fn collect_enum_def(&mut self, e: &EnumDecl) {
         let name = e.name.clone();
-        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
+        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), &name);
         let type_params: Vec<TypeParam> = e
             .type_params
             .iter()
@@ -465,10 +465,7 @@ impl<'db> TypeChecker<'db> {
                 TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
             let ctor_id = CtorId::new(
                 self.db(),
-                crate::qualified_symbol(
-                    &mut self.current_prefix().to_owned(),
-                    variant.name.clone(),
-                ),
+                crate::qualified_symbol(&mut self.current_prefix().to_owned(), &variant.name),
             );
             self.env.register_constructor(ctor_id, ctor_scheme);
             if let Some(names) = field_names(&variant.fields) {
@@ -485,7 +482,7 @@ impl<'db> TypeChecker<'db> {
         // Create AbilityId for this ability
         let ability_id = AbilityId::source(
             self.db(),
-            crate::qualified_symbol(&mut self.current_prefix().to_owned(), a.name.clone()),
+            crate::qualified_symbol(&mut self.current_prefix().to_owned(), &a.name),
         );
 
         // Build type parameter info

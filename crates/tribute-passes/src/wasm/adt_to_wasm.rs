@@ -765,10 +765,10 @@ mod tests {
 }"#,
         );
         let enum_ty = ctx
-            .type_alias_by_name(Symbol::new("E"))
+            .type_alias_by_name(&Symbol::new("E"))
             .expect("enum layout");
         let typeref_ty = ctx
-            .type_alias_by_name(Symbol::new("ERef"))
+            .type_alias_by_name(&Symbol::new("ERef"))
             .expect("enum reference");
 
         assert_eq!(canonical_enum_type(&ctx, enum_ty), Some(enum_ty));
@@ -1004,7 +1004,7 @@ mod tests {
             })
             .collect();
         let list = ctx
-            .type_alias_by_name(Symbol::new("List"))
+            .type_alias_by_name(&Symbol::new("List"))
             .expect("list layout");
         let cons_tag = ctx.intern_str("Cons");
         let empty_tag = ctx.intern_str("Empty");

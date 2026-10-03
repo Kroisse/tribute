@@ -779,7 +779,7 @@ mod tests {
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
                 .attr(
                     "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
                 )
                 .region(region)
                 .build(ctx);
@@ -1064,7 +1064,7 @@ mod tests {
         let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("external"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("external"))),
             )
             .attr("type", Attribute::Type(fn_ty))
             .build(&mut ctx);

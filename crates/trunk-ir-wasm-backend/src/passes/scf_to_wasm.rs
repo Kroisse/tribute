@@ -1354,8 +1354,8 @@ mod tests {
             ctx.types()
                 .is_dialect(
                     ty,
-                    trunk_ir::Symbol::new("core"),
-                    trunk_ir::Symbol::new("array"),
+                    &trunk_ir::Symbol::new("core"),
+                    &trunk_ir::Symbol::new("array"),
                 )
                 .then_some(arrayref_ty)
         });

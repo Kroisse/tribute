@@ -467,7 +467,7 @@ pub fn compose_root_entry_bridge(
         .attributes
         .insert("sym_name", Attribute::String(root_main_name));
     for &op in &top_level_ops {
-        rewrite_symbol_refs(ctx, op, main.clone(), root_main.clone());
+        rewrite_symbol_refs(ctx, op, &main, &root_main);
     }
 
     let entry = ctx.create_block(BlockData {
@@ -757,8 +757,8 @@ pub(crate) fn dispatch_answer_type(
             && is_parameterless_dialect_type(
                 ctx,
                 results[0],
-                Symbol::new("core"),
-                Symbol::new("never"),
+                &Symbol::new("core"),
+                &Symbol::new("never"),
             )))
     {
         return Err(TargetAbiError::new(
@@ -931,14 +931,19 @@ fn validate_root_dispatch_type(
     };
     if callable.results(ctx) != physical_results
         || *actual_evidence != evidence
-        || !is_parameterless_dialect_type(ctx, *prompt, Symbol::new("core"), Symbol::new("i32"))
-        || !is_parameterless_dialect_type(ctx, *ability, Symbol::new("core"), Symbol::new("i32"))
-        || !is_parameterless_dialect_type(ctx, *operation, Symbol::new("core"), Symbol::new("i32"))
+        || !is_parameterless_dialect_type(ctx, *prompt, &Symbol::new("core"), &Symbol::new("i32"))
+        || !is_parameterless_dialect_type(ctx, *ability, &Symbol::new("core"), &Symbol::new("i32"))
+        || !is_parameterless_dialect_type(
+            ctx,
+            *operation,
+            &Symbol::new("core"),
+            &Symbol::new("i32"),
+        )
         || !is_parameterless_dialect_type(
             ctx,
             *payload,
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
+            &Symbol::new("tribute_rt"),
+            &Symbol::new("anyref"),
         )
     {
         return Err(TargetAbiError::new(
@@ -967,8 +972,8 @@ fn validate_root_dispatch_type(
         || !is_parameterless_dialect_type(
             ctx,
             resume.inputs(ctx)[2],
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
+            &Symbol::new("tribute_rt"),
+            &Symbol::new("anyref"),
         )
     {
         return Err(TargetAbiError::new(
@@ -1007,8 +1012,8 @@ fn dispatch_entry_function_type(
 fn is_parameterless_dialect_type(
     ctx: &IrContext,
     ty: TypeRef,
-    dialect: Symbol,
-    name: Symbol,
+    dialect: &Symbol,
+    name: &Symbol,
 ) -> bool {
     ctx.types().is_dialect(ty, dialect, name)
         && ctx.get_type(ty).params.is_empty()
@@ -1043,12 +1048,12 @@ fn remove_root_contract(ctx: &mut IrContext, op: OpRef) {
     ctx.op_mut(op).attributes.remove(ROOT_SOURCE_RESULT_ATTR);
 }
 
-fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol) {
+fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &Symbol, new: &Symbol) {
     if core::Module::from_op(ctx, op).is_ok() {
         return;
     }
     for key in [Symbol::new("callee"), Symbol::new("func_ref")] {
-        if ctx.op(op).attributes.get_symbol_ref(key.clone()) == Some(old.clone()) {
+        if ctx.op(op).attributes.get_symbol_ref(key.clone()) == Some(old) {
             ctx.op_mut(op).attributes.insert(key, new.clone());
         }
     }
@@ -1058,7 +1063,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol)
         for block in blocks {
             let nested_ops = ctx.block(block).ops.clone();
             for nested in nested_ops {
-                rewrite_symbol_refs(ctx, nested, old.clone(), new.clone());
+                rewrite_symbol_refs(ctx, nested, old, new);
             }
         }
     }
@@ -1293,18 +1298,18 @@ fn is_cps_never_caller(ctx: &IrContext, op: OpRef, never: TypeRef) -> Result<boo
 
 /// The tagged function named by a root-qualified reference.
 fn function_for_symbol(
-    symbol: Symbol,
+    symbol: &Symbol,
     functions: &HashMap<Symbol, FunctionIdentity>,
 ) -> Result<FunctionIdentity, TargetAbiError> {
-    function_for_symbol_optional(symbol.clone(), functions)
+    function_for_symbol_optional(symbol, functions)
         .ok_or_else(|| TargetAbiError::new(format!("target ABI: unknown callable `{symbol}`")))
 }
 
 fn function_for_symbol_optional(
-    symbol: Symbol,
+    symbol: &Symbol,
     functions: &HashMap<Symbol, FunctionIdentity>,
 ) -> Option<FunctionIdentity> {
-    functions.get(&symbol).copied()
+    functions.get(symbol).copied()
 }
 
 /// The root-qualified name a definition is referenced by.
@@ -1555,7 +1560,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             self.embedded.insert(ty, converted);
             return Ok(converted);
         }
-        let mut converted = data.clone();
+        let mut converted = data;
         for parameter in &mut converted.params {
             *parameter = self.convert_embedded(*parameter)?;
         }
@@ -1836,7 +1841,7 @@ mod tests {
         }"#,
         );
         assert_eq!(
-            ctx.type_alias_by_name(Symbol::new("Evidence")),
+            ctx.type_alias_by_name(&Symbol::new("Evidence")),
             Some(evidence)
         );
         let cps = function(&ctx, module, "cps");
@@ -2052,7 +2057,7 @@ mod tests {
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
             ctx.op(call).attributes.get_symbol_ref("callee"),
-            Some(Symbol::new(ROOT_MAIN_SYMBOL))
+            Some(&Symbol::new(ROOT_MAIN_SYMBOL))
         );
         let worker_callable = func::FuncSig::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();
         let [worker_evidence, worker_frame] = worker_callable.inputs(&ctx) else {

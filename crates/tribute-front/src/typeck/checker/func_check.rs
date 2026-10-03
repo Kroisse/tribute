@@ -42,10 +42,10 @@ impl<'db> TypeChecker<'db> {
         let mut checked = FunctionCheck::default();
         // 1. Create a fresh FunctionInferenceContext for this function
         // Use function definition ID for globally unique UniVar IDs
-        let func_id = self.func_def_id(func.name.clone());
+        let func_id = self.func_def_id(&func.name.clone());
         let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, func_id);
         // Only the exact root `main` is an entrypoint.
-        let is_root_main = crate::is_root_main(func.name.clone(), self.current_prefix().is_empty());
+        let is_root_main = crate::is_root_main(&func.name, self.current_prefix().is_empty());
 
         // 2. Get the function's registered type scheme and instantiate it
 
@@ -171,7 +171,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name.clone(),
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -180,7 +180,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name.clone(),
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -199,7 +199,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name.clone(),
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -214,7 +214,7 @@ impl<'db> TypeChecker<'db> {
                 solve_failed = true;
                 self.report_solve_error(
                     diagnostic_func_id,
-                    diagnostic_func_name,
+                    &diagnostic_func_name,
                     diagnostic_effects.as_deref(),
                     error,
                 );
@@ -578,7 +578,7 @@ impl<'db> TypeChecker<'db> {
 
             for mc in std::mem::take(&mut deferred) {
                 let resolved_receiver = solver.type_subst().apply(self.db(), mc.receiver_ty);
-                if let Some(entry) = self.env.lookup_method(mc.method.clone(), resolved_receiver) {
+                if let Some(entry) = self.env.lookup_method(&mc.method, resolved_receiver) {
                     // Method found — instantiate the TypeScheme to get fresh types
                     let func_ty = if let Some(scheme) = self.env.lookup_function(entry.func_id) {
                         let instance = crate::typeck::subst::instantiate_scheme_details_for_solver(

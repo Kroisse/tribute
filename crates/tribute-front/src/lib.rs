@@ -39,9 +39,9 @@ use trunk_ir::Symbol;
 /// If `prefix` is empty, returns `name` directly (no allocation).
 /// Otherwise, temporarily appends `::name` to the buffer, creates the symbol,
 /// then restores the buffer to its original length.
-pub fn qualified_symbol(prefix: &mut String, name: Symbol) -> Symbol {
+pub fn qualified_symbol(prefix: &mut String, name: &Symbol) -> Symbol {
     if prefix.is_empty() {
-        name
+        name.clone()
     } else {
         let len = prefix.len();
         prefix.push_str("::");
@@ -57,13 +57,13 @@ pub fn qualified_path_symbol(path: &[Symbol]) -> Option<Symbol> {
     let (name, prefix) = path.split_last()?;
     let mut buf = String::new();
     for segment in prefix {
-        push_prefix(&mut buf, segment.clone());
+        push_prefix(&mut buf, segment);
     }
-    Some(qualified_symbol(&mut buf, name.clone()))
+    Some(qualified_symbol(&mut buf, name))
 }
 
 /// Push a segment onto a prefix buffer. Returns the length before push (for truncate).
-pub fn push_prefix(prefix: &mut String, name: Symbol) -> usize {
+pub fn push_prefix(prefix: &mut String, name: &Symbol) -> usize {
     let len = prefix.len();
     if !prefix.is_empty() {
         prefix.push_str("::");
@@ -73,6 +73,6 @@ pub fn push_prefix(prefix: &mut String, name: Symbol) -> usize {
 }
 
 /// Whether a declaration is the exact root program entrypoint.
-pub(crate) fn is_root_main(name: Symbol, is_root_module: bool) -> bool {
-    is_root_module && name == Symbol::new("main")
+pub(crate) fn is_root_main(name: &Symbol, is_root_module: bool) -> bool {
+    is_root_module && *name == Symbol::new("main")
 }

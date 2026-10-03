@@ -28,16 +28,16 @@ fn intern_type(ctx: &mut IrContext, dialect: Symbol, name: Symbol) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new(dialect, name).build())
 }
 
-fn is_type(ctx: &IrContext, ty: TypeRef, dialect: Symbol, name: Symbol) -> bool {
+fn is_type(ctx: &IrContext, ty: TypeRef, dialect: &Symbol, name: &Symbol) -> bool {
     ctx.types().is_dialect(ty, dialect, name)
 }
 
 fn is_adt_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, Symbol::new("adt"), Symbol::new("struct"))
+    is_type(ctx, ty, &Symbol::new("adt"), &Symbol::new("struct"))
 }
 
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, Symbol::new("adt"), Symbol::new("typeref"))
+    is_type(ctx, ty, &Symbol::new("adt"), &Symbol::new("typeref"))
 }
 
 /// Create an TypeConverter configured for target-agnostic type conversions.
@@ -282,7 +282,7 @@ mod tests {
             );
             let closure = crate::closure_lower::closure_struct_type_ref(&mut ctx);
             assert_eq!(
-                ctx.type_alias_by_name(Symbol::new("Closure")),
+                ctx.type_alias_by_name(&Symbol::new("Closure")),
                 Some(closure)
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());

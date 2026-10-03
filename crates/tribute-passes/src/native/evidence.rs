@@ -48,7 +48,7 @@ pub fn lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) {
 }
 
 fn try_lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
-    if is_evidence_runtime_fn(Symbol::from_dynamic(func_op.sym_name(ctx))) {
+    if is_evidence_runtime_fn(&Symbol::from_dynamic(func_op.sym_name(ctx))) {
         return Ok(());
     }
     lower_effect_abi_to_native(ctx, func_op)?;
@@ -122,8 +122,8 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
 // Phase 2: Rewrite evidence ops inside function bodies
 // =============================================================================
 
-fn is_evidence_runtime_fn(name: Symbol) -> bool {
-    evidence_runtime_symbols().contains(&name)
+fn is_evidence_runtime_fn(name: &Symbol) -> bool {
+    evidence_runtime_symbols().contains(name)
 }
 
 fn rewrite_evidence_ops_in_module(ctx: &mut IrContext, module: Module) {

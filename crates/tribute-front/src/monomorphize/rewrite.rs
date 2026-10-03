@@ -92,7 +92,7 @@ pub fn build_type_rewrite_map<'db>(
         let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
             .iter()
             .map(|type_args| {
-                let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
+                let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
                 (type_args.clone(), mangled)
             })
             .collect();

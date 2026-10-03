@@ -126,7 +126,7 @@ mod tests {
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("empty"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("empty"))),
             )
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
@@ -154,7 +154,7 @@ mod tests {
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("m"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("m"))),
             )
             .region(region)
             .build(&mut ctx);
@@ -173,7 +173,7 @@ mod tests {
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
             .attr(
                 "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("m"))),
+                Attribute::String(ctx.intern_symbol_text(&Symbol::new("m"))),
             )
             .build(&mut ctx);
         let op = ctx.create_op(op_data);

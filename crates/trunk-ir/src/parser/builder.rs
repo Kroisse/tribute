@@ -87,7 +87,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 let dialect = Symbol::from_dynamic(dialect);
                 let name = Symbol::from_dynamic(name);
                 let params = self.build_params(params)?;
-                let attrs = self.build_type_attrs(dialect.clone(), name.clone(), attrs)?;
+                let attrs = self.build_type_attrs(&dialect, &name, attrs)?;
 
                 let mut builder = TypeDataBuilder::new(dialect, name);
                 for (ty, param_attrs) in params {
@@ -136,8 +136,8 @@ impl<'a> ArenaIrBuilder<'a> {
     /// parameter, so an explicit [`PARAM_ATTRS_ATTR`] key is rejected.
     fn build_type_attrs(
         &mut self,
-        dialect: Symbol,
-        name: Symbol,
+        dialect: &Symbol,
+        name: &Symbol,
         attrs: &RawAttrDict<'_>,
     ) -> Result<AttributeMap, ParseError> {
         if attrs.iter().any(|(key, _)| key == PARAM_ATTRS_ATTR) {
@@ -155,8 +155,8 @@ impl<'a> ArenaIrBuilder<'a> {
     /// its inputs and results in canonical [`PARAM_ATTRS_ATTR`] form.
     fn build_function_type_attrs(
         &mut self,
-        dialect: Symbol,
-        name: Symbol,
+        dialect: &Symbol,
+        name: &Symbol,
         attrs: &RawAttrDict<'_>,
         inputs: &[(TypeRef, AttributeMap)],
         results: &[(TypeRef, AttributeMap)],
@@ -209,8 +209,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            Symbol::new("wasm"),
-            Symbol::new("func_sig"),
+            &Symbol::new("wasm"),
+            &Symbol::new("func_sig"),
             attrs,
             &inputs,
             &results,
@@ -243,8 +243,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            Symbol::new("clif"),
-            Symbol::new("func_sig"),
+            &Symbol::new("clif"),
+            &Symbol::new("func_sig"),
             attrs,
             &inputs,
             &results,
@@ -287,8 +287,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            Symbol::new("func"),
-            Symbol::new("func_sig"),
+            &Symbol::new("func"),
+            &Symbol::new("func_sig"),
             attrs,
             &inputs,
             &results,
@@ -324,8 +324,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            Symbol::from_dynamic(dialect),
-            Symbol::from_dynamic(name),
+            &Symbol::from_dynamic(dialect),
+            &Symbol::from_dynamic(name),
             attrs,
             &inputs,
             &results,
@@ -1685,7 +1685,7 @@ core.module @test {
             ("many_one", 2, 1),
         ] {
             let ty = ctx
-                .type_alias_by_name(Symbol::from_dynamic(name))
+                .type_alias_by_name(&Symbol::from_dynamic(name))
                 .expect("function alias");
             let function = func::FuncSig::from_type_ref(&ctx, ty).expect("validated func.func_sig");
             assert_eq!(function.inputs(&ctx).len(), input_count);
@@ -1711,7 +1711,7 @@ core.module @test {
         );
         assert_eq!(
             ctx.op(function).attributes.get_type("type"),
-            ctx.type_alias_by_name(Symbol::new("signature"))
+            ctx.type_alias_by_name(&Symbol::new("signature"))
         );
     }
 
@@ -1744,7 +1744,7 @@ core.module @test {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("native assembly should parse");
-        let contract = ctx.type_alias_by_name(Symbol::new("contract")).unwrap();
+        let contract = ctx.type_alias_by_name(&Symbol::new("contract")).unwrap();
         assert!(clif::FuncSig::from_type_ref(&ctx, contract).is_some());
         assert!(func::FuncSig::from_type_ref(&ctx, contract).is_none());
         let function = ctx
