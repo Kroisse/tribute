@@ -550,21 +550,22 @@ RTTI table `__tribute_rtti`는 index마다 고정 크기 descriptor 레코드 �
 __tribute_rtti: [record; max_index + 1]
 ```
 
-레코드는 8바이트 정렬이다. 포인터는 모두 같은 프로그램 안의 함수나 데이터를
-가리키며, 이름은 UTF-8 바이트이고 NUL로 끝나지 않는다. Index를 받지 않는 enum
-레코드와 필드 배열, 이름은 table 밖의 별도 데이터다.
+`__tribute_rtti`는 8바이트 정렬의 데이터 하나다. Index 레코드 배열 뒤에 index를
+받지 않는 enum 레코드, 필드 배열, 이름 바이트를 둔다. 레코드 안의 참조는
+`__tribute_rtti` 시작 기준의 `u32` offset이며, `0`은 참조가 없음을 뜻한다. 이름은
+UTF-8 바이트이고 NUL로 끝나지 않는다. 링크 시점에야 정해지는 값은 release 함수
+주소뿐이다.
 
 ```text
-record:  ptr release_fn_or_null | u32 kind | u32 field_count | ptr name
-         | u32 name_len | u32 tag_index | ptr enum_record_or_null
-         | ptr fields_or_null
-field:   ptr name | u32 name_len | u32 field_kind
+record:  ptr release_fn_or_null | u32 kind | u32 field_count | u32 name
+         | u32 name_len | u32 tag_index | u32 enum_record | u32 fields | u32 0
+field:   u32 name | u32 name_len | u32 field_kind
 ```
 
 `release_fn`은 그 index의 release 함수다. Null이면 얕은 해제를 뜻한다. Native RTTI
-생성은 table을 함수와 데이터 재배치가 달린 `clif.data`로, table을 통해 해제를
-디스패치하는 `__tribute_deep_release`를 `clif.func`로 IR에 선언한다. 해제할 크기는
-table에 두지 않고 `__tribute_deep_release(ptr, size)`의 인자로 받는다.
+생성은 table을 함수 재배치가 달린 `clif.data`로, table을 통해 해제를 디스패치하는
+`__tribute_deep_release`를 `clif.func`로 IR에 선언한다. 해제할 크기는 table에 두지
+않고 `__tribute_deep_release(ptr, size)`의 인자로 받는다.
 
 | `kind` | 뜻 |
 | ---- | ---- |
