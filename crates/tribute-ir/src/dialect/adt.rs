@@ -70,6 +70,7 @@ mod adt {
 // === Nominal struct layout type ===
 
 use trunk_ir::Symbol;
+use trunk_ir::attr_kind::{Bytes, Type};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;

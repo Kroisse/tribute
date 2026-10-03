@@ -1,5 +1,7 @@
 //! Target-independent operations for the opaque persistent `List` sequence.
 
+use trunk_ir::attr_kind::Type;
+
 #[trunk_ir::dialect]
 mod list {
     fn empty(element_type: Attr<Type>) -> Value<_> {}

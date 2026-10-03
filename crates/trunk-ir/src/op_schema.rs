@@ -153,6 +153,10 @@ pub enum AttributeKind {
     String,
     SymbolRef,
     Bytes,
+    /// A list whose every element has the given kind.
+    List(&'static AttributeKind),
+    /// A dictionary whose every value has the given kind.
+    Dict(&'static AttributeKind),
 }
 
 impl AttributeKind {
@@ -170,6 +174,12 @@ impl AttributeKind {
             (AttributeKind::String, Attribute::String(_)) => true,
             (AttributeKind::SymbolRef, Attribute::SymbolRef(_)) => true,
             (AttributeKind::Bytes, Attribute::Bytes(_)) => true,
+            (AttributeKind::List(element), Attribute::List(items)) => {
+                items.iter().all(|item| element.accepts(item))
+            }
+            (AttributeKind::Dict(value), Attribute::Dict(entries)) => {
+                entries.values().all(|entry| value.accepts(entry))
+            }
             _ => false,
         }
     }
@@ -177,7 +187,7 @@ impl AttributeKind {
 
 impl fmt::Display for AttributeKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+        let name = match self {
             AttributeKind::Any => "any",
             AttributeKind::Bool => "bool",
             AttributeKind::I32 => "i32",
@@ -190,7 +200,10 @@ impl fmt::Display for AttributeKind {
             AttributeKind::String => "String",
             AttributeKind::SymbolRef => "SymbolRef",
             AttributeKind::Bytes => "Bytes",
-        })
+            AttributeKind::List(element) => return write!(f, "[{element}]"),
+            AttributeKind::Dict(value) => return write!(f, "Dict<{value}>"),
+        };
+        f.write_str(name)
     }
 }
 

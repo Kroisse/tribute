@@ -7,6 +7,8 @@
 use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::ops::ControlFlow;
+use trunk_ir::attr_kind::SymbolRef;
+use trunk_ir::attr_kind::Type;
 
 use crate::dialect::adt;
 use itertools::Itertools;

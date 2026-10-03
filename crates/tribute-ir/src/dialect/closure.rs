@@ -1,5 +1,7 @@
 //! Closure dialect — closures and captures.
 
+use trunk_ir::attr_kind::SymbolRef;
+
 #[trunk_ir::dialect]
 mod closure {
     // Types

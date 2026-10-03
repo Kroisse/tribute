@@ -6,7 +6,7 @@ use proc_macro2::{Delimiter, Ident, TokenTree};
 use unsynn::{Parser, ToTokenIter, TokenIter};
 
 mod constraint;
-pub use constraint::{BoundPath, ListExpr, Projection, TypeExpr, TypeVar, ValueExpr};
+pub use constraint::{BoundPath, KindType, ListExpr, Projection, TypeExpr, TypeVar, ValueExpr};
 
 // ============================================================================
 // Parsed types
@@ -57,25 +57,31 @@ pub struct AttrDef {
     pub name: String,
     /// Original ident
     pub raw_ident: Ident,
-    pub ty: AttrType,
+    pub kind: AttrKind,
+    /// `Attr<[K]>`: a list whose every element has kind `kind`.
+    pub list: bool,
     pub optional: bool,
     pub binds: Option<usize>,
 }
 
-#[derive(Clone, Copy)]
-pub enum AttrType {
+/// The kind of a declared attribute, or of a list attribute's elements.
+#[derive(Clone)]
+pub enum AttrKind {
+    /// `_`: any attribute value.
     Any,
-    Bool,
-    I32,
-    I64,
-    U32,
-    U64,
-    F32,
-    F64,
-    Type,
-    String,
-    SymbolRef,
-    Bytes,
+    /// `V::Type`: a type attribute bound to a type variable.
+    BoundType,
+    /// A Rust type implementing `trunk_ir::attr_kind::AttrKind`.
+    Path(KindType),
+}
+
+impl AttrKind {
+    /// Whether this is the string kind, the one kind recognized by name: its
+    /// accessors come with a `<name>_ref` handle accessor, and its setters
+    /// take anything convertible to a `StringArg`.
+    pub fn is_string(&self) -> bool {
+        matches!(self, AttrKind::Path(path) if path.is_ident("String"))
+    }
 }
 
 pub struct Operand {
@@ -233,7 +239,7 @@ fn parse_item(iter: &mut TokenIter) -> Result<DialectItem, String> {
                 }
             }
             for attr in &op.attrs {
-                if !matches!(attr.ty, AttrType::String) {
+                if !attr.kind.is_string() {
                     continue;
                 }
                 let handle = format!("{}_ref", attr.name);
@@ -358,12 +364,12 @@ fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, Str
 
         let ty_ident: Ident =
             Ident::parser(&mut iter).map_err(|e| format!("expected attribute type: {e}"))?;
-        let ty = parse_attr_type(&ty_ident)?;
 
         attrs.push(AttrDef {
             name,
             raw_ident: name_ident,
-            ty,
+            kind: AttrKind::Path(KindType::from_ident(ty_ident)),
+            list: false,
             optional,
             binds: None,
         });
@@ -378,24 +384,6 @@ fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, Str
     }
 
     Ok(attrs)
-}
-
-fn parse_attr_type(ident: &Ident) -> Result<AttrType, String> {
-    match ident.to_string().as_str() {
-        "any" => Ok(AttrType::Any),
-        "bool" => Ok(AttrType::Bool),
-        "i32" => Ok(AttrType::I32),
-        "i64" => Ok(AttrType::I64),
-        "u32" => Ok(AttrType::U32),
-        "u64" => Ok(AttrType::U64),
-        "f32" => Ok(AttrType::F32),
-        "f64" => Ok(AttrType::F64),
-        "Type" => Ok(AttrType::Type),
-        "String" => Ok(AttrType::String),
-        "SymbolRef" => Ok(AttrType::SymbolRef),
-        "Bytes" => Ok(AttrType::Bytes),
-        other => Err(format!("unknown attribute type `{other}`")),
-    }
 }
 
 // ============================================================================
@@ -737,9 +725,41 @@ mod tests {
         assert_eq!(op.attrs.len(), 2);
         assert_eq!(op.attrs[0].name, "type");
         assert!(!op.attrs[0].optional);
-        assert!(matches!(op.attrs[0].ty, AttrType::Type));
+        assert!(matches!(&op.attrs[0].kind, AttrKind::Path(path) if path.is_ident("Type")));
         assert_eq!(op.attrs[1].name, "field");
-        assert!(matches!(op.attrs[1].ty, AttrType::U32));
+        assert!(matches!(&op.attrs[1].kind, AttrKind::Path(path) if path.is_ident("u32")));
+    }
+
+    #[test]
+    fn test_parse_list_attributes() {
+        let module = parse_test_module(quote! {
+            mod rtti {
+                fn layout(fields: Attr<[String]>, sizes: Option<Attr<[u32]>>) {}
+            }
+        })
+        .unwrap();
+
+        let DialectItem::Operation(op) = &module.items[0] else {
+            panic!("expected operation")
+        };
+        assert!(op.attrs[0].list && op.attrs[0].kind.is_string());
+        assert!(op.attrs[1].list && op.attrs[1].optional);
+        assert!(matches!(&op.attrs[1].kind, AttrKind::Path(path) if path.is_ident("u32")));
+
+        for (kind, expected) in [
+            (quote!([_]), "a list attribute needs a named element kind"),
+            (quote!([[u32]]), "invalid attribute kind"),
+            (quote!([u32, u32]), "expected one element type"),
+        ] {
+            let error = parse_test_module(quote! {
+                mod rtti {
+                    fn layout(fields: Attr<#kind>) {}
+                }
+            })
+            .err()
+            .expect(expected);
+            assert!(error.contains(expected), "{error}");
+        }
     }
 
     #[test]
@@ -996,7 +1016,7 @@ mod tests {
                 assert_eq!(td.params.len(), 1);
                 assert_eq!(td.attrs.len(), 1);
                 assert_eq!(td.attrs[0].name, "nullable");
-                assert!(matches!(td.attrs[0].ty, AttrType::Bool));
+                assert!(matches!(&td.attrs[0].kind, AttrKind::Path(path) if path.is_ident("bool")));
             }
             _ => panic!("expected TypeDef"),
         }

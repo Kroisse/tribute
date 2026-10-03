@@ -1,0 +1,44 @@
+error[E0277]: the trait bound `NotAKind: AttrKind` is not satisfied
+ --> tests/ui/attribute_kind_is_not_a_kind.rs:3:1
+  |
+3 | #[trunk_ir::dialect]
+  | ^^^^^^^^^^^^^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `AttrKind` is not implemented for `NotAKind`
+ --> tests/ui/attribute_kind_is_not_a_kind.rs:1:1
+  |
+1 | struct NotAKind;
+  | ^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `AttrKind`:
+            [K]
+            bool
+            f32
+            f64
+            i32
+            i64
+            std::string::String
+            trunk_ir::Attribute
+          and $N others
+  = note: this error originates in the attribute macro `trunk_ir::dialect` (in Nightly builds, run with -Z macro-backtrace for more info)
+
+error[E0277]: the trait bound `NotAKind: AttrKind` is not satisfied
+ --> tests/ui/attribute_kind_is_not_a_kind.rs:5:24
+  |
+5 |     fn bad(value: Attr<NotAKind>) {}
+  |                        ^^^^^^^^ unsatisfied trait bound
+  |
+help: the trait `AttrKind` is not implemented for `NotAKind`
+ --> tests/ui/attribute_kind_is_not_a_kind.rs:1:1
+  |
+1 | struct NotAKind;
+  | ^^^^^^^^^^^^^^^
+  = help: the following other types implement trait `AttrKind`:
+            [K]
+            bool
+            f32
+            f64
+            i32
+            i64
+            std::string::String
+            trunk_ir::Attribute
+          and $N others

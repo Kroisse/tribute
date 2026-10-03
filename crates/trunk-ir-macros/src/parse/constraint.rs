@@ -50,6 +50,40 @@ impl ToTokens for BoundPath {
     }
 }
 
+/// A Rust type naming an attribute kind, such as `u32` or `Dict<Type>`.
+#[derive(Clone)]
+pub struct KindType {
+    tokens: TokenStream,
+    span: Span,
+    /// The name, when the type is a single identifier.
+    ident: Option<String>,
+}
+
+impl KindType {
+    pub(super) fn from_ident(ident: Ident) -> Self {
+        KindType {
+            span: ident.span(),
+            ident: Some(ident.to_string()),
+            tokens: quote!(#ident),
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Whether the type is the single identifier `name`.
+    pub fn is_ident(&self, name: &str) -> bool {
+        self.ident.as_deref() == Some(name)
+    }
+}
+
+impl ToTokens for KindType {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(self.tokens.clone());
+    }
+}
+
 pub struct TypeVar {
     pub name: String,
     pub bounds: Vec<BoundPath>,
@@ -101,6 +135,8 @@ enum Ty {
     Impl(Vec<BoundPath>),
     /// `a::B<C>`, `S::X`, `<S as B>::X`
     Path(TyPath),
+    /// `[T]`
+    Slice(Box<Ty>),
     /// Any other type form (references, slices, ...), which is always rejected.
     Other,
 }
@@ -157,6 +193,15 @@ fn parse_ty(iter: &mut TokenIter) -> Result<Ty, String> {
         Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Parenthesis => {
             iter.next();
             parse_ty_list(g.stream()).map(Ty::Tuple)
+        }
+        Some(TokenTree::Group(g)) if g.delimiter() == Delimiter::Bracket => {
+            iter.next();
+            let mut inner = g.stream().to_token_iter();
+            let element = parse_ty(&mut inner)?;
+            if has_remaining(&inner) {
+                return Err("expected one element type in `[..]`".into());
+            }
+            Ok(Ty::Slice(Box::new(element)))
         }
         Some(TokenTree::Punct(p)) if p.as_char() == '<' => parse_qualified(iter).map(Ty::Path),
         Some(TokenTree::Ident(_)) => parse_ty_path(iter).map(Ty::Path),
@@ -337,11 +382,18 @@ pub(super) fn parse_typed_operation(
         let (wrapper, inner, optional) = unwrap_wrapper(ty)?;
         match wrapper.as_str() {
             "Attr" => {
-                let (ty, binds) = parse_attr_kind(inner, &vars)?;
+                let (kind, list, binds) = match inner {
+                    Ty::Slice(element) => (parse_list_attr_kind(element, &vars)?, true, None),
+                    _ => {
+                        let (kind, binds) = parse_attr_kind(inner, &vars)?;
+                        (kind, false, binds)
+                    }
+                };
                 attrs.push(AttrDef {
                     name,
                     raw_ident: ident.clone(),
-                    ty,
+                    kind,
+                    list,
                     optional,
                     binds,
                 });
@@ -549,27 +601,74 @@ fn unwrap_wrapper(ty: &Ty) -> Result<(String, &Ty, bool), String> {
     }
 }
 
-fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrType, Option<usize>), String> {
+/// The element kind of `Attr<[K]>`: a named kind, not `_`, a projection, or
+/// another list.
+fn parse_list_attr_kind(element: &Ty, vars: &[TypeVar]) -> Result<AttrKind, String> {
+    match parse_attr_kind(element, vars)? {
+        (AttrKind::Path(path), _) => Ok(AttrKind::Path(path)),
+        _ => Err("a list attribute needs a named element kind".into()),
+    }
+}
+
+fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrKind, Option<usize>), String> {
     let path = match ty {
-        Ty::Infer => return Ok((AttrType::Any, None)),
+        Ty::Infer => return Ok((AttrKind::Any, None)),
         Ty::Path(path) => path,
         _ => return Err("invalid attribute kind".into()),
     };
     if path.qself.is_some() {
         return Err("invalid attribute projection".into());
     }
-    if path.leading_colon || path.segments.iter().any(|s| s.args.is_some()) {
-        return Err("invalid attribute kind".into());
+    if let [var, proj] = path.segments.as_slice()
+        && !path.leading_colon
+        && let Some(var) = vars.iter().position(|v| var.ident == v.name)
+    {
+        if proj.ident == "Type" {
+            return Ok((AttrKind::BoundType, Some(var)));
+        }
+        return Err("attribute projection must be V::Type for a declared variable".into());
     }
-    match path.segments.as_slice() {
-        [kind] => parse_attr_type(&kind.ident).map(|kind| (kind, None)),
-        [var, proj] => {
-            if proj.ident == "Type"
-                && let Some(var) = vars.iter().position(|v| var.ident == v.name)
-            {
-                return Ok((AttrType::Type, Some(var)));
+    let ident = match path.segments.as_slice() {
+        [Segment { ident, args: None }] if !path.leading_colon => Some(ident.to_string()),
+        _ => None,
+    };
+    let kind = KindType {
+        tokens: kind_tokens(ty)?,
+        span: path.segments[0].ident.span(),
+        ident,
+    };
+    Ok((AttrKind::Path(kind), None))
+}
+
+/// The tokens of a kind type: a path whose generic arguments are kind types,
+/// such as `Dict<[u32]>`.
+fn kind_tokens(ty: &Ty) -> Result<TokenStream, String> {
+    match ty {
+        Ty::Slice(element) => {
+            let element = kind_tokens(element)?;
+            Ok(quote!([#element]))
+        }
+        Ty::Path(path) if path.qself.is_none() => {
+            let mut segments = Vec::new();
+            for Segment { ident, args } in &path.segments {
+                let Some(args) = args else {
+                    segments.push(quote!(#ident));
+                    continue;
+                };
+                let args = args
+                    .iter()
+                    .map(|arg| match arg {
+                        GenericArg::Type(ty) => kind_tokens(ty),
+                        GenericArg::Lifetime => Err("invalid attribute kind".into()),
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                segments.push(quote!(#ident<#(#args),*>));
             }
-            Err("attribute projection must be V::Type for a declared variable".into())
+            if path.leading_colon {
+                Ok(quote!(:: #(#segments)::*))
+            } else {
+                Ok(quote!(#(#segments)::*))
+            }
         }
         _ => Err("invalid attribute kind".into()),
     }
@@ -590,7 +689,7 @@ fn parse_one(ty: &Ty, vars: &[TypeVar]) -> Result<TypeExpr, String> {
             }
             Ok(TypeExpr::Exact(bound))
         }
-        Ty::Other => Err("invalid single-type constraint".into()),
+        Ty::Slice(_) | Ty::Other => Err("invalid single-type constraint".into()),
     }
 }
 
@@ -696,10 +795,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(op.attrs.len(), 3);
-        assert!(matches!(op.attrs[0].ty, AttrType::Type));
+        assert!(matches!(op.attrs[0].kind, AttrKind::BoundType));
         assert_eq!(op.attrs[0].binds, Some(0));
         assert!(op.attrs[1].optional);
-        assert!(matches!(op.attrs[2].ty, AttrType::Any));
+        assert!(matches!(op.attrs[2].kind, AttrKind::Any));
         assert!(matches!(
             op.operands[0].constraint,
             ValueExpr::Each(TypeExpr::Exact(_))
@@ -826,7 +925,7 @@ mod tests {
             ),
             (
                 quote!(
-                    fn f(x: Attr<::Symbol>) {}
+                    fn f(x: Attr<Dict<'a>>) {}
                 ),
                 "invalid attribute kind",
             ),
@@ -896,12 +995,6 @@ mod tests {
                     fn f<S: A>(x: Values<<S as B>::Xs>) {}
                 ),
                 "qualified projection bound is not declared",
-            ),
-            (
-                quote!(
-                    fn f(t: Attr<U::Type>) {}
-                ),
-                "attribute projection must be V::Type",
             ),
             (
                 quote!(
@@ -1052,18 +1145,6 @@ mod tests {
                     fn f<S: B>(x: Attr<<S as B>::Type>) {}
                 ),
                 "invalid attribute projection",
-            ),
-            (
-                quote!(
-                    fn f(x: Attr<a::b::c>) {}
-                ),
-                "invalid attribute kind",
-            ),
-            (
-                quote!(
-                    fn f(x: Attr<Unknown>) {}
-                ),
-                "unknown attribute type",
             ),
             (
                 quote!(

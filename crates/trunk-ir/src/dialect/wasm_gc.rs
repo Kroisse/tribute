@@ -4,6 +4,8 @@
 //! types with `TypeRef`. A module-wide layout pass must fully convert them to
 //! `wasm` operations before binary emission.
 
+use crate::attr_kind::Type;
+
 #[trunk_ir::dialect]
 mod wasm_gc {
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}

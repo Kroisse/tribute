@@ -6,6 +6,7 @@ crate::register_pure_op!(Null);
 crate::register_pure_op!(PtrAdd);
 // mem.load is intentionally NOT pure: loads depend on mutable memory and may trap.
 
+use crate::attr_kind::Bytes;
 use crate::dialect::core::{IntegerLike, Ptr, ScalarLike};
 
 #[trunk_ir::dialect]
