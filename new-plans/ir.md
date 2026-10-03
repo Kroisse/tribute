@@ -271,6 +271,54 @@ Pass의 보존 선언은 revision 검사가 거부한 결과를 재사용하게 
 소비자는 캐시를 다시 조회한다. 조회 결과나 실패한 분석 계산은 변경 전후에
 부분적으로 캐시되지 않는다.
 
+`AnalysisCache`는 `IrContext`와 별개의 값으로 남으며, pass와 분석 소비자는
+캐시를 명시적인 인자로 받는다. `IrContext`를 캐시와 함께 소유하는 별도
+session이나 editor 계층은 두지 않는다. `IrContext`의 필드는 비공개이고 IR
+변경은 그 메서드로만 일어나므로 `IrContext` 자체가 변경을 관찰하는 editor
+역할을 한다. 캐시를 `IrContext` 안에 두지 않는 이유는 두 가지이다. 분석
+계산은 `&IrContext`를 읽는 동안 캐시에 써야 하고, 공유 읽기만 받는 검증기가
+캐시를 조회하려면 내부 가변성이 필요해져 `IrContext`의 공유 읽기 안전성과
+충돌한다.
+
+하나의 pipeline phase는 캐시 하나를 소유하며, 그 phase의 pass manager, pass,
+pass 검증기와 pass 바깥의 분석 소비자가 이를 공유한다. Pass manager의 검증기는
+입력을 한 번 검사한 뒤 revision을 바꾼 pass 다음에만 실행한다. IR을 바꾸지
+않은 pass는 불변 조건을 깨뜨릴 수 없기 때문이다. 검증기는 IR을 바꾸지 않으므로
+검증 중 계산된 분석은 이후 pass를 위해 캐시에 남는다.
+
+변경 중에 분석 결과를 다루는 소비자는 다음 세 방식 중 하나를 따른다.
+
+- **보유 후 재구축**: 결과의 `Arc`를 쥔 채 rewrite하고, IR을 바꾼 반복마다
+  분석을 무효화한 뒤 다음 반복에서 다시 조회한다. 보유한 결과가 이전 IR의
+  snapshot이라는 사실은 그 결과를 읽는 rewrite가 감수하며 문서화한다.
+- **결정 추출 후 무효화**: 변경 전에 원래 operation에 대한 결정을 모두
+  추출하고 분석을 무효화한 뒤, rewrite는 추출한 결정만 소비한다.
+- **보존한 계획의 재검증**: 읽기 전용 단계에서 만든 계획을 보존하되, 변경
+  단계는 사용 전에 계획이 가리키는 operation identity와 layout을 현재 IR에
+  대조한다.
+
+분석은 기본적으로 context 전체에 의존한다. `AnalysisContext::ir()`는 임의의
+읽기를 허용하므로, 분석 대상 operation이나 그 operation의
+`IsolatedFromAbove` 성질만으로는 읽기 범위가 그 subtree에 국한된다는 것이
+증명되지 않는다. 다른 함수의 변경 뒤에도 한 함수의 결과를 재사용하는 범위
+재사용은 다음 조건을 모두 만족할 때만 허용한다.
+
+- 분석이 대상 subtree와 선언한 선행 분석만 읽는다고 명시적으로 선언한다.
+  선언하지 않은 분석은 context 전체 의존으로 남는다.
+- `IrContext`가 변경 전에 영향받는 `IsolatedFromAbove` 조상을 기록한다. 이동은
+  이전 부모와 새 부모 모두에, operand 변경과 RAUW는 관련 정의·사용자·use-list
+  모두에 영향을 준다. Detached 사용자를 만드는 것도 값의 use를 바꾼다. 범위를
+  알 수 없는 변경, 직접 mutable reference 경로와 전역 metadata 변경은 context
+  전체 무효화로 되돌아간다.
+- 선행 분석이 무효화되면 그에 의존하는 분석도 무효화된다. Module 집계 분석은
+  포함한 함수 어느 하나가 바뀌어도 무효화되며, 다시 계산한 결과가 이전과
+  같으면 그 의존 분석을 유지할 수 있다(early cutoff). 의존 분석의 캐시 hit은
+  반환 전에 선행 분석의 신선도를 확인한다.
+
+범위 재사용을 쓰는 소비자가 생기기 전까지 위 조건은 계약으로만 존재하며,
+모든 분석은 context 전체 revision 검사를 따른다. Pass의 보존 선언은 범위 검사가
+거부한 결과도 재사용하게 할 수 없다.
+
 Native ownership planning의 policy-neutral 입력은 `scf_to_cf` 이후,
 `func_to_clif` 이전 경계에서 fallible 분석이 소유한다. Module 범위 분석은
 module body, `func.func` 목록, 중복 없는 function 정의, 검증된 managed
