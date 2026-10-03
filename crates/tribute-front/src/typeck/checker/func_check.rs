@@ -42,7 +42,7 @@ impl<'db> TypeChecker<'db> {
         let mut checked = FunctionCheck::default();
         // 1. Create a fresh FunctionInferenceContext for this function
         // Use function definition ID for globally unique UniVar IDs
-        let func_id = self.func_def_id(&func.name.clone());
+        let func_id = self.func_def_id(&func.name);
         let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, func_id);
         // Only the exact root `main` is an entrypoint.
         let is_root_main = crate::is_root_main(&func.name, self.current_prefix().is_empty());

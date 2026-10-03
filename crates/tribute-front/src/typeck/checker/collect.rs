@@ -144,10 +144,10 @@ impl<'db> TypeChecker<'db> {
         for decl in decls {
             match decl {
                 Decl::Struct(s) => {
-                    self.predeclare_nominal_type(&s.name.clone(), s.id, &s.type_params);
+                    self.predeclare_nominal_type(&s.name, s.id, &s.type_params);
                 }
                 Decl::Enum(e) => {
-                    self.predeclare_nominal_type(&e.name.clone(), e.id, &e.type_params);
+                    self.predeclare_nominal_type(&e.name, e.id, &e.type_params);
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
@@ -254,7 +254,7 @@ impl<'db> TypeChecker<'db> {
             .build(self.db());
 
         // Register the function with its FuncDefId
-        let func_id = self.func_def_id(&func.name.clone());
+        let func_id = self.func_def_id(&func.name);
         if let Some(origins) = effect_origins {
             self.effect_annotation_origins.insert(func_id, origins);
         }
@@ -325,7 +325,7 @@ impl<'db> TypeChecker<'db> {
             .build(self.db());
 
         // Register the extern function with its FuncDefId
-        let func_id = self.func_def_id(&func.name.clone());
+        let func_id = self.func_def_id(&func.name);
         self.env.register_function(func_id, scheme);
 
         // Register as UFCS method candidate if function has parameters

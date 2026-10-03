@@ -337,8 +337,8 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// The IR symbol of the function with qualified name `name`: its declared
     /// name for an `extern "C"` function, the qualified name otherwise.
-    pub(crate) fn function_symbol(&self, name: Symbol) -> Symbol {
-        self.c_symbols.get(&name).cloned().unwrap_or(name)
+    pub(crate) fn function_symbol(&self, name: &Symbol) -> Symbol {
+        self.c_symbols.get(name).unwrap_or(name).clone()
     }
 
     pub(crate) fn is_logical_source_function(&self, name: &Symbol) -> bool {
@@ -526,7 +526,7 @@ impl<'db> IrLoweringCtx<'db> {
                         .logical_nominal_declarations
                         .contains(id.qualified(self.db)) =>
             {
-                self.adt_typeref(ir, &id.qualified(self.db).clone())
+                self.adt_typeref(ir, id.qualified(self.db))
             }
             TypeKind::Named { .. } => self.anyref_type(ir),
             TypeKind::Func { params, result, .. } => {

@@ -180,7 +180,7 @@ fn lower_function_ref<'db>(
         .ctx
         .function_calling_convention(&name)
         .unwrap_or(signature.convention);
-    ensure_prelude_declaration(builder, location, name.clone(), &signature);
+    ensure_prelude_declaration(builder, location, &name, &signature);
     let worker_ty = func_sig_type(
         builder.ir,
         signature.return_type,
@@ -201,7 +201,7 @@ fn lower_function_ref<'db>(
                     >= tribute_control::func_sig_convention(builder.ir, worker_ty)
         })
         .unwrap_or(worker_ty);
-    let symbol = builder.ctx.function_symbol(name);
+    let symbol = builder.ctx.function_symbol(&name);
     let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
         builder
             .result(ty)
@@ -1012,7 +1012,7 @@ fn lower_extern<'db>(
         signature.param_types,
         signature.convention,
     );
-    let name = ctx.function_symbol(ctx.qualify_name(&decl.name));
+    let name = ctx.function_symbol(&ctx.qualify_name(&decl.name));
     let function = tribute_control::func_declaration(ir, location, &name, callable);
     if let Some(identity) = ctx.compiler_intrinsic(decl.id) {
         let identity_text = ir.intern_symbol_text(&identity);
@@ -1037,13 +1037,13 @@ fn lower_extern<'db>(
 fn ensure_prelude_declaration(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
-    name: Symbol,
+    name: &Symbol,
     signature: &FuncSignature,
 ) {
-    if builder.ctx.is_logical_source_function(&name)
+    if builder.ctx.is_logical_source_function(name)
         || builder
             .ctx
-            .lookup_logical_generated_signature(&name)
+            .lookup_logical_generated_signature(name)
             .is_some()
         || !builder.ctx.mark_logical_extern_emitted(name.clone())
     {
@@ -1999,7 +1999,7 @@ fn named_call(
 ) -> OpRef {
     let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
         .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
-    ensure_prelude_declaration(builder, location, name.clone(), &signature);
+    ensure_prelude_declaration(builder, location, &name, &signature);
     if values.len() != signature.param_types.len() {
         panic!("typechecked call arity disagrees with logical signature for {name}");
     }
@@ -2008,7 +2008,7 @@ fn named_call(
         .zip(signature.param_types.iter().copied())
         .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
         .collect();
-    let symbol = builder.ctx.function_symbol(name);
+    let symbol = builder.ctx.function_symbol(&name);
     op(builder.ir, builder.block, location, "call", |builder| {
         builder
             .operands(values)
@@ -2485,7 +2485,7 @@ fn lower_handler<'db>(
     if params.len() != semantic.params.len() {
         panic!("handler parameter arity disagrees with typed semantic signature");
     }
-    let ability_ref = ctx.ability_ref_type(ir, &ability_id.qualified(ctx.db).clone(), &arguments);
+    let ability_ref = ctx.ability_ref_type(ir, ability_id.qualified(ctx.db), &arguments);
     let parameter_types: Vec<_> = expected_params
         .into_iter()
         .map(|ty| ctx.convert_logical_type(ir, ty))
