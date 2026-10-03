@@ -13,7 +13,7 @@ use crate::context::IrContext;
 use crate::op_schema::AttributeKind;
 use crate::refs::TypeRef;
 use crate::symbol::Symbol;
-use crate::types::{Attribute, StringArg, StringRef};
+use crate::types::{Attribute, AttributeIter, AttributeKey, AttributeMap, StringArg, StringRef};
 
 /// The value domain and typed access of a declared attribute.
 pub trait AttrKind {
@@ -256,6 +256,95 @@ impl<K: AttrHandle> AttrHandle for [K] {
             items: list_items(attr).iter(),
             kind: PhantomData,
         }
+    }
+}
+
+/// `Attr<Dict<V>>`: a dictionary whose every value has kind `V`.
+pub struct Dict<V: ?Sized>(PhantomData<fn() -> V>);
+
+impl<V: AttrKind + ?Sized> AttrKind for Dict<V> {
+    const KIND: AttributeKind = AttributeKind::Dict(&V::KIND);
+    type Out<'ctx> = DictView<'ctx, V>;
+    type In = Vec<(Symbol, V::In)>;
+
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> DictView<'ctx, V> {
+        match attr {
+            Attribute::Dict(entries) => DictView {
+                ctx,
+                entries,
+                kind: PhantomData,
+            },
+            _ => panic!("expected Dict attribute"),
+        }
+    }
+
+    fn write(ctx: &mut IrContext, value: Vec<(Symbol, V::In)>) -> Attribute {
+        Attribute::Dict(
+            value
+                .into_iter()
+                .map(|(key, entry)| (key, V::write(ctx, entry)))
+                .collect(),
+        )
+    }
+}
+
+/// The entries of a dictionary attribute, read as kind `V`.
+pub struct DictView<'ctx, V: ?Sized> {
+    ctx: &'ctx IrContext,
+    entries: &'ctx AttributeMap,
+    kind: PhantomData<fn() -> V>,
+}
+
+impl<'ctx, V: AttrKind + ?Sized> DictView<'ctx, V> {
+    pub fn get(&self, key: impl AttributeKey) -> Option<V::Out<'ctx>> {
+        self.entries.get(key).map(|attr| V::read(self.ctx, attr))
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The entries in key order.
+    pub fn iter(&self) -> DictIter<'ctx, V> {
+        DictIter {
+            ctx: self.ctx,
+            entries: self.entries.iter(),
+            kind: PhantomData,
+        }
+    }
+}
+
+impl<'ctx, V: AttrKind + ?Sized> IntoIterator for DictView<'ctx, V> {
+    type Item = (Symbol, V::Out<'ctx>);
+    type IntoIter = DictIter<'ctx, V>;
+
+    fn into_iter(self) -> DictIter<'ctx, V> {
+        self.iter()
+    }
+}
+
+/// The entries of a dictionary attribute in key order.
+pub struct DictIter<'ctx, V: ?Sized> {
+    ctx: &'ctx IrContext,
+    entries: AttributeIter<'ctx>,
+    kind: PhantomData<fn() -> V>,
+}
+
+impl<'ctx, V: AttrKind + ?Sized> Iterator for DictIter<'ctx, V> {
+    type Item = (Symbol, V::Out<'ctx>);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.entries
+            .next()
+            .map(|(key, attr)| (*key, V::read(self.ctx, attr)))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.entries.size_hint()
     }
 }
 

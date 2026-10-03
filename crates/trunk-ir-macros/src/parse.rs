@@ -6,7 +6,7 @@ use proc_macro2::{Delimiter, Ident, TokenTree};
 use unsynn::{Parser, ToTokenIter, TokenIter};
 
 mod constraint;
-pub use constraint::{BoundPath, ListExpr, Projection, TypeExpr, TypeVar, ValueExpr};
+pub use constraint::{BoundPath, KindType, ListExpr, Projection, TypeExpr, TypeVar, ValueExpr};
 
 // ============================================================================
 // Parsed types
@@ -72,7 +72,7 @@ pub enum AttrKind {
     /// `V::Type`: a type attribute bound to a type variable.
     BoundType,
     /// A Rust type implementing `trunk_ir::attr_kind::AttrKind`.
-    Path(BoundPath),
+    Path(KindType),
 }
 
 impl AttrKind {
@@ -368,7 +368,7 @@ fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, Str
         attrs.push(AttrDef {
             name,
             raw_ident: name_ident,
-            kind: AttrKind::Path(BoundPath::from_ident(ty_ident)),
+            kind: AttrKind::Path(KindType::from_ident(ty_ident)),
             list: false,
             optional,
             binds: None,

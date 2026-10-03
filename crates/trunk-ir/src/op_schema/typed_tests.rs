@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::Symbol;
+use crate::attr_kind::Dict;
 use crate::dialect::core::{BoolLike, I32, IntegerLike, Ptr};
 use crate::dialect::func;
 use crate::ops::DialectOp;
@@ -68,6 +69,8 @@ mod test_typed {
         fn labeled(labels: Attr<[String]>, sizes: Option<Attr<[u32]>>) {}
 
         fn export(linkage: Attr<Linkage>, history: Option<Attr<[Linkage]>>) {}
+
+        fn annotated(notes: Attr<Dict<String>>, sizes: Option<Attr<Dict<[u32]>>>) {}
     }
 
     /// An attribute kind defined next to its dialect.
@@ -681,4 +684,58 @@ fn a_dialect_defines_its_own_attribute_kind() {
         Some(&Attribute::SymbolRef(Symbol::new("public")))
     );
     assert!(test_typed::Export::DEF.verify(&ctx, op.op_ref()).is_empty());
+}
+
+#[test]
+fn dict_attributes_build_read_and_verify_their_values() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let schema = &test_typed::Annotated::DEF.schema;
+    assert_eq!(
+        schema.attributes[0].kind,
+        AttributeKind::Dict(&AttributeKind::String)
+    );
+    assert_eq!(schema.attributes[1].kind.to_string(), "Dict<[u32]>");
+
+    let op = test_typed::Annotated::operands()
+        .notes(vec![
+            (Symbol::new("b"), "second".into()),
+            (Symbol::new("a"), "first".into()),
+        ])
+        .sizes(vec![(Symbol::new("a"), vec![1, 2])])
+        .build(&mut ctx, loc);
+    let notes = op.notes(&ctx);
+    assert_eq!(notes.len(), 2);
+    assert_eq!(notes.get("b"), Some("second"));
+    assert_eq!(notes.get("missing"), None);
+    assert_eq!(
+        notes.iter().collect::<Vec<_>>(),
+        [(Symbol::new("a"), "first"), (Symbol::new("b"), "second")]
+    );
+    let sizes = op.sizes(&ctx).unwrap();
+    assert_eq!(
+        sizes.get("a").map(Iterator::collect::<Vec<_>>),
+        Some(vec![1, 2])
+    );
+    assert!(
+        test_typed::Annotated::DEF
+            .verify(&ctx, op.op_ref())
+            .is_empty()
+    );
+
+    let mixed = op.op_ref();
+    let entries = [(Symbol::new("a"), Attribute::Int(1))]
+        .into_iter()
+        .collect();
+    ctx.op_mut(mixed)
+        .attributes
+        .insert("notes", Attribute::Dict(entries));
+    let violations = test_typed::Annotated::DEF.verify(&ctx, mixed);
+    assert_eq!(
+        violations
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["attribute `notes` must be a Dict<String> attribute"]
+    );
 }

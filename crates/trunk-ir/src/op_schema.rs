@@ -155,6 +155,8 @@ pub enum AttributeKind {
     Bytes,
     /// A list whose every element has the given kind.
     List(&'static AttributeKind),
+    /// A dictionary whose every value has the given kind.
+    Dict(&'static AttributeKind),
 }
 
 impl AttributeKind {
@@ -174,6 +176,9 @@ impl AttributeKind {
             (AttributeKind::Bytes, Attribute::Bytes(_)) => true,
             (AttributeKind::List(element), Attribute::List(items)) => {
                 items.iter().all(|item| element.accepts(item))
+            }
+            (AttributeKind::Dict(value), Attribute::Dict(entries)) => {
+                entries.values().all(|entry| value.accepts(entry))
             }
             _ => false,
         }
@@ -196,6 +201,7 @@ impl fmt::Display for AttributeKind {
             AttributeKind::SymbolRef => "SymbolRef",
             AttributeKind::Bytes => "Bytes",
             AttributeKind::List(element) => return write!(f, "[{element}]"),
+            AttributeKind::Dict(value) => return write!(f, "Dict<{value}>"),
         };
         f.write_str(name)
     }

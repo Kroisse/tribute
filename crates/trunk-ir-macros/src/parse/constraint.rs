@@ -20,20 +20,8 @@ pub struct BoundPath {
 }
 
 impl BoundPath {
-    pub(super) fn from_ident(ident: Ident) -> Self {
-        BoundPath {
-            leading_colon: false,
-            segments: vec![ident],
-        }
-    }
-
     pub fn span(&self) -> Span {
         self.segments[0].span()
-    }
-
-    /// Whether the path is the single identifier `name`.
-    pub fn is_ident(&self, name: &str) -> bool {
-        matches!(self.segments.as_slice(), [ident] if !self.leading_colon && ident == name)
     }
 
     fn key(&self) -> String {
@@ -59,6 +47,40 @@ impl ToTokens for BoundPath {
         } else {
             tokens.extend(quote!(#(#segments)::*));
         }
+    }
+}
+
+/// A Rust type naming an attribute kind, such as `u32` or `Dict<Type>`.
+#[derive(Clone)]
+pub struct KindType {
+    tokens: TokenStream,
+    span: Span,
+    /// The name, when the type is a single identifier.
+    ident: Option<String>,
+}
+
+impl KindType {
+    pub(super) fn from_ident(ident: Ident) -> Self {
+        KindType {
+            span: ident.span(),
+            ident: Some(ident.to_string()),
+            tokens: quote!(#ident),
+        }
+    }
+
+    pub fn span(&self) -> Span {
+        self.span
+    }
+
+    /// Whether the type is the single identifier `name`.
+    pub fn is_ident(&self, name: &str) -> bool {
+        self.ident.as_deref() == Some(name)
+    }
+}
+
+impl ToTokens for KindType {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        tokens.extend(self.tokens.clone());
     }
 }
 
@@ -597,9 +619,6 @@ fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrKind, Option<usize>
     if path.qself.is_some() {
         return Err("invalid attribute projection".into());
     }
-    if path.segments.iter().any(|s| s.args.is_some()) {
-        return Err("invalid attribute kind".into());
-    }
     if let [var, proj] = path.segments.as_slice()
         && !path.leading_colon
         && let Some(var) = vars.iter().position(|v| var.ident == v.name)
@@ -609,7 +628,50 @@ fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrKind, Option<usize>
         }
         return Err("attribute projection must be V::Type for a declared variable".into());
     }
-    Ok((AttrKind::Path(bound_path(path)?), None))
+    let ident = match path.segments.as_slice() {
+        [Segment { ident, args: None }] if !path.leading_colon => Some(ident.to_string()),
+        _ => None,
+    };
+    let kind = KindType {
+        tokens: kind_tokens(ty)?,
+        span: path.segments[0].ident.span(),
+        ident,
+    };
+    Ok((AttrKind::Path(kind), None))
+}
+
+/// The tokens of a kind type: a path whose generic arguments are kind types,
+/// such as `Dict<[u32]>`.
+fn kind_tokens(ty: &Ty) -> Result<TokenStream, String> {
+    match ty {
+        Ty::Slice(element) => {
+            let element = kind_tokens(element)?;
+            Ok(quote!([#element]))
+        }
+        Ty::Path(path) if path.qself.is_none() => {
+            let mut segments = Vec::new();
+            for Segment { ident, args } in &path.segments {
+                let Some(args) = args else {
+                    segments.push(quote!(#ident));
+                    continue;
+                };
+                let args = args
+                    .iter()
+                    .map(|arg| match arg {
+                        GenericArg::Type(ty) => kind_tokens(ty),
+                        GenericArg::Lifetime => Err("invalid attribute kind".into()),
+                    })
+                    .collect::<Result<Vec<_>, String>>()?;
+                segments.push(quote!(#ident<#(#args),*>));
+            }
+            if path.leading_colon {
+                Ok(quote!(:: #(#segments)::*))
+            } else {
+                Ok(quote!(#(#segments)::*))
+            }
+        }
+        _ => Err("invalid attribute kind".into()),
+    }
 }
 
 fn parse_one(ty: &Ty, vars: &[TypeVar]) -> Result<TypeExpr, String> {
@@ -863,7 +925,7 @@ mod tests {
             ),
             (
                 quote!(
-                    fn f(x: Attr<Vec<u32>>) {}
+                    fn f(x: Attr<Dict<'a>>) {}
                 ),
                 "invalid attribute kind",
             ),
