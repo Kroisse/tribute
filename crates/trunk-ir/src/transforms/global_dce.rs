@@ -26,7 +26,7 @@ use crate::rewrite::Module;
 use crate::symbol::Symbol;
 use crate::symbol_table::SymbolTable;
 use crate::transforms::call_graph::CallGraph;
-use crate::walk::{WalkAction, walk_region};
+use crate::walk::{WalkAction, walk_op};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -99,7 +99,7 @@ fn run(
         .filter(|&(name, op)| !is_candidate(op) || is_root(ctx, name, op, config))
         .map(|(name, _)| name)
         .collect();
-    let _ = walk_region::<()>(ctx, module.body(ctx).expect("module body"), &mut |op| {
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         if func::Func::matches(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
@@ -477,14 +477,21 @@ mod tests {
   func.func @only_from_unused() {
     func.return
   }
+  func.func @named_by_module() {
+    func.return
+  }
 }"#,
+        );
+        ctx.op_mut(module.op()).attributes.insert(
+            "entry",
+            Attribute::SymbolRef(Symbol::new("named_by_module")),
         );
 
         eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from([Symbol::new("exported"), Symbol::new("captured")])
+            HashSet::from(["exported", "captured", "named_by_module"].map(Symbol::new))
         );
     }
 

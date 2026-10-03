@@ -200,10 +200,11 @@ pub struct InlineConfig {
     /// all blocks and nested regions).
     pub size_threshold: usize,
     /// If true, always inline callees with exactly one static call site
-    /// (provided they do not escape via `func.constant`).
+    /// (provided they are referenced only as the callee of direct calls).
     pub always_inline_single_call_site: bool,
-    /// If true, inline even when the callee is referenced by `func.constant`
-    /// somewhere. Defaults to false (conservative).
+    /// If true, allow size-threshold inlining even when the callee is
+    /// referenced other than as the callee of a direct call, for example by
+    /// `func.constant`. Defaults to false (conservative).
     pub inline_across_func_constant: bool,
 }
 
