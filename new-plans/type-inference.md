@@ -272,10 +272,14 @@ fn handled(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
 
 "tail에는 제거한 label이 없다"는 본문 검사 안에서의 사실이다. 호출자는 그
 tail을 같은 instance를 담은 row로 채울 수 있다. 대입한 row는
-[중복 처리](#기본-규칙)에 따라 그 instance를 한 번만 담고, operation은
-[evidence 조회](cps-effects.md#evidence-lookup)에 따라 가장 가까운 handler로
-간다. 따라서 함수 안의 handler는 tail을 통해 들어온 같은 instance의 operation도
-처리하며, 결과 row는 그 instance를 실제 발생보다 넓게 담는다:
+[중복 처리](#기본-규칙)에 따라 그 instance를 한 번만 담는다.
+
+시그니처가 약속하는 것은 tail의 effect가 호출자에게 속한다는 점이다. Handler가
+처리하는 것은 handle 지점의 row가 명시한 label이며, tail로 들어온 operation이
+함수 안의 handler에 도달하는 것은 이 타입 규칙이 뜻하는 바가 아니다. 다만
+[evidence 조회](cps-effects.md#evidence-lookup)는 명시 label과 tail을 구별하지
+못하므로, 아래 호출에서는 안쪽 handler가 그 operation을 받는다. 이 결과는
+보장하는 동작이 아니며 프로그램이 이에 의존해서는 안 된다:
 
 ```rust
 fn twice_counted(f: fn() ->{e} Nil) ->{e} Nat {
@@ -286,8 +290,8 @@ fn twice_counted(f: fn() ->{e} Nil) ->{e} Nat {
     }, 0)
 }
 
-// `e`에 State(Nat)가 들어온다. `f`의 State operation은 `twice_counted` 안의
-// handler가 처리하고, 호출자의 handler에는 도달하지 않는다.
+// `e`에 State(Nat)가 들어온다. 시그니처는 `f`의 State operation이 호출자의
+// handler로 간다고 말하지만, 조회는 `twice_counted` 안의 handler를 찾는다.
 run_state(fn() { twice_counted(fn() { State::set(10) }) }, 0)
 ```
 
