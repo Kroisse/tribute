@@ -25,6 +25,7 @@ itoa = "1"
 inventory = "0.3"
 lasso = "0.7"
 string_cache = { version = "0.11", default-features = false }
+malloc_size_of = { version = "0.1", default-features = false }
 string_cache_codegen = "0.11"
 libc = "0.2"
 lsp-server = "0.10"
@@ -103,6 +104,7 @@ trunk-ir-cranelift-backend.workspace = true
 trunk-ir-wasm-backend.workspace = true
 
 [dev-dependencies]
+trunk-ir = { workspace = true, features = ["salsa", "symbol-stats"] }
 wasmparser.workspace = true
 insta.workspace = true
 salsa-test-macros = { path = "crates/salsa-test-macros" }

@@ -321,7 +321,6 @@ impl<'db> ModuleEnv<'db> {
 
 /// The first segment of a qualified namespace.
 fn namespace_root(namespace: &Symbol) -> Symbol {
-    // Interning inside `with_str` would re-enter the interner.
     let spelling = namespace.to_string();
     Symbol::from_dynamic(spelling.split("::").next().unwrap_or_default())
 }

@@ -915,6 +915,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "malloc_size_of"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5d719de8b8f230028cf8192ae4c1b25267cd6b8a99d2747d345a70b8c81aa13"
+
+[[package]]
 name = "matchers"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1507,6 +1513,7 @@ version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ffa8a5dbe8b3f0bbe29d4c3225daafaeead63afdc1b65fc4c01a1384166038e6"
 dependencies = [
+ "malloc_size_of",
  "new_debug_unreachable",
  "parking_lot",
  "phf_shared",
@@ -1885,6 +1892,7 @@ dependencies = [
  "inventory",
  "itertools 0.14.0",
  "lasso",
+ "malloc_size_of",
  "parking_lot",
  "proptest",
  "rustc-hash",

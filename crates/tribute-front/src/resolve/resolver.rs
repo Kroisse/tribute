@@ -215,7 +215,6 @@ impl<'db> Resolver<'db> {
             // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
             // A path keyword names a package-root path, read from nowhere else.
             if let Some(namespace) = name.namespace() {
-                // Interning inside `with_str` would re-enter the interner.
                 let segments: Vec<Symbol> = namespace
                     .to_string()
                     .split("::")
@@ -277,8 +276,6 @@ impl<'db> Resolver<'db> {
     /// `use outer::abilities::Abort` becomes `outer::abilities::Abort`.
     fn imported_namespace(&self, namespace: &Symbol) -> Option<Symbol> {
         let imports = self.module_imports.last()?;
-        // Copy the segments out before interning: interning inside
-        // `with_str` would re-enter the interner.
         let (first, rest) = namespace.with_str(|path| {
             let (first, rest) = path.split_once("::").unwrap_or((path, ""));
             (first.to_owned(), rest.to_owned())

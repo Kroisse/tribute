@@ -1,9 +1,9 @@
 //! Generates the static atom set backing `Symbol`.
 //!
-//! EXPERIMENT: a static atom is an index into one concrete set, so the set
-//! must list every name up front. This script scans the workspace sources for
-//! names passed to `Symbol::new`, declared through `symbols!`, or declared by
-//! a `#[dialect]` module, including the crates downstream of trunk-ir.
+//! A static atom is an index into one set, so the set lists trunk-ir's own
+//! names: those declared by a `#[dialect]` module or `symbols!`, and the
+//! literals passed to `Symbol::new`. A name missing from the set is still a
+//! valid symbol; it is interned in the dynamic set instead.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -12,30 +12,12 @@ use std::path::{Path, PathBuf};
 const MAX_INLINE_LEN: usize = 7;
 
 fn main() {
-    let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let mut roots = vec![manifest_dir.join("src")];
-    if std::env::var_os("TRUNK_IR_SYMBOL_ATOMS_LOCAL_ONLY").is_none() {
-        let workspace = manifest_dir.join("../..");
-        roots.extend(
-            [
-                "crates/tribute-ir/src",
-                "crates/tribute-core/src",
-                "crates/tribute-front/src",
-                "crates/tribute-passes/src",
-                "crates/trunk-ir-cranelift-backend/src",
-                "crates/trunk-ir-wasm-backend/src",
-                "src",
-            ]
-            .map(|path| workspace.join(path)),
-        );
-    }
-    println!("cargo::rerun-if-env-changed=TRUNK_IR_SYMBOL_ATOMS_LOCAL_ONLY");
+    let src = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("src");
+    println!("cargo::rerun-if-changed={}", src.display());
 
     let mut atoms = BTreeSet::new();
-    for root in &roots {
-        println!("cargo::rerun-if-changed={}", root.display());
-        scan_dir(root, &mut atoms);
-    }
+    scan_dir(&src, &mut atoms);
+    atoms.retain(|name| name.len() > MAX_INLINE_LEN);
 
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("symbol_atom.rs");
     string_cache_codegen::AtomType::new("symbol::SymbolAtom", "symbol_atom!")
@@ -45,48 +27,103 @@ fn main() {
 }
 
 fn scan_dir(dir: &Path, atoms: &mut BTreeSet<String>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
+    for entry in std::fs::read_dir(dir).unwrap().flatten() {
         let path = entry.path();
         if path.is_dir() {
             scan_dir(&path, atoms);
         } else if path.extension().is_some_and(|ext| ext == "rs") {
-            let Ok(text) = std::fs::read_to_string(&path) else {
-                continue;
-            };
-            scan_literals(&text, atoms);
-            if path.components().any(|part| part.as_os_str() == "dialect") {
-                scan_identifiers(&text, atoms);
+            let text = std::fs::read_to_string(&path).unwrap();
+            scan_symbol_literals(&text, atoms);
+            scan_dialects(&text, atoms);
+        }
+    }
+}
+
+/// Collect `Symbol::new("..")` arguments, `symbols!` entries, and `&str`
+/// constants, which name attributes passed to `Symbol::new`.
+fn scan_symbol_literals(text: &str, atoms: &mut BTreeSet<String>) {
+    for marker in [
+        "Symbol::new(\"",
+        "=> \"",
+        ": &str = \"",
+        ": &'static str = \"",
+    ] {
+        for (start, _) in text.match_indices(marker) {
+            let rest = &text[start + marker.len()..];
+            if let Some(end) = rest.find('"') {
+                insert_name(&rest[..end], atoms);
             }
         }
     }
 }
 
-/// Collect identifier-like string literals: every `Symbol::new` and
-/// `symbols!` argument is one.
-fn scan_literals(text: &str, atoms: &mut BTreeSet<String>) {
-    for literal in text.split('"').skip(1).step_by(2) {
-        if literal.len() > MAX_INLINE_LEN
-            && literal.len() <= 64
-            && literal
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'.' | b':' | b'$'))
-        {
-            atoms.insert(literal.to_owned());
+/// Collect the names a `#[dialect]` module declares: the dialect, its
+/// operations, its types, and their attributes.
+fn scan_dialects(text: &str, atoms: &mut BTreeSet<String>) {
+    for (start, _) in text.match_indices("dialect]") {
+        let Some(rest) = text[start + "dialect]".len()..]
+            .trim_start()
+            .strip_prefix("mod ")
+        else {
+            continue;
+        };
+        let Some(open) = rest.find('{') else { continue };
+        let body = &rest[open..open + matching_brace(&rest[open..])];
+        insert_name(rest[..open].trim(), atoms);
+        for (marker, snake) in [("fn ", false), ("struct ", true)] {
+            for (at, _) in body.match_indices(marker) {
+                let name = identifier(&body[at + marker.len()..]);
+                if snake {
+                    insert_name(&snake_case(name), atoms);
+                } else {
+                    insert_name(name, atoms);
+                }
+            }
+        }
+        for marker in [": Attr<", ": Option<Attr<"] {
+            for (at, _) in body.match_indices(marker) {
+                let before = &body[..at];
+                let begin = before
+                    .rfind(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '#'))
+                    .map_or(0, |index| index + 1);
+                insert_name(&before[begin..], atoms);
+            }
+        }
+        for (at, _) in body.match_indices("#[attr(") {
+            insert_name(identifier(&body[at + "#[attr(".len()..]), atoms);
         }
     }
 }
 
-/// Collect identifiers of dialect sources: dialect, operation, type and
-/// attribute names are declared as Rust identifiers.
-fn scan_identifiers(text: &str, atoms: &mut BTreeSet<String>) {
-    for word in text.split(|c: char| !(c.is_ascii_alphanumeric() || c == '_')) {
-        if word.len() > MAX_INLINE_LEN {
-            atoms.insert(word.to_owned());
-            atoms.insert(snake_case(word));
+/// The length of the text from an opening brace through its matching close.
+fn matching_brace(text: &str) -> usize {
+    let mut depth = 0usize;
+    for (index, c) in text.char_indices() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth -= 1;
+                if depth == 0 {
+                    return index + 1;
+                }
+            }
+            _ => {}
         }
+    }
+    text.len()
+}
+
+fn identifier(text: &str) -> &str {
+    let end = text
+        .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_' || c == '#'))
+        .unwrap_or(text.len());
+    &text[..end]
+}
+
+fn insert_name(name: &str, atoms: &mut BTreeSet<String>) {
+    let name = name.strip_prefix("r#").unwrap_or(name);
+    if !name.is_empty() {
+        atoms.insert(name.to_owned());
     }
 }
 
