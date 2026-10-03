@@ -58,6 +58,8 @@ pub struct ModuleCheckResult<'db> {
     /// Exact instantiated types selected for direct call callees.
     pub function_instances: Vec<(NodeId, super::FunctionInstance<'db>)>,
     pub local_instances: Vec<(NodeId, super::LocalCallableInstance<'db>)>,
+    /// Non-identity evidence selections of calls and resumes.
+    pub evidence_plans: Vec<(NodeId, Vec<super::EvidenceStep<'db>>)>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
     /// Exact semantic operation instances for handler arms.
@@ -87,6 +89,7 @@ pub(crate) struct FunctionCheck<'db> {
     pub(super) node_types: HashMap<NodeId, Type<'db>>,
     pub(super) function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
     pub(super) local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
+    pub(super) evidence_plans: HashMap<NodeId, Vec<super::EvidenceStep<'db>>>,
     pub(super) handler_operations:
         HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     pub(super) perform_operations:
@@ -126,6 +129,7 @@ pub struct TypeChecker<'db> {
     node_types: HashMap<NodeId, Type<'db>>,
     function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
     local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
+    evidence_plans: HashMap<NodeId, Vec<super::EvidenceStep<'db>>>,
     /// Exact handler operation instances collected from each checked function.
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
@@ -195,6 +199,7 @@ impl<'db> TypeChecker<'db> {
             node_types: HashMap::new(),
             function_instances: HashMap::new(),
             local_instances: HashMap::new(),
+            evidence_plans: HashMap::new(),
             handler_operations: HashMap::new(),
             perform_operations: HashMap::new(),
             lambda_signatures: HashMap::new(),
@@ -314,6 +319,8 @@ impl<'db> TypeChecker<'db> {
         function_instances.sort_by_key(|(id, _)| *id);
         let mut local_instances: Vec<_> = self.local_instances.into_iter().collect();
         local_instances.sort_by_key(|(id, _)| *id);
+        let mut evidence_plans: Vec<_> = self.evidence_plans.into_iter().collect();
+        evidence_plans.sort_by_key(|(id, _)| *id);
         let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
         handler_operations.sort_by_key(|(id, _)| *id);
         let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();
@@ -333,6 +340,7 @@ impl<'db> TypeChecker<'db> {
             node_types,
             function_instances,
             local_instances,
+            evidence_plans,
             ability_conventions,
             handler_operations,
             perform_operations,
@@ -387,6 +395,7 @@ impl<'db> TypeChecker<'db> {
         self.node_types.extend(checked.node_types);
         self.function_instances.extend(checked.function_instances);
         self.local_instances.extend(checked.local_instances);
+        self.evidence_plans.extend(checked.evidence_plans);
         self.handler_operations.extend(checked.handler_operations);
         self.perform_operations.extend(checked.perform_operations);
         self.lambda_signatures.extend(checked.lambda_signatures);

@@ -38,6 +38,8 @@ pub(crate) struct HandleContext<'db> {
     pub body_ty: Type<'db>,
     pub body_effect: EffectRow<'db>,
     pub handled_effects: EffectRow<'db>,
+    /// The evidence scope of the handle body, once conversion has entered it.
+    pub evidence_body: Option<usize>,
 }
 
 /// Function-level type inference context.
@@ -181,6 +183,9 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Deferred UFCS method calls whose receiver type is still a UniVar.
     /// Resolved after constraint solving when UniVars have been substituted.
     deferred_methods: Vec<DeferredMethodCall<'db>>,
+
+    /// Evidence scopes and the calls and resumes made in them.
+    pub(crate) evidence: super::evidence_plan::EvidenceTracker<'db>,
 }
 
 /// A UFCS method call deferred until after constraint solving.
@@ -250,6 +255,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             handle_ctx_stack: Vec::new(),
             resolved_methods: HashMap::new(),
             deferred_methods: Vec::new(),
+            evidence: Default::default(),
         }
     }
 

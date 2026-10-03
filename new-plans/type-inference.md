@@ -322,9 +322,10 @@ callee 선언 row의 명시 `L`과, callee의 tail 인스턴스가 명시한 `L`
 | 2 | Callee의 명시 `L`과 tail의 `L`이 모두 caller의 명시 `L`이다 | `g: fn(fn() ->{e} Nil) ->{State \| e} Nil`을 `e := {State \| e'}`로 호출 |
 
 `k = 2`는 [중복 처리](#기본-규칙)로 대입한 row에서는 보이지 않으므로, 이 선택은
-병합한 row가 아니라 인스턴스화에서 계산한다. Caller row가 명시하지 않은 label은
-그대로 전달한다. 이 결과는 typechecking이 각 호출에 확정하는 metadata이며 이후
-단계는 signature나 본문 형상에서 다시 계산하지 않는다. 표현과 lowering은
+병합한 row가 아니라 인스턴스화에서 계산한다. Caller row가 명시하지 않은 label과
+handler marker가 없는 ambient `Io`는 그대로 전달한다. 이 결과는 typechecking이
+각 호출에 확정하는 metadata이며 이후 단계는 signature나 본문 형상에서 다시
+계산하지 않는다. 표현과 lowering은
 [cps-effects.md](cps-effects.md#row-directed-evidence)를 따른다.
 
 이 규칙은 callee row의 tail이 row 변수 하나일 때를 정의한다. 선언 row가 여러 row
@@ -336,7 +337,12 @@ handler를 받아야 하는 경우, 즉 한 tail에는 caller의 명시 label이
 caller tail의 같은 instance가 들어가는 경우의 dispatch는 보장하지 않는다.
 
 Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 바깥 그대로
-본다. Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
+본다. 바깥 row가 처리하는 label을 명시하면 handle body는 그 바깥 handler를 보지
+않는다. Body row는 그 label을 한 번만 명시하므로 body 안에서 바깥 handler에
+닿는 자리가 없고, 바깥 handler가 남아 있으면 새 handler와 바깥 tail의 handler
+사이에 끼어 tail 자리를 밀어낸다. 그래서 handle 설치도 `k = 0`인 호출처럼 그
+label을 먼저 가린다. 바깥 row가 그 label을 tail로만 가지면 가리지 않는다.
+Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
 operation과 호출은 handle 바깥의 handler를 본다. `resume`의 handler 선택은
 [abilities.md](abilities.md#resume과-handler-선택)를 따른다.
 

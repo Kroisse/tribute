@@ -22,6 +22,7 @@ mod checker;
 mod constraint;
 mod context;
 pub mod effect_row;
+mod evidence_plan;
 mod func_context;
 mod solver;
 pub mod subst;
@@ -225,11 +226,49 @@ pub struct LocalCallableInstance<'db> {
     pub callable: Type<'db>,
 }
 
+/// One change a call makes to its caller's evidence before the callee runs.
+///
+/// A call keeps the caller's evidence except for the ability instances its
+/// plan names (`new-plans/type-inference.md`, 호출의 evidence 선택).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum EvidenceStep<'db> {
+    /// The callee reaches this caller-explicit instance only through its row
+    /// tail, so the caller's handler is hidden from it.
+    Mask(crate::ast::Effect<'db>),
+    /// One more callee position takes the caller's handler for this instance.
+    Dup(crate::ast::Effect<'db>),
+}
+
+impl<'db> EvidenceStep<'db> {
+    /// The ability instance this step changes.
+    pub fn instance(&self) -> &crate::ast::Effect<'db> {
+        match self {
+            Self::Mask(instance) | Self::Dup(instance) => instance,
+        }
+    }
+
+    /// Apply `map` to the type arguments of the instance.
+    pub fn map_types(&self, mut map: impl FnMut(Type<'db>) -> Type<'db>) -> Self {
+        let instance = self.instance();
+        let instance = crate::ast::Effect {
+            ability_id: instance.ability_id,
+            args: instance.args.iter().map(|ty| map(*ty)).collect(),
+        };
+        match self {
+            Self::Mask(_) => Self::Mask(instance),
+            Self::Dup(_) => Self::Dup(instance),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ExpressionTypeMetadata<'db> {
     pub node_types: Vec<(NodeId, Type<'db>)>,
     pub function_instances: Vec<(NodeId, FunctionInstance<'db>)>,
     pub local_instances: Vec<(NodeId, LocalCallableInstance<'db>)>,
+    /// Non-identity evidence selections of calls, resumes, and handle
+    /// installations, keyed by their expressions.
+    pub evidence_plans: Vec<(NodeId, Vec<EvidenceStep<'db>>)>,
 }
 
 /// Constructor declarations and exact schemes for cloned enum variants.
@@ -359,6 +398,7 @@ pub fn typecheck_module<'db>(
             node_types: result.node_types,
             function_instances: result.function_instances,
             local_instances: result.local_instances,
+            evidence_plans: result.evidence_plans,
         },
         result.ability_conventions,
         ability_schemas(&result.ability_definitions),

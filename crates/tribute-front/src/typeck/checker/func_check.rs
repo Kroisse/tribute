@@ -102,6 +102,7 @@ impl<'db> TypeChecker<'db> {
             };
 
         ctx.effect_contract = declared_effect;
+        ctx.evidence.enter_callable(declared_effect);
         // 3. Check body against expected return type
         let body = self.check_expr_with_ctx(&mut ctx, &func.body, Mode::Check(expected_return));
         let mut reported_undeclared = false;
@@ -147,6 +148,7 @@ impl<'db> TypeChecker<'db> {
         let body_effect_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
         let deferred_methods = ctx.take_deferred_methods();
+        let evidence = std::mem::take(&mut ctx.evidence);
         let next_row_var = ctx.next_row_var();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
@@ -474,6 +476,12 @@ impl<'db> TypeChecker<'db> {
                 .collect();
             checked.function_instances.insert(node, instance);
         }
+        checked.evidence_plans = evidence.plans(self.db(), |row| {
+            let row = row_subst.apply(self.db(), row);
+            crate::typeck::solver::map_effect_row_type_args(self.db(), row, |ty| {
+                substitution.apply(ty)
+            })
+        });
         for (arm_id, operation) in func_handler_operations {
             checked.handler_operations.insert(
                 arm_id,
