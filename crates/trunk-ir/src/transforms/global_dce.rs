@@ -15,7 +15,6 @@
 //! removes unreachable functions via BFS.
 
 use std::collections::{HashSet, VecDeque};
-use std::ops::ControlFlow;
 
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
@@ -26,7 +25,6 @@ use crate::rewrite::Module;
 use crate::symbol::Symbol;
 use crate::symbol_table::SymbolTable;
 use crate::transforms::call_graph::CallGraph;
-use crate::walk::{WalkAction, walk_op};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -99,17 +97,8 @@ fn run(
         .filter(|&(name, op)| !is_candidate(op) || is_root(ctx, name, op, config))
         .map(|(name, _)| name)
         .collect();
-    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
-        if func::Func::matches(ctx, op) {
-            return ControlFlow::Continue(WalkAction::Skip);
-        }
-        ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
-            roots.insert(reference);
-        });
-        ControlFlow::Continue(WalkAction::Advance)
-    });
-
     let graph = analyses.require::<CallGraph>(ctx, module.op());
+    roots.extend(&graph.module_references);
     let reachable = compute_reachable(&graph, roots);
 
     // A function containing a reachable function definition is kept with it.

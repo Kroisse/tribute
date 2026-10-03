@@ -52,6 +52,7 @@
 //! Module (ability.handle_dispatch lowered)
 //!     │
 //!     ├─── Representation/ABI Boundary (run_target_to_boundary_exit) ──┤
+//!     ▼ global DCE (unreachable functions skip target lowering)
 //!     ▼ inline_functions
 //!     ▼ target ABI validation → CPS signature physicalization
 //!     ▼ root entry bridge
@@ -1012,6 +1013,9 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 
     let mut analyses = AnalysisCache::new();
 
+    // Drop unreachable functions first, so that no later pass lowers them.
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, &mut analyses);
+
     // General function inlining. The pass is single-block-only and cf-free,
     // so its output stays within dialects WASM lowering already handles.
     trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
@@ -1040,11 +1044,15 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     debug_validate_value_integrity(ctx, m, "before native target lowering");
 
+    let mut analyses = AnalysisCache::new();
+
+    // Drop unreachable functions first, so that no later pass lowers them.
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, &mut analyses);
+
     // General function inlining. Single-block-only (no `cf` dialect
     // dependency), so it preserves the caller's block structure. That
     // keeps `evidence_to_native`'s per-block producer/consumer correlation
     // assumptions intact, and lets the same pass work on both backend paths.
-    let mut analyses = AnalysisCache::new();
     trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
 
     enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
