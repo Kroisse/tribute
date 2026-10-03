@@ -12,7 +12,8 @@
 | 핸들러 디스패치 | Evidence passing | 런타임 스택 탐색 |
 | Continuation | One-shot, scoped | Multi-shot |
 | Polymorphic 함수 | Monomorphization + 필요한 Evidence/CPS convention | Uniform erasure, dictionary passing |
-| Evidence 구조 | 포인터 전달 + 정렬된 slice | bitmap, HashMap, 연결 리스트 |
+| Evidence 구조 | 포인터 전달 + 정렬된 slice, 같은 ability는 marker 연결 | bitmap, HashMap, 연결 리스트 |
+| Tail effect | Row 위치로 정적 선택 | 가장 가까운 handler |
 | 메모리 관리 (Cranelift) | Reference counting | Tracing GC |
 | GC (WasmGC) | 런타임 내장 GC | - |
 
@@ -357,17 +358,21 @@ resumption을 만들지 않으며 `resume_token` block argument도 받지 않는
 
 ### Evidence와 dispatch의 소유권
 
-Evidence는 ability identity를 key로 하는 불변 Marker 배열이다. Shared effect ABI는
-명시적 evidence operand와 `effect.extend`, `effect.dispatch_tail`,
+Evidence는 ability identity를 key로 하는 불변 Marker 배열이며 같은 ability의
+가려진 marker를 연결로 유지한다. Shared effect ABI는 명시적 evidence operand와
+`effect.extend`, `effect.mask`, `effect.dup`, `effect.dispatch_tail`,
 `effect.dispatch_cps`만 사용하며 concrete marker field나 runtime layout을 선택하지
 않는다. Native는 runtime pointer를, WasmGC는 GC array/struct reference를 사용한다.
 Target별 field layout, runtime 함수와 dispatch signature는
 [cps-effects.md](cps-effects.md#handle-evidence-extension--handler-closures)가 정의한다.
 
 Handler 설치는 새 evidence 값을 만든다. 같은 ability instance의 nested handler는
-기존 marker를 대체하므로 lookup이 가장 가까운 handler를 선택한다. 각 handler
+기존 marker를 가리며, lookup은 가장 위의 marker를 선택한다. 각 handler
 인스턴스의 `prompt_tag`는 runtime에 생성하며, 한 handle의 모든 ability marker가
-같은 prompt를 공유한다. 그 밖의 호출은 같은 evidence 값을 전달한다.
+같은 prompt를 공유한다. 호출은 typechecking이 정한 evidence 선택에 따라 caller
+evidence를 그대로 전달하거나 `mask`/`dup`한 값을 전달한다
+([cps-effects.md](cps-effects.md#row-directed-evidence)). Handler arm은 handle을
+설치한 지점의 evidence로 실행한다.
 
 Source-logical `handle`은 shared legalization에서 explicit evidence 입력과 dispatch
 closure를 가진 `ability.handle_dispatch`가 된다. `resolve_evidence`는
