@@ -1,5 +1,7 @@
 //! Arena-based func dialect.
 
+use crate::attr_kind::SymbolRef;
+use crate::attr_kind::Type;
 use crate::op_interface::{
     CallableExitModel, CallableExitOps, ControlFlowInterfaceError, IndirectCallLikeModel,
     IndirectCallLikeOps,

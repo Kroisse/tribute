@@ -1,5 +1,7 @@
 //! Arena-based wasm dialect.
 
+use crate::attr_kind::SymbolRef;
+use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
 use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};

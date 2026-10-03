@@ -8,6 +8,7 @@
 //! backend-ready boundary.
 
 use std::fmt;
+use trunk_ir::attr_kind::Type;
 
 use std::collections::HashMap;
 

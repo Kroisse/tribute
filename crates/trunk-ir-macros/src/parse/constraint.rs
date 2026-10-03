@@ -20,8 +20,20 @@ pub struct BoundPath {
 }
 
 impl BoundPath {
+    pub(super) fn from_ident(ident: Ident) -> Self {
+        BoundPath {
+            leading_colon: false,
+            segments: vec![ident],
+        }
+    }
+
     pub fn span(&self) -> Span {
         self.segments[0].span()
+    }
+
+    /// Whether the path is the single identifier `name`.
+    pub fn is_ident(&self, name: &str) -> bool {
+        matches!(self.segments.as_slice(), [ident] if !self.leading_colon && ident == name)
     }
 
     fn key(&self) -> String {
@@ -348,17 +360,17 @@ pub(super) fn parse_typed_operation(
         let (wrapper, inner, optional) = unwrap_wrapper(ty)?;
         match wrapper.as_str() {
             "Attr" => {
-                let (ty, list, binds) = match inner {
-                    Ty::Slice(element) => (parse_list_attr_kind(element)?, true, None),
+                let (kind, list, binds) = match inner {
+                    Ty::Slice(element) => (parse_list_attr_kind(element, &vars)?, true, None),
                     _ => {
-                        let (ty, binds) = parse_attr_kind(inner, &vars)?;
-                        (ty, false, binds)
+                        let (kind, binds) = parse_attr_kind(inner, &vars)?;
+                        (kind, false, binds)
                     }
                 };
                 attrs.push(AttrDef {
                     name,
                     raw_ident: ident.clone(),
-                    ty,
+                    kind,
                     list,
                     optional,
                     binds,
@@ -569,37 +581,35 @@ fn unwrap_wrapper(ty: &Ty) -> Result<(String, &Ty, bool), String> {
 
 /// The element kind of `Attr<[K]>`: a named kind, not `_`, a projection, or
 /// another list.
-fn parse_list_attr_kind(element: &Ty) -> Result<AttrType, String> {
-    match parse_attr_kind(element, &[])? {
-        (AttrType::Any, _) => Err("a list attribute needs a named element kind".into()),
-        (kind, _) => Ok(kind),
+fn parse_list_attr_kind(element: &Ty, vars: &[TypeVar]) -> Result<AttrKind, String> {
+    match parse_attr_kind(element, vars)? {
+        (AttrKind::Path(path), _) => Ok(AttrKind::Path(path)),
+        _ => Err("a list attribute needs a named element kind".into()),
     }
 }
 
-fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrType, Option<usize>), String> {
+fn parse_attr_kind(ty: &Ty, vars: &[TypeVar]) -> Result<(AttrKind, Option<usize>), String> {
     let path = match ty {
-        Ty::Infer => return Ok((AttrType::Any, None)),
+        Ty::Infer => return Ok((AttrKind::Any, None)),
         Ty::Path(path) => path,
         _ => return Err("invalid attribute kind".into()),
     };
     if path.qself.is_some() {
         return Err("invalid attribute projection".into());
     }
-    if path.leading_colon || path.segments.iter().any(|s| s.args.is_some()) {
+    if path.segments.iter().any(|s| s.args.is_some()) {
         return Err("invalid attribute kind".into());
     }
-    match path.segments.as_slice() {
-        [kind] => parse_attr_type(&kind.ident).map(|kind| (kind, None)),
-        [var, proj] => {
-            if proj.ident == "Type"
-                && let Some(var) = vars.iter().position(|v| var.ident == v.name)
-            {
-                return Ok((AttrType::Type, Some(var)));
-            }
-            Err("attribute projection must be V::Type for a declared variable".into())
+    if let [var, proj] = path.segments.as_slice()
+        && !path.leading_colon
+        && let Some(var) = vars.iter().position(|v| var.ident == v.name)
+    {
+        if proj.ident == "Type" {
+            return Ok((AttrKind::BoundType, Some(var)));
         }
-        _ => Err("invalid attribute kind".into()),
+        return Err("attribute projection must be V::Type for a declared variable".into());
     }
+    Ok((AttrKind::Path(bound_path(path)?), None))
 }
 
 fn parse_one(ty: &Ty, vars: &[TypeVar]) -> Result<TypeExpr, String> {
@@ -723,10 +733,10 @@ mod tests {
         })
         .unwrap();
         assert_eq!(op.attrs.len(), 3);
-        assert!(matches!(op.attrs[0].ty, AttrType::Type));
+        assert!(matches!(op.attrs[0].kind, AttrKind::BoundType));
         assert_eq!(op.attrs[0].binds, Some(0));
         assert!(op.attrs[1].optional);
-        assert!(matches!(op.attrs[2].ty, AttrType::Any));
+        assert!(matches!(op.attrs[2].kind, AttrKind::Any));
         assert!(matches!(
             op.operands[0].constraint,
             ValueExpr::Each(TypeExpr::Exact(_))
@@ -853,7 +863,7 @@ mod tests {
             ),
             (
                 quote!(
-                    fn f(x: Attr<::Symbol>) {}
+                    fn f(x: Attr<Vec<u32>>) {}
                 ),
                 "invalid attribute kind",
             ),
@@ -923,12 +933,6 @@ mod tests {
                     fn f<S: A>(x: Values<<S as B>::Xs>) {}
                 ),
                 "qualified projection bound is not declared",
-            ),
-            (
-                quote!(
-                    fn f(t: Attr<U::Type>) {}
-                ),
-                "attribute projection must be V::Type",
             ),
             (
                 quote!(
@@ -1079,18 +1083,6 @@ mod tests {
                     fn f<S: B>(x: Attr<<S as B>::Type>) {}
                 ),
                 "invalid attribute projection",
-            ),
-            (
-                quote!(
-                    fn f(x: Attr<a::b::c>) {}
-                ),
-                "invalid attribute kind",
-            ),
-            (
-                quote!(
-                    fn f(x: Attr<Unknown>) {}
-                ),
-                "unknown attribute type",
             ),
             (
                 quote!(

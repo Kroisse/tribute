@@ -87,8 +87,8 @@ fn call_indirect<S: FuncSig>(
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
 - Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
   in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
-  `u64`, `f32`, `f64`), `String`, `Symbol`, and the markers
-  `attr_kind::{Type, QualifiedName, Bytes}`. A kind defines its schema domain
+  `u64`, `f32`, `f64`), `String`, and the markers
+  `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain
   and the values its accessor returns and its builder setter takes, so a
   dialect adds a kind by implementing the trait. `_` accepts any attribute.
 - A list attribute's accessor iterates its elements, and its builder setter

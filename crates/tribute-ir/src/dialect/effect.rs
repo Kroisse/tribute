@@ -5,6 +5,8 @@
 //! dispatch semantics without exposing Marker fields, handler-table storage, or
 //! closure function/environment layout to shared lowering passes.
 
+use trunk_ir::attr_kind::Type;
+
 #[trunk_ir::dialect]
 mod effect {
     /// Allocate the runtime-unique prompt token for one dynamic handler

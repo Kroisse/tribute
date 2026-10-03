@@ -175,6 +175,7 @@ fn hash_type(ctx: &IrContext, ty: TypeRef) -> u32 {
 
 // === Pure operation registrations ===
 
+use trunk_ir::attr_kind::Type;
 use trunk_ir::op_interface::{CallableExitModel, CallableExitOps, ControlFlowInterfaceError};
 
 impl CallableExitModel for Perform {

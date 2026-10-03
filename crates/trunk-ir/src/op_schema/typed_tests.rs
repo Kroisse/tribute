@@ -66,6 +66,35 @@ mod test_typed {
         fn maybe_call<S: func::FuncSig>(sig: Option<Attr<S::Type>>, args: Values<S::Inputs>) {}
 
         fn labeled(labels: Attr<[String]>, sizes: Option<Attr<[u32]>>) {}
+
+        fn export(linkage: Attr<Linkage>, history: Option<Attr<[Linkage]>>) {}
+    }
+
+    /// An attribute kind defined next to its dialect.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+    pub enum Linkage {
+        Private,
+        Public,
+    }
+
+    impl crate::attr_kind::AttrKind for Linkage {
+        const KIND: AttributeKind = AttributeKind::SymbolRef;
+        type Out<'ctx> = Linkage;
+        type In = Linkage;
+
+        fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> Linkage {
+            match attr {
+                Attribute::SymbolRef(name) if *name == Symbol::new("public") => Linkage::Public,
+                _ => Linkage::Private,
+            }
+        }
+
+        fn write(_: &mut IrContext, value: Linkage) -> Attribute {
+            Attribute::SymbolRef(Symbol::new(match value {
+                Linkage::Private => "private",
+                Linkage::Public => "public",
+            }))
+        }
     }
 
     impl crate::ops::Verify for Nonempty {
@@ -622,4 +651,34 @@ fn list_attributes_build_read_and_verify_their_elements() {
             .collect::<Vec<_>>(),
         ["attribute `labels` must be a [String] attribute"]
     );
+}
+
+#[test]
+fn a_dialect_defines_its_own_attribute_kind() {
+    let mut ctx = IrContext::new();
+    let loc = location(&mut ctx);
+    let schema = &test_typed::Export::DEF.schema;
+    assert_eq!(schema.attributes[0].kind, AttributeKind::SymbolRef);
+    assert_eq!(
+        schema.attributes[1].kind,
+        AttributeKind::List(&AttributeKind::SymbolRef)
+    );
+
+    let op = test_typed::Export::operands()
+        .linkage(test_typed::Linkage::Public)
+        .history([test_typed::Linkage::Private, test_typed::Linkage::Public])
+        .build(&mut ctx, loc);
+    assert_eq!(op.linkage(&ctx), test_typed::Linkage::Public);
+    assert_eq!(
+        op.history(&ctx).map(Iterator::collect::<Vec<_>>),
+        Some(vec![
+            test_typed::Linkage::Private,
+            test_typed::Linkage::Public
+        ])
+    );
+    assert_eq!(
+        ctx.op(op.op_ref()).attributes.get("linkage"),
+        Some(&Attribute::SymbolRef(Symbol::new("public")))
+    );
+    assert!(test_typed::Export::DEF.verify(&ctx, op.op_ref()).is_empty());
 }

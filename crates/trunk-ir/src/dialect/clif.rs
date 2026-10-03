@@ -1,5 +1,7 @@
 //! Arena-based clif dialect.
 
+use crate::attr_kind::Bytes;
+use crate::attr_kind::SymbolRef;
 use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
