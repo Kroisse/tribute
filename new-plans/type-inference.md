@@ -12,7 +12,7 @@
 | 타입 추론 방식 | Bidirectional | 순수 HM, 전면 양방향 |
 | Effect polymorphism | Row variables | Subtyping constraints |
 | Effect 흐름 | Hybrid (inward + outward) | Frank (순수 inward), Koka (순수 outward) |
-| 중복 label | 금지 | 허용 (런타임 모호성) |
+| 중복 label | 금지 | 허용 (scoped label과 `mask`) |
 | 암묵적 polymorphism | `fn(a) -> b` = `fn(a) ->{e} b` | 항상 명시 |
 
 ### Nominal Type Equality
@@ -193,9 +193,10 @@ fn foo() ->{State(Int), State(String)} Nil
 fn bar() ->{State(Int), State(Int)} Nil
 ```
 
-**이유**: 중복 허용 시 `State::get()`이 어떤 handler를 참조하는지 타입
-수준에서 결정할 수 없다. "가장 안쪽 handler"는 런타임 개념이지 타입 시스템이
-추적할 수 있는 정보가 아니다.
+**이유**: Tribute는 한 ability instance의 여러 occurrence나 handler 인스턴스를
+구별하는 의미론을 정의하지 않는다. Row는 instance의 집합이며, `State::get()`이
+참조하는 handler는 그 instance 하나로 정해진다. 중복을 허용하려면 occurrence의
+순서나 이름으로 handler를 고르는 규칙이 함께 필요하다.
 
 **향후 확장**: 동일 ability의 여러 인스턴스가 필요한 경우, effect row에서 이름을 붙일 수 있다:
 
@@ -267,6 +268,27 @@ fn handled(comp: fn() ->{e} Nil) ->{} Nil {
 fn handled(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
     handle comp() { do v { v } op Ping::ping() { resume Nil } }
 }
+```
+
+"tail에는 제거한 label이 없다"는 본문 검사 안에서의 사실이다. 호출자는 그
+tail을 같은 instance를 담은 row로 채울 수 있다. 대입한 row는
+[중복 처리](#기본-규칙)에 따라 그 instance를 한 번만 담고, operation은
+[evidence 조회](cps-effects.md#evidence-lookup)에 따라 가장 가까운 handler로
+간다. 따라서 함수 안의 handler는 tail을 통해 들어온 같은 instance의 operation도
+처리하며, 결과 row는 그 instance를 실제 발생보다 넓게 담는다:
+
+```rust
+fn twice_counted(f: fn() ->{e} Nil) ->{e} Nat {
+    run_state(fn() {
+        f()
+        State::set(State::get() + 1)
+        State::get()
+    }, 0)
+}
+
+// `e`에 State(Nat)가 들어온다. `f`의 State operation은 `twice_counted` 안의
+// handler가 처리하고, 호출자의 handler에는 도달하지 않는다.
+run_state(fn() { twice_counted(fn() { State::set(10) }) }, 0)
 ```
 
 Row 단일화는 시그니처 row 변수를 별칭의 대표로 유지한다. 열린 두 row를 맞출 때
