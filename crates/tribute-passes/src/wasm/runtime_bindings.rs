@@ -23,6 +23,8 @@ pub const PROVIDED: &[&str] = &[
     evidence_abi::LOOKUP_TR,
     evidence_abi::LOOKUP_HANDLER,
     evidence_abi::EXTEND,
+    evidence_abi::MASK,
+    evidence_abi::DUP,
     NEXT_TAG,
     BYTES_LEN,
     BYTES_CONCAT,

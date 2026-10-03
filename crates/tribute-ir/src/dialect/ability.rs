@@ -251,6 +251,7 @@ pub enum MarkerField {
     PromptTag = 1,
     TrDispatchFn = 2,
     HandlerDispatch = 3,
+    Shadowed = 4,
 }
 
 impl MarkerField {
@@ -284,7 +285,7 @@ pub struct MarkerFieldSpec {
 }
 
 /// Canonical field layout for the `_Marker` ADT.
-pub const MARKER_FIELDS: [MarkerFieldSpec; 4] = [
+pub const MARKER_FIELDS: [MarkerFieldSpec; 5] = [
     MarkerFieldSpec {
         field: MarkerField::AbilityId,
         symbol_name: "ability_id",
@@ -303,6 +304,11 @@ pub const MARKER_FIELDS: [MarkerFieldSpec; 4] = [
     MarkerFieldSpec {
         field: MarkerField::HandlerDispatch,
         symbol_name: "handler_dispatch",
+        field_type: MarkerFieldType::Ptr,
+    },
+    MarkerFieldSpec {
+        field: MarkerField::Shadowed,
+        symbol_name: "shadowed",
         field_type: MarkerFieldType::Ptr,
     },
 ];
@@ -342,15 +348,19 @@ pub mod evidence_abi {
     pub const EMPTY: &str = "__tribute_evidence_empty";
     pub const LOOKUP: &str = "__tribute_evidence_lookup";
     pub const EXTEND: &str = "__tribute_evidence_extend";
+    pub const MASK: &str = "__tribute_evidence_mask";
+    pub const DUP: &str = "__tribute_evidence_dup";
     pub const LOOKUP_TR: &str = "__tribute_evidence_lookup_tr";
     pub const LOOKUP_HANDLER: &str = "__tribute_evidence_lookup_handler";
 }
 
-pub fn evidence_runtime_symbols() -> [Symbol; 5] {
+pub fn evidence_runtime_symbols() -> [Symbol; 7] {
     [
         Symbol::new(evidence_abi::EMPTY),
         Symbol::new(evidence_abi::LOOKUP),
         Symbol::new(evidence_abi::EXTEND),
+        Symbol::new(evidence_abi::MASK),
+        Symbol::new(evidence_abi::DUP),
         Symbol::new(evidence_abi::LOOKUP_TR),
         Symbol::new(evidence_abi::LOOKUP_HANDLER),
     ]
@@ -365,9 +375,11 @@ pub fn evidence_runtime_symbols() -> [Symbol; 5] {
 ///     prompt_tag: i32,
 ///     tr_dispatch_fn: ptr,
 ///     handler_dispatch: ptr,
+///     shadowed: ptr,
 /// }
 /// ```
 ///
+/// `shadowed` is the marker of the same ability this one shadows, or null.
 /// Dispatch fields store erased closure references. Tail-resumptive operations
 /// return their source result; general CPS dispatch uses the exact resultless
 /// dispatch ABI. Shared lowering installs typed reject closures for missing kinds.
@@ -466,11 +478,12 @@ mod tests {
         assert_eq!(MarkerField::PromptTag.index(), 1);
         assert_eq!(MarkerField::TrDispatchFn.index(), 2);
         assert_eq!(MarkerField::HandlerDispatch.index(), 3);
+        assert_eq!(MarkerField::Shadowed.index(), 4);
     }
 
     #[test]
     fn test_marker_field_specs_are_canonical() {
-        assert_eq!(MARKER_FIELDS.len(), 4);
+        assert_eq!(MARKER_FIELDS.len(), 5);
         assert_eq!(
             MARKER_FIELDS,
             [
@@ -494,6 +507,11 @@ mod tests {
                     symbol_name: "handler_dispatch",
                     field_type: MarkerFieldType::Ptr,
                 },
+                MarkerFieldSpec {
+                    field: MarkerField::Shadowed,
+                    symbol_name: "shadowed",
+                    field_type: MarkerFieldType::Ptr,
+                },
             ]
         );
     }
@@ -506,6 +524,8 @@ mod tests {
                 Symbol::new(evidence_abi::EMPTY),
                 Symbol::new(evidence_abi::LOOKUP),
                 Symbol::new(evidence_abi::EXTEND),
+                Symbol::new(evidence_abi::MASK),
+                Symbol::new(evidence_abi::DUP),
                 Symbol::new(evidence_abi::LOOKUP_TR),
                 Symbol::new(evidence_abi::LOOKUP_HANDLER),
             ]

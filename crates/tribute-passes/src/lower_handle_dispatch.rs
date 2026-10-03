@@ -212,7 +212,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {{layout = "evidence_marker"}}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {{layout = "evidence_marker"}}>
   !evidence = core.array<!marker, {{layout = "evidence"}}>
   func.func @run(%ev: !evidence) -> core.never {{
     {operation}

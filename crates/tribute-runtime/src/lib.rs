@@ -700,6 +700,11 @@ pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: u64) {
 /// `handler_dispatch` is a pointer to the full CPS handler dispatch closure
 /// `(k: ptr, op_idx: i32, value: ptr) -> void`, or null if not using
 /// full CPS. Used by the tail-call-based effect handling path.
+///
+/// `shadowed` is the marker of the same ability this one shadows, or null.
+/// It points into the evidence this marker's evidence was derived from. An
+/// evidence is immutable and never freed once returned, so the marker it
+/// points to stays valid.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Marker {
@@ -707,12 +712,15 @@ pub struct Marker {
     pub prompt_tag: i32,
     pub tr_dispatch_fn: *const u8,
     pub handler_dispatch: *const u8,
+    pub shadowed: *const Marker,
 }
 
-/// Opaque evidence structure — a sorted array of `Marker`s keyed by `ability_id`.
+/// Opaque evidence structure — an array of marker stacks sorted by
+/// `ability_id`. Each slot holds the top `Marker` of its ability; the markers
+/// it shadows follow its `shadowed` chain.
 ///
 /// IR-level code only sees `core.ptr`; this struct is never exposed across FFI
-/// except through the three `__tribute_evidence_*` functions.
+/// except through the `__tribute_evidence_*` functions.
 #[derive(Debug, Clone)]
 struct Evidence {
     markers: SmallVec<[Marker; 4]>,
@@ -725,17 +733,17 @@ impl Evidence {
         }
     }
 
-    fn lookup(&self, ability_id: i32) -> &Marker {
+    fn position(&self, ability_id: i32) -> usize {
         let result = self
             .markers
             .binary_search_by_key(&ability_id, |m| m.ability_id);
         debug_assert!(
             result.is_ok(),
-            "ICE: __tribute_evidence_lookup: ability_id {} not found (compiler bug)",
+            "ICE: evidence has no marker for ability_id {} (compiler bug)",
             ability_id
         );
         match result {
-            Ok(idx) => &self.markers[idx],
+            Ok(idx) => idx,
             // SAFETY: The compiler guarantees that every ability_id passed here
             // has been previously inserted via __tribute_evidence_extend.
             // Reaching this branch means a compiler bug.
@@ -743,22 +751,50 @@ impl Evidence {
         }
     }
 
-    fn extend(&self, marker: Marker) -> Self {
+    fn lookup(&self, ability_id: i32) -> &Marker {
+        &self.markers[self.position(ability_id)]
+    }
+
+    /// Push `marker` onto its ability's stack. Its `shadowed` is set here.
+    fn extend(&self, mut marker: Marker) -> Self {
         let mut new = self.clone();
-        match new
+        match self
             .markers
             .binary_search_by_key(&marker.ability_id, |m| m.ability_id)
         {
             Ok(pos) => {
-                // Same ability_id already exists (nested same-ability handler).
-                // Replace with the new (inner) marker so lookup returns the
-                // closest handler.
+                // The shadowed marker is the one stored in `self`, not its
+                // copy in `new`: `new` moves when it is boxed.
+                marker.shadowed = &self.markers[pos];
                 new.markers[pos] = marker;
             }
             Err(pos) => {
+                marker.shadowed = core::ptr::null();
                 new.markers.insert(pos, marker);
             }
         }
+        new
+    }
+
+    /// Pop the top marker of `ability_id`, exposing the one it shadows.
+    fn mask(&self, ability_id: i32) -> Self {
+        let pos = self.position(ability_id);
+        let mut new = self.clone();
+        let shadowed = self.markers[pos].shadowed;
+        if shadowed.is_null() {
+            new.markers.remove(pos);
+        } else {
+            // SAFETY: `shadowed` points into an evidence that is never freed.
+            new.markers[pos] = unsafe { *shadowed };
+        }
+        new
+    }
+
+    /// Push a copy of the top marker of `ability_id` onto its stack.
+    fn dup(&self, ability_id: i32) -> Self {
+        let pos = self.position(ability_id);
+        let mut new = self.clone();
+        new.markers[pos].shadowed = &self.markers[pos];
         new
     }
 }
@@ -810,8 +846,46 @@ pub unsafe extern "C" fn __tribute_evidence_extend(
         prompt_tag,
         tr_dispatch_fn,
         handler_dispatch,
+        shadowed: core::ptr::null(),
     };
     Box::into_raw(Box::new(ev.extend(marker)))
+}
+
+/// Remove the top marker of an ability, exposing the marker it shadows
+/// (persistent — returns a new evidence). The ability's slot is removed when
+/// the top marker shadows nothing.
+///
+/// Signature: `(ev: ptr, ability_id: i32) -> ptr`
+///
+/// # Safety
+///
+/// `ev` must be a valid pointer returned by a `__tribute_evidence_*` function
+/// and must hold a marker for `ability_id`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_mask(
+    ev: *const Evidence,
+    ability_id: i32,
+) -> *mut Evidence {
+    let ev = unsafe { &*ev };
+    Box::into_raw(Box::new(ev.mask(ability_id)))
+}
+
+/// Push a copy of the top marker of an ability so that it shadows the
+/// original (persistent — returns a new evidence).
+///
+/// Signature: `(ev: ptr, ability_id: i32) -> ptr`
+///
+/// # Safety
+///
+/// `ev` must be a valid pointer returned by a `__tribute_evidence_*` function
+/// and must hold a marker for `ability_id`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_dup(
+    ev: *const Evidence,
+    ability_id: i32,
+) -> *mut Evidence {
+    let ev = unsafe { &*ev };
+    Box::into_raw(Box::new(ev.dup(ability_id)))
 }
 
 /// Look up the tail-resumptive dispatch function pointer for an ability.
@@ -1124,6 +1198,11 @@ mod tests {
     // Evidence tests
     // =========================================================================
 
+    /// The marker slots of a live evidence.
+    unsafe fn markers<'a>(ev: *const Evidence) -> &'a [Marker] {
+        unsafe { &(*ev).markers }
+    }
+
     #[test]
     fn test_evidence_runtime_function_signatures() {
         let _: extern "C" fn() -> *mut Evidence = __tribute_evidence_empty;
@@ -1135,6 +1214,9 @@ mod tests {
             *const u8,
             *const u8,
         ) -> *mut Evidence = __tribute_evidence_extend;
+        let _: unsafe extern "C" fn(*const Evidence, i32) -> *mut Evidence =
+            __tribute_evidence_mask;
+        let _: unsafe extern "C" fn(*const Evidence, i32) -> *mut Evidence = __tribute_evidence_dup;
         let _: unsafe extern "C" fn(*const Evidence, i32) -> *const u8 =
             __tribute_evidence_lookup_tr;
         let _: unsafe extern "C" fn(*const Evidence, i32) -> *const u8 =
@@ -1154,6 +1236,10 @@ mod tests {
         assert!(
             core::mem::offset_of!(Marker, tr_dispatch_fn)
                 < core::mem::offset_of!(Marker, handler_dispatch)
+        );
+        assert!(
+            core::mem::offset_of!(Marker, handler_dispatch)
+                < core::mem::offset_of!(Marker, shadowed)
         );
     }
 
@@ -1241,7 +1327,7 @@ mod tests {
     }
 
     #[test]
-    fn test_evidence_extend_replaces_nested_same_ability_handler() {
+    fn test_evidence_extend_shadows_nested_same_ability_handler() {
         unsafe {
             let outer_tr = 0x10usize as *const u8;
             let outer_handler = 0x20usize as *const u8;
@@ -1263,10 +1349,98 @@ mod tests {
             assert_eq!(outer_ref.markers[0].prompt_tag, 1);
             assert_eq!(outer_ref.markers[0].tr_dispatch_fn, outer_tr);
             assert_eq!(outer_ref.markers[0].handler_dispatch, outer_handler);
+            assert!(outer_ref.markers[0].shadowed.is_null());
+            assert_eq!(*inner_ref.markers[0].shadowed, outer_ref.markers[0]);
 
             let _ = Box::from_raw(ev);
             let _ = Box::from_raw(outer);
             let _ = Box::from_raw(inner);
+        }
+    }
+
+    #[test]
+    fn test_evidence_mask_exposes_shadowed_handler() {
+        unsafe {
+            let outer_tr = 0x10usize as *const u8;
+            let outer_handler = 0x20usize as *const u8;
+
+            let ev = __tribute_evidence_empty();
+            let other = __tribute_evidence_extend(ev, 20, 9, core::ptr::null(), core::ptr::null());
+            let outer = __tribute_evidence_extend(other, 10, 1, outer_tr, outer_handler);
+            let middle =
+                __tribute_evidence_extend(outer, 10, 2, core::ptr::null(), core::ptr::null());
+            let inner =
+                __tribute_evidence_extend(middle, 10, 3, core::ptr::null(), core::ptr::null());
+
+            let once = __tribute_evidence_mask(inner, 10);
+            assert_eq!(markers(once).len(), 2);
+            assert_eq!(__tribute_evidence_lookup(once, 10), 2);
+            assert_eq!(__tribute_evidence_lookup(once, 20), 9);
+
+            let twice = __tribute_evidence_mask(once, 10);
+            assert_eq!(__tribute_evidence_lookup(twice, 10), 1);
+            assert_eq!(__tribute_evidence_lookup_tr(twice, 10), outer_tr);
+            assert_eq!(__tribute_evidence_lookup_handler(twice, 10), outer_handler);
+            assert!(markers(twice)[0].shadowed.is_null());
+
+            // The masked evidence is unchanged (persistent).
+            assert_eq!(__tribute_evidence_lookup(inner, 10), 3);
+            assert_eq!(__tribute_evidence_lookup(once, 10), 2);
+
+            for ev in [ev, other, outer, middle, inner, once, twice] {
+                let _ = Box::from_raw(ev);
+            }
+        }
+    }
+
+    #[test]
+    fn test_evidence_mask_removes_unshadowed_ability() {
+        unsafe {
+            let ev = __tribute_evidence_empty();
+            let one = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), core::ptr::null());
+            let two = __tribute_evidence_extend(one, 20, 2, core::ptr::null(), core::ptr::null());
+            let three = __tribute_evidence_extend(two, 30, 3, core::ptr::null(), core::ptr::null());
+
+            let masked = __tribute_evidence_mask(three, 20);
+            let masked_ref = &*masked;
+            assert_eq!(masked_ref.markers.len(), 2);
+            assert_eq!(masked_ref.markers[0].ability_id, 10);
+            assert_eq!(masked_ref.markers[1].ability_id, 30);
+            assert_eq!(markers(three).len(), 3);
+
+            for ev in [ev, one, two, three, masked] {
+                let _ = Box::from_raw(ev);
+            }
+        }
+    }
+
+    #[test]
+    fn test_evidence_dup_pushes_a_copy_of_the_top_handler() {
+        unsafe {
+            let tr = 0x10usize as *const u8;
+            let handler = 0x20usize as *const u8;
+
+            let ev = __tribute_evidence_empty();
+            let outer = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), core::ptr::null());
+            let inner = __tribute_evidence_extend(outer, 10, 2, tr, handler);
+
+            let dup = __tribute_evidence_dup(inner, 10);
+            assert_eq!(markers(dup).len(), 1);
+            assert_eq!(__tribute_evidence_lookup(dup, 10), 2);
+            assert_eq!(__tribute_evidence_lookup_tr(dup, 10), tr);
+            assert_eq!(__tribute_evidence_lookup_handler(dup, 10), handler);
+
+            // One mask undoes the dup; the next exposes the outer handler.
+            let once = __tribute_evidence_mask(dup, 10);
+            assert_eq!(markers(once), markers(inner));
+            let twice = __tribute_evidence_mask(once, 10);
+            assert_eq!(__tribute_evidence_lookup(twice, 10), 1);
+            let thrice = __tribute_evidence_mask(twice, 10);
+            assert!(markers(thrice).is_empty());
+
+            for ev in [ev, outer, inner, dup, once, twice, thrice] {
+                let _ = Box::from_raw(ev);
+            }
         }
     }
 }
