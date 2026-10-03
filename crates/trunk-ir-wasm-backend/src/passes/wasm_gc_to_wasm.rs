@@ -18,7 +18,8 @@ fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
     data.dialect == Symbol::new("adt") && data.attrs.get_str(ctx, "name") == Some(expected)
 }
 
-pub(crate) fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
+/// The reserved GC type index of a builtin runtime layout, if `ty` is one.
+pub fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
     if named_adt(ctx, ty, "_BoxedF64") {
         Some(BOXED_F64_IDX)
     } else {

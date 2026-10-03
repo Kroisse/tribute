@@ -335,10 +335,10 @@ fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
     assert_eq!(count(function, ActionKind::EntryAcquire), 1);
     assert_eq!(count(function, ActionKind::StoreAcquire), 1);
     assert_eq!(count(function, ActionKind::FinalRelease), 2);
-    assert!(matches!(
-        &plan.rtti_types()[0].fields,
-        ManagedFieldBitmap::Struct(fields) if fields == &[true, false]
-    ));
+    assert_eq!(
+        plan.rtti_types()[0].fields,
+        [FieldKind::Managed, FieldKind::Raw]
+    );
 }
 
 #[test]
@@ -1229,16 +1229,12 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
   }
 }"#,
     );
-    let entry = plan
-        .rtti_types()
-        .iter()
-        .find(|entry| ctx.get_type(entry.ty).attrs.get_str(&ctx, "name") == Some("Choice"))
-        .unwrap();
-    assert!(matches!(
-        &entry.fields,
-        ManagedFieldBitmap::Enum(variants)
-            if variants == &[vec![], vec![true, false], vec![false]]
-    ));
+    let [entry] = plan.rtti_types() else {
+        panic!("one RTTI descriptor per allocated variant")
+    };
+    assert_eq!(adt::nominal_name(&ctx, entry.ty), Some("Choice"));
+    assert_eq!(entry.tag.map(|tag| ctx.str(tag)), Some("Some"));
+    assert_eq!(entry.fields, [FieldKind::Managed, FieldKind::Raw]);
 }
 
 #[test]
@@ -1682,10 +1678,7 @@ fn reachable_recursive_nominal_layout_is_validated_once() {
     );
 
     assert_eq!(plan.rtti_types().len(), 1);
-    assert!(matches!(
-        &plan.rtti_types()[0].fields,
-        ManagedFieldBitmap::Struct(fields) if fields == &[true]
-    ));
+    assert_eq!(plan.rtti_types()[0].fields, [FieldKind::Managed]);
 }
 
 #[test]
@@ -1809,7 +1802,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     assert!(duplicate_rtti.validate_against(&ctx, module).is_err());
 
     let mut stale_bitmap = plan.clone();
-    stale_bitmap.rtti_types[0].fields = ManagedFieldBitmap::Struct(vec![true]);
+    stale_bitmap.rtti_types[0].fields = vec![FieldKind::Raw];
     assert!(stale_bitmap.validate_against(&ctx, module).is_err());
 
     let function = &plan.functions[0];
@@ -1885,21 +1878,27 @@ fn closure_rtti_declaration_follows_the_native_closure_layout() {
     );
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     let semantic = plan.rtti_types()[0].ty;
-    assert!(matches!(
-        &plan.rtti_types()[0].fields,
-        ManagedFieldBitmap::Struct(fields) if fields == &[false, true]
-    ));
+    assert_eq!(
+        plan.rtti_types()[0].fields,
+        [
+            FieldKind::Int {
+                width: 32,
+                signed: false
+            },
+            FieldKind::Dynamic
+        ]
+    );
 
     crate::native::rtti::declare_rtti_layouts(&mut ctx, module, plan.rtti_types());
     crate::native::adapt_closure_layout::lower(&mut ctx, module);
     let (type_converter, _) = native_type_converter(&mut ctx);
     func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
 
-    let [layout] = crate::native::rtti::declared_rtti_layouts(&ctx, module)[..] else {
+    let [layout] = tribute_ir::dialect::tribute_rtti::Layout::declared(&ctx, module)[..] else {
         panic!("one closure RTTI declaration")
     };
     assert_ne!(layout.r#type(&ctx), semantic);
-    assert_eq!(layout.managed_fields(&ctx), plan.rtti_types()[0].fields);
+    assert_eq!(layout.field_kinds(&ctx), plan.rtti_types()[0].fields);
     let (type_converter, _) = native_type_converter(&mut ctx);
     crate::native::rtti::generate_rtti(&mut ctx, module, &type_converter)
         .expect("the declaration names the adapted allocation layout");

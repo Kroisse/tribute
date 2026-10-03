@@ -67,18 +67,23 @@ Descriptor는 runtime에 할당되는 값의 종류마다 하나다.
 
 ## IR에서의 표현
 
-Descriptor 참조는 nominal 정보가 남아 있는 동안 정해진다.
+Nominal IR에는 descriptor 선언이 없다. Descriptor의 identity는 할당 operation이
+가리키는 nominal layout 타입과 variant tag의 쌍이다. 이름과 필드 이름의 출처는
+`adt.struct`와 `adt.enum` 하나뿐이다.
 
-- 할당 operation(`adt.struct_new`, `adt.variant_new`)은 nominal layout을 해석하는
-  단계에서 자기 descriptor 참조를 얻는다. 참조는 모듈 수준 descriptor 선언을
-  가리키는 operation 속성이며, layout 타입과 별개다.
-- 이후 layout 타입이 이름 없는 structural struct로 바뀌어도 descriptor 참조는
-  그대로 남는다. 저수준 pass는 descriptor를 layout 타입에서 다시 찾지 않는다.
-- Descriptor 선언은 descriptor 내용을 모두 담는다. Target은 선언을 자기 runtime
-  표현(table, data segment)으로 내리고, 할당 operation의 참조를 그 표현의
-  번호로 바꾼다.
-- 해제 정보는 ownership 계획이 정한 managed 판정을 그대로 쓴다. 저수준에서 필드의
-  물리 타입만 보고 다시 판정하지 않는다.
+- Nominal layout을 마지막으로 해석하는 target 경계가 descriptor를 소유한다. 이
+  경계는 `(layout 타입, tag)`마다 번호와 필드 종류를 정해 module 수준
+  `tribute_rtti.layout` 선언으로 남긴다. 할당 operation(`adt.struct_new`,
+  `adt.variant_new`)을 내리는 pass는 번호를 스스로 정하지 않고 이 선언에서 읽어
+  할당에 새긴 뒤 선언을 지운다. Native는 RC header의 RTTI index, Wasm은 객체의
+  첫 필드에 새긴다.
+- 번호와 레코드는 nominal 이름이 지워지기 전에 확정된다. 그 아래의 이름 없는
+  [structural struct](ir.md#nominal-수준과-structural-수준)는 번호만 다루고
+  descriptor를 layout 타입에서 다시 찾지 않는다.
+- 필드 종류는 target이 의미 타입으로 정한다. Native 해제 정보는 ownership 계획이
+  정한 managed 판정을 그대로 쓴다. Wasm은 ownership 계획이 없으므로 필드 타입에서
+  managed 참조와 동적 값을 가린다. 저수준에서 필드의 물리 타입만 보고 다시
+  판정하지 않는다.
 
 ## Native 배치
 
@@ -90,9 +95,9 @@ Native RC 객체의 header가 descriptor를 가리킨다.
 [ 0] payload...
 ```
 
-- Header의 index 칸은 [RC header](rc.md#object-header)의 RTTI index다. 같은 번호로
-  release 함수 table과 descriptor table을 찾는다. 번호 배정과 두 table의 모양은
-  [RTTI table](rc.md#rtti-table)이 정한다.
+- Header의 index 칸은 [RC header](rc.md#object-header)의 RTTI index다. 이 번호가
+  RTTI table의 descriptor 레코드를 고르며, 레코드가 release 함수도 담는다. 번호
+  배정과 레코드 모양은 [RTTI table](rc.md#rtti-table)이 정한다.
 - Structural layout(`mem.struct`)의 필드 타입은 managed 참조와 unmanaged 포인터를
   구분한다. Managed 참조는 `tribute_rt.anyref`, unmanaged 포인터는 `core.ptr`로
   둔다. 둘의 크기와 정렬은 같지만 해제 동작이 다르기 때문이다.
@@ -111,8 +116,9 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   타입이며, runtime identity는 descriptor 필드가 맡는다. 그래서 variant마다 별개의
   GC 타입 index를 둘 필요가 없다.
 - Builtin layout(bytes, closure, marker, evidence, boxing된 scalar)은 지금처럼
-  예약 GC 타입을 쓰며, descriptor 필드를 두지 않는다. 이 값들의 descriptor는 예약
-  번호로 정해진다. Builtin layout은 layout마다 필드와 해제 동작이 하나로 고정되어
+  예약 GC 타입을 쓰며, descriptor 필드를 두지 않는다. 이 값들의 descriptor 번호는
+  자기 예약 GC 타입 index다. 사용자 struct와 variant의 번호는 예약 GC 타입 index
+  범위 다음부터 할당 순서대로 정한다. Builtin layout은 layout마다 필드와 해제 동작이 하나로 고정되어
   있으므로 descriptor도 layout마다 하나다. 예를 들어 모든 closure는 같은 함수 참조
   필드와 동적 값 environment 필드를 가진다. Capture마다 달라지는 내용은 closure
   descriptor가 아니라, environment가 가리키는 객체 자신의 descriptor가 설명한다.

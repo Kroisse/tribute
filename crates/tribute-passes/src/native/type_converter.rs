@@ -28,17 +28,13 @@
 //! reference types. Most conversions between pointer types are no-ops.
 
 use tribute_ir::dialect::tribute_rt;
-use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
-use trunk_ir::refs::{OpRef, TypeRef, ValueRef};
+use trunk_ir::refs::{TypeRef, ValueRef};
 use trunk_ir::rewrite::TypeConverter;
-use trunk_ir::types::{Location, TypeDataBuilder};
-
-/// Name of the runtime allocation function.
-const ALLOC_FN: &str = "__tribute_alloc";
+use trunk_ir::types::TypeDataBuilder;
 
 // =============================================================================
 // Native type conversion
@@ -166,28 +162,15 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
         // representation changes are materialized here.
         let to_is_ptr = to_ty == r.core_ptr || to_ty == r.tribute_rt_anyref;
 
-        // Boxing: primitive → ptr/anyref
+        // A nil value as a reference is null. Boxing a scalar is not a
+        // materialization: only `tribute_rt.box_*` knows which runtime type,
+        // and so which RTTI descriptor, the box has.
         if to_is_ptr {
             let ptr_ty = if to_ty == r.tribute_rt_anyref {
                 r.tribute_rt_anyref
             } else {
                 r.core_ptr
             };
-            if from_ty == r.core_i32 {
-                return Some(box_primitive(
-                    ctx, location, value, 4, r.core_i64, r.core_i32, ptr_ty,
-                ));
-            }
-            if from_ty == r.core_i64 {
-                return Some(box_primitive(
-                    ctx, location, value, 8, r.core_i64, r.core_i32, ptr_ty,
-                ));
-            }
-            if from_ty == r.core_f64 {
-                return Some(box_primitive(
-                    ctx, location, value, 8, r.core_i64, r.core_i32, ptr_ty,
-                ));
-            }
             if from_ty == r.core_nil {
                 let null_op = clif::Iconst::operands()
                     .value(0)
@@ -246,90 +229,6 @@ fn materialize_result_noop(
     value: ValueRef,
 ) -> trunk_ir::rewrite::type_converter::MaterializeResult {
     trunk_ir::rewrite::type_converter::MaterializeResult { value, ops: vec![] }
-}
-
-/// Generate boxing operations: allocate + store RC header + store value.
-fn box_primitive(
-    ctx: &mut IrContext,
-    location: Location,
-    value: ValueRef,
-    payload_size: u64,
-    i64_ty: TypeRef,
-    i32_ty: TypeRef,
-    ptr_ty: TypeRef,
-) -> trunk_ir::rewrite::type_converter::MaterializeResult {
-    let mut ops: Vec<OpRef> = Vec::new();
-
-    // 1. Allocation size (payload + RC header)
-    let alloc_size = payload_size + RC_HEADER_SIZE;
-    let size_op = clif::Iconst::operands()
-        .value(alloc_size as i64)
-        .results(i64_ty)
-        .build(ctx, location);
-    ops.push(size_op.op_ref());
-
-    // 2. Allocate heap memory
-    let call_op = clif::Call::operands([size_op.result(ctx)])
-        .callee(Symbol::new(ALLOC_FN))
-        .results([ptr_ty])
-        .build(ctx, location);
-    ops.push(call_op.op_ref());
-    let raw_ptr = call_op.results(ctx)[0];
-
-    // 3. Store refcount = 1
-    let rc_one = clif::Iconst::operands()
-        .value(1)
-        .results(i32_ty)
-        .build(ctx, location);
-    ops.push(rc_one.op_ref());
-    let store_rc = clif::Store::operands(rc_one.result(ctx), raw_ptr)
-        .offset(REFCOUNT_OFFSET as i32)
-        .build(ctx, location);
-    ops.push(store_rc.op_ref());
-
-    // 4. Store rtti_idx = 0
-    let rtti_zero = clif::Iconst::operands()
-        .value(0)
-        .results(i32_ty)
-        .build(ctx, location);
-    ops.push(rtti_zero.op_ref());
-    let store_rtti = clif::Store::operands(rtti_zero.result(ctx), raw_ptr)
-        .offset(RTTI_IDX_OFFSET as i32)
-        .build(ctx, location);
-    ops.push(store_rtti.op_ref());
-
-    // 5. Compute payload pointer = raw_ptr + 8
-    let hdr_size = clif::Iconst::operands()
-        .value(RC_HEADER_SIZE as i64)
-        .results(i64_ty)
-        .build(ctx, location);
-    ops.push(hdr_size.op_ref());
-    let payload_ptr = clif::Iadd::operands(raw_ptr, hdr_size.result(ctx))
-        .results(ptr_ty)
-        .build(ctx, location);
-    ops.push(payload_ptr.op_ref());
-
-    // 6. Store value at payload offset 0
-    let store_val = clif::Store::operands(value, payload_ptr.result(ctx))
-        .offset(0)
-        .build(ctx, location);
-    ops.push(store_val.op_ref());
-
-    // 7. Identity pass-through so the last op produces the payload ptr result
-    let zero_op = clif::Iconst::operands()
-        .value(0)
-        .results(ptr_ty)
-        .build(ctx, location);
-    ops.push(zero_op.op_ref());
-    let identity_op = clif::Iadd::operands(payload_ptr.result(ctx), zero_op.result(ctx))
-        .results(ptr_ty)
-        .build(ctx, location);
-    ops.push(identity_op.op_ref());
-
-    trunk_ir::rewrite::type_converter::MaterializeResult {
-        value: identity_op.result(ctx),
-        ops,
-    }
 }
 
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.

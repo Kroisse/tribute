@@ -131,8 +131,8 @@ mod tests {
             r#"core.module @test {
   !_closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
   !Other = adt.struct<Other(value: tribute_rt.anyref)>
-  tribute_rtti.layout {type = !_closure, index = 32, managed = [false, true]}
-  tribute_rtti.layout {type = !Other, index = 33, managed = [true]}
+  tribute_rtti.layout {type = !_closure, index = 32, fields = ["u32", "dynamic"]}
+  tribute_rtti.layout {type = !Other, index = 33, fields = ["dynamic"]}
   func.func @make(%table: core.i32, %env: tribute_rt.anyref) -> !_closure {
     %closure = adt.struct_new %table, %env {type = !_closure} : !_closure
     %loaded = adt.struct_get %closure {field = 1, type = !_closure} : tribute_rt.anyref
@@ -158,8 +158,14 @@ mod tests {
             .collect::<Vec<_>>();
         assert_eq!(layouts[0].r#type(&ctx), native);
         assert_eq!(
-            layouts[0].managed_fields(&ctx),
-            tribute_rtti::ManagedFieldBitmap::Struct(vec![false, true])
+            layouts[0].field_kinds(&ctx),
+            [
+                tribute_rtti::FieldKind::Int {
+                    width: 32,
+                    signed: false
+                },
+                tribute_rtti::FieldKind::Dynamic
+            ]
         );
         assert_ne!(layouts[1].r#type(&ctx), native);
         let output = print_module(&ctx, module.op());

@@ -255,8 +255,8 @@ Plan의 RTTI 배치는 plan을 만든 직후 할당 layout마다 하나의
 plan의 할당 순서대로 사용자 RTTI index 공간에서 정한다. Closure layout(`layout = "closure"`)을
 native closure layout으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과
 그 layout의 RTTI 선언을 함께 바꾼다. RTTI 생성은 선언이 모든 할당 layout을 정확히
-한 번씩 이름 붙이는지 검사한 뒤, layout별 release 함수, index마다 release 함수
-주소를 담는 RTTI table(`clif.data`와 함수 재배치), table을 통해 해제를 디스패치하는
+한 번씩 이름 붙이는지 검사한 뒤, descriptor별 release 함수, index마다 release 함수
+주소와 descriptor 내용을 담는 RTTI table(`clif.data`와 재배치), table을 통해 해제를 디스패치하는
 `__tribute_deep_release`를 IR에 선언한다. RC header lowering은 선언된 index를
 header에 기록하고 선언을 지운다. Backend는 RTTI 이름 규칙을 알지 않는다.
 

@@ -172,8 +172,10 @@ fn wasm_lowering_passes() -> PassManager {
         super::const_to_wasm::lower(ctx, m.into(), &const_analysis);
         Ok(())
     }))
-    // Convert all adt operations, including String::Leaf from const lowering.
+    // Convert all adt operations, including String::Leaf from const lowering,
+    // after declaring the runtime type descriptors they store.
     .add_pass(pass_fn("adt-to-wasm", |ctx, m: core::Module, _| {
+        super::descriptors::declare(ctx, m.into());
         let tc = wasm_type_converter(ctx);
         crate::wasm::adt_to_wasm::lower(ctx, m.into(), tc);
         Ok(())
@@ -522,6 +524,7 @@ mod tests {
             .add_pattern(WasmFuncSignatureConversionPattern)
             .apply_partial(&mut ctx, module);
         let tc = wasm_type_converter(&mut ctx);
+        crate::wasm::descriptors::declare(&mut ctx, module);
         crate::wasm::adt_to_wasm::lower(&mut ctx, module, tc);
 
         let func = module.ops(&ctx)[0];
@@ -539,7 +542,9 @@ mod tests {
         // Evidence keeps its layout identifier instead of erasing to arrayref.
         let evidence = tribute_ir::dialect::ability::evidence_adt_type_ref(&mut ctx);
 
-        assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[1]), evidence);
+        // The descriptor field precedes the source fields.
+        assert_eq!(ctx.value_ty(struct_new.fields(&ctx)[2]), evidence);
+        assert_eq!(struct_get.field_idx(&ctx), 2);
         assert_eq!(struct_get.result_ty(&ctx), evidence);
         assert_eq!(
             ctx.get_type(struct_get.r#type(&ctx))
