@@ -7,6 +7,14 @@
 //! - `adt.struct_get` -> `wasm.struct_get`
 //! - `adt.struct_set` -> `wasm.struct_set`
 //!
+//! ## Runtime type descriptors
+//!
+//! A user struct or variant object carries its runtime type descriptor
+//! number as an `i32` first field, so its source fields start at index 1.
+//! The number comes from the module's `tribute_rtti.layout` declarations
+//! ([`super::descriptors::declare`]), which this pass erases. Builtin layouts
+//! have no descriptor field.
+//!
 //! ## Variant Operations (WasmGC Subtyping Approach)
 //!
 //! Variants use WasmGC's nominal subtyping for discrimination instead of
@@ -19,7 +27,7 @@
 //!   - Result type is marked with `is_variant=true` and `variant_tag` attributes
 //! - `adt.variant_is` -> `wasm.ref_test` (tests if ref is of specific variant type)
 //! - `adt.variant_cast` -> `wasm.ref_cast` (casts to specific variant type)
-//! - `adt.variant_get` -> `wasm.struct_get` (direct field access, no offset)
+//! - `adt.variant_get` -> `wasm.struct_get` (field access after the descriptor field)
 //!
 //! ## Array Operations
 //! - `adt.array_new` -> `wasm.array_new` or `wasm.array_new_default`
@@ -54,7 +62,12 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::{StringRef, Symbol};
 
+use std::collections::HashMap;
+
+use tribute_ir::dialect::tribute_rtti;
 use tribute_ir::runtime_layout::{self, has_runtime_layout};
+
+use super::descriptors::has_descriptor_field;
 
 /// The logical variant operation's `type` attribute is its exact enum-layout
 /// identity. Operand types may be an equivalent `adt.typeref` or already have
@@ -90,16 +103,47 @@ fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     ty
 }
 
+/// The declared number of each user allocation descriptor.
+type DescriptorNumbers = HashMap<(TypeRef, Option<StringRef>), u32>;
+
+/// The field index of source field `field` in an object of layout `ty`.
+fn physical_field(ctx: &IrContext, ty: TypeRef, field: u32) -> u32 {
+    field + u32::from(has_descriptor_field(ctx, ty))
+}
+
+/// The descriptor field operand for a new object of the descriptor
+/// `(ty, tag)`, inserted before the allocation, or `None` when the module does
+/// not declare that descriptor.
+fn descriptor_operand(
+    ctx: &mut IrContext,
+    rewriter: &mut PatternRewriter<'_>,
+    numbers: &DescriptorNumbers,
+    descriptor: (TypeRef, Option<StringRef>),
+    loc: trunk_ir::types::Location,
+) -> Option<trunk_ir::refs::ValueRef> {
+    let number = *numbers.get(&descriptor)?;
+    let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+    let constant = wasm_dialect::I32Const::operands()
+        .value(number as i32)
+        .results(i32_ty)
+        .build(ctx, loc);
+    rewriter.insert_op(constant.op_ref());
+    Some(constant.result(ctx))
+}
+
 /// Lower adt dialect to wasm dialect using arena IR.
 ///
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+    let numbers = tribute_rtti::Layout::declared_indices(ctx, module);
     let applicator = PatternApplicator::new(type_converter)
-        .add_pattern(StructNewPattern)
+        .add_pattern(StructNewPattern {
+            numbers: numbers.clone(),
+        })
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(VariantNewPattern)
+        .add_pattern(VariantNewPattern { numbers })
         .add_pattern(VariantIsPattern)
         .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
@@ -111,10 +155,15 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(RefIsNullPattern)
         .add_pattern(RefCastPattern);
     applicator.apply_partial(ctx, module);
+    for layout in tribute_rtti::Layout::declared(ctx, module) {
+        trunk_ir::rewrite::erase_op(ctx, layout.op_ref());
+    }
 }
 
 /// Pattern for `adt.struct_new` -> `wasm.struct_new`
-struct StructNewPattern;
+struct StructNewPattern {
+    numbers: DescriptorNumbers,
+}
 
 impl RewritePattern for StructNewPattern {
     fn match_and_rewrite(
@@ -128,7 +177,16 @@ impl RewritePattern for StructNewPattern {
         };
 
         let loc = ctx.op(op).location;
-        let fields: Vec<_> = struct_new.fields(ctx).to_vec();
+        let struct_ty = struct_new.r#type(ctx);
+        let mut fields: Vec<_> = struct_new.fields(ctx).to_vec();
+        if has_descriptor_field(ctx, struct_ty) {
+            let Some(descriptor) =
+                descriptor_operand(ctx, rewriter, &self.numbers, (struct_ty, None), loc)
+            else {
+                return false;
+            };
+            fields.insert(0, descriptor);
+        }
         let result_ty = struct_new.result_ty(ctx);
 
         // Keep type attribute, emit will convert to type_idx
@@ -165,7 +223,7 @@ impl RewritePattern for StructGetPattern {
         let Some(result_ty) = rewriter.result_type(ctx, op, 0) else {
             return false;
         };
-        let field_idx = struct_get.field(ctx);
+        let field_idx = physical_field(ctx, struct_get.r#type(ctx), struct_get.field(ctx));
 
         // Build wasm.struct_get with the converted field result type.
         // field attribute is already u32, emit will read it directly
@@ -196,7 +254,7 @@ impl RewritePattern for StructSetPattern {
         let loc = ctx.op(op).location;
         let ref_val = struct_set.r#ref(ctx);
         let value = struct_set.value(ctx);
-        let field_idx = struct_set.field(ctx);
+        let field_idx = physical_field(ctx, struct_set.r#type(ctx), struct_set.field(ctx));
 
         // Build wasm.struct_set: just change dialect/name
         // field attribute is already u32, emit will read it directly
@@ -211,9 +269,12 @@ impl RewritePattern for StructSetPattern {
 
 /// Pattern for `adt.variant_new` -> `wasm.struct_new`
 ///
-/// With WasmGC subtyping, variants are represented as separate struct types
-/// without an explicit tag field. The type itself serves as the discriminant.
-struct VariantNewPattern;
+/// Variants are represented as separate struct types without an explicit tag
+/// field. The type itself serves as the discriminant, and the leading field
+/// holds the variant's runtime type descriptor.
+struct VariantNewPattern {
+    numbers: DescriptorNumbers,
+}
 
 impl RewritePattern for VariantNewPattern {
     fn match_and_rewrite(
@@ -231,7 +292,13 @@ impl RewritePattern for VariantNewPattern {
         let Some(base_type) = canonical_enum_type(ctx, variant_new.r#type(ctx)) else {
             return false;
         };
-        let fields: Vec<_> = variant_new.fields(ctx).to_vec();
+        let mut fields: Vec<_> = variant_new.fields(ctx).to_vec();
+        let descriptor = (variant_new.r#type(ctx), Some(tag_sym));
+        let Some(descriptor) = descriptor_operand(ctx, rewriter, &self.numbers, descriptor, loc)
+        else {
+            return false;
+        };
+        fields.insert(0, descriptor);
 
         // Create variant-specific type: Expr + Add -> Expr$Add
         let variant_type = make_variant_type(ctx, base_type, tag_sym);
@@ -426,11 +493,11 @@ impl RewritePattern for VariantGetPattern {
             make_variant_type(ctx, enum_type, tag)
         };
 
-        // Infer type from the operand (the cast result has the variant-specific type)
-        // field attribute is already u32 and will be used directly
+        // Infer type from the operand (the cast result has the variant-specific
+        // type). The variant's fields follow its descriptor field.
         let new_op = wasm_gc_dialect::StructGet::operands(ref_val)
             .r#type(variant_type)
-            .field_idx(field_idx)
+            .field_idx(field_idx + 1)
             .results(result_ty)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -679,6 +746,13 @@ mod tests {
     use super::*;
     use trunk_ir::dialect::wasm;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
+
+    /// Declare the module's descriptors and lower it, as the Wasm pipeline does.
+    fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+        crate::wasm::descriptors::declare(ctx, module);
+        super::lower(ctx, module, type_converter);
+    }
 
     #[test]
     fn canonical_enum_type_requires_an_exact_enum_layout() {
@@ -781,6 +855,81 @@ mod tests {
             .get_type("type")
             .expect("struct_get type must be a Type attribute");
         assert_eq!(variant_ty, ctx.value_ty(ctx.op_operands(variant_get)[0]));
+    }
+
+    #[test]
+    fn user_objects_lead_with_their_descriptor_number() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !S = adt.struct<S(value: core.i32)>
+  !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
+  !E = adt.enum<{name = "E", variants = [["None", []], ["Some", [core.i32]]]}>
+
+  wasm.func @main(%env: wasm.anyref) -> core.nil {
+    %one = wasm.i32_const {value = 1} : core.i32
+    %first = adt.struct_new %one {type = !S} : !S
+    %second = adt.struct_new %one {type = !S} : !S
+    %field = adt.struct_get %first {type = !S, field = 0} : core.i32
+    adt.struct_set %first, %field {type = !S, field = 0}
+    %closure = adt.struct_new %one, %env {type = !Closure} : !Closure
+    %table = adt.struct_get %closure {type = !Closure, field = 0} : core.i32
+    %some = adt.variant_new %one {type = !E, tag = "Some"} : !E
+    %none = adt.variant_new {type = !E, tag = "None"} : !E
+    %payload = adt.variant_get %some {type = !E, tag = "Some", field = 0} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        assert!(
+            tribute_rtti::Layout::declared(&ctx, module).is_empty(),
+            "lowering consumes the descriptor declarations"
+        );
+        let func = module.ops(&ctx)[0];
+        let block = ctx.region(ctx.op_region(func, 0).unwrap()).blocks[0];
+        let ops = ctx.block(block).ops.clone();
+        let descriptor_number = |op: OpRef| {
+            let first = ctx.op_operands(op).first().copied()?;
+            let trunk_ir::refs::ValueDef::OpResult(def, _) = ctx.value_def(first) else {
+                return None;
+            };
+            wasm_dialect::I32Const::from_op(&ctx, def)
+                .ok()
+                .map(|constant| constant.value(&ctx))
+        };
+        let news = ops
+            .iter()
+            .copied()
+            .filter(|&op| wasm_gc_dialect::StructNew::matches(&ctx, op))
+            .collect::<Vec<_>>();
+        let first_user = FIRST_USER_TYPE_IDX as i32;
+        assert_eq!(descriptor_number(news[0]), Some(first_user));
+        assert_eq!(descriptor_number(news[1]), Some(first_user));
+        assert_eq!(ctx.op_operands(news[2]).len(), 2, "builtin closure");
+        assert_eq!(descriptor_number(news[3]), Some(first_user + 1));
+        assert_eq!(descriptor_number(news[4]), Some(first_user + 2));
+        assert_eq!(
+            ctx.op_operands(news[4]).len(),
+            1,
+            "None has only a descriptor"
+        );
+
+        let field_indices = ops
+            .iter()
+            .filter_map(|&op| {
+                wasm_gc_dialect::StructGet::from_op(&ctx, op)
+                    .map(|get| get.field_idx(&ctx))
+                    .or_else(|_| {
+                        wasm_gc_dialect::StructSet::from_op(&ctx, op).map(|set| set.field_idx(&ctx))
+                    })
+                    .ok()
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(field_indices, [1, 1, 0, 1]);
     }
 
     #[test]

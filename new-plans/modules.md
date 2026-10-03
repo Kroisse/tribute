@@ -51,6 +51,21 @@ syntax-owned semantics를 바꾸지 않는다. 예를 들어 로컬 `List`는 an
 선택될 수 있지만 `[1, 2]`의 canonical builtin `List` identity를 capture하지 못하며,
 두 타입은 unify되지 않는다.
 
+### Prelude와 패키지 `std`
+
+prelude는 패키지 `std`의 루트 모듈이다. 선언의 식별자는 그 선언이 속한 패키지와
+모듈 경로다. 그래서 prelude 선언의 식별자와 IR symbol은 `std::Option`,
+`std::Option::map`, `std::Int::+`처럼 `std`로 시작하고, 사용자 패키지의 같은 경로
+선언과 섞이지 않는다. prelude 안에서 `pkg`는 `std`를 가리킨다.
+
+모든 모듈은 prelude 루트 항목을 짧은 이름으로 본다. 값과 타입(`Option`, `Some`,
+`String`)뿐 아니라 그 항목의 namespace도 경로의 첫 segment가 된다
+(`Option::map`, `Int::to_string`, `abilities::Throw`). 사용자 선언이 같은 이름을 가지면
+그 선언이 우선하고, prelude 항목은 `std::Option`처럼 패키지 경로로 가리킨다. UFCS는
+receiver 타입의 method index로 고르므로 이름이 가려져도 prelude method를 찾는다.
+
+진단은 타입을 식별 경로로 표시한다. prelude 타입은 `std::Option(Int)`처럼 보인다.
+
 ---
 
 ## Module Syntax
@@ -92,13 +107,18 @@ operation들은 sequence 의미만 갖고 target layout이나 variant tag를 노
 않는다. Native와 Wasm은 각자 private layout으로 lower한다.
 
 `extern "intrinsic"`은 compiler-reserved directive다. Prelude와 사용자 선언 모두
-canonical qualified source name을 intrinsic identity로 요청하며, 병합한 AST 전체에서
+선언의 패키지 경로를 intrinsic identity로 요청하며(`std::Int::+`), 사용자 패키지의
+선언은 `std`가 가진 identity를 요청할 수 없다. 병합한 AST 전체에서
 monomorphization 전에 지원되는 identity인지 검사한다. 미지원 directive는 미사용
 선언이라도 각 source span에서 진단한다. 지원되는 identity와 typechecked complete
 signature가 registry metadata와 함께 검증된 선언만 intrinsic lowering에 진입한다.
 Ordinary source function이나 `extern "C"`는 같은 symbol을 사용해도 intrinsic이 아니며,
 reserved ABI 문자열만으로 signature 검증을 우회할 수 없다. 이 directive는 일반적인
 symbol uniqueness 규칙을 완화하지 않는다.
+
+`extern "C"` 함수의 IR symbol은 선언한 이름이다. C linkage는 하나의 평평한
+이름공간이므로, 모듈 안에서 선언해도 모듈 경로를 붙이지 않는다. 소스에서는 여전히
+모듈 경로로 그 함수를 가리킨다.
 
 ### Use 문법
 

@@ -23,12 +23,15 @@ fn keyword(segment: Symbol) -> Option<&'static str> {
     })
 }
 
-/// The package-root path `path` names when it starts with a path keyword,
-/// read from the module at `module_path`; `None` for a path without one.
+/// The path `path` names when it starts with a path keyword, read from the
+/// module at `module_path`; `None` for a path without one.
 ///
+/// The first `package_depth` segments of `module_path` are the package root.
 /// `pkg` names the package root, `self` the current module, and `super` its
-/// parent. A keyword may only start a path.
+/// parent, which the package root does not have. A keyword may only start a
+/// path.
 pub(crate) fn absolute_path(
+    package_depth: usize,
     module_path: &[Symbol],
     path: &[Symbol],
 ) -> Result<Option<Vec<Symbol>>, PathKeywordError> {
@@ -40,13 +43,13 @@ pub(crate) fn absolute_path(
     }
     let mut base = match keyword(first) {
         None => return Ok(None),
-        Some("pkg") => Vec::new(),
+        Some("pkg") => module_path[..package_depth].to_vec(),
         Some("self") => module_path.to_vec(),
         Some(_) => {
-            let (_, parent) = module_path
-                .split_last()
-                .ok_or(PathKeywordError::SuperAtRoot)?;
-            parent.to_vec()
+            if module_path.len() <= package_depth {
+                return Err(PathKeywordError::SuperAtRoot);
+            }
+            module_path[..module_path.len() - 1].to_vec()
         }
     };
     base.extend_from_slice(rest);
@@ -65,40 +68,57 @@ mod tests {
     fn keywords_expand_from_the_current_module() {
         let module = path("a::b");
         assert_eq!(
-            absolute_path(&module, &path("pkg::x::y")),
+            absolute_path(0, &module, &path("pkg::x::y")),
             Ok(Some(path("x::y")))
         );
         assert_eq!(
-            absolute_path(&module, &path("self::x")),
+            absolute_path(0, &module, &path("self::x")),
             Ok(Some(path("a::b::x")))
         );
         assert_eq!(
-            absolute_path(&module, &path("super::x")),
+            absolute_path(0, &module, &path("super::x")),
             Ok(Some(path("a::x")))
         );
-        assert_eq!(absolute_path(&module, &path("x::y")), Ok(None));
+        assert_eq!(absolute_path(0, &module, &path("x::y")), Ok(None));
+    }
+
+    #[test]
+    fn keywords_stop_at_the_package_root() {
+        let module = path("std::io");
+        assert_eq!(
+            absolute_path(1, &module, &path("pkg::x")),
+            Ok(Some(path("std::x")))
+        );
+        assert_eq!(
+            absolute_path(1, &module, &path("super::x")),
+            Ok(Some(path("std::x")))
+        );
+        assert_eq!(
+            absolute_path(1, &path("std"), &path("super::x")),
+            Err(PathKeywordError::SuperAtRoot)
+        );
     }
 
     #[test]
     fn invalid_keywords_are_errors() {
         assert_eq!(
-            absolute_path(&[], &path("super::x")),
+            absolute_path(0, &[], &path("super::x")),
             Err(PathKeywordError::SuperAtRoot)
         );
         assert_eq!(
-            absolute_path(&path("a::b"), &path("super::super::x")),
+            absolute_path(0, &path("a::b"), &path("super::super::x")),
             Err(PathKeywordError::Misplaced(Symbol::new("super")))
         );
         assert_eq!(
-            absolute_path(&[], &path("x::super::y")),
+            absolute_path(0, &[], &path("x::super::y")),
             Err(PathKeywordError::Misplaced(Symbol::new("super")))
         );
         assert_eq!(
-            absolute_path(&[], &path("pkg::super::y")),
+            absolute_path(0, &[], &path("pkg::super::y")),
             Err(PathKeywordError::Misplaced(Symbol::new("super")))
         );
         assert_eq!(
-            absolute_path(&[], &path("pkg::self")),
+            absolute_path(0, &[], &path("pkg::self")),
             Err(PathKeywordError::Misplaced(Symbol::new("self")))
         );
     }

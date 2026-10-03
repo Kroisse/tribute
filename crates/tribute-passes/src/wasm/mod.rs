@@ -19,6 +19,7 @@
 pub mod adt_to_wasm;
 pub mod bytes;
 pub mod const_to_wasm;
+pub mod descriptors;
 pub mod evidence_to_wasm;
 pub mod intrinsic_to_wasm;
 pub mod io;

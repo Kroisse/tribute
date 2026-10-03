@@ -291,14 +291,10 @@ fn trusted_ownership_forwarding_has_focused_ir(db: &salsa::DatabaseImpl) {
         ),
     )
     .expect("elided forwarding IR should be available");
-    assert_eq!(
-        generated_rtti_field_releases(preserved),
-        "@__tribute_release_5=1"
-    );
-    assert_eq!(
-        generated_rtti_field_releases(elided),
-        "@__tribute_release_5=1"
-    );
+    // The fixture allocates only `Boxed(Nat)`, whose descriptor has no
+    // managed field to release.
+    assert_eq!(generated_rtti_field_releases(preserved), "");
+    assert_eq!(generated_rtti_field_releases(elided), "");
     let preserved = focused_rc_ops(preserved);
     let elided = focused_rc_ops(elided);
     assert_eq!(
@@ -507,18 +503,11 @@ fn borrowed_parameters_have_focused_before_after_ir(db: &salsa::DatabaseImpl) {
     )
     .expect("preserved parameter RC IR should be available");
 
-    assert_eq!(
-        generated_rtti_field_releases(before),
-        "@__tribute_release_5=1"
-    );
-    assert_eq!(
-        generated_rtti_field_releases(after),
-        "@__tribute_release_5=1"
-    );
-    assert_eq!(
-        generated_rtti_field_releases(preserved_after),
-        "@__tribute_release_5=1"
-    );
+    // The fixture allocates only `Boxed(Nat)`, whose descriptor has no
+    // managed field to release.
+    assert_eq!(generated_rtti_field_releases(before), "");
+    assert_eq!(generated_rtti_field_releases(after), "");
+    assert_eq!(generated_rtti_field_releases(preserved_after), "");
 
     let before = focused_rc_ops(before);
     let after = focused_rc_ops(after);

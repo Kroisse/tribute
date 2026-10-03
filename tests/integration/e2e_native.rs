@@ -126,6 +126,104 @@ fn main() -> Nil {
 }
 
 #[test]
+fn test_native_extern_c_in_module_links_by_declared_name() {
+    let output = compile_and_run_native(
+        "extern_c_in_module.trb",
+        r#"
+mod ffi {
+    pub extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+}
+
+fn main() -> Nil {
+    ffi::__tribute_print_nat(7)
+}
+"#,
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "7");
+}
+
+#[test]
+fn test_native_user_enum_shadows_prelude_type() {
+    assert_native_output(
+        "user_option.trb",
+        r#"
+enum Option(a) {
+    None,
+    Some(a)
+}
+
+fn wrap(x: Nat) -> Option(Nat) {
+    Some(x)
+}
+
+fn main() -> Nil {
+    case wrap(5) {
+        Some(n) -> __tribute_print_nat(n)
+        None -> __tribute_print_nat(0)
+    }
+}
+"#,
+        "5",
+    );
+}
+
+#[test]
+fn test_native_shadowed_prelude_type_by_package_path() {
+    assert_native_output(
+        "shadowed_option_path.trb",
+        r#"
+enum Option(a) {
+    None,
+    Some(a)
+}
+
+fn mine(x: Nat) -> Option(Nat) { Some(x) }
+
+fn theirs(x: Nat) -> std::Option(Nat) { std::Option::Some(x) }
+
+fn main() -> Nil {
+    case theirs(1) {
+        std::Option::Some(n) -> __tribute_print_nat(n)
+        std::Option::None -> __tribute_print_nat(0)
+    }
+    case mine(2) {
+        Some(n) -> __tribute_print_nat(n)
+        None -> __tribute_print_nat(0)
+    }
+}
+"#,
+        "1\n2",
+    );
+}
+
+#[test]
+fn test_native_user_function_beside_prelude_function_of_the_same_path() {
+    assert_native_output(
+        "user_option_map.trb",
+        r#"
+pub mod Option {
+    pub fn map(x: Nat) -> Nat { x + 1 }
+}
+
+fn main() -> Nil {
+    __tribute_print_nat(Option::map(1))
+    let doubled = Some(3).map(fn(n) { n * 2 })
+    case doubled {
+        Some(n) -> __tribute_print_nat(n)
+        None -> __tribute_print_nat(0)
+    }
+}
+"#,
+        "2\n6",
+    );
+}
+
+#[test]
 fn test_native_function_call() {
     assert_native_output(
         "function_call.trb",

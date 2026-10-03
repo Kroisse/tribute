@@ -144,12 +144,22 @@ impl<'db> TypeChecker<'db> {
         key: impl WellKnownTypeKey,
     ) -> Option<WellKnownType<'db>> {
         let name = key.name();
-        let declaration = module.decls.iter().find_map(|decl| match decl {
+        // The prelude's root items are inside its package module.
+        let mut prefix = String::new();
+        let mut decls = &module.decls;
+        if let [Decl::Module(package)] = decls.as_slice()
+            && let Some(body) = &package.body
+        {
+            crate::push_prefix(&mut prefix, package.name);
+            decls = body;
+        }
+        let declaration = decls.iter().find_map(|decl| match decl {
             Decl::Struct(decl) if decl.name == name => Some(decl.id),
             Decl::Enum(decl) if decl.name == name => Some(decl.id),
             _ => None,
         })?;
-        let ty = self.env.lookup_type_def(name)?.body(self.db());
+        let qualified = crate::qualified_symbol(&mut prefix, name);
+        let ty = self.env.lookup_type_def(qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
             definition: DefinitionIdentity::new(

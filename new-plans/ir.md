@@ -1419,8 +1419,8 @@ Struct 이름과 필드 이름은 IR에서 nominal layout을 해석하는 단계
 가진다. `adt.typeref`를 같은 이름의 layout으로 해석하는 단계, ownership 계획, ABI
 검증, frontend의 record pattern 해석이 여기에 속한다. 그 아래의 target lowering은
 필드의 물리 표현과 순서만 사용한다. 이름이 필요한 runtime 동작(해제, 값 출력,
-variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡으며, 할당
-operation은 nominal 단계에서 descriptor 참조를 얻는다.
+variant 판별)은 [runtime 타입 descriptor](runtime-types.md)가 맡는다. Nominal
+layout을 마지막으로 해석하는 target 경계가 할당에 descriptor 번호를 새긴다.
 
 저수준 struct 타입이 갖는 identity는 runtime 동작이 달라지는 경우로 한정한다.
 Layout과 runtime 동작이 같은 두 소스 타입은 같은 저수준 struct를 쓰고

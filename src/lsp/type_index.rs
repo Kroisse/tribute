@@ -358,7 +358,7 @@ mod tests {
         let index = type_index(&db, source).expect("type index");
         let offset = text.rfind("value").unwrap();
         let entry = index.type_at(&db, offset).expect("type of `value`");
-        assert_eq!(print_ast_type(&db, entry.ty), "Option(Nat)");
+        assert_eq!(print_ast_type(&db, entry.ty), "std::Option(Nat)");
     }
 
     #[test]

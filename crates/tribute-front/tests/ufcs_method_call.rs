@@ -149,7 +149,7 @@ fn test() -> Nat {
                     arg_count: 0,
                 },
                 TdnrCall {
-                    target: "Nat::+".to_owned(),
+                    target: "std::Nat::+".to_owned(),
                     arg_count: 2,
                 },
             ],
@@ -411,7 +411,7 @@ fn test() -> Nat {
         TdnrSummary {
             method_calls: vec![],
             calls: vec![TdnrCall {
-                target: "String::len".to_owned(),
+                target: "std::String::len".to_owned(),
                 arg_count: 1,
             }],
         }

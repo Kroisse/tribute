@@ -91,18 +91,28 @@ impl<'db> TdnrResolver<'db> {
     /// (no additional prefix), so FuncDefIds match what the rest of the pipeline expects.
     pub fn index_external_module(&mut self, module: &Module<TypedRef<'db>>) {
         if self.string_type.is_none() {
-            self.string_type = module.decls.iter().find_map(|decl| {
+            // The prelude's root items are inside its package module.
+            let mut package = String::new();
+            let mut decls = &module.decls;
+            if let [Decl::Module(root)] = decls.as_slice()
+                && let Some(body) = &root.body
+            {
+                crate::push_prefix(&mut package, root.name);
+                decls = body;
+            }
+            self.string_type = decls.iter().find_map(|decl| {
                 let (name, declaration) = match decl {
                     Decl::Struct(decl) => (decl.name, decl.id),
                     Decl::Enum(decl) => (decl.name, decl.id),
                     _ => return None,
                 };
                 (name == "String").then(|| {
+                    let qualified = crate::qualified_symbol(&mut package.clone(), name);
                     Type::new(
                         self.db,
                         TypeKind::Named {
-                            id: crate::ast::TypeDefId::source(self.db, name, declaration),
-                            name,
+                            id: crate::ast::TypeDefId::source(self.db, qualified, declaration),
+                            name: qualified,
                             args: vec![],
                         },
                     )

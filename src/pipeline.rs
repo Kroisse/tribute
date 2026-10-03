@@ -283,10 +283,11 @@ fn checked_prelude<'db>(
     db: &'db dyn salsa::Database,
 ) -> Option<(ast_typeck::TypeCheckOutput<'db>, PreludeExports<'db>)> {
     let (parsed, _) = parse_prelude(db)?;
-    let prelude_ast = parsed.module(db);
+    let prelude_ast = &ast_resolve::library_package_module(parsed.module(db));
     let span_map = parsed.span_map(db).clone();
     let prelude_env = ast_resolve::build_env(db, prelude_ast);
-    let resolved = ast_resolve::resolve_with_env(db, prelude_ast, prelude_env, span_map.clone());
+    let resolved =
+        ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env, span_map.clone());
 
     // Typecheck with independent TypeContext (all UniVars resolved)
     let checker = ast_typeck::TypeChecker::new(db, span_map.clone());
@@ -344,8 +345,8 @@ fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
 #[salsa::tracked(returns(as_ref))]
 fn prelude_env<'db>(db: &'db dyn salsa::Database) -> Option<ModuleEnv<'db>> {
     let (parsed, _) = parse_prelude(db)?;
-    let prelude_ast = parsed.module(db);
-    Some(ast_resolve::build_env(db, prelude_ast))
+    let prelude_ast = ast_resolve::library_package_module(parsed.module(db));
+    Some(ast_resolve::build_env(db, &prelude_ast))
 }
 
 /// The prelude's type exports (TypeSchemes only, no UniVars), injected into
@@ -1558,10 +1559,9 @@ pub fn parse_and_lower_ast<'db>(
     // Phase 2: Build user env and merge prelude bindings
     let mut user_env = ast_resolve::build_env(db, user_ast);
     if let Some(p_env) = prelude_env(db) {
-        user_env.merge(p_env); // Prelude bindings injected, user definitions take precedence
+        // Prelude bindings injected, user definitions take precedence
+        ast_resolve::merge_library(&mut user_env, p_env);
     }
-    // Resolve `use` imports that reference prelude modules (e.g., `use abilities::Abort`)
-    ast_resolve::resolve_use_imports(&mut user_env);
 
     // Phase 3: Name resolution with merged environment
     let resolved_ast = ast_resolve::resolve_with_env(db, user_ast, user_env, span_map.clone());
@@ -3123,7 +3123,7 @@ fn main() -> Nil {
             let (_, monomorphized) =
                 merge_and_lower_to_ir_with(db, &typed, source, |typed, _, _, _| typed);
             let ast = format!("{:#?}", monomorphized.ast);
-            let concrete = "std::collections::List::__tribute_list_prepend_intrinsic$String";
+            let concrete = "std::collections::List::__tribute_list_prepend_intrinsic$std::String";
 
             assert!(
                 monomorphized
@@ -3394,7 +3394,7 @@ fn main() -> Nil {}
                 assert_eq!(outer[3].1.len(), 2);
                 assert_eq!(outer[3].1[0], value);
                 assert_eq!(ir.get_type(outer[3].1[1]).name, Symbol::new("i1"));
-                assert_eq!(target(&ir, outer[4].1[0]), alias(&ir, "String"));
+                assert_eq!(target(&ir, outer[4].1[0]), alias(&ir, "std::String"));
                 let tuple = target(&ir, outer[1].1[0]);
                 let fields = get_struct_fields(&ir, tuple).unwrap();
                 assert_eq!(fields[0].1, value);
@@ -3749,28 +3749,26 @@ mod Nested {
         }
     }
 
+    /// An intrinsic identity is the declaration's package path, so a user
+    /// declaration cannot claim one the `std` package owns.
     #[salsa_test]
-    fn supported_user_intrinsic_directive_is_registered_before_lowering(db: &salsa::DatabaseImpl) {
-        use tribute_front::ast::Decl;
-        use trunk_ir::Symbol;
-
+    fn user_declaration_cannot_claim_a_library_intrinsic(db: &salsa::DatabaseImpl) {
         let source = source_from_str(
-            "supported_intrinsic.trb",
+            "library_intrinsic.trb",
             r#"extern "intrinsic" fn __bytes_get_or_panic(bytes: Bytes, index: Nat) -> Nat"#,
         );
         let typed = parse_and_lower_ast(db, source).expect("frontend output");
         assert!(parse_and_lower_ast::accumulated::<Diagnostic>(db, source).is_empty());
-        let Decl::ExternFunction(user_declaration) = &typed.module(db).decls[0] else {
-            panic!("expected the user intrinsic declaration");
-        };
-        let prepared = prepare_frontend_details(db, typed, source).expect("supported directive");
+        assert!(prepare_frontend_for_lowering(db, typed, source).is_none());
+        let diagnostics =
+            prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, typed, source);
         assert_eq!(
-            prepared.compiler_intrinsics.get(&user_declaration.id),
-            Some(&Symbol::new("__bytes_get_or_panic"))
+            diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.inner.message.as_str())
+                .collect::<Vec<_>>(),
+            ["unsupported compiler intrinsic directive `__bytes_get_or_panic`"]
         );
-        assert!(prepare_frontend_details::accumulated::<Diagnostic>(db, typed, source).is_empty());
-        // This checks registration of the user's declaration ID. The later
-        // symbol-uniqueness boundary independently rejects prelude redeclarations.
     }
 
     #[salsa_test]
@@ -3801,14 +3799,14 @@ mod Nested {
             })
         };
         assert_eq!(
-            identity("Int::+"),
+            identity("std::Int::+"),
             None,
             "arithmetic lowering is the last reader of its identities and removes \
              declarations nothing references"
         );
         assert_eq!(
-            identity("__bytes_get_or_panic"),
-            Some(Some("__bytes_get_or_panic".to_owned())),
+            identity("std::__bytes_get_or_panic"),
+            Some(Some("std::__bytes_get_or_panic".to_owned())),
             "bytes lowering consumes its identity inside the target boundary"
         );
     }
@@ -3875,11 +3873,11 @@ fn main() -> Nil { }
         };
         assert_eq!(
             qualified(well_known.string_equality).as_deref(),
-            Some("String::==")
+            Some("std::String::==")
         );
         assert_eq!(
             qualified(well_known.bytes_equality).as_deref(),
-            Some("Bytes::==")
+            Some("std::Bytes::==")
         );
     }
 
