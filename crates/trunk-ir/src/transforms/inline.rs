@@ -187,7 +187,7 @@ fn splice_callee_body_before(
 // Policy
 // =========================================================================
 
-use super::call_graph::{CallGraph, recursive_functions};
+use super::call_graph::{CallGraph, directly_recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
 use std::collections::HashSet;
@@ -336,7 +336,7 @@ pub fn inline_functions_with_config(
 
     loop {
         let graph = am.require::<CallGraph>(ctx, module.op());
-        let recursive = recursive_functions(&graph);
+        let recursive = directly_recursive_functions(&graph);
 
         let pattern = InlineCallSite::new(Arc::clone(&graph), recursive, config.clone());
 
@@ -1425,7 +1425,7 @@ mod pass {
 
         let mut am = AnalysisCache::new();
         let graph = am.require::<CallGraph>(&ctx, module.op());
-        let recursive = recursive_functions(&graph);
+        let recursive = directly_recursive_functions(&graph);
 
         let inline_pattern =
             InlineCallSite::new(Arc::clone(&graph), recursive, InlineConfig::default());

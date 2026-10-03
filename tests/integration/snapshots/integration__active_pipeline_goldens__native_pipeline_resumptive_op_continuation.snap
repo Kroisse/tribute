@@ -5,7 +5,6 @@ expression: "pipeline_contract_summary(ir_text, true)"
 __tribute_done_k: (tribute_rt.anyref, core.nil) -> ()
   func.return operands=0 results=0: 1
 __tribute_main: (core.array<adt.struct<_Marker>>, Frame) -> ()
-  func.call operands=2 results=1: 1
   func.tail_call operands=2 results=0: 1
 __tribute_unhandled: (core.array<adt.struct<_Marker>>, tribute_rt.anyref, adt.struct<_closure>, core.i32, core.i32, core.i32, tribute_rt.anyref) -> ()
   func.unreachable operands=0 results=0: 1
@@ -18,6 +17,5 @@ main: () -> (core.nil)
   func.return operands=1 results=0: 1
 run_state: (core.array<adt.struct<_Marker>>, Frame) -> ()
   func.call operands=0 results=1: 1
-  func.call operands=2 results=1: 3
-  func.call operands=5 results=1: 2
+  func.call operands=5 results=1: 1
   func.tail_call operands=2 results=0: 1
