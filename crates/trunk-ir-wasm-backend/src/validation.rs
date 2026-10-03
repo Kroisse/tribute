@@ -554,10 +554,7 @@ mod tests {
   !Plain = core.array<!Marker>
 }"#,
         );
-        let alias = |ctx: &IrContext, name: &str| {
-            ctx.type_alias_by_name(&trunk_ir::Symbol::from_dynamic(name))
-                .unwrap()
-        };
+        let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
         let evidence = alias(&ctx, "Evidence");
         let plain = alias(&ctx, "Plain");
         let arrayref =

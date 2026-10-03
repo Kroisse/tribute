@@ -432,10 +432,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -487,10 +484,7 @@ mod tests {
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(&Symbol::new(name))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str(name)))
             .attr("type", Attribute::Type(func_ty))
             .region(region)
             .build(ctx);
@@ -536,10 +530,7 @@ mod tests {
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let op_data = OperationDataBuilder::new(loc, Symbol::new(dialect), Symbol::new("func"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(&Symbol::new(name))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str(name)))
             .attr("type", Attribute::Type(func_ty))
             .build(ctx);
         ctx.create_op(op_data)

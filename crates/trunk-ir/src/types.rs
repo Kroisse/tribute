@@ -948,9 +948,15 @@ impl TypeInterner {
     }
 
     /// Check if this type matches the given dialect and name.
-    pub fn is_dialect(&self, r: TypeRef, dialect: &Symbol, name: &Symbol) -> bool {
+    ///
+    /// `dialect` and `name` are anything a `Symbol` compares with, such as a
+    /// `&str` or a `&Symbol`.
+    pub fn is_dialect<D, N>(&self, r: TypeRef, dialect: D, name: N) -> bool
+    where
+        Symbol: PartialEq<D> + PartialEq<N>,
+    {
         let data = self.get(r);
-        data.dialect == *dialect && data.name == *name
+        data.dialect == dialect && data.name == name
     }
 
     /// Iterate over all interned types, yielding `(TypeRef, &TypeData)` pairs.

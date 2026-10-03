@@ -1189,7 +1189,7 @@ mod tests {
             }}"
             );
             let module = crate::parser::parse_module(&mut ctx, &input).unwrap();
-            let callable = ctx.type_alias_by_name(&Symbol::new("callable")).unwrap();
+            let callable = ctx.type_alias_by_text("callable").unwrap();
             let expanded_result = if result == "()" { "()" } else { "core.i32" };
             assert_eq!(
                 print_type(&ctx, callable),

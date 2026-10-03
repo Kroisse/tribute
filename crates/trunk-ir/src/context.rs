@@ -2401,10 +2401,7 @@ mod tests {
             Symbol::new("func"),
             Symbol::new("func"),
         )
-        .attr(
-            "sym_name",
-            Attribute::String(ctx.intern_symbol_text(&Symbol::new(new_name))),
-        )
+        .attr("sym_name", Attribute::String(ctx.intern_str(new_name)))
         .attr("type", func_ty)
         .region(cloned_region)
         .build(&mut ctx);

@@ -125,10 +125,7 @@ mod tests {
             parent_op: None,
         });
         let module = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(&Symbol::new("test"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
             .region(region)
             .build(ctx);
         let module = ctx.create_op(module);

@@ -672,10 +672,7 @@ mod tests {
         let nil_ty = core::nil(ctx).as_type_ref();
         let func_ty = func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(&Symbol::new(name))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str(name)))
             .attr("type", Attribute::Type(func_ty))
             .build(ctx);
         let func_op = ctx.create_op(op_data);

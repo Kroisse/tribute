@@ -601,7 +601,7 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
     let function = plan.function(&Symbol::new("load")).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let block = ctx.region(body).blocks[0];
-    let box_layout = ctx.type_alias_by_name(&Symbol::new("Box")).unwrap();
+    let box_layout = ctx.type_alias_by_text("Box").unwrap();
     let mut owner = None;
     let mut call = None;
     for &op in &ctx.block(block).ops {
@@ -1646,7 +1646,7 @@ fn unused_frame_alias_with_missing_nominal_result_is_not_a_live_ownership_root()
     let plan = production_plan(&ctx, module)
         .expect("unused continuation-frame aliases must not affect ownership planning");
     let dead_frame = ctx
-        .type_alias_by_name(&Symbol::new("DeadFrame"))
+        .type_alias_by_text("DeadFrame")
         .expect("parsed dead frame alias");
     assert!(!plan.is_managed_type(&ctx, dead_frame));
     assert!(plan.rtti_types().is_empty());
@@ -1699,7 +1699,7 @@ fn direct_layout_in_live_null_metadata_is_managed() {
     );
 
     let node = ctx
-        .type_alias_by_name(&Symbol::new("Node"))
+        .type_alias_by_text("Node")
         .expect("parsed native node alias");
     assert!(plan.is_managed_type(&ctx, node));
     assert!(plan.rtti_types().is_empty());

@@ -32,8 +32,7 @@ pub(crate) fn is_type(
     dialect: &'static str,
     name: &'static str,
 ) -> bool {
-    let data = ctx.get_type(ty);
-    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
+    ctx.types().is_dialect(ty, dialect, name)
 }
 
 // ============================================================================
@@ -444,7 +443,7 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and Int → checked u32 conversion
-pub(crate) fn attr_u32(attrs: &AttributeMap, key: &Symbol) -> CompilationResult<u32> {
+pub(crate) fn attr_u32(attrs: &AttributeMap, key: &str) -> CompilationResult<u32> {
     match attrs.get(key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(

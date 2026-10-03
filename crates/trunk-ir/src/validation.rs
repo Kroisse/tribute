@@ -2107,10 +2107,7 @@ mod tests {
         // Build wasm.func manually
         let wasm_func_data =
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(&Symbol::new("func_b"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("func_b")))
                 .attr("type", Attribute::Type(wasm_func_ty))
                 .region(body_b)
                 .build(&mut ctx);

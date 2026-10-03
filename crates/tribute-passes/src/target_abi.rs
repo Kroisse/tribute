@@ -753,13 +753,7 @@ pub(crate) fn dispatch_answer_type(
         .ok_or_else(|| TargetAbiError::new("CPS resume frame lacks answer type"))?;
     let results = resume_signature.results(ctx);
     if !(results.is_empty()
-        || (results.len() == 1
-            && is_parameterless_dialect_type(
-                ctx,
-                results[0],
-                &Symbol::new("core"),
-                &Symbol::new("never"),
-            )))
+        || (results.len() == 1 && is_parameterless_dialect_type(ctx, results[0], "core", "never")))
     {
         return Err(TargetAbiError::new(
             "CPS resume must have logical never or physical empty results",
@@ -931,20 +925,10 @@ fn validate_root_dispatch_type(
     };
     if callable.results(ctx) != physical_results
         || *actual_evidence != evidence
-        || !is_parameterless_dialect_type(ctx, *prompt, &Symbol::new("core"), &Symbol::new("i32"))
-        || !is_parameterless_dialect_type(ctx, *ability, &Symbol::new("core"), &Symbol::new("i32"))
-        || !is_parameterless_dialect_type(
-            ctx,
-            *operation,
-            &Symbol::new("core"),
-            &Symbol::new("i32"),
-        )
-        || !is_parameterless_dialect_type(
-            ctx,
-            *payload,
-            &Symbol::new("tribute_rt"),
-            &Symbol::new("anyref"),
-        )
+        || !is_parameterless_dialect_type(ctx, *prompt, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *ability, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *operation, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *payload, "tribute_rt", "anyref")
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch operands differ from the exact terminal ABI",
@@ -969,12 +953,7 @@ fn validate_root_dispatch_type(
         || resume.inputs(ctx).len() != 3
         || resume.inputs(ctx)[0] != evidence
         || resume.inputs(ctx)[1] != frame
-        || !is_parameterless_dialect_type(
-            ctx,
-            resume.inputs(ctx)[2],
-            &Symbol::new("tribute_rt"),
-            &Symbol::new("anyref"),
-        )
+        || !is_parameterless_dialect_type(ctx, resume.inputs(ctx)[2], "tribute_rt", "anyref")
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch resume differs from the exact frame ABI",
@@ -1009,12 +988,7 @@ fn dispatch_entry_function_type(
         .as_type_ref())
 }
 
-fn is_parameterless_dialect_type(
-    ctx: &IrContext,
-    ty: TypeRef,
-    dialect: &Symbol,
-    name: &Symbol,
-) -> bool {
+fn is_parameterless_dialect_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
     ctx.types().is_dialect(ty, dialect, name)
         && ctx.get_type(ty).params.is_empty()
         && ctx.get_type(ty).attrs.is_empty()
@@ -1840,10 +1814,7 @@ mod tests {
             func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
         }"#,
         );
-        assert_eq!(
-            ctx.type_alias_by_name(&Symbol::new("Evidence")),
-            Some(evidence)
-        );
+        assert_eq!(ctx.type_alias_by_text("Evidence"), Some(evidence));
         let cps = function(&ctx, module, "cps");
         let unchanged: Vec<_> = collect_ops(&ctx, module.op())
             .into_iter()

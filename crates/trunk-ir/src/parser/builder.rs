@@ -1684,9 +1684,7 @@ core.module @test {
             ("zero_one", 0, 1),
             ("many_one", 2, 1),
         ] {
-            let ty = ctx
-                .type_alias_by_name(&Symbol::from_dynamic(name))
-                .expect("function alias");
+            let ty = ctx.type_alias_by_text(name).expect("function alias");
             let function = func::FuncSig::from_type_ref(&ctx, ty).expect("validated func.func_sig");
             assert_eq!(function.inputs(&ctx).len(), input_count);
             assert_eq!(function.results(&ctx).len(), result_count);
@@ -1711,7 +1709,7 @@ core.module @test {
         );
         assert_eq!(
             ctx.op(function).attributes.get_type("type"),
-            ctx.type_alias_by_name(&Symbol::new("signature"))
+            ctx.type_alias_by_text("signature")
         );
     }
 
@@ -1744,7 +1742,7 @@ core.module @test {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("native assembly should parse");
-        let contract = ctx.type_alias_by_name(&Symbol::new("contract")).unwrap();
+        let contract = ctx.type_alias_by_text("contract").unwrap();
         assert!(clif::FuncSig::from_type_ref(&ctx, contract).is_some());
         assert!(func::FuncSig::from_type_ref(&ctx, contract).is_none());
         let function = ctx

@@ -856,7 +856,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(ty, &Symbol::new("core"), &Symbol::new("array"))
+                .is_dialect(ty, "core", "array")
                 .then_some(ptr_ty)
         });
 

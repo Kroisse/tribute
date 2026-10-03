@@ -1036,14 +1036,10 @@ mod tests {
         let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, &Symbol::new("tribute_rt"), &Symbol::new("anyref")))
-            .then_some(anyref_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, &Symbol::new("tribute_rt"), &Symbol::new("float")))
-            .then_some(f64_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "float")).then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
 
@@ -1093,14 +1089,10 @@ mod tests {
         let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, &Symbol::new("tribute_rt"), &Symbol::new("anyref")))
-            .then_some(anyref_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, &Symbol::new("tribute_rt"), &Symbol::new("float")))
-            .then_some(f64_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "float")).then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
 
@@ -1199,7 +1191,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(ty, &Symbol::new("adt"), &Symbol::new("typeref"))
+                .is_dialect(ty, "adt", "typeref")
                 .then_some(structref_ty)
         });
         lower(&mut ctx, module, type_converter);
