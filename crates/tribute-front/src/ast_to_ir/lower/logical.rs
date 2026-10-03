@@ -49,6 +49,7 @@ struct Declarations<'db> {
     lambda_signatures:
         std::collections::HashMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: std::collections::HashSet<crate::ast::NodeId>,
+    evidence_plans: HashMap<crate::ast::NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     local_instances: HashMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
     local_callables: local_callables::Plan<'db>,
 }
@@ -108,6 +109,40 @@ fn op(
     let op = ir.create_op(data);
     ir.push_op(block, op);
     op
+}
+
+/// Attach the typechecked evidence selection of the source node `node`.
+fn attach_evidence_plan<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    op: OpRef,
+    node: crate::ast::NodeId,
+    declarations: &Declarations<'db>,
+) {
+    let Some(plan) = declarations.evidence_plans.get(&node) else {
+        return;
+    };
+    let steps: Vec<_> = plan
+        .iter()
+        .map(|step| {
+            let instance = step.instance();
+            let ability_ref =
+                ctx.ability_ref_type(ir, instance.ability_id.qualified(ctx.db), &instance.args);
+            match step {
+                crate::typeck::EvidenceStep::Mask(_) => {
+                    tribute_control::EvidenceStep::Mask(ability_ref)
+                }
+                crate::typeck::EvidenceStep::Dup(_) => {
+                    tribute_control::EvidenceStep::Dup(ability_ref)
+                }
+            }
+        })
+        .collect();
+    if let Some(plan) = tribute_control::EvidenceStep::plan_attribute(steps) {
+        ir.op_mut(op)
+            .attributes
+            .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
+    }
 }
 
 fn result(ir: &IrContext, op: OpRef) -> ValueRef {
@@ -272,6 +307,7 @@ pub(super) fn lower_module<'db>(
         perform_operations,
         lambda_signatures,
         exhaustive_cases,
+        evidence_plans,
         well_known_types,
         compiler_intrinsics,
     } = typed;
@@ -306,6 +342,7 @@ pub(super) fn lower_module<'db>(
         perform_operations,
         lambda_signatures,
         exhaustive_cases,
+        evidence_plans,
         local_instances,
         local_callables: local_callables::Plan::default(),
     };
@@ -1354,7 +1391,15 @@ fn lower_expr<'db>(
                 .copied()
                 .map(|ty| builder.ctx.convert_logical_type(builder.ir, ty))
                 .unwrap_or_else(|| panic!("missing typechecked result for handle"));
-            lower_handle(builder, location, result_ty, body, handlers, declarations)
+            lower_handle(
+                builder,
+                location,
+                expr.id,
+                result_ty,
+                body,
+                handlers,
+                declarations,
+            )
         }
         ExprKind::Cons { ctor, args } => {
             lower_constructor(builder, location, expr.id, ctor, args, declarations)
@@ -1407,6 +1452,13 @@ fn lower_expr<'db>(
             let value = builder.cast_if_needed(location, value, input_ty);
             let resume =
                 tribute_control::Resume::operands(token, value).build(builder.ir, location);
+            attach_evidence_plan(
+                builder.ctx,
+                builder.ir,
+                resume.op_ref(),
+                expr.id,
+                declarations,
+            );
             builder.ir.push_op(builder.block, resume.op_ref());
             Some(resume.result(builder.ir))
         }
@@ -1924,6 +1976,16 @@ pub(super) fn emit_named_call(
     name: Symbol,
     values: Vec<ValueRef>,
 ) -> ValueRef {
+    let call = named_call(builder, location, name, values);
+    result(builder.ir, call)
+}
+
+fn named_call(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    name: Symbol,
+    values: Vec<ValueRef>,
+) -> OpRef {
     let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
         .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
     ensure_prelude_declaration(builder, location, name, &signature);
@@ -1936,13 +1998,12 @@ pub(super) fn emit_named_call(
         .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
         .collect();
     let symbol = builder.ctx.function_symbol(name);
-    let call = op(builder.ir, builder.block, location, "call", |builder| {
+    op(builder.ir, builder.block, location, "call", |builder| {
         builder
             .operands(values)
             .result(signature.return_type)
             .attr("callee", Attribute::SymbolRef(symbol))
-    });
-    result(builder.ir, call)
+    })
 }
 
 fn lower_call<'db>(
@@ -2059,7 +2120,9 @@ fn lower_call<'db>(
             }
             ResolvedRef::Function { id } => {
                 let name = id.qualified(builder.ctx.db);
-                let value = emit_named_call(builder, location, name, values);
+                let call = named_call(builder, location, name, values);
+                attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
+                let value = result(builder.ir, call);
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
             ResolvedRef::Local { id, .. } => {
@@ -2092,6 +2155,7 @@ fn lower_call<'db>(
                             .result(call_result)
                     },
                 );
+                attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
                 let value = result(builder.ir, call);
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
@@ -2125,6 +2189,7 @@ fn lower_call<'db>(
                     .result(call_result)
             },
         );
+        attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
         let value = result(builder.ir, call);
         Some(builder.cast_if_needed(location, value, result_ty))
     }
@@ -2223,6 +2288,7 @@ fn lower_lambda<'db>(
 fn lower_handle<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
+    handle_id: crate::ast::NodeId,
     result_ty: TypeRef,
     body: Expr<TypedRef<'db>>,
     handlers: Vec<HandlerArm<TypedRef<'db>>>,
@@ -2324,6 +2390,7 @@ fn lower_handle<'db>(
             .region(completion_region)
             .region(handlers_region)
     });
+    attach_evidence_plan(builder.ctx, builder.ir, handle, handle_id, declarations);
     Some(result(builder.ir, handle))
 }
 

@@ -19,6 +19,7 @@ mod e2e_local_callables;
 mod e2e_native;
 mod effect_var_collision;
 mod evidence_lambda;
+mod evidence_plan_ir;
 mod frontend_instances;
 mod frontend_type_roots;
 mod lang_examples;

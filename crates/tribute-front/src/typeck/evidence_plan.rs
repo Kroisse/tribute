@@ -23,12 +23,17 @@
 //! row substitution to the callee's whole row would merge an instance named
 //! in both, losing the second position.
 //!
+//! A callee's row stays open only when its tail is the caller's own tail:
+//! that is the only way an operation can pass the callee's explicit
+//! instances and still reach a handler of the caller. A tail variable that
+//! solving left unconstrained can be instantiated with the empty row.
+//!
 //! Checking records each call against the evidence scope it runs in and
 //! computes the selections only after solving, when every row is known.
 
 use std::collections::HashMap;
 
-use crate::ast::{Effect, EffectRow, LocalId, NodeId};
+use crate::ast::{Effect, EffectRow, EffectVar, LocalId, NodeId};
 
 use super::EvidenceStep;
 
@@ -189,15 +194,15 @@ impl<'db> EvidenceTracker<'db> {
         for (node, site) in &self.sites {
             let plan = match site {
                 EvidenceSite::Call { scope, callee } => {
-                    let (caller, _) = self.explicit(db, *scope, &resolve, &mut explicit);
-                    let (positions, open) = callee_positions(db, *callee, &resolve);
-                    call_plan(&caller, &positions, open)
+                    let (caller, tail) = self.explicit(db, *scope, &resolve, &mut explicit);
+                    let (positions, callee_tail) = callee_positions(db, *callee, &resolve);
+                    call_plan(&caller, &positions, opens_into(callee_tail, tail))
                 }
                 EvidenceSite::Resume { scope, body } if scope != body => {
-                    let (caller, _) = self.explicit(db, *scope, &resolve, &mut explicit);
-                    let (body, open) = self.explicit(db, *body, &resolve, &mut explicit);
+                    let (caller, tail) = self.explicit(db, *scope, &resolve, &mut explicit);
+                    let (body, body_tail) = self.explicit(db, *body, &resolve, &mut explicit);
                     // The handle body takes each of its instances once.
-                    call_plan(&caller, &body, open)
+                    call_plan(&caller, &body, opens_into(body_tail, tail))
                 }
                 EvidenceSite::Resume { .. } => Vec::new(),
                 EvidenceSite::Handle { body } => {
@@ -221,15 +226,15 @@ impl<'db> EvidenceTracker<'db> {
         plans
     }
 
-    /// The explicit instances of a scope's evidence, and whether a row tail
+    /// The explicit instances of a scope's evidence, and the row tail that
     /// lies beneath them.
     fn explicit(
         &self,
         db: &'db dyn salsa::Database,
         scope: usize,
         resolve: &impl Fn(EffectRow<'db>) -> EffectRow<'db>,
-        memo: &mut HashMap<usize, (Vec<Effect<'db>>, bool)>,
-    ) -> (Vec<Effect<'db>>, bool) {
+        memo: &mut HashMap<usize, (Vec<Effect<'db>>, Option<EffectVar>)>,
+    ) -> (Vec<Effect<'db>>, Option<EffectVar>) {
         if let Some(found) = memo.get(&scope) {
             return found.clone();
         }
@@ -242,15 +247,15 @@ impl<'db> EvidenceTracker<'db> {
                     .iter()
                     .filter(|instance| !instance.ability_id.is_builtin_io(db))
                     .cloned();
-                (unique(selectable), row.rest(db).is_some())
+                (unique(selectable), row.rest(db))
             }
-            EvidenceScope::Callable(None) => (Vec::new(), false),
+            EvidenceScope::Callable(None) => (Vec::new(), None),
             EvidenceScope::HandleBody { parent, handled } => {
-                let (parent, open) = self.explicit(db, *parent, resolve, memo);
+                let (parent, tail) = self.explicit(db, *parent, resolve, memo);
                 let handled = handled
                     .map(|row| resolve(row).effects(db).to_vec())
                     .unwrap_or_default();
-                (unique(handled.into_iter().chain(parent)), open)
+                (unique(handled.into_iter().chain(parent)), tail)
             }
         };
         memo.insert(scope, found.clone());
@@ -259,26 +264,28 @@ impl<'db> EvidenceTracker<'db> {
 }
 
 /// The callee positions that a caller's explicit instances may fill, and
-/// whether the callee's row stays open after instantiation.
+/// the callee's row tail after instantiation.
 fn callee_positions<'db>(
     db: &'db dyn salsa::Database,
     callee: EffectRow<'db>,
     resolve: &impl Fn(EffectRow<'db>) -> EffectRow<'db>,
-) -> (Vec<Effect<'db>>, bool) {
+) -> (Vec<Effect<'db>>, Option<EffectVar>) {
     // Resolve the declared instances and the tail separately so an instance
     // named by both keeps both positions. Within one part, an instance takes
     // one position however many times solving left it in the row.
     let declared = resolve(EffectRow::new(db, callee.effects(db).to_vec(), None));
     let mut positions = unique(declared.effects(db).iter().cloned());
-    let open = match callee.rest(db) {
-        Some(tail) => {
-            let tail = resolve(EffectRow::open(db, tail));
-            positions.extend(unique(tail.effects(db).iter().cloned()));
-            tail.rest(db).is_some()
-        }
-        None => false,
-    };
-    (positions, open)
+    let tail = callee.rest(db).and_then(|tail| {
+        let tail = resolve(EffectRow::open(db, tail));
+        positions.extend(unique(tail.effects(db).iter().cloned()));
+        tail.rest(db)
+    });
+    (positions, tail)
+}
+
+/// Whether operations through a callee's row tail reach the caller's tail.
+fn opens_into(callee_tail: Option<EffectVar>, caller_tail: Option<EffectVar>) -> bool {
+    callee_tail.is_some() && callee_tail == caller_tail
 }
 
 /// Select the evidence for a callee from the caller's explicit instances.

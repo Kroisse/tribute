@@ -697,6 +697,12 @@ fn merge_and_lower_to_ir_with<'db, M>(
             perform_operations: typed.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
+            evidence_plans: typed
+                .expression_types(db)
+                .evidence_plans
+                .iter()
+                .cloned()
+                .collect(),
             well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
         },

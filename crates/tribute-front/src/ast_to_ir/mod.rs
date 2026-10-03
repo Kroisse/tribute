@@ -183,6 +183,8 @@ pub struct TypedModule<'db> {
     pub lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     /// Case expressions whose source coverage is known to be exhaustive.
     pub exhaustive_cases: std::collections::HashSet<NodeId>,
+    /// Non-identity evidence selections of calls, resumes, and handles.
+    pub evidence_plans: HashMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
     /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,

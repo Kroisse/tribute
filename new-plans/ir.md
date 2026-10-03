@@ -629,16 +629,21 @@ typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`, `handle`
 수 있다. `handle`의 선택은 body evidence를 만들기 전에 적용하며 `mask`만 담는다.
 
 ```text
-{evidence_plan = [mask(core.ability_ref<{name = "State"}>), dup(...)]}
+{evidence_plan = [{mask = core.ability_ref<{name = "State", ...}>}, {dup = ...}]}
 ```
 
-- 원소는 `mask` 또는 `dup`과 exact ability instance의 쌍이며 순서대로 적용한다.
+- 원소는 key 하나짜리 dictionary다. Key `mask` 또는 `dup`이 연산을, 값이 exact
+  ability instance(`core.ability_ref` type)를 나타내며 원소는 순서대로 적용한다.
   한 instance는 한 번만 나온다.
 - 속성이 없으면 그대로 전달한다. 빈 목록은 쓰지 않는다.
-- Verifier는 원소 형상과 instance 중복만 검사한다. Row 정보는 IR에 없으므로
-  선택의 옳고 그름은 typechecking이 책임진다.
-- CPS legalization은 만든 호출에 속성을 옮기고, `resolve_evidence`가
-  `effect.mask`/`effect.dup`으로 만든다([cps-effects.md](cps-effects.md#row-directed-evidence)).
+- Verifier는 원소 형상, `handle`의 `mask` 전용 규칙, instance 중복만 검사한다.
+  Row 정보는 IR에 없으므로 선택의 옳고 그름은 typechecking이 책임진다.
+- CPS legalization은 선택을 바꾸지 않고 옮긴다. 호출과 `resume`의 선택은 그것이
+  만든 evidence-taking `func.call`, `func.tail_call`, `func.call_indirect`,
+  `func.tail_call_indirect`에, `handle`의 선택은 `ability.handle_dispatch`에 같은
+  이름의 속성으로 둔다. Evidence를 받지 않는 callee로 가는 호출에는 옮기지 않는다.
+  `resolve_evidence`가 이를 `effect.mask`/`effect.dup`으로 만든다
+  ([cps-effects.md](cps-effects.md#row-directed-evidence)).
 
 #### `tribute_control.return`
 

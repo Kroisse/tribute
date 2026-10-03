@@ -170,3 +170,25 @@ fn apply(callback: fn() ->{e} Nil) ->{e, Io} Nil {
 "#;
     assert!(plans(db, source).is_empty());
 }
+
+#[salsa_test]
+fn unconstrained_callee_tails_keep_the_evidence(db: &salsa::DatabaseImpl) {
+    let source = format!(
+        "{STATE}{}",
+        r#"
+pub mod labels {
+    pub fn label(value: Nat) -> Nat {
+        value
+    }
+}
+
+fn bump() ->{State(Nat)} Nat {
+    case State::get() {
+        0 -> labels::label(0)
+        value -> labels::label(value)
+    }
+}
+"#
+    );
+    assert!(plans(db, &source).is_empty());
+}

@@ -680,6 +680,21 @@ pub fn verify_tribute_control_post_cps(
     }
 }
 
+/// Carry a source call's, resume's, or handle's evidence selection to the
+/// operation that passes its evidence. The selection is copied unchanged.
+fn carry_evidence_plan(ctx: &mut IrContext, source: OpRef, target: OpRef) {
+    if let Some(plan) = ctx
+        .op(source)
+        .attributes
+        .get(tribute_control::EVIDENCE_PLAN_ATTR)
+        .cloned()
+    {
+        ctx.op_mut(target)
+            .attributes
+            .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
+    }
+}
+
 fn convert_convention(convention: tribute_control::CallingConvention) -> CallingConvention {
     match convention {
         tribute_control::CallingConvention::Direct => CallingConvention::Direct,
@@ -2017,6 +2032,9 @@ impl<'a> Converter<'a> {
             .results([result_ty])
             .build(self.ctx, location);
         set_calling_convention(self.ctx, call.op_ref(), target.convention);
+        if target.convention.needs_evidence() {
+            carry_evidence_plan(self.ctx, source, call.op_ref());
+        }
         Ok(call)
     }
 
@@ -2828,12 +2846,13 @@ impl<'a> Converter<'a> {
         self.ctx.push_op(block, suffix_op);
         let resume_result = self.convert_type(result_type);
         let resume_frame = self.frame_for_suffix(block, location, resume_result, flow, suffix)?;
-        self.emit_cps_tail_call_indirect(
+        let transfer = self.emit_cps_tail_call_indirect(
             block,
             location,
             token,
             [self.current_evidence(source, flow)?, resume_frame, value],
         )?;
+        carry_evidence_plan(self.ctx, source, transfer);
         Ok(())
     }
 
@@ -3257,6 +3276,7 @@ impl<'a> Converter<'a> {
         .ability_refs(ability_refs)
         .regions(body_region)
         .build(self.ctx, location);
+        carry_evidence_plan(self.ctx, source, dispatch.op_ref());
         self.ctx.push_op(block, dispatch.op_ref());
         Ok(())
     }
@@ -3393,6 +3413,7 @@ impl<'a> Converter<'a> {
                             .callee(target_symbol)
                             .build(self.ctx, location);
                         set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+                        carry_evidence_plan(self.ctx, source, tail.op_ref());
                         self.ctx.push_op(block, tail.op_ref());
                         return Ok(());
                     }
@@ -3451,7 +3472,9 @@ impl<'a> Converter<'a> {
                                 .iter()
                                 .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
                         );
-                        self.emit_cps_tail_call_indirect(block, location, callee, args)?;
+                        let transfer =
+                            self.emit_cps_tail_call_indirect(block, location, callee, args)?;
+                        carry_evidence_plan(self.ctx, source, transfer);
                         return Ok(());
                     }
                     let mut args = Vec::new();
@@ -3484,6 +3507,9 @@ impl<'a> Converter<'a> {
                         .signature(signature)
                         .build(self.ctx, location);
                     set_calling_convention(self.ctx, call.op_ref(), convention);
+                    if convention.needs_evidence() {
+                        carry_evidence_plan(self.ctx, source, call.op_ref());
+                    }
                     self.ctx.push_op(block, call.op_ref());
                     mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
                     index += 1;
