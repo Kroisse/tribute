@@ -280,8 +280,10 @@ session이나 editor 계층은 두지 않는다. `IrContext`의 필드는 비공
 캐시를 조회하려면 내부 가변성이 필요해져 `IrContext`의 공유 읽기 안전성과
 충돌한다.
 
-하나의 pipeline phase는 캐시 하나를 소유하며, 그 phase의 pass manager, pass,
-pass 검증기와 pass 바깥의 분석 소비자가 이를 공유한다. Pass manager의 검증기는
+컴파일 pipeline의 각 phase는 캐시 하나를 소유하며, 그 phase의 pass manager,
+pass, pass 검증기와 pass 바깥의 분석 소비자가 이를 공유한다. 캐시 인자를 받지
+않는 단독 진입점은 자체 캐시를 새로 만들며, phase 안의 호출은 캐시를 받는
+진입점을 사용한다. Pass manager의 검증기는
 입력을 한 번 검사한 뒤 revision을 바꾼 pass 다음에만 실행한다. IR을 바꾸지
 않은 pass는 불변 조건을 깨뜨릴 수 없기 때문이다. 검증기는 IR을 바꾸지 않으므로
 검증 중 계산된 분석은 이후 pass를 위해 캐시에 남는다.
