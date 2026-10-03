@@ -47,7 +47,7 @@ mod func {
         {}
     }
 
-    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
+    fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
     fn call_indirect<S: FuncSig>(
@@ -57,7 +57,7 @@ mod func {
     ) -> Values<S::Results> {
     }
 
-    fn tail_call(callee: Attr<Symbol>, args: Variadic<_>) {}
+    fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
     fn tail_call_indirect<S: FuncSig>(
@@ -69,7 +69,7 @@ mod func {
 
     fn r#return(values: Variadic<_>) {}
 
-    fn constant(func_ref: Attr<Symbol>) -> Value<_> {}
+    fn constant(func_ref: Attr<SymbolRef>) -> Value<_> {}
 
     fn unreachable() {}
 }
@@ -92,29 +92,29 @@ pub enum CallConv {
 }
 
 impl CallConv {
-    fn symbol(self) -> Option<Symbol> {
+    fn name(self) -> Option<&'static str> {
         match self {
             Self::Platform => None,
-            Self::Tail => Some(Symbol::new("tail")),
+            Self::Tail => Some("tail"),
         }
     }
 
     /// Read the convention from signature attributes.
     ///
     /// Returns `None` for a malformed `call_conv` value.
-    pub fn from_attrs(attrs: &AttributeMap) -> Option<Self> {
+    pub fn from_attrs(ctx: &IrContext, attrs: &AttributeMap) -> Option<Self> {
         match attrs.get(CALL_CONV_ATTR) {
             None => Some(Self::Platform),
-            Some(Attribute::Symbol(symbol)) if *symbol == Symbol::new("tail") => Some(Self::Tail),
+            Some(Attribute::String(name)) if ctx.str(*name) == "tail" => Some(Self::Tail),
             Some(_) => None,
         }
     }
 
     /// Write the convention into signature attributes.
-    pub fn set_in(self, attrs: &mut AttributeMap) {
-        match self.symbol() {
-            Some(symbol) => {
-                attrs.insert(Symbol::new(CALL_CONV_ATTR), Attribute::Symbol(symbol));
+    pub fn set_in(self, ctx: &mut IrContext, attrs: &mut AttributeMap) {
+        match self.name() {
+            Some(name) => {
+                attrs.insert(Symbol::new(CALL_CONV_ATTR), ctx.string_attr(name));
             }
             None => {
                 attrs.remove(CALL_CONV_ATTR);
@@ -307,7 +307,7 @@ impl FuncSig {
 
     /// The machine calling convention, or `None` if `call_conv` is malformed.
     pub fn call_conv(&self, ctx: &IrContext) -> Option<CallConv> {
-        CallConv::from_attrs(&ctx.get_type(self.0).attrs)
+        CallConv::from_attrs(ctx, &ctx.get_type(self.0).attrs)
     }
 
     /// Return this signature with its machine calling convention replaced.
@@ -316,7 +316,7 @@ impl FuncSig {
         let results = self.results(ctx).to_vec();
         let mut attrs = ctx.get_type(self.0).attrs.clone();
         Self::remove_reserved_attrs(&mut attrs);
-        call_conv.set_in(&mut attrs);
+        call_conv.set_in(ctx, &mut attrs);
         func_sig_with_attrs(ctx, inputs, results, attrs)
     }
 }
@@ -548,7 +548,7 @@ impl CallableExitModel for TailCall {
         if ctx
             .op(self.op_ref())
             .attributes
-            .get_symbol("callee")
+            .get_symbol_ref("callee")
             .is_some()
         {
             Ok(())
@@ -885,8 +885,8 @@ mod tests {
     #[test]
     fn call_conv_is_a_signature_attribute_that_round_trips() {
         let input = r#"core.module @test {
-  func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = @tail}>, %value: core.i32) attributes {type = func.func_sig<(func.func_sig<(core.i32) -> (), {call_conv = @tail}>, core.i32) -> (), {call_conv = @tail}>} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = @tail}>}
+  func.func @transfer(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, %value: core.i32) attributes {type = func.func_sig<(func.func_sig<(core.i32) -> (), {call_conv = "tail"}>, core.i32) -> (), {call_conv = "tail"}>} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
 }"#;
         let mut ctx = crate::IrContext::new();
@@ -896,7 +896,7 @@ mod tests {
         assert_eq!(signature.call_conv(&ctx), Some(CallConv::Tail));
 
         let printed = print_module(&ctx, module.op());
-        assert!(printed.contains("call_conv = @tail"), "{printed}");
+        assert!(printed.contains("call_conv = \"tail\""), "{printed}");
         let mut reparsed_ctx = crate::IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
         assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
@@ -907,7 +907,10 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let mut attrs = AttributeMap::new();
-        attrs.insert(Symbol::new("note"), Attribute::Symbol(Symbol::new("kept")));
+        attrs.insert(
+            Symbol::new("note"),
+            Attribute::SymbolRef(Symbol::new("kept")),
+        );
         let platform = func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs);
         assert_eq!(platform.call_conv(&ctx), Some(CallConv::Platform));
 
@@ -928,7 +931,7 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
             .into_iter()
             .collect();
         let source = func_sig_with_param_attrs(
@@ -959,10 +962,7 @@ mod tests {
     fn malformed_call_conv_is_reported_rather_than_defaulted() {
         let mut ctx = crate::IrContext::new();
         let mut attrs = AttributeMap::new();
-        attrs.insert(
-            Symbol::new(CALL_CONV_ATTR),
-            Attribute::Symbol(Symbol::new("fast")),
-        );
+        attrs.insert(Symbol::new(CALL_CONV_ATTR), ctx.string_attr("fast"));
         let signature = func_sig_with_attrs(&mut ctx, [], [], attrs);
         assert_eq!(signature.call_conv(&ctx), None);
     }
@@ -1230,7 +1230,7 @@ mod result_list_tests {
             (
                 "callee = @sink",
                 "callee = 1",
-                "attribute `callee` must be a Symbol attribute",
+                "attribute `callee` must be a SymbolRef attribute",
             ),
         ] {
             let text = verify(&valid.replace(old, new));

@@ -384,7 +384,7 @@ Each RC-managed physical parameter has one exact entry mode:
 
 Physically empty CPS callables use `consumed` for their parameters. The
 representation/ABI boundary records this in the exact physical signature as the
-per-parameter attribute `tribute.ownership = @consumed` on every input, because
+per-parameter attribute `tribute.ownership = "consumed"` on every input, because
 it physicalizes the CPS convention and owns that decision. The marker is inert
 on a parameter the typed managed-reference contract does not select: unmanaged
 parameters have no RC action. Only `consumed` is encoded; a managed parameter

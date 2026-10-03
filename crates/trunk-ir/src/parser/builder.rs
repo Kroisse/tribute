@@ -366,7 +366,7 @@ impl<'a> ArenaIrBuilder<'a> {
             RawAttribute::Int(n) => Attribute::Int(*n),
             RawAttribute::Float(f) => Attribute::FloatBits(f.to_bits()),
             RawAttribute::String(s) => self.ctx.string_attr(s),
-            RawAttribute::Symbol(s) => Attribute::Symbol(Symbol::from_dynamic(s.as_str())),
+            RawAttribute::SymbolRef(s) => Attribute::SymbolRef(Symbol::from_dynamic(s.as_str())),
             RawAttribute::Type(t) => Attribute::Type(self.build_type(t)?),
             RawAttribute::List(items) => {
                 let list: Vec<Attribute> = items
@@ -494,7 +494,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
                 let mut attrs = AttributeMap::new();
                 if !is_default_name {
-                    attrs.insert("bind_name", Symbol::from_dynamic(name));
+                    attrs.insert("bind_name", self.ctx.string_attr(name));
                 }
                 block_arg_data.push(BlockArgData { ty, attrs });
                 arg_names.push(name.to_string());

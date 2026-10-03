@@ -690,7 +690,7 @@ mod tests {
                 sig: Attr<S::Type>,
                 callee: Value<core::Ptr>,
                 args: Values<S::Inputs>,
-                tag: Option<Attr<Symbol>>,
+                tag: Option<Attr<SymbolRef>>,
                 raw: Attr<_>,
             ) -> Values<S::Results> {}
         })
@@ -838,7 +838,7 @@ mod tests {
             ),
             (
                 quote!(
-                    #[attr(p: Symbol)]
+                    #[attr(p: SymbolRef)]
                     fn f(x: Value<_>) {}
                 ),
                 "declare `Attr<..>` parameters",

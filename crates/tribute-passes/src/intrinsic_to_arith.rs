@@ -86,7 +86,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let mut referenced = HashSet::new();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         for value in ctx.op(op).attributes.values() {
-            if let Attribute::Symbol(reference) = value
+            if let Attribute::SymbolRef(reference) = value
                 && let Some(target) = symbols.resolve(*reference)
                 && target != op
             {

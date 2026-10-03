@@ -111,7 +111,7 @@ pub enum RawAttribute<'a> {
     Int(i128),
     Float(f64),
     String(String),
-    Symbol(String),
+    SymbolRef(String),
     Type(RawType<'a>),
     List(Vec<RawAttribute<'a>>),
     Dict(Vec<(Cow<'a, str>, RawAttribute<'a>)>),
@@ -427,7 +427,7 @@ pub fn raw_attr_value<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> 
         // String literal
         string_lit.map(RawAttribute::String),
         // Symbol reference
-        symbol_ref.map(RawAttribute::Symbol),
+        symbol_ref.map(RawAttribute::SymbolRef),
         alt((
             // List
             delimited(
@@ -980,7 +980,7 @@ mod tests {
         let attr = raw_attr_value
             .parse_next(&mut input)
             .expect("should parse symbol");
-        assert!(matches!(attr, RawAttribute::Symbol(ref s) if s == "foo"));
+        assert!(matches!(attr, RawAttribute::SymbolRef(ref s) if s == "foo"));
     }
 
     #[test]
@@ -1180,7 +1180,7 @@ mod tests {
 
     #[test]
     fn test_parse_function_type_parameter_attributes() {
-        let mut input = "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = @tail}>";
+        let mut input = "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = \"tail\"}>";
         let raw = raw_type.parse_next(&mut input).expect("should parse");
         let RawType::Function {
             inputs,

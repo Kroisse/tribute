@@ -100,7 +100,7 @@ fn run(
         .collect();
     let _ = walk_region::<()>(ctx, module.body(ctx).expect("module body"), &mut |op| {
         if wasm::ExportFunc::matches(ctx, op)
-            && let Some(func_ref) = ctx.op(op).attributes.get_symbol("func")
+            && let Some(func_ref) = ctx.op(op).attributes.get_symbol_ref("func")
         {
             roots.insert(func_ref);
         }
@@ -443,7 +443,7 @@ mod tests {
         let export_data =
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("export_func"))
                 .attr("name", ctx.string_attr("my_export"))
-                .attr("func", Attribute::Symbol(Symbol::new("exported_func")))
+                .attr("func", Attribute::SymbolRef(Symbol::new("exported_func")))
                 .build(&mut ctx);
         let export_op = ctx.create_op(export_data);
 

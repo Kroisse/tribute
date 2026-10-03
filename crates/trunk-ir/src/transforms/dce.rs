@@ -286,7 +286,7 @@ mod tests {
             let call_data =
                 OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("call"))
                     .result(i32_ty)
-                    .attr("callee", Attribute::Symbol(Symbol::new("foo")))
+                    .attr("callee", Attribute::SymbolRef(Symbol::new("foo")))
                     .build(ctx);
             let call_op = ctx.create_op(call_data);
             ctx.push_op(entry, call_op);

@@ -188,7 +188,10 @@ mod tests {
                     Attribute::List(vec![Attribute::Type(i32)]),
                 ]),
             );
-            attrs.insert(Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep")));
+            attrs.insert(
+                Symbol::new("tag"),
+                Attribute::SymbolRef(Symbol::new("keep")),
+            );
             let signature = wasm::func_sig_with_attrs(
                 &mut ctx,
                 [i32, ptr],
@@ -236,7 +239,7 @@ mod tests {
                     Attribute::List(vec![Attribute::Type(i64)]),
                 ])),
             );
-            assert_eq!(attrs.get_symbol("tag"), Some(Symbol::new("keep")),);
+            assert_eq!(attrs.get_symbol_ref("tag"), Some(Symbol::new("keep")),);
             assert_eq!(ctx.get_type(function.r#type(&ctx)).attrs.len(), 4);
             assert_eq!(
                 ctx.op(module.ops(&ctx)[0]).attributes.get("custom"),

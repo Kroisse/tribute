@@ -408,7 +408,7 @@ impl RewritePattern for InlineCallSite {
             return false;
         }
 
-        let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+        let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
             return false;
         };
 
@@ -942,7 +942,7 @@ mod pass {
         let body = ctx.op_region(func_op, 0).unwrap();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op)
-                && ctx.op(op).attributes.get_symbol("callee") == Some(target)
+                && ctx.op(op).attributes.get_symbol_ref("callee") == Some(target)
             {
                 count += 1;
             }

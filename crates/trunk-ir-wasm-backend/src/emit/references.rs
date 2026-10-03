@@ -122,7 +122,7 @@ fn collect_op(
 
     match kind {
         Some(kind) => {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol(attribute) else {
+            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref(attribute) else {
                 return Err(CompilationError::invalid_module(format!(
                     "wasm.{} requires a symbol `{}` attribute",
                     ctx.op(op).name,
@@ -436,7 +436,7 @@ mod tests {
         assert!(wasm_dialect::Return::matches(&ctx, ret));
         ctx.op_mut(ret).attributes.insert(
             Symbol::new("callee"),
-            Attribute::Symbol(Symbol::new("helper")),
+            Attribute::SymbolRef(Symbol::new("helper")),
         );
 
         let error = collect_function_references(&ctx, module)

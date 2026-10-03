@@ -359,7 +359,7 @@ fn verify_physical_callable_graph(
             });
         }
         if data.dialect == Symbol::new("func") && data.name == Symbol::new("tail_call") {
-            let Some(callee) = data.attributes.get_symbol("callee") else {
+            let Some(callee) = data.attributes.get_symbol_ref("callee") else {
                 failures.push(BoundaryFailure {
                     op: Some(op),
                     location: Some(data.location),
@@ -421,7 +421,7 @@ fn verify_physical_callable_graph(
                 message: "func.tail_call_indirect must carry exact Cps metadata".into(),
             });
         } else if data.dialect == Symbol::new("func") && data.name == Symbol::new("call") {
-            let callee = data.attributes.get_symbol("callee");
+            let callee = data.attributes.get_symbol_ref("callee");
             if let Some(callee) = callee {
                 match signatures.get(&callee) {
                     Some((_, target_convention)) if *target_convention == op_convention => {}
@@ -2070,7 +2070,7 @@ impl<'a> Converter<'a> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol("func_ref")
+            .get_symbol_ref("func_ref")
             .expect("pre-CPS validation checked func_ref target");
         let target = self
             .current_func(target_symbol)
@@ -3346,7 +3346,7 @@ impl<'a> Converter<'a> {
                         .ctx
                         .op(source)
                         .attributes
-                        .get_symbol("callee")
+                        .get_symbol_ref("callee")
                         .expect("pre-CPS validation checked direct callee");
                     let target = self
                         .current_func(target_symbol)
@@ -4422,7 +4422,7 @@ mod tests {
         };
         let [
             Attribute::Type(function_nested),
-            Attribute::Symbol(function_tag),
+            Attribute::SymbolRef(function_tag),
         ] = function_pair.as_slice()
         else {
             panic!("function metadata must preserve its nested source signature");
@@ -4456,7 +4456,7 @@ mod tests {
             let [Attribute::List(pair)] = metadata.as_slice() else {
                 return None;
             };
-            let [Attribute::Type(nested), Attribute::Symbol(tag)] = pair.as_slice() else {
+            let [Attribute::Type(nested), Attribute::SymbolRef(tag)] = pair.as_slice() else {
                 return None;
             };
             (*tag == Symbol::new("lambda")).then_some(*nested)
@@ -5673,7 +5673,7 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
             .into_iter()
             .collect();
         let empty = AttributeMap::new;
@@ -5711,7 +5711,9 @@ mod tests {
         crate::target_abi::lower_cps_signatures_to_physical(&mut ctx, module).unwrap();
         crate::closure_lower::lower_prepared_closures(&mut ctx, module).unwrap();
         let physical = adapter_type(&ctx);
-        let consumed = || crate::target_abi::physical_parameter_attrs(CallingConvention::Cps);
+        let contract =
+            crate::target_abi::physical_parameter_attrs(&mut ctx, CallingConvention::Cps);
+        let consumed = || contract.clone();
         let mut marked_consumed = marked;
         marked_consumed.extend(consumed());
         assert_eq!(
@@ -6185,7 +6187,7 @@ mod tests {
         );
         assert!(printed.contains("func.unreachable"));
         assert!(!printed.contains("value = 99"));
-        assert!(!printed.contains("@consumed"));
+        assert!(!printed.contains("tribute.ownership"));
         assert!(!printed.contains("adt.struct_set"));
         assert!(!printed.contains("adt.ref_null"));
     }
@@ -6244,7 +6246,7 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("ability.call"));
         assert!(!printed.contains("ability.perform"));
-        assert!(!printed.contains("@consumed"));
+        assert!(!printed.contains("tribute.ownership"));
         assert!(!printed.contains("adt.struct_set"));
         assert!(printed.contains("tribute.calling_convention = 1"));
         let mut indirect_calls = Vec::new();

@@ -154,10 +154,9 @@ fn exact_signature(ctx: &mut IrContext) -> TypeRef {
 
 /// Whether any attribute of `op` names one of `names`.
 fn references_any(ctx: &IrContext, op: OpRef, names: &[Symbol]) -> bool {
-    ctx.op(op)
-        .attributes
-        .values()
-        .any(|attribute| matches!(attribute, Attribute::Symbol(symbol) if names.contains(symbol)))
+    ctx.op(op).attributes.values().any(
+        |attribute| matches!(attribute, Attribute::SymbolRef(symbol) if names.contains(symbol)),
+    )
 }
 
 #[cfg(test)]

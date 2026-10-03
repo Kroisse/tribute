@@ -21,7 +21,9 @@ use trunk_ir::transforms::call_graph::{CallGraph, recursive_functions};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::target_abi::{CONSUMED, OWNERSHIP_ATTR};
-use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, Symbol, TypeRef, ValueDef, ValueRef};
+use trunk_ir::{
+    Attribute, BlockRef, OpRef, RegionRef, StringRef, Symbol, TypeRef, ValueDef, ValueRef,
+};
 
 mod actions;
 mod cfg;
@@ -877,7 +879,7 @@ fn consumed_inputs(
         .input_attrs(ctx)
         .map(|attrs| match attrs.get(OWNERSHIP_ATTR) {
             None => Ok(false),
-            Some(value) if value.as_symbol() == Some(Symbol::new(CONSUMED)) => Ok(true),
+            Some(Attribute::String(mode)) if ctx.str(*mode) == CONSUMED => Ok(true),
             Some(_) => Err(OwnershipPlanError::new(format!(
                 "unknown {OWNERSHIP_ATTR} parameter contract"
             ))),

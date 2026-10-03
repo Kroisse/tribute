@@ -233,7 +233,7 @@ fn validate_clif_function(
     // the platform convention.
     if signature.call_conv(ctx) == Some(func::CallConv::Tail) && (has_abi || name == "main") {
         errors.push(format!(
-            "clif.func @{name} is an external boundary and cannot use call_conv = @tail"
+            "clif.func @{name} is an external boundary and cannot use call_conv = \"tail\""
         ));
     }
     match classify_callable_body(ctx, op) {
@@ -330,7 +330,7 @@ fn validate_clif_region(
 
             let operands = ctx.op_operands(op);
             if clif::Call::matches(ctx, op) {
-                let Some(name) = ctx.op(op).attributes.get_symbol("callee") else {
+                let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     errors.push("clif.call requires a symbol callee".into());
                     continue;
                 };
@@ -362,7 +362,7 @@ fn validate_clif_region(
                     errors.push("clif.return_call requires a nearest clif.func owner".into());
                     continue;
                 };
-                let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+                let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     errors.push("clif.return_call requires a symbol callee".into());
                     continue;
                 };
@@ -421,7 +421,7 @@ fn check_tail_call_conv(
     let tail = Some(func::CallConv::Tail);
     if caller.call_conv(ctx) != tail || callee.call_conv(ctx) != tail {
         errors.push(format!(
-            "clif.{} requires caller and callee signatures with call_conv = @tail",
+            "clif.{} requires caller and callee signatures with call_conv = \"tail\"",
             ctx.op(op).name
         ));
     }
@@ -498,7 +498,7 @@ mod tests {
     fn tail_transfers_require_tail_call_conv_on_both_signatures() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = "tail_target", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "tail_target", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32):
       clif.return
   }
@@ -510,11 +510,11 @@ mod tests {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @tail_target}
   }
-  clif.func {sym_name = "to_platform", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "to_platform", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @platform_target}
   }
-  clif.func {sym_name = "indirect_platform", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "indirect_platform", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%callee: core.ptr, %value: core.i32):
       clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> ()>}
   }
@@ -522,7 +522,7 @@ mod tests {
         );
         assert_eq!(
             error
-                .matches("requires caller and callee signatures with call_conv = @tail")
+                .matches("requires caller and callee signatures with call_conv = \"tail\"")
                 .count(),
             3,
             "{error}"
@@ -532,17 +532,17 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.func {sym_name = "target", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "target", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32):
       clif.return
   }
-  clif.func {sym_name = "direct", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "direct", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @target}
   }
-  clif.func {sym_name = "indirect", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "indirect", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%callee: core.ptr, %value: core.i32):
-      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
+      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
 }"#,
         );
@@ -553,8 +553,8 @@ mod tests {
     fn external_boundaries_cannot_use_tail_call_conv() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = "foreign", abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
-  clif.func {sym_name = "main", type = clif.func_sig<() -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "foreign", abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+  clif.func {sym_name = "main", type = clif.func_sig<() -> (), {call_conv = "tail"}>} {
     ^entry:
       clif.return
   }

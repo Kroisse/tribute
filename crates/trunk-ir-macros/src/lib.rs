@@ -19,7 +19,7 @@ mod parse;
 ///         #[region(body?)] {}
 ///     }
 ///
-///     fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
+///     fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 ///
 ///     fn r#return(values: Variadic<_>) {}
 /// }

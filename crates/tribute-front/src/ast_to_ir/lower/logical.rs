@@ -174,7 +174,7 @@ fn lower_function_ref<'db>(
     let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
         builder
             .result(ty)
-            .attr("func_ref", Attribute::Symbol(symbol))
+            .attr("func_ref", Attribute::SymbolRef(symbol))
     });
     result(builder.ir, op)
 }
@@ -869,18 +869,20 @@ fn lower_function<'db>(
         signature.param_types.iter().copied(),
         signature.convention,
     );
+    let args = function
+        .params
+        .iter()
+        .zip(signature.param_types.iter())
+        .map(|(parameter, ty)| {
+            let mut attrs = trunk_ir::types::AttributeMap::default();
+            let name = parameter.name.with_str(|name| ir.string_attr(name));
+            attrs.insert(Symbol::new("bind_name"), name);
+            BlockArgData { ty: *ty, attrs }
+        })
+        .collect();
     let entry = ir.create_block(BlockData {
         location,
-        args: function
-            .params
-            .iter()
-            .zip(signature.param_types.iter())
-            .map(|(parameter, ty)| {
-                let mut attrs = trunk_ir::types::AttributeMap::default();
-                attrs.insert(Symbol::new("bind_name"), Attribute::Symbol(parameter.name));
-                BlockArgData { ty: *ty, attrs }
-            })
-            .collect(),
+        args,
         ops: Default::default(),
         parent_region: None,
     });
@@ -1938,7 +1940,7 @@ pub(super) fn emit_named_call(
         builder
             .operands(values)
             .result(signature.return_type)
-            .attr("callee", Attribute::Symbol(symbol))
+            .attr("callee", Attribute::SymbolRef(symbol))
     });
     result(builder.ir, call)
 }

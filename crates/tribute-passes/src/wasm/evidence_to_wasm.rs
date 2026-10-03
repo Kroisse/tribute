@@ -1331,7 +1331,7 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains("func.tail_call_indirect"), "{printed}");
-        assert!(printed.contains("call_conv = @tail"), "{printed}");
+        assert!(printed.contains("call_conv = \"tail\""), "{printed}");
     }
 
     #[test]

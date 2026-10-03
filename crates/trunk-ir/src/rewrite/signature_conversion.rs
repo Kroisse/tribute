@@ -584,7 +584,10 @@ mod result_list_tests {
                         .collect(),
                     ),
                 );
-                attrs.insert(Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep")));
+                attrs.insert(
+                    Symbol::new("tag"),
+                    Attribute::SymbolRef(Symbol::new("keep")),
+                );
                 let signature = func::func_sig_with_attrs(
                     &mut ctx,
                     vec![nil; inputs],
@@ -616,7 +619,7 @@ mod result_list_tests {
                     ))
                 );
                 assert_eq!(
-                    ctx.get_type(converted).attrs.get_symbol("tag"),
+                    ctx.get_type(converted).attrs.get_symbol_ref("tag"),
                     Some(Symbol::new("keep"))
                 );
             }

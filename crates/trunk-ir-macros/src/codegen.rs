@@ -1198,7 +1198,7 @@ fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         AttrType::F64 => quote!(f64),
         AttrType::Type => quote!(#crate_path::TypeRef),
         AttrType::String => quote!(#crate_path::StringRef),
-        AttrType::Symbol | AttrType::QualifiedName => quote!(#crate_path::Symbol),
+        AttrType::SymbolRef => quote!(#crate_path::Symbol),
         AttrType::Bytes => quote!(#crate_path::smallvec::SmallVec<[u8; 16]>),
     }
 }
@@ -1215,8 +1215,7 @@ fn attr_kind(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
         AttrType::F64 => quote!(F64),
         AttrType::Type => quote!(Type),
         AttrType::String => quote!(String),
-        AttrType::Symbol => quote!(Symbol),
-        AttrType::QualifiedName => quote!(QualifiedName),
+        AttrType::SymbolRef => quote!(SymbolRef),
         AttrType::Bytes => quote!(Bytes),
     };
     quote!(#crate_path::op_schema::AttributeKind::#kind)
@@ -1236,8 +1235,8 @@ fn attr_to_attr(crate_path: &TokenStream, ty: AttrType, val: TokenStream) -> Tok
         AttrType::F64 => quote!(#crate_path::Attribute::FloatBits(#val.to_bits())),
         AttrType::Type => quote!(#crate_path::Attribute::Type(#val)),
         AttrType::String => quote!(#crate_path::Attribute::String(#val)),
-        AttrType::Symbol | AttrType::QualifiedName => {
-            quote!(#crate_path::Attribute::Symbol(#val))
+        AttrType::SymbolRef => {
+            quote!(#crate_path::Attribute::SymbolRef(#val))
         }
         AttrType::Bytes => quote!(#crate_path::Attribute::Bytes(#val)),
     }
@@ -1268,7 +1267,7 @@ fn typed_attr_lookup(ty: AttrType, attrs: &TokenStream, name: &str) -> Option<To
         )),
         AttrType::Type => Some(quote!(#attrs.get_type(#name))),
         AttrType::String => Some(quote!(#attrs.get_string_ref(#name))),
-        AttrType::Symbol | AttrType::QualifiedName => Some(quote!(#attrs.get_symbol(#name))),
+        AttrType::SymbolRef => Some(quote!(#attrs.get_symbol_ref(#name))),
         AttrType::Any | AttrType::F32 | AttrType::F64 | AttrType::Bytes => None,
     }
 }
@@ -1334,10 +1333,10 @@ fn attr_from_attr(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
                 _ => panic!("expected String attribute"),
             }
         },
-        AttrType::Symbol | AttrType::QualifiedName => quote! {
+        AttrType::SymbolRef => quote! {
             match attr {
-                #crate_path::Attribute::Symbol(v) => *v,
-                _ => panic!("expected Symbol attribute"),
+                #crate_path::Attribute::SymbolRef(v) => *v,
+                _ => panic!("expected SymbolRef attribute"),
             }
         },
         AttrType::Bytes => quote! {

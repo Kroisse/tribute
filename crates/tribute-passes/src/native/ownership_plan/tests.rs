@@ -1138,16 +1138,16 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @branch(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @branch(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     ^entry:
       cf.br %value, %value [^merge]
     ^merge(%left: !R, %right: !R):
       func.unreachable
   }
-  func.func @tail(%sent: !R, %dying: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @tail(%sent: !R, %dying: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call %sent {callee = @sink}
   }
-  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#,
@@ -1195,7 +1195,7 @@ fn cfg_accepts_conditional_branch_with_duplicate_successors() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @duplicate_successor(%condition: core.i1, %value: !R) attributes {type = func.func_sig<(core.i1 {tribute.ownership = @consumed}, !R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @duplicate_successor(%condition: core.i1, %value: !R) attributes {type = func.func_sig<(core.i1 {tribute.ownership = "consumed"}, !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     ^entry:
       cf.cond_br %condition [^exit, ^exit]
     ^exit:
@@ -1315,10 +1315,10 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
     %indirect = func.call_indirect %callee, %direct {signature = func.func_sig<(!R) -> !R>} : !R
     func.return %indirect
   }
-  func.func @tail(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @tail(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call %value {callee = @sink}
   }
-  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#,
@@ -1395,7 +1395,7 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  !Consuming = func.func_sig<(!R {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>
+  !Consuming = func.func_sig<(!R {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
   func.func @sink(%value: !R, %count: core.i32) attributes {type = !Consuming} {
     func.unreachable
   }
@@ -1404,7 +1404,7 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
-  func.func @pair(%left: !R, %right: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !R {tribute.ownership = @consumed}) -> ()>} {
+  func.func @pair(%left: !R, %right: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !R {tribute.ownership = "consumed"}) -> ()>} {
     func.return
   }
   func.func @indirect(%value: !R, %callee: !Consuming, %count: core.i32) -> core.i32 {
@@ -1412,13 +1412,13 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
-  func.func @tail(%value: !R, %callee: !Consuming, %count: core.i32) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !Consuming {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @tail(%value: !R, %callee: !Consuming, %count: core.i32) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !Consuming {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call_indirect %callee, %value, %count {signature = !Consuming}
   }
-  func.func @duplicate(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @duplicate(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call %value, %value {callee = @pair_tail}
   }
-  func.func @pair_tail(%left: !R, %right: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @pair_tail(%left: !R, %right: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#,
@@ -1466,10 +1466,10 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @tail(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @tail(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call %value {callee = @sink}
   }
-  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R) -> (), {call_conv = @tail}>} {
+  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#,
@@ -1479,8 +1479,8 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  !Unmarked = func.func_sig<(!R) -> (), {call_conv = @tail}>
-  func.func @tail(%value: !R, %callee: !Unmarked) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !Unmarked {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  !Unmarked = func.func_sig<(!R) -> (), {call_conv = "tail"}>
+  func.func @tail(%value: !R, %callee: !Unmarked) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !Unmarked {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call_indirect %callee, %value {signature = !Unmarked}
   }
 }"#,
@@ -1494,7 +1494,7 @@ fn unknown_parameter_ownership_contracts_are_rejected() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @run(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @borrowed}) -> ()>} {
+  func.func @run(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "borrowed"}) -> ()>} {
     func.return
   }
 }"#,

@@ -325,11 +325,12 @@ fn build_lifted_body(
             attrs: ctx.block(orig_entry).args[index].attrs.clone(),
         })
         .collect();
+    let environment_attrs = make_bind_name_attrs(ctx, "__env");
     new_entry_args.insert(
         environment_index,
         BlockArgData {
             ty: anyref_ty,
-            attrs: make_bind_name_attrs("__env"),
+            attrs: environment_attrs,
         },
     );
     let new_entry = ctx.create_block(BlockData {
@@ -461,9 +462,9 @@ impl LambdaNamer {
 }
 
 /// Create a `bind_name` attribute map for a block argument.
-fn make_bind_name_attrs(name: &str) -> AttributeMap {
+fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
     let mut attrs = AttributeMap::new();
-    attrs.insert("bind_name", Symbol::from_dynamic(name));
+    attrs.insert("bind_name", ctx.string_attr(name));
     attrs
 }
 
@@ -532,11 +533,12 @@ mod tests {
         //   }
 
         // Lambda body: ^bb0(%x: i32): func.return %x
+        let x_attrs = make_bind_name_attrs(&mut ctx, "x");
         let lambda_entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: make_bind_name_attrs("x"),
+                attrs: x_attrs,
             }],
             ops: Default::default(),
             parent_region: None,
@@ -553,7 +555,7 @@ mod tests {
 
         // closure type: closure.closure<func.func_sig<i32, i32>>, whose input
         // carries a parameter attribute.
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
             .into_iter()
             .collect();
         let func_ty = func::func_sig_with_param_attrs(
@@ -650,11 +652,12 @@ mod tests {
 
             // Incomplete or conflicting provenance cannot determine hidden
             // evidence operands or the environment slot.
+            let evidence_attrs = make_bind_name_attrs(&mut ctx, "evidence");
             let outer_entry = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![BlockArgData {
                     ty: evidence_ty,
-                    attrs: make_bind_name_attrs("evidence"),
+                    attrs: evidence_attrs,
                 }],
                 ops: Default::default(),
                 parent_region: None,
@@ -739,11 +742,12 @@ mod tests {
         //   }
 
         // Outer function entry block with one param %a
+        let a_attrs = make_bind_name_attrs(&mut ctx, "a");
         let outer_entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: make_bind_name_attrs("a"),
+                attrs: a_attrs,
             }],
             ops: Default::default(),
             parent_region: None,
@@ -751,11 +755,12 @@ mod tests {
         let a_val = ctx.block_arg(outer_entry, 0);
 
         // Lambda body: ^bb0(%x: i32): %r = arith.add %a, %x; func.return %r
+        let x_attrs = make_bind_name_attrs(&mut ctx, "x");
         let lambda_entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: make_bind_name_attrs("x"),
+                attrs: x_attrs,
             }],
             ops: Default::default(),
             parent_region: None,

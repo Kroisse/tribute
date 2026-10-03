@@ -525,7 +525,7 @@ impl ActionPlanner<'_> {
                 .ir
                 .op(op)
                 .attributes
-                .get_symbol("callee")
+                .get_symbol_ref("callee")
                 .ok_or_else(|| OwnershipPlanError::new("direct call lacks callee identity"))?;
             if !self.definitions.contains_key(&callee) {
                 if args

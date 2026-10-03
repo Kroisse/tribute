@@ -2184,12 +2184,11 @@ fn main() -> Nil {
         db: &crate::TributeDatabaseImpl,
         target: tribute_passes::abi_boundary::TargetKind,
     ) {
-        use trunk_ir::Symbol;
         use trunk_ir::op_interface::IndirectCallLikeOps;
         let consumed = |ctx: &IrContext, signature: func_dialect::FuncSig| {
             signature
                 .input_attrs(ctx)
-                .all(|attrs| attrs.get_symbol("tribute.ownership") == Some(Symbol::new("consumed")))
+                .all(|attrs| attrs.get_str(ctx, "tribute.ownership") == Some("consumed"))
         };
         let mut tail_signatures = 0;
         for (path, text) in BOUNDARY_EXIT_PROGRAMS {
@@ -2513,14 +2512,14 @@ fn main() -> Nil {
     func.return
   }}
 
-  func.func @step(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}} {{
+  func.func @step(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
     %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> (){reference_call_conv}>
-    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}}
+    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}}
   }}
 
-  func.func @start(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}} {{
+  func.func @start(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
     func.tail_call %next {{callee = @step}}
@@ -2541,7 +2540,7 @@ fn main() -> Nil {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            &physical_tail_chain_module(", {call_conv = @tail}", ", {call_conv = @tail}"),
+            &physical_tail_chain_module(", {call_conv = \"tail\"}", ", {call_conv = \"tail\"}"),
         );
         let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verified.is_ok(), "{verified}");
@@ -2586,7 +2585,7 @@ fn main() -> Nil {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            &physical_tail_chain_module("", ", {call_conv = @tail}"),
+            &physical_tail_chain_module("", ", {call_conv = \"tail\"}"),
         );
         let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verified.is_ok(), "{verified}");

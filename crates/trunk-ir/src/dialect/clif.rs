@@ -28,9 +28,9 @@ mod clif {
     /// Asks the linker to write the address of `func` over the pointer-sized
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
-    fn func_reloc(offset: Attr<u32>, func: Attr<Symbol>) {}
+    fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
 
-    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
+    fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
     fn call_indirect<S: FuncSig>(
@@ -96,7 +96,7 @@ mod clif {
 
     fn trap(code: Attr<String>) {}
 
-    fn return_call(callee: Attr<Symbol>, args: Variadic<_>) {}
+    fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<S::Type>,
@@ -122,7 +122,7 @@ mod clif {
 
     fn stack_addr(slot: Value<_>) -> Value<_> {}
 
-    fn symbol_addr(sym: Attr<Symbol>) -> Value<_> {}
+    fn symbol_addr(sym: Attr<SymbolRef>) -> Value<_> {}
 
     // Type conversions
     fn ireduce(operand: Value<_>) -> Value<_> {}
@@ -244,7 +244,7 @@ impl FuncSig {
 
     /// The machine calling convention, or `None` if `call_conv` is malformed.
     pub fn call_conv(self, ctx: &crate::IrContext) -> Option<crate::dialect::func::CallConv> {
-        crate::dialect::func::CallConv::from_attrs(&ctx.get_type(self.0).attrs)
+        crate::dialect::func::CallConv::from_attrs(ctx, &ctx.get_type(self.0).attrs)
     }
 
     pub fn non_reserved_attrs(
@@ -639,7 +639,7 @@ mod tests {
                 .param(i32)
                 .attr(
                     NUM_INPUTS_ATTR,
-                    Attribute::Symbol(crate::Symbol::new("one")),
+                    Attribute::SymbolRef(crate::Symbol::new("one")),
                 )
                 .attr(NUM_RESULTS_ATTR, Attribute::Int(0))
                 .build(),

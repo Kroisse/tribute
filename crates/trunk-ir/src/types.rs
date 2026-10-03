@@ -48,8 +48,8 @@ pub enum Attribute {
     String(StringRef),
     Bytes(SmallVec<[u8; 16]>),
     Type(TypeRef),
-    /// Single interned symbol.
-    Symbol(Symbol),
+    /// Reference to a symbol table definition, by its qualified name.
+    SymbolRef(Symbol),
     /// List of attributes.
     List(Vec<Attribute>),
     /// Dictionary of attributes keyed by symbol, ordered by key.
@@ -78,10 +78,10 @@ impl fmt::Display for IntegerOutOfRange {
 impl std::error::Error for IntegerOutOfRange {}
 
 impl Attribute {
-    /// Extract the inner `Symbol` if this is `Attribute::Symbol`.
-    pub fn as_symbol(&self) -> Option<Symbol> {
+    /// Extract the inner `Symbol` if this is `Attribute::SymbolRef`.
+    pub fn as_symbol_ref(&self) -> Option<Symbol> {
         match self {
-            Attribute::Symbol(s) => Some(*s),
+            Attribute::SymbolRef(s) => Some(*s),
             _ => None,
         }
     }
@@ -163,7 +163,29 @@ impl Attribute {
             | Attribute::FloatBits(_)
             | Attribute::String(_)
             | Attribute::Bytes(_)
-            | Attribute::Symbol(_)
+            | Attribute::SymbolRef(_)
+            | Attribute::Location(_) => {}
+        }
+    }
+
+    /// Visit every symbol reference nested in this attribute, including those
+    /// inside lists and dictionaries, in printing order.
+    pub fn visit_symbol_refs(&self, f: &mut impl FnMut(Symbol)) {
+        match self {
+            Attribute::SymbolRef(symbol) => f(*symbol),
+            Attribute::List(items) => {
+                for item in items {
+                    item.visit_symbol_refs(f);
+                }
+            }
+            Attribute::Dict(dict) => dict.visit_symbol_refs(f),
+            Attribute::Unit
+            | Attribute::Bool(_)
+            | Attribute::Int(_)
+            | Attribute::FloatBits(_)
+            | Attribute::String(_)
+            | Attribute::Bytes(_)
+            | Attribute::Type(_)
             | Attribute::Location(_) => {}
         }
     }
@@ -193,7 +215,7 @@ impl Attribute {
             | Attribute::FloatBits(_)
             | Attribute::String(_)
             | Attribute::Bytes(_)
-            | Attribute::Symbol(_)
+            | Attribute::SymbolRef(_)
             | Attribute::Location(_) => self.clone(),
         })
     }
@@ -220,7 +242,7 @@ impl Attribute {
             Attribute::FloatBits(_) => 8,
             Attribute::String(s) => strings.get(*s).len() + 2,
             Attribute::Bytes(b) => b.len() * 4 + 7,
-            Attribute::Symbol(sym) => sym.with_str(|s| s.len()) + 1,
+            Attribute::SymbolRef(sym) => sym.with_str(|s| s.len()) + 1,
             Attribute::Type(_) => 10, // rough estimate; actual depends on type
             Attribute::List(list) => {
                 list.iter()
@@ -278,7 +300,7 @@ impl From<Vec<Attribute>> for Attribute {
 
 impl From<Symbol> for Attribute {
     fn from(value: Symbol) -> Self {
-        Attribute::Symbol(value)
+        Attribute::SymbolRef(value)
     }
 }
 
@@ -393,8 +415,8 @@ impl AttributeMap {
         self.get_string_ref(key).map(|s| ctx.str(s))
     }
 
-    pub fn get_symbol(&self, key: impl AttributeKey) -> Option<Symbol> {
-        self.get(key).and_then(Attribute::as_symbol)
+    pub fn get_symbol_ref(&self, key: impl AttributeKey) -> Option<Symbol> {
+        self.get(key).and_then(Attribute::as_symbol_ref)
     }
 
     pub fn get_type(&self, key: impl AttributeKey) -> Option<TypeRef> {
@@ -455,6 +477,14 @@ impl AttributeMap {
 
     pub fn keys(&self) -> AttributeKeys<'_> {
         AttributeKeys(self.0.iter())
+    }
+
+    /// Visit every symbol reference in these attributes; see
+    /// [`Attribute::visit_symbol_refs`].
+    pub fn visit_symbol_refs(&self, f: &mut impl FnMut(Symbol)) {
+        for value in self.values() {
+            value.visit_symbol_refs(f);
+        }
     }
 
     pub fn values(&self) -> AttributeValues<'_> {
@@ -1102,7 +1132,7 @@ mod tests {
     fn parameter_attributes_are_canonical_and_part_of_identity() {
         let mut ctx = IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
             .into_iter()
             .collect();
 
@@ -1210,6 +1240,33 @@ mod tests {
     }
 
     #[test]
+    fn symbol_refs_are_visited_through_lists_and_dicts() {
+        let mut ctx = IrContext::new();
+        let reference = |name| Attribute::SymbolRef(Symbol::new(name));
+        let mut attrs = AttributeMap::new();
+        attrs.insert("callee", reference("direct"));
+        attrs.insert("name", ctx.string_attr("not_a_reference"));
+        attrs.insert(
+            "table",
+            Attribute::List(vec![
+                reference("first"),
+                Attribute::Dict(
+                    [(Symbol::new("target"), reference("nested"))]
+                        .into_iter()
+                        .collect(),
+                ),
+            ]),
+        );
+
+        let mut visited = Vec::new();
+        attrs.visit_symbol_refs(&mut |symbol| visited.push(symbol));
+        assert_eq!(
+            visited,
+            ["direct", "first", "nested"].map(Symbol::new).to_vec()
+        );
+    }
+
+    #[test]
     fn nested_types_are_visited_and_mapped_through_lists_and_dicts() {
         let mut ctx = IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
@@ -1218,7 +1275,10 @@ mod tests {
             Attribute::Dict(
                 [
                     (Symbol::new("ty"), Attribute::Type(ty)),
-                    (Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep"))),
+                    (
+                        Symbol::new("tag"),
+                        Attribute::SymbolRef(Symbol::new("keep")),
+                    ),
                 ]
                 .into_iter()
                 .collect(),

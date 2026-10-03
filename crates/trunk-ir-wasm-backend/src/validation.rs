@@ -253,7 +253,7 @@ fn validate_direct_callable_contracts(
     if !is_direct {
         return;
     }
-    let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+    let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
         errors.push(format!(
             "wasm.{} requires a symbol callee attribute",
             ctx.op(op).name
