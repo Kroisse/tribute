@@ -777,7 +777,10 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                )
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -1059,7 +1062,10 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         let fn_ty = fn_type(&mut ctx);
         let func_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("external")))
+            .attr(
+                "sym_name",
+                Attribute::String(ctx.intern_symbol_text(Symbol::new("external"))),
+            )
             .attr("type", Attribute::Type(fn_ty))
             .build(&mut ctx);
         let func_op = ctx.create_op(func_data);

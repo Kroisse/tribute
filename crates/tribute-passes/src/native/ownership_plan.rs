@@ -359,7 +359,8 @@ pub fn build_native_ownership_plan(
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        let symbol = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
+        let symbol =
+            qualified_name(ctx, op).unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
         if let CallableBody::Declaration = ownership_callable_body(ctx, op)? {
             validate_bodyless_signature(ctx, op, &managed_layouts)?;
             continue;
@@ -410,7 +411,8 @@ fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, O
         let symbol = ctx
             .op(op)
             .attributes
-            .get_symbol("sym_name")
+            .get_str(ctx, "sym_name")
+            .map(Symbol::from_dynamic)
             .map(|name| format!("@{name}"))
             .unwrap_or_else(|| "<unnamed>".into());
         OwnershipPlanError::new(format!("func.func {symbol}: {error}"))
@@ -463,7 +465,8 @@ fn collect_function_definitions(
             continue;
         };
         // Direct callees name their targets by root-qualified path.
-        let symbol = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
+        let symbol =
+            qualified_name(ctx, op).unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
         if definitions.insert(symbol, op).is_some() {
             return Err(OwnershipPlanError::new(format!(
                 "duplicate function identity @{symbol}"

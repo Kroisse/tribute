@@ -216,7 +216,12 @@ fn declare_rodata(
 
     let mut taken = HashSet::new();
     for &op in ctx.block(module_block).ops.iter() {
-        if let Some(name) = ctx.op(op).attributes.get_symbol("sym_name") {
+        if let Some(name) = ctx
+            .op(op)
+            .attributes
+            .get_str(ctx, "sym_name")
+            .map(Symbol::from_dynamic)
+        {
             taken.insert(name);
         }
         if let Ok(data) = clif::Data::from_op(ctx, op)
@@ -224,7 +229,7 @@ fn declare_rodata(
         {
             content_to_symbol
                 .entry(data.bytes(ctx).to_vec())
-                .or_insert(data.sym_name(ctx));
+                .or_insert(Symbol::from_dynamic(data.sym_name(ctx)));
         }
     }
 
@@ -608,8 +613,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data {sym_name = @__tribute_rodata_0, bytes = b"kept", align = 1}
-  clif.data {sym_name = @aligned, bytes = b"wide", align = 8}
+  clif.data {sym_name = "__tribute_rodata_0", bytes = b"kept", align = 1}
+  clif.data {sym_name = "aligned", bytes = b"wide", align = 8}
   func.func @__tribute_rodata_1() -> core.nil {
     func.return
   }

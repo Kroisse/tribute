@@ -832,7 +832,10 @@ mod tests {
 
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                )
                 .region(module_region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -911,13 +914,13 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         let int_release = output
-            .split("clif.func {sym_name = @__tribute_release_3")
+            .split("clif.func {sym_name = \"__tribute_release_3\"")
             .nth(1)
             .expect("boxed Int must have a reserved RTTI release entry");
         assert!(int_release.contains("value = 12"));
         assert!(int_release.contains("callee = @__tribute_dealloc"));
         let float_release = output
-            .split("clif.func {sym_name = @__tribute_release_4")
+            .split("clif.func {sym_name = \"__tribute_release_4\"")
             .nth(1)
             .expect("boxed Float must have a reserved RTTI release entry");
         assert!(float_release.contains("value = 16"));
@@ -1116,7 +1119,10 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                )
                 .region(module_region)
                 .build(&mut ctx);
         let module_op = ctx.create_op(module_data);

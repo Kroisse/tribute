@@ -214,7 +214,7 @@ fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
             trunk_ir::OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
                 .attr(
                     "sym_name",
-                    Attribute::Symbol(Symbol::new("__tribute_next_tag")),
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("__tribute_next_tag"))),
                 )
                 .attr("type", Attribute::Type(func_ty))
                 .attr("abi", ctx.string_attr("C"))
@@ -418,7 +418,11 @@ mod tests {
         for name in [ability::evidence_abi::LOOKUP, ability::evidence_abi::EXTEND] {
             assert!(
                 module.ops(&ctx).iter().copied().all(|op| {
-                    ctx.op(op).attributes.get_symbol("sym_name") != Some(Symbol::new(name))
+                    ctx.op(op)
+                        .attributes
+                        .get_str(&ctx, "sym_name")
+                        .map(Symbol::from_dynamic)
+                        != Some(Symbol::new(name))
                 }),
                 "shared resolution must not fabricate target helper {name}"
             );
@@ -477,7 +481,10 @@ mod tests {
             .iter()
             .copied()
             .find(|&op| {
-                ctx.op(op).attributes.get_symbol("sym_name")
+                ctx.op(op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
                     == Some(Symbol::new("__tribute_next_tag"))
             })
             .expect("runtime tag declaration");
@@ -672,7 +679,13 @@ mod tests {
             .ops(&ctx)
             .iter()
             .copied()
-            .find(|&op| ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new("body")))
+            .find(|&op| {
+                ctx.op(op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::from_dynamic)
+                    == Some(Symbol::new("body"))
+            })
             .unwrap();
         let entry = ctx.region(ctx.op_region(body, 0).unwrap()).blocks[0];
         let outer_evidence = ctx.block_args(entry)[0];

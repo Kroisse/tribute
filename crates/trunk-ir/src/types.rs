@@ -77,48 +77,6 @@ impl fmt::Display for IntegerOutOfRange {
 
 impl std::error::Error for IntegerOutOfRange {}
 
-/// Text of a string attribute or of an interned symbol attribute.
-#[derive(Clone, Copy, Debug)]
-pub enum AttributeText<'a> {
-    String(&'a str),
-    Symbol(Symbol),
-}
-
-impl AttributeText<'_> {
-    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
-        match self {
-            AttributeText::String(text) => f(text),
-            AttributeText::Symbol(symbol) => symbol.with_str(f),
-        }
-    }
-}
-
-impl PartialEq for AttributeText<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.with_str(|text| other.with_str(|other| text == other))
-    }
-}
-
-impl Eq for AttributeText<'_> {}
-
-impl PartialEq<str> for AttributeText<'_> {
-    fn eq(&self, other: &str) -> bool {
-        self.with_str(|text| text == other)
-    }
-}
-
-impl PartialEq<&str> for AttributeText<'_> {
-    fn eq(&self, other: &&str) -> bool {
-        self == *other
-    }
-}
-
-impl fmt::Display for AttributeText<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.with_str(|text| f.write_str(text))
-    }
-}
-
 impl Attribute {
     /// Extract the inner `Symbol` if this is `Attribute::Symbol`.
     pub fn as_symbol(&self) -> Option<Symbol> {
@@ -441,18 +399,6 @@ impl AttributeMap {
 
     pub fn get_type(&self, key: impl AttributeKey) -> Option<TypeRef> {
         self.get(key).and_then(Attribute::as_type)
-    }
-
-    pub fn get_text<'a>(
-        &self,
-        ctx: &'a IrContext,
-        key: impl AttributeKey,
-    ) -> Option<AttributeText<'a>> {
-        match self.get(key)? {
-            Attribute::String(text) => Some(AttributeText::String(ctx.str(*text))),
-            Attribute::Symbol(symbol) => Some(AttributeText::Symbol(*symbol)),
-            _ => None,
-        }
     }
 
     fn get_integer<T>(
@@ -1072,10 +1018,21 @@ pub struct StringRef(lasso::Spur);
 
 /// A string attribute value given to an operation builder: a pooled handle,
 /// or text the builder interns when it creates the operation.
+///
+/// `Symbol` carries a name from the global interner (such as a function's
+/// qualified name) without an intermediate allocation. It is transitional
+/// until symbols are owned by the context.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StringArg {
     Ref(StringRef),
     Text(std::borrow::Cow<'static, str>),
+    Symbol(crate::Symbol),
+}
+
+impl From<crate::Symbol> for StringArg {
+    fn from(value: crate::Symbol) -> Self {
+        StringArg::Symbol(value)
+    }
 }
 
 impl From<StringRef> for StringArg {
@@ -1416,12 +1373,8 @@ mod tests {
         );
         assert_eq!(attrs.get_u32("enabled"), Ok(None));
 
-        let string_text = attrs.get_text(&ctx, "name").expect("string text");
-        let symbol_text = attrs.get_text(&ctx, "symbol_name").expect("symbol text");
-        assert_eq!(string_text, "tribute");
-        assert_eq!(symbol_text, "tribute");
-        assert_eq!(string_text, symbol_text);
-        assert_eq!(attrs.get_text(&ctx, "enabled"), None);
+        assert_eq!(attrs.get_str(&ctx, "name"), Some("tribute"));
+        assert_eq!(attrs.get_str(&ctx, "symbol_name"), None);
     }
 
     #[test]

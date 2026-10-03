@@ -51,7 +51,10 @@ pub(crate) fn build_extern_func(
     let func_ty = func::func_sig(ctx, params.iter().copied(), [result]).as_type_ref();
 
     let data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-        .attr("sym_name", Attribute::Symbol(Symbol::from_dynamic(name)))
+        .attr(
+            "sym_name",
+            Attribute::String(ctx.intern_symbol_text(Symbol::from_dynamic(name))),
+        )
         .attr("type", Attribute::Type(func_ty))
         .attr("abi", ctx.string_attr("C"))
         .build(ctx);

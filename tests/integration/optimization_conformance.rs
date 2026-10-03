@@ -60,17 +60,21 @@ fn temporary_borrow_options(temporary_borrows: TemporaryBorrowPolicy) -> Optimiz
     }
 }
 
+/// The `@name` of a generic `clif.func` line, whose name prints as `sym_name = "name"`.
+fn clif_func_symbol(line: &str) -> Option<String> {
+    line.split_once("sym_name = \"")
+        .and_then(|(_, rest)| rest.split('"').next())
+        .map(|name| format!("@{name}"))
+}
+
 fn focused_rc_ops(ir: &str) -> String {
-    let mut function = "<outside function>";
+    let mut function = "<outside function>".to_owned();
     let mut emitted_function = None;
     let mut output = String::new();
     for line in ir.lines() {
         let trimmed = line.trim();
         if trimmed.starts_with("clif.func ") {
-            function = trimmed
-                .split_once("sym_name = ")
-                .and_then(|(_, rest)| rest.split([',', '}']).next())
-                .unwrap_or("<unknown function>");
+            function = clif_func_symbol(trimmed).unwrap_or_else(|| "<unknown function>".to_owned());
             continue;
         }
         if function.starts_with("@__tribute_release_")
@@ -78,9 +82,9 @@ fn focused_rc_ops(ir: &str) -> String {
         {
             continue;
         }
-        if emitted_function != Some(function) {
+        if emitted_function.as_ref() != Some(&function) {
             writeln!(&mut output, "{function}:").expect("writing to a String cannot fail");
-            emitted_function = Some(function);
+            emitted_function = Some(function.clone());
         }
         writeln!(&mut output, "{trimmed}").expect("writing to a String cannot fail");
     }
@@ -105,9 +109,7 @@ fn generated_rtti_field_releases(ir: &str) -> String {
                     .expect("writing to a String cannot fail");
             }
             count = 0;
-            function = trimmed
-                .split_once("sym_name = ")
-                .and_then(|(_, rest)| rest.split([',', '}']).next())
+            function = clif_func_symbol(trimmed)
                 .filter(|symbol| symbol.starts_with("@__tribute_release_"));
         } else if function.is_some() && trimmed.contains("tribute_rt.release") {
             count += 1;

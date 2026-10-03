@@ -492,10 +492,10 @@ Operation attribute는 별개의 generic attribute dictionary에 남는다.
 #### `tribute_control.func`
 
 ```text
-tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
+tribute_control.func {sym_name = "id", type = !Callable} (%x: T) { ... }
 ```
 
-- **형상:** 피연산자와 결과는 없다. `sym_name: Symbol`과
+- **형상:** 피연산자와 결과는 없다. `sym_name: String`과
   `type: tribute_control.func_sig<(Params...) -> Result>`가 필수다. 선언은 region이
   없고 정의는 source parameter만 block argument로 받는 single-block `body`
   하나이며 `tribute_control.return`으로 끝난다. Foreign ABI 같은 비제어
@@ -1294,8 +1294,13 @@ Symbol 값은 symbol table의 정의를 가리키는 참조에만 쓴다(`callee
 아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
 `predicate = "slt"`로 쓴다. Ability 이름(`core.ability_ref`의 `name`)과 operation
-이름(`op_name`), operation kind(`"fn"`, `"op"`)도 symbol table의 정의가 아니므로
-문자열이다. 그래서 텍스트의 `@`는 언제나 참조를 뜻하고, 속성을 훑어
+이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity
+(`tribute.compiler_intrinsic`)도 symbol table의 정의가 아니므로 문자열이다.
+
+정의의 이름(`sym_name`)도 문자열이다. 정의는 symbol table에 자기 이름을 등록할 뿐
+다른 정의를 가리키지 않으므로 참조가 아니다(MLIR의 `sym_name`도 `StringAttr`다).
+`func.func @foo`처럼 정의 operation의 전용 문법은 이름 앞에 `@`를 붙이지만, 저장되는
+값은 문자열이다. 그래서 속성 값으로 쓰인 `@`는 언제나 참조를 뜻하고, 속성을 훑어
 참조를 일반적으로 찾을 수 있다.
 
 문자열 값은 그 속성을 가진 `IrContext`의 문자열 pool에 uniquing되며, 속성은 pool

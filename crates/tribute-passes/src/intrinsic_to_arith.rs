@@ -42,8 +42,11 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
             .copied()
             .filter_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                let symbol = function.sym_name(ctx);
-                (ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR) == Some(symbol)
+                let symbol = Symbol::from_dynamic(function.sym_name(ctx));
+                (ctx.op(op)
+                    .attributes
+                    .get_str(ctx, COMPILER_INTRINSIC_ATTR)
+                    .is_some_and(|identity| symbol == identity)
                     && intrinsic_map.get(&symbol).is_some_and(|mapping| {
                         exact_signature(ctx, function.r#type(ctx), symbol, mapping)
                     }))
@@ -71,8 +74,9 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         .iter()
         .copied()
         .filter(|&op| {
-            func::Func::from_op(ctx, op)
-                .is_ok_and(|function| eligible.contains(&function.sym_name(ctx)))
+            func::Func::from_op(ctx, op).is_ok_and(|function| {
+                eligible.contains(&Symbol::from_dynamic(function.sym_name(ctx)))
+            })
         })
         .collect();
     if declarations.is_empty() {
@@ -318,7 +322,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         };
 
         // Check if this is one of our known arithmetic intrinsics
-        let sym_name = func_op.sym_name(ctx);
+        let sym_name = Symbol::from_dynamic(func_op.sym_name(ctx));
         if !self.eligible.contains(&sym_name) {
             return false;
         }
@@ -457,7 +461,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -497,7 +501,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Int::=="(%0: core.i32, %1: core.i32) -> core.i1
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Int::=="} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Int::=="} {
                 ^bb0:
                     func.unreachable
                 }
@@ -526,7 +530,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"}
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
                     %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
@@ -551,7 +555,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"}
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @user() -> func.func_sig<(core.i32, core.i32) -> core.i32> {
                 ^bb0:
                     %f = func.constant {func_ref = @"std::Nat::+"} : func.func_sig<(core.i32, core.i32) -> core.i32>
@@ -579,7 +583,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.f64, %1: core.f64) -> core.f64
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -626,7 +630,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }

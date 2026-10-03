@@ -51,12 +51,22 @@ impl SymbolTable {
             for &op in &ctx.block(block).ops {
                 if core::Module::matches(ctx, op) {
                     let mut nested = path.to_vec();
-                    nested.extend(ctx.op(op).attributes.get_symbol(SYM_NAME));
+                    nested.extend(
+                        ctx.op(op)
+                            .attributes
+                            .get_str(ctx, SYM_NAME)
+                            .map(Symbol::from_dynamic),
+                    );
                     for region in ctx.op_regions(op) {
                         self.collect_region(ctx, region, &nested);
                     }
                 } else {
-                    if let Some(name) = ctx.op(op).attributes.get_symbol(SYM_NAME) {
+                    if let Some(name) = ctx
+                        .op(op)
+                        .attributes
+                        .get_str(ctx, SYM_NAME)
+                        .map(Symbol::from_dynamic)
+                    {
                         self.definitions
                             .entry(qualify(path, name))
                             .or_default()
@@ -128,7 +138,11 @@ impl InfallibleAnalysis for SymbolTable {}
 /// The root-qualified name of the definition `op`, which must carry a
 /// `sym_name`.
 pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
-    let name = ctx.op(op).attributes.get_symbol(SYM_NAME)?;
+    let name = ctx
+        .op(op)
+        .attributes
+        .get_str(ctx, SYM_NAME)
+        .map(Symbol::from_dynamic)?;
     let path = parent_op(ctx, op).map_or_else(Vec::new, |parent| module_path(ctx, parent));
     Some(qualify(&path, name))
 }
@@ -142,7 +156,12 @@ fn module_path(ctx: &IrContext, op: OpRef) -> Vec<Symbol> {
         let parent = parent_op(ctx, op);
         // The root module has no parent and contributes nothing.
         if core::Module::matches(ctx, op) && parent.is_some() {
-            path.extend(ctx.op(op).attributes.get_symbol(SYM_NAME));
+            path.extend(
+                ctx.op(op)
+                    .attributes
+                    .get_str(ctx, SYM_NAME)
+                    .map(Symbol::from_dynamic),
+            );
         }
         current = parent;
     }

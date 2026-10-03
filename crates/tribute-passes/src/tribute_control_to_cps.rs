@@ -3566,7 +3566,8 @@ impl<'a> Converter<'a> {
             .ctx
             .op(source)
             .attributes
-            .get_symbol("sym_name")
+            .get_str(self.ctx, "sym_name")
+            .map(Symbol::from_dynamic)
             .expect("pre-CPS validation checked function symbol");
         let logical_type = self
             .ctx
@@ -3583,7 +3584,10 @@ impl<'a> Converter<'a> {
         if !self.ctx.op_has_regions(source) {
             let mut builder =
                 OperationDataBuilder::new(location, Symbol::new("func"), Symbol::new("func"))
-                    .attr("sym_name", Attribute::Symbol(symbol))
+                    .attr(
+                        "sym_name",
+                        Attribute::String(self.ctx.intern_symbol_text(symbol)),
+                    )
                     .attr("type", Attribute::Type(physical_type));
             for (key, value) in self.convert_attrs(&self.ctx.op(source).attributes.clone()) {
                 if key != Symbol::new("sym_name") && key != Symbol::new("type") {
@@ -4375,7 +4379,7 @@ mod tests {
   !inner = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
   !outer = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @function]], tribute.calling_convention = 0}>
   !lambda = tribute_control.func_sig<() -> core.i32, {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}>
-  tribute_control.func {sym_name = @outer, type = !outer} {
+  tribute_control.func {sym_name = "outer", type = !outer} {
     %lambda = tribute_control.lambda : !lambda {
       %inner = arith.const {value = 1} : core.i32
       tribute_control.return %inner
@@ -4539,7 +4543,7 @@ mod tests {
     #[test]
     fn raw_malformed_source_signature_storage_fails_before_conversion() {
         let input = r#"core.module @test {
-  tribute_control.func {sym_name = @broken, type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>}
+  tribute_control.func {sym_name = "broken", type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>}
   %lambda = tribute_control.lambda : tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>
 }"#;
         let (mut ctx, module) = parse(input);

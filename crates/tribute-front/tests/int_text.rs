@@ -625,8 +625,8 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
             ControlFlow::Continue(WalkAction::Skip)
         });
     for (argument, primitive) in [("Int", "i32"), ("Bool", "i1")] {
-        let parent = functions[&Symbol::from_dynamic(&format!("apply${argument}"))];
-        let consumer = functions[&Symbol::from_dynamic(&format!("pure${argument}"))];
+        let parent = functions[format!("apply${argument}").as_str()];
+        let consumer = functions[format!("pure${argument}").as_str()];
         let parent_signature = FuncSig::from_type_ref(&ir, parent.r#type(&ir)).unwrap();
         let data_type = parent_signature.result(&ir);
         assert_eq!(parent_signature.inputs(&ir), [data_type]);

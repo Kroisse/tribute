@@ -136,11 +136,11 @@ fn make_bodyless_function_op(
     ctx: &mut IrContext,
     loc: crate::types::Location,
     dialect: crate::Symbol,
-    sym_name: crate::Symbol,
+    sym_name: crate::types::StringRef,
     func_type: TypeRef,
 ) -> OpRef {
     let data = OperationDataBuilder::new(loc, dialect, crate::Symbol::new("func"))
-        .attr("sym_name", Attribute::Symbol(sym_name))
+        .attr("sym_name", Attribute::String(sym_name))
         .attr("type", Attribute::Type(func_type))
         .build(ctx);
     ctx.create_op(data)
@@ -224,7 +224,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
         )
         .as_type_ref();
         let body = ctx.op_region(op, 0);
-        let sym_name = func_op.sym_name(ctx);
+        let sym_name = func_op.sym_name_ref(ctx);
         let loc = ctx.op(op).location;
 
         rewrite_function_signature(
@@ -299,7 +299,10 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                )
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -454,13 +457,9 @@ mod tests {
             };
             let func_ty = func::func_sig(&mut ctx, [i32_ty], results.clone()).as_type_ref();
 
-            let func_decl = make_bodyless_function_op(
-                &mut ctx,
-                loc,
-                Symbol::new("func"),
-                Symbol::new("external"),
-                func_ty,
-            );
+            let external = ctx.intern_str("external");
+            let func_decl =
+                make_bodyless_function_op(&mut ctx, loc, Symbol::new("func"), external, func_ty);
             let func_def = make_func_op(&mut ctx, loc, "defined", func_ty, &[i32_ty]);
             let module = make_module(&mut ctx, loc, vec![func_decl, func_def]);
 

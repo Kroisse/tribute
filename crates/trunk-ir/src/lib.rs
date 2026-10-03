@@ -93,7 +93,7 @@ pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef}
 pub use rewrite::Module;
 pub use types::{
     Attribute, AttributeIntoIter, AttributeIter, AttributeIterMut, AttributeKey, AttributeKeys,
-    AttributeMap, AttributeText, AttributeValues, AttributeValuesMut, IntegerOutOfRange, Location,
-    PathInterner, StringArg, StringPool, StringRef, TypeData, TypeDataBuilder, TypeInterner,
+    AttributeMap, AttributeValues, AttributeValuesMut, IntegerOutOfRange, Location, PathInterner,
+    StringArg, StringPool, StringRef, TypeData, TypeDataBuilder, TypeInterner,
 };
 pub use walk::WalkAction;

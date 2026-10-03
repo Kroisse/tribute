@@ -8,7 +8,7 @@ crate::register_pure_op!(NilValue);
 
 #[trunk_ir::dialect]
 mod core {
-    fn module(sym_name: Attr<Symbol>) {
+    fn module(sym_name: Attr<String>) {
         #[region(body)]
         {}
     }

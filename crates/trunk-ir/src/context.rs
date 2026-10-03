@@ -391,6 +391,7 @@ impl IrContext {
         match arg {
             StringArg::Ref(r) => r,
             StringArg::Text(text) => self.intern_str(&text),
+            StringArg::Symbol(symbol) => self.intern_symbol_text(symbol),
         }
     }
 
@@ -2400,7 +2401,10 @@ mod tests {
             Symbol::new("func"),
             Symbol::new("func"),
         )
-        .attr("sym_name", Attribute::Symbol(Symbol::new(new_name)))
+        .attr(
+            "sym_name",
+            Attribute::String(ctx.intern_symbol_text(Symbol::new(new_name))),
+        )
         .attr("type", func_ty)
         .region(cloned_region)
         .build(&mut ctx);

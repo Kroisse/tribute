@@ -15,7 +15,7 @@ mod parse;
 /// ```ignore
 /// #[dialect]
 /// mod func {
-///     fn func(sym_name: Attr<Symbol>, r#type: Attr<Type>) {
+///     fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
 ///         #[region(body?)] {}
 ///     }
 ///

@@ -58,11 +58,11 @@ impl Pass for LowerListIntrinsics {
             let Ok(function) = func::Func::from_op(ctx, op) else {
                 continue;
             };
-            let name = function.sym_name(ctx);
+            let name = Symbol::from_dynamic(function.sym_name(ctx));
             intrinsic_declarations.all.insert(name);
             if is_prepend_intrinsic(name)
-                && ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
-                    == Some(Symbol::new(PREPEND_INTRINSIC))
+                && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
+                    == Some(PREPEND_INTRINSIC)
                 && {
                     func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some_and(
                         |signature| {
@@ -159,7 +159,7 @@ impl RewritePattern for PrependDeclarationPattern {
         if !self
             .intrinsic_declarations
             .eligible
-            .contains(&function.sym_name(ctx))
+            .contains(&Symbol::from_dynamic(function.sym_name(ctx)))
         {
             return false;
         }
@@ -182,7 +182,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -246,7 +246,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int
-                    attributes {tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
+                    attributes {tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.return %0
                 }
@@ -280,7 +280,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }

@@ -91,7 +91,8 @@ fn collect_clif_function_signatures(
             if clif::Func::matches(ctx, op) && clif::Func::DEF.verify(ctx, op).is_empty() {
                 let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
                 // References resolve by root-qualified path.
-                let name = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
+                let name = qualified_name(ctx, op)
+                    .unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
                 let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
                     .expect("schema-verified clif.func_sig");
                 if functions.insert(name, signature).is_some() {
@@ -223,7 +224,8 @@ fn validate_clif_function(
     errors: &mut Vec<String>,
 ) -> Option<clif::FuncSig> {
     let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
-    let name = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
+    let name =
+        qualified_name(ctx, op).unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
     let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
         .expect("schema-verified clif.func_sig");
     let has_abi = ctx.op(op).attributes.contains_key("abi");
@@ -294,7 +296,8 @@ fn validate_clif_region(
             }
             if let Ok(data) = clif::Data::from_op(ctx, op) {
                 // Data objects link under their root-qualified path.
-                let name = qualified_name(ctx, op).unwrap_or_else(|| data.sym_name(ctx));
+                let name = qualified_name(ctx, op)
+                    .unwrap_or_else(|| Symbol::from_dynamic(data.sym_name(ctx)));
                 if name.with_str(|name| RESERVED_RUNTIME_SYMBOLS.contains(&name)) {
                     errors.push(format!(
                         "clif.data @{name}: symbol is reserved for the native runtime"
@@ -473,7 +476,10 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr(
+                    "sym_name",
+                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
+                )
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -492,23 +498,23 @@ mod tests {
     fn tail_transfers_require_tail_call_conv_on_both_signatures() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @tail_target, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "tail_target", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%value: core.i32):
       clif.return
   }
-  clif.func {sym_name = @platform_target, type = clif.func_sig<(core.i32) -> ()>} {
+  clif.func {sym_name = "platform_target", type = clif.func_sig<(core.i32) -> ()>} {
     ^entry(%value: core.i32):
       clif.return
   }
-  clif.func {sym_name = @platform_caller, type = clif.func_sig<(core.i32) -> ()>} {
+  clif.func {sym_name = "platform_caller", type = clif.func_sig<(core.i32) -> ()>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @tail_target}
   }
-  clif.func {sym_name = @to_platform, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "to_platform", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @platform_target}
   }
-  clif.func {sym_name = @indirect_platform, type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "indirect_platform", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%callee: core.ptr, %value: core.i32):
       clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> ()>}
   }
@@ -526,15 +532,15 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.func {sym_name = @target, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "target", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%value: core.i32):
       clif.return
   }
-  clif.func {sym_name = @direct, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "direct", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @target}
   }
-  clif.func {sym_name = @indirect, type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "indirect", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
     ^entry(%callee: core.ptr, %value: core.i32):
       clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
   }
@@ -547,8 +553,8 @@ mod tests {
     fn external_boundaries_cannot_use_tail_call_conv() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @foreign, abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
-  clif.func {sym_name = @main, type = clif.func_sig<() -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "foreign", abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
+  clif.func {sym_name = "main", type = clif.func_sig<() -> (), {call_conv = @tail}>} {
     ^entry:
       clif.return
   }
@@ -603,7 +609,7 @@ mod tests {
     fn native_boundary_rejects_malformed_target_signature_storage() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @bad, type = clif.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
+  clif.func {sym_name = "bad", type = clif.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
 }"#,
         );
         assert!(

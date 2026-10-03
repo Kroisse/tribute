@@ -398,7 +398,7 @@ impl RewritePattern for FuncFuncPattern {
         };
 
         let loc = ctx.op(op).location;
-        let sym_name = func_op.sym_name(ctx);
+        let sym_name = func_op.sym_name_ref(ctx);
         let Some(func_type) =
             convert_to_wasm_func_type(ctx, func_op.r#type(ctx), rewriter.type_converter())
         else {
@@ -428,7 +428,7 @@ impl RewritePattern for FuncFuncPattern {
                 .op_ref(),
             None => {
                 let data = OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
-                    .attr("sym_name", Attribute::Symbol(sym_name))
+                    .attr("sym_name", Attribute::String(sym_name))
                     .attr("type", Attribute::Type(func_type))
                     .build(ctx);
                 ctx.create_op(data)
@@ -866,11 +866,11 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains("!t0 = wasm.func_sig<(core.i32) -> core.i32>")
-                && output.contains("wasm.func {custom = 7, sym_name = @external, type = !t0}"),
+                && output.contains("wasm.func {custom = 7, sym_name = \"external\", type = !t0}"),
             "{output}"
         );
         assert!(
-            output.contains("wasm.func {sym_name = @defined"),
+            output.contains("wasm.func {sym_name = \"defined\""),
             "{output}"
         );
         assert!(output.contains("wasm.return %0"), "{output}");

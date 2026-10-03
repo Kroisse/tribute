@@ -8,7 +8,7 @@ use itertools::Itertools;
 #[trunk_ir::dialect]
 mod clif {
     // Module
-    fn func<S: FuncSig>(sym_name: Attr<Symbol>, r#type: Attr<S::Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<S::Type>) {
         #[region(body?)]
         {}
     }
@@ -20,7 +20,7 @@ mod clif {
     /// pointer-width ranges must fit in `bytes` and must not overlap;
     /// emission checks both against the target pointer width.
     #[verify]
-    fn data(sym_name: Attr<Symbol>, bytes: Attr<Bytes>, align: Attr<u32>) {
+    fn data(sym_name: Attr<String>, bytes: Attr<Bytes>, align: Attr<u32>) {
         #[region(relocs?)]
         {}
     }

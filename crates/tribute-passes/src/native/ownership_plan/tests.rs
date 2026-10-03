@@ -148,7 +148,7 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         "call arguments differ from the exact callable signature",
     );
     assert_plan_error_unchanged(
-        "core.module @test { func.func {sym_name = @bad, type = core.i32} }",
+        "core.module @test { func.func {sym_name = \"bad\", type = core.i32} }",
         "bodyless function lacks exact signature",
     );
     assert_plan_error_unchanged(
@@ -160,13 +160,13 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
 #[test]
 fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
     assert_plan_error_unchanged(
-        "core.module @test { func.func {sym_name = @empty, type = func.func_sig<() -> ()>} {} }",
+        "core.module @test { func.func {sym_name = \"empty\", type = func.func_sig<() -> ()>} {} }",
         "func.func @empty: body has no entry block",
     );
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
-        "core.module @test { func.func {sym_name = @extra, type = func.func_sig<() -> ()>} { func.return } }",
+        "core.module @test { func.func {sym_name = \"extra\", type = func.func_sig<() -> ()>} { func.return } }",
     );
     let op = module.ops(&ctx)[0];
     let extra = ctx.create_region(trunk_ir::RegionData {
@@ -189,7 +189,7 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
 #[test]
 fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
     let (mut ctx, module, plan) = build(
-        "core.module @test { func.func {sym_name = @external, type = func.func_sig<() -> ()>} }",
+        "core.module @test { func.func {sym_name = \"external\", type = func.func_sig<() -> ()>} }",
     );
     let op = module.ops(&ctx)[0];
     let body = ctx.create_region(trunk_ir::RegionData {

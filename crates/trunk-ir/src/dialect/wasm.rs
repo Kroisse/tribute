@@ -69,7 +69,7 @@ mod wasm {
     fn nop() -> Value<_> {}
 
     // Module
-    fn func(sym_name: Attr<Symbol>, r#type: Attr<Type>) {
+    fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
         {}
     }
@@ -77,7 +77,7 @@ mod wasm {
     fn import_func(
         module: Attr<String>,
         name: Attr<String>,
-        sym_name: Attr<Symbol>,
+        sym_name: Attr<String>,
         r#type: Attr<Type>,
     ) {
     }
