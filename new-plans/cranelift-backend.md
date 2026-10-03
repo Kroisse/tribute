@@ -250,11 +250,12 @@ type, exact callable contract와 CFG liveness만 사용한다. RTTI deep-release
 entry/call/store/load/final-use/tail action은 이 plan에 함께 들어간다. 이후
 `core.ptr`는 이미 선택된 explicit RC operation의 physical operand일 뿐이다.
 
-Plan의 RTTI 배치는 plan을 만든 직후 할당 layout마다 하나의
-`tribute_rtti.layout {type, index, managed}` 선언으로 모듈에 기록한다. index는
+Plan의 RTTI 배치는 plan을 만든 직후 descriptor(struct layout, 또는 enum layout의
+variant 하나)마다 하나의 `tribute_rtti.layout` 선언으로 모듈에 기록한다. 선언이
+담는 내용은 [runtime-types.md](runtime-types.md#ir에서의-표현)를 따른다. index는
 plan의 할당 순서대로 사용자 RTTI index 공간에서 정한다. Closure layout(`layout = "closure"`)을
 native closure layout으로 바꾸는 일은 Tribute target 단계가 소유하며, 할당 op과
-그 layout의 RTTI 선언을 함께 바꾼다. RTTI 생성은 선언이 모든 할당 layout을 정확히
+그 layout의 RTTI 선언을 함께 바꾼다. RTTI 생성은 선언이 모든 할당 descriptor를 정확히
 한 번씩 이름 붙이는지 검사한 뒤, descriptor별 release 함수, index마다 release 함수
 주소와 descriptor 내용을 담는 RTTI table(`clif.data`와 재배치), table을 통해 해제를 디스패치하는
 `__tribute_deep_release`를 IR에 선언한다. RC header lowering은 선언된 index를

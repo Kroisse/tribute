@@ -46,15 +46,20 @@ pub fn declare(ctx: &mut IrContext, module: Module) {
         return;
     };
     let location = ctx.op(module.op()).location;
-    for (position, (ty, tag)) in descriptors.into_iter().enumerate() {
-        let fields = descriptor_field_types(ctx, ty, tag)
-            .expect("an allocation names its own layout")
+    let mut index = FIRST_USER_TYPE_IDX;
+    for (ty, tag) in descriptors {
+        // An allocation whose type does not resolve to its layout stays
+        // undeclared; `adt_to_wasm` leaves it for the backend boundary to reject.
+        let Ok(field_types) = descriptor_field_types(ctx, ty, tag) else {
+            continue;
+        };
+        let fields = field_types
             .into_iter()
             .map(|field| field_kind(ctx, field))
             .collect::<Vec<_>>();
-        let index = FIRST_USER_TYPE_IDX + u32::try_from(position).expect("descriptor fits u32");
         let layout = tribute_rtti::Layout::declare(ctx, location, ty, tag, index, &fields);
         ctx.push_op(module_block, layout.op_ref());
+        index += 1;
     }
 }
 
@@ -141,6 +146,39 @@ mod tests {
                         }
                     ]
                 ),
+            ]
+        );
+    }
+
+    #[test]
+    fn unresolved_descriptors_are_skipped_without_a_gap() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !S = adt.struct<S(x: core.f64)>
+  !E = adt.enum<{name = "E", variants = [["None", []], ["Some", [core.f64]]]}>
+  wasm.func @main(%x: core.f64) -> core.nil {
+    %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
+    %erased = adt.variant_new %x {type = tribute_rt.anyref, tag = "Some"} : tribute_rt.anyref
+    %missing = adt.variant_new %x {type = !E, tag = "Other"} : !E
+    %s = adt.struct_new %x {type = !S} : !S
+    wasm.return
+  }
+}"#,
+        );
+
+        declare(&mut ctx, module);
+
+        let summary = tribute_rtti::Layout::declared(&ctx, module)
+            .iter()
+            .map(|layout| (layout.index(&ctx), layout.tag(&ctx)))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            summary,
+            [
+                (FIRST_USER_TYPE_IDX, Some("Some")),
+                (FIRST_USER_TYPE_IDX + 1, None),
             ]
         );
     }
