@@ -96,15 +96,10 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         result.function_types.into_iter().collect();
     let constructor_types: std::collections::HashMap<_, _> =
         result.constructor_types.into_iter().collect();
-    let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
     let ability_conventions: std::collections::HashMap<_, _> =
         result.ability_conventions.into_iter().collect();
     let ability_definitions: std::collections::HashMap<_, _> =
         result.ability_definitions.into_iter().collect();
-    let handler_operations: std::collections::HashMap<_, _> =
-        result.handler_operations.into_iter().collect();
-    let perform_operations: std::collections::HashMap<_, _> =
-        result.perform_operations.into_iter().collect();
     let compiler_intrinsics = prelude
         .as_ref()
         .map(|prelude| {
@@ -119,15 +114,15 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         function_types: function_types_map,
         constructor_types,
         specialized_enum_variants: Default::default(),
-        node_types: node_types_map,
-        local_instances: result.local_instances.into_iter().collect(),
+        node_types: result.node_types,
+        local_instances: result.local_instances,
         ability_conventions,
         ability_definitions,
-        handler_operations,
-        perform_operations,
-        lambda_signatures: result.lambda_signatures.into_iter().collect(),
+        handler_operations: result.handler_operations,
+        perform_operations: result.perform_operations,
+        lambda_signatures: result.lambda_signatures,
         exhaustive_cases: result.exhaustive_cases.into_iter().collect(),
-        evidence_plans: result.evidence_plans.into_iter().collect(),
+        evidence_plans: result.evidence_plans,
         well_known_types: result.well_known_types,
         compiler_intrinsics,
     }

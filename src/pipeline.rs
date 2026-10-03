@@ -583,18 +583,8 @@ fn prepare_frontend_details<'db>(
             return None;
         }
     };
-    let mut node_types: Vec<_> = mono_result.metadata.node_types.into_iter().collect();
-    node_types.sort_by_key(|(id, _)| *id);
-    let mut instances: Vec<_> = mono_result
-        .metadata
-        .function_instances
-        .into_iter()
-        .collect();
-    instances.sort_by_key(|(id, _)| *id);
-    let mut local_instances: Vec<_> = mono_result.metadata.local_instances.into_iter().collect();
-    local_instances.sort_by_key(|(id, _)| *id);
-    let mut evidence_plans: Vec<_> = mono_result.metadata.evidence_plans.into_iter().collect();
-    evidence_plans.sort_by_key(|(id, _)| *id);
+    let mut exhaustive_cases: Vec<_> = mono_result.metadata.exhaustive_cases.into_iter().collect();
+    exhaustive_cases.sort();
     let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
@@ -602,21 +592,21 @@ fn prepare_frontend_details<'db>(
         mono_result.function_types,
         ast_typeck::ConstructorTypeMetadata {
             schemes: mono_result.metadata.constructor_types.into_iter().collect(),
-            specialized_enum_variants: {
-                let mut variants: Vec<_> = mono_result
-                    .metadata
-                    .specialized_enum_variants
-                    .into_iter()
-                    .collect();
-                variants.sort_by_key(|(id, _)| *id);
-                variants
-            },
+            specialized_enum_variants: mono_result
+                .metadata
+                .specialized_enum_variants
+                .into_iter()
+                .collect(),
         },
         ast_typeck::ExpressionTypeMetadata {
-            node_types,
-            function_instances: instances,
-            local_instances,
-            evidence_plans,
+            node_types: mono_result.metadata.node_types.into_iter().collect(),
+            function_instances: mono_result
+                .metadata
+                .function_instances
+                .into_iter()
+                .collect(),
+            local_instances: mono_result.metadata.local_instances.into_iter().collect(),
+            evidence_plans: mono_result.metadata.evidence_plans.into_iter().collect(),
         },
         merged_ability_conventions.into_iter().collect::<Vec<_>>(),
         typed.ability_definitions(db).to_vec(),
@@ -624,22 +614,14 @@ fn prepare_frontend_details<'db>(
             .metadata
             .handler_operations
             .into_iter()
-            .collect::<Vec<_>>(),
+            .collect(),
         mono_result
             .metadata
             .perform_operations
             .into_iter()
-            .collect::<Vec<_>>(),
-        mono_result
-            .metadata
-            .lambda_signatures
-            .into_iter()
-            .collect::<Vec<_>>(),
-        mono_result
-            .metadata
-            .exhaustive_cases
-            .into_iter()
-            .collect::<Vec<_>>(),
+            .collect(),
+        mono_result.metadata.lambda_signatures.into_iter().collect(),
+        exhaustive_cases,
         *typed.well_known_types(db),
         merged_span_map,
     );
@@ -663,12 +645,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
     let module = lower(
         ast_to_ir::TypedModule {
             ast: typed.module(db).clone(),
-            local_instances: typed
-                .expression_types(db)
-                .local_instances
-                .iter()
-                .cloned()
-                .collect(),
+            local_instances: typed.expression_types(db).local_instances.clone(),
             span_map: typed.span_map(db).clone(),
             function_types: typed.function_types(db).iter().cloned().collect(),
             constructor_types: typed
@@ -680,29 +657,17 @@ fn merge_and_lower_to_ir_with<'db, M>(
             specialized_enum_variants: typed
                 .constructor_types(db)
                 .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: typed
-                .expression_types(db)
-                .node_types
-                .iter()
-                .cloned()
-                .collect(),
+                .clone(),
+            node_types: typed.expression_types(db).node_types.clone(),
             ability_conventions: typed.ability_conventions(db).iter().cloned().collect(),
             ability_definitions: ast_typeck::ability_definitions_from_schemas(
                 typed.ability_definitions(db),
             ),
-            handler_operations: typed.handler_operations(db).iter().cloned().collect(),
-            perform_operations: typed.perform_operations(db).iter().cloned().collect(),
-            lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
+            handler_operations: typed.handler_operations(db).clone(),
+            perform_operations: typed.perform_operations(db).clone(),
+            lambda_signatures: typed.lambda_signatures(db).clone(),
             exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
-            evidence_plans: typed
-                .expression_types(db)
-                .evidence_plans
-                .iter()
-                .cloned()
-                .collect(),
+            evidence_plans: typed.expression_types(db).evidence_plans.clone(),
             well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
         },

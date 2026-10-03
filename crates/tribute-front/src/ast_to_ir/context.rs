@@ -15,6 +15,7 @@ use trunk_ir::dialect::core;
 use trunk_ir::refs::{BlockRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeDataBuilder};
 
+use crate::SortedMap;
 use crate::ast::{
     AbilityId, CallingConvention, CtorId, LocalId, NodeId, SpanMap, TypeKind, TypeScheme,
 };
@@ -113,7 +114,7 @@ pub struct IrLoweringCtx<'db> {
     literal_equalities: LiteralEqualities,
     /// Node types from type checking, keyed by NodeId.
     /// Used to get the effect type of lambda expressions.
-    node_types: HashMap<NodeId, crate::ast::Type<'db>>,
+    node_types: SortedMap<NodeId, crate::ast::Type<'db>>,
 }
 
 /// The functions that compare a scrutinee with a `String` or `Bytes` literal
@@ -137,7 +138,7 @@ impl<'db> IrLoweringCtx<'db> {
         function_types: HashMap<Symbol, TypeScheme<'db>>,
         ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
         module_path: SymbolVec,
-        node_types: HashMap<NodeId, crate::ast::Type<'db>>,
+        node_types: SortedMap<NodeId, crate::ast::Type<'db>>,
     ) -> Self {
         Self {
             db,
@@ -1005,7 +1006,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         )
     }
 
@@ -1118,7 +1119,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         let ty = AstType::new(&db, TypeKind::BoundVar { index: 0 });
@@ -1142,7 +1143,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
         let int = AstType::new(&db, TypeKind::Int);
         let effect = crate::ast::EffectRow::pure(&db);
@@ -1455,7 +1456,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         // Int → I32
@@ -1506,7 +1507,7 @@ mod tests {
             ft,
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
         assert_eq!(ctx.lookup_function_type(name), Some(&scheme));
         assert_eq!(ctx.lookup_function_type(Symbol::new("missing")), None);

@@ -35,6 +35,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
 
+use crate::SortedMap;
 use crate::ast::{
     AbilityId, CallingConvention, Module as AstModule, NodeId, SpanMap, Type, TypeScheme, TypedRef,
 };
@@ -172,19 +173,19 @@ pub struct TypedModule<'db> {
     pub span_map: SpanMap,
     pub function_types: HashMap<Symbol, TypeScheme<'db>>,
     pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
-    pub specialized_enum_variants: HashMap<NodeId, TypeScheme<'db>>,
-    pub node_types: HashMap<NodeId, Type<'db>>,
-    pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
+    pub node_types: SortedMap<NodeId, Type<'db>>,
+    pub local_instances: SortedMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
     pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
     pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
-    pub handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
-    pub perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    pub perform_operations: SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     /// Solved source-callable signatures for lambda expressions.
-    pub lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    pub lambda_signatures: SortedMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     /// Case expressions whose source coverage is known to be exhaustive.
     pub exhaustive_cases: std::collections::HashSet<NodeId>,
     /// Non-identity evidence selections of calls, resumes, and handles.
-    pub evidence_plans: HashMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
+    pub evidence_plans: SortedMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
     /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
@@ -240,7 +241,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         // Verify context provides expected types
@@ -285,7 +286,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         let local_id = crate::ast::LocalId::new(0);
@@ -317,7 +318,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         let local_id = crate::ast::LocalId::new(0);
@@ -352,7 +353,7 @@ mod tests {
             HashMap::new(),
             HashMap::new(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         // Verify location creation doesn't panic

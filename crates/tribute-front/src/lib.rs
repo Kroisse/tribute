@@ -12,6 +12,7 @@
 //! - [`tdnr`]: Type-directed name resolution (AST → AST)
 //! - [`ast_to_ir`]: AST to TrunkIR lowering
 //! - [`query`]: Salsa-tracked query functions for incremental compilation
+//! - [`sorted_map`]: Sorted-vector map for deterministic phase results
 //! - [`source_file`]: Source file management and URI handling
 
 pub mod ast;
@@ -21,12 +22,14 @@ pub mod keywords;
 pub mod monomorphize;
 pub mod query;
 pub mod resolve;
+pub mod sorted_map;
 pub mod source_file;
 pub mod tdnr;
 pub mod typeck;
 
 pub use fluent_uri::Uri;
 pub use query::{ParsedCst, parse_cst};
+pub use sorted_map::SortedMap;
 pub use source_file::{SourceCst, derive_module_name_from_path, path_to_uri};
 
 use trunk_ir::Symbol;
