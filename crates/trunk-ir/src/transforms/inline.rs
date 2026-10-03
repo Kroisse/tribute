@@ -261,7 +261,7 @@ fn should_inline(
     if recursive.contains(&callee) {
         return false;
     }
-    let escapes = graph.has_constant_ref.contains(&callee);
+    let escapes = graph.address_taken.contains(&callee);
 
     // Single-call-site rule (only when the callee doesn't escape).
     if config.always_inline_single_call_site

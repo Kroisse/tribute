@@ -1,7 +1,8 @@
 //! Call graph analysis for TrunkIR.
 //!
-//! Builds a directed graph of function call relationships from `func.call`,
-//! `func.tail_call`, and `func.constant` operations. Provides Tarjan's SCC
+//! Builds a directed graph of function call relationships from every symbol
+//! reference in a function body. A [`CallLikeOps`] callee is a call; any
+//! other reference takes its target's address. Provides Tarjan's SCC
 //! for detecting recursive functions (direct self-recursion and mutual
 //! recursion), which is a prerequisite for inlining (`inline.rs`) and other
 //! interprocedural transforms.
@@ -15,6 +16,7 @@ use std::ops::ControlFlow;
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
 use crate::dialect::func;
+use crate::op_interface::CallLikeOps;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
@@ -24,22 +26,22 @@ use crate::walk::{WalkAction, walk_region};
 
 /// A function call graph over a module.
 ///
-/// Edges include direct calls (`func.call`), tail calls (`func.tail_call`),
-/// and reference-as-value (`func.constant`). Reference edges are conservative:
-/// they represent "function X escapes as a value, so could be called from
-/// anywhere later" and should be treated as a call edge for recursion
-/// detection.
+/// Edges include direct calls and address references such as `func.constant`.
+/// Reference edges are conservative: they represent "function X escapes as a
+/// value, so could be called from anywhere later" and should be treated as a
+/// call edge for recursion detection.
 #[derive(Debug, Default)]
 pub struct CallGraph {
-    /// Caller → set of callees (includes direct calls and `func.constant` refs).
+    /// Caller → set of callees (includes direct calls and address references).
     pub edges: HashMap<Symbol, HashSet<Symbol>>,
     /// Function name (possibly qualified) → its defining `func.func` op.
     pub func_ops: HashMap<Symbol, OpRef>,
-    /// Functions referenced by at least one `func.constant` anywhere in the module.
-    pub has_constant_ref: HashSet<Symbol>,
+    /// Functions whose address some function body takes: referenced other
+    /// than as the callee of a direct call.
+    pub address_taken: HashSet<Symbol>,
     /// Callee → number of static direct-call sites across the whole module.
-    /// `func.constant` references are *not* counted here (they are tracked in
-    /// `has_constant_ref`).
+    /// Address references are *not* counted here (they are tracked in
+    /// `address_taken`).
     pub call_site_count: HashMap<Symbol, usize>,
 }
 
@@ -76,17 +78,16 @@ fn collect_calls(ctx: &IrContext, region: RegionRef, caller: Symbol, graph: &mut
         if func::Func::matches(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
-        let attributes = &ctx.op(op).attributes;
-        if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
-            if let Some(callee) = attributes.get_symbol_ref("callee") {
-                record_call(graph, caller, callee);
+        let mut callee = CallLikeOps::callee(ctx, op);
+        ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
+            if callee == Some(reference) {
+                callee = None;
+                record_call(graph, caller, reference);
+            } else {
+                graph.edges.entry(caller).or_default().insert(reference);
+                graph.address_taken.insert(reference);
             }
-        } else if func::Constant::matches(ctx, op)
-            && let Some(func_ref) = attributes.get_symbol_ref("func_ref")
-        {
-            graph.edges.entry(caller).or_default().insert(func_ref);
-            graph.has_constant_ref.insert(func_ref);
-        }
+        });
         ControlFlow::Continue(WalkAction::Advance)
     });
 }
@@ -393,9 +394,44 @@ mod tests {
                 .unwrap()
                 .contains(&Symbol::new("target"))
         );
-        assert!(g.has_constant_ref.contains(&Symbol::new("target")));
+        assert!(g.address_taken.contains(&Symbol::new("target")));
         // func.constant should NOT count toward call_site_count
         assert_eq!(g.call_site_count.get(&Symbol::new("target")).copied(), None);
+    }
+
+    #[test]
+    fn a_reference_other_than_a_direct_callee_takes_the_address() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @called() {
+    func.return
+  }
+  func.func @captured() {
+    func.return
+  }
+  func.func @listed() {
+    func.return
+  }
+  func.func @holder() {
+    func.call {callee = @called}
+    test.make_closure {func_ref = @captured}
+    test.table {entries = [{target = @listed}], callee = @called}
+    func.return
+  }
+}"#,
+        );
+
+        let g = build_call_graph(&ctx, module);
+        let [called, captured, listed] = ["called", "captured", "listed"].map(Symbol::new);
+        assert_eq!(
+            g.edges[&Symbol::new("holder")],
+            HashSet::from([called, captured, listed])
+        );
+        // `callee` is a call only on an operation registered as a direct call.
+        assert_eq!(g.address_taken, HashSet::from([called, captured, listed]));
+        assert_eq!(g.call_site_count, HashMap::from([(called, 1)]));
     }
 
     #[test]
