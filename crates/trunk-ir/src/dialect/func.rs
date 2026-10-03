@@ -47,7 +47,7 @@ mod func {
         {}
     }
 
-    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
+    fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
     fn call_indirect<S: FuncSig>(
@@ -57,7 +57,7 @@ mod func {
     ) -> Values<S::Results> {
     }
 
-    fn tail_call(callee: Attr<Symbol>, args: Variadic<_>) {}
+    fn tail_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     #[verify]
     fn tail_call_indirect<S: FuncSig>(
@@ -69,7 +69,7 @@ mod func {
 
     fn r#return(values: Variadic<_>) {}
 
-    fn constant(func_ref: Attr<Symbol>) -> Value<_> {}
+    fn constant(func_ref: Attr<SymbolRef>) -> Value<_> {}
 
     fn unreachable() {}
 }
@@ -548,7 +548,7 @@ impl CallableExitModel for TailCall {
         if ctx
             .op(self.op_ref())
             .attributes
-            .get_symbol("callee")
+            .get_symbol_ref("callee")
             .is_some()
         {
             Ok(())
@@ -907,7 +907,10 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let mut attrs = AttributeMap::new();
-        attrs.insert(Symbol::new("note"), Attribute::Symbol(Symbol::new("kept")));
+        attrs.insert(
+            Symbol::new("note"),
+            Attribute::SymbolRef(Symbol::new("kept")),
+        );
         let platform = func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs);
         assert_eq!(platform.call_conv(&ctx), Some(CallConv::Platform));
 
@@ -928,7 +931,7 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
             .into_iter()
             .collect();
         let source = func_sig_with_param_attrs(
@@ -1227,7 +1230,7 @@ mod result_list_tests {
             (
                 "callee = @sink",
                 "callee = 1",
-                "attribute `callee` must be a Symbol attribute",
+                "attribute `callee` must be a SymbolRef attribute",
             ),
         ] {
             let text = verify(&valid.replace(old, new));

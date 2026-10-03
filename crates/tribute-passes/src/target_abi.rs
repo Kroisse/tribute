@@ -1047,7 +1047,7 @@ fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol)
         return;
     }
     for key in [Symbol::new("callee"), Symbol::new("func_ref")] {
-        if ctx.op(op).attributes.get_symbol(key) == Some(old) {
+        if ctx.op(op).attributes.get_symbol_ref(key) == Some(old) {
             ctx.op_mut(op).attributes.insert(key, new);
         }
     }
@@ -1129,9 +1129,13 @@ fn validate_transfers(
     for &op in ops {
         if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
             let convention = exact_convention(ctx, op)?;
-            let callee = ctx.op(op).attributes.get_symbol("callee").ok_or_else(|| {
-                TargetAbiError::new("target ABI: direct transfer lacks callee metadata")
-            })?;
+            let callee = ctx
+                .op(op)
+                .attributes
+                .get_symbol_ref("callee")
+                .ok_or_else(|| {
+                    TargetAbiError::new("target ABI: direct transfer lacks callee metadata")
+                })?;
             let Some(convention) = convention else {
                 if function_for_symbol_optional(callee, functions)
                     .is_some_and(|identity| identity.convention == CallingConvention::Cps)
@@ -2046,7 +2050,7 @@ mod tests {
             .expect("wrapper must make exactly one ordinary worker call");
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
-            ctx.op(call).attributes.get_symbol("callee"),
+            ctx.op(call).attributes.get_symbol_ref("callee"),
             Some(Symbol::new(ROOT_MAIN_SYMBOL))
         );
         let worker_callable = func::FuncSig::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();

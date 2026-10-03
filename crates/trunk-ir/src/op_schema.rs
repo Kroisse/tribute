@@ -151,8 +151,7 @@ pub enum AttributeKind {
     F64,
     Type,
     String,
-    Symbol,
-    QualifiedName,
+    SymbolRef,
     Bytes,
 }
 
@@ -169,7 +168,7 @@ impl AttributeKind {
             (AttributeKind::F32 | AttributeKind::F64, Attribute::FloatBits(_)) => true,
             (AttributeKind::Type, Attribute::Type(_)) => true,
             (AttributeKind::String, Attribute::String(_)) => true,
-            (AttributeKind::Symbol | AttributeKind::QualifiedName, Attribute::Symbol(_)) => true,
+            (AttributeKind::SymbolRef, Attribute::SymbolRef(_)) => true,
             (AttributeKind::Bytes, Attribute::Bytes(_)) => true,
             _ => false,
         }
@@ -189,8 +188,7 @@ impl fmt::Display for AttributeKind {
             AttributeKind::F64 => "f64",
             AttributeKind::Type => "Type",
             AttributeKind::String => "String",
-            AttributeKind::Symbol => "Symbol",
-            AttributeKind::QualifiedName => "QualifiedName",
+            AttributeKind::SymbolRef => "SymbolRef",
             AttributeKind::Bytes => "Bytes",
         })
     }
@@ -917,7 +915,7 @@ mod tests {
         assert!(AttributeKind::U32.accepts(&Attribute::Int(7)));
         assert!(!AttributeKind::U32.accepts(&Attribute::Int(-1)));
         let mut ctx = crate::IrContext::new();
-        assert!(!AttributeKind::Symbol.accepts(&ctx.string_attr("x")));
+        assert!(!AttributeKind::SymbolRef.accepts(&ctx.string_attr("x")));
         assert!(AttributeKind::Any.accepts(&Attribute::Unit));
     }
 }

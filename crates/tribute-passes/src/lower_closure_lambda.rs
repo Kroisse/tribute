@@ -555,7 +555,7 @@ mod tests {
 
         // closure type: closure.closure<func.func_sig<i32, i32>>, whose input
         // carries a parameter attribute.
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
+        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
             .into_iter()
             .collect();
         let func_ty = func::func_sig_with_param_attrs(

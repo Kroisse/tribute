@@ -74,8 +74,7 @@ pub enum AttrType {
     F64,
     Type,
     String,
-    Symbol,
-    QualifiedName,
+    SymbolRef,
     Bytes,
 }
 
@@ -393,8 +392,7 @@ fn parse_attr_type(ident: &Ident) -> Result<AttrType, String> {
         "f64" => Ok(AttrType::F64),
         "Type" => Ok(AttrType::Type),
         "String" => Ok(AttrType::String),
-        "Symbol" => Ok(AttrType::Symbol),
-        "QualifiedName" => Ok(AttrType::QualifiedName),
+        "SymbolRef" => Ok(AttrType::SymbolRef),
         "Bytes" => Ok(AttrType::Bytes),
         other => Err(format!("unknown attribute type `{other}`")),
     }
@@ -748,7 +746,7 @@ mod tests {
     fn test_parse_optional_attributes() {
         let module = parse_test_module(quote! {
             mod wasm {
-                fn table(reftype: Attr<Symbol>, min: Attr<u32>, max: Option<Attr<u32>>) {}
+                fn table(reftype: Attr<SymbolRef>, min: Attr<u32>, max: Option<Attr<u32>>) {}
             }
         })
         .unwrap();

@@ -5,7 +5,7 @@ mod closure {
     // Types
     struct Closure<FuncType>;
 
-    fn new(func_ref: Attr<Symbol>, env: Value<_>) -> Value<_> {}
+    fn new(func_ref: Attr<SymbolRef>, env: Value<_>) -> Value<_> {}
 
     fn func(closure: Value<_>) -> Value<_> {}
 

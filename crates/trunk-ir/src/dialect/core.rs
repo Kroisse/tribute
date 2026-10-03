@@ -333,7 +333,10 @@ mod canonicalize_tests {
         let mut ctx = IrContext::new();
         let nil = nil(&mut ctx).as_type_ref();
         let metadata = AttributeMap::from_iter([
-            (Symbol::new("tag"), Attribute::Symbol(Symbol::new("kept"))),
+            (
+                Symbol::new("tag"),
+                Attribute::SymbolRef(Symbol::new("kept")),
+            ),
             (
                 Symbol::new("nested"),
                 Attribute::List(vec![Attribute::Type(nil)]),

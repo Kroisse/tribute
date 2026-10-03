@@ -245,7 +245,7 @@ impl<'a> PrintState<'a> {
                 write_escaped_bytes(f, bytes)?;
                 f.write_char('"')
             }
-            Attribute::Symbol(sym) => write_symbol(f, *sym),
+            Attribute::SymbolRef(sym) => write_symbol(f, *sym),
             Attribute::Type(ty) => self.write_type(f, *ty),
             Attribute::List(list) => {
                 f.write_char('[')?;
@@ -1548,7 +1548,7 @@ mod tests {
 
         // Symbol
         out.clear();
-        write_attribute(&ctx, &mut out, &Attribute::Symbol(Symbol::new("foo"))).unwrap();
+        write_attribute(&ctx, &mut out, &Attribute::SymbolRef(Symbol::new("foo"))).unwrap();
         assert_eq!(out, "@foo");
 
         // Symbol with path (needs quoting)
@@ -1556,7 +1556,7 @@ mod tests {
         write_attribute(
             &ctx,
             &mut out,
-            &Attribute::Symbol(Symbol::from_dynamic("std::List::map")),
+            &Attribute::SymbolRef(Symbol::from_dynamic("std::List::map")),
         )
         .unwrap();
         assert_eq!(out, r#"@"std::List::map""#);

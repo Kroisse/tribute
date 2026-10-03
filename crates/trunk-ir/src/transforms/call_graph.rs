@@ -78,11 +78,11 @@ fn collect_calls(ctx: &IrContext, region: RegionRef, caller: Symbol, graph: &mut
         }
         let attributes = &ctx.op(op).attributes;
         if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
-            if let Some(callee) = attributes.get_symbol("callee") {
+            if let Some(callee) = attributes.get_symbol_ref("callee") {
                 record_call(graph, caller, callee);
             }
         } else if func::Constant::matches(ctx, op)
-            && let Some(func_ref) = attributes.get_symbol("func_ref")
+            && let Some(func_ref) = attributes.get_symbol_ref("func_ref")
         {
             graph.edges.entry(caller).or_default().insert(func_ref);
             graph.has_constant_ref.insert(func_ref);
@@ -428,7 +428,7 @@ mod tests {
         let call = ctx.block(block).ops[0];
         ctx.op_mut(call).attributes.insert(
             Symbol::new("callee"),
-            Attribute::Symbol(Symbol::new("other")),
+            Attribute::SymbolRef(Symbol::new("other")),
         );
         assert!(
             analyses

@@ -246,7 +246,7 @@ impl RewritePattern for FuncCallPattern {
         }
         ctx.op_mut(new_op)
             .attributes
-            .insert(Symbol::new("callee"), Attribute::Symbol(callee));
+            .insert(Symbol::new("callee"), Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -360,7 +360,7 @@ impl RewritePattern for FuncTailCallPattern {
         );
         ctx.op_mut(new_op)
             .attributes
-            .insert(Symbol::new("callee"), Attribute::Symbol(callee));
+            .insert(Symbol::new("callee"), Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -604,7 +604,7 @@ mod tests {
         let mut inner_attrs = AttributeMap::new();
         inner_attrs.insert(
             Symbol::new("tag"),
-            Attribute::Symbol(Symbol::new("preserved")),
+            Attribute::SymbolRef(Symbol::new("preserved")),
         );
         inner_attrs.insert(
             Symbol::new("nested"),

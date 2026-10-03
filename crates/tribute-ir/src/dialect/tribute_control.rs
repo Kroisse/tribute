@@ -88,9 +88,9 @@ mod tribute_control {
         {}
     }
 
-    fn func_ref(func_ref: Attr<Symbol>) -> Value<impl FuncSig> {}
+    fn func_ref(func_ref: Attr<SymbolRef>) -> Value<impl FuncSig> {}
 
-    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Value<_> {}
+    fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Value<_> {}
 
     fn call_indirect<S: FuncSig>(callee: Value<S>, args: Values<S::Inputs>) -> Value<S::Result> {}
 
@@ -1676,7 +1676,7 @@ fn validate_symbol_use(
 ) {
     {
         if is_control_op(ctx, op, "func_ref") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol("func_ref") else {
+            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref("func_ref") else {
                 return;
             };
             let Some(target) = funcs
@@ -1719,7 +1719,7 @@ fn validate_symbol_use(
                 );
             }
         } else if is_control_op(ctx, op, "call") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol("callee") else {
+            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                 return;
             };
             let Some(target) = funcs
@@ -2347,7 +2347,7 @@ fn callable_has_semantic_provenance(
                     && ctx
                         .op(producer)
                         .attributes
-                        .get_symbol(if is_control_op(ctx, producer, "func_ref") {
+                        .get_symbol_ref(if is_control_op(ctx, producer, "func_ref") {
                             "func_ref"
                         } else {
                             "callee"
@@ -2686,7 +2686,7 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     if !is_control_op(ctx, op, "call") {
         return false;
     }
-    let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+    let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
         return false;
     };
     let mut owner = parent_op(ctx, op);
@@ -3655,7 +3655,7 @@ mod tests {
             Some(Attribute::List(_))
         ));
         assert_eq!(
-            ctx.op(declaration).attributes.get_symbol("metadata"),
+            ctx.op(declaration).attributes.get_symbol_ref("metadata"),
             Some(Symbol::new("declaration"))
         );
 
@@ -3835,12 +3835,12 @@ mod tests {
         assert_op_diagnostics(
             &result,
             control_op(&ctx, module, "func_ref"),
-            &["attribute `func_ref` must be a Symbol attribute"],
+            &["attribute `func_ref` must be a SymbolRef attribute"],
         );
         assert_op_diagnostics(
             &result,
             control_op(&ctx, module, "call"),
-            &["attribute `callee` must be a Symbol attribute"],
+            &["attribute `callee` must be a SymbolRef attribute"],
         );
         assert_op_diagnostics(
             &result,

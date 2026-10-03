@@ -652,7 +652,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
             }
             let operands = ctx.op_operands(op);
             let (signature, args) = if direct {
-                let Some(name) = ctx.op(op).attributes.get_symbol("callee") else {
+                let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     return;
                 };
                 let Some(signature) = resolve(name) else {
@@ -1217,7 +1217,7 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let Some(callee_sym) = data.attributes.get_symbol(callee_key) else {
+        let Some(callee_sym) = data.attributes.get_symbol_ref(callee_key) else {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
@@ -1404,7 +1404,10 @@ mod tests {
 
         let loc = test_location(&mut ctx);
         let bodyless = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(Symbol::new("sym_name"), Attribute::Symbol(Symbol::new("m")))
+            .attr(
+                Symbol::new("sym_name"),
+                Attribute::SymbolRef(Symbol::new("m")),
+            )
             .build(&mut ctx);
         let bodyless = ctx.create_op(bodyless);
         let bodyless = Module::new(&ctx, bodyless).unwrap();

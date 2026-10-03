@@ -330,7 +330,7 @@ fn validate_clif_region(
 
             let operands = ctx.op_operands(op);
             if clif::Call::matches(ctx, op) {
-                let Some(name) = ctx.op(op).attributes.get_symbol("callee") else {
+                let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     errors.push("clif.call requires a symbol callee".into());
                     continue;
                 };
@@ -362,7 +362,7 @@ fn validate_clif_region(
                     errors.push("clif.return_call requires a nearest clif.func owner".into());
                     continue;
                 };
-                let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+                let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     errors.push("clif.return_call requires a symbol callee".into());
                     continue;
                 };

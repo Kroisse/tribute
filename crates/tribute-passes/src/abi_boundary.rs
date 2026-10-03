@@ -188,11 +188,12 @@ impl<'a> Verifier<'a> {
         let ctx = self.ctx;
         let mut unbound = Vec::new();
         for &op in ops {
-            for value in ctx.op(op).attributes.values() {
-                let Attribute::Symbol(reference) = value else {
-                    continue;
-                };
-                let Some(declaration) = functions.resolve(*reference) else {
+            let mut references = Vec::new();
+            ctx.op(op)
+                .attributes
+                .visit_symbol_refs(&mut |reference| references.push(reference));
+            for reference in references {
+                let Some(declaration) = functions.resolve(reference) else {
                     continue;
                 };
                 if declaration == op

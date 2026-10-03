@@ -1288,9 +1288,9 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
 ### Attribute 값
 
 Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
-정수, 부동소수점, 문자열, bytes, symbol, type, location, list, dictionary.
+정수, 부동소수점, 문자열, bytes, symbol 참조, type, location, list, dictionary.
 
-Symbol 값은 symbol table의 정의를 가리키는 참조에만 쓴다(`callee = @foo`). 참조가
+Symbol 참조는 symbol table의 정의를 한정 이름으로 가리킨다(`callee = @foo`). 참조가
 아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
 `predicate = "slt"`로 쓴다. Ability 이름(`core.ability_ref`의 `name`)과 operation
@@ -1323,6 +1323,10 @@ List와 dictionary는 임의로 중첩된다. 속성 값 안의 type은 type wal
 담긴 type을 변환하거나 검사하는 pass는 list와 dictionary 안까지 모든 type에 도달해야
 하며, 일부 variant만 따라가고 나머지를 그대로 통과시키지 않는다. 공용 순회는
 `Attribute::visit_types`, `Attribute::map_types`, `Attribute::try_map_types`가 소유한다.
+
+속성 값 안의 symbol 참조도 같은 방식으로 찾는다. 정의를 가리키는 참조를 모으는 pass는
+속성 이름을 나열하지 않고 `Attribute::visit_symbol_refs`로 list와 dictionary 안까지
+모든 참조에 도달한다.
 
 ### 타입 매개변수 속성
 

@@ -204,6 +204,15 @@ let converted = attribute.map_types(|ty| converter.convert_type_or_identity(ctx,
 attribute.visit_types(&mut |ty| seen.push(ty));
 ```
 
+A name that refers to a symbol table definition is an `Attribute::SymbolRef`
+(`callee = @foo`, declared `Attr<SymbolRef>`). Definition names and other
+fixed names are strings. Collect the references an operation makes with the
+shared traversal rather than by listing attribute names:
+
+```rust
+ctx.op(op).attributes.visit_symbol_refs(&mut |symbol| referenced.push(symbol));
+```
+
 Per-parameter attributes (`param_attrs`, see
 [the type model](../../new-plans/ir.md#타입-매개변수-속성)) are built with the
 parameter they describe and read back by position:

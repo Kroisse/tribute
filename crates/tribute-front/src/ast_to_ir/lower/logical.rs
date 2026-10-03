@@ -174,7 +174,7 @@ fn lower_function_ref<'db>(
     let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
         builder
             .result(ty)
-            .attr("func_ref", Attribute::Symbol(symbol))
+            .attr("func_ref", Attribute::SymbolRef(symbol))
     });
     result(builder.ir, op)
 }
@@ -1940,7 +1940,7 @@ pub(super) fn emit_named_call(
         builder
             .operands(values)
             .result(signature.return_type)
-            .attr("callee", Attribute::Symbol(symbol))
+            .attr("callee", Attribute::SymbolRef(symbol))
     });
     result(builder.ir, call)
 }
