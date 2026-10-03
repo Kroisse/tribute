@@ -233,6 +233,12 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
                 .iter()
                 .cloned()
                 .collect(),
+            evidence_plans: checked
+                .expression_types(db)
+                .evidence_plans
+                .iter()
+                .cloned()
+                .collect(),
             function_instances: checked
                 .expression_types(db)
                 .function_instances
@@ -320,6 +326,12 @@ fn lower_specialized_source(
             local_instances: checked
                 .expression_types(db)
                 .local_instances
+                .iter()
+                .cloned()
+                .collect(),
+            evidence_plans: checked
+                .expression_types(db)
+                .evidence_plans
                 .iter()
                 .cloned()
                 .collect(),

@@ -14,7 +14,9 @@ use trunk_ir::Symbol;
 
 use crate::ast::{CtorId, Decl, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
 use crate::typeck::subst::substitute_bound_vars;
-use crate::typeck::{InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature};
+use crate::typeck::{
+    EvidenceStep, InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature,
+};
 
 const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
 
@@ -25,6 +27,7 @@ pub struct MonomorphizeMetadata<'db> {
     pub node_types: HashMap<NodeId, Type<'db>>,
     pub function_instances: HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    pub evidence_plans: HashMap<NodeId, Vec<EvidenceStep<'db>>>,
     pub handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
     pub perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
     pub lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
@@ -195,6 +198,9 @@ pub fn monomorphize_functions<'db>(
         extra_types.extend(op.params.iter().copied());
         extra_types.push(op.result);
     }
+    for step in metadata.evidence_plans.values().flatten() {
+        extra_types.extend(step.instance().args.iter().copied());
+    }
     let nominal_index = nominal_index::NominalIndex::new(db, &module);
     let seeds =
         collect::collect_type_instantiations_with_index(db, &module, extra_types, &nominal_index);
@@ -284,6 +290,9 @@ pub fn monomorphize_functions<'db>(
                 *ty = rewrite_ty(*ty);
             }
             op.result = rewrite_ty(op.result);
+        }
+        for step in metadata.evidence_plans.values_mut().flatten() {
+            *step = step.map_types(rewrite_ty);
         }
         rewrite::rewrite_types_in_module(db, &mut module, &type_rewrite_map);
 
@@ -421,6 +430,24 @@ fn specialize_metadata<'db>(
             },
         );
     }
+    let plans: Vec<_> = origins
+        .iter()
+        .filter_map(|id| {
+            metadata
+                .evidence_plans
+                .get(id)
+                .map(|plan| (*id, plan.clone()))
+        })
+        .collect();
+    for (id, plan) in plans {
+        let plan = plan
+            .into_iter()
+            .map(|step| step.map_types(|ty| substitute_type(db, ty, type_args)))
+            .collect();
+        metadata
+            .evidence_plans
+            .insert(id.with_variant(variant), plan);
+    }
     let lambdas: Vec<_> = origins
         .iter()
         .filter_map(|id| {
@@ -556,6 +583,13 @@ mod tests {
             specialized_enum_variants: HashMap::new(),
             node_types: HashMap::from([(origin, bound)]),
             function_instances: HashMap::new(),
+            evidence_plans: HashMap::from([(
+                origin,
+                vec![EvidenceStep::Mask(crate::ast::Effect {
+                    ability_id: ability,
+                    args: vec![bound],
+                })],
+            )]),
             local_instances: HashMap::from([(
                 origin,
                 crate::typeck::LocalCallableInstance {
@@ -629,6 +663,13 @@ mod tests {
             [int]
         );
         assert_eq!(metadata.perform_operations.get(&clone).unwrap().result, int);
+        assert_eq!(
+            metadata.evidence_plans[&clone],
+            [EvidenceStep::Mask(crate::ast::Effect {
+                ability_id: ability,
+                args: vec![int],
+            })]
+        );
         assert_eq!(
             metadata
                 .lambda_signatures

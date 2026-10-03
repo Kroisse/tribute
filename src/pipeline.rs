@@ -307,6 +307,7 @@ fn checked_prelude<'db>(
             node_types: result.node_types,
             function_instances: result.function_instances,
             local_instances: result.local_instances,
+            evidence_plans: result.evidence_plans,
         },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
@@ -536,6 +537,11 @@ fn prepare_frontend_details<'db>(
                 .chain(typed.expression_types(db).local_instances.iter().cloned())
                 .collect(),
             function_instances,
+            evidence_plans: prelude_module(db)
+                .into_iter()
+                .flat_map(|prelude| prelude.expression_types(db).evidence_plans.clone())
+                .chain(typed.expression_types(db).evidence_plans.iter().cloned())
+                .collect(),
             handler_operations: prelude_module(db)
                 .into_iter()
                 .flat_map(|prelude| prelude.handler_operations(db).iter().cloned())
@@ -587,6 +593,8 @@ fn prepare_frontend_details<'db>(
     instances.sort_by_key(|(id, _)| *id);
     let mut local_instances: Vec<_> = mono_result.metadata.local_instances.into_iter().collect();
     local_instances.sort_by_key(|(id, _)| *id);
+    let mut evidence_plans: Vec<_> = mono_result.metadata.evidence_plans.into_iter().collect();
+    evidence_plans.sort_by_key(|(id, _)| *id);
     let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
@@ -608,6 +616,7 @@ fn prepare_frontend_details<'db>(
             node_types,
             function_instances: instances,
             local_instances,
+            evidence_plans,
         },
         merged_ability_conventions.into_iter().collect::<Vec<_>>(),
         typed.ability_definitions(db).to_vec(),
@@ -1606,6 +1615,7 @@ pub fn parse_and_lower_ast<'db>(
             node_types: result.node_types,
             function_instances: result.function_instances,
             local_instances: result.local_instances,
+            evidence_plans: result.evidence_plans,
         },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),

@@ -625,7 +625,8 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 
 `evidence_plan`은 호출이 callee에게 넘길 evidence를 caller evidence에서 고르는
 선택이며 [type-inference.md](type-inference.md#호출의-evidence-선택)가 정한 값을
-typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`이 가질 수 있다.
+typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`, `handle`이 가질
+수 있다. `handle`의 선택은 body evidence를 만들기 전에 적용하며 `mask`만 담는다.
 
 ```text
 {evidence_plan = [mask(core.ability_ref<{name = "State"}>), dup(...)]}
@@ -731,8 +732,10 @@ Callable operation의 physical lowering은
 - **피연산자:** 없다. 실행 가능한 region이 capture하는 값은 일반 enclosing SSA
   visibility를 사용한다.
 - **결과:** logical handle result 하나만 만든다.
-- **속성:** 필수 attribute는 없다. Dynamic prompt/owner tag와 physical tail-call
-  표현은 이 operation의 의미 attribute가 아니라 legalization 계약이다.
+- **속성:** 필수 attribute는 없다. 선택적 [`evidence_plan`](#evidence-선택-속성)은
+  body evidence를 만들기 전에 바깥 evidence에서 가릴 handler를 정한다. Dynamic
+  prompt/owner tag와 physical tail-call 표현은 이 operation의 의미 attribute가
+  아니라 legalization 계약이다.
 - **영역:** 고정된 `body`, `completion`, `handlers` 순서로 정확히 세 개다.
 - **Block argument:** `body`는 argument가 없는 block 하나다. `completion`은
   argument가 정확히 하나인 block 하나이며, 그 type은 `body`가 yield한 value의

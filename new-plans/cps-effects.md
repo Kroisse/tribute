@@ -518,6 +518,8 @@ callable 또는 handle body row의 명시 label로 확정하기 때문이다.
 Handler와 evidence의 연결은 다음과 같다.
 
 - **Handle body:** 처리하는 label마다 `effect.extend`로 새 marker를 쌓은 evidence를 받는다.
+  바깥 row가 그 label을 명시하면 extend 전에 `mask`로 바깥 marker를 걷어 낸다
+  ([type-inference.md](type-inference.md#호출의-evidence-선택)).
 - **Handler arm, `do` arm:** handle을 설치한 지점의 evidence(바깥)로 실행한다.
   `handler_dispatch`와 `tr_dispatch_fn` closure는 이 evidence를 environment에
   capture하며, dispatch가 넘기는 perform 지점 evidence를 arm에 전달하지 않는다.
@@ -525,8 +527,8 @@ Handler와 evidence의 연결은 다음과 같다.
   arm 본문의 resume은 자기 handle body의 evidence를, arm 안 lambda의 resume은 그
   lambda가 받은 evidence를 continuation에 넘긴다.
 - **재개된 frame:** 포착된 경로의 각 frame은 resume이 넘긴 handle body evidence에서
-  자기 위치까지의 호출 선택과 그 사이에 설치된 handler를 다시 적용한 evidence를
-  본다. 포착 시점의 evidence를 그대로 재사용하지 않으며, resume이 넘긴 evidence를
+  자기 위치까지의 호출 선택과 그 사이에 설치된 handler(설치의 `mask` 포함)를 다시
+  적용한 evidence를 본다. 포착 시점의 evidence를 그대로 재사용하지 않으며, resume이 넘긴 evidence를
   모든 frame에 그대로 흘리지도 않는다.
 
 두 target의 effect lowering은 같은 evidence runtime helper ABI를 호출한다.

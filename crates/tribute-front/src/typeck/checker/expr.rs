@@ -232,7 +232,13 @@ impl<'db> TypeChecker<'db> {
                         .unwrap_or_else(|| ctx.fresh_type_var());
                     ctx.record_resolved_method(expr.id, func_id, callee_ty);
                     match callee_ty.kind(self.db()) {
-                        TypeKind::Func { params, result, .. } => {
+                        TypeKind::Func {
+                            params,
+                            result,
+                            effect,
+                            ..
+                        } => {
+                            ctx.evidence.record_call(expr.id, *effect);
                             // Constrain receiver against the method's first param
                             if let Some(first_param) = params.first() {
                                 ctx.constrain_coerce(receiver_ty, *first_param, receiver.id);
@@ -377,6 +383,7 @@ impl<'db> TypeChecker<'db> {
                 // Use a new scope for lambda parameters so they don't leak out
                 ctx.push_scope();
                 ctx.enter_lambda();
+                let (lambda_evidence, outer_evidence) = ctx.evidence.enter_callable(None);
 
                 // Bind lambda parameters in the new scope
                 for (param, ty) in params.iter().zip(param_types.iter()) {
@@ -402,6 +409,7 @@ impl<'db> TypeChecker<'db> {
                 // lambda therefore stays closed when its body is pure.
                 let accumulated = ctx.current_effect();
                 ctx.pop_scope();
+                ctx.evidence.restore(outer_evidence);
                 let resume_effect = ctx.exit_lambda();
                 let inferred_effect = match (accumulated.rest(self.db()), resume_effect) {
                     // Resuming performs the continuation's effects, so a closed
@@ -445,6 +453,8 @@ impl<'db> TypeChecker<'db> {
                 }
                 ctx.effect_contract = outer_contract;
                 let lambda_effect = inferred_effect;
+                ctx.evidence
+                    .set_callable_row(lambda_evidence, lambda_effect);
                 if let Some(expected) = expected_effect {
                     // This resolves generic ability arguments selected by the body.
                     ctx.constrain_row_eq_at(
@@ -495,7 +505,11 @@ impl<'db> TypeChecker<'db> {
                 ctx.set_current_effect(EffectRow::pure(self.db()));
 
                 // Infer the body's type
+                let body_evidence = ctx.evidence.enter_handle_body(expr.id, None);
                 let body_ty = self.infer_expr_type_with_ctx(ctx, body);
+                if let Some((_, outer_evidence)) = body_evidence {
+                    ctx.evidence.restore(outer_evidence);
+                }
 
                 // Extract handled ability IDs from effect handlers
                 let mut handled_ability_ids = Vec::new();
@@ -561,6 +575,9 @@ impl<'db> TypeChecker<'db> {
                     });
                 }
                 let handled_effects = EffectRow::new(self.db(), selected_effects, None);
+                if let Some((scope, _)) = body_evidence {
+                    ctx.evidence.set_handled(scope, handled_effects);
+                }
                 // Create a result effect row that excludes handled effects
                 // This is the effect that propagates out of the handle expression
                 let result_effect = if handled_ability_ids.is_empty() {
@@ -587,6 +604,7 @@ impl<'db> TypeChecker<'db> {
                     body_ty,
                     body_effect: body_effect_after,
                     handled_effects,
+                    evidence_body: None,
                 });
 
                 // The handler contributes its residual requirements to the
@@ -736,6 +754,7 @@ impl<'db> TypeChecker<'db> {
         {
             ctx.constrain_coerce(arg_ty, *cont_arg, arg.id);
             ctx.record_lambda_resume_effect(*effect);
+            ctx.evidence.record_resume(resume, local_id);
             *cont_result
         } else {
             ctx.fresh_type_var()
@@ -856,7 +875,13 @@ impl<'db> TypeChecker<'db> {
                         .unwrap_or_else(|| ctx.fresh_type_var());
                     ctx.record_resolved_method(expr.id, entry.func_id, callee_ty);
                     match callee_ty.kind(self.db()) {
-                        TypeKind::Func { params, result, .. } => {
+                        TypeKind::Func {
+                            params,
+                            result,
+                            effect,
+                            ..
+                        } => {
+                            ctx.evidence.record_call(expr.id, *effect);
                             if let Some(param) = params.first() {
                                 ctx.constrain_coerce(receiver_ty, *param, receiver.id);
                             }
@@ -1540,7 +1565,9 @@ impl<'db> TypeChecker<'db> {
                     ctx.constrain_coerce_at(*arg_ty, *param_ty, origin, ConstraintOriginKind::Call);
                 }
 
-                ctx.merge_effect_at(self.resolve_callee_effect(callee_ty, callee_effect), origin);
+                let effect = self.resolve_callee_effect(callee_ty, callee_effect);
+                ctx.evidence.record_call(origin, effect);
+                ctx.merge_effect_at(effect, origin);
 
                 return result_ty;
             }
@@ -1561,7 +1588,9 @@ impl<'db> TypeChecker<'db> {
             ctx.constrain_coerce_at(*arg_ty, *param_ty, origin, ConstraintOriginKind::Call);
         }
 
-        ctx.merge_effect_at(self.resolve_callee_effect(callee_ty, callee_effect), origin);
+        let effect = self.resolve_callee_effect(callee_ty, callee_effect);
+        ctx.evidence.record_call(origin, effect);
+        ctx.merge_effect_at(effect, origin);
 
         result_ty
     }
@@ -1954,6 +1983,7 @@ impl<'db> TypeChecker<'db> {
                             _ => None,
                         });
                 ctx.set_current_effect(EffectRow::pure(self.db()));
+                let (_, outer_evidence) = ctx.evidence.enter_callable(ctx.effect_contract);
 
                 // Bind lambda parameters so that references to them in the body
                 // resolve to their concrete types (not fresh UniVars). Without this,
@@ -1997,6 +2027,7 @@ impl<'db> TypeChecker<'db> {
                 let converted_body = self.check_expr_with_ctx(ctx, body, body_mode);
 
                 ctx.pop_scope();
+                ctx.evidence.restore(outer_evidence);
                 ctx.effect_contract = outer_contract;
                 ctx.set_current_effect(outer_effect);
                 ExprKind::Lambda {
@@ -2005,7 +2036,7 @@ impl<'db> TypeChecker<'db> {
                 }
             }
             ExprKind::Handle { body, handlers } => {
-                let handle_ctx = ctx.pop_handle_ctx().expect(
+                let mut handle_ctx = ctx.pop_handle_ctx().expect(
                     "pop_handle_ctx should match a corresponding push_handle_ctx in infer phase",
                 );
                 // Save and restore effect context for handle body conversion,
@@ -2014,7 +2045,14 @@ impl<'db> TypeChecker<'db> {
                 // into the enclosing scope during convert-phase re-inference.
                 let outer_effect = ctx.current_effect();
                 ctx.set_current_effect(EffectRow::pure(self.db()));
+                let body_evidence = ctx
+                    .evidence
+                    .enter_handle_body(expr_id, Some(handle_ctx.handled_effects));
                 let converted_body = self.check_expr_with_ctx(ctx, body, Mode::Infer);
+                if let Some((scope, outer_evidence)) = body_evidence {
+                    ctx.evidence.restore(outer_evidence);
+                    handle_ctx.evidence_body = Some(scope);
+                }
                 ctx.set_current_effect(outer_effect);
                 let handlers = handlers
                     .iter()
@@ -3043,6 +3081,9 @@ impl<'db> TypeChecker<'db> {
                             },
                         );
                         ctx.bind_local(k_local_id, cont_ty);
+                        if let Some(body) = handle_ctx.evidence_body {
+                            ctx.evidence.bind_continuation(k_local_id, body);
+                        }
                     }
                 }
 
@@ -3063,7 +3104,16 @@ impl<'db> TypeChecker<'db> {
             }
         };
         let contributes_answer = matches!(kind, HandlerKind::Op { .. } | HandlerKind::Do { .. });
+        // Every arm runs with the evidence of the handle's installation; only
+        // an `op` arm's resumes pass the handle body's evidence.
+        let outer_evidence = match (&kind, handle_ctx.evidence_body) {
+            (HandlerKind::Op { .. }, Some(body)) => Some(ctx.evidence.enter_op_arm(body)),
+            _ => None,
+        };
         let body = self.check_expr_with_ctx(ctx, &arm.body, body_mode);
+        if let Some(outer_evidence) = outer_evidence {
+            ctx.evidence.restore(outer_evidence);
+        }
         if contributes_answer {
             let actual = ctx
                 .get_node_type(body.id)
@@ -3660,6 +3710,7 @@ mod tests {
             answer_ty: body_ty,
             body_ty,
             body_effect: EffectRow::pure(db),
+            evidence_body: None,
         };
 
         let do_arm = HandlerArm {
@@ -3756,6 +3807,7 @@ mod tests {
             answer_ty: Type::new(db, TypeKind::Nil),
             body_ty: Type::new(db, TypeKind::Nil),
             body_effect: EffectRow::pure(db),
+            evidence_body: None,
         };
         let name = Symbol::new("value");
         let ability = ResolvedRef::ability(ability_id);
