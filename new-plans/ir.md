@@ -461,7 +461,7 @@ attribute를 쓰지 않는다. 추가 operation attribute에
 
 ```text
 tribute_control.func @f(%x: T) -> R convention(cps)
-    attributes {visibility = @private} {
+    attributes {visibility = "private"} {
   ...
 }
 
