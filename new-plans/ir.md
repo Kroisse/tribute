@@ -375,6 +375,12 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   참조는 참조하는 operation이 속한 module을 기준으로 해석하거나 바깥 module로 찾아
   올라가지 않는다. Qualified name은 module tree 전체에서 유일해야 하며, 중복 정의는
   모호한 참조가 아니라 IR 오류다.
+- 함수 참조를 모으는 분석(call graph, global DCE)은 참조하는 operation이나 속성의
+  이름을 나열하지 않고 operation 속성의 모든 symbol 참조를 모은다. 직접 호출
+  operation은 `CallLike` interface로 callee를 게시하며, 그 callee 참조만 호출이다.
+  그 밖의 참조는 모두 주소 참조이고, 대상 함수는 값으로 escape한 것으로 본다. 함수
+  정의 밖에 있는 참조는 reachability root다. Symbol 참조는 operation 속성에만 두며,
+  type 속성과 block 인자 속성에는 두지 않는다.
 - Nested regions use normal SSA visibility rules: values defined inside a
   nested region are not visible outside it unless yielded or otherwise modeled
   by the operation.
@@ -461,7 +467,7 @@ attribute를 쓰지 않는다. 추가 operation attribute에
 
 ```text
 tribute_control.func @f(%x: T) -> R convention(cps)
-    attributes {visibility = @private} {
+    attributes {visibility = "private"} {
   ...
 }
 
@@ -1267,7 +1273,7 @@ representation.
 
 ```text
 core.i32
-core.tuple<core.i32, core.ptr {k = @v}>
+core.tuple<core.i32, core.ptr {k = "v"}>
 core.ref<core.i32, {nullable = true}>
 adt.typeref<{name = "Point"}>
 func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
@@ -1348,7 +1354,7 @@ parameter와 같은 용법). 함수 signature에서는 input과 result 타입이
   매개변수 속성이 없는 타입은 하나의 identity를 가진다. 속성이 다른 두 타입은 서로
   다른 identity를 가진다.
 - Textual form에서는 각 매개변수 바로 뒤에 dictionary로 쓴다:
-  `core.tuple<core.i32, core.ptr {k = @v}>`. Printer는 `param_attrs` key를
+  `core.tuple<core.i32, core.ptr {k = "v"}>`. Printer는 `param_attrs` key를
   출력하지 않고 reader는 이 key를 거부하므로, 매개변수 속성의 textual form은 이것
   하나뿐이다. 빈 dictionary(`core.i32 {}`)는 속성이 없는 것으로 읽는다.
 - Type verifier는 모든 interned type에 같은 규칙을 적용한다. List가 아닌 값,
@@ -1407,7 +1413,7 @@ Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol tab
 
 ```text
 adt.struct<Point(x: core.i32, y: core.i32)>
-adt.struct<Node(value: core.i32 {k = @v}, next: adt.typeref<{name = "Node"}>)>
+adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<{name = "Node"}>)>
 adt.struct<_closure(func_ptr: core.ptr, env: core.ptr), {layout = "closure"}>
 adt.struct<Empty()>
 ```

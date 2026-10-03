@@ -400,6 +400,11 @@ inventory::submit! {
     trunk_ir::op_interface::IsolatedFromAboveOps::register::<Func>()
 }
 
+impl trunk_ir::op_interface::CallLikeModel for Call {}
+inventory::submit! {
+    trunk_ir::op_interface::CallLikeOps::register::<Call>()
+}
+
 // These operations only create/refer to values and are safe for DCE.
 inventory::submit! {
     trunk_ir::op_interface::PureOps::register::<FuncRef>()

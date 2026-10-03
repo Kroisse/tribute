@@ -3,7 +3,7 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
-use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
 
@@ -712,6 +712,17 @@ impl IndirectCallLikeModel for ReturnCallIndirect {
     fn set_exact_signature(self, ctx: &mut crate::IrContext, signature: crate::TypeRef) -> bool {
         set_indirect_call_signature(ctx, self.op_ref(), signature)
     }
+}
+
+impl CallLikeModel for Call {}
+impl CallLikeModel for ReturnCall {}
+
+inventory::submit! {
+    CallLikeOps::register::<Call>()
+}
+
+inventory::submit! {
+    CallLikeOps::register::<ReturnCall>()
 }
 
 inventory::submit! {

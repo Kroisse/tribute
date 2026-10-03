@@ -574,6 +574,74 @@ impl CallableExitOps {
     }
 }
 
+/// Direct-call semantics supplied by a generated operation wrapper.
+///
+/// The callee is the one symbol reference of the operation that transfers
+/// control to its target. Any other reference takes the target's address.
+pub trait CallLikeModel: DialectOp {
+    /// `None` for a malformed call; read fallibly since unverified IR may be
+    /// queried.
+    fn direct_callee(self, ctx: &IrContext) -> Option<Symbol> {
+        ctx.op(self.op_ref()).attributes.get_symbol_ref("callee")
+    }
+}
+
+/// Registry entry for [`CallLikeModel`].
+pub struct CallLikeRegistration {
+    dialect: &'static str,
+    op_name: &'static str,
+    callee: fn(&IrContext, OpRef) -> Option<Symbol>,
+}
+
+fn call_like_model_callee<T: CallLikeModel>(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
+    T::from_op(ctx, op)
+        .ok()
+        .and_then(|model| model.direct_callee(ctx))
+}
+
+inventory::collect!(CallLikeRegistration);
+
+static CALL_LIKE_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static CallLikeRegistration>> =
+    LazyLock::new(|| {
+        let mut registry = HashMap::new();
+        for registration in inventory::iter::<CallLikeRegistration> {
+            let key = (
+                Symbol::from_dynamic(registration.dialect),
+                Symbol::from_dynamic(registration.op_name),
+            );
+            assert!(
+                registry.insert(key, registration).is_none(),
+                "duplicate CallLike registration for '{}.{}'",
+                registration.dialect,
+                registration.op_name,
+            );
+        }
+        registry
+    });
+
+/// Dynamic query and registration entry point for direct calls.
+pub struct CallLikeOps;
+
+impl CallLikeOps {
+    #[doc(hidden)]
+    pub const fn register<T: CallLikeModel>() -> CallLikeRegistration {
+        CallLikeRegistration {
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            callee: call_like_model_callee::<T>,
+        }
+    }
+
+    /// The callee of a direct call, or `None` if `op` is not one or is
+    /// malformed.
+    pub fn callee(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
+        let data = ctx.op(op);
+        CALL_LIKE_REGISTRY
+            .get(&(data.dialect, data.name))
+            .and_then(|registration| (registration.callee)(ctx, op))
+    }
+}
+
 /// Object-safe semantic accessors for indirect calls.
 ///
 /// An exact signature is optional on otherwise valid ordinary indirect

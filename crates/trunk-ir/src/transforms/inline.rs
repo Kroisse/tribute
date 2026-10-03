@@ -187,7 +187,7 @@ fn splice_callee_body_before(
 // Policy
 // =========================================================================
 
-use super::call_graph::{CallGraph, recursive_functions};
+use super::call_graph::{CallGraph, directly_recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::Symbol;
 use std::collections::HashSet;
@@ -200,10 +200,11 @@ pub struct InlineConfig {
     /// all blocks and nested regions).
     pub size_threshold: usize,
     /// If true, always inline callees with exactly one static call site
-    /// (provided they do not escape via `func.constant`).
+    /// (provided they are referenced only as the callee of direct calls).
     pub always_inline_single_call_site: bool,
-    /// If true, inline even when the callee is referenced by `func.constant`
-    /// somewhere. Defaults to false (conservative).
+    /// If true, allow size-threshold inlining even when the callee is
+    /// referenced other than as the callee of a direct call, for example by
+    /// `func.constant`. Defaults to false (conservative).
     pub inline_across_func_constant: bool,
 }
 
@@ -261,7 +262,7 @@ fn should_inline(
     if recursive.contains(&callee) {
         return false;
     }
-    let escapes = graph.has_constant_ref.contains(&callee);
+    let escapes = graph.address_taken.contains(&callee);
 
     // Single-call-site rule (only when the callee doesn't escape).
     if config.always_inline_single_call_site
@@ -336,7 +337,7 @@ pub fn inline_functions_with_config(
 
     loop {
         let graph = am.require::<CallGraph>(ctx, module.op());
-        let recursive = recursive_functions(&graph);
+        let recursive = directly_recursive_functions(&graph);
 
         let pattern = InlineCallSite::new(Arc::clone(&graph), recursive, config.clone());
 
@@ -1425,7 +1426,7 @@ mod pass {
 
         let mut am = AnalysisCache::new();
         let graph = am.require::<CallGraph>(&ctx, module.op());
-        let recursive = recursive_functions(&graph);
+        let recursive = directly_recursive_functions(&graph);
 
         let inline_pattern =
             InlineCallSite::new(Arc::clone(&graph), recursive, InlineConfig::default());

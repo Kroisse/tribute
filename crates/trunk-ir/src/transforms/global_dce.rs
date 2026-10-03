@@ -3,29 +3,30 @@
 //! Removes function definitions that are not reachable from reachability roots.
 //! Functions are keyed by root-qualified name. Reachability roots include:
 //! - The root module's `main` or `_start`
-//! - Functions referenced by `wasm.export_func`
+//! - Functions referenced outside any function definition, such as by
+//!   `wasm.export_func`
 //! - Function definitions with an `abi` attribute (externally callable)
 //!
 //! A bodyless `abi` declaration is an import, not a root: it stays only while
 //! something reachable references it.
 //! - Custom entry points from configuration, by qualified name
 //!
-//! Follows the [`CallGraph`] edges of `func.call`, `func.tail_call`, and
-//! `func.constant` operations, then removes unreachable functions via BFS.
+//! Follows the [`CallGraph`] edges of calls and address references, then
+//! removes unreachable functions via BFS.
 
 use std::collections::{HashSet, VecDeque};
 use std::ops::ControlFlow;
 
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
-use crate::dialect::{core, func, wasm};
+use crate::dialect::{core, func};
 use crate::ops::DialectOp;
 use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::Symbol;
 use crate::symbol_table::SymbolTable;
 use crate::transforms::call_graph::CallGraph;
-use crate::walk::{WalkAction, walk_region};
+use crate::walk::{WalkAction, walk_op};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -98,12 +99,13 @@ fn run(
         .filter(|&(name, op)| !is_candidate(op) || is_root(ctx, name, op, config))
         .map(|(name, _)| name)
         .collect();
-    let _ = walk_region::<()>(ctx, module.body(ctx).expect("module body"), &mut |op| {
-        if wasm::ExportFunc::matches(ctx, op)
-            && let Some(func_ref) = ctx.op(op).attributes.get_symbol_ref("func")
-        {
-            roots.insert(func_ref);
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        if func::Func::matches(ctx, op) {
+            return ControlFlow::Continue(WalkAction::Skip);
         }
+        ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
+            roots.insert(reference);
+        });
         ControlFlow::Continue(WalkAction::Advance)
     });
 
@@ -452,6 +454,45 @@ mod tests {
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 1); // Only unused_func removed
+    }
+
+    #[test]
+    fn keeps_functions_referenced_by_any_operation() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  test.table {entries = [@exported]}
+  func.func @exported() {
+    test.make_closure {func_ref = @captured}
+    func.return
+  }
+  func.func @captured() {
+    func.return
+  }
+  func.func @unused() {
+    test.make_closure {func_ref = @only_from_unused}
+    func.return
+  }
+  func.func @only_from_unused() {
+    func.return
+  }
+  func.func @named_by_module() {
+    func.return
+  }
+}"#,
+        );
+        ctx.op_mut(module.op()).attributes.insert(
+            "entry",
+            Attribute::SymbolRef(Symbol::new("named_by_module")),
+        );
+
+        eliminate_dead_functions(&mut ctx, module, &mut Default::default());
+
+        assert_eq!(
+            surviving_functions(&ctx, module),
+            HashSet::from(["exported", "captured", "named_by_module"].map(Symbol::new))
+        );
     }
 
     #[test]

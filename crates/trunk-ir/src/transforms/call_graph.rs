@@ -1,7 +1,8 @@
 //! Call graph analysis for TrunkIR.
 //!
-//! Builds a directed graph of function call relationships from `func.call`,
-//! `func.tail_call`, and `func.constant` operations. Provides Tarjan's SCC
+//! Builds a directed graph of function call relationships from every symbol
+//! reference in a function body. A [`CallLikeOps`] callee is a call; any
+//! other reference takes its target's address. Provides Tarjan's SCC
 //! for detecting recursive functions (direct self-recursion and mutual
 //! recursion), which is a prerequisite for inlining (`inline.rs`) and other
 //! interprocedural transforms.
@@ -15,6 +16,7 @@ use std::ops::ControlFlow;
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
 use crate::context::IrContext;
 use crate::dialect::func;
+use crate::op_interface::CallLikeOps;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
@@ -22,24 +24,28 @@ use crate::symbol::Symbol;
 use crate::symbol_table::SymbolTable;
 use crate::walk::{WalkAction, walk_region};
 
+type Edges = HashMap<Symbol, HashSet<Symbol>>;
+
 /// A function call graph over a module.
 ///
-/// Edges include direct calls (`func.call`), tail calls (`func.tail_call`),
-/// and reference-as-value (`func.constant`). Reference edges are conservative:
-/// they represent "function X escapes as a value, so could be called from
-/// anywhere later" and should be treated as a call edge for recursion
-/// detection.
+/// Edges include direct calls and address references such as `func.constant`.
+/// Reference edges are conservative: they represent "function X escapes as a
+/// value, so could be called from anywhere later" and should be treated as a
+/// call edge for recursion detection.
 #[derive(Debug, Default)]
 pub struct CallGraph {
-    /// Caller → set of callees (includes direct calls and `func.constant` refs).
+    /// Caller → set of callees (includes direct calls and address references).
     pub edges: HashMap<Symbol, HashSet<Symbol>>,
+    /// Caller → callees of its direct calls only; a subset of `edges`.
+    pub calls: HashMap<Symbol, HashSet<Symbol>>,
     /// Function name (possibly qualified) → its defining `func.func` op.
     pub func_ops: HashMap<Symbol, OpRef>,
-    /// Functions referenced by at least one `func.constant` anywhere in the module.
-    pub has_constant_ref: HashSet<Symbol>,
+    /// Functions whose address some function body takes: referenced other
+    /// than as the callee of a direct call.
+    pub address_taken: HashSet<Symbol>,
     /// Callee → number of static direct-call sites across the whole module.
-    /// `func.constant` references are *not* counted here (they are tracked in
-    /// `has_constant_ref`).
+    /// Address references are *not* counted here (they are tracked in
+    /// `address_taken`).
     pub call_site_count: HashMap<Symbol, usize>,
 }
 
@@ -76,23 +82,23 @@ fn collect_calls(ctx: &IrContext, region: RegionRef, caller: Symbol, graph: &mut
         if func::Func::matches(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
-        let attributes = &ctx.op(op).attributes;
-        if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
-            if let Some(callee) = attributes.get_symbol_ref("callee") {
-                record_call(graph, caller, callee);
+        let mut callee = CallLikeOps::callee(ctx, op);
+        ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
+            if callee == Some(reference) {
+                callee = None;
+                record_call(graph, caller, reference);
+            } else {
+                graph.edges.entry(caller).or_default().insert(reference);
+                graph.address_taken.insert(reference);
             }
-        } else if func::Constant::matches(ctx, op)
-            && let Some(func_ref) = attributes.get_symbol_ref("func_ref")
-        {
-            graph.edges.entry(caller).or_default().insert(func_ref);
-            graph.has_constant_ref.insert(func_ref);
-        }
+        });
         ControlFlow::Continue(WalkAction::Advance)
     });
 }
 
 fn record_call(graph: &mut CallGraph, caller: Symbol, callee: Symbol) {
     graph.edges.entry(caller).or_default().insert(callee);
+    graph.calls.entry(caller).or_default().insert(callee);
     *graph.call_site_count.entry(callee).or_insert(0) += 1;
 }
 
@@ -114,10 +120,14 @@ impl InfallibleAnalysis for CallGraph {}
 /// callees (callees that appear in edges but have no corresponding `func.func`)
 /// are skipped.
 pub fn tarjan_scc(graph: &CallGraph) -> HashMap<Symbol, u32> {
+    scc_over(graph, &graph.edges)
+}
+
+fn scc_over(graph: &CallGraph, edges: &Edges) -> HashMap<Symbol, u32> {
     let mut state = TarjanState::default();
     for &v in graph.func_ops.keys() {
         if !state.index.contains_key(&v) {
-            strongconnect(v, &mut state, graph);
+            strongconnect(v, &mut state, graph, edges);
         }
     }
     state.scc_id
@@ -128,7 +138,20 @@ pub fn tarjan_scc(graph: &CallGraph) -> HashMap<Symbol, u32> {
 /// A function is "recursive" if it belongs to an SCC of size > 1 **or** its
 /// singleton SCC contains a self-edge (direct self-recursion).
 pub fn recursive_functions(graph: &CallGraph) -> HashSet<Symbol> {
-    let scc_ids = tarjan_scc(graph);
+    cyclic_functions(graph, &graph.edges)
+}
+
+/// Functions on a cycle of direct calls.
+///
+/// Address references are ignored: a reference copied into a caller does not
+/// add a call site, so only these functions can be instantiated without
+/// bound by inlining.
+pub fn directly_recursive_functions(graph: &CallGraph) -> HashSet<Symbol> {
+    cyclic_functions(graph, &graph.calls)
+}
+
+fn cyclic_functions(graph: &CallGraph, edges: &Edges) -> HashSet<Symbol> {
+    let scc_ids = scc_over(graph, edges);
     let mut by_scc: HashMap<u32, Vec<Symbol>> = HashMap::new();
     for (&v, &id) in &scc_ids {
         by_scc.entry(id).or_default().push(v);
@@ -139,7 +162,7 @@ pub fn recursive_functions(graph: &CallGraph) -> HashSet<Symbol> {
             result.extend(members);
         } else {
             let v = members[0];
-            if graph.edges.get(&v).is_some_and(|s| s.contains(&v)) {
+            if edges.get(&v).is_some_and(|s| s.contains(&v)) {
                 result.insert(v);
             }
         }
@@ -162,7 +185,7 @@ struct TarjanState {
     next_scc: u32,
 }
 
-fn strongconnect(v: Symbol, state: &mut TarjanState, graph: &CallGraph) {
+fn strongconnect(v: Symbol, state: &mut TarjanState, graph: &CallGraph, edges: &Edges) {
     let v_index = state.next_index;
     state.next_index += 1;
     state.index.insert(v, v_index);
@@ -170,7 +193,7 @@ fn strongconnect(v: Symbol, state: &mut TarjanState, graph: &CallGraph) {
     state.stack.push(v);
     state.on_stack.insert(v);
 
-    if let Some(successors) = graph.edges.get(&v) {
+    if let Some(successors) = edges.get(&v) {
         let successors: Vec<Symbol> = successors.iter().copied().collect();
         for w in successors {
             // Skip external callees (not defined in this module).
@@ -178,7 +201,7 @@ fn strongconnect(v: Symbol, state: &mut TarjanState, graph: &CallGraph) {
                 continue;
             }
             if !state.index.contains_key(&w) {
-                strongconnect(w, state, graph);
+                strongconnect(w, state, graph, edges);
                 let w_low = state.lowlink[&w];
                 let v_low = state.lowlink[&v];
                 state.lowlink.insert(v, v_low.min(w_low));
@@ -393,9 +416,74 @@ mod tests {
                 .unwrap()
                 .contains(&Symbol::new("target"))
         );
-        assert!(g.has_constant_ref.contains(&Symbol::new("target")));
+        assert!(g.address_taken.contains(&Symbol::new("target")));
         // func.constant should NOT count toward call_site_count
         assert_eq!(g.call_site_count.get(&Symbol::new("target")).copied(), None);
+    }
+
+    #[test]
+    fn a_reference_other_than_a_direct_callee_takes_the_address() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @called() {
+    func.return
+  }
+  func.func @captured() {
+    func.return
+  }
+  func.func @listed() {
+    func.return
+  }
+  func.func @holder() {
+    func.call {callee = @called}
+    test.make_closure {func_ref = @captured}
+    test.table {entries = [{target = @listed}], callee = @called}
+    func.return
+  }
+}"#,
+        );
+
+        let g = build_call_graph(&ctx, module);
+        let [called, captured, listed] = ["called", "captured", "listed"].map(Symbol::new);
+        assert_eq!(
+            g.edges[&Symbol::new("holder")],
+            HashSet::from([called, captured, listed])
+        );
+        // `callee` is a call only on an operation registered as a direct call.
+        assert_eq!(g.address_taken, HashSet::from([called, captured, listed]));
+        assert_eq!(g.call_site_count, HashMap::from([(called, 1)]));
+    }
+
+    #[test]
+    fn a_cycle_through_an_address_reference_is_not_direct_recursion() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @make() {
+    test.make_closure {func_ref = @body}
+    func.return
+  }
+  func.func @body() {
+    func.call {callee = @make}
+    func.return
+  }
+  func.func @looping() {
+    func.call {callee = @looping}
+    func.return
+  }
+}"#,
+        );
+
+        let g = build_call_graph(&ctx, module);
+        let [make, body, looping] = ["make", "body", "looping"].map(Symbol::new);
+        assert_eq!(
+            recursive_functions(&g),
+            HashSet::from([make, body, looping])
+        );
+        assert_eq!(directly_recursive_functions(&g), HashSet::from([looping]));
     }
 
     #[test]

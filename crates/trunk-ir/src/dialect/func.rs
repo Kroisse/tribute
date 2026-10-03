@@ -3,8 +3,8 @@
 use crate::attr_kind::SymbolRef;
 use crate::attr_kind::Type;
 use crate::op_interface::{
-    CallableExitModel, CallableExitOps, ControlFlowInterfaceError, IndirectCallLikeModel,
-    IndirectCallLikeOps,
+    CallLikeModel, CallLikeOps, CallableExitModel, CallableExitOps, ControlFlowInterfaceError,
+    IndirectCallLikeModel, IndirectCallLikeOps,
 };
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
@@ -605,6 +605,17 @@ inventory::submit! { CallableExitOps::register::<Return>() }
 inventory::submit! { CallableExitOps::register::<TailCall>() }
 inventory::submit! { CallableExitOps::register::<TailCallIndirect>() }
 inventory::submit! { CallableExitOps::register::<Unreachable>() }
+
+impl CallLikeModel for Call {}
+impl CallLikeModel for TailCall {}
+
+inventory::submit! {
+    CallLikeOps::register::<Call>()
+}
+
+inventory::submit! {
+    CallLikeOps::register::<TailCall>()
+}
 
 inventory::submit! {
     IndirectCallLikeOps::register::<CallIndirect>()

@@ -228,6 +228,18 @@ shared traversal rather than by listing attribute names:
 ctx.op(op).attributes.visit_symbol_refs(&mut |symbol| referenced.push(symbol));
 ```
 
+A direct call operation registers `CallLike` so analyses can tell its callee
+from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;
+every other reference an operation holds takes its target's address, which
+the call graph records as an escape:
+
+```rust
+impl CallLikeModel for Call {}
+inventory::submit! {
+    CallLikeOps::register::<Call>()
+}
+```
+
 Per-parameter attributes (`param_attrs`, see
 [the type model](../../new-plans/ir.md#타입-매개변수-속성)) are built with the
 parameter they describe and read back by position:
