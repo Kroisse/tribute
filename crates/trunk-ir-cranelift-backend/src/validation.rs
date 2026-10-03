@@ -307,10 +307,7 @@ fn validate_clif_region(
                         data.sym_name(ctx)
                     ));
                 }
-                for (offset, target) in data.relocations(ctx) {
-                    let clif::RelocTarget::Func(function) = target else {
-                        continue;
-                    };
+                for (offset, function) in data.relocations(ctx) {
                     if !functions.contains_key(&function) {
                         errors.push(format!(
                             "clif.data @{}: relocation at offset {offset} names unknown function @{function}",

@@ -119,12 +119,9 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     // 3b. Declare runtime functions
     declare_runtime_functions(&mut obj_module, &mut func_ids, call_conv)?;
 
-    // 3d. Declare the module's read-only data objects, then define them, so a
-    // data relocation can name any of them.
+    // 3d. Declare and define the module's read-only data objects
     let mut data_ids: FxHashMap<Symbol, cranelift_module::DataId> = FxHashMap::default();
-    let data_objects = collect_clif_data(ctx, module);
-    let mut data_symbols = Vec::with_capacity(data_objects.len());
-    for &data in &data_objects {
+    for data in collect_clif_data(ctx, module) {
         // References name data objects by root-qualified path, like functions.
         let symbol = qualified_name(ctx, data.op_ref()).unwrap_or_else(|| data.sym_name(ctx));
         let data_id = obj_module
@@ -135,10 +132,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
                 false, // not TLS
             )
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
-        data_ids.insert(symbol, data_id);
-        data_symbols.push(symbol);
-    }
-    for (data, symbol) in data_objects.into_iter().zip(data_symbols) {
+
         let contents = data.bytes(ctx).to_vec();
         let mut relocations = data.relocations(ctx);
         relocations.sort_by_key(|&(offset, _)| offset);
@@ -162,29 +156,17 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
             previous_end = end;
         }
         let mut data_desc = DataDescription::new();
-        for (offset, target) in relocations {
-            match target {
-                clif::RelocTarget::Func(function) => {
-                    let func_ref =
-                        obj_module.declare_func_in_data(func_ids[&function], &mut data_desc);
-                    data_desc.write_function_addr(offset, func_ref);
-                }
-                clif::RelocTarget::Data(target) => {
-                    let Some(&target_id) = data_ids.get(&target) else {
-                        return Err(CompilationError::ir_validation(format!(
-                            "clif.data @{symbol}: relocation at offset {offset} names unknown data @{target}"
-                        )));
-                    };
-                    let data_ref = obj_module.declare_data_in_data(target_id, &mut data_desc);
-                    data_desc.write_data_addr(offset, data_ref, 0);
-                }
-            }
+        for (offset, function) in relocations {
+            let func_ref = obj_module.declare_func_in_data(func_ids[&function], &mut data_desc);
+            data_desc.write_function_addr(offset, func_ref);
         }
         data_desc.define(contents.into_boxed_slice());
         data_desc.set_align(u64::from(data.align(ctx)));
         obj_module
-            .define_data(data_ids[&symbol], &data_desc)
+            .define_data(data_id, &data_desc)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
+
+        data_ids.insert(symbol, data_id);
     }
 
     // 4. Second pass — define functions
@@ -875,72 +857,6 @@ mod tests {
     }
 
     #[test]
-    fn native_emission_relocates_data_addresses_in_data() {
-        use object::{Object, ObjectSection, ObjectSymbol, RelocationTarget};
-
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  clif.data {sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
-    clif.data_reloc {offset = 8, data = @record}
-  }
-  clif.data {sym_name = @record, bytes = b"record", align = 8}
-  clif.func @main() -> core.i32 {
-    %table = clif.symbol_addr {sym = @table} : core.ptr
-    %result = clif.iconst {value = 0} : core.i32
-    clif.return %result
-  }
-}"#,
-        );
-
-        let bytes = emit_module_to_native(&ctx, module).expect("native object");
-
-        let file = object::File::parse(bytes.as_slice()).expect("parse native object");
-        let table = file
-            .symbols()
-            .find(|symbol| symbol.name().is_ok_and(|name| name.ends_with("table")))
-            .expect("table symbol");
-        let section = file
-            .section_by_index(table.section_index().expect("defined table"))
-            .expect("table section");
-        let base = table.address() - section.address();
-        let targets = section
-            .relocations()
-            .filter_map(|(offset, relocation)| {
-                let RelocationTarget::Symbol(index) = relocation.target() else {
-                    return None;
-                };
-                let symbol = file.symbol_by_index(index).ok()?;
-                // A local data target may be addressed through its section.
-                let name = symbol.name().ok()?.to_owned();
-                Some((offset.checked_sub(base)?, name))
-            })
-            .filter(|&(offset, _)| offset < 16)
-            .collect::<Vec<_>>();
-        assert_eq!(targets.len(), 1, "{targets:?}");
-        assert_eq!(targets[0].0, 8, "{targets:?}");
-    }
-
-    #[test]
-    fn native_emission_rejects_a_relocation_to_unknown_data() {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  clif.data {sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
-    clif.data_reloc {offset = 0, data = @missing}
-  }
-}"#,
-        );
-        let error = emit_module_to_native(&ctx, module).expect_err("unknown data");
-        assert!(
-            error.to_string().contains("unknown data @missing"),
-            "{error}"
-        );
-    }
-
-    #[test]
     fn native_emission_rejects_invalid_data_relocations() {
         for (relocs, expected) in [
             (&[(0, "missing")][..], "unknown function @missing"),
@@ -997,13 +913,6 @@ mod tests {
   clif.func_reloc {offset = 0, func = @helper}
 }"#,
                 "must be inside a clif.data relocation region",
-            ),
-            (
-                r#"core.module @test {
-  clif.data {sym_name = @record, bytes = b"record", align = 8}
-  clif.data_reloc {offset = 0, data = @record}
-}"#,
-                "clif.data_reloc must be inside a clif.data relocation region",
             ),
         ] {
             let mut ctx = IrContext::new();
