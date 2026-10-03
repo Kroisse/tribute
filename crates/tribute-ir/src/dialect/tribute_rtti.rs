@@ -1,16 +1,20 @@
-//! Native RTTI layout declarations.
+//! Runtime type descriptor declarations.
 //!
-//! Native ownership planning declares, for each runtime type descriptor, its
-//! RTTI index and how the runtime reads each of its fields. A descriptor is a
-//! struct allocation layout, or one variant of an enum allocation layout.
-//! Native RTTI generation and RC header lowering read these module-level
-//! declarations, and RC header lowering erases them, so none reaches the
+//! The target boundary that last reads nominal layouts declares, for each
+//! runtime type descriptor, its number and how the runtime reads each of its
+//! fields. A descriptor is a struct allocation layout, or one variant of an
+//! enum allocation layout. The pass that lowers allocations reads these
+//! module-level declarations and erases them, so none reaches the
 //! backend-ready boundary.
 
 use std::fmt;
 
+use std::collections::HashMap;
+
 use trunk_ir::TypeRef;
 use trunk_ir::context::IrContext;
+use trunk_ir::ops::DialectOp;
+use trunk_ir::rewrite::Module;
 use trunk_ir::types::{Attribute, Location, StringRef};
 
 use crate::dialect::adt;
@@ -47,6 +51,48 @@ pub enum FieldKind {
 }
 
 impl FieldKind {
+    /// The kind of a scalar field of semantic type `ty`, or `None` when `ty`
+    /// is not a scalar.
+    pub fn scalar(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
+        let data = ctx.get_type(ty);
+        let is = |dialect: &'static str, name: &'static str| {
+            data.dialect == trunk_ir::Symbol::new(dialect)
+                && data.name == trunk_ir::Symbol::new(name)
+        };
+        if is("core", "i1") || is("tribute_rt", "bool") {
+            return Some(Self::Bool);
+        }
+        if is("tribute_rt", "int") {
+            return Some(Self::Int {
+                width: 32,
+                signed: true,
+            });
+        }
+        if is("tribute_rt", "nat") {
+            return Some(Self::Int {
+                width: 32,
+                signed: false,
+            });
+        }
+        if is("tribute_rt", "float") || is("core", "f64") {
+            return Some(Self::Float { width: 64 });
+        }
+        if is("core", "f32") {
+            return Some(Self::Float { width: 32 });
+        }
+        // A `core` integer carries no sign, so it records as unsigned.
+        let width = (data.dialect == trunk_ir::Symbol::new("core"))
+            .then(|| {
+                data.name
+                    .with_str(|name| name.strip_prefix('i').and_then(|width| width.parse().ok()))
+            })
+            .flatten()?;
+        Some(Self::Int {
+            width,
+            signed: false,
+        })
+    }
+
     /// Whether releasing the allocation releases this field.
     pub fn is_released(self) -> bool {
         matches!(self, Self::Managed | Self::Dynamic)
@@ -129,7 +175,6 @@ pub fn allocation_descriptor(
     ctx: &IrContext,
     op: trunk_ir::OpRef,
 ) -> Option<(TypeRef, Option<StringRef>)> {
-    use trunk_ir::ops::DialectOp;
     if let Ok(new) = adt::StructNew::from_op(ctx, op) {
         return Some((new.r#type(ctx), None));
     }
@@ -215,6 +260,27 @@ impl Layout {
     fn decode(self, ctx: &IrContext) -> Result<Vec<FieldKind>, String> {
         let fields = descriptor_field_types(ctx, self.r#type(ctx), self.tag_ref(ctx))?;
         decode_fields(ctx, &self.fields(ctx), fields.len())
+    }
+
+    /// The declarations of a module, in module order.
+    pub fn declared(ctx: &IrContext, module: Module) -> Vec<Self> {
+        module
+            .ops(ctx)
+            .iter()
+            .filter_map(|&op| Self::from_op(ctx, op).ok())
+            .collect()
+    }
+
+    /// The declared number of each descriptor of a module: a struct layout,
+    /// or an enum layout and one of its variant tags.
+    pub fn declared_indices(
+        ctx: &IrContext,
+        module: Module,
+    ) -> HashMap<(TypeRef, Option<StringRef>), u32> {
+        Self::declared(ctx, module)
+            .into_iter()
+            .map(|layout| ((layout.r#type(ctx), layout.tag_ref(ctx)), layout.index(ctx)))
+            .collect()
     }
 
     /// Point the declaration at another layout type with the same shape.

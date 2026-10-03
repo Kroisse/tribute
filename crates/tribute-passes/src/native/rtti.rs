@@ -135,28 +135,6 @@ pub fn declare_rtti_layouts(ctx: &mut IrContext, module: Module, rtti_types: &[R
     }
 }
 
-/// The `tribute_rtti.layout` declarations of a module, in module order.
-pub fn declared_rtti_layouts(ctx: &IrContext, module: Module) -> Vec<tribute_rtti::Layout> {
-    module
-        .ops(ctx)
-        .iter()
-        .copied()
-        .filter_map(|op| tribute_rtti::Layout::from_op(ctx, op).ok())
-        .collect()
-}
-
-/// The declared RTTI index of each runtime type descriptor: a struct layout,
-/// or an enum layout and one of its variant tags.
-pub fn declared_rtti_indices(
-    ctx: &IrContext,
-    module: Module,
-) -> HashMap<(TypeRef, Option<StringRef>), u32> {
-    declared_rtti_layouts(ctx, module)
-        .into_iter()
-        .map(|layout| ((layout.r#type(ctx), layout.tag_ref(ctx)), layout.index(ctx)))
-        .collect()
-}
-
 /// Check that the declarations name each allocation descriptor of the module
 /// exactly once, under distinct user indices.
 fn validate_declarations(
@@ -203,7 +181,7 @@ pub fn generate_rtti(
     module: Module,
     type_converter: &TypeConverter,
 ) -> Result<(), RttiError> {
-    let mut layouts = declared_rtti_layouts(ctx, module);
+    let mut layouts = tribute_rtti::Layout::declared(ctx, module);
     validate_declarations(ctx, module, &layouts)?;
     let primitive_releases = primitive_release_entries(ctx, module);
 
@@ -872,7 +850,7 @@ mod tests {
         declare_planned_layouts(&mut ctx, module);
 
         assert_eq!(
-            declared_rtti_indices(&ctx, module),
+            tribute_rtti::Layout::declared_indices(&ctx, module),
             HashMap::from([((point_ty, None), RTTI_USER_START)])
         );
     }
@@ -912,7 +890,7 @@ mod tests {
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         declare_planned_layouts(&mut ctx, module);
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
-        assert!(declared_rtti_indices(&ctx, module).is_empty());
+        assert!(tribute_rtti::Layout::declared_indices(&ctx, module).is_empty());
     }
 
     #[test]
@@ -929,7 +907,7 @@ mod tests {
         let (tc, _) = crate::native::type_converter::native_type_converter(&mut ctx);
         declare_planned_layouts(&mut ctx, module);
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
-        assert!(declared_rtti_indices(&ctx, module).is_empty());
+        assert!(tribute_rtti::Layout::declared_indices(&ctx, module).is_empty());
 
         let output = print_module(&ctx, module.op());
         let int_release = output
@@ -973,7 +951,7 @@ mod tests {
         let pair_field =
             layout.fields_offset + find_variant_layout(&layout, pair).unwrap().field_offsets[1];
         let none = ctx.intern_str("None");
-        let indices = declared_rtti_indices(&ctx, module);
+        let indices = tribute_rtti::Layout::declared_indices(&ctx, module);
         assert_eq!(indices.len(), 2, "one descriptor per allocated variant");
 
         let release = |index: u32| {
@@ -1149,7 +1127,7 @@ mod tests {
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         // Both struct types should be registered
-        let indices = declared_rtti_indices(&ctx, module);
+        let indices = tribute_rtti::Layout::declared_indices(&ctx, module);
         assert!(indices.contains_key(&(point_ty, None)));
         assert!(indices.contains_key(&(node_ty, None)));
 

@@ -1894,7 +1894,7 @@ fn closure_rtti_declaration_follows_the_native_closure_layout() {
     let (type_converter, _) = native_type_converter(&mut ctx);
     func_to_clif::lower(&mut ctx, module, type_converter).expect("func_to_clif");
 
-    let [layout] = crate::native::rtti::declared_rtti_layouts(&ctx, module)[..] else {
+    let [layout] = tribute_ir::dialect::tribute_rtti::Layout::declared(&ctx, module)[..] else {
         panic!("one closure RTTI declaration")
     };
     assert_ne!(layout.r#type(&ctx), semantic);

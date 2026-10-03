@@ -11,10 +11,9 @@
 //!
 //! A user struct or variant object carries its runtime type descriptor
 //! number as an `i32` first field, so its source fields start at index 1.
-//! This pass is the last to read nominal layouts and numbers each
-//! `(layout, tag)` in allocation order. Builtin layouts have no descriptor
-//! field; their reserved GC type index is their descriptor number, and user
-//! numbers start after it.
+//! The number comes from the module's `tribute_rtti.layout` declarations
+//! ([`super::descriptors::declare`]), which this pass erases. Builtin layouts
+//! have no descriptor field.
 //!
 //! ## Variant Operations (WasmGC Subtyping Approach)
 //!
@@ -64,13 +63,11 @@ use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::{StringRef, Symbol};
 
 use std::collections::HashMap;
-use std::ops::ControlFlow;
 
-use tribute_ir::dialect::tribute_rtti::allocation_descriptor;
+use tribute_ir::dialect::tribute_rtti;
 use tribute_ir::runtime_layout::{self, has_runtime_layout};
-use trunk_ir::walk::{WalkAction, walk_region};
-use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
-use trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::builtin_type_idx;
+
+use super::descriptors::has_descriptor_field;
 
 /// The logical variant operation's `type` attribute is its exact enum-layout
 /// identity. Operand types may be an equivalent `adt.typeref` or already have
@@ -106,54 +103,32 @@ fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     ty
 }
 
-/// The runtime type descriptor number of each user allocation descriptor.
+/// The declared number of each user allocation descriptor.
 type DescriptorNumbers = HashMap<(TypeRef, Option<StringRef>), u32>;
-
-/// Whether objects of the struct or enum layout `ty` carry a leading
-/// descriptor field. Builtin layouts do not.
-fn has_descriptor_field(ctx: &IrContext, ty: TypeRef) -> bool {
-    builtin_type_idx(ctx, ty).is_none()
-}
 
 /// The field index of source field `field` in an object of layout `ty`.
 fn physical_field(ctx: &IrContext, ty: TypeRef, field: u32) -> u32 {
     field + u32::from(has_descriptor_field(ctx, ty))
 }
 
-/// Number the module's user allocation descriptors in allocation order.
-fn number_descriptors(ctx: &IrContext, module: Module) -> DescriptorNumbers {
-    let mut numbers = DescriptorNumbers::new();
-    if let Some(body) = module.body(ctx) {
-        let _ = walk_region::<()>(ctx, body, &mut |op| {
-            if let Some(descriptor) = allocation_descriptor(ctx, op)
-                && has_descriptor_field(ctx, descriptor.0)
-            {
-                let next = FIRST_USER_TYPE_IDX + numbers.len() as u32;
-                numbers.entry(descriptor).or_insert(next);
-            }
-            ControlFlow::Continue(WalkAction::Advance)
-        });
-    }
-    numbers
-}
-
 /// The descriptor field operand for a new object of the descriptor
-/// `(ty, tag)`, inserted before the allocation.
+/// `(ty, tag)`, inserted before the allocation, or `None` when the module does
+/// not declare that descriptor.
 fn descriptor_operand(
     ctx: &mut IrContext,
     rewriter: &mut PatternRewriter<'_>,
     numbers: &DescriptorNumbers,
     descriptor: (TypeRef, Option<StringRef>),
     loc: trunk_ir::types::Location,
-) -> trunk_ir::refs::ValueRef {
-    let number = numbers[&descriptor];
+) -> Option<trunk_ir::refs::ValueRef> {
+    let number = *numbers.get(&descriptor)?;
     let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
     let constant = wasm_dialect::I32Const::operands()
         .value(number as i32)
         .results(i32_ty)
         .build(ctx, loc);
     rewriter.insert_op(constant.op_ref());
-    constant.result(ctx)
+    Some(constant.result(ctx))
 }
 
 /// Lower adt dialect to wasm dialect using arena IR.
@@ -161,7 +136,7 @@ fn descriptor_operand(
 /// The `type_converter` parameter allows language-specific backends to provide
 /// their own type conversion rules.
 pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
-    let numbers = number_descriptors(ctx, module);
+    let numbers = tribute_rtti::Layout::declared_indices(ctx, module);
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(StructNewPattern {
             numbers: numbers.clone(),
@@ -180,6 +155,9 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(RefIsNullPattern)
         .add_pattern(RefCastPattern);
     applicator.apply_partial(ctx, module);
+    for layout in tribute_rtti::Layout::declared(ctx, module) {
+        trunk_ir::rewrite::erase_op(ctx, layout.op_ref());
+    }
 }
 
 /// Pattern for `adt.struct_new` -> `wasm.struct_new`
@@ -202,8 +180,11 @@ impl RewritePattern for StructNewPattern {
         let struct_ty = struct_new.r#type(ctx);
         let mut fields: Vec<_> = struct_new.fields(ctx).to_vec();
         if has_descriptor_field(ctx, struct_ty) {
-            let descriptor =
-                descriptor_operand(ctx, rewriter, &self.numbers, (struct_ty, None), loc);
+            let Some(descriptor) =
+                descriptor_operand(ctx, rewriter, &self.numbers, (struct_ty, None), loc)
+            else {
+                return false;
+            };
             fields.insert(0, descriptor);
         }
         let result_ty = struct_new.result_ty(ctx);
@@ -313,7 +294,10 @@ impl RewritePattern for VariantNewPattern {
         };
         let mut fields: Vec<_> = variant_new.fields(ctx).to_vec();
         let descriptor = (variant_new.r#type(ctx), Some(tag_sym));
-        let descriptor = descriptor_operand(ctx, rewriter, &self.numbers, descriptor, loc);
+        let Some(descriptor) = descriptor_operand(ctx, rewriter, &self.numbers, descriptor, loc)
+        else {
+            return false;
+        };
         fields.insert(0, descriptor);
 
         // Create variant-specific type: Expr + Add -> Expr$Add
@@ -762,6 +746,13 @@ mod tests {
     use super::*;
     use trunk_ir::dialect::wasm;
     use trunk_ir::parser::parse_test_module;
+    use trunk_ir_wasm_backend::gc_types::FIRST_USER_TYPE_IDX;
+
+    /// Declare the module's descriptors and lower it, as the Wasm pipeline does.
+    fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter) {
+        crate::wasm::descriptors::declare(ctx, module);
+        super::lower(ctx, module, type_converter);
+    }
 
     #[test]
     fn canonical_enum_type_requires_an_exact_enum_layout() {
@@ -894,6 +885,10 @@ mod tests {
 
         lower(&mut ctx, module, TypeConverter::new());
 
+        assert!(
+            tribute_rtti::Layout::declared(&ctx, module).is_empty(),
+            "lowering consumes the descriptor declarations"
+        );
         let func = module.ops(&ctx)[0];
         let block = ctx.region(ctx.op_region(func, 0).unwrap()).blocks[0];
         let ops = ctx.block(block).ops.clone();

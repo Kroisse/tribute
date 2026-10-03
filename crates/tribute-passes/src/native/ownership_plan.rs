@@ -735,51 +735,19 @@ fn build_field_kinds(
 /// How the runtime reads a field of semantic type `ty`. Managed-ness follows
 /// [`is_typed_managed_reference`], so release and ownership agree.
 fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) -> FieldKind {
-    let data = ctx.get_type(ty);
-    let is = |dialect: &'static str, name: &'static str| {
-        data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
-    };
     if is_typed_managed_reference(ctx, ty, managed_layouts) {
-        return if is("tribute_rt", "anyref") || is("tribute_rt", "intref") {
+        let data = ctx.get_type(ty);
+        let dynamic = data.dialect == Symbol::new("tribute_rt")
+            && (data.name == Symbol::new("anyref") || data.name == Symbol::new("intref"));
+        return if dynamic {
             FieldKind::Dynamic
         } else {
             FieldKind::Managed
         };
     }
-    if is("core", "i1") || is("tribute_rt", "bool") {
-        return FieldKind::Bool;
-    }
-    if is("tribute_rt", "int") {
-        return FieldKind::Int {
-            width: 32,
-            signed: true,
-        };
-    }
-    if is("tribute_rt", "nat") {
-        return FieldKind::Int {
-            width: 32,
-            signed: false,
-        };
-    }
-    if is("tribute_rt", "float") || is("core", "f64") {
-        return FieldKind::Float { width: 64 };
-    }
-    if is("core", "f32") {
-        return FieldKind::Float { width: 32 };
-    }
-    if data.dialect == Symbol::new("core")
-        && let Some(width) = data
-            .name
-            .with_str(|name| name.strip_prefix('i').and_then(|width| width.parse().ok()))
-    {
-        return FieldKind::Int {
-            width,
-            signed: false,
-        };
-    }
     // Pointers, code references, and runtime buffers that ownership does not
     // manage are raw: neither released nor followed.
-    FieldKind::Raw
+    FieldKind::scalar(ctx, ty).unwrap_or(FieldKind::Raw)
 }
 
 fn compute_entry_contracts(

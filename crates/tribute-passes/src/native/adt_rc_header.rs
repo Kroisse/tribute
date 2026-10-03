@@ -46,7 +46,7 @@ pub fn lower(
     module: Module,
     type_converter: TypeConverter,
 ) -> Result<(), ConversionError> {
-    let rtti_map = &crate::native::rtti::declared_rtti_indices(ctx, module);
+    let rtti_map = &tribute_ir::dialect::tribute_rtti::Layout::declared_indices(ctx, module);
     // Pre-intern types
     let ptr_ty = core::ptr(ctx).as_type_ref();
     let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
@@ -72,7 +72,7 @@ pub fn lower(
     applicator
         .with_target(target)
         .apply_partial_conversion(ctx, module, "adt-rc-header")?;
-    for layout in crate::native::rtti::declared_rtti_layouts(ctx, module) {
+    for layout in tribute_ir::dialect::tribute_rtti::Layout::declared(ctx, module) {
         trunk_ir::rewrite::erase_op(ctx, layout.op_ref());
     }
     Ok(())

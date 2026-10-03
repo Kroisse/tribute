@@ -172,8 +172,10 @@ fn wasm_lowering_passes() -> PassManager {
         super::const_to_wasm::lower(ctx, m.into(), &const_analysis);
         Ok(())
     }))
-    // Convert all adt operations, including String::Leaf from const lowering.
+    // Convert all adt operations, including String::Leaf from const lowering,
+    // after declaring the runtime type descriptors they store.
     .add_pass(pass_fn("adt-to-wasm", |ctx, m: core::Module, _| {
+        super::descriptors::declare(ctx, m.into());
         let tc = wasm_type_converter(ctx);
         crate::wasm::adt_to_wasm::lower(ctx, m.into(), tc);
         Ok(())
@@ -522,6 +524,7 @@ mod tests {
             .add_pattern(WasmFuncSignatureConversionPattern)
             .apply_partial(&mut ctx, module);
         let tc = wasm_type_converter(&mut ctx);
+        crate::wasm::descriptors::declare(&mut ctx, module);
         crate::wasm::adt_to_wasm::lower(&mut ctx, module, tc);
 
         let func = module.ops(&ctx)[0];
