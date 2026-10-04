@@ -206,6 +206,7 @@ scf_to_cf
 typed ownership/RTTI planning + explicit RC materialization
 func_to_clif
 cf_to_clif
+RTTI generation + struct_to_mem + RC header lowering
 adt_to_clif
 arith_to_clif + mem_to_clif
 runtime/constant/intrinsic lowering

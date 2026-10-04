@@ -12,6 +12,9 @@
 //!
 //! ## Note
 //!
+//! Struct field accesses carry the `mem.struct` layout that
+//! [`struct_to_mem`](super::struct_to_mem) derived from their nominal layout.
+//!
 //! `adt.struct_new` and `adt.variant_new` are handled by a separate pass,
 //! [`adt_rc_header`](super::adt_rc_header), that initializes RC headers. This pass only handles field access and
 //! reference operations.
@@ -24,7 +27,7 @@ use tracing::warn;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{
-    compute_enum_layout, compute_struct_layout, find_variant_layout, get_enum_variants,
+    compute_enum_layout, compute_mem_struct_layout, find_variant_layout, get_enum_variants,
 };
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -43,8 +46,9 @@ use trunk_ir_cranelift_backend::passes::arith_to_clif::finalize_cmp;
 /// This is a partial lowering: struct access and reference operations are converted.
 /// Other ADT operations (struct_new, variant, array) pass through unchanged.
 ///
-/// The `type_converter` parameter is used to determine field sizes for
-/// layout computation.
+/// The `type_converter` parameter converts result types and determines field
+/// sizes for enum layout computation. Struct field offsets come from the
+/// `mem.struct` layout alone.
 pub fn lower(
     ctx: &mut IrContext,
     module: Module,
@@ -115,8 +119,8 @@ impl RewritePattern for StructGetPattern {
         let field_idx = struct_get.field(ctx) as usize;
         let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
-            warn!("adt_to_clif arena: cannot compute layout for struct_get");
+        let Some(layout) = compute_mem_struct_layout(ctx, struct_ty) else {
+            warn!("adt_to_clif arena: struct_get layout is not a mem.struct");
             return false;
         };
 
@@ -162,10 +166,9 @@ impl RewritePattern for StructSetPattern {
 
         let struct_ty = struct_set.r#type(ctx);
         let field_idx = struct_set.field(ctx) as usize;
-        let tc = rewriter.type_converter();
 
-        let Some(layout) = compute_struct_layout(ctx, struct_ty, tc) else {
-            warn!("adt_to_clif arena: cannot compute layout for struct_set");
+        let Some(layout) = compute_mem_struct_layout(ctx, struct_ty) else {
+            warn!("adt_to_clif arena: struct_set layout is not a mem.struct");
             return false;
         };
 
@@ -454,12 +457,34 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = clif.iconst {value = 0} : core.ptr
-    %1 = adt.struct_get %0 {field = 1, type = adt.struct<Point(x: core.i32, y: core.i32)>} : core.i32
+    %1 = adt.struct_get %0 {field = 1, type = mem.struct<core.i32, core.i32>} : core.i32
     func.return %1
   }
 }"#,
         );
         insta::assert_snapshot!(result);
+    }
+
+    #[test]
+    fn struct_access_with_a_nominal_layout_is_rejected() {
+        let error = run_pass_result(
+            r#"core.module @test {
+  func.func @test_fn() -> core.i32 {
+    %0 = clif.iconst {value = 0} : core.ptr
+    %1 = adt.struct_get %0 {field = 1, type = adt.struct<Point(x: core.i32, y: core.i32)>} : core.i32
+    func.return %1
+  }
+}"#,
+        )
+        .expect_err("struct_to_mem must run first");
+
+        assert_eq!(error.boundary(), "adt-to-clif");
+        assert!(
+            error
+                .operations()
+                .iter()
+                .any(|illegal| illegal.dialect == "adt" && illegal.name == "struct_get")
+        );
     }
 
     #[test]
@@ -469,7 +494,7 @@ mod tests {
   func.func @test_fn() -> core.nil {
     %0 = clif.iconst {value = 0} : core.ptr
     %1 = clif.iconst {value = 42} : core.i32
-    adt.struct_set %0, %1 {field = 0, type = adt.struct<Point(x: core.i32, y: core.i32)>}
+    adt.struct_set %0, %1 {field = 0, type = mem.struct<core.i32, core.i32>}
     func.return
   }
 }"#,

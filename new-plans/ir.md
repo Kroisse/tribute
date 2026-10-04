@@ -1541,12 +1541,18 @@ layout을 마지막으로 해석하는 target 경계가 할당에 descriptor 번
 Layout과 runtime 동작이 같은 두 소스 타입은 같은 저수준 struct를 쓰고
 descriptor로만 구별된다.
 
-- Native는 nominal 해석이 끝난 뒤 `adt.struct`를 이름 없는 `mem.struct<T...>`로
-  내린다. `mem.struct`는 필드 타입만 갖고 자연 정렬 memory layout을 뜻한다. 필드
-  타입은 target 표현이며, 해제 동작이 다른 managed 참조(`tribute_rt.anyref`)와
-  unmanaged 포인터(`core.ptr`)는 크기가 같아도 구분한다. RC header와 field offset
-  계산은 이 타입을 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
-  사라진다. Cranelift에는 aggregate 타입이 없다.
+- Native는 nominal layout을 마지막으로 해석하는 경계에서 struct field 접근의
+  `adt.struct`를 이름 없는 `mem.struct<T...>`로 내린다. `mem.struct`는 필드 타입만
+  갖고 자연 정렬 memory layout을 뜻한다. 필드 타입은 target 표현이며, 해제 동작이
+  다른 managed 참조(`tribute_rt.anyref`)와 unmanaged 포인터(`core.ptr`)는 크기가
+  같아도 구분한다. 할당이 해제하는 필드가 managed 참조이며, 이 판정은 그 layout의
+  descriptor 선언에서 읽고 선언이 없는 layout은 ownership 계획에서 읽는다.
+  `mem.struct`의 field offset과 크기는 같은 nominal layout에서 계산한 할당 크기와
+  일치한다.
+- 할당은 descriptor를 nominal layout 타입으로 찾으므로 RC header를 새기는 단계가
+  nominal `adt.struct`의 마지막 사용처다. Field offset 계산은 타입 변환 없이
+  `mem.struct`만 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
+  `mem.struct`도 사라진다. Cranelift에는 aggregate 타입이 없다.
 - Wasm은 타입 변환에서 `adt.struct`를 이름 없는 `wasm_gc.struct<T...>`로 바꾼다.
   함수 signature와 block 인자도 같은 변환을 거치므로 모든 위치가 같은 타입을
   가진다. 필드 표현이 같은 struct와 variant는 같은 GC 타입이며, 첫 필드의

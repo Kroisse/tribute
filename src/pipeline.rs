@@ -1315,7 +1315,7 @@ fn prepare_module_to_native(
     }
 
     // Phase 1 - Plan ownership and RTTI, then lower func dialect to clif dialect
-    {
+    let ownership_plan = {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         let plan_options = native_ownership_plan_options(stop_after, optimizations);
@@ -1341,7 +1341,8 @@ fn prepare_module_to_native(
         );
         tribute_passes::native::adapt_closure_layout::lower(ctx, module);
         func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
-    }
+        ownership_plan
+    };
 
     // Phase 1.5 - Lower cf dialect to clif dialect
     {
@@ -1350,13 +1351,16 @@ fn prepare_module_to_native(
         cf_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
-    // Phase 1.9-1.95 - RTTI + ADT RC header
+    // Phase 1.9-1.95 - RTTI + ADT RC header. Allocation is the last use of a
+    // nominal struct layout; field accesses keep only the structural
+    // `mem.struct` layout.
     {
         let (type_converter, _) =
             tribute_passes::native::type_converter::native_type_converter(ctx);
         tribute_passes::native::rtti::generate_rtti(ctx, module, &type_converter).map_err(
             |error| trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string()),
         )?;
+        tribute_passes::native::struct_to_mem::lower(ctx, module, &ownership_plan, &type_converter);
         tribute_passes::native::adt_rc_header::lower(ctx, module, type_converter)
             .map_err(native_conversion_failure)?;
     }
