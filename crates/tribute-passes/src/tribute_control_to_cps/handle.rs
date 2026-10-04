@@ -169,13 +169,8 @@ impl Converter<'_> {
             &completion_flow,
         )?;
         let body = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, body);
         let closure_type = self.completion_type(arg_type, flow.answer_type);
-        let lambda = closure::Lambda::operands(captures)
-            .results(closure_type)
-            .regions(body)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        let lambda = self.closure_over(location, body, closure_type, CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -214,13 +209,8 @@ impl Converter<'_> {
             &suffix_flow,
         )?;
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
         let closure_type = self.resumption_type(input_type, flow.answer_type);
-        let lambda = closure::Lambda::operands(captures)
-            .results(closure_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        let lambda = self.closure_over(location, region, closure_type, CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -251,11 +241,7 @@ impl Converter<'_> {
         )?;
         let region = self.single_block_region(location, block);
         let token_type = self.resumption_type(input_type, answer_type);
-        let lambda = closure::Lambda::operands(ordered_external_values(self.ctx, region))
-            .results(token_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        let lambda = self.closure_over(location, region, token_type, CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -352,11 +338,7 @@ impl Converter<'_> {
         )?;
         let region = self.single_block_region(location, block);
         let dispatch_type = self.frame_types(layer.body_type).dispatch;
-        let lambda = closure::Lambda::operands(ordered_external_values(self.ctx, region))
-            .results(dispatch_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        let lambda = self.closure_over(location, region, dispatch_type, CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -506,11 +488,7 @@ impl Converter<'_> {
         self.ctx.push_op(block, switch.op_ref());
         let region = self.single_block_region(location, block);
         let dispatch_type = self.frame_types(layer.body_type).dispatch;
-        let lambda = closure::Lambda::operands(ordered_external_values(self.ctx, region))
-            .results(dispatch_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        let lambda = self.closure_over(location, region, dispatch_type, CallingConvention::Cps);
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -610,18 +588,13 @@ impl Converter<'_> {
             .build(self.ctx, location);
         self.ctx.push_op(block, guard.op_ref());
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
         let closure_type = tribute_core::calling_convention::cps_resume_type(
             self.ctx,
             evidence_type,
             frame_type,
             anyref,
         );
-        let wrapper = closure::Lambda::operands(captures)
-            .results(closure_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, wrapper.op_ref(), CallingConvention::Cps);
+        let wrapper = self.closure_over(location, region, closure_type, CallingConvention::Cps);
         Ok((
             vec![not_consumed.op_ref(), state.op_ref(), wrapper.op_ref()],
             wrapper.result(self.ctx),
@@ -904,7 +877,6 @@ impl Converter<'_> {
             &flow,
         )?;
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
         let result = if convention == CallingConvention::Cps {
             self.never_type()
         } else {
@@ -912,11 +884,7 @@ impl Converter<'_> {
         };
         let function = func::func_sig(self.ctx, params, [result]).as_type_ref();
         let closure_type = physical_closure_type(self.ctx, function, convention);
-        let lambda = closure::Lambda::operands(captures)
-            .results(closure_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), convention);
+        let lambda = self.closure_over(location, region, closure_type, convention);
         Ok(HandlerArmInfo {
             op: lambda.op_ref(),
             value: lambda.result(self.ctx),
@@ -1044,15 +1012,15 @@ impl Converter<'_> {
         self.ctx.push_op(block, switch.op_ref());
 
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
         let function = func::func_sig(self.ctx, params, [anyref]).as_type_ref();
         let closure_type =
             physical_closure_type(self.ctx, function, CallingConvention::EvidenceDirect);
-        let lambda = closure::Lambda::operands(captures)
-            .results(closure_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::EvidenceDirect);
+        let lambda = self.closure_over(
+            location,
+            region,
+            closure_type,
+            CallingConvention::EvidenceDirect,
+        );
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 

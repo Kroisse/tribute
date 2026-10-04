@@ -42,7 +42,6 @@ mod tests;
 mod types;
 
 pub use boundary::*;
-use frame::ordered_external_values;
 
 /// Carry a source call's, resume's, or handle's evidence selection to the
 /// operation that passes its evidence. The selection is copied unchanged.

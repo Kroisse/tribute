@@ -97,6 +97,23 @@ impl Converter<'_> {
         packed.result(self.ctx)
     }
 
+    /// Build the closure of `region`, capturing the values it uses from
+    /// outside in their order of first use.
+    pub(super) fn closure_over(
+        &mut self,
+        location: Location,
+        region: RegionRef,
+        closure_type: TypeRef,
+        convention: CallingConvention,
+    ) -> closure::Lambda {
+        let lambda = closure::Lambda::operands(ordered_external_values(self.ctx, region))
+            .results(closure_type)
+            .regions(region)
+            .build(self.ctx, location);
+        set_calling_convention(self.ctx, lambda.op_ref(), convention);
+        lambda
+    }
+
     pub(super) fn build_done_adapter(
         &mut self,
         value_type: TypeRef,
@@ -115,11 +132,7 @@ impl Converter<'_> {
         )?;
         let region = self.single_block_region(location, done_block);
         let done_type = self.done_k_type(value_type);
-        let done = closure::Lambda::operands(ordered_external_values(self.ctx, region))
-            .results(done_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, done.op_ref(), CallingConvention::Cps);
+        let done = self.closure_over(location, region, done_type, CallingConvention::Cps);
         Ok((done.op_ref(), done.result(self.ctx)))
     }
 
@@ -184,11 +197,7 @@ impl Converter<'_> {
             boundary_frame,
             anyref,
         );
-        let resume = closure::Lambda::operands(ordered_external_values(self.ctx, region))
-            .results(resume_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, resume.op_ref(), CallingConvention::Cps);
+        let resume = self.closure_over(location, region, resume_type, CallingConvention::Cps);
         Ok((resume.op_ref(), resume.result(self.ctx)))
     }
 
@@ -256,12 +265,12 @@ impl Converter<'_> {
             ],
         )?;
         let dispatch_region = self.single_block_region(location, dispatch_block);
-        let dispatch =
-            closure::Lambda::operands(ordered_external_values(self.ctx, dispatch_region))
-                .results(dispatch_type)
-                .regions(dispatch_region)
-                .build(self.ctx, location);
-        set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Cps);
+        let dispatch = self.closure_over(
+            location,
+            dispatch_region,
+            dispatch_type,
+            CallingConvention::Cps,
+        );
         self.ctx.push_op(factory_block, dispatch.op_ref());
         let ret = func::Return::operands([dispatch.result(self.ctx)]).build(self.ctx, location);
         self.ctx.push_op(factory_block, ret.op_ref());
@@ -416,15 +425,10 @@ impl Converter<'_> {
             &suffix_flow,
         )?;
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
         let never = self.never_type();
         let function = func::func_sig(self.ctx, [evidence_type, frame_type], [never]).as_type_ref();
         let closure_type = self.generated_continuation_type(function);
-        let lambda = closure::Lambda::operands(captures)
-            .results(closure_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        let lambda = self.closure_over(location, region, closure_type, CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
     }
 
@@ -459,13 +463,8 @@ impl Converter<'_> {
             &suffix_flow,
         )?;
         let region = self.single_block_region(location, block);
-        let captures = ordered_external_values(self.ctx, region);
         let closure_ty = self.completion_type(result_type, flow.answer_type);
-        let lambda = closure::Lambda::operands(captures)
-            .results(closure_ty)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
+        let lambda = self.closure_over(location, region, closure_ty, CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
     }
 }
@@ -503,7 +502,7 @@ fn collect_external_in_order(
     }
 }
 
-pub(super) fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> {
+fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> {
     let mut defined = HashSet::new();
     collect_defined_values(ctx, region, &mut defined);
     let mut seen = HashSet::new();
