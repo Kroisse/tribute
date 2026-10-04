@@ -218,6 +218,7 @@ pub(super) fn function_body(
 mod tests {
     use super::*;
     use trunk_ir::Attribute;
+    use trunk_ir::Symbol;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use wasmparser::{Parser, Payload, Validator, WasmFeatures};
@@ -438,7 +439,7 @@ mod tests {
         let ret = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Return::matches(&ctx, ret));
         ctx.op_mut(ret).attributes.insert(
-            trunk_ir::Symbol::new("callee"),
+            Symbol::new("callee"),
             Attribute::SymbolRef(SymbolPath::from("helper")),
         );
 

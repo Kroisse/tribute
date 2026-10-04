@@ -347,7 +347,7 @@ mod tests {
 
         let block = module.first_block(&ctx).unwrap();
         let loc = ctx.op(module.op()).location;
-        let release = trunk_ir::SymbolPath::from("__tribute_release_5");
+        let release = SymbolPath::from("__tribute_release_5");
         generate(
             &mut ctx,
             block,

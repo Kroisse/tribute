@@ -32,6 +32,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
+use trunk_ir::SymbolPath;
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -298,7 +299,7 @@ fn emit_bytes_alloc(
     ops.push(size_op.op_ref());
 
     let call_op = clif::Call::operands([size_op.result(ctx)])
-        .callee(trunk_ir::SymbolPath::from(ALLOC_FN))
+        .callee(SymbolPath::from(ALLOC_FN))
         .results([ptr_ty])
         .build(ctx, loc);
     ops.push(call_op.op_ref());

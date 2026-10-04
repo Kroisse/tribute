@@ -472,6 +472,7 @@ fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
 mod tests {
     use super::*;
     use tribute_core::CallingConvention;
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::RegionData;
     use trunk_ir::dialect::{arith, core};
     use trunk_ir::printer::print_module;
@@ -554,7 +555,7 @@ mod tests {
         // carries a parameter attribute.
         let marked: AttributeMap = [(
             Symbol::new("k"),
-            Attribute::SymbolRef(trunk_ir::SymbolPath::from("v")),
+            Attribute::SymbolRef(SymbolPath::from("v")),
         )]
         .into_iter()
         .collect();

@@ -14,6 +14,7 @@ use tribute_ir::dialect::{effect, tribute_rt};
 use trunk_ir::Symbol;
 
 use crate::effect_dispatch;
+use trunk_ir::SymbolPath;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -278,7 +279,7 @@ impl RewritePattern for LowerEffectExtendToNative {
         operands.push(handler_dispatch);
 
         let extend_call = func::Call::operands(operands)
-            .callee(trunk_ir::SymbolPath::from(evidence_abi::EXTEND))
+            .callee(SymbolPath::from(evidence_abi::EXTEND))
             .results([ptr_ty])
             .build(ctx, loc);
         rewriter.insert_op(extend_call.op_ref());
@@ -334,7 +335,7 @@ impl RewritePattern for LowerEffectStackOpToNative {
         let ptr_ty = core_ptr_type(ctx);
         let ability_id = effect_dispatch::insert_ability_id(ctx, loc, ability_ref, rewriter);
         let call = func::Call::operands([evidence, ability_id])
-            .callee(trunk_ir::SymbolPath::from(helper))
+            .callee(SymbolPath::from(helper))
             .results([ptr_ty])
             .build(ctx, loc);
         rewriter.insert_op(call.op_ref());
@@ -365,7 +366,7 @@ impl RewritePattern for LowerEffectDispatchTailToNative {
         let ability_id =
             effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
         let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
-            .callee(trunk_ir::SymbolPath::from(evidence_abi::LOOKUP_TR))
+            .callee(SymbolPath::from(evidence_abi::LOOKUP_TR))
             .results([ptr_ty])
             .build(ctx, loc);
         rewriter.insert_op(dispatch_closure.op_ref());
@@ -396,7 +397,7 @@ impl RewritePattern for LowerEffectDispatchCpsToNative {
         let ability_id =
             effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
         let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
-            .callee(trunk_ir::SymbolPath::from(evidence_abi::LOOKUP))
+            .callee(SymbolPath::from(evidence_abi::LOOKUP))
             .results([i32_ty])
             .build(ctx, loc);
         rewriter.insert_op(prompt.op_ref());
@@ -450,7 +451,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
             if !result_types.is_empty() && is_evidence_type(ctx, result_types[0]) {
                 let old_result = ctx.op_result(op, 0);
                 let call = func::Call::operands([])
-                    .callee(trunk_ir::SymbolPath::from(evidence_abi::EMPTY))
+                    .callee(SymbolPath::from(evidence_abi::EMPTY))
                     .results([ptr_ty])
                     .build(ctx, loc);
                 ctx.insert_op_before(block, op, call.op_ref());
@@ -480,7 +481,7 @@ fn rewrite_evidence_ops_in_block(ctx: &mut IrContext, block: BlockRef) -> PassRu
                 }
                 let old_result = ctx.op_result(op, 0);
                 let call = func::Call::operands([])
-                    .callee(trunk_ir::SymbolPath::from(evidence_abi::EMPTY))
+                    .callee(SymbolPath::from(evidence_abi::EMPTY))
                     .results([ptr_ty])
                     .build(ctx, loc);
                 ctx.insert_op_before(block, op, call.op_ref());

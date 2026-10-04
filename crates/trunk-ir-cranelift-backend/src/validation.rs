@@ -298,7 +298,7 @@ fn validate_clif_region(
                 // Data objects link under their root-qualified path.
                 let name = qualified_name(ctx, op)
                     .unwrap_or_else(|| SymbolPath::from_text(data.sym_name(ctx)));
-                if name.with_str(|name| RESERVED_RUNTIME_SYMBOLS.contains(&name)) {
+                if name.is_simple() && RESERVED_RUNTIME_SYMBOLS.contains(&name.leaf().as_str()) {
                     errors.push(format!(
                         "clif.data @{name}: symbol is reserved for the native runtime"
                     ));

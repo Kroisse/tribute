@@ -92,6 +92,7 @@ fn make_bodyless_wasm_func(
 mod tests {
     use super::*;
     use trunk_ir::Symbol;
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::location::Span;
     use trunk_ir::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
@@ -187,7 +188,7 @@ mod tests {
             );
             attrs.insert(
                 Symbol::new("tag"),
-                Attribute::SymbolRef(trunk_ir::SymbolPath::from("keep")),
+                Attribute::SymbolRef(SymbolPath::from("keep")),
             );
             let signature = wasm::func_sig_with_attrs(
                 &mut ctx,
@@ -236,10 +237,7 @@ mod tests {
                     Attribute::List(vec![Attribute::Type(i64)]),
                 ])),
             );
-            assert_eq!(
-                attrs.get_symbol_ref("tag"),
-                Some(&trunk_ir::SymbolPath::from("keep"))
-            );
+            assert_eq!(attrs.get_symbol_ref("tag"), Some(&SymbolPath::from("keep")));
             assert_eq!(ctx.get_type(function.r#type(&ctx)).attrs.len(), 4);
             assert_eq!(
                 ctx.op(module.ops(&ctx)[0]).attributes.get("custom"),

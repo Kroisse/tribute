@@ -433,13 +433,11 @@ fn exact_signature(
         ArithMapping::BinaryOp(_) => {
             result.dialect == operand.dialect
                 && result.name == operand.name
-                && symbol.with_str(|symbol| {
-                    if symbol.starts_with("std::Float::") {
-                        operand_is_f64
-                    } else {
-                        operand_is_i32
-                    }
-                })
+                && if symbol.text_after_prefix("std::Float::").is_some() {
+                    operand_is_f64
+                } else {
+                    operand_is_i32
+                }
         }
         ArithMapping::CmpI(_) => {
             operand_is_i32

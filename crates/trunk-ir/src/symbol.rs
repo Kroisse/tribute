@@ -200,6 +200,11 @@ impl std::fmt::Display for Symbol {
 /// The textual form joins the components with `::` (`left::helper`), and
 /// [`SymbolPath::from_text`] splits it again, so two paths are equal exactly
 /// when their texts are. Up to two components are stored inline.
+///
+/// Splitting is purely textual. A name whose own spelling contains `::`, such
+/// as a specialization suffix naming a qualified type, contributes several
+/// components, so [`leaf`](Self::leaf) and [`modules`](Self::modules) describe
+/// the text, not necessarily the module structure.
 #[derive(Clone, PartialEq, Eq, Hash)]
 pub struct SymbolPath(SmallVec<[Symbol; 2]>);
 
@@ -256,13 +261,20 @@ impl SymbolPath {
         }
     }
 
-    /// Access the qualified name as text. A path with modules is joined
-    /// first.
-    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
-        match self.0.as_slice() {
-            [name] => f(name.as_str()),
-            _ => f(&self.to_string()),
-        }
+    /// The length of the textual form in bytes.
+    pub fn text_len(&self) -> usize {
+        self.text_bytes().count()
+    }
+
+    /// Whether the textual form starts with `prefix`, and if so the byte
+    /// that follows it. Use this instead of joining the path when a name is
+    /// recognized by its spelling.
+    pub fn text_after_prefix(&self, prefix: &str) -> Option<Option<u8>> {
+        let mut bytes = self.text_bytes();
+        prefix
+            .bytes()
+            .all(|expected| bytes.next() == Some(expected))
+            .then(|| bytes.next())
     }
 
     /// The bytes of the textual form.
@@ -400,6 +412,10 @@ mod tests {
         assert_eq!(path, SymbolPath::from("outer::inner::same"));
         assert_eq!(SymbolPath::from_text("outer").child("inner::same"), path);
         assert!(SymbolPath::from_text("top").is_simple());
+        assert_eq!(path.text_after_prefix("outer::in"), Some(Some(b'n')));
+        assert_eq!(path.text_after_prefix("outer::inner::same"), Some(None));
+        assert_eq!(path.text_after_prefix("outer::other"), None);
+        assert_eq!(path.text_len(), "outer::inner::same".len());
 
         // `$` sorts below `:`, so text order and component order disagree.
         let nested = SymbolPath::from_text("a::b");

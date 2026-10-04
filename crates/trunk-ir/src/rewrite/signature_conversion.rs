@@ -615,7 +615,7 @@ mod result_list_tests {
                 );
                 assert_eq!(
                     ctx.get_type(converted).attrs.get_symbol_ref("tag"),
-                    Some(&crate::SymbolPath::from("keep"))
+                    Some(&SymbolPath::from("keep"))
                 );
             }
         }

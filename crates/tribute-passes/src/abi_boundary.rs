@@ -10,6 +10,7 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::IndirectCallLikeOps;
@@ -234,7 +235,7 @@ impl<'a> Verifier<'a> {
     /// the platform convention.
     fn check_root_entry(&mut self, functions: &SymbolTable) {
         let ctx = self.ctx;
-        let Some(main) = functions.resolve(&trunk_ir::SymbolPath::from("main")) else {
+        let Some(main) = functions.resolve(&SymbolPath::from("main")) else {
             return;
         };
         let Ok(function) = func::Func::from_op(ctx, main) else {

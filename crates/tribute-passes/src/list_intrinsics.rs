@@ -18,17 +18,18 @@ use trunk_ir::{Symbol, SymbolPath};
 
 const PREPEND_INTRINSIC: &str = "std::collections::List::__tribute_list_prepend_intrinsic";
 
+/// Whether `name` is the prepend intrinsic or one of its specializations,
+/// which append a `$` suffix. A specialization's suffix can itself contain
+/// `::`, so the name is matched by its spelling, not by its components.
 fn is_prepend_intrinsic(name: &SymbolPath) -> bool {
-    name.with_str(|name| {
-        name == PREPEND_INTRINSIC
-            || name
-                .strip_prefix(PREPEND_INTRINSIC)
-                .is_some_and(|suffix| suffix.starts_with('$'))
-    })
+    matches!(
+        name.text_after_prefix(PREPEND_INTRINSIC),
+        Some(None | Some(b'$'))
+    )
 }
 
-fn intrinsic_declaration(name: &SymbolPath) -> Option<Symbol> {
-    is_prepend_intrinsic(name).then(|| Symbol::new(PREPEND_INTRINSIC))
+fn intrinsic_declaration(name: &SymbolPath) -> Option<SymbolPath> {
+    is_prepend_intrinsic(name).then(|| SymbolPath::from_text(PREPEND_INTRINSIC))
 }
 
 #[derive(Default)]
@@ -123,7 +124,7 @@ impl RewritePattern for PrependCallPattern {
         } else {
             self.intrinsic_declarations
                 .eligible
-                .contains(&SymbolPath::from(&base_declaration))
+                .contains(&base_declaration)
         };
         if !eligible {
             return false;

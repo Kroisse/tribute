@@ -106,7 +106,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         })?;
 
         let linker_name = match linkage {
-            Linkage::Local => name_sym.with_str(mangle_native_name),
+            Linkage::Local => mangle_native_name(&name_sym.to_string()),
             Linkage::Import => local_name.to_string(),
             _ => name_sym.to_string(),
         };

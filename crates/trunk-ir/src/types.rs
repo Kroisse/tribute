@@ -242,7 +242,7 @@ impl Attribute {
             Attribute::FloatBits(_) => 8,
             Attribute::String(s) => strings.get(*s).len() + 2,
             Attribute::Bytes(b) => b.len() * 4 + 7,
-            Attribute::SymbolRef(path) => path.with_str(str::len) + 1,
+            Attribute::SymbolRef(path) => path.text_len() + 1,
             Attribute::Type(_) => 10, // rough estimate; actual depends on type
             Attribute::List(list) => {
                 list.iter()

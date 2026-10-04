@@ -494,6 +494,7 @@ impl RewritePattern for FuncConstantPattern {
 
 #[cfg(test)]
 mod tests {
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::IrContext;
     use trunk_ir::dialect::{clif, core, func};
     use trunk_ir::ops::DialectType;
@@ -604,7 +605,7 @@ mod tests {
         let mut inner_attrs = AttributeMap::new();
         inner_attrs.insert(
             Symbol::new("tag"),
-            Attribute::SymbolRef(trunk_ir::SymbolPath::from("preserved")),
+            Attribute::SymbolRef(SymbolPath::from("preserved")),
         );
         inner_attrs.insert(
             Symbol::new("nested"),

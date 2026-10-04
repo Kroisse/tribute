@@ -63,7 +63,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
 
     // 2. Assign table indices (sorted for deterministic ordering)
     let mut sorted_funcs: Vec<_> = func_refs.into_iter().collect();
-    sorted_funcs.sort_by(|a, b| a.with_str(|a_str| b.with_str(|b_str| a_str.cmp(b_str))));
+    sorted_funcs.sort();
 
     let table_indices: HashMap<SymbolPath, u32> = sorted_funcs
         .iter()

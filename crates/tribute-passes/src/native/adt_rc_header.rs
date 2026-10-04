@@ -20,6 +20,7 @@ use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout,
 };
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -139,7 +140,7 @@ impl RewritePattern for StructNewPattern {
 
         // 2. Call __tribute_alloc
         let call_op = clif::Call::operands([size_val])
-            .callee(trunk_ir::SymbolPath::from(ALLOC_FN))
+            .callee(SymbolPath::from(ALLOC_FN))
             .results([self.ptr_ty])
             .build(ctx, loc);
         let raw_ptr = call_op.results(ctx)[0];
@@ -305,7 +306,7 @@ impl RewritePattern for VariantNewPattern {
 
         // 2. Call __tribute_alloc
         let call_op = clif::Call::operands([size_val])
-            .callee(trunk_ir::SymbolPath::from(ALLOC_FN))
+            .callee(SymbolPath::from(ALLOC_FN))
             .results([self.ptr_ty])
             .build(ctx, loc);
         let raw_ptr = call_op.results(ctx)[0];
@@ -413,6 +414,7 @@ impl RewritePattern for VariantNewPattern {
 mod tests {
     use super::*;
     use trunk_ir::Span;
+    use trunk_ir::Symbol;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
@@ -463,15 +465,12 @@ mod tests {
             .map(|i| ctx.block_arg(entry, i as u32))
             .collect();
 
-        let struct_new_data = OperationDataBuilder::new(
-            loc,
-            trunk_ir::Symbol::new("adt"),
-            trunk_ir::Symbol::new("struct_new"),
-        )
-        .operands(field_vals)
-        .result(struct_ty)
-        .attr("type", Attribute::Type(struct_ty))
-        .build(ctx);
+        let struct_new_data =
+            OperationDataBuilder::new(loc, Symbol::new("adt"), Symbol::new("struct_new"))
+                .operands(field_vals)
+                .result(struct_ty)
+                .attr("type", Attribute::Type(struct_ty))
+                .build(ctx);
         let struct_new_ref = ctx.create_op(struct_new_data);
         let struct_result = ctx.op_result(struct_new_ref, 0);
         ctx.push_op(entry, struct_new_ref);
@@ -485,7 +484,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(trunk_ir::Symbol::new("create_struct"))
+            .sym_name(Symbol::new("create_struct"))
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -505,14 +504,11 @@ mod tests {
             parent_op: None,
         });
 
-        let module_data = OperationDataBuilder::new(
-            loc,
-            trunk_ir::Symbol::new("core"),
-            trunk_ir::Symbol::new("module"),
-        )
-        .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-        .region(module_region)
-        .build(ctx);
+        let module_data =
+            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
+                .region(module_region)
+                .build(ctx);
         let module_op = ctx.create_op(module_data);
         let module = Module::new(ctx, module_op).expect("valid arena module");
 
@@ -530,10 +526,9 @@ mod tests {
         let ptr_ty = intern_ty(ctx, "core", "ptr");
         let erased_func_ty =
             func::func_sig(ctx, field_types.iter().copied(), [ptr_ty]).as_type_ref();
-        ctx.op_mut(func_op.op_ref()).attributes.insert(
-            trunk_ir::Symbol::new("type"),
-            Attribute::Type(erased_func_ty),
-        );
+        ctx.op_mut(func_op.op_ref())
+            .attributes
+            .insert(Symbol::new("type"), Attribute::Type(erased_func_ty));
         crate::native::rtti::declare_rtti_layouts(ctx, module, plan.rtti_types());
         crate::native::rtti::generate_rtti(ctx, module, &tc).expect("declared layouts");
 

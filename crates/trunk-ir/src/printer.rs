@@ -246,7 +246,7 @@ impl<'a> PrintState<'a> {
                 write_escaped_bytes(f, bytes)?;
                 f.write_char('"')
             }
-            Attribute::SymbolRef(path) => path.with_str(|text| write_symbol_text(f, text)),
+            Attribute::SymbolRef(path) => write_symbol_path(f, path),
             Attribute::Type(ty) => self.write_type(f, *ty),
             Attribute::List(list) => {
                 f.write_char('[')?;
@@ -612,6 +612,21 @@ fn write_name(f: &mut dyn Write, name: &str) -> fmt::Result {
 
 fn write_symbol(f: &mut dyn Write, sym: &crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| write_symbol_text(f, s))
+}
+
+/// Write `@path`. A path with modules contains `::`, so it is always quoted.
+fn write_symbol_path(f: &mut dyn Write, path: &crate::symbol::SymbolPath) -> fmt::Result {
+    let [name] = path.components() else {
+        f.write_str("@\"")?;
+        for (index, component) in path.components().iter().enumerate() {
+            if index != 0 {
+                f.write_str(crate::symbol::SymbolPath::SEPARATOR)?;
+            }
+            write_escaped_string(f, component.as_str())?;
+        }
+        return f.write_char('"');
+    };
+    write_symbol_text(f, name.as_str())
 }
 
 /// Write `@name` for symbol text, quoting it when needed.
