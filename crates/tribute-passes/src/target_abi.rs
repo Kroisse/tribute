@@ -4,7 +4,7 @@
 //! only then maps logical CPS `core.never` results to the shared empty-result
 //! list used by target backends.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
@@ -1066,8 +1066,8 @@ fn collect_functions(
     ops: &[OpRef],
     never: TypeRef,
     anyref: TypeRef,
-) -> Result<FxHashMap<SymbolPath, FunctionIdentity>, TargetAbiError> {
-    let mut functions = FxHashMap::default();
+) -> Result<HashMap<SymbolPath, FunctionIdentity>, TargetAbiError> {
+    let mut functions = HashMap::default();
     for &op in ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
@@ -1103,7 +1103,7 @@ fn collect_functions(
 fn validate_transfers(
     ctx: &IrContext,
     ops: &[OpRef],
-    functions: &FxHashMap<SymbolPath, FunctionIdentity>,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
     never: TypeRef,
 ) -> Result<(), TargetAbiError> {
     for &op in ops {
@@ -1273,7 +1273,7 @@ fn is_cps_never_caller(ctx: &IrContext, op: OpRef, never: TypeRef) -> Result<boo
 /// The tagged function named by a root-qualified reference.
 fn function_for_symbol(
     symbol: &SymbolPath,
-    functions: &FxHashMap<SymbolPath, FunctionIdentity>,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
 ) -> Result<FunctionIdentity, TargetAbiError> {
     function_for_symbol_optional(symbol, functions)
         .ok_or_else(|| TargetAbiError::new(format!("target ABI: unknown callable `{symbol}`")))
@@ -1281,7 +1281,7 @@ fn function_for_symbol(
 
 fn function_for_symbol_optional(
     symbol: &SymbolPath,
-    functions: &FxHashMap<SymbolPath, FunctionIdentity>,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
 ) -> Option<FunctionIdentity> {
     functions.get(symbol).copied()
 }
@@ -1423,8 +1423,8 @@ fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 struct PhysicalTypeConverter<'a> {
     ctx: &'a mut IrContext,
     never: TypeRef,
-    embedded: FxHashMap<TypeRef, TypeRef>,
-    callable: FxHashMap<(TypeRef, CallingConvention), TypeRef>,
+    embedded: HashMap<TypeRef, TypeRef>,
+    callable: HashMap<(TypeRef, CallingConvention), TypeRef>,
 }
 
 impl<'a> PhysicalTypeConverter<'a> {
@@ -1432,8 +1432,8 @@ impl<'a> PhysicalTypeConverter<'a> {
         Self {
             ctx,
             never,
-            embedded: FxHashMap::default(),
-            callable: FxHashMap::default(),
+            embedded: HashMap::default(),
+            callable: HashMap::default(),
         }
     }
 

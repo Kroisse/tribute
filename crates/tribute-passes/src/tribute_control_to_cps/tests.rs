@@ -28,7 +28,7 @@ fn shared_function_conversion_preserves_lists_and_nested_attributes() {
             AttributeMap::from_iter([(Symbol::new("nested"), Attribute::Type(source_callable))]);
         let source = func::func_sig_with_attrs(&mut ctx, [source_callable], results.clone(), attrs)
             .as_type_ref();
-        let mut converter = Converter::new(&mut ctx, block, FxHashMap::default());
+        let mut converter = Converter::new(&mut ctx, block, HashMap::default());
         let converted = converter.convert_type(source);
         assert_eq!(
             converter.convert_type(source),
@@ -1627,7 +1627,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
         .results(raw_type)
         .build(&mut ctx, location);
     let before = ctx.block(module_block).ops.clone();
-    let mut converter = Converter::new(&mut ctx, module_block, FxHashMap::default());
+    let mut converter = Converter::new(&mut ctx, module_block, HashMap::default());
 
     let error = converter
         .emit_cps_tail_call_indirect(

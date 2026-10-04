@@ -10,7 +10,7 @@
 use std::fmt;
 use trunk_ir::attr_kind::Type;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::TypeRef;
 use trunk_ir::context::IrContext;
@@ -267,7 +267,7 @@ impl Layout {
     pub fn declared_indices(
         ctx: &IrContext,
         module: Module,
-    ) -> FxHashMap<(TypeRef, Option<StringRef>), u32> {
+    ) -> HashMap<(TypeRef, Option<StringRef>), u32> {
         Self::declared(ctx, module)
             .into_iter()
             .map(|layout| ((layout.r#type(ctx), layout.tag_ref(ctx)), layout.index(ctx)))

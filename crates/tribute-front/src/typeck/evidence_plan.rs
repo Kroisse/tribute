@@ -31,7 +31,7 @@
 //! Checking records each call against the evidence scope it runs in and
 //! computes the selections only after solving, when every row is known.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::ast::{Effect, EffectRow, EffectVar, LocalId, NodeId};
 
@@ -80,8 +80,8 @@ pub(crate) struct EvidenceTracker<'db> {
     /// resume in an arm body, the lambda for a resume in a lambda in the arm.
     resume_from: Option<usize>,
     /// The handle body each continuation local resumes.
-    continuations: FxHashMap<LocalId, usize>,
-    sites: FxHashMap<NodeId, EvidenceSite<'db>>,
+    continuations: HashMap<LocalId, usize>,
+    sites: HashMap<NodeId, EvidenceSite<'db>>,
 }
 
 impl<'db> EvidenceTracker<'db> {
@@ -188,9 +188,9 @@ impl<'db> EvidenceTracker<'db> {
         &self,
         db: &'db dyn salsa::Database,
         resolve: impl Fn(EffectRow<'db>) -> EffectRow<'db>,
-    ) -> FxHashMap<NodeId, Vec<EvidenceStep<'db>>> {
-        let mut explicit = FxHashMap::default();
-        let mut plans = FxHashMap::default();
+    ) -> HashMap<NodeId, Vec<EvidenceStep<'db>>> {
+        let mut explicit = HashMap::default();
+        let mut plans = HashMap::default();
         for (node, site) in &self.sites {
             let plan = match site {
                 EvidenceSite::Call { scope, callee } => {
@@ -233,7 +233,7 @@ impl<'db> EvidenceTracker<'db> {
         db: &'db dyn salsa::Database,
         scope: usize,
         resolve: &impl Fn(EffectRow<'db>) -> EffectRow<'db>,
-        memo: &mut FxHashMap<usize, (Vec<Effect<'db>>, Option<EffectVar>)>,
+        memo: &mut HashMap<usize, (Vec<Effect<'db>>, Option<EffectVar>)>,
     ) -> (Vec<Effect<'db>>, Option<EffectVar>) {
         if let Some(found) = memo.get(&scope) {
             return found.clone();

@@ -549,7 +549,7 @@ pub(crate) fn handle_i64_store32(
 
 #[cfg(test)]
 mod tests {
-    use rustc_hash::FxHashMap;
+    use rustc_hash::FxHashMap as HashMap;
 
     use trunk_ir::Span;
     use trunk_ir::refs::PathRef;
@@ -607,8 +607,8 @@ mod tests {
                 (load.result(&ctx), 2),
             ]
             .into_iter()
-            .collect::<FxHashMap<_, _>>(),
-            effective_types: FxHashMap::default(),
+            .collect::<HashMap<_, _>>(),
+            effective_types: HashMap::default(),
         };
         let module_info = ModuleInfo::default();
         let mut function = Function::new([(3, ValType::I32)]);

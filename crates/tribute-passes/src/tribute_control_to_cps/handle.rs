@@ -139,7 +139,7 @@ impl Converter<'_> {
     pub(super) fn build_completion_continuation(
         &mut self,
         source_region: RegionRef,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
         location: Location,
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
@@ -179,7 +179,7 @@ impl Converter<'_> {
         rest: Rest<'_>,
         source_result: ValueRef,
         input_type: TypeRef,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
         location: Location,
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
@@ -623,7 +623,7 @@ impl Converter<'_> {
         source: OpRef,
         rest: Rest<'_>,
         block: BlockRef,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention != CallingConvention::Cps {
@@ -694,7 +694,7 @@ impl Converter<'_> {
         source: OpRef,
         rest: Rest<'_>,
         block: BlockRef,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention != CallingConvention::Cps {
@@ -750,7 +750,7 @@ impl Converter<'_> {
     pub(super) fn lower_handler_arm(
         &mut self,
         source: OpRef,
-        outer_mapping: &FxHashMap<ValueRef, ValueRef>,
+        outer_mapping: &HashMap<ValueRef, ValueRef>,
         handle_answer: TypeRef,
     ) -> Result<HandlerArmInfo, TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
@@ -1020,7 +1020,7 @@ impl Converter<'_> {
         source: OpRef,
         rest: Rest<'_>,
         block: BlockRef,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention != CallingConvention::Cps {
@@ -1193,7 +1193,7 @@ impl Converter<'_> {
         &mut self,
         source: OpRef,
         block: BlockRef,
-        mapping: &mut FxHashMap<ValueRef, ValueRef>,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         let location = self.ctx.op(source).location;

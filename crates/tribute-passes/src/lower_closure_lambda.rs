@@ -22,7 +22,7 @@
 //! %k = closure.new @foo::__clam_0, %env
 //! ```
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_core::calling_convention::{
     CLOSURE_ENVIRONMENT_INDEX_ATTR, get_physical_closure_environment_index,
@@ -443,13 +443,13 @@ fn find_enclosing_func_name(ctx: &IrContext, op: OpRef) -> String {
 
 /// Generates unique lifted lambda names, scoped by parent function.
 struct LambdaNamer {
-    counters: FxHashMap<String, u32>,
+    counters: HashMap<String, u32>,
 }
 
 impl LambdaNamer {
     fn new() -> Self {
         Self {
-            counters: FxHashMap::default(),
+            counters: HashMap::default(),
         }
     }
 

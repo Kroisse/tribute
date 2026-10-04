@@ -3,7 +3,7 @@
 //! It emits only the documented `tribute_control` boundary and ordinary value
 //! dialects; shared CPS construction belongs to `tribute-passes`.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 
 use salsa::Accumulator;
@@ -39,7 +39,7 @@ struct Declarations<'db> {
     // through its debug representation.  Preserve first source use explicitly.
     values: Vec<OperationDeclaration>,
     compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
-    schemas: rustc_hash::FxHashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
+    schemas: HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     handler_operations:
         SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations:
@@ -522,7 +522,7 @@ fn prescan_logical_nominal_layouts<'db>(
     declarations: &[Decl<TypedRef<'db>>],
     prefix: &mut String,
     well_known_types: &mut super::decl::WellKnownTypePrescan,
-    constructors: &FxHashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
+    constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
     specialized_enum_variants: &SortedMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
 ) {
     for declaration in declarations {
@@ -666,7 +666,7 @@ fn collect_logical_nominal_identities<'db>(
 
 fn constructor_fields<'db>(
     ctx: &IrLoweringCtx<'db>,
-    constructors: &FxHashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
+    constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
     constructor: CtorId<'db>,
     field_count: usize,
 ) -> Vec<crate::ast::Type<'db>> {
@@ -1626,7 +1626,7 @@ fn lower_record<'db>(
     };
     // Lower explicit fields in source order, then place their already-evaluated
     // values in declaration layout order.
-    let mut values = FxHashMap::default();
+    let mut values = HashMap::default();
     for (name, field) in fields {
         if !field_order.contains(&name) || values.contains_key(&name) {
             panic!("typechecked record has an invalid field layout");
@@ -1680,7 +1680,7 @@ fn lower_variant_record<'db>(
         .ctx
         .variant_field_names(layout, variant.clone())
         .unwrap_or_else(|| panic!("prescan did not register field names of variant {variant}"));
-    let mut values = FxHashMap::default();
+    let mut values = HashMap::default();
     for (name, field) in fields {
         if !field_order.contains(&name) || values.contains_key(&name) {
             panic!("typechecked variant record has an invalid field layout");
@@ -2590,8 +2590,8 @@ mod tests {
             db,
             path,
             crate::ast::SpanMap::default(),
-            FxHashMap::default(),
-            FxHashMap::default(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );

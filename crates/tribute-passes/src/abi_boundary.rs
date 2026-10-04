@@ -5,7 +5,7 @@
 //! the point where target dialect lowering begins. This module reports every
 //! violation of that contract, and the pipeline rejects a module with any.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;
@@ -159,7 +159,7 @@ type TypeViolation = (ViolationKind, String);
 struct Verifier<'a> {
     ctx: &'a IrContext,
     /// Violations inside each type, computed once and replayed at every use.
-    type_violations: FxHashMap<TypeRef, Rc<[TypeViolation]>>,
+    type_violations: HashMap<TypeRef, Rc<[TypeViolation]>>,
     /// Types being computed, to stop recursion through cyclic references.
     computing: HashSet<TypeRef>,
     violations: Vec<BoundaryViolation>,
@@ -169,7 +169,7 @@ impl<'a> Verifier<'a> {
     fn new(ctx: &'a IrContext) -> Self {
         Self {
             ctx,
-            type_violations: FxHashMap::default(),
+            type_violations: HashMap::default(),
             computing: HashSet::new(),
             violations: Vec::new(),
         }

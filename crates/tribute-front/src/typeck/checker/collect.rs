@@ -3,7 +3,7 @@
 //! Populates `ModuleTypeEnv` with function signatures, constructor types,
 //! and type definitions before type checking function bodies.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -26,9 +26,9 @@ fn field_names(fields: &[crate::ast::FieldDecl]) -> Option<Vec<Symbol>> {
 
 #[derive(Default)]
 struct SignatureVariables<'db> {
-    types: FxHashMap<Symbol, u32>,
+    types: HashMap<Symbol, u32>,
     next_type: u32,
-    rows: FxHashMap<Symbol, EffectVar>,
+    rows: HashMap<Symbol, EffectVar>,
     next_row: u64,
     unions: Vec<crate::ast::RowUnion<'db>>,
 }
@@ -501,7 +501,7 @@ impl<'db> TypeChecker<'db> {
             .collect();
 
         // Collect operation signatures
-        let mut operations = FxHashMap::default();
+        let mut operations = HashMap::default();
         for op in &a.operations {
             let param_types: Vec<Type<'db>> = op
                 .params

@@ -10,7 +10,7 @@
 //! 2. **IR build**: `ArenaIrBuilder` converts `Raw*` → arena `OpRef`,
 //!    `BlockRef`, `RegionRef`, etc.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use smallvec::smallvec;
 use winnow::prelude::*;
@@ -39,11 +39,11 @@ fn param_types(params: &[(TypeRef, AttributeMap)]) -> impl ExactSizeIterator<Ite
 #[derive(Clone, Default)]
 struct BuilderScope {
     /// Maps value name (without %) -> ValueRef
-    value_map: FxHashMap<String, ValueRef>,
+    value_map: HashMap<String, ValueRef>,
     /// Maps block label (without ^) -> BlockRef
-    block_map: FxHashMap<String, BlockRef>,
+    block_map: HashMap<String, BlockRef>,
     /// Maps type alias name -> TypeRef
-    type_alias_map: FxHashMap<String, TypeRef>,
+    type_alias_map: HashMap<String, TypeRef>,
 }
 
 struct ArenaIrBuilder<'a> {
@@ -1057,7 +1057,7 @@ core.module @test {
             printed.contains("func.func_sig<(core.i32 {a = core.i32}, core.ptr) -> core.i32>"),
             "{printed}"
         );
-        let aliases: rustc_hash::FxHashMap<_, _> = ctx
+        let aliases: HashMap<_, _> = ctx
             .type_aliases()
             .iter()
             .map(|(name, ty)| (name.to_string(), *ty))

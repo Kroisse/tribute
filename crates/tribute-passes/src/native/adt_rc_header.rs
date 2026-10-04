@@ -13,7 +13,7 @@
 //! Runs at Phase 1.95, after RTTI assignment (Phase 1.9) and before
 //! `adt_to_clif` (Phase 2).
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{
@@ -96,7 +96,7 @@ pub fn lower(
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
 struct StructNewPattern {
-    rtti_map: FxHashMap<(TypeRef, Option<StringRef>), u32>,
+    rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
@@ -253,7 +253,7 @@ impl RewritePattern for StructNewPattern {
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
 struct VariantNewPattern {
-    rtti_map: FxHashMap<(TypeRef, Option<StringRef>), u32>,
+    rtti_map: HashMap<(TypeRef, Option<StringRef>), u32>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,

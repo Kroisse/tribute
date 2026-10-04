@@ -3,7 +3,7 @@
 //! All expression checking methods take a `FunctionInferenceContext` as parameter,
 //! enabling per-function type inference with isolated constraints.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 
 use itertools::Itertools;
@@ -2326,7 +2326,7 @@ impl<'db> TypeChecker<'db> {
         // by the root pattern: the right-hand side is checked once, so a
         // variable shared by several names (`let f as g = ...`) must have a
         // single owner.
-        let mut let_quantifiers = FxHashMap::default();
+        let mut let_quantifiers = HashMap::default();
         let mut let_schemes = Vec::new();
         for PatternBinding {
             name,
@@ -3544,7 +3544,7 @@ impl<'db> TypeChecker<'db> {
 
 #[cfg(test)]
 mod tests {
-    use rustc_hash::FxHashMap;
+    use rustc_hash::FxHashMap as HashMap;
 
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
@@ -3723,7 +3723,7 @@ mod tests {
                     },
                 )]
                 .into_iter()
-                .collect::<FxHashMap<_, _>>(),
+                .collect::<HashMap<_, _>>(),
             },
         );
         let mut ctx = make_test_ctx(db, &checker.env);
@@ -3821,7 +3821,7 @@ mod tests {
                     ),
                 ]
                 .into_iter()
-                .collect::<FxHashMap<_, _>>(),
+                .collect::<HashMap<_, _>>(),
             },
         );
 

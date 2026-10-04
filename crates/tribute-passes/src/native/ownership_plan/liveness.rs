@@ -1,6 +1,6 @@
 //! Cached native managed-liveness views over policy-neutral ownership facts.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
@@ -22,9 +22,9 @@ pub struct NativeManagedLiveness {
 
 /// Block-level liveness sets used by both policy views.
 pub struct BlockLiveness {
-    pub(super) defs: FxHashMap<BlockRef, HashSet<ValueRef>>,
-    pub(super) live_in: FxHashMap<BlockRef, HashSet<ValueRef>>,
-    pub(super) live_out: FxHashMap<BlockRef, HashSet<ValueRef>>,
+    pub(super) defs: HashMap<BlockRef, HashSet<ValueRef>>,
+    pub(super) live_in: HashMap<BlockRef, HashSet<ValueRef>>,
+    pub(super) live_out: HashMap<BlockRef, HashSet<ValueRef>>,
 }
 
 impl BlockLiveness {
@@ -52,7 +52,7 @@ impl NativeManagedLiveness {
                 .get_or_init(|| compute_liveness(&self.facts, self.facts.projection_owners()))
         } else {
             self.conservative
-                .get_or_init(|| compute_liveness(&self.facts, &FxHashMap::default()))
+                .get_or_init(|| compute_liveness(&self.facts, &HashMap::default()))
         }
     }
 
@@ -78,14 +78,14 @@ impl Analysis for NativeManagedLiveness {
 
 fn compute_liveness(
     facts: &NativeOwnershipFunctionFacts,
-    borrowed: &FxHashMap<ValueRef, ValueRef>,
+    borrowed: &HashMap<ValueRef, ValueRef>,
 ) -> BlockLiveness {
     let cfg = facts.cfg();
     let managed = facts.managed_values();
     let aliases = facts.aliases();
     let blocks = cfg.blocks();
-    let mut uses = FxHashMap::default();
-    let mut defs = FxHashMap::default();
+    let mut uses = HashMap::default();
+    let mut defs = HashMap::default();
     for &block in blocks {
         let mut block_uses = HashSet::new();
         let mut block_defs = HashSet::new();
@@ -118,7 +118,7 @@ fn compute_liveness(
     let mut live_in = blocks
         .iter()
         .map(|&b| (b, HashSet::new()))
-        .collect::<FxHashMap<_, _>>();
+        .collect::<HashMap<_, _>>();
     let mut live_out = live_in.clone();
     loop {
         let mut changed = false;

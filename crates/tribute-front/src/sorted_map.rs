@@ -124,7 +124,7 @@ impl<K, V> Deref for SortedMap<K, V> {
 }
 
 /// Collects entries in any order. When a key repeats, the last entry wins,
-/// as with `FxHashMap::extend`.
+/// as with `HashMap::extend`.
 impl<K: Ord, V> FromIterator<(K, V)> for SortedMap<K, V> {
     fn from_iter<I: IntoIterator<Item = (K, V)>>(iter: I) -> Self {
         let mut entries: Vec<(K, V)> = iter.into_iter().collect();

@@ -4,7 +4,7 @@
 //! It runs in the shared pipeline before backend-specific lowering, handling
 //! arithmetic and comparison intrinsics declared in the prelude for Int, Nat, and Float.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;
@@ -34,7 +34,7 @@ use trunk_ir::{Symbol, SymbolPath};
 /// valid when used as first-class values (closures, `func.constant`, etc.).
 pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let pattern = ArithIntrinsicPattern::new();
-    let intrinsic_map: FxHashMap<SymbolPath, ArithMapping> = pattern.map.clone();
+    let intrinsic_map: HashMap<SymbolPath, ArithMapping> = pattern.map.clone();
     let eligible: Rc<HashSet<SymbolPath>> = Rc::new(
         module
             .ops(ctx)
@@ -144,13 +144,13 @@ enum ArithMapping {
 /// Pattern that matches `func.call` to known arithmetic intrinsics and
 /// rewrites them to the corresponding `arith.*` dialect operations.
 struct ArithIntrinsicPattern {
-    map: FxHashMap<SymbolPath, ArithMapping>,
+    map: HashMap<SymbolPath, ArithMapping>,
     eligible: Rc<HashSet<SymbolPath>>,
 }
 
 impl ArithIntrinsicPattern {
     fn new() -> Self {
-        let mut map = FxHashMap::default();
+        let mut map = HashMap::default();
 
         macro_rules! binary {
             ($name:expr, $op_fn:expr) => {
@@ -308,7 +308,7 @@ impl RewritePattern for ArithIntrinsicPattern {
 /// `func.constant` references) while also removing the `abi = "intrinsic"`
 /// marker so the backend treats them as normal functions.
 struct ArithIntrinsicFuncDeclPattern {
-    intrinsic_map: FxHashMap<SymbolPath, ArithMapping>,
+    intrinsic_map: HashMap<SymbolPath, ArithMapping>,
     eligible: Rc<HashSet<SymbolPath>>,
 }
 

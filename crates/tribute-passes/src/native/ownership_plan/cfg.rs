@@ -1,4 +1,4 @@
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 
 use trunk_ir::context::IrContext;
@@ -16,9 +16,9 @@ use super::OwnershipPlanError;
 /// without decoding operation layouts independently.
 pub(super) struct ValidatedFlatCfg {
     blocks: BlockList,
-    terminators: FxHashMap<BlockRef, OpRef>,
-    successors: FxHashMap<BlockRef, BlockList>,
-    branches: FxHashMap<OpRef, Vec<ValueTransfer>>,
+    terminators: HashMap<BlockRef, OpRef>,
+    successors: HashMap<BlockRef, BlockList>,
+    branches: HashMap<OpRef, Vec<ValueTransfer>>,
 }
 
 #[derive(Clone, Copy)]
@@ -40,9 +40,9 @@ impl ValidatedFlatCfg {
             ));
         }
 
-        let mut terminators = FxHashMap::default();
-        let mut successors = FxHashMap::default();
-        let mut branches = FxHashMap::default();
+        let mut terminators = HashMap::default();
+        let mut successors = HashMap::default();
+        let mut branches = HashMap::default();
         for &block in &blocks {
             let ops = &ctx.block(block).ops;
             let Some((&terminator, preceding)) = ops.split_last() else {

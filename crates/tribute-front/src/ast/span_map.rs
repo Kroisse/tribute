@@ -8,7 +8,7 @@
 //! - Span changes don't invalidate Salsa caches
 //! - Additional metadata can be added using the same pattern
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -22,7 +22,7 @@ use super::NodeId;
 /// After lowering is complete, call `finish()` to create a `SpanMap`.
 #[derive(Debug, Default)]
 pub struct SpanMapBuilder {
-    spans: FxHashMap<NodeId, Span>,
+    spans: HashMap<NodeId, Span>,
 }
 
 impl SpanMapBuilder {
@@ -44,7 +44,7 @@ impl SpanMapBuilder {
 
 /// NodeId → Span mapping.
 ///
-/// Uses `Arc<FxHashMap>` internally for efficient sharing and cheap cloning.
+/// Uses `Arc<HashMap>` internally for efficient sharing and cheap cloning.
 /// The SpanMap is immutable once created.
 ///
 /// This is embedded in `ParsedAst` (a Salsa tracked struct) which handles
@@ -53,7 +53,7 @@ impl SpanMapBuilder {
 /// Note: `Hash` is implemented using Arc pointer identity for Salsa compatibility.
 /// Two SpanMaps hash the same only if they point to the same underlying data.
 #[derive(Clone, Debug)]
-pub struct SpanMap(Arc<FxHashMap<NodeId, Span>>);
+pub struct SpanMap(Arc<HashMap<NodeId, Span>>);
 
 impl PartialEq for SpanMap {
     fn eq(&self, other: &Self) -> bool {
@@ -115,7 +115,7 @@ impl SpanMap {
 
 impl Default for SpanMap {
     fn default() -> Self {
-        Self(Arc::new(FxHashMap::default()))
+        Self(Arc::new(HashMap::default()))
     }
 }
 

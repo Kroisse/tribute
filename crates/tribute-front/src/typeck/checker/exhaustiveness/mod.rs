@@ -7,7 +7,7 @@
 
 mod matrix;
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 
 use itertools::Itertools;
@@ -198,7 +198,7 @@ struct PatternLowering<'a, 'db> {
     /// The nominal type each family constructs, compared by declaration
     /// identity because a type may be spelled by several names.
     family_types: Vec<TypeDefId<'db>>,
-    family_ids: FxHashMap<Symbol, FamilyId>,
+    family_ids: HashMap<Symbol, FamilyId>,
     /// A pattern did not resolve to a constructor. The case is treated as
     /// non-exhaustive without a diagnostic here; resolution usually reports it.
     saw_error: bool,
@@ -213,7 +213,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
             checker,
             families: Vec::new(),
             family_types: Vec::new(),
-            family_ids: FxHashMap::default(),
+            family_ids: HashMap::default(),
             saw_error: false,
             unanalyzable: false,
         }

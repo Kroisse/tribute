@@ -3,7 +3,7 @@
 //! This module provides an interface system similar to `type_interface.rs` but for operations.
 //! It uses the `inventory` crate to build a registry of operation properties at compile time.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::sync::LazyLock;
@@ -412,9 +412,9 @@ fn callable_owner_signature<T: CallableOwnerModel>(
 inventory::collect!(CallableOwnerRegistration);
 
 static CALLABLE_OWNER_REGISTRY: LazyLock<
-    FxHashMap<(Symbol, Symbol), &'static CallableOwnerRegistration>,
+    HashMap<(Symbol, Symbol), &'static CallableOwnerRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = FxHashMap::default();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<CallableOwnerRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),
@@ -524,9 +524,9 @@ impl CallableExit for CallableExitRegistration {
 inventory::collect!(CallableExitRegistration);
 
 static CALLABLE_EXIT_REGISTRY: LazyLock<
-    FxHashMap<(Symbol, Symbol), &'static CallableExitRegistration>,
+    HashMap<(Symbol, Symbol), &'static CallableExitRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = FxHashMap::default();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<CallableExitRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),
@@ -605,9 +605,9 @@ fn call_like_model_callee<T: CallLikeModel>(ctx: &IrContext, op: OpRef) -> Optio
 
 inventory::collect!(CallLikeRegistration);
 
-static CALL_LIKE_REGISTRY: LazyLock<FxHashMap<(Symbol, Symbol), &'static CallLikeRegistration>> =
+static CALL_LIKE_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static CallLikeRegistration>> =
     LazyLock::new(|| {
-        let mut registry = FxHashMap::default();
+        let mut registry = HashMap::default();
         for registration in inventory::iter::<CallLikeRegistration> {
             let key = (
                 Symbol::from_dynamic(registration.dialect),
@@ -745,9 +745,9 @@ impl IndirectCallLike for IndirectCallLikeRegistration {
 inventory::collect!(IndirectCallLikeRegistration);
 
 static INDIRECT_CALL_LIKE_REGISTRY: LazyLock<
-    FxHashMap<(Symbol, Symbol), &'static IndirectCallLikeRegistration>,
+    HashMap<(Symbol, Symbol), &'static IndirectCallLikeRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = FxHashMap::default();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<IndirectCallLikeRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),
@@ -858,9 +858,9 @@ impl Branch for BranchRegistration {
 
 inventory::collect!(BranchRegistration);
 
-static BRANCH_REGISTRY: LazyLock<FxHashMap<(Symbol, Symbol), &'static BranchRegistration>> =
+static BRANCH_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static BranchRegistration>> =
     LazyLock::new(|| {
-        let mut registry = FxHashMap::default();
+        let mut registry = HashMap::default();
         for registration in inventory::iter::<BranchRegistration> {
             let key = (
                 Symbol::from_dynamic(registration.dialect),
@@ -995,9 +995,9 @@ impl RegionBranch for RegionBranchRegistration {
 inventory::collect!(RegionBranchRegistration);
 
 static REGION_BRANCH_REGISTRY: LazyLock<
-    FxHashMap<(Symbol, Symbol), &'static RegionBranchRegistration>,
+    HashMap<(Symbol, Symbol), &'static RegionBranchRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = FxHashMap::default();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),
@@ -1133,9 +1133,9 @@ impl RegionBranchTerminator for RegionBranchTerminatorRegistration {
 inventory::collect!(RegionBranchTerminatorRegistration);
 
 static REGION_BRANCH_TERMINATOR_REGISTRY: LazyLock<
-    FxHashMap<(Symbol, Symbol), &'static RegionBranchTerminatorRegistration>,
+    HashMap<(Symbol, Symbol), &'static RegionBranchTerminatorRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = FxHashMap::default();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchTerminatorRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),

@@ -18,7 +18,7 @@ mod unify;
 
 pub use error::{LocatedSolveError, SolveError};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::smallvec::SmallVec;
 
@@ -60,13 +60,13 @@ pub(super) fn map_effect_row_type_args<'db>(
 /// Type substitution: maps type variable IDs to types.
 #[derive(Clone, Debug, Default)]
 pub struct TypeSubst<'db> {
-    map: FxHashMap<UniVarId<'db>, Type<'db>>,
+    map: HashMap<UniVarId<'db>, Type<'db>>,
 }
 
 /// Row substitution: maps row variable IDs to effect rows.
 #[derive(Clone, Debug, Default)]
 pub struct RowSubst<'db> {
-    map: FxHashMap<u64, EffectRow<'db>>,
+    map: HashMap<u64, EffectRow<'db>>,
 }
 
 /// Type constraint solver.

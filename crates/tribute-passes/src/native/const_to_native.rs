@@ -15,7 +15,7 @@
 //! Runs before `adt_rc_header` (Phase 1.95) so that `adt.variant_new` operations
 //! produced here are handled by the existing variant lowering.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 
@@ -210,8 +210,8 @@ fn declare_rodata(
     ctx: &mut IrContext,
     module: Module,
     contents: &[Vec<u8>],
-) -> FxHashMap<Vec<u8>, Symbol> {
-    let mut content_to_symbol = FxHashMap::default();
+) -> HashMap<Vec<u8>, Symbol> {
+    let mut content_to_symbol = HashMap::default();
     let Some(module_block) = module.first_block(ctx) else {
         return content_to_symbol;
     };
@@ -354,7 +354,7 @@ fn emit_bytes_alloc(
 
 /// Pattern for `adt.bytes_const` → clif ops (rodata + alloc).
 struct BytesConstNativePattern {
-    content_to_symbol: FxHashMap<Vec<u8>, Symbol>,
+    content_to_symbol: HashMap<Vec<u8>, Symbol>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
@@ -409,7 +409,7 @@ impl RewritePattern for BytesConstNativePattern {
 
 /// Pattern for `adt.string_const` → bytes alloc + `adt.variant_new(String, Leaf, bytes)`.
 struct StringConstNativePattern {
-    content_to_symbol: FxHashMap<Vec<u8>, Symbol>,
+    content_to_symbol: HashMap<Vec<u8>, Symbol>,
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,

@@ -63,7 +63,7 @@
 //! `Arc<dyn Any + Send + Sync>` for future flexibility, but the cache
 //! itself is single-threaded.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::any::{Any, TypeId, type_name};
 use std::collections::HashSet;
 use std::error::Error;
@@ -270,11 +270,11 @@ struct InProgressAnalysis {
 #[derive(Default)]
 pub struct AnalysisCache {
     bound_stamp: Option<(u64, u64)>,
-    cache: FxHashMap<AnalysisKey, Arc<dyn Any + Send + Sync>>,
+    cache: HashMap<AnalysisKey, Arc<dyn Any + Send + Sync>>,
     /// Computed analysis -> its direct prerequisites.
-    dependencies: FxHashMap<AnalysisKey, HashSet<AnalysisKey>>,
+    dependencies: HashMap<AnalysisKey, HashSet<AnalysisKey>>,
     /// Prerequisite -> analyses that directly depend on it.
-    dependents: FxHashMap<AnalysisKey, HashSet<AnalysisKey>>,
+    dependents: HashMap<AnalysisKey, HashSet<AnalysisKey>>,
     in_progress: Vec<InProgressAnalysis>,
 }
 

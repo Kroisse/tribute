@@ -311,7 +311,7 @@ fn verify_physical_callable_graph(
     fn visit(
         ctx: &IrContext,
         op: OpRef,
-        signatures: &FxHashMap<SymbolPath, (TypeRef, Option<i64>)>,
+        signatures: &HashMap<SymbolPath, (TypeRef, Option<i64>)>,
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let data = ctx.op(op);
@@ -439,7 +439,7 @@ fn verify_physical_callable_graph(
     }
 
     // Callees resolve by root-qualified name across the whole module tree.
-    let signatures: FxHashMap<SymbolPath, (TypeRef, Option<i64>)> = symbols
+    let signatures: HashMap<SymbolPath, (TypeRef, Option<i64>)> = symbols
         .iter()
         .filter_map(|(name, ops)| {
             let &[op] = ops else { return None };

@@ -1,6 +1,7 @@
 //\! Shared test helpers for tribute-front integration tests.
 #![allow(dead_code)]
 
+use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, Expr, ExprKind, Module, ResolvedRef, Stmt, TypedRef};
@@ -92,14 +93,10 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let mut tdnr_ast = result.module;
     tribute_front::tdnr::resolve_tdnr(db, &mut tdnr_ast, prelude_modules.iter().copied());
 
-    let function_types_map: rustc_hash::FxHashMap<_, _> =
-        result.function_types.into_iter().collect();
-    let constructor_types: rustc_hash::FxHashMap<_, _> =
-        result.constructor_types.into_iter().collect();
-    let ability_conventions: rustc_hash::FxHashMap<_, _> =
-        result.ability_conventions.into_iter().collect();
-    let ability_definitions: rustc_hash::FxHashMap<_, _> =
-        result.ability_definitions.into_iter().collect();
+    let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
+    let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
+    let ability_conventions: HashMap<_, _> = result.ability_conventions.into_iter().collect();
+    let ability_definitions: HashMap<_, _> = result.ability_definitions.into_iter().collect();
     let compiler_intrinsics = prelude
         .as_ref()
         .map(|prelude| {

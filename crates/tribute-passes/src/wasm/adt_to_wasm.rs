@@ -62,7 +62,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::{StringRef, Symbol};
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::tribute_rtti;
 use tribute_ir::runtime_layout::{self, has_runtime_layout};
@@ -101,7 +101,7 @@ fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 }
 
 /// The declared number of each user allocation descriptor.
-type DescriptorNumbers = FxHashMap<(TypeRef, Option<StringRef>), u32>;
+type DescriptorNumbers = HashMap<(TypeRef, Option<StringRef>), u32>;
 
 /// The field index of source field `field` in an object of layout `ty`.
 fn physical_field(ctx: &IrContext, ty: TypeRef, field: u32) -> u32 {

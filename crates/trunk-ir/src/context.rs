@@ -4,7 +4,7 @@
 //! `PrimaryMap`s owned by `IrContext`. Entity lists (operands, results)
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -200,9 +200,9 @@ pub struct IrContext {
     /// Type aliases: ordered list of `(name, type)` for stable output.
     type_aliases: Vec<(Symbol, TypeRef)>,
     /// Lookup alias by name.
-    type_alias_by_name: FxHashMap<Symbol, TypeRef>,
+    type_alias_by_name: HashMap<Symbol, TypeRef>,
     /// Reverse lookup: type → alias name (for printer).
-    type_alias_by_type: FxHashMap<TypeRef, Symbol>,
+    type_alias_by_type: HashMap<TypeRef, Symbol>,
 
     /// Diagnostics collected during validation and transformation passes.
     diagnostics: RefCell<Vec<Diagnostic>>,
@@ -293,8 +293,8 @@ impl IrContext {
             result_values: SecondaryMap::new(),
             block_arg_values: SecondaryMap::new(),
             type_aliases: Vec::new(),
-            type_alias_by_name: FxHashMap::default(),
-            type_alias_by_type: FxHashMap::default(),
+            type_alias_by_name: HashMap::default(),
+            type_alias_by_type: HashMap::default(),
             diagnostics: RefCell::new(Vec::new()),
         }
     }

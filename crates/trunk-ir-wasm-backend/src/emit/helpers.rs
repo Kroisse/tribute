@@ -3,7 +3,7 @@
 //! This module contains type conversion and utility functions shared across
 //! the emit module.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
@@ -221,7 +221,7 @@ pub(crate) fn exact_return_call_indirect_signature_with(
 pub(crate) fn type_to_valtype(
     ctx: &IrContext,
     ty: TypeRef,
-    type_idx_by_type: &FxHashMap<TypeRef, u32>,
+    type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<ValType> {
     if is_type(ctx, ty, "core", "i32")
         || is_type(ctx, ty, "core", "i1")
@@ -345,7 +345,7 @@ pub(crate) fn type_to_valtype(
 pub(crate) fn signature_result_types(
     ctx: &IrContext,
     results: &[TypeRef],
-    type_idx_by_type: &FxHashMap<TypeRef, u32>,
+    type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<Vec<ValType>> {
     results
         .iter()
@@ -493,8 +493,7 @@ mod tests {
         let array_ty = ctx.intern_type(TypeDataBuilder::new("core", "array").param(i32_ty).build());
 
         assert_eq!(
-            type_to_valtype(&ctx, array_ty, &FxHashMap::default())
-                .expect("core.array is supported"),
+            type_to_valtype(&ctx, array_ty, &HashMap::default()).expect("core.array is supported"),
             ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -512,7 +511,7 @@ mod tests {
         let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(
-            type_to_valtype(&ctx, signature, &FxHashMap::default())
+            type_to_valtype(&ctx, signature, &HashMap::default())
                 .expect("func.func_sig is a supported Wasm value type"),
             ValType::Ref(RefType::FUNCREF)
         );

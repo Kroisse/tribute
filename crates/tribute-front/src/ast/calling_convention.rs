@@ -1,6 +1,6 @@
 //! Calling-convention requirements derived from source effect rows.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::{AbilityId, EffectRow, Type, TypeKind};
 pub use tribute_core::CallingConvention;
@@ -11,7 +11,7 @@ pub use tribute_core::CallingConvention;
 pub fn calling_convention_for_effect_row<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
-    abilities: &FxHashMap<AbilityId<'db>, CallingConvention>,
+    abilities: &HashMap<AbilityId<'db>, CallingConvention>,
 ) -> CallingConvention {
     let mut convention = CallingConvention::Direct;
     for effect in row.effects(db) {
@@ -31,7 +31,7 @@ pub fn calling_convention_for_effect_row<'db>(
 pub fn calling_convention_for_function_type<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
-    abilities: &FxHashMap<AbilityId<'db>, CallingConvention>,
+    abilities: &HashMap<AbilityId<'db>, CallingConvention>,
 ) -> Option<CallingConvention> {
     let TypeKind::Func {
         effect,
@@ -67,7 +67,7 @@ mod tests {
         let db = salsa::DatabaseImpl::new();
         let logger = AbilityId::source(&db, Symbol::new("Logger"));
         let state = AbilityId::source(&db, Symbol::new("State"));
-        let mut abilities = FxHashMap::default();
+        let mut abilities = HashMap::default();
         abilities.insert(logger, CallingConvention::EvidenceDirect);
         abilities.insert(state, CallingConvention::Cps);
 
@@ -110,7 +110,7 @@ mod tests {
             None,
         );
         let open_row = EffectRow::open(&db, EffectVar { id: 0 });
-        let abilities = FxHashMap::default();
+        let abilities = HashMap::default();
 
         assert_eq!(
             calling_convention_for_effect_row(&db, unknown_row, &abilities),

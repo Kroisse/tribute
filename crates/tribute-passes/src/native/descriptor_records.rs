@@ -7,7 +7,7 @@
 //! nominal layouts still carry their names, so lower passes see only the
 //! index.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
@@ -144,7 +144,7 @@ pub fn generate(
     ctx: &mut IrContext,
     module_block: BlockRef,
     records: Vec<(u32, DescriptorRecord)>,
-    release_fns: &FxHashMap<u32, SymbolPath>,
+    release_fns: &HashMap<u32, SymbolPath>,
     loc: Location,
 ) {
     let records = reserved_records()
@@ -183,7 +183,7 @@ pub fn generate(
     let mut layout = Layout {
         bytes: vec![0; fields_base + field_count * FIELD_SIZE],
         next_fields: fields_base,
-        names: FxHashMap::default(),
+        names: HashMap::default(),
         name_bytes: Vec::new(),
         names_base: fields_base + field_count * FIELD_SIZE,
     };
@@ -192,7 +192,7 @@ pub fn generate(
         .iter()
         .enumerate()
         .map(|(position, (ty, _))| (*ty, enum_base + position * RECORD_SIZE))
-        .collect::<FxHashMap<_, _>>();
+        .collect::<HashMap<_, _>>();
     for (position, (_, record)) in enums.iter().enumerate() {
         layout.write_record(enum_base + position * RECORD_SIZE, record, &enum_offsets);
     }
@@ -225,7 +225,7 @@ struct Layout {
     /// Offset of the next unwritten field array.
     next_fields: usize,
     /// Offset of each distinct name, relative to `names_base`.
-    names: FxHashMap<String, usize>,
+    names: HashMap<String, usize>,
     name_bytes: Vec<u8>,
     names_base: usize,
 }
@@ -236,7 +236,7 @@ impl Layout {
         &mut self,
         base: usize,
         record: &DescriptorRecord,
-        enum_offsets: &FxHashMap<TypeRef, usize>,
+        enum_offsets: &HashMap<TypeRef, usize>,
     ) {
         put_u32(&mut self.bytes, base + 8, record.kind as u32);
         put_u32(&mut self.bytes, base + 12, record.fields.len() as u32);
@@ -354,7 +354,7 @@ mod tests {
             vec![(5, record)],
             &[(5, release.clone())]
                 .into_iter()
-                .collect::<FxHashMap<_, _>>(),
+                .collect::<HashMap<_, _>>(),
             loc,
         );
 

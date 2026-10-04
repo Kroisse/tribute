@@ -4,7 +4,7 @@
 //! by matching the callee's concrete type against collected instantiations.
 //! Also rewrites Named types with type arguments to their mangled monomorphic versions.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
@@ -17,17 +17,17 @@ use crate::ast::{
 use super::mangle::mangle_type_name;
 
 /// Rewrite map: original FuncDefId → list of (type_args, mangled_name) pairs.
-pub type RewriteMap<'db> = FxHashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
+pub type RewriteMap<'db> = HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
 
 /// Type rewrite map: declaration identity → specialized argument/name pairs.
-pub type TypeRewriteMap<'db> = FxHashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
+pub type TypeRewriteMap<'db> = HashMap<TypeDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>>;
 
 /// Rewrite all generic function call sites in a module to use specialized versions.
 pub fn rewrite_module<'db>(
     db: &'db dyn salsa::Database,
     module: &mut Module<TypedRef<'db>>,
     rewrite_map: &RewriteMap<'db>,
-    instances: &FxHashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     rewrite_decls(db, &mut module.decls, rewrite_map, instances);
 }
@@ -37,7 +37,7 @@ pub fn rewrite_decls<'db>(
     db: &'db dyn salsa::Database,
     decls: &mut [Decl<TypedRef<'db>>],
     rewrite_map: &RewriteMap<'db>,
-    instances: &FxHashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
 ) {
     let mut rewrite = Refs(|site, node, value: &mut TypedRef<'db>| {
         // Only a function reference in expression position is a call site.
@@ -57,7 +57,7 @@ pub fn rewrite_decls<'db>(
 fn specialized_callee<'db>(
     db: &'db dyn salsa::Database,
     rewrite_map: &RewriteMap<'db>,
-    instances: &FxHashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    instances: &HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
     node: NodeId,
     typed_ref: &TypedRef<'db>,
 ) -> Option<TypedRef<'db>> {
@@ -86,7 +86,7 @@ fn specialized_callee<'db>(
 /// Build a type rewrite map from collected type instantiations.
 pub fn build_type_rewrite_map<'db>(
     db: &'db dyn salsa::Database,
-    instantiations: &FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> TypeRewriteMap<'db> {
     let mut map = TypeRewriteMap::default();
     for (id, type_arg_sets) in instantiations {
@@ -392,7 +392,7 @@ mod tests {
         let builtin_id = TypeDefId::builtin_list(&db);
         let source_id =
             TypeDefId::source(&db, Symbol::new("List"), crate::ast::NodeId::from_raw(1));
-        let mut instantiations = FxHashMap::default();
+        let mut instantiations = HashMap::default();
         instantiations.insert(builtin_id, HashSet::from([vec![int]]));
         instantiations.insert(source_id, HashSet::from([vec![int]]));
 
@@ -417,7 +417,7 @@ mod tests {
             Symbol::new("B::Thing"),
             crate::ast::NodeId::from_raw(2),
         );
-        let mut instantiations = FxHashMap::default();
+        let mut instantiations = HashMap::default();
         instantiations.insert(a_id, HashSet::from([vec![int]]));
         instantiations.insert(b_id, HashSet::from([vec![int]]));
 

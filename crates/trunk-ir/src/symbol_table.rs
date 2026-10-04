@@ -9,7 +9,7 @@
 //! definitions share one namespace: a qualified name defined more than once is
 //! an IR error. Consumers check the kind of the definition they resolve.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use smallvec::SmallVec;
 
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
@@ -28,7 +28,7 @@ const SYM_NAME: &str = "sym_name";
 pub struct SymbolTable {
     /// Every definition of each name, in traversal order. A name with more
     /// than one definition is duplicated.
-    definitions: FxHashMap<SymbolPath, SmallVec<[OpRef; 1]>>,
+    definitions: HashMap<SymbolPath, SmallVec<[OpRef; 1]>>,
 }
 
 impl SymbolTable {

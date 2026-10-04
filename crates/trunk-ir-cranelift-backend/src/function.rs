@@ -3,7 +3,7 @@
 //! Translates `clif.*` dialect operations within a single function body
 //! to Cranelift IR instructions using `FunctionBuilder`.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{self as cl_ir, InstBuilder, TrapCode};
@@ -166,19 +166,19 @@ pub(crate) struct FunctionTranslator<'a> {
     ctx: &'a IrContext,
     pub(crate) builder: FunctionBuilder<'a>,
     /// Maps TrunkIR arena values to Cranelift IR values.
-    pub(crate) values: FxHashMap<ValueRef, cl_ir::Value>,
+    pub(crate) values: HashMap<ValueRef, cl_ir::Value>,
     /// The object module that owns the function and data declarations.
     module: &'a mut ObjectModule,
     /// Module-level functions a body may reference.
-    func_ids: &'a FxHashMap<SymbolPath, FuncId>,
+    func_ids: &'a HashMap<SymbolPath, FuncId>,
     /// Module-level data objects a body may reference.
-    data_ids: &'a FxHashMap<SymbolPath, DataId>,
+    data_ids: &'a HashMap<SymbolPath, DataId>,
     /// Functions this body referenced, declared on first reference.
-    func_refs: FxHashMap<SymbolPath, cl_ir::FuncRef>,
+    func_refs: HashMap<SymbolPath, cl_ir::FuncRef>,
     /// Data objects this body referenced, declared on first reference.
-    data_refs: FxHashMap<SymbolPath, cl_ir::GlobalValue>,
+    data_refs: HashMap<SymbolPath, cl_ir::GlobalValue>,
     /// Maps TrunkIR block refs to Cranelift blocks.
-    pub(crate) block_map: FxHashMap<BlockRef, cl_ir::Block>,
+    pub(crate) block_map: HashMap<BlockRef, cl_ir::Block>,
     /// The platform's ordinary calling convention for non-CPS indirect calls.
     default_call_conv: CallConv,
     /// The platform pointer type (e.g. I64 on 64-bit).
@@ -190,21 +190,21 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &'a IrContext,
         builder: FunctionBuilder<'a>,
         module: &'a mut ObjectModule,
-        func_ids: &'a FxHashMap<SymbolPath, FuncId>,
-        data_ids: &'a FxHashMap<SymbolPath, DataId>,
+        func_ids: &'a HashMap<SymbolPath, FuncId>,
+        data_ids: &'a HashMap<SymbolPath, DataId>,
         default_call_conv: CallConv,
         ptr_ty: cl_types::Type,
     ) -> Self {
         Self {
             ctx,
             builder,
-            values: FxHashMap::default(),
+            values: HashMap::default(),
             module,
             func_ids,
             data_ids,
-            func_refs: FxHashMap::default(),
-            data_refs: FxHashMap::default(),
-            block_map: FxHashMap::default(),
+            func_refs: HashMap::default(),
+            data_refs: HashMap::default(),
+            block_map: HashMap::default(),
             default_call_conv,
             ptr_ty,
         }

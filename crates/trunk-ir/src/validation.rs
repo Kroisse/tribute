@@ -14,7 +14,7 @@
 //! 3. **Operation verifiers**: Check local operation invariants that do not
 //!    require whole-IR analysis or conversion-boundary state.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use std::fmt;
 
@@ -764,7 +764,7 @@ fn validate_forwarding_types(
 }
 
 fn forwarding_comes_from_operands(source: &[ValueRef], forwarded: &[ValueRef]) -> bool {
-    let mut available = FxHashMap::<ValueRef, usize>::default();
+    let mut available = HashMap::<ValueRef, usize>::default();
     for &value in source {
         *available.entry(value).or_default() += 1;
     }
@@ -1153,7 +1153,7 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 fn collect_function_signatures(
     ctx: &IrContext,
     module_body: RegionRef,
-) -> FxHashMap<SymbolPath, usize> {
+) -> HashMap<SymbolPath, usize> {
     let func_name_sym = Symbol::new("func");
     let func_dialect = Symbol::new("func");
     let wasm_dialect = Symbol::new("wasm");
@@ -1162,7 +1162,7 @@ fn collect_function_signatures(
     let sym_name_key = Symbol::new("sym_name");
     let type_key = Symbol::new("type");
 
-    let mut signatures = FxHashMap::default();
+    let mut signatures = HashMap::default();
 
     for &block in &ctx.region(module_body).blocks {
         for &op in &ctx.block(block).ops {
@@ -1201,7 +1201,7 @@ fn collect_function_signatures(
 fn check_call_arity_in_region(
     ctx: &IrContext,
     region: RegionRef,
-    signatures: &FxHashMap<SymbolPath, usize>,
+    signatures: &HashMap<SymbolPath, usize>,
     enclosing_fn: &str,
 ) {
     let func_dialect = Symbol::new("func");

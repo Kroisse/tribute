@@ -8,7 +8,7 @@
 //! A data index is the position of its segment among the module's `wasm.data`
 //! operations, so later steps read the segments from the IR itself.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use std::collections::hash_map::Entry;
 use std::fmt;
@@ -189,7 +189,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, analysis: &ConstAnalysis) {
 }
 
 /// Passive data segment index by payload.
-type DataSegments = FxHashMap<Vec<u8>, u32>;
+type DataSegments = HashMap<Vec<u8>, u32>;
 
 /// Map each payload to a passive `wasm.data` segment of the module.
 ///

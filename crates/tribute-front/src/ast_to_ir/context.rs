@@ -3,7 +3,7 @@
 //! Manages state during AST-to-IR transformation.
 //! Emits arena IR (`IrContext` / `TypeRef` / `ValueRef`) directly.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 
@@ -66,51 +66,51 @@ pub struct IrLoweringCtx<'db> {
     /// Span map for looking up source locations.
     span_map: SpanMap,
     /// Stack of scopes, each mapping LocalId to (name, SSA value).
-    scopes: Vec<FxHashMap<LocalId, (Symbol, ValueRef)>>,
-    local_callable_values: Vec<FxHashMap<(NodeId, crate::ast::Type<'db>, TypeRef), ValueRef>>,
+    scopes: Vec<HashMap<LocalId, (Symbol, ValueRef)>>,
+    local_callable_values: Vec<HashMap<(NodeId, crate::ast::Type<'db>, TypeRef), ValueRef>>,
     /// Scoped tags identifying locals whose SSA value is a suspended handler
     /// continuation rather than a source value.
     resume_scopes: Vec<HashSet<LocalId>>,
     /// Function type schemes from type checking, keyed by function name.
-    function_types: FxHashMap<Symbol, TypeScheme<'db>>,
+    function_types: HashMap<Symbol, TypeScheme<'db>>,
     /// Source-visible generated callables that have no source TypeScheme.
-    logical_generated_signatures: FxHashMap<Symbol, LogicalGeneratedSignature>,
+    logical_generated_signatures: HashMap<Symbol, LogicalGeneratedSignature>,
     /// Source declarations collected before logical lowering begins.
     logical_source_functions: HashSet<Symbol>,
     /// IR symbols of `extern "C"` functions declared inside a module, keyed
     /// by their qualified name. C linkage has one flat namespace, so they keep
     /// their declared name.
-    c_symbols: FxHashMap<Symbol, Symbol>,
+    c_symbols: HashMap<Symbol, Symbol>,
     /// Extern declarations synthesized for referenced prelude functions.
     logical_emitted_externs: HashSet<Symbol>,
     /// Ability-level calling-convention requirements.
-    ability_conventions: FxHashMap<AbilityId<'db>, CallingConvention>,
+    ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
     /// Physical worker conventions for named function definitions.
     ///
     /// These are intentionally separate from semantic function-type
     /// conventions: an effect-polymorphic pure definition may have a Direct
     /// worker while its first-class function type requires a CPS adapter.
-    definition_conventions: FxHashMap<Symbol, CallingConvention>,
+    definition_conventions: HashMap<Symbol, CallingConvention>,
     /// Module path as a vector of segments (e.g., ["std", "Option"]).
     module_path: SymbolVec,
     /// Module's top-level block, used for in-place insertion of lifted lambdas.
     module_block: Option<BlockRef>,
     /// Struct field order: CtorId → [field_names in definition order].
     /// Used for lowering Record expressions to adt.struct_new.
-    struct_fields: FxHashMap<CtorId<'db>, Vec<Symbol>>,
+    struct_fields: HashMap<CtorId<'db>, Vec<Symbol>>,
     /// Field names of named-field enum variants: (enum layout, tag) →
     /// [field names in declaration order]. Used to match brace-form
     /// constructor patterns by name.
-    variant_field_names: FxHashMap<(TypeRef, Symbol), Vec<Symbol>>,
+    variant_field_names: HashMap<(TypeRef, Symbol), Vec<Symbol>>,
     /// Type map: type name → arena TypeRef for adt.struct / adt.enum.
     /// Used for named structs, tuples, and (future) enum variants.
-    type_map: FxHashMap<Symbol, TypeRef>,
+    type_map: HashMap<Symbol, TypeRef>,
     /// All source nominal identities collected before source-logical layouts
     /// are built. This lets recursive and forward fields retain `adt.typeref`
     /// while their layout is still incomplete.
     logical_nominal_declarations: HashSet<Symbol>,
     /// Exact intrinsic-directive declaration ID to canonical identity.
-    compiler_intrinsics: FxHashMap<NodeId, Symbol>,
+    compiler_intrinsics: HashMap<NodeId, Symbol>,
     /// The `==` functions that `String` and `Bytes` literal patterns call.
     literal_equalities: LiteralEqualities,
     /// Node types from type checking, keyed by NodeId.
@@ -136,8 +136,8 @@ impl<'db> IrLoweringCtx<'db> {
         db: &'db dyn salsa::Database,
         path: PathRef,
         span_map: SpanMap,
-        function_types: FxHashMap<Symbol, TypeScheme<'db>>,
-        ability_conventions: FxHashMap<AbilityId<'db>, CallingConvention>,
+        function_types: HashMap<Symbol, TypeScheme<'db>>,
+        ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
         module_path: SymbolVec,
         node_types: SortedMap<NodeId, crate::ast::Type<'db>>,
     ) -> Self {
@@ -145,23 +145,23 @@ impl<'db> IrLoweringCtx<'db> {
             db,
             path,
             span_map,
-            scopes: vec![FxHashMap::default()],
-            local_callable_values: vec![FxHashMap::default()],
+            scopes: vec![HashMap::default()],
+            local_callable_values: vec![HashMap::default()],
             resume_scopes: vec![HashSet::new()],
             function_types,
-            logical_generated_signatures: FxHashMap::default(),
+            logical_generated_signatures: HashMap::default(),
             logical_source_functions: HashSet::new(),
-            c_symbols: FxHashMap::default(),
+            c_symbols: HashMap::default(),
             logical_emitted_externs: HashSet::new(),
             ability_conventions,
-            definition_conventions: FxHashMap::default(),
+            definition_conventions: HashMap::default(),
             module_path,
             module_block: None,
-            struct_fields: FxHashMap::default(),
-            variant_field_names: FxHashMap::default(),
-            type_map: FxHashMap::default(),
+            struct_fields: HashMap::default(),
+            variant_field_names: HashMap::default(),
+            type_map: HashMap::default(),
             logical_nominal_declarations: HashSet::new(),
-            compiler_intrinsics: FxHashMap::default(),
+            compiler_intrinsics: HashMap::default(),
             literal_equalities: LiteralEqualities::default(),
 
             node_types,
@@ -170,7 +170,7 @@ impl<'db> IrLoweringCtx<'db> {
 
     pub(crate) fn with_compiler_intrinsics(
         mut self,
-        compiler_intrinsics: FxHashMap<NodeId, Symbol>,
+        compiler_intrinsics: HashMap<NodeId, Symbol>,
     ) -> Self {
         self.compiler_intrinsics = compiler_intrinsics;
         self
@@ -233,8 +233,8 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Enter a new scope (internal — use `scope()` guard instead).
     fn enter_scope(&mut self) {
-        self.scopes.push(FxHashMap::default());
-        self.local_callable_values.push(FxHashMap::default());
+        self.scopes.push(HashMap::default());
+        self.local_callable_values.push(HashMap::default());
         self.resume_scopes.push(HashSet::new());
     }
 
@@ -1012,8 +1012,8 @@ mod tests {
             db,
             path,
             crate::ast::SpanMap::default(),
-            FxHashMap::default(),
-            FxHashMap::default(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         )
@@ -1126,8 +1126,8 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
-            FxHashMap::default(),
-            FxHashMap::default(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -1150,8 +1150,8 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
-            FxHashMap::default(),
-            FxHashMap::default(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -1463,8 +1463,8 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
-            FxHashMap::default(),
-            FxHashMap::default(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -1507,7 +1507,7 @@ mod tests {
         let body = AstType::new(&db, TypeKind::Int);
         let scheme = TypeScheme::new(&db, vec![], vec![], body);
 
-        let mut ft = FxHashMap::default();
+        let mut ft = HashMap::default();
         ft.insert(name.clone(), scheme);
 
         let ctx = IrLoweringCtx::new(
@@ -1515,7 +1515,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             ft,
-            FxHashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );

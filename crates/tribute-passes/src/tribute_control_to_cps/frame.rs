@@ -380,7 +380,7 @@ impl Converter<'_> {
     pub(super) fn build_void_suffix_continuation(
         &mut self,
         rest: Rest<'_>,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
         location: Location,
     ) -> Result<ValueRef, TributeControlToCpsError> {
@@ -415,7 +415,7 @@ impl Converter<'_> {
         rest: Rest<'_>,
         source_result: ValueRef,
         result_type: TypeRef,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
         location: Location,
     ) -> Result<ValueRef, TributeControlToCpsError> {
@@ -452,7 +452,7 @@ impl Converter<'_> {
         source: OpRef,
         rest: Rest<'_>,
         block: BlockRef,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
         plan: Option<Attribute>,
     ) -> Result<ValueRef, TributeControlToCpsError> {

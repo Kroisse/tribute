@@ -3,7 +3,7 @@ use super::{MonomorphizeMetadata, collect::is_concrete_type};
 use crate::ast::{
     Decl, ExprKind, FuncDecl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
 };
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 use trunk_ir::Symbol;
 
@@ -39,14 +39,14 @@ fn substitute<'db>(
 pub(super) fn validate<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
-    schemes: &FxHashMap<Symbol, TypeScheme<'db>>,
+    schemes: &HashMap<Symbol, TypeScheme<'db>>,
     metadata: &MonomorphizeMetadata<'db>,
 ) -> Vec<InstanceError> {
     fn declarations<'a, 'db>(
         db: &'db dyn salsa::Database,
         decls: &'a [Decl<TypedRef<'db>>],
         prefix: &mut String,
-        functions: &mut FxHashMap<FuncDefId<'db>, &'a FuncDecl<TypedRef<'db>>>,
+        functions: &mut HashMap<FuncDefId<'db>, &'a FuncDecl<TypedRef<'db>>>,
         fields: &mut HashSet<(crate::ast::TypeDefId<'db>, Symbol)>,
     ) {
         for decl in decls {
@@ -75,7 +75,7 @@ pub(super) fn validate<'db>(
             }
         }
     }
-    let mut functions = FxHashMap::default();
+    let mut functions = HashMap::default();
     let mut fields = HashSet::new();
     declarations(
         db,

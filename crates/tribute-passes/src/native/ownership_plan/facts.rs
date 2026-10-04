@@ -16,7 +16,7 @@ use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError};
 /// function-scope analysis and every planner consumer reuses them.
 pub struct NativeOwnershipModuleFacts {
     function_ops: Vec<OpRef>,
-    definitions: FxHashMap<SymbolPath, OpRef>,
+    definitions: HashMap<SymbolPath, OpRef>,
     managed_layouts: HashSet<TypeRef>,
 }
 
@@ -27,7 +27,7 @@ impl NativeOwnershipModuleFacts {
     }
 
     /// Unique function symbol to its operation.
-    pub fn definitions(&self) -> &FxHashMap<SymbolPath, OpRef> {
+    pub fn definitions(&self) -> &HashMap<SymbolPath, OpRef> {
         &self.definitions
     }
 
@@ -54,9 +54,9 @@ impl Analysis for NativeOwnershipModuleFacts {
 pub struct NativeOwnershipFunctionFacts {
     cfg: ValidatedFlatCfg,
     managed: HashSet<ValueRef>,
-    aliases: FxHashMap<ValueRef, ValueRef>,
-    projection_owners: FxHashMap<ValueRef, ValueRef>,
-    block_flow: FxHashMap<BlockRef, BlockFlowFacts>,
+    aliases: HashMap<ValueRef, ValueRef>,
+    projection_owners: HashMap<ValueRef, ValueRef>,
+    block_flow: HashMap<BlockRef, BlockFlowFacts>,
 }
 
 impl NativeOwnershipFunctionFacts {
@@ -74,12 +74,12 @@ impl NativeOwnershipFunctionFacts {
     ///
     /// Roots are derived from the typed cast contract only, never from
     /// `core.ptr` or physical shape.
-    pub fn aliases(&self) -> &FxHashMap<ValueRef, ValueRef> {
+    pub fn aliases(&self) -> &HashMap<ValueRef, ValueRef> {
         &self.aliases
     }
 
     /// Validated managed projection to its owning managed root.
-    pub fn projection_owners(&self) -> &FxHashMap<ValueRef, ValueRef> {
+    pub fn projection_owners(&self) -> &HashMap<ValueRef, ValueRef> {
         &self.projection_owners
     }
 
@@ -237,8 +237,8 @@ fn build_aliases(
     blocks: &[BlockRef],
     managed: &mut HashSet<ValueRef>,
     managed_layouts: &HashSet<TypeRef>,
-) -> Result<FxHashMap<ValueRef, ValueRef>, OwnershipPlanError> {
-    let mut aliases = FxHashMap::default();
+) -> Result<HashMap<ValueRef, ValueRef>, OwnershipPlanError> {
+    let mut aliases = HashMap::default();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
             if !(adt::RefCast::matches(ctx, op)
@@ -337,13 +337,13 @@ fn is_core_i32_type(ctx: &IrContext, ty: TypeRef) -> bool {
     data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
 }
 
-pub(super) fn root_value(aliases: &FxHashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRef {
+pub(super) fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRef {
     aliases.get(&value).copied().unwrap_or(value)
 }
 
 pub(super) fn borrowed_owner(
-    borrowed: &FxHashMap<ValueRef, ValueRef>,
-    aliases: &FxHashMap<ValueRef, ValueRef>,
+    borrowed: &HashMap<ValueRef, ValueRef>,
+    aliases: &HashMap<ValueRef, ValueRef>,
     value: ValueRef,
 ) -> Option<ValueRef> {
     let mut owner = root_value(aliases, value);
@@ -363,9 +363,9 @@ fn collect_borrowed_loads(
     ctx: &IrContext,
     blocks: &[BlockRef],
     managed_layouts: &HashSet<TypeRef>,
-    aliases: &FxHashMap<ValueRef, ValueRef>,
-) -> Result<FxHashMap<ValueRef, ValueRef>, OwnershipPlanError> {
-    let mut borrowed = FxHashMap::default();
+    aliases: &HashMap<ValueRef, ValueRef>,
+) -> Result<HashMap<ValueRef, ValueRef>, OwnershipPlanError> {
+    let mut borrowed = HashMap::default();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
             let source = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
@@ -440,9 +440,9 @@ fn collect_block_flow(
     ctx: &IrContext,
     cfg: &ValidatedFlatCfg,
     managed: &HashSet<ValueRef>,
-    aliases: &FxHashMap<ValueRef, ValueRef>,
-) -> FxHashMap<BlockRef, BlockFlowFacts> {
-    let mut flow = FxHashMap::default();
+    aliases: &HashMap<ValueRef, ValueRef>,
+) -> HashMap<BlockRef, BlockFlowFacts> {
+    let mut flow = HashMap::default();
     for &block in cfg.blocks() {
         let mut events = Vec::new();
         for &argument in ctx.block_args(block) {

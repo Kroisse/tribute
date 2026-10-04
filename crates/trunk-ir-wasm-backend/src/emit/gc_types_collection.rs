@@ -3,7 +3,7 @@
 //! This module traverses wasm operations to collect WebAssembly GC type
 //! definitions (structs and arrays) and build the type index mappings.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tracing::debug;
 
@@ -22,7 +22,7 @@ use crate::{CompilationError, CompilationResult};
 use super::helpers;
 
 /// Result type for GC type collection.
-pub(crate) type GcTypesResult = (Vec<GcTypeDef>, FxHashMap<TypeRef, u32>);
+pub(crate) type GcTypesResult = (Vec<GcTypeDef>, HashMap<TypeRef, u32>);
 
 /// GC type kind enum
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -79,7 +79,7 @@ fn try_get_builder(builders: &mut Vec<GcTypeBuilder>, idx: u32) -> Option<&mut G
 /// Register a type in the type_idx_by_type map
 fn register_type(
     ctx: &IrContext,
-    type_idx_by_type: &mut FxHashMap<TypeRef, u32>,
+    type_idx_by_type: &mut HashMap<TypeRef, u32>,
     idx: u32,
     ty: TypeRef,
 ) {
@@ -141,7 +141,7 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
         let actual = if helpers::is_type(ctx, ty, "core", "ptr") {
             ValType::Ref(wasm_encoder::RefType::ANYREF)
         } else {
-            helpers::type_to_valtype(ctx, ty, &FxHashMap::default())?
+            helpers::type_to_valtype(ctx, ty, &HashMap::default())?
         };
         if StorageType::Val(actual) != expected.element_type {
             return Err(invalid());
@@ -153,7 +153,7 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
 /// Register a validated retained declaration for an indexed evidence operation.
 fn register_builtin_evidence_type(
     ctx: &IrContext,
-    map: &mut FxHashMap<TypeRef, u32>,
+    map: &mut HashMap<TypeRef, u32>,
     index: u32,
     ty: TypeRef,
 ) -> CompilationResult<()> {
@@ -320,7 +320,7 @@ fn record_array_elem(
 fn type_to_field_type(
     ctx: &IrContext,
     ty: TypeRef,
-    type_idx_by_type: &FxHashMap<TypeRef, u32>,
+    type_idx_by_type: &HashMap<TypeRef, u32>,
 ) -> CompilationResult<FieldType> {
     let val_type = helpers::type_to_valtype(ctx, ty, type_idx_by_type)?;
     Ok(FieldType {
@@ -353,7 +353,7 @@ pub(crate) fn collect_gc_types(
 ) -> CompilationResult<GcTypesResult> {
     let wasm_dialect = Symbol::new("wasm");
     let mut builders: Vec<GcTypeBuilder> = Vec::new();
-    let mut type_idx_by_type: FxHashMap<TypeRef, u32> = FxHashMap::default();
+    let mut type_idx_by_type: HashMap<TypeRef, u32> = HashMap::default();
     let body = module
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;

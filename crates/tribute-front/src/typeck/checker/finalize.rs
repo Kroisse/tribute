@@ -8,7 +8,7 @@ use crate::ast::NodeId;
 use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut};
 use crate::ast::{Expr, ExprKind, FuncDefId, ResolvedRef, Type, TypedRef, UniVarId};
 use crate::typeck::solver::{RowSubst, TypeSubst};
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::collections::HashSet;
 
 impl<'db> TypeChecker<'db> {
@@ -35,7 +35,7 @@ impl<'db> TypeChecker<'db> {
 
     pub(super) fn collect_univars_from_deferred_resolutions(
         &self,
-        deferred_resolutions: &FxHashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
+        deferred_resolutions: &HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)>,
         type_subst: &TypeSubst<'db>,
         row_subst: &RowSubst<'db>,
         out: &mut Vec<UniVarId<'db>>,
@@ -54,8 +54,8 @@ pub(super) struct Substitution<'a, 'db> {
     pub(super) db: &'db dyn salsa::Database,
     pub(super) type_subst: &'a TypeSubst<'db>,
     pub(super) row_subst: &'a RowSubst<'db>,
-    pub(super) var_to_index: &'a FxHashMap<UniVarId<'db>, u32>,
-    pub(super) local_generalizations: &'a FxHashMap<UniVarId<'db>, (NodeId, u32)>,
+    pub(super) var_to_index: &'a HashMap<UniVarId<'db>, u32>,
+    pub(super) local_generalizations: &'a HashMap<UniVarId<'db>, (NodeId, u32)>,
 }
 
 impl<'db> Substitution<'_, 'db> {
@@ -81,8 +81,8 @@ impl<'db> Substitution<'_, 'db> {
 pub(super) struct Finalize<'a, 'db> {
     pub(super) checker: &'a TypeChecker<'db>,
     pub(super) substitution: &'a Substitution<'a, 'db>,
-    pub(super) deferred_resolutions: &'a FxHashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
-    pub(super) node_types: &'a FxHashMap<NodeId, Type<'db>>,
+    pub(super) deferred_resolutions: &'a HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+    pub(super) node_types: &'a HashMap<NodeId, Type<'db>>,
     pub(super) exhaustive_cases: &'a mut Vec<NodeId>,
     pub(super) exhaustiveness_reported: &'a mut HashSet<NodeId>,
 }

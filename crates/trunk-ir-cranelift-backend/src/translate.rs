@@ -3,7 +3,7 @@
 //! This module provides functions for validating and emitting native object files
 //! from TrunkIR modules that have already been lowered to the clif dialect.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use cranelift_codegen::ir::{self as cl_ir, UserFuncName};
 use cranelift_codegen::settings::{self, Configurable};
@@ -79,7 +79,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     let ptr_ty = obj_module.target_config().pointer_type();
 
     // 3. First pass — declare all functions
-    let mut func_ids: FxHashMap<SymbolPath, cranelift_module::FuncId> = FxHashMap::default();
+    let mut func_ids: HashMap<SymbolPath, cranelift_module::FuncId> = HashMap::default();
     let all_func_ops = collect_clif_funcs(ctx, module);
 
     for &func_op in &all_func_ops {
@@ -120,7 +120,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     declare_runtime_functions(&mut obj_module, &mut func_ids, call_conv)?;
 
     // 3d. Declare and define the module's read-only data objects
-    let mut data_ids: FxHashMap<SymbolPath, cranelift_module::DataId> = FxHashMap::default();
+    let mut data_ids: HashMap<SymbolPath, cranelift_module::DataId> = HashMap::default();
     for data in collect_clif_data(ctx, module) {
         // References name data objects by root-qualified path, like functions.
         let symbol = qualified_name(ctx, data.op_ref())
@@ -401,7 +401,7 @@ fn collect_clif_funcs_from_region(ctx: &IrContext, region: RegionRef, funcs: &mu
 /// with custom allocator implementations.
 fn declare_runtime_functions(
     obj_module: &mut ObjectModule,
-    func_ids: &mut FxHashMap<SymbolPath, cranelift_module::FuncId>,
+    func_ids: &mut HashMap<SymbolPath, cranelift_module::FuncId>,
     call_conv: isa::CallConv,
 ) -> CompilationResult<()> {
     let ptr_ty = obj_module.target_config().pointer_type();

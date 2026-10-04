@@ -7,7 +7,7 @@ impl Converter<'_> {
     pub(super) fn lower_lambda(
         &mut self,
         source: OpRef,
-        mapping: &mut FxHashMap<ValueRef, ValueRef>,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
     ) -> Result<OpRef, TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
         let logical_ty = self.ctx.op_result_types(source)[0];
@@ -86,7 +86,7 @@ impl Converter<'_> {
         &mut self,
         source: OpRef,
         target: &CallableInfo,
-        mapping: &FxHashMap<ValueRef, ValueRef>,
+        mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<func::Call, TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
@@ -289,7 +289,7 @@ impl Converter<'_> {
         let frame_ty = self.frame_types(source_result).reference;
         let params = abi.lowered_params(evidence_ty, frame_ty);
         let block = self.make_block(location, &params);
-        let mut mapping = FxHashMap::default();
+        let mut mapping = HashMap::default();
         for (old, new) in self.ctx.block_args(source_block).to_vec().into_iter().zip(
             self.ctx.block_args(block)[abi.source_param_offset()..]
                 .iter()
@@ -344,7 +344,7 @@ impl Converter<'_> {
         source: OpRef,
         rest: Rest<'_>,
         block: BlockRef,
-        mapping: &mut FxHashMap<ValueRef, ValueRef>,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<ControlFlow<()>, TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
@@ -396,7 +396,7 @@ impl Converter<'_> {
         source: OpRef,
         rest: Rest<'_>,
         block: BlockRef,
-        mapping: &mut FxHashMap<ValueRef, ValueRef>,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<ControlFlow<()>, TributeControlToCpsError> {
         let location = self.ctx.op(source).location;
