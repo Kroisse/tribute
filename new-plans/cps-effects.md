@@ -437,8 +437,10 @@ Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는
 - `tr_dispatch_fn`: `(Evidence, Environment, OperationIndex, Payload) -> anyref`.
   `fn` handler용이며 marker에 저장된다. `anyref`는 erased source result다.
 
-General operation은 marker에서 prompt만 읽고 dispatch는 frame의 어휘적 dispatcher가
-맡는다. Marker의 `handler_dispatch` 칸에는 호출되지 않는 typed reject closure를 둔다.
+General operation은 marker에서 prompt만 읽고 dispatch는 frame의 어휘적 dispatcher가 맡는다.
+Handle body의 frame은 그 층의 dispatcher를 담으며, body 안의 operation과 suffix는 lexical
+capture가 아니라 받은 frame에서 dispatcher를 읽는다. Marker의 `handler_dispatch` 칸에는 호출되지
+않는 typed reject closure를 둔다.
 
 Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 것과 재개된 계산이 다시
 만든 것([재개된 frame](#row-directed-evidence))을 각각 그 handle의 **층**이라 한다.
@@ -546,8 +548,10 @@ Handler와 evidence의 연결은 다음과 같다.
   lambda가 받은 evidence를 continuation에 넘긴다. Arm 본문의 resume은 resume하는
   지점의 arm evidence 위에 자기 handle을 같은 prompt로 다시 설치해 body evidence를
   만든다. Arm이 수행한 operation이 바깥 handler를 바꾸었으면 재개된 계산도 바뀐
-  handler를 본다. Arm 본문에 중첩된 handle body 안의 resume은 그 중첩 handle을
-  설치한 지점의 arm evidence를 쓴다.
+  handler를 본다. Arm 본문에 중첩된 handle body 안의 resume은 그 지점의 evidence에서
+  중첩 handle의 marker를 걷어 낸 것을 arm evidence로 쓴다. 중첩 handle이 설치 때
+  선택(`mask`)을 가졌으면 걷어 낸 것으로 arm evidence를 복원할 수 없으므로, 그 중첩
+  handle을 설치한 지점의 arm evidence를 쓴다.
 - **재개된 frame:** 포착된 경로의 각 frame은 resume이 넘긴 handle body evidence에서
   자기 위치까지의 호출 선택과 그 사이에 설치된 handler(설치의 `mask` 포함)를 다시
   적용한 evidence를 본다. 포착 시점의 evidence를 그대로 재사용하지 않으며,

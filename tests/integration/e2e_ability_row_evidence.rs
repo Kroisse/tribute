@@ -317,3 +317,76 @@ fn main() ->{Io} Nil {
     // computation's `ask` reaches the outer handler (4).
     assert_program("resume_in_nested_handle.trb", code, "1094");
 }
+
+/// Operations written directly in a handle body dispatch through the layer
+/// as it is installed now, across an outer handler that reinstalls itself.
+#[test]
+fn test_inline_handle_body_follows_a_reinstalled_outer_handler() {
+    let code = r#"
+ability Reader {
+    op ask() -> Int
+}
+
+fn inline() ->{State(Int)} Int {
+    handle {
+        let a = Reader::ask()
+        State::set(a)
+        let b = Reader::ask()
+        State::set(State::get() + b)
+        State::get() + Reader::ask()
+    } {
+        do result { result }
+        op Reader::ask() { resume State::get() + +1 }
+    }
+}
+
+fn main() ->{Io} Nil {
+    show(run_state(fn() { inline() }, +1))
+}
+"#;
+    // ask() reads the state and adds 1: 2, then 3 (state 5), then 6.
+    assert_program("inline_handle_body.trb", code, "11");
+}
+
+/// A resume in a handle body nested in an arm uses the arm's evidence as it
+/// is at the resume, after an operation of the nested body made an outer
+/// handler reinstall itself.
+#[test]
+fn test_nested_resume_after_an_outer_handler_reinstalled_itself() {
+    let code = r#"
+ability Tick {
+    op tick() -> Int
+}
+
+ability Reader {
+    op ask() -> Int
+}
+
+fn with_tick(comp: fn() ->{e, Tick, State(Int)} Int) ->{e, State(Int)} Int {
+    handle comp() {
+        do result { result }
+        op Tick::tick() {
+            handle {
+                let s = State::get()
+                resume s + Reader::ask()
+            } {
+                do inner { inner }
+                op Reader::ask() { resume +9 }
+            }
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    show(run_state(fn() {
+        with_tick(fn() {
+            let t = Tick::tick()
+            State::set(t)
+            State::get() + Tick::tick()
+        })
+    }, +1))
+}
+"#;
+    // tick() is the state plus 9: 10, stored, then 19.
+    assert_program("nested_resume_after_reinstall.trb", code, "29");
+}

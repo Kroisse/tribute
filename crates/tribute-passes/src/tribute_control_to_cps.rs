@@ -683,12 +683,21 @@ pub fn verify_tribute_control_post_cps(
 /// Carry a source call's, resume's, or handle's evidence selection to the
 /// operation that passes its evidence. The selection is copied unchanged.
 fn carry_evidence_plan(ctx: &mut IrContext, source: OpRef, target: OpRef) {
-    if let Some(plan) = ctx
-        .op(source)
+    let plan = evidence_plan_of(ctx, source);
+    set_evidence_plan(ctx, target, plan);
+}
+
+/// The `evidence_plan` of a source call, resume, or handle.
+fn evidence_plan_of(ctx: &IrContext, source: OpRef) -> Option<Attribute> {
+    ctx.op(source)
         .attributes
         .get(tribute_control::EVIDENCE_PLAN_ATTR)
         .cloned()
-    {
+}
+
+/// Put a selection on the operation that passes the evidence it selects.
+fn set_evidence_plan(ctx: &mut IrContext, target: OpRef, plan: Option<Attribute>) {
+    if let Some(plan) = plan {
         ctx.op_mut(target)
             .attributes
             .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
@@ -764,9 +773,9 @@ struct SuffixLayer {
     boundary: TypeRef,
     /// Builds the dispatcher that rebuilds this layer when it is resumed.
     dispatch_factory: Symbol,
-    /// The call or resume whose `evidence_plan` selects the evidence of the
-    /// computation the layer continues.
-    plan: Option<OpRef>,
+    /// The `evidence_plan` that selects the evidence of the computation the
+    /// layer continues.
+    plan: Option<Attribute>,
 }
 
 /// The values one installed layer of a handle runs with.
@@ -779,16 +788,29 @@ struct LayerValues {
 }
 
 /// How a `resume` in the body of a handler arm reaches its continuation.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 struct ArmResume {
     /// The source resume token of the arm.
     token: ValueRef,
     /// The token that installs the arm's handle again on the evidence it is
     /// called with and resumes under it.
     installed: ValueRef,
-    /// The arm's own evidence where the flow's evidence is not it: inside a
-    /// handle body nested in the arm.
-    outer_evidence: Option<ValueRef>,
+    evidence: ArmEvidence,
+}
+
+/// Where the evidence of a handler arm is found at a point of its body.
+#[derive(Clone)]
+enum ArmEvidence {
+    /// The flow's evidence.
+    Flow,
+    /// The flow's evidence beneath the top handler of each of these
+    /// instances: inside handle bodies nested in the arm that installed them
+    /// without a selection.
+    Beneath(Vec<TypeRef>),
+    /// The evidence a handle nested in the arm was installed on. A nested
+    /// handle that masks an instance leaves no way to recover the arm's
+    /// evidence from its body's.
+    Captured(ValueRef),
 }
 
 #[derive(Clone)]
@@ -797,9 +819,6 @@ struct Flow {
     evidence: Option<ValueRef>,
     exit_k: Option<ValueRef>,
     root_exit_k: Option<ValueRef>,
-    /// The exact lexical dispatcher installed by the nearest handle. General
-    /// operations carry it through the effect ABI without erasing it.
-    dispatch: Option<ValueRef>,
     /// Zero-result structured control uses a private suffix closure whose
     /// arguments are `(Evidence, ContinuationFrame<R>)` rather than `Done<R>`.
     void_exit_k: Option<ValueRef>,
@@ -1062,9 +1081,7 @@ impl<'a> Converter<'a> {
             resume_body,
             [args[0], frame, args[2]],
         )?;
-        if let Some(plan) = plan {
-            carry_evidence_plan(self.ctx, plan, transfer);
-        }
+        set_evidence_plan(self.ctx, transfer, plan);
         self.finish_rebound(location, boundary, block)
     }
 
@@ -1230,7 +1247,7 @@ impl<'a> Converter<'a> {
         location: Location,
         value_type: TypeRef,
         boundary: TypeRef,
-        plan: Option<OpRef>,
+        plan: Option<Attribute>,
     ) -> Result<Symbol, TributeControlToCpsError> {
         let symbol = self.fresh_helper("make_dispatch_adapter");
         let evidence_type = self.evidence_type();
@@ -1310,8 +1327,8 @@ impl<'a> Converter<'a> {
     }
 
     /// Build the frame a suffix continuation is entered through. `plan` is
-    /// the call or resume whose `evidence_plan` selects the evidence of the
-    /// computation the frame is passed to.
+    /// the `evidence_plan` that selects the evidence of the computation the
+    /// frame is passed to.
     fn frame_for_suffix(
         &mut self,
         block: BlockRef,
@@ -1319,7 +1336,7 @@ impl<'a> Converter<'a> {
         value_type: TypeRef,
         flow: &Flow,
         suffix: ValueRef,
-        plan: Option<OpRef>,
+        plan: Option<Attribute>,
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let outer = flow.exit_k.ok_or_else(|| {
             TributeControlToCpsError::one(
@@ -1340,13 +1357,7 @@ impl<'a> Converter<'a> {
         let (done_op, done) =
             self.build_done_adapter(value_type, suffix, evidence, outer, location)?;
         self.ctx.push_op(block, done_op);
-        let outer_dispatch = match flow.dispatch {
-            Some(dispatch) => dispatch,
-            None => {
-                self.unpack_frame(block, location, flow.answer_type, outer)
-                    .1
-            }
-        };
+        let (_, outer_dispatch) = self.unpack_frame(block, location, flow.answer_type, outer);
         let dispatch_factory =
             self.build_dispatch_adapter_factory(location, value_type, flow.answer_type, plan)?;
         let completion_type = self.completion_type(value_type, flow.answer_type);
@@ -2174,7 +2185,6 @@ impl<'a> Converter<'a> {
             exit_k,
             root_exit_k: exit_k,
             void_exit_k: None,
-            dispatch: None,
             answer_type: result,
             preserve_scf_yield: false,
             arm: None,
@@ -2425,10 +2435,9 @@ impl<'a> Converter<'a> {
             exit_k: Some(self.ctx.block_args(block)[1]),
             root_exit_k: Some(self.ctx.block_args(block)[1]),
             void_exit_k: None,
-            dispatch: None,
             answer_type: flow.answer_type,
             preserve_scf_yield: false,
-            arm: flow.arm,
+            arm: flow.arm.clone(),
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.clone(),
@@ -2988,13 +2997,9 @@ impl<'a> Converter<'a> {
                 "general operation has no verified Dispatch boundary",
             )
         })?;
-        let dispatch = match flow.dispatch {
-            Some(dispatch) => dispatch,
-            None => {
-                self.unpack_frame(block, location, flow.answer_type, frame)
-                    .1
-            }
-        };
+        // The frame's dispatcher is the lexical dispatcher of the nearest
+        // handle layer as it is installed now.
+        let (_, dispatch) = self.unpack_frame(block, location, flow.answer_type, frame);
         let perform = ability::Perform::operands(evidence, dispatch, continuation, args)
             .ability_ref(ability_ref)
             .op_name(op_name)
@@ -3025,17 +3030,29 @@ impl<'a> Converter<'a> {
         let value_source = self.ctx.op_operands(source)[1];
         // A resume in the arm body continues under the arm's own handle; any
         // other resume passes the evidence of the lambda it is in.
-        let arm = flow.arm.filter(|arm| arm.token == token_source);
-        let (token, evidence) = match arm {
-            Some(ArmResume {
-                installed,
-                outer_evidence: Some(outer_evidence),
-                ..
-            }) => (installed, outer_evidence),
-            Some(arm) => (arm.installed, self.current_evidence(source, flow)?),
+        // The selection yields the evidence the resumed computation's handle
+        // is installed on, or its own evidence when resumed from a lambda.
+        let arm = flow.arm.clone().filter(|arm| arm.token == token_source);
+        let (token, evidence, plan) = match arm {
+            Some(arm) => {
+                let (evidence, plan) = match arm.evidence {
+                    ArmEvidence::Flow => (self.current_evidence(source, flow)?, None),
+                    ArmEvidence::Beneath(instances) => (
+                        self.current_evidence(source, flow)?,
+                        tribute_control::EvidenceStep::plan_attribute(
+                            instances
+                                .into_iter()
+                                .map(tribute_control::EvidenceStep::Mask),
+                        ),
+                    ),
+                    ArmEvidence::Captured(evidence) => (evidence, None),
+                };
+                (arm.installed, evidence, plan)
+            }
             None => (
                 mapping.get(&token_source).copied().unwrap_or(token_source),
                 self.current_evidence(source, flow)?,
+                evidence_plan_of(self.ctx, source),
             ),
         };
         let value = mapping.get(&value_source).copied().unwrap_or(value_source);
@@ -3056,18 +3073,15 @@ impl<'a> Converter<'a> {
         };
         self.ctx.push_op(block, suffix_op);
         let resume_result = self.convert_type(result_type);
-        let plan = arm.is_none().then_some(source);
         let resume_frame =
-            self.frame_for_suffix(block, location, resume_result, flow, suffix, plan)?;
+            self.frame_for_suffix(block, location, resume_result, flow, suffix, plan.clone())?;
         let transfer = self.emit_cps_tail_call_indirect(
             block,
             location,
             token,
             [evidence, resume_frame, value],
         )?;
-        if let Some(plan) = plan {
-            carry_evidence_plan(self.ctx, plan, transfer);
-        }
+        set_evidence_plan(self.ctx, transfer, plan);
         Ok(())
     }
 
@@ -3148,7 +3162,7 @@ impl<'a> Converter<'a> {
         let arm = has_resume_token.then(|| ArmResume {
             token: *source_args.last().expect("resumptive arm has a token"),
             installed: *block_args.last().expect("resumptive arm has a token"),
-            outer_evidence: None,
+            evidence: ArmEvidence::Flow,
         });
         let flow = Flow {
             convention,
@@ -3156,7 +3170,6 @@ impl<'a> Converter<'a> {
             exit_k: handle_exit,
             root_exit_k: handle_exit,
             void_exit_k: None,
-            dispatch: None,
             answer_type: handle_answer,
             preserve_scf_yield: false,
             arm,
@@ -3436,15 +3449,27 @@ impl<'a> Converter<'a> {
             exit_k: Some(handle_frame),
             root_exit_k: Some(handle_frame),
             void_exit_k: None,
-            dispatch: None,
             answer_type: handle_answer,
             preserve_scf_yield: false,
-            arm: flow.arm,
+            arm: flow.arm.clone(),
         };
-        // Inside the body, an enclosing arm's evidence is no longer the
-        // flow's evidence.
-        let body_arm = flow.arm.map(|arm| ArmResume {
-            outer_evidence: arm.outer_evidence.or(Some(outer_evidence)),
+        // Inside the body, an enclosing arm's evidence lies beneath this
+        // handle's markers.
+        let masks = evidence_plan_of(self.ctx, source).is_some();
+        let body_arm = flow.arm.clone().map(|arm| ArmResume {
+            evidence: match arm.evidence {
+                ArmEvidence::Flow if !masks => {
+                    ArmEvidence::Beneath(Self::layer_ability_refs(&layer))
+                }
+                ArmEvidence::Beneath(mut instances) if !masks => {
+                    instances.extend(Self::layer_ability_refs(&layer));
+                    ArmEvidence::Beneath(instances)
+                }
+                ArmEvidence::Captured(evidence) => ArmEvidence::Captured(evidence),
+                ArmEvidence::Flow | ArmEvidence::Beneath(_) => {
+                    ArmEvidence::Captured(outer_evidence)
+                }
+            },
             ..arm
         });
         let (completion_op, completion_k) = self.build_completion_continuation(
@@ -3454,14 +3479,14 @@ impl<'a> Converter<'a> {
             location,
         )?;
         self.ctx.push_op(body_block, completion_op);
-        let completion_frame = self.frame_for_suffix(
-            body_block,
-            location,
+        let (done_op, done) = self.build_done_adapter(
             completion_input,
-            &outer_flow,
             completion_k,
-            None,
+            outer_evidence,
+            handle_frame,
+            location,
         )?;
+        self.ctx.push_op(body_block, done_op);
         let values = LayerValues {
             completion: completion_k,
             prompt: prompt.result(self.ctx),
@@ -3475,12 +3500,15 @@ impl<'a> Converter<'a> {
             handle_frame,
             outer_evidence,
         );
+        // The body's frame carries the layer's dispatcher, as the frame of a
+        // rebuilt layer does.
+        let completion_frame =
+            self.pack_frame(body_block, location, completion_input, done, local_dispatch);
         let body_flow = Flow {
             arm: body_arm,
             evidence: Some(extended_evidence),
             exit_k: Some(completion_frame),
             root_exit_k: Some(completion_frame),
-            dispatch: Some(local_dispatch),
             answer_type: completion_input,
             ..outer_flow
         };
@@ -3624,7 +3652,7 @@ impl<'a> Converter<'a> {
                             converted_result,
                             flow,
                             continuation,
-                            Some(source),
+                            evidence_plan_of(self.ctx, source),
                         )?;
                         let mut args = vec![self.current_evidence(source, flow)?, frame];
                         args.extend(
@@ -3689,7 +3717,7 @@ impl<'a> Converter<'a> {
                             converted_result,
                             flow,
                             continuation,
-                            Some(source),
+                            evidence_plan_of(self.ctx, source),
                         )?;
                         let mut args = vec![self.current_evidence(source, flow)?, frame];
                         args.extend(
@@ -3890,7 +3918,6 @@ impl<'a> Converter<'a> {
             exit_k,
             root_exit_k: exit_k,
             void_exit_k: None,
-            dispatch: None,
             answer_type: source_result,
             preserve_scf_yield: false,
             arm: None,
