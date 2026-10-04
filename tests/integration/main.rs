@@ -11,6 +11,7 @@ mod e2e_ability_core;
 mod e2e_ability_effect_row;
 mod e2e_ability_handler;
 mod e2e_ability_nested;
+mod e2e_ability_row_evidence;
 mod e2e_add;
 mod e2e_effect_instances;
 mod e2e_float;
