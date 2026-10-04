@@ -1,4 +1,3 @@
-use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
 use std::collections::hash_map::Entry;
 
@@ -30,7 +29,11 @@ pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<T
 #[salsa::db]
 pub struct TributeDatabaseImpl {
     storage: salsa::Storage<Self>,
-    documents: RwLock<HashMap<String, SourceCst>>,
+    #[allow(
+        clippy::disallowed_types,
+        reason = "Client-controlled document URI keys require the standard collision-resistant hasher"
+    )]
+    documents: RwLock<std::collections::HashMap<String, SourceCst>>,
 }
 
 #[salsa::db]
