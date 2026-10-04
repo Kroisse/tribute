@@ -32,7 +32,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     )?;
 
     let prelude_ast = &tribute_front::resolve::library_package_module(parsed.module(db));
-    let prelude_span_map = parsed.span_map(db).clone();
+    let prelude_span_map = parsed.span_map(db);
 
     // Build env for name resolution merging
     let env = tribute_front::resolve::build_env(db, prelude_ast);
@@ -68,7 +68,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 
     let parsed = parsed.unwrap();
     let ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
 
     // Load prelude for operator declarations (Int::(+) etc.)
     let prelude = load_prelude(db);
@@ -148,7 +148,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
 
     let parsed = parsed.unwrap();
     let ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
     let prelude = load_prelude(db);
 
     let mut env = tribute_front::resolve::build_env(db, ast);
@@ -179,7 +179,7 @@ fn tdnr_function_summary_inner(
 
     let parsed = parsed.unwrap();
     let ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
 
     let prelude = load_prelude(db);
 

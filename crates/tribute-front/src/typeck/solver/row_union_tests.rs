@@ -87,7 +87,7 @@ fn row_removal_uses_exact_ability_identity(db: &salsa::DatabaseImpl) {
     let builtin = crate::ast::AbilityId::new(
         db,
         crate::ast::AbilityOrigin::Builtin(crate::ast::BuiltinAbility::Io),
-        name,
+        name.clone(),
     );
     let source = crate::ast::AbilityId::source(db, name);
     let effect = |ability_id| Effect {

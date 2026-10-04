@@ -47,7 +47,7 @@ impl OpDef {
     /// Look up the registered definition for an operation.
     pub fn of(ctx: &IrContext, op: OpRef) -> Option<&'static OpDef> {
         let data = ctx.op(op);
-        Self::lookup(data.dialect, data.name)
+        Self::lookup(data.dialect.clone(), data.name.clone())
     }
 }
 

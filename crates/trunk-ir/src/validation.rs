@@ -435,7 +435,7 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 ),
             });
         }
-        let Some(verifier) = lookup_type_verifier(data.dialect, data.name) else {
+        let Some(verifier) = lookup_type_verifier(data.dialect.clone(), data.name.clone()) else {
             continue;
         };
         if let Err(error) = (verifier.verify_fn)(ctx, ty) {
@@ -602,8 +602,8 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
     // undeclared. A found but invalid or duplicated declaration is Some(None),
     // so compatibility cannot hide malformed known contracts.
     let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
-        let found = *symbols.definitions_of(name).first()?;
-        if symbols.resolve(name).is_none() || !func::Func::matches(ctx, found) {
+        let found = *symbols.definitions_of(&name).first()?;
+        if symbols.resolve(&name).is_none() || !func::Func::matches(ctx, found) {
             return Some(None);
         }
         Some(
@@ -655,7 +655,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
                 let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     return;
                 };
-                let Some(signature) = resolve(name) else {
+                let Some(signature) = resolve(name.clone()) else {
                     return;
                 };
                 let Some(signature) = signature else {
@@ -1173,13 +1173,13 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
 
             let Some(sym_name) = data
                 .attributes
-                .get_str(ctx, sym_name_key)
+                .get_str(ctx, &sym_name_key)
                 .map(Symbol::from_dynamic)
             else {
                 continue;
             };
 
-            let Some(func_ty) = data.attributes.get_type(type_key) else {
+            let Some(func_ty) = data.attributes.get_type(&type_key) else {
                 continue;
             };
 
@@ -1217,11 +1217,11 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let Some(callee_sym) = data.attributes.get_symbol_ref(callee_key) else {
+        let Some(callee_sym) = data.attributes.get_symbol_ref(callee_key.clone()) else {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
-        if let Some(&expected) = signatures.get(&callee_sym) {
+        if let Some(&expected) = signatures.get(callee_sym) {
             let actual = ctx.op_operands(op).len();
             if actual != expected {
                 ctx.report_warning(
@@ -1269,7 +1269,7 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 
             let fn_name = data
                 .attributes
-                .get_str(ctx, sym_name_key)
+                .get_str(ctx, &sym_name_key)
                 .map(str::to_owned)
                 .unwrap_or_else(|| "<unnamed>".to_string());
 
@@ -2107,10 +2107,7 @@ mod tests {
         // Build wasm.func manually
         let wasm_func_data =
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("func_b"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("func_b")))
                 .attr("type", Attribute::Type(wasm_func_ty))
                 .region(body_b)
                 .build(&mut ctx);

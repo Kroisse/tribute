@@ -48,7 +48,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
                     .get_str(ctx, COMPILER_INTRINSIC_ATTR)
                     .is_some_and(|identity| symbol == identity)
                     && intrinsic_map.get(&symbol).is_some_and(|mapping| {
-                        exact_signature(ctx, function.r#type(ctx), symbol, mapping)
+                        exact_signature(ctx, function.r#type(ctx), &symbol, mapping)
                     }))
                 .then_some(symbol)
             })
@@ -87,7 +87,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         for value in ctx.op(op).attributes.values() {
             if let Attribute::SymbolRef(reference) = value
-                && let Some(target) = symbols.resolve(*reference)
+                && let Some(target) = symbols.resolve(reference)
                 && target != op
             {
                 referenced.insert(target);
@@ -264,10 +264,10 @@ impl RewritePattern for ArithIntrinsicPattern {
         };
         let callee = call_op.callee(ctx);
 
-        if !self.eligible.contains(&callee) {
+        if !self.eligible.contains(callee) {
             return false;
         }
-        let Some(mapping) = self.map.get(&callee) else {
+        let Some(mapping) = self.map.get(callee) else {
             return false;
         };
 
@@ -403,7 +403,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
     }
 }
 
-fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: Symbol, mapping: &ArithMapping) -> bool {
+fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: &Symbol, mapping: &ArithMapping) -> bool {
     let Some(function) = func::FuncSig::from_type_ref(ctx, ty) else {
         return false;
     };

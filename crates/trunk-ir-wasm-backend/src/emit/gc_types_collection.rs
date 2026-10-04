@@ -375,8 +375,8 @@ pub(crate) fn collect_gc_types(
             for &block in ctx.region(region).blocks.iter() {
                 for &op in ctx.block(block).ops.iter() {
                     let op_data = ctx.op(op);
-                    let dialect = op_data.dialect;
-                    let name = op_data.name;
+                    let dialect = op_data.dialect.clone();
+                    let name = op_data.name.clone();
 
                     // Recurse into nested core.module operations
                     if dialect == core_dialect && name == module_name {
@@ -737,8 +737,8 @@ mod tests {
                         ),
                     );
                     let (_, map) = collect_gc_types(&mut ctx, module).unwrap();
-                    let a_ty = ctx.type_alias_by_name(Symbol::new("A")).unwrap();
-                    let b_ty = ctx.type_alias_by_name(Symbol::new("B")).unwrap();
+                    let a_ty = ctx.type_alias_by_text("A").unwrap();
+                    let b_ty = ctx.type_alias_by_text("B").unwrap();
                     assert_eq!(map.get(&a_ty), Some(&a));
                     assert_eq!(map.get(&b_ty), Some(&b));
                     let abstract_ty = ctx.intern_type(
@@ -838,7 +838,7 @@ mod tests {
         }}"#
             ),
         );
-        let ty = ctx.type_alias_by_name(Symbol::new("Marker")).unwrap();
+        let ty = ctx.type_alias_by_text("Marker").unwrap();
         let (_, map) = collect_gc_types(&mut ctx, module).unwrap();
         assert!(!map.contains_key(&ty));
     }

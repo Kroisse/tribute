@@ -95,7 +95,7 @@ pub fn type_size_align(ctx: &IrContext, ty: TypeRef) -> (u32, u32) {
     if data.dialect != Symbol::new("core") {
         return (8, 8);
     }
-    let name = data.name;
+    let name = data.name.clone();
     if name == Symbol::new("i8") {
         (1, 1)
     } else if name == Symbol::new("i16") {

@@ -20,7 +20,7 @@ pub fn clone_attrs_except(
         .attributes
         .iter()
         .filter(|(name, _)| !excluded_names.iter().any(|excluded| **name == *excluded))
-        .map(|(name, value)| (*name, value.clone()))
+        .map(|(name, value)| (name.clone(), value.clone()))
         .collect()
 }
 

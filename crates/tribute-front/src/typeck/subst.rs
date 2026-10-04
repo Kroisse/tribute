@@ -70,7 +70,7 @@ pub fn substitute_bound_vars<'db>(
                 db,
                 TypeKind::Named {
                     id: *id,
-                    name: *name,
+                    name: name.clone(),
                     args: new_args,
                 },
             ))
@@ -362,7 +362,7 @@ fn freshen_effect_vars_inner<'db>(
             db,
             TypeKind::Named {
                 id: *id,
-                name: *name,
+                name: name.clone(),
                 args: args
                     .iter()
                     .map(|arg| {

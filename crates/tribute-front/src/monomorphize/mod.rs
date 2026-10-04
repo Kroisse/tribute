@@ -62,8 +62,10 @@ pub fn monomorphize_functions<'db>(
     if !errors.is_empty() {
         return Err(errors);
     }
-    let fn_types_vec: Vec<(Symbol, TypeScheme<'db>)> =
-        function_types.iter().map(|(k, v)| (*k, *v)).collect();
+    let fn_types_vec: Vec<(Symbol, TypeScheme<'db>)> = function_types
+        .iter()
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
 
     // === Function monomorphization ===
 
@@ -229,7 +231,8 @@ pub fn monomorphize_functions<'db>(
             .struct_constructors
             .into_iter()
             .map(|(owner, arguments, scheme)| {
-                let name = mangle::mangle_type_name(db, owner, owner.qualified(db), &arguments);
+                let name =
+                    mangle::mangle_type_name(db, owner, owner.qualified(db).clone(), &arguments);
                 (CtorId::new(db, name), scheme)
             })
             .collect();
@@ -514,7 +517,7 @@ fn build_rewrite_map<'db>(
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
-        let Some(_scheme) = scheme_map.get(&qualified) else {
+        let Some(_scheme) = scheme_map.get(qualified) else {
             continue;
         };
 
@@ -525,7 +528,7 @@ fn build_rewrite_map<'db>(
                 (type_args.clone(), mangled)
             })
             .collect();
-        entries.sort_by_key(|e| e.1);
+        entries.sort_by_key(|e| e.1.clone());
         rewrite_map.insert(*func_id, entries);
     }
 

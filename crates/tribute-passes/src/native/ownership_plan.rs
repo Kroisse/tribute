@@ -122,7 +122,7 @@ pub struct FunctionOwnershipPlan {
 
 impl FunctionOwnershipPlan {
     pub fn symbol(&self) -> Symbol {
-        self.symbol
+        self.symbol.clone()
     }
 
     pub fn operation(&self) -> OpRef {
@@ -177,10 +177,10 @@ impl NativeOwnershipPlan {
         &self.rtti_types
     }
 
-    pub fn function(&self, symbol: Symbol) -> Option<&FunctionOwnershipPlan> {
+    pub fn function(&self, symbol: &Symbol) -> Option<&FunctionOwnershipPlan> {
         self.functions
             .iter()
-            .find(|function| function.symbol == symbol)
+            .find(|function| function.symbol == *symbol)
     }
 
     pub fn is_managed_type(&self, ctx: &IrContext, ty: TypeRef) -> bool {
@@ -469,7 +469,7 @@ fn collect_function_definitions(
         // Direct callees name their targets by root-qualified path.
         let symbol =
             qualified_name(ctx, op).unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
-        if definitions.insert(symbol, op).is_some() {
+        if definitions.insert(symbol.clone(), op).is_some() {
             return Err(OwnershipPlanError::new(format!(
                 "duplicate function identity @{symbol}"
             )));
@@ -764,7 +764,8 @@ fn compute_entry_contracts(
 ) -> Result<HashMap<Symbol, Vec<EntryOwnership>>, OwnershipPlanError> {
     let recursive = recursive_functions(call_graph);
     let mut summaries = HashMap::new();
-    for (&symbol, &op) in definitions {
+    for (symbol, &op) in definitions {
+        let symbol = symbol.clone();
         let entry = match ownership_callable_body(ctx, op)? {
             CallableBody::Declaration => {
                 let signature = validate_bodyless_signature(ctx, op, managed_layouts)?;
@@ -810,7 +811,8 @@ fn compute_entry_contracts(
 
     loop {
         let mut changed = false;
-        for (&symbol, &op) in definitions {
+        for (symbol, &op) in definitions {
+            let symbol = symbol.clone();
             let CallableBody::Definition {
                 region: body,
                 entry,
@@ -923,7 +925,7 @@ fn value_is_borrowed(
         }
         if let Ok(call) = func::Call::from_op(ctx, op) {
             return summaries
-                .get(&call.callee(ctx))
+                .get(call.callee(ctx))
                 .and_then(|entries| entries.get(index))
                 == Some(&EntryOwnership::Borrowed);
         }
@@ -1004,7 +1006,7 @@ fn validate_function_contract(
 fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), OwnershipPlanError> {
     let mut function_symbols = HashSet::new();
     for function in &plan.functions {
-        if !function_symbols.insert(function.symbol) {
+        if !function_symbols.insert(function.symbol.clone()) {
             return Err(OwnershipPlanError::new(
                 "plan has duplicate function identity",
             ));

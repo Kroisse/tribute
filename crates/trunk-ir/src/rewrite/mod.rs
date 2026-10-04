@@ -124,10 +124,7 @@ mod tests {
         let (mut ctx, loc) = test_ctx();
         // Create a core.module op without any regions.
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("empty"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("empty")))
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
 
@@ -152,10 +149,7 @@ mod tests {
             parent_op: None,
         });
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("m"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("m")))
             .region(region)
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
@@ -171,10 +165,7 @@ mod tests {
 
         let (mut ctx, loc) = test_ctx();
         let op_data = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("m"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("m")))
             .build(&mut ctx);
         let op = ctx.create_op(op_data);
 

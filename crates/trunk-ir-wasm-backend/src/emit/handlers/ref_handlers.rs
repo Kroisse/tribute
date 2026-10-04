@@ -115,10 +115,10 @@ pub(crate) fn handle_ref_test(
 }
 
 /// Resolve a callee symbol to a function index.
-fn resolve_callee(path: Symbol, module_info: &ModuleInfo) -> CompilationResult<u32> {
+fn resolve_callee(path: &Symbol, module_info: &ModuleInfo) -> CompilationResult<u32> {
     module_info
         .func_indices
-        .get(&path)
+        .get(path)
         .copied()
         .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
 }
@@ -168,11 +168,11 @@ mod tests {
     fn resolve_callee_reports_missing_symbols() {
         let found = Symbol::new("found");
         let module_info = ModuleInfo {
-            func_indices: HashMap::from([(found, 7)]),
+            func_indices: HashMap::from([(found.clone(), 7)]),
             ..ModuleInfo::default()
         };
 
-        assert_eq!(resolve_callee(found, &module_info).unwrap(), 7);
-        assert!(resolve_callee(Symbol::new("missing"), &module_info).is_err());
+        assert_eq!(resolve_callee(&found, &module_info).unwrap(), 7);
+        assert!(resolve_callee(&Symbol::new("missing"), &module_info).is_err());
     }
 }

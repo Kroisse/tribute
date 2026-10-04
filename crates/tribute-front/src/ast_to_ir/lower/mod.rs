@@ -31,7 +31,7 @@ impl FuncSignature {
     pub fn lookup_logical<'db>(
         ctx: &IrLoweringCtx<'db>,
         ir: &mut IrContext,
-        name: Symbol,
+        name: &Symbol,
     ) -> Option<Self> {
         if let Some(signature) = ctx.lookup_logical_generated_signature(name) {
             return Some(Self {
@@ -118,7 +118,7 @@ impl<'a, 'db> IrBuilder<'a, 'db> {
 
 /// Derive a qualified type name from a CtorId for use as a type_map key.
 pub(super) fn qualified_type_name(db: &dyn salsa::Database, ctor_id: &CtorId<'_>) -> Symbol {
-    ctor_id.qualified(db)
+    ctor_id.qualified(db).clone()
 }
 
 /// Extract the type name from a ResolvedRef.
@@ -127,7 +127,7 @@ pub(super) fn extract_type_name<'db>(
     resolved: &ResolvedRef<'db>,
 ) -> Symbol {
     match resolved {
-        ResolvedRef::Constructor { id, .. } => id.qualified(db),
+        ResolvedRef::Constructor { id, .. } => id.qualified(db).clone(),
         _ => unreachable!("Record type must be a constructor: {:?}", resolved),
     }
 }
@@ -161,12 +161,12 @@ pub(super) fn get_or_create_logical_tuple_type<'db>(
         .collect();
     let tuple_name = ctx.logical_tuple_name(*ast_ty);
 
-    if let Some(struct_ty) = ctx.get_type(tuple_name) {
+    if let Some(struct_ty) = ctx.get_type(&tuple_name) {
         return Some((tuple_name, struct_ty));
     }
 
-    let struct_ty = ctx.adt_struct_type(ir, tuple_name, &ir_fields);
-    ctx.register_type(tuple_name, struct_ty);
+    let struct_ty = ctx.adt_struct_type(ir, &tuple_name, &ir_fields);
+    ctx.register_type(tuple_name.clone(), struct_ty);
     Some((tuple_name, struct_ty))
 }
 

@@ -94,11 +94,11 @@ fn run(
         functions().filter(|&(_, op)| is_candidate(op)).collect();
 
     let mut roots: HashSet<Symbol> = functions()
-        .filter(|&(name, op)| !is_candidate(op) || is_root(ctx, name, op, config))
+        .filter(|(name, op)| !is_candidate(*op) || is_root(ctx, name, *op, config))
         .map(|(name, _)| name)
         .collect();
     let graph = analyses.require::<CallGraph>(ctx, module.op());
-    roots.extend(&graph.module_references);
+    roots.extend(graph.module_references.iter().cloned());
     let reachable = compute_reachable(&graph, roots);
 
     // A function containing a reachable function definition is kept with it.
@@ -142,9 +142,9 @@ fn run(
 /// Whether `name` is a reachability root: the root `main` or `_start`, a
 /// function definition with an `abi` attribute (externally callable), or a
 /// configured extra entry point.
-fn is_root(ctx: &IrContext, name: Symbol, op: OpRef, config: &GlobalDceConfig) -> bool {
-    name == Symbol::new("main")
-        || name == Symbol::new("_start")
+fn is_root(ctx: &IrContext, name: &Symbol, op: OpRef, config: &GlobalDceConfig) -> bool {
+    *name == Symbol::new("main")
+        || *name == Symbol::new("_start")
         || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
         || name.with_str(|name| config.extra_entry_points.iter().any(|extra| extra == name))
 }
@@ -187,11 +187,16 @@ fn compute_reachable(graph: &CallGraph, roots: HashSet<Symbol>) -> HashSet<Symbo
     let mut worklist: VecDeque<Symbol> = roots.into_iter().collect();
 
     while let Some(func) = worklist.pop_front() {
-        if !reachable.insert(func) {
+        if !reachable.insert(func.clone()) {
             continue;
         }
         if let Some(callees) = graph.edges.get(&func) {
-            worklist.extend(callees.iter().filter(|callee| !reachable.contains(*callee)));
+            worklist.extend(
+                callees
+                    .iter()
+                    .filter(|callee| !reachable.contains(*callee))
+                    .cloned(),
+            );
         }
     }
 
@@ -296,10 +301,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -503,10 +505,7 @@ mod tests {
             parent_op: None,
         });
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("extern_fn"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("extern_fn")))
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)
@@ -573,10 +572,7 @@ mod tests {
             parent_op: None,
         });
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("extern_fn"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("extern_fn")))
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)
@@ -618,10 +614,7 @@ mod tests {
         });
         let nested_module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("nested"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("nested")))
                 .region(nested_region)
                 .build(&mut ctx);
         let nested_module_op = ctx.create_op(nested_module_data);
@@ -667,10 +660,7 @@ mod tests {
         });
         let nested_module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("nested"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("nested")))
                 .region(nested_region)
                 .build(&mut ctx);
         let nested_module_op = ctx.create_op(nested_module_data);

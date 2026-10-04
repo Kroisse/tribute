@@ -216,7 +216,7 @@ impl RewritePattern for LowerTypedGcPattern {
             rewriter.replace_op(new.op_ref());
         } else if let Ok(old) = wasm_gc::RefNull::from_op(ctx, op) {
             let target = old.target_type(ctx);
-            let heap_type = ctx.get_type(target).name;
+            let heap_type = ctx.get_type(target).name.clone();
             let heap_type = heap_type.with_str(|name| ctx.intern_str(name));
             let new = wasm::RefNull::operands()
                 .heap_type(heap_type)
@@ -357,8 +357,7 @@ mod tests {
 }"#,
         );
         fn alias(ctx: &IrContext, name: &'static str) -> TypeRef {
-            ctx.type_alias_by_name(Symbol::new(name))
-                .expect("fixture alias")
+            ctx.type_alias_by_text(name).expect("fixture alias")
         }
 
         assert_eq!(

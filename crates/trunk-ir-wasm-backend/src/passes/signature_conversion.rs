@@ -125,10 +125,7 @@ mod tests {
             parent_op: None,
         });
         let module = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
             .region(region)
             .build(ctx);
         let module = ctx.create_op(module);
@@ -230,7 +227,7 @@ mod tests {
             );
             let attrs = signature
                 .non_reserved_attrs(&ctx)
-                .map(|(key, value)| (*key, value.clone()))
+                .map(|(key, value)| (key.clone(), value.clone()))
                 .collect::<trunk_ir::AttributeMap>();
             assert_eq!(
                 attrs.get("nested"),
@@ -239,7 +236,7 @@ mod tests {
                     Attribute::List(vec![Attribute::Type(i64)]),
                 ])),
             );
-            assert_eq!(attrs.get_symbol_ref("tag"), Some(Symbol::new("keep")),);
+            assert_eq!(attrs.get_symbol_ref("tag"), Some(&Symbol::new("keep")));
             assert_eq!(ctx.get_type(function.r#type(&ctx)).attrs.len(), 4);
             assert_eq!(
                 ctx.op(module.ops(&ctx)[0]).attributes.get("custom"),

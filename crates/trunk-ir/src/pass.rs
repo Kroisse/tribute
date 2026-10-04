@@ -672,10 +672,7 @@ mod tests {
         let nil_ty = core::nil(ctx).as_type_ref();
         let func_ty = func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         let op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new(name))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str(name)))
             .attr("type", Attribute::Type(func_ty))
             .build(ctx);
         let func_op = ctx.create_op(op_data);
@@ -1110,7 +1107,7 @@ mod tests {
 
         let mut pm = PassManager::new();
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
-        pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
+        pm.add_pass(CountingPass::<core::Module>::new(dummy));
         pm.with_instrumentation(move |_ctx, _name, _op| {
             inv_clone.set(inv_clone.get() + 1);
         });
@@ -1134,7 +1131,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
         pm.nest::<func::Func>()
-            .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
+            .add_pass(CountingPass::<func::Func>::new(dummy));
         pm.with_instrumentation(move |_ctx, _name, _op| {
             inv_clone.set(inv_clone.get() + 1);
         });
@@ -1294,7 +1291,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
         pm.nest::<func::Func>()
-            .add_pass(CountingPass::<func::Func>::new(dummy.clone()))
+            .add_pass(CountingPass::<func::Func>::new(dummy))
             .with_instrumentation(move |_ctx, _name, _op| {
                 nested_clone.set(nested_clone.get() + 1);
             });
@@ -1326,7 +1323,7 @@ mod tests {
         let mut pm = PassManager::new();
         pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
         pm.nest::<func::Func>()
-            .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
+            .add_pass(CountingPass::<func::Func>::new(dummy));
         pm.with_instrumentation(move |_ctx, name, op| {
             seen_clone.borrow_mut().push((name.to_string(), op));
         });
@@ -1375,7 +1372,7 @@ mod tests {
         let instrumentation_count = Rc::new(Cell::new(0));
         let instrumentation_count_clone = instrumentation_count.clone();
         let mut pm = PassManager::new();
-        pm.add_pass(CountingPass::<core::Module>::new(dummy.clone()));
+        pm.add_pass(CountingPass::<core::Module>::new(dummy));
         pm.add_pass(CountingPass::<core::Module>::new(after.clone()));
         pm.with_instrumentation(move |_ctx, _name, _op| {
             instrumentation_count_clone.set(instrumentation_count_clone.get() + 1);
@@ -1406,7 +1403,7 @@ mod tests {
         let dummy = Rc::new(Cell::new(0));
         let mut pm = PassManager::new();
         pm.nest::<func::Func>()
-            .add_pass(CountingPass::<func::Func>::new(dummy.clone()));
+            .add_pass(CountingPass::<func::Func>::new(dummy));
         pm.with_verifier(accept_input_then_fail("nested boom"));
         let error = pm
             .run(&mut ctx, module, &mut Default::default())

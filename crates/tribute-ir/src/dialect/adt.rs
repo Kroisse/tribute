@@ -237,7 +237,7 @@ impl Struct {
                     .expect("field index is in range");
                 let attrs = self
                     .field_attrs(ctx, index)
-                    .map(|(key, value)| (*key, value.clone()))
+                    .map(|(key, value)| (key.clone(), value.clone()))
                     .collect();
                 (name, ty, attrs)
             })
@@ -525,7 +525,7 @@ mod tests {
         let aliases: std::collections::HashMap<_, _> = ctx
             .type_aliases()
             .iter()
-            .map(|&(name, ty)| (name.to_string(), ty))
+            .map(|(name, ty)| (name.to_string(), *ty))
             .collect();
         let point = Struct::from_type_ref(&ctx, aliases["point"]).unwrap();
         assert_eq!(point.name(&ctx), Symbol::new("Point"));
@@ -640,7 +640,7 @@ mod tests {
             (
                 "`fields` is not an `adt.struct` attribute",
                 TypeDataBuilder::new("adt", "struct")
-                    .attr("name", p.clone())
+                    .attr("name", p)
                     .attr("fields", Attribute::List(vec![]))
                     .build(),
             ),

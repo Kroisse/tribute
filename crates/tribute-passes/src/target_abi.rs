@@ -221,7 +221,7 @@ pub fn lower_cps_signatures_to_physical(
         }
         let op_attributes: Vec<_> = converted_attributes
             .iter()
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for (name, value) in op_attributes {
             if func::Func::matches(converter.ctx, op) && name == Symbol::new("type") {
@@ -231,7 +231,7 @@ pub fn lower_cps_signatures_to_physical(
             converted_attributes.insert(name, converted);
         }
         for (name, value) in converted_attributes {
-            if original_attributes.get(name) != Some(&value) {
+            if original_attributes.get(name.clone()) != Some(&value) {
                 attributes.push((op, name, value));
             }
         }
@@ -254,7 +254,8 @@ pub fn lower_cps_signatures_to_physical(
                 {
                     let mut converted_attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
-                        converted_attrs.insert(*name, converter.convert_attribute(value.clone())?);
+                        converted_attrs
+                            .insert(name.clone(), converter.convert_attribute(value.clone())?);
                     }
                     if converted_attrs != argument.attrs {
                         block_attributes.push((block, index, converted_attrs));
@@ -466,7 +467,7 @@ pub fn compose_root_entry_bridge(
         .attributes
         .insert("sym_name", Attribute::String(root_main_name));
     for &op in &top_level_ops {
-        rewrite_symbol_refs(ctx, op, main, root_main);
+        rewrite_symbol_refs(ctx, op, &main, &root_main);
     }
 
     let entry = ctx.create_block(BlockData {
@@ -581,7 +582,7 @@ fn build_cps_root_call(
         parent_op: None,
     });
     let done_function = func::Func::operands()
-        .sym_name(root_done_k)
+        .sym_name(root_done_k.clone())
         .r#type(done_function_ty)
         .regions(done_region)
         .build(ctx, location);
@@ -616,7 +617,7 @@ fn build_cps_root_call(
         parent_op: None,
     });
     let dispatch_function = func::Func::operands()
-        .sym_name(root_dispatch)
+        .sym_name(root_dispatch.clone())
         .r#type(dispatch_function_ty)
         .regions(dispatch_region)
         .build(ctx, location);
@@ -752,13 +753,7 @@ pub(crate) fn dispatch_answer_type(
         .ok_or_else(|| TargetAbiError::new("CPS resume frame lacks answer type"))?;
     let results = resume_signature.results(ctx);
     if !(results.is_empty()
-        || (results.len() == 1
-            && is_parameterless_dialect_type(
-                ctx,
-                results[0],
-                Symbol::new("core"),
-                Symbol::new("never"),
-            )))
+        || (results.len() == 1 && is_parameterless_dialect_type(ctx, results[0], "core", "never")))
     {
         return Err(TargetAbiError::new(
             "CPS resume must have logical never or physical empty results",
@@ -930,15 +925,10 @@ fn validate_root_dispatch_type(
     };
     if callable.results(ctx) != physical_results
         || *actual_evidence != evidence
-        || !is_parameterless_dialect_type(ctx, *prompt, Symbol::new("core"), Symbol::new("i32"))
-        || !is_parameterless_dialect_type(ctx, *ability, Symbol::new("core"), Symbol::new("i32"))
-        || !is_parameterless_dialect_type(ctx, *operation, Symbol::new("core"), Symbol::new("i32"))
-        || !is_parameterless_dialect_type(
-            ctx,
-            *payload,
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
-        )
+        || !is_parameterless_dialect_type(ctx, *prompt, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *ability, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *operation, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *payload, "tribute_rt", "anyref")
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch operands differ from the exact terminal ABI",
@@ -963,12 +953,7 @@ fn validate_root_dispatch_type(
         || resume.inputs(ctx).len() != 3
         || resume.inputs(ctx)[0] != evidence
         || resume.inputs(ctx)[1] != frame
-        || !is_parameterless_dialect_type(
-            ctx,
-            resume.inputs(ctx)[2],
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
-        )
+        || !is_parameterless_dialect_type(ctx, resume.inputs(ctx)[2], "tribute_rt", "anyref")
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch resume differs from the exact frame ABI",
@@ -1003,12 +988,7 @@ fn dispatch_entry_function_type(
         .as_type_ref())
 }
 
-fn is_parameterless_dialect_type(
-    ctx: &IrContext,
-    ty: TypeRef,
-    dialect: Symbol,
-    name: Symbol,
-) -> bool {
+fn is_parameterless_dialect_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
     ctx.types().is_dialect(ty, dialect, name)
         && ctx.get_type(ty).params.is_empty()
         && ctx.get_type(ty).attrs.is_empty()
@@ -1042,13 +1022,13 @@ fn remove_root_contract(ctx: &mut IrContext, op: OpRef) {
     ctx.op_mut(op).attributes.remove(ROOT_SOURCE_RESULT_ATTR);
 }
 
-fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol) {
+fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &Symbol, new: &Symbol) {
     if core::Module::from_op(ctx, op).is_ok() {
         return;
     }
     for key in [Symbol::new("callee"), Symbol::new("func_ref")] {
-        if ctx.op(op).attributes.get_symbol_ref(key) == Some(old) {
-            ctx.op_mut(op).attributes.insert(key, new);
+        if ctx.op(op).attributes.get_symbol_ref(key.clone()) == Some(old) {
+            ctx.op_mut(op).attributes.insert(key, new.clone());
         }
     }
     let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
@@ -1292,7 +1272,7 @@ fn is_cps_never_caller(ctx: &IrContext, op: OpRef, never: TypeRef) -> Result<boo
 
 /// The tagged function named by a root-qualified reference.
 fn function_for_symbol(
-    symbol: Symbol,
+    symbol: &Symbol,
     functions: &HashMap<Symbol, FunctionIdentity>,
 ) -> Result<FunctionIdentity, TargetAbiError> {
     function_for_symbol_optional(symbol, functions)
@@ -1300,10 +1280,10 @@ fn function_for_symbol(
 }
 
 fn function_for_symbol_optional(
-    symbol: Symbol,
+    symbol: &Symbol,
     functions: &HashMap<Symbol, FunctionIdentity>,
 ) -> Option<FunctionIdentity> {
-    functions.get(&symbol).copied()
+    functions.get(symbol).copied()
 }
 
 /// The root-qualified name a definition is referenced by.
@@ -1554,7 +1534,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             self.embedded.insert(ty, converted);
             return Ok(converted);
         }
-        let mut converted = data.clone();
+        let mut converted = data;
         for parameter in &mut converted.params {
             *parameter = self.convert_embedded(*parameter)?;
         }
@@ -1576,7 +1556,7 @@ impl<'a> PhysicalTypeConverter<'a> {
     ) -> Result<AttributeMap, TargetAbiError> {
         let attributes = callable
             .non_reserved_attrs(self.ctx)
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect::<Vec<_>>();
         attributes
             .into_iter()
@@ -1588,7 +1568,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         let attributes: Vec<_> = data
             .attrs
             .iter()
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for (name, value) in attributes {
             data.attrs.insert(name, self.convert_attribute(value)?);
@@ -1834,10 +1814,7 @@ mod tests {
             func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
         }"#,
         );
-        assert_eq!(
-            ctx.type_alias_by_name(Symbol::new("Evidence")),
-            Some(evidence)
-        );
+        assert_eq!(ctx.type_alias_by_text("Evidence"), Some(evidence));
         let cps = function(&ctx, module, "cps");
         let unchanged: Vec<_> = collect_ops(&ctx, module.op())
             .into_iter()
@@ -2051,7 +2028,7 @@ mod tests {
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
             ctx.op(call).attributes.get_symbol_ref("callee"),
-            Some(Symbol::new(ROOT_MAIN_SYMBOL))
+            Some(&Symbol::new(ROOT_MAIN_SYMBOL))
         );
         let worker_callable = func::FuncSig::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();
         let [worker_evidence, worker_frame] = worker_callable.inputs(&ctx) else {

@@ -204,10 +204,7 @@ mod tests {
         let func_op_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
             .result(func_ty)
             .region(inner_region)
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("test_fn"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("test_fn")))
             .attr("type", Attribute::Type(func_ty))
             .build(&mut ctx);
         let func_op = ctx.create_op(func_op_data);

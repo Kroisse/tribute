@@ -244,10 +244,10 @@ fn should_inline(
     config: &InlineConfig,
     recursive: &HashSet<Symbol>,
     ctx: &IrContext,
-    callee: Symbol,
+    callee: &Symbol,
 ) -> bool {
     // Must have a body in this module.
-    let Some(&callee_op) = graph.func_ops.get(&callee) else {
+    let Some(&callee_op) = graph.func_ops.get(callee) else {
         return false;
     };
     if !ctx.op_has_regions(callee_op) {
@@ -259,15 +259,15 @@ fn should_inline(
         return false;
     }
     // Skip recursive functions to avoid unbounded instantiation.
-    if recursive.contains(&callee) {
+    if recursive.contains(callee) {
         return false;
     }
-    let escapes = graph.address_taken.contains(&callee);
+    let escapes = graph.address_taken.contains(callee);
 
     // Single-call-site rule (only when the callee doesn't escape).
     if config.always_inline_single_call_site
         && !escapes
-        && graph.call_site_count.get(&callee).copied().unwrap_or(0) == 1
+        && graph.call_site_count.get(callee).copied().unwrap_or(0) == 1
     {
         return true;
     }
@@ -417,7 +417,7 @@ impl RewritePattern for InlineCallSite {
             return false;
         }
 
-        let Some(&callee_op) = self.graph.func_ops.get(&callee) else {
+        let Some(&callee_op) = self.graph.func_ops.get(callee) else {
             return false;
         };
 
@@ -528,10 +528,7 @@ mod mechanics {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         ctx.create_op(module_data)
@@ -925,10 +922,7 @@ mod pass {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr(
-                    "sym_name",
-                    Attribute::String(ctx.intern_symbol_text(Symbol::new("test"))),
-                )
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -943,7 +937,7 @@ mod pass {
         let body = ctx.op_region(func_op, 0).unwrap();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op)
-                && ctx.op(op).attributes.get_symbol_ref("callee") == Some(target)
+                && ctx.op(op).attributes.get_symbol_ref("callee") == Some(&target)
             {
                 count += 1;
             }
@@ -1184,10 +1178,7 @@ mod pass {
 
         let fn_ty = crate::dialect::func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
         let helper_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr(
-                "sym_name",
-                Attribute::String(ctx.intern_symbol_text(Symbol::new("helper"))),
-            )
+            .attr("sym_name", Attribute::String(ctx.intern_str("helper")))
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)

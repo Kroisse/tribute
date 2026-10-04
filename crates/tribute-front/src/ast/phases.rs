@@ -113,7 +113,6 @@ impl LocalId {
 #[salsa::interned(debug)]
 pub struct FuncDefId<'db> {
     /// The fully qualified name (e.g., `"foo::bar::func_name"`).
-    #[returns(copy)]
     pub qualified: Symbol,
 }
 
@@ -152,7 +151,6 @@ pub struct TypeDefId<'db> {
     #[returns(copy)]
     pub origin: TypeOrigin,
     /// The fully qualified name (e.g., `"std::option::Option"`).
-    #[returns(copy)]
     pub qualified: Symbol,
 }
 
@@ -198,7 +196,6 @@ impl<'db> TypeDefId<'db> {
 #[salsa::interned(debug)]
 pub struct CtorId<'db> {
     /// The fully qualified name (e.g., `"std::option::Some"`).
-    #[returns(copy)]
     pub qualified: Symbol,
 }
 
@@ -234,7 +231,6 @@ pub struct AbilityId<'db> {
     #[returns(copy)]
     pub origin: AbilityOrigin,
     /// The fully qualified name (e.g., `"std::state::State"`).
-    #[returns(copy)]
     pub qualified: Symbol,
 }
 

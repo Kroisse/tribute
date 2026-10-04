@@ -144,7 +144,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
         let schemes = function_types
             .iter()
             .filter(|(_, scheme)| !scheme.is_mono(db))
-            .map(|(sym, scheme)| (FuncDefId::new(db, *sym), *scheme))
+            .map(|(sym, scheme)| (FuncDefId::new(db, sym.clone()), *scheme))
             .collect();
         Self {
             db,
@@ -907,7 +907,7 @@ mod tests {
                 &db,
                 TypeKind::Named {
                     id,
-                    name: id.qualified(&db),
+                    name: id.qualified(&db).clone(),
                     args: vec![int],
                 },
             );

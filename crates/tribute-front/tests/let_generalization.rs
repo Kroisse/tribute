@@ -160,7 +160,7 @@ fn local_identity_scope(db: &dyn salsa::Database, ty: Type<'_>) -> Option<NodeId
 
 fn typed_function_body<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
-    name: Symbol,
+    name: &Symbol,
 ) -> &'a Expr<TypedRef<'db>> {
     module
         .decls
@@ -291,7 +291,7 @@ fn pass(value: a) -> a {
         (Symbol::new("pass"), "pass", 1),
     ] {
         let mut nodes = Vec::new();
-        body_node_ids(typed_function_body(module, function), &mut nodes);
+        body_node_ids(typed_function_body(module, &function), &mut nodes);
         for node in &nodes {
             let ty = output
                 .expression_types(db)
@@ -313,7 +313,8 @@ fn pass(value: a) -> a {
             }
         }
     }
-    let pair_identities = local_call_callee_types(typed_function_body(module, Symbol::new("pair")));
+    let pair_identities =
+        local_call_callee_types(typed_function_body(module, &Symbol::new("pair")));
     assert!(
         pair_identities
             .iter()
@@ -326,7 +327,8 @@ fn pass(value: a) -> a {
             .any(|ty| func_ref_has_param_and_result(db, *ty, Type::new(db, TypeKind::Bool))),
         "identity(True) must have a concrete Bool callable type"
     );
-    let pass_identities = local_call_callee_types(typed_function_body(module, Symbol::new("pass")));
+    let pass_identities =
+        local_call_callee_types(typed_function_body(module, &Symbol::new("pass")));
     assert!(
         pass_identities.iter().any(|ty| {
             matches!(ty.kind(db), TypeKind::Func { params, result, .. }
@@ -760,7 +762,7 @@ fn shared() -> #(Nat, Bool, Nat, Bool, Nat) {
         .expect("type checking should produce output");
     let lets = let_rhs_nodes(typed_function_body(
         output.module(db),
-        Symbol::new("shared"),
+        &Symbol::new("shared"),
     ));
     assert_eq!(lets.len(), 2, "shared has two lets");
     assert_ne!(lets[0].0, lets[1].0, "the lets have distinct root patterns");

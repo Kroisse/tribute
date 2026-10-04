@@ -82,8 +82,8 @@ fn validate_operation(
     errors: &mut Vec<String>,
 ) {
     let op_data = ctx.op(op);
-    let dialect = op_data.dialect;
-    let name = op_data.name;
+    let dialect = op_data.dialect.clone();
+    let name = op_data.name.clone();
 
     // Check dialect - must be wasm (with specific exceptions)
     if !is_allowed_dialect(ctx, op, depth) {
@@ -125,7 +125,7 @@ fn enclosing_wasm_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<wasm_
 fn resolve_wasm_callee(
     ctx: &IrContext,
     symbols: &SymbolTable,
-    name: Symbol,
+    name: &Symbol,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
     let found = *symbols.definitions_of(name).first()?;
     if symbols.resolve(name).is_none()
@@ -554,10 +554,7 @@ mod tests {
   !Plain = core.array<!Marker>
 }"#,
         );
-        let alias = |ctx: &IrContext, name: &str| {
-            ctx.type_alias_by_name(trunk_ir::Symbol::from_dynamic(name))
-                .unwrap()
-        };
+        let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
         let evidence = alias(&ctx, "Evidence");
         let plain = alias(&ctx, "Plain");
         let arrayref =

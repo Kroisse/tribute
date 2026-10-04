@@ -42,10 +42,10 @@ impl<'db> TypeChecker<'db> {
         let mut checked = FunctionCheck::default();
         // 1. Create a fresh FunctionInferenceContext for this function
         // Use function definition ID for globally unique UniVar IDs
-        let func_id = self.func_def_id(func.name);
+        let func_id = self.func_def_id(&func.name);
         let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, func_id);
         // Only the exact root `main` is an entrypoint.
-        let is_root_main = crate::is_root_main(func.name, self.current_prefix().is_empty());
+        let is_root_main = crate::is_root_main(&func.name, self.current_prefix().is_empty());
 
         // 2. Get the function's registered type scheme and instantiate it
 
@@ -56,7 +56,10 @@ impl<'db> TypeChecker<'db> {
             && let Some(names) = self.signature_type_names.get(&func_id)
         {
             for (name, index) in names {
-                ctx.bind_annotation_type_parameter(*name, instance.type_args[*index as usize]);
+                ctx.bind_annotation_type_parameter(
+                    name.clone(),
+                    instance.type_args[*index as usize],
+                );
             }
         }
         if let Some((scheme, instance)) = &signature_instance
@@ -71,11 +74,11 @@ impl<'db> TypeChecker<'db> {
                 let row = instance.row_args[index]
                     .rest(self.db())
                     .expect("fresh signature row must be open");
-                ctx.bind_annotation_row(*name, row);
+                ctx.bind_annotation_row(name.clone(), row);
             }
         }
         let diagnostic_func_id = func.id;
-        let diagnostic_func_name = func.name;
+        let diagnostic_func_name = func.name.clone();
         let diagnostic_effects = func.effects.clone();
 
         // Bind parameters: by LocalId when present, and also by name
@@ -87,7 +90,7 @@ impl<'db> TypeChecker<'db> {
             if let Some(local_id) = param.local_id {
                 ctx.bind_local(local_id, ty);
             }
-            ctx.bind_local_by_name(param.name, ty);
+            ctx.bind_local_by_name(param.name.clone(), ty);
         }
 
         // Set effect row from the function's declared type before checking
@@ -168,7 +171,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name,
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -177,7 +180,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name,
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -196,7 +199,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name,
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -211,7 +214,7 @@ impl<'db> TypeChecker<'db> {
                 solve_failed = true;
                 self.report_solve_error(
                     diagnostic_func_id,
-                    diagnostic_func_name,
+                    &diagnostic_func_name,
                     diagnostic_effects.as_deref(),
                     error,
                 );
@@ -546,7 +549,7 @@ impl<'db> TypeChecker<'db> {
         let decl = FuncDecl {
             id: func.id,
             is_pub: func.is_pub,
-            name: func.name,
+            name: func.name.clone(),
             type_params: func.type_params.clone(),
             params: func.params.clone(),
             return_ty: func.return_ty.clone(),
@@ -575,7 +578,7 @@ impl<'db> TypeChecker<'db> {
 
             for mc in std::mem::take(&mut deferred) {
                 let resolved_receiver = solver.type_subst().apply(self.db(), mc.receiver_ty);
-                if let Some(entry) = self.env.lookup_method(mc.method, resolved_receiver) {
+                if let Some(entry) = self.env.lookup_method(&mc.method, resolved_receiver) {
                     // Method found — instantiate the TypeScheme to get fresh types
                     let func_ty = if let Some(scheme) = self.env.lookup_function(entry.func_id) {
                         let instance = crate::typeck::subst::instantiate_scheme_details_for_solver(
@@ -988,7 +991,7 @@ impl<'db> TypeChecker<'db> {
             .get(&func_id)
             .into_iter()
             .flatten()
-            .map(|(name, index)| (*index, *name))
+            .map(|(name, index)| (*index, name.clone()))
             .collect();
         let type_name = |index: usize| {
             type_names
@@ -1024,7 +1027,7 @@ impl<'db> TypeChecker<'db> {
             .get(&func_id)
             .into_iter()
             .flatten()
-            .map(|(name, var)| (*var, *name))
+            .map(|(name, var)| (*var, name.clone()))
             .collect();
         let effect_params = scheme.effect_params(db);
         let row_name = |index: usize| {

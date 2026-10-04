@@ -56,7 +56,7 @@ impl<'db> TypeSubst<'db> {
                     db,
                     TypeKind::Named {
                         id: *id,
-                        name: *name,
+                        name: name.clone(),
                         args,
                     },
                 )
@@ -272,7 +272,7 @@ impl<'db> TypeSubst<'db> {
                 db,
                 TypeKind::Named {
                     id: *id,
-                    name: *name,
+                    name: name.clone(),
                     args: args
                         .iter()
                         .map(|arg| {

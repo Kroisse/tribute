@@ -108,15 +108,15 @@ impl ResolvedTarget {
     /// Get the name of the target.
     pub fn name(&self) -> Symbol {
         match self {
-            ResolvedTarget::Local { name, .. } => *name,
-            ResolvedTarget::Function { name } => *name,
-            ResolvedTarget::Constructor { variant, .. } => *variant,
-            ResolvedTarget::Type { name } => *name,
-            ResolvedTarget::Ability { name } => *name,
-            ResolvedTarget::AbilityOp { op, .. } => *op,
-            ResolvedTarget::Unresolved { name } => *name,
-            ResolvedTarget::Field { name, .. } => *name,
-            ResolvedTarget::Other { name } => *name,
+            ResolvedTarget::Local { name, .. } => name.clone(),
+            ResolvedTarget::Function { name } => name.clone(),
+            ResolvedTarget::Constructor { variant, .. } => variant.clone(),
+            ResolvedTarget::Type { name } => name.clone(),
+            ResolvedTarget::Ability { name } => name.clone(),
+            ResolvedTarget::AbilityOp { op, .. } => op.clone(),
+            ResolvedTarget::Unresolved { name } => name.clone(),
+            ResolvedTarget::Field { name, .. } => name.clone(),
+            ResolvedTarget::Other { name } => name.clone(),
         }
     }
 
@@ -169,7 +169,7 @@ impl<'db> AstDefinitionIndex<'db> {
         // Build name index
         let mut by_name = BTreeMap::<_, Vec<_>>::new();
         for (i, def) in definitions.iter().enumerate() {
-            by_name.entry(def.name).or_default().push(i);
+            by_name.entry(def.name.clone()).or_default().push(i);
         }
 
         Self::new(db, definitions, references, by_name)
@@ -218,10 +218,10 @@ impl<'db> AstDefinitionIndex<'db> {
     pub fn definition_of(
         &self,
         db: &'db dyn salsa::Database,
-        name: Symbol,
+        name: &Symbol,
     ) -> Option<&AstDefinitionEntry> {
         self.by_name(db)
-            .get(&name)
+            .get(name)
             .and_then(|indices| indices.first())
             .map(|&i| &self.definitions(db)[i])
     }
@@ -274,7 +274,7 @@ impl<'db> AstDefinitionIndex<'db> {
             }
             _ => {
                 // For non-locals, fall back to name-based lookup
-                self.definition_of(db, target.name())
+                self.definition_of(db, &target.name())
             }
         }
     }
@@ -286,7 +286,7 @@ impl<'db> AstDefinitionIndex<'db> {
     pub fn references_of(
         &self,
         db: &'db dyn salsa::Database,
-        name: Symbol,
+        name: &Symbol,
     ) -> Vec<&AstReferenceEntry> {
         self.references(db)
             .iter()
@@ -352,7 +352,7 @@ impl<'db> AstDefinitionIndex<'db> {
             }
             _ => {
                 // For non-locals, fall back to name-based lookup
-                self.references_of(db, target.name())
+                self.references_of(db, &target.name())
             }
         }
     }
@@ -393,29 +393,35 @@ impl<'db> AstDefinitionIndex<'db> {
                 if let Some(local_id) = def.local_id {
                     ResolvedTarget::Local {
                         id: local_id,
-                        name: def.name,
+                        name: def.name.clone(),
                     }
                 } else {
                     // Fallback for locals without LocalId
-                    ResolvedTarget::Unresolved { name: def.name }
+                    ResolvedTarget::Unresolved {
+                        name: def.name.clone(),
+                    }
                 }
             }
-            DefinitionKind::Function => ResolvedTarget::Function { name: def.name },
-            DefinitionKind::Struct | DefinitionKind::Enum => {
-                ResolvedTarget::Type { name: def.name }
-            }
-            DefinitionKind::EnumVariant { owner } => ResolvedTarget::Constructor {
-                type_name: *owner,
-                variant: def.name,
+            DefinitionKind::Function => ResolvedTarget::Function {
+                name: def.name.clone(),
             },
-            DefinitionKind::Ability => ResolvedTarget::Ability { name: def.name },
+            DefinitionKind::Struct | DefinitionKind::Enum => ResolvedTarget::Type {
+                name: def.name.clone(),
+            },
+            DefinitionKind::EnumVariant { owner } => ResolvedTarget::Constructor {
+                type_name: owner.clone(),
+                variant: def.name.clone(),
+            },
+            DefinitionKind::Ability => ResolvedTarget::Ability {
+                name: def.name.clone(),
+            },
             DefinitionKind::AbilityOp { owner } => ResolvedTarget::AbilityOp {
-                ability: *owner,
-                op: def.name,
+                ability: owner.clone(),
+                op: def.name.clone(),
             },
             DefinitionKind::Field { owner } => ResolvedTarget::Field {
-                owner: *owner,
-                name: def.name,
+                owner: owner.clone(),
+                name: def.name.clone(),
             },
         }
     }
@@ -489,7 +495,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     }
 
     fn collect_extern_func(&mut self, func: &ExternFuncDecl) {
-        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
+        self.add_definition(func.id, func.name.clone(), DefinitionKind::Function, None);
 
         for param in &func.params {
             self.collect_param(param);
@@ -499,22 +505,24 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     fn collect_param(&mut self, param: &ParamDecl) {
         self.add_definition(
             param.id,
-            param.name,
+            param.name.clone(),
             DefinitionKind::Parameter,
             param.local_id,
         );
     }
 
     fn collect_struct(&mut self, s: &StructDecl) {
-        self.add_definition(s.id, s.name, DefinitionKind::Struct, None);
+        self.add_definition(s.id, s.name.clone(), DefinitionKind::Struct, None);
 
         // Add field definitions
         for field in &s.fields {
-            if let Some(name) = field.name {
+            if let Some(name) = field.name.clone() {
                 self.add_definition(
                     field.id,
                     name,
-                    DefinitionKind::Field { owner: s.name },
+                    DefinitionKind::Field {
+                        owner: s.name.clone(),
+                    },
                     None,
                 );
             }
@@ -522,28 +530,32 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
     }
 
     fn collect_enum(&mut self, e: &EnumDecl) {
-        self.add_definition(e.id, e.name, DefinitionKind::Enum, None);
+        self.add_definition(e.id, e.name.clone(), DefinitionKind::Enum, None);
 
         // Add variant definitions
         for variant in &e.variants {
             self.add_definition(
                 variant.id,
-                variant.name,
-                DefinitionKind::EnumVariant { owner: e.name },
+                variant.name.clone(),
+                DefinitionKind::EnumVariant {
+                    owner: e.name.clone(),
+                },
                 None,
             );
         }
     }
 
     fn collect_ability(&mut self, a: &AbilityDecl) {
-        self.add_definition(a.id, a.name, DefinitionKind::Ability, None);
+        self.add_definition(a.id, a.name.clone(), DefinitionKind::Ability, None);
 
         // Add operation definitions with owner for disambiguation
         for op in &a.operations {
             self.add_definition(
                 op.id,
-                op.name,
-                DefinitionKind::AbilityOp { owner: a.name },
+                op.name.clone(),
+                DefinitionKind::AbilityOp {
+                    owner: a.name.clone(),
+                },
                 None,
             );
         }
@@ -557,14 +569,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         match resolved {
             ResolvedRef::Local { id, name } => ResolvedTarget::Local {
                 id: *id,
-                name: *name,
+                name: name.clone(),
             },
             ResolvedRef::Function { id } => ResolvedTarget::Function {
                 name: id.name(self.db),
             },
             ResolvedRef::Constructor { id, variant } => ResolvedTarget::Constructor {
                 type_name: id.name(self.db),
-                variant: *variant,
+                variant: variant.clone(),
             },
             ResolvedRef::TypeDef { id } => ResolvedTarget::Type {
                 name: id.name(self.db),
@@ -574,7 +586,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             },
             ResolvedRef::AbilityOp { ability, op, .. } => ResolvedTarget::AbilityOp {
                 ability: ability.name(self.db),
-                op: *op,
+                op: op.clone(),
             },
             ResolvedRef::Ability { id } => ResolvedTarget::Type {
                 name: id.name(self.db),
@@ -596,7 +608,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
     }
 
     fn visit_func_decl(&mut self, func: &'ast FuncDecl<TypedRef<'db>>) {
-        self.add_definition(func.id, func.name, DefinitionKind::Function, None);
+        self.add_definition(func.id, func.name.clone(), DefinitionKind::Function, None);
         for param in &func.params {
             self.collect_param(param);
         }
@@ -609,7 +621,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
             for param in params {
                 self.add_definition(
                     param.id,
-                    param.name,
+                    param.name.clone(),
                     DefinitionKind::Parameter,
                     param.local_id,
                 );
@@ -624,14 +636,19 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
         // shadowed variables apart.
         match pattern.kind.as_ref() {
             PatternKind::Bind { name, local_id } | PatternKind::As { name, local_id, .. } => {
-                self.add_definition(pattern.id, *name, DefinitionKind::Local, *local_id);
+                self.add_definition(pattern.id, name.clone(), DefinitionKind::Local, *local_id);
             }
             PatternKind::ListRest {
                 rest: Some(name),
                 rest_local_id,
                 ..
             } => {
-                self.add_definition(pattern.id, *name, DefinitionKind::Local, *rest_local_id);
+                self.add_definition(
+                    pattern.id,
+                    name.clone(),
+                    DefinitionKind::Local,
+                    *rest_local_id,
+                );
             }
             _ => {}
         }
@@ -641,7 +658,7 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
         // Shorthand `{ name }` binds `name` (no LocalId available); the field
         // id gives each binding its own span.
         if field.pattern.is_none() {
-            self.add_definition(field.id, field.name, DefinitionKind::Local, None);
+            self.add_definition(field.id, field.name.clone(), DefinitionKind::Local, None);
         }
         walk_field_pattern(self, field);
     }
@@ -792,11 +809,11 @@ mod tests {
 
         // Find the definition of "foo"
         let foo_sym = trunk_ir::Symbol::new("foo");
-        let foo_def = index.definition_of(&db, foo_sym);
+        let foo_def = index.definition_of(&db, &foo_sym);
         assert!(foo_def.is_some(), "Should find definition of 'foo'");
 
         // Find references to "foo" (should have 2: foo + foo)
-        let foo_refs = index.references_of(&db, foo_sym);
+        let foo_refs = index.references_of(&db, &foo_sym);
         assert_eq!(foo_refs.len(), 2, "Should have 2 references to 'foo'");
     }
 
@@ -810,7 +827,7 @@ mod tests {
 
         let index = index.unwrap();
         let hello_sym = trunk_ir::Symbol::new("hello");
-        let def = index.definition_of(&db, hello_sym);
+        let def = index.definition_of(&db, &hello_sym);
         assert!(def.is_some());
         assert_eq!(def.unwrap().kind, DefinitionKind::Function);
     }
@@ -826,12 +843,12 @@ mod tests {
         let index = index.unwrap();
 
         // Check struct definition
-        let point_def = index.definition_of(&db, trunk_ir::Symbol::new("Point"));
+        let point_def = index.definition_of(&db, &trunk_ir::Symbol::new("Point"));
         assert!(point_def.is_some());
         assert_eq!(point_def.unwrap().kind, DefinitionKind::Struct);
 
         // Check field definition
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
         assert!(matches!(x_def.unwrap().kind, DefinitionKind::Field { .. }));
     }
@@ -845,7 +862,7 @@ mod tests {
         assert!(index.is_some());
 
         let index = index.unwrap();
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
         assert_eq!(x_def.unwrap().kind, DefinitionKind::Parameter);
     }
@@ -886,7 +903,7 @@ mod tests {
         let x_sym = trunk_ir::Symbol::new("x");
 
         // Find all references
-        let refs = index.references_of(&db, x_sym);
+        let refs = index.references_of(&db, &x_sym);
         assert_eq!(refs.len(), 2);
     }
 
@@ -925,7 +942,7 @@ mod tests {
         assert!(index.is_some());
 
         let index = index.unwrap();
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
         assert_eq!(x_def.unwrap().kind, DefinitionKind::Local);
     }
@@ -947,11 +964,11 @@ mod tests {
         let index = index.unwrap();
 
         // Both a and b should be defined as locals
-        let a_def = index.definition_of(&db, trunk_ir::Symbol::new("a"));
+        let a_def = index.definition_of(&db, &trunk_ir::Symbol::new("a"));
         assert!(a_def.is_some());
         assert_eq!(a_def.unwrap().kind, DefinitionKind::Local);
 
-        let b_def = index.definition_of(&db, trunk_ir::Symbol::new("b"));
+        let b_def = index.definition_of(&db, &trunk_ir::Symbol::new("b"));
         assert!(b_def.is_some());
         assert_eq!(b_def.unwrap().kind, DefinitionKind::Local);
     }
@@ -974,7 +991,7 @@ mod tests {
 
         // All three variables should be defined
         for name in ["a", "b", "c"] {
-            let def = index.definition_of(&db, trunk_ir::Symbol::new(name));
+            let def = index.definition_of(&db, &trunk_ir::Symbol::new(name));
             assert!(def.is_some(), "Expected definition for '{}'", name);
             assert_eq!(def.unwrap().kind, DefinitionKind::Local);
         }
@@ -996,7 +1013,7 @@ mod tests {
 
         // Wildcard should not create a definition
         let index = index.unwrap();
-        let underscore_def = index.definition_of(&db, trunk_ir::Symbol::new("_"));
+        let underscore_def = index.definition_of(&db, &trunk_ir::Symbol::new("_"));
         assert!(underscore_def.is_none());
     }
 
@@ -1021,24 +1038,24 @@ fn unwrap(opt: Option) -> Int {
         let index = index.unwrap();
 
         // 'v' should be defined in the Some pattern
-        let v_def = index.definition_of(&db, trunk_ir::Symbol::new("v"));
+        let v_def = index.definition_of(&db, &trunk_ir::Symbol::new("v"));
         assert!(v_def.is_some());
         assert_eq!(v_def.unwrap().kind, DefinitionKind::Local);
 
         // 'opt' should be a parameter
-        let opt_def = index.definition_of(&db, trunk_ir::Symbol::new("opt"));
+        let opt_def = index.definition_of(&db, &trunk_ir::Symbol::new("opt"));
         assert!(opt_def.is_some());
         assert_eq!(opt_def.unwrap().kind, DefinitionKind::Parameter);
 
         // Enum variants should be defined with owner
-        let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
+        let some_def = index.definition_of(&db, &trunk_ir::Symbol::new("Some"));
         assert!(some_def.is_some());
         assert!(matches!(
             some_def.unwrap().kind,
             DefinitionKind::EnumVariant { .. }
         ));
 
-        let none_def = index.definition_of(&db, trunk_ir::Symbol::new("None"));
+        let none_def = index.definition_of(&db, &trunk_ir::Symbol::new("None"));
         assert!(none_def.is_some());
         assert!(matches!(
             none_def.unwrap().kind,
@@ -1112,7 +1129,7 @@ fn unwrap(opt: Option) -> Int {
         let x_sym = trunk_ir::Symbol::new("x");
 
         // Get all references to 'x'
-        let all_refs = index.references_of(&db, x_sym);
+        let all_refs = index.references_of(&db, &x_sym);
         assert_eq!(all_refs.len(), 2, "Expected 2 references to 'x'");
 
         // Get the two different definitions
@@ -1128,7 +1145,7 @@ fn unwrap(opt: Option) -> Int {
             if let Some(local_id) = def.local_id {
                 let target = ResolvedTarget::Local {
                     id: local_id,
-                    name: x_sym,
+                    name: x_sym.clone(),
                 };
                 let refs = index.references_of_target(&db, &target);
                 assert_eq!(
@@ -1158,7 +1175,7 @@ fn unwrap(opt: Option) -> Int {
 
         // All list elements should be defined
         for name in ["a", "b", "c"] {
-            let def = index.definition_of(&db, trunk_ir::Symbol::new(name));
+            let def = index.definition_of(&db, &trunk_ir::Symbol::new(name));
             assert!(def.is_some(), "Expected definition for '{}'", name);
             assert_eq!(def.unwrap().kind, DefinitionKind::Local);
         }
@@ -1184,12 +1201,12 @@ fn unwrap(opt: Option) -> Int {
         let index = index.unwrap();
 
         // 'x' should be defined from the third arm
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
         assert_eq!(x_def.unwrap().kind, DefinitionKind::Local);
 
         // 'n' should be a parameter
-        let n_def = index.definition_of(&db, trunk_ir::Symbol::new("n"));
+        let n_def = index.definition_of(&db, &trunk_ir::Symbol::new("n"));
         assert!(n_def.is_some());
         assert_eq!(n_def.unwrap().kind, DefinitionKind::Parameter);
     }
@@ -1279,7 +1296,7 @@ fn unwrap(opt: Option) -> Int {
         assert!(index.is_some());
         let index = index.unwrap();
 
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
 
         let target = index.target_from_definition(x_def.unwrap());
@@ -1298,7 +1315,7 @@ fn unwrap(opt: Option) -> Int {
         assert!(index.is_some());
         let index = index.unwrap();
 
-        let foo_def = index.definition_of(&db, trunk_ir::Symbol::new("foo"));
+        let foo_def = index.definition_of(&db, &trunk_ir::Symbol::new("foo"));
         assert!(foo_def.is_some());
 
         let target = index.target_from_definition(foo_def.unwrap());
@@ -1317,7 +1334,7 @@ fn unwrap(opt: Option) -> Int {
         assert!(index.is_some());
         let index = index.unwrap();
 
-        let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
+        let some_def = index.definition_of(&db, &trunk_ir::Symbol::new("Some"));
         assert!(some_def.is_some());
 
         let target = index.target_from_definition(some_def.unwrap());
@@ -1350,7 +1367,7 @@ fn use_point(p: Point) -> Int {
         let index = index.unwrap();
 
         // Both x and y should be defined as locals from the shorthand pattern
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some(), "Expected definition for 'x'");
         // x appears as both a field and a local binding; check we have at least one
         let x_defs: Vec<_> = index
@@ -1364,7 +1381,7 @@ fn use_point(p: Point) -> Int {
             x_defs.len()
         );
 
-        let y_def = index.definition_of(&db, trunk_ir::Symbol::new("y"));
+        let y_def = index.definition_of(&db, &trunk_ir::Symbol::new("y"));
         assert!(y_def.is_some(), "Expected definition for 'y'");
     }
 
@@ -1424,26 +1441,26 @@ fn f(p: Point) -> Int {
         let index = index.unwrap();
 
         // The enum itself should have Enum kind
-        let color_def = index.definition_of(&db, trunk_ir::Symbol::new("Color"));
+        let color_def = index.definition_of(&db, &trunk_ir::Symbol::new("Color"));
         assert!(color_def.is_some());
         assert_eq!(color_def.unwrap().kind, DefinitionKind::Enum);
 
         // Variants should have EnumVariant kind with owner, not Field
-        let red_def = index.definition_of(&db, trunk_ir::Symbol::new("Red"));
+        let red_def = index.definition_of(&db, &trunk_ir::Symbol::new("Red"));
         assert!(red_def.is_some());
         assert!(matches!(
             &red_def.unwrap().kind,
             DefinitionKind::EnumVariant { owner } if *owner == "Color"
         ));
 
-        let green_def = index.definition_of(&db, trunk_ir::Symbol::new("Green"));
+        let green_def = index.definition_of(&db, &trunk_ir::Symbol::new("Green"));
         assert!(green_def.is_some());
         assert!(matches!(
             &green_def.unwrap().kind,
             DefinitionKind::EnumVariant { owner } if *owner == "Color"
         ));
 
-        let blue_def = index.definition_of(&db, trunk_ir::Symbol::new("Blue"));
+        let blue_def = index.definition_of(&db, &trunk_ir::Symbol::new("Blue"));
         assert!(blue_def.is_some());
         assert!(matches!(
             &blue_def.unwrap().kind,
@@ -1462,14 +1479,14 @@ fn f(p: Point) -> Int {
         let index = index.unwrap();
 
         // Struct fields should still have Field kind with owner
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
         assert!(matches!(
             &x_def.unwrap().kind,
             DefinitionKind::Field { owner } if *owner == "Point"
         ));
 
-        let y_def = index.definition_of(&db, trunk_ir::Symbol::new("y"));
+        let y_def = index.definition_of(&db, &trunk_ir::Symbol::new("y"));
         assert!(y_def.is_some());
         assert!(matches!(
             &y_def.unwrap().kind,
@@ -1527,7 +1544,7 @@ enum Result(T, E) {
         let index = index.unwrap();
 
         // Some's owner should be Option
-        let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
+        let some_def = index.definition_of(&db, &trunk_ir::Symbol::new("Some"));
         assert!(some_def.is_some());
         assert!(matches!(
             &some_def.unwrap().kind,
@@ -1535,7 +1552,7 @@ enum Result(T, E) {
         ));
 
         // None's owner should be Option
-        let none_def = index.definition_of(&db, trunk_ir::Symbol::new("None"));
+        let none_def = index.definition_of(&db, &trunk_ir::Symbol::new("None"));
         assert!(none_def.is_some());
         assert!(matches!(
             &none_def.unwrap().kind,
@@ -1543,7 +1560,7 @@ enum Result(T, E) {
         ));
 
         // Ok's owner should be Result
-        let ok_def = index.definition_of(&db, trunk_ir::Symbol::new("Ok"));
+        let ok_def = index.definition_of(&db, &trunk_ir::Symbol::new("Ok"));
         assert!(ok_def.is_some());
         assert!(matches!(
             &ok_def.unwrap().kind,
@@ -1551,7 +1568,7 @@ enum Result(T, E) {
         ));
 
         // Err's owner should be Result
-        let err_def = index.definition_of(&db, trunk_ir::Symbol::new("Err"));
+        let err_def = index.definition_of(&db, &trunk_ir::Symbol::new("Err"));
         assert!(err_def.is_some());
         assert!(matches!(
             &err_def.unwrap().kind,
@@ -1572,11 +1589,11 @@ enum Result(T, E) {
         let index = index.unwrap();
 
         // Parameters should be registered as definitions with LocalIds
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some(), "Parameter 'x' should be in definitions");
         assert_eq!(x_def.unwrap().kind, DefinitionKind::Parameter);
 
-        let y_def = index.definition_of(&db, trunk_ir::Symbol::new("y"));
+        let y_def = index.definition_of(&db, &trunk_ir::Symbol::new("y"));
         assert!(y_def.is_some(), "Parameter 'y' should be in definitions");
         assert_eq!(y_def.unwrap().kind, DefinitionKind::Parameter);
 
@@ -1603,13 +1620,13 @@ enum Result(T, E) {
         let index = index.unwrap();
 
         // Get the parameter definition
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
         let x_local_id = x_def.unwrap().local_id;
         assert!(x_local_id.is_some(), "Parameter should have LocalId");
 
         // Get references to x (the one in the body)
-        let x_refs = index.references_of(&db, trunk_ir::Symbol::new("x"));
+        let x_refs = index.references_of(&db, &trunk_ir::Symbol::new("x"));
         assert_eq!(x_refs.len(), 1, "Should have 1 reference to 'x' in body");
 
         // The reference's target LocalId should match the definition's LocalId
@@ -1661,7 +1678,7 @@ enum Result(T, E) {
         assert!(index.is_some());
         let index = index.unwrap();
 
-        let x_def = index.definition_of(&db, trunk_ir::Symbol::new("x"));
+        let x_def = index.definition_of(&db, &trunk_ir::Symbol::new("x"));
         assert!(x_def.is_some());
 
         let target = index.target_from_definition(x_def.unwrap());
@@ -1680,7 +1697,7 @@ enum Result(T, E) {
         assert!(index.is_some());
         let index = index.unwrap();
 
-        let foo_def = index.definition_of(&db, trunk_ir::Symbol::new("foo"));
+        let foo_def = index.definition_of(&db, &trunk_ir::Symbol::new("foo"));
         assert!(foo_def.is_some());
 
         let target = index.target_from_definition(foo_def.unwrap());
@@ -1699,7 +1716,7 @@ enum Result(T, E) {
         assert!(index.is_some());
         let index = index.unwrap();
 
-        let some_def = index.definition_of(&db, trunk_ir::Symbol::new("Some"));
+        let some_def = index.definition_of(&db, &trunk_ir::Symbol::new("Some"));
         assert!(some_def.is_some());
 
         let target = index.target_from_definition(some_def.unwrap());
@@ -1925,7 +1942,7 @@ struct Rect { x: Int, width: Int }"#,
         let index = index.unwrap();
 
         // Extern function should be registered as a definition
-        let add_def = index.definition_of(&db, trunk_ir::Symbol::new("__add"));
+        let add_def = index.definition_of(&db, &trunk_ir::Symbol::new("__add"));
         assert!(
             add_def.is_some(),
             "Extern function should have a definition entry"
@@ -1944,14 +1961,14 @@ struct Rect { x: Int, width: Int }"#,
         let index = index.unwrap();
 
         // Parameters of extern functions should be registered
-        let a_def = index.definition_of(&db, trunk_ir::Symbol::new("a"));
+        let a_def = index.definition_of(&db, &trunk_ir::Symbol::new("a"));
         assert!(
             a_def.is_some(),
             "Extern function param 'a' should be defined"
         );
         assert_eq!(a_def.unwrap().kind, DefinitionKind::Parameter);
 
-        let b_def = index.definition_of(&db, trunk_ir::Symbol::new("b"));
+        let b_def = index.definition_of(&db, &trunk_ir::Symbol::new("b"));
         assert!(
             b_def.is_some(),
             "Extern function param 'b' should be defined"

@@ -152,7 +152,7 @@ pub fn func_names(db: &dyn salsa::Database, source: SourceCst) -> Vec<Symbol> {
         .decls
         .iter()
         .filter_map(|decl| match decl {
-            Decl::Function(f) => Some(f.name),
+            Decl::Function(f) => Some(f.name.clone()),
             _ => None,
         })
         .collect()
@@ -204,19 +204,19 @@ pub fn function_schemes<'db>(
 // tracked queries of their own.
 
 /// Find the function declaration named `name` in `module`.
-fn find_func<V>(module: &Module<V>, name: Symbol) -> Option<&FuncDecl<V>> {
+fn find_func<'a, V>(module: &'a Module<V>, name: &Symbol) -> Option<&'a FuncDecl<V>> {
     module.decls.iter().find_map(|decl| match decl {
-        Decl::Function(f) if f.name == name => Some(f),
+        Decl::Function(f) if f.name == *name => Some(f),
         _ => None,
     })
 }
 
 /// Get a parsed function by name.
-pub fn parsed_func(
-    db: &dyn salsa::Database,
+pub fn parsed_func<'db>(
+    db: &'db dyn salsa::Database,
     source: SourceCst,
-    name: Symbol,
-) -> Option<&FuncDecl<UnresolvedName>> {
+    name: &Symbol,
+) -> Option<&'db FuncDecl<UnresolvedName>> {
     find_func(parsed_module(db, source)?, name)
 }
 
@@ -226,7 +226,7 @@ pub fn parsed_func(
 pub fn resolved_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-    name: Symbol,
+    name: &Symbol,
 ) -> Option<&'db FuncDecl<ResolvedRef<'db>>> {
     find_func(resolved_module(db, source)?, name)
 }
@@ -237,7 +237,7 @@ pub fn resolved_func<'db>(
 pub fn typed_func<'db>(
     db: &'db dyn salsa::Database,
     source: SourceCst,
-    name: Symbol,
+    name: &Symbol,
 ) -> Option<&'db FuncDecl<TypedRef<'db>>> {
     find_func(type_check_output(db, source)?.module(db), name)
 }
@@ -311,15 +311,15 @@ mod tests {
         "#,
         );
 
-        let foo = parsed_func(&db, source, Symbol::new("foo"));
+        let foo = parsed_func(&db, source, &Symbol::new("foo"));
         assert!(foo.is_some());
         assert_eq!(foo.unwrap().name.to_string(), "foo");
 
-        let bar = parsed_func(&db, source, Symbol::new("bar"));
+        let bar = parsed_func(&db, source, &Symbol::new("bar"));
         assert!(bar.is_some());
         assert_eq!(bar.unwrap().name.to_string(), "bar");
 
-        let missing = parsed_func(&db, source, Symbol::new("missing"));
+        let missing = parsed_func(&db, source, &Symbol::new("missing"));
         assert!(missing.is_none());
     }
 
@@ -328,7 +328,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() -> Nil { 42 }");
 
-        let func = resolved_func(&db, source, Symbol::new("main"));
+        let func = resolved_func(&db, source, &Symbol::new("main"));
         assert!(func.is_some());
     }
 
@@ -337,7 +337,7 @@ mod tests {
         let db = salsa::DatabaseImpl::default();
         let source = make_source(&db, "fn main() -> Nil { 42 }");
 
-        let func = typed_func(&db, source, Symbol::new("main"));
+        let func = typed_func(&db, source, &Symbol::new("main"));
         assert!(func.is_some());
     }
 

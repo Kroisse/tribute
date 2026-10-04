@@ -285,7 +285,7 @@ fn checked_prelude<'db>(
 ) -> Option<(ast_typeck::TypeCheckOutput<'db>, PreludeExports<'db>)> {
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = &ast_resolve::library_package_module(parsed.module(db));
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
     let prelude_env = ast_resolve::build_env(db, prelude_ast);
     let resolved =
         ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env, span_map.clone());
@@ -434,7 +434,7 @@ fn prepare_frontend_details<'db>(
 
         let merged_ast = tribute_front::ast::Module::<TypedRef<'db>>::new(
             user_module.id,
-            user_module.name,
+            user_module.name.clone(),
             merged_decls,
         );
 
@@ -472,7 +472,7 @@ fn prepare_frontend_details<'db>(
             fn_types,
             node_types,
             ability_conventions,
-            user_span_map.clone(),
+            user_span_map,
         )
     };
 
@@ -1538,7 +1538,7 @@ pub fn parse_and_lower_ast<'db>(
     let parsed = ast_query::parsed_ast(db, source)?;
 
     let user_ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
     tracing::debug!(
         "Phase 1: parsed AST has {} declarations",
         user_ast.decls.len()
@@ -3273,7 +3273,7 @@ fn main() -> Nil {
         fn alias(ir: &IrContext, name: &str) -> TypeRef {
             let name = Symbol::from_dynamic(name);
             let ty = ir
-                .type_alias_by_name(name)
+                .type_alias_by_name(&name)
                 .expect("dependency layout is published");
             assert!(
                 ir.get_type(ty)
@@ -3430,7 +3430,7 @@ fn main() -> Nil {}
         use tribute_ir::dialect::tribute_control;
         use trunk_ir::{Symbol, TypeRef};
 
-        fn layout(ir: &IrContext, name: Symbol, kind: &str) -> TypeRef {
+        fn layout(ir: &IrContext, name: &Symbol, kind: &str) -> TypeRef {
             let ty = ir
                 .type_alias_by_name(name)
                 .expect("published nominal layout");
@@ -3535,22 +3535,22 @@ fn main() -> Nil {}
                     .expect("signature-only specialization");
                 let name = reference_name(&ir, parameter);
                 assert_eq!(name, Symbol::from_dynamic(nominal));
-                layout(&ir, name, kind);
+                layout(&ir, &name, kind);
             }
             assert_ne!(
-                layout(&ir, Symbol::new("A::Token$Nat"), "struct"),
-                layout(&ir, Symbol::new("B::Token$Nat"), "struct")
+                layout(&ir, &Symbol::new("A::Token$Nat"), "struct"),
+                layout(&ir, &Symbol::new("B::Token$Nat"), "struct")
             );
             for (owner, target) in [("Node", "Node"), ("First", "Second"), ("Second", "First")] {
-                let owner = layout(&ir, Symbol::from_dynamic(owner), "struct");
+                let owner = layout(&ir, &Symbol::from_dynamic(owner), "struct");
                 let field = get_struct_fields(&ir, owner).unwrap()[0].1;
                 let name = reference_name(&ir, field);
                 assert_eq!(name, Symbol::from_dynamic(target));
-                layout(&ir, name, "struct");
+                layout(&ir, &name, "struct");
             }
-            let holder = layout(&ir, Symbol::new("Holder"), "struct");
+            let holder = layout(&ir, &Symbol::new("Holder"), "struct");
             let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
-            let tuple = layout(&ir, reference_name(&ir, pair), "struct");
+            let tuple = layout(&ir, &reference_name(&ir, pair), "struct");
             let fields = get_struct_fields(&ir, tuple).unwrap();
             let callback = ir.get_type(fields[1].1);
             if after_cps {
@@ -3930,7 +3930,7 @@ fn main() ->{std::io::Io} Nil {
                 .expect("Wasm lowering");
 
             let mut sites = std::collections::BTreeSet::new();
-            for &(name, ty) in ctx.type_aliases() {
+            for (name, ty) in ctx.type_aliases().iter().cloned() {
                 if !type_tree_all(&ctx, ty, &not_core_bytes) {
                     sites.insert(format!("alias !{name}"));
                 }

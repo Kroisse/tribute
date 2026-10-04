@@ -18,7 +18,7 @@ use trunk_ir::rewrite::{
 
 const PREPEND_INTRINSIC: &str = "std::collections::List::__tribute_list_prepend_intrinsic";
 
-fn is_prepend_intrinsic(name: Symbol) -> bool {
+fn is_prepend_intrinsic(name: &Symbol) -> bool {
     name.with_str(|name| {
         name == PREPEND_INTRINSIC
             || name
@@ -27,7 +27,7 @@ fn is_prepend_intrinsic(name: Symbol) -> bool {
     })
 }
 
-fn intrinsic_declaration(name: Symbol) -> Option<Symbol> {
+fn intrinsic_declaration(name: &Symbol) -> Option<Symbol> {
     is_prepend_intrinsic(name).then(|| Symbol::new(PREPEND_INTRINSIC))
 }
 
@@ -59,8 +59,8 @@ impl Pass for LowerListIntrinsics {
                 continue;
             };
             let name = Symbol::from_dynamic(function.sym_name(ctx));
-            intrinsic_declarations.all.insert(name);
-            if is_prepend_intrinsic(name)
+            intrinsic_declarations.all.insert(name.clone());
+            if is_prepend_intrinsic(&name)
                 && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
                     == Some(PREPEND_INTRINSIC)
                 && {
@@ -118,8 +118,8 @@ impl RewritePattern for PrependCallPattern {
         // The frontend keeps generic extern declarations unmangled while
         // specializing their calls. An exact declaration still takes priority
         // so an ordinary same-spelled function cannot inherit the base ABI.
-        let eligible = if self.intrinsic_declarations.all.contains(&callee) {
-            self.intrinsic_declarations.eligible.contains(&callee)
+        let eligible = if self.intrinsic_declarations.all.contains(callee) {
+            self.intrinsic_declarations.eligible.contains(callee)
         } else {
             self.intrinsic_declarations
                 .eligible

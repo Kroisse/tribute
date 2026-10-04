@@ -9,6 +9,8 @@ description = "TrunkIR: A multi-level dialect IR system"
 [features]
 default = []
 salsa = ["dep:salsa"]
+# Exposes `symbol::live_dynamic_symbols` for tests that check names are released.
+symbol-stats = ["dep:malloc_size_of", "string_cache/malloc_size_of"]
 
 [dependencies]
 cranelift-entity.workspace = true
@@ -17,14 +19,19 @@ hashbrown.workspace = true
 inventory.workspace = true
 itertools.workspace = true
 lasso.workspace = true
+malloc_size_of = { workspace = true, optional = true }
 parking_lot.workspace = true
 salsa = { workspace = true, optional = true }
 rustc-hash.workspace = true
 serde.workspace = true
 smallvec.workspace = true
+string_cache.workspace = true
 tracing.workspace = true
 trunk-ir-macros.workspace = true
 winnow.workspace = true
+
+[build-dependencies]
+string_cache_codegen.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

@@ -16,7 +16,7 @@ use crate::ast::{Type, TypeDefId, TypeKind};
 /// - `f + [List(Option(Int))]`       → `f$List$0$Option$0$Int$1$1`
 /// - `apply + [fn(Int) -> Bool]`     → `apply$Fn$0$Int$1$Bool`
 /// - `swap + [(Int, Bool)]`          → `swap$Tup$0$Int$Bool$1`
-pub fn mangle_name(db: &dyn salsa::Database, base: Symbol, type_args: &[Type<'_>]) -> Symbol {
+pub fn mangle_name(db: &dyn salsa::Database, base: &Symbol, type_args: &[Type<'_>]) -> Symbol {
     let mut buf = String::new();
     base.with_str(|s| buf.push_str(s));
     for ty in type_args {
@@ -32,7 +32,7 @@ pub fn mangle_type_name(
     name: Symbol,
     type_args: &[Type<'_>],
 ) -> Symbol {
-    mangle_name(db, nominal_mangle_base(db, id, name), type_args)
+    mangle_name(db, &nominal_mangle_base(db, id, name), type_args)
 }
 
 fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol) -> Symbol {
@@ -40,7 +40,11 @@ fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol
         Symbol::new("BuiltinList")
     } else {
         let qualified = id.qualified(db);
-        if qualified == name { name } else { qualified }
+        if *qualified == name {
+            name
+        } else {
+            qualified.clone()
+        }
     }
 }
 
@@ -59,7 +63,7 @@ fn write_type_mangled(
         TypeKind::Nil => f.write_str("Nil"),
         TypeKind::Never => f.write_str("Never"),
         TypeKind::Named { id, name, args } => {
-            nominal_mangle_base(db, *id, *name).with_str(|s| f.write_str(s))?;
+            nominal_mangle_base(db, *id, name.clone()).with_str(|s| f.write_str(s))?;
             if !args.is_empty() {
                 f.write_str("$0$")?;
                 write_type_mangled_list(db, args, f)?;
@@ -122,7 +126,7 @@ mod tests {
         let db = TestDb::default();
         let base = Symbol::new("identity");
         let int_ty = Type::new(&db, TypeKind::Int);
-        let result = mangle_name(&db, base, &[int_ty]);
+        let result = mangle_name(&db, &base, &[int_ty]);
         assert_eq!(result.to_string(), "identity$Int");
     }
 
@@ -132,7 +136,7 @@ mod tests {
         let base = Symbol::new("first");
         let int_ty = Type::new(&db, TypeKind::Int);
         let float_ty = Type::new(&db, TypeKind::Float);
-        let result = mangle_name(&db, base, &[int_ty, float_ty]);
+        let result = mangle_name(&db, &base, &[int_ty, float_ty]);
         assert_eq!(result.to_string(), "first$Int$Float");
     }
 
@@ -148,7 +152,7 @@ mod tests {
                 args: vec![],
             },
         );
-        let result = mangle_name(&db, base, &[text_ty]);
+        let result = mangle_name(&db, &base, &[text_ty]);
         assert_eq!(result.to_string(), "wrap$Text");
     }
 
@@ -165,7 +169,7 @@ mod tests {
                 args: vec![int_ty],
             },
         );
-        let result = mangle_name(&db, base, &[int_ty, option_int]);
+        let result = mangle_name(&db, &base, &[int_ty, option_int]);
         assert_eq!(result.to_string(), "map$Int$Option$0$Int$1");
     }
 
@@ -190,7 +194,7 @@ mod tests {
                 args: vec![option_int],
             },
         );
-        let result = mangle_name(&db, base, &[list_option_int]);
+        let result = mangle_name(&db, &base, &[list_option_int]);
         assert_eq!(result.to_string(), "f$BuiltinList$0$Option$0$Int$1$1");
     }
 
@@ -204,25 +208,29 @@ mod tests {
             &db,
             TypeKind::Named {
                 id: crate::ast::TypeDefId::builtin_list(&db),
-                name,
+                name: name.clone(),
                 args: vec![int_ty],
             },
         );
         let source = Type::new(
             &db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1)),
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    name.clone(),
+                    crate::ast::NodeId::from_raw(1),
+                ),
                 name,
                 args: vec![int_ty],
             },
         );
 
         assert_eq!(
-            mangle_name(&db, base, &[builtin]).to_string(),
+            mangle_name(&db, &base, &[builtin]).to_string(),
             "identity$BuiltinList$0$Int$1"
         );
         assert_eq!(
-            mangle_name(&db, base, &[source]).to_string(),
+            mangle_name(&db, &base, &[source]).to_string(),
             "identity$List$0$Int$1"
         );
     }
@@ -241,7 +249,7 @@ mod tests {
                     Symbol::new("A::Thing"),
                     crate::ast::NodeId::from_raw(1),
                 ),
-                name,
+                name: name.clone(),
                 args: vec![int_ty],
             },
         );
@@ -259,11 +267,11 @@ mod tests {
         );
 
         assert_eq!(
-            mangle_name(&db, base, &[a_thing]).to_string(),
+            mangle_name(&db, &base, &[a_thing]).to_string(),
             "identity$A::Thing$0$Int$1"
         );
         assert_eq!(
-            mangle_name(&db, base, &[b_thing]).to_string(),
+            mangle_name(&db, &base, &[b_thing]).to_string(),
             "identity$B::Thing$0$Int$1"
         );
     }
@@ -289,7 +297,7 @@ mod tests {
                 args: vec![int_ty, text_ty],
             },
         );
-        let result = mangle_name(&db, base, &[pair]);
+        let result = mangle_name(&db, &base, &[pair]);
         assert_eq!(result.to_string(), "f$Pair$0$Int$Text$1");
     }
 
@@ -308,7 +316,7 @@ mod tests {
                 minimum_convention: crate::ast::CallingConvention::Direct,
             },
         );
-        let result = mangle_name(&db, base, &[func_ty]);
+        let result = mangle_name(&db, &base, &[func_ty]);
         assert_eq!(result.to_string(), "apply$Fn$0$Int$1$Bool");
     }
 
@@ -319,7 +327,7 @@ mod tests {
         let int_ty = Type::new(&db, TypeKind::Int);
         let bool_ty = Type::new(&db, TypeKind::Bool);
         let tup_ty = Type::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
-        let result = mangle_name(&db, base, &[tup_ty]);
+        let result = mangle_name(&db, &base, &[tup_ty]);
         assert_eq!(result.to_string(), "swap$Tup$0$Int$Bool$1");
     }
 
@@ -338,7 +346,7 @@ mod tests {
             (Type::new(&db, TypeKind::Never), "Never"),
         ];
         for (ty, expected_suffix) in types {
-            let result = mangle_name(&db, base, &[ty]);
+            let result = mangle_name(&db, &base, &[ty]);
             assert_eq!(result.to_string(), format!("f${expected_suffix}"));
         }
     }
@@ -347,7 +355,7 @@ mod tests {
     fn test_empty_type_args() {
         let db = TestDb::default();
         let base = Symbol::new("main");
-        let result = mangle_name(&db, base, &[]);
+        let result = mangle_name(&db, &base, &[]);
         assert_eq!(result.to_string(), "main");
     }
 
@@ -356,7 +364,7 @@ mod tests {
         let db = TestDb::default();
         let base = Symbol::new("f");
         let bv = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let result = mangle_name(&db, base, &[bv]);
+        let result = mangle_name(&db, &base, &[bv]);
         assert_eq!(result.to_string(), "f$T0");
     }
 
@@ -365,7 +373,7 @@ mod tests {
         let db = TestDb::default();
         let base = Symbol::new("f");
         let err_ty = Type::new(&db, TypeKind::Error);
-        let result = mangle_name(&db, base, &[err_ty]);
+        let result = mangle_name(&db, &base, &[err_ty]);
         assert_eq!(result.to_string(), "f$error");
     }
 
@@ -376,6 +384,6 @@ mod tests {
         let base = Symbol::new("f");
         let univar_id = crate::ast::UniVarId::new(&db, crate::ast::UniVarSource::Anonymous(0), 0);
         let ty = Type::new(&db, TypeKind::UniVar { id: univar_id });
-        mangle_name(&db, base, &[ty]);
+        mangle_name(&db, &base, &[ty]);
     }
 }

@@ -146,8 +146,8 @@ impl<'db> ModuleEnv<'db> {
     /// Add a name the prelude or the compiler supplies to every module,
     /// declared at the package path `path`.
     pub fn add_library(&mut self, name: Symbol, binding: Binding<'db>, path: Vec<Symbol>) {
-        self.library.entry(name).or_insert(binding.clone());
-        self.library_paths.entry(name).or_insert(path);
+        self.library.entry(name.clone()).or_insert(binding.clone());
+        self.library_paths.entry(name.clone()).or_insert(path);
         self.add_import_if_absent(name, binding);
     }
 
@@ -157,13 +157,13 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// The package path a library name is declared at.
-    pub fn library_path(&self, name: Symbol) -> Option<&[Symbol]> {
-        self.library_paths.get(&name).map(Vec::as_slice)
+    pub fn library_path(&self, name: &Symbol) -> Option<&[Symbol]> {
+        self.library_paths.get(name).map(Vec::as_slice)
     }
 
     /// The library namespace a path starting with `alias` continues in.
-    pub fn library_namespace(&self, alias: Symbol) -> Option<Symbol> {
-        self.library_namespaces.get(&alias).copied()
+    pub fn library_namespace(&self, alias: &Symbol) -> Option<Symbol> {
+        self.library_namespaces.get(alias).cloned()
     }
 
     /// Mark the namespaces under `root` as supplied to every module.
@@ -172,13 +172,13 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// A name the prelude or the compiler supplies to every module.
-    pub fn lookup_library(&self, name: Symbol) -> Option<&Binding<'db>> {
-        self.library.get(&name)
+    pub fn lookup_library(&self, name: &Symbol) -> Option<&Binding<'db>> {
+        self.library.get(name)
     }
 
     /// Whether namespaces under `root` are supplied to every module.
-    pub fn is_library_root(&self, root: Symbol) -> bool {
-        self.library_roots.contains(&root)
+    pub fn is_library_root(&self, root: &Symbol) -> bool {
+        self.library_roots.contains(root)
     }
 
     /// Add a qualified name to a namespace only if it doesn't already exist.
@@ -196,76 +196,81 @@ impl<'db> ModuleEnv<'db> {
     }
 
     /// Look up an unqualified name.
-    pub fn lookup(&self, name: Symbol) -> Option<&Binding<'db>> {
+    pub fn lookup(&self, name: &Symbol) -> Option<&Binding<'db>> {
         // First check local definitions
-        if let Some(b) = self.definitions.get(&name) {
+        if let Some(b) = self.definitions.get(name) {
             return Some(b);
         }
         // Then check imports
-        self.imports.get(&name)
+        self.imports.get(name)
     }
 
     /// Check whether a name is defined locally, excluding imports.
-    pub fn has_definition(&self, name: Symbol) -> bool {
-        self.definitions.contains_key(&name)
+    pub fn has_definition(&self, name: &Symbol) -> bool {
+        self.definitions.contains_key(name)
     }
 
     /// Look up a qualified path (e.g., "List::map").
-    pub fn lookup_qualified(&self, namespace: Symbol, name: Symbol) -> Option<&Binding<'db>> {
-        self.namespaces.get(&namespace)?.get(&name)
+    pub fn lookup_qualified(&self, namespace: &Symbol, name: &Symbol) -> Option<&Binding<'db>> {
+        self.namespaces.get(namespace)?.get(name)
     }
 
     /// Iterate over all bindings in a namespace.
     pub fn iter_namespace(
         &self,
-        namespace: Symbol,
+        namespace: &Symbol,
     ) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
         self.namespaces
-            .get(&namespace)
+            .get(namespace)
             .into_iter()
-            .flat_map(|bindings| bindings.iter().map(|(k, v)| (*k, v)))
+            .flat_map(|bindings| bindings.iter().map(|(k, v)| (k.clone(), v)))
     }
 
     /// Collect all bindings in a namespace (owned, avoids borrow issues).
-    pub fn collect_namespace(&self, namespace: Symbol) -> Vec<(Symbol, Binding<'db>)> {
+    pub fn collect_namespace(&self, namespace: &Symbol) -> Vec<(Symbol, Binding<'db>)> {
         self.namespaces
-            .get(&namespace)
-            .map(|bindings| bindings.iter().map(|(k, v)| (*k, v.clone())).collect())
+            .get(namespace)
+            .map(|bindings| {
+                bindings
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone()))
+                    .collect()
+            })
             .unwrap_or_default()
     }
 
     /// Check whether a namespace exists.
-    pub fn has_namespace(&self, namespace: Symbol) -> bool {
-        self.namespaces.contains_key(&namespace)
+    pub fn has_namespace(&self, namespace: &Symbol) -> bool {
+        self.namespaces.contains_key(namespace)
     }
 
     /// Check whether the package declares `name` at its root: an item, a
     /// namespace, or a module, which may define no namespace entries.
     pub fn declares(&self, name: Symbol) -> bool {
-        self.has_definition(name)
-            || self.has_namespace(name)
+        self.has_definition(&name)
+            || self.has_namespace(&name)
             || matches!(self.imports.get(&name), Some(Binding::Module { path }) if path[..] == [name])
     }
 
     /// Iterate over all imports.
     pub fn iter_imports(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
-        self.imports.iter().map(|(k, v)| (*k, v))
+        self.imports.iter().map(|(k, v)| (k.clone(), v))
     }
 
     /// Replace an import binding, recording the original path.
     pub fn replace_import(&mut self, name: Symbol, binding: Binding<'db>, path: Vec<Symbol>) {
-        self.use_paths.insert(name, path);
+        self.use_paths.insert(name.clone(), path);
         self.imports.insert(name, binding);
     }
 
     /// Get the original `use` path for an import name.
-    pub fn get_use_path(&self, name: Symbol) -> Option<&Vec<Symbol>> {
-        self.use_paths.get(&name)
+    pub fn get_use_path(&self, name: &Symbol) -> Option<&Vec<Symbol>> {
+        self.use_paths.get(name)
     }
 
     /// Iterate over all definitions in this environment.
     pub fn iter_definitions(&self) -> impl Iterator<Item = (Symbol, &Binding<'db>)> {
-        self.definitions.iter().map(|(k, v)| (*k, v))
+        self.definitions.iter().map(|(k, v)| (k.clone(), v))
     }
 
     /// Iterate over all namespaces in this environment.
@@ -274,15 +279,15 @@ impl<'db> ModuleEnv<'db> {
     ) -> impl Iterator<Item = (Symbol, impl Iterator<Item = (Symbol, &Binding<'db>)>)> {
         self.namespaces
             .iter()
-            .map(|(ns, bindings)| (*ns, bindings.iter().map(|(k, v)| (*k, v))))
+            .map(|(ns, bindings)| (ns.clone(), bindings.iter().map(|(k, v)| (k.clone(), v))))
     }
 
     /// Iterate over all names visible via unqualified lookup (definitions + imports).
     pub fn iter_all_names(&self) -> impl Iterator<Item = Symbol> + '_ {
         self.definitions
             .keys()
-            .copied()
-            .chain(self.imports.keys().copied())
+            .cloned()
+            .chain(self.imports.keys().cloned())
     }
 
     /// Merge another environment into this one.
@@ -293,14 +298,14 @@ impl<'db> ModuleEnv<'db> {
     /// `other` declares the library package `package`, whose root items every
     /// module sees under their short names, and whose namespaces a path may
     /// enter by their first segment below the package root.
-    pub fn merge(&mut self, other: &ModuleEnv<'db>, package: Symbol) {
+    pub fn merge(&mut self, other: &ModuleEnv<'db>, package: &Symbol) {
         for (name, binding) in other.iter_namespace(package) {
-            self.add_library(name, binding.clone(), vec![package, name]);
+            self.add_library(name.clone(), binding.clone(), vec![package.clone(), name]);
         }
 
         let prefix = format!("{package}::");
         for (ns, bindings) in other.iter_namespaces() {
-            self.add_library_root(namespace_root(ns));
+            self.add_library_root(namespace_root(&ns));
             let spelling = ns.to_string();
             if let Some(rest) = spelling.strip_prefix(&prefix) {
                 let alias = rest.split("::").next().unwrap_or_default();
@@ -308,15 +313,14 @@ impl<'db> ModuleEnv<'db> {
                 self.add_library_namespace(Symbol::from_dynamic(alias), namespace);
             }
             for (name, binding) in bindings {
-                self.add_to_namespace_if_absent(ns, name, binding.clone());
+                self.add_to_namespace_if_absent(ns.clone(), name, binding.clone());
             }
         }
     }
 }
 
 /// The first segment of a qualified namespace.
-fn namespace_root(namespace: Symbol) -> Symbol {
-    // Interning inside `with_str` would re-enter the interner.
+fn namespace_root(namespace: &Symbol) -> Symbol {
     let spelling = namespace.to_string();
     Symbol::from_dynamic(spelling.split("::").next().unwrap_or_default())
 }

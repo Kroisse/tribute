@@ -416,8 +416,17 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   legalization에서 실제 adapter를 생성해야 한다.
 - `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
   nil을 만들지 않는다.
-- Operation and type names are interned `Symbol`s. Qualified paths are stored as
-  `::`-separated symbols.
+- Operation과 type의 이름은 `Symbol`이다. Qualified path는 `::`로 구분한 하나의
+  `Symbol`로 저장한다.
+- `Symbol`은 8바이트 atom이며 세 형태 중 하나다. 7바이트 이하의 이름은 값 안에
+  직접 담는다. IR 기반 계층이 선언한 dialect, operation, type, 속성 이름은 빌드
+  때 만든 static 집합의 색인이다. 그 밖의 이름은 프로세스 전역 동적 집합의
+  참조 카운트 항목이며, 마지막 `Symbol`이 사라지면 집합에서 제거된다. Static
+  집합에 없는 이름도 유효한 `Symbol`이다.
+- `Symbol`의 동등성은 값 비교이고 hash는 atom에 미리 계산된 값을 쓴다. 순서는
+  텍스트 순서이므로 `Symbol`을 key로 정렬한 자료구조는 이름 순서로 순회한다.
+  Hash 순회 순서는 출력에 영향을 주어서는 안 된다. `Symbol`은 `Copy`가 아니다.
+  이름을 읽기만 하는 곳은 `&Symbol`을 받는다.
 - 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접 호출과 주소 참조)는
   항상 root module 기준 qualified path이다. 정의는 자기 module 안의 `sym_name`을
   가지며, 정의의 qualified name은 root module을 제외한 중첩 `core.module` 이름 경로와

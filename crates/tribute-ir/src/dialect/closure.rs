@@ -99,7 +99,7 @@ fn print_closure_lambda(
         .op(op)
         .attributes
         .iter()
-        .map(|(k, v)| (*k, v.clone()))
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     if !attrs.is_empty() {
         write!(h, " {{")?;

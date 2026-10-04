@@ -33,7 +33,7 @@ pub const PROVIDED: &[&str] = &[
 ];
 
 /// Whether the Wasm target binds the C helper named `name`.
-pub fn provides(name: Symbol) -> bool {
+pub fn provides(name: &Symbol) -> bool {
     PROVIDED.iter().any(|&provided| name == provided)
 }
 
@@ -44,7 +44,7 @@ pub fn is_c_declaration(ctx: &IrContext, op: OpRef) -> bool {
 
 /// The C link name of the declaration `callee` resolves to, if it is a
 /// bodyless `abi = "C"` declaration.
-pub(crate) fn c_helper(ctx: &IrContext, symbols: &SymbolTable, callee: Symbol) -> Option<Symbol> {
+pub(crate) fn c_helper(ctx: &IrContext, symbols: &SymbolTable, callee: &Symbol) -> Option<Symbol> {
     let declaration = symbols.resolve(callee)?;
     is_c_declaration(ctx, declaration)
         .then(|| {

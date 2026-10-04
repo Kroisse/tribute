@@ -72,7 +72,7 @@ fn specialized_callee<'db>(
     let (_, mangled) = entries.iter().find(|(args, _)| args == type_args)?;
     Some(TypedRef::new(
         ResolvedRef::Function {
-            id: FuncDefId::new(db, *mangled),
+            id: FuncDefId::new(db, mangled.clone()),
         },
         typed_ref.ty,
     ))
@@ -92,11 +92,11 @@ pub fn build_type_rewrite_map<'db>(
         let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
             .iter()
             .map(|type_args| {
-                let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
+                let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
                 (type_args.clone(), mangled)
             })
             .collect();
-        entries.sort_by_key(|e| e.1);
+        entries.sort_by_key(|e| e.1.clone());
         map.insert(*id, entries);
     }
     map
@@ -134,8 +134,8 @@ pub fn rewrite_type<'db>(
                 return Type::new(
                     db,
                     TypeKind::Named {
-                        id: id.with_qualified(db, *mangled),
-                        name: *mangled,
+                        id: id.with_qualified(db, mangled.clone()),
+                        name: mangled.clone(),
                         args: vec![],
                     },
                 );
@@ -149,7 +149,7 @@ pub fn rewrite_type<'db>(
                 db,
                 TypeKind::Named {
                     id: *id,
-                    name: *name,
+                    name: name.clone(),
                     args: rewritten_args,
                 },
             )
@@ -267,7 +267,7 @@ fn rewrite_typed_ref_type<'db>(
             if let Some(mangled) = find_mangled_for_ctor(db, *id, tr.ty, map) {
                 ResolvedRef::Constructor {
                     id: CtorId::new(db, mangled),
-                    variant: *variant,
+                    variant: variant.clone(),
                 }
             } else {
                 tr.resolved.clone()
@@ -304,7 +304,7 @@ fn find_mangled_for_ctor<'db>(
             let entries = map.get(id)?;
             // Match against the original args stored in the map.
             let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(*mangled)
+            Some(mangled.clone())
         }
         _ => None,
     }
@@ -321,7 +321,7 @@ fn find_mangled_for_typedef<'db>(
             let entries = map.get(id)?;
             // Match against the original args stored in the map.
             let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(*mangled)
+            Some(mangled.clone())
         }
         _ => None,
     }

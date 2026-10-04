@@ -163,7 +163,7 @@ pub(crate) fn extract_export_func(
     Ok(ExportDef {
         name,
         kind: ExportKind::Func,
-        target: ExportTarget::Func(func),
+        target: ExportTarget::Func(func.clone()),
     })
 }
 
@@ -245,9 +245,9 @@ pub(crate) fn extract_element_def(
         for &inner_op in &ctx.block(block_ref).ops {
             // Look for func.constant or wasm.ref_func operations
             if let Ok(const_op) = func::Constant::from_op(ctx, inner_op) {
-                funcs.push(const_op.func_ref(ctx));
+                funcs.push(const_op.func_ref(ctx).clone());
             } else if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, inner_op) {
-                funcs.push(ref_func_op.func_name(ctx));
+                funcs.push(ref_func_op.func_name(ctx).clone());
             }
         }
     }

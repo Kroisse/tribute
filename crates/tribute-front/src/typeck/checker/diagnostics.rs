@@ -54,7 +54,7 @@ impl<'db> TypeChecker<'db> {
     pub(super) fn report_solve_error(
         &self,
         func_id: crate::ast::NodeId,
-        func_name: trunk_ir::Symbol,
+        func_name: &trunk_ir::Symbol,
         effects: Option<&[crate::ast::TypeAnnotation]>,
         failure: LocatedSolveError<'db>,
     ) {
