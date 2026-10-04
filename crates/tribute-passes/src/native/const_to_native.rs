@@ -401,10 +401,21 @@ impl RewritePattern for BytesConstNativePattern {
             self.i32_ty,
         );
 
+        // The allocation is a `core.ptr`; uses still declare the constant's
+        // type until native type conversion runs.
+        let payload = clif::Iadd::from_op(ctx, last_op)
+            .expect("last op is iadd")
+            .result(ctx);
+        let result_ty = ctx.op_result_types(op)[0];
+        let typed = core::UnrealizedConversionCast::operands(payload)
+            .results(result_ty)
+            .build(ctx, loc);
+
         for o in insert_ops {
             rewriter.insert_op(o);
         }
-        rewriter.replace_op(last_op);
+        rewriter.insert_op(last_op);
+        rewriter.replace_op(typed.op_ref());
         true
     }
 
@@ -642,5 +653,39 @@ mod tests {
             symbol_addrs(&ctx, module),
             ["__tribute_rodata_0", "__tribute_rodata_2"]
         );
+    }
+
+    #[test]
+    fn lowered_bytes_constant_keeps_its_declared_type_at_block_arguments() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @pick(%x: core.bytes, %flag: core.i1) -> core.bytes {
+    ^entry:
+      cf.cond_br %flag [^param, ^literal]
+    ^param:
+      cf.br %x [^merge]
+    ^literal:
+      %no = adt.bytes_const {value = b"no"} : core.bytes
+      cf.br %no [^merge]
+    ^merge(%picked: core.bytes):
+      func.return %picked
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis).expect("bytes constants should lower");
+
+        let bytes_ty = core::bytes(&mut ctx).as_type_ref();
+        let mut forwarded = Vec::new();
+        let body = module.body(&ctx).expect("module body");
+        walk_ops_in_region(&ctx, body, &mut |ctx, op| {
+            if trunk_ir::dialect::cf::Br::matches(ctx, op) {
+                forwarded.extend(ctx.op_operands(op).iter().map(|&value| ctx.value_ty(value)));
+            }
+        });
+        assert_eq!(forwarded, [bytes_ty, bytes_ty]);
     }
 }
