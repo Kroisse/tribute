@@ -938,6 +938,104 @@ fn main() ->{std::io::Io} Nil {
     assert_eq!(output.stdout, b"ab\ncd\nhe\nello>\n");
 }
 
+#[salsa_test]
+fn test_variants_are_told_apart_by_descriptor_under_the_object_supertype(db: &salsa::DatabaseImpl) {
+    use trunk_ir_wasm_backend::gc_types::{FIRST_USER_TYPE_IDX, OBJECT_IDX};
+    use wasmparser::{CompositeInnerType, Operator, Payload};
+
+    let source = SourceCst::from_source_str(
+        db,
+        "variant_descriptor.trb",
+        r#"
+enum Shape {
+    Circle(Int),
+    Square(Int),
+    Empty,
+}
+
+fn area(shape: Shape) -> Int {
+    case shape {
+        Circle(r) -> r * r * +3
+        Square(s) -> s * s
+        Empty -> +0
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(Int::to_string(area(Circle(+2)) + area(Square(+3)) + area(Empty)))
+}
+"#,
+    );
+    let binary = expect_wasm_compilation_success(db, source, "Should compile enum matching");
+
+    let mut struct_types = Vec::new();
+    let mut ref_tests = 0;
+    for payload in wasmparser::Parser::new(0).parse_all(binary) {
+        match payload.expect("Wasm payload") {
+            Payload::TypeSection(types) => {
+                for group in types {
+                    for sub_type in group.expect("rec group").into_types() {
+                        struct_types.push(match &sub_type.composite_type.inner {
+                            CompositeInnerType::Struct(layout) => Some((
+                                layout.fields.to_vec(),
+                                sub_type.is_final,
+                                sub_type.supertype_idx.map(|index| {
+                                    index.as_module_index().expect("module type index")
+                                }),
+                            )),
+                            _ => None,
+                        });
+                    }
+                }
+            }
+            Payload::CodeSectionEntry(body) => {
+                for operator in body.get_operators_reader().expect("operators") {
+                    if matches!(
+                        operator.expect("operator"),
+                        Operator::RefTestNonNull { .. } | Operator::RefTestNullable { .. }
+                    ) {
+                        ref_tests += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let (object_fields, object_is_final, object_supertype) = struct_types[OBJECT_IDX as usize]
+        .clone()
+        .expect("the object type is a struct");
+    let [descriptor] = object_fields[..] else {
+        panic!("the object type holds the descriptor field alone")
+    };
+    assert_eq!(
+        descriptor.element_type,
+        wasmparser::StorageType::Val(wasmparser::ValType::I32)
+    );
+    assert!(!object_is_final);
+    assert_eq!(object_supertype, None);
+
+    let user_structs: Vec<_> = struct_types[FIRST_USER_TYPE_IDX as usize..]
+        .iter()
+        .flatten()
+        .collect();
+    assert!(user_structs.len() >= 3, "one type per Shape variant");
+    for (fields, is_final, supertype) in user_structs {
+        assert_eq!(fields.first(), Some(&descriptor));
+        assert!(is_final);
+        assert_eq!(*supertype, Some(OBJECT_IDX));
+    }
+    assert_eq!(ref_tests, 0, "variants are not tested by GC type");
+
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"21\n");
+}
+
 fn run_validated_wasm(binary: &[u8]) -> std::process::Output {
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(binary)

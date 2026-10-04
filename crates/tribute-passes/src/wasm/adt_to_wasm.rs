@@ -15,17 +15,17 @@
 //! ([`super::descriptors::declare`]), which this pass erases. Builtin layouts
 //! have no descriptor field.
 //!
-//! ## Variant Operations (WasmGC Subtyping Approach)
+//! ## Variant Operations
 //!
-//! Variants use WasmGC's nominal subtyping for discrimination instead of
-//! explicit tag fields. Each variant gets its own struct type (e.g., `Expr$Add`,
-//! `Expr$Num`) that is a subtype of the base enum type. The type itself serves
-//! as the discriminant via `ref.test` and `ref.cast` instructions.
+//! Each variant gets its own struct type (e.g., `Expr$Add`, `Expr$Num`) with
+//! only the variant's fields after the descriptor field. A variant is told
+//! apart by its descriptor number, not by its type: every user object type is
+//! a subtype of the object supertype, which holds the descriptor field alone.
 //!
 //! - `adt.variant_new` -> `wasm.struct_new` with variant-specific type
-//!   - Creates a struct with only the variant's fields (no tag field)
 //!   - Result type is marked with `is_variant=true` and `variant_tag` attributes
-//! - `adt.variant_is` -> `wasm.ref_test` (tests if ref is of specific variant type)
+//! - `adt.variant_is` -> `wasm.ref_cast` to the object supertype, a read of
+//!   its descriptor field, and a comparison with the variant's number
 //! - `adt.variant_cast` -> `wasm.ref_cast` (casts to specific variant type)
 //! - `adt.variant_get` -> `wasm.struct_get` (field access after the descriptor field)
 //!
@@ -140,8 +140,10 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         })
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(VariantNewPattern { numbers })
-        .add_pattern(VariantIsPattern)
+        .add_pattern(VariantNewPattern {
+            numbers: numbers.clone(),
+        })
+        .add_pattern(VariantIsPattern { numbers })
         .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
         .add_pattern(ArrayNewPattern)
@@ -267,8 +269,8 @@ impl RewritePattern for StructSetPattern {
 /// Pattern for `adt.variant_new` -> `wasm.struct_new`
 ///
 /// Variants are represented as separate struct types without an explicit tag
-/// field. The type itself serves as the discriminant, and the leading field
-/// holds the variant's runtime type descriptor.
+/// field. The leading field holds the variant's runtime type descriptor, which
+/// is its discriminant.
 struct VariantNewPattern {
     numbers: DescriptorNumbers,
 }
@@ -348,10 +350,14 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: StringRef) ->
     ctx.intern_type(builder.build())
 }
 
-/// Pattern for `adt.variant_is` -> `wasm.ref_test`
+/// Pattern for `adt.variant_is` -> a comparison of the object's descriptor.
 ///
-/// Tests if a variant reference is of a specific variant type.
-struct VariantIsPattern;
+/// The reference is cast to the object supertype to read its descriptor
+/// field, which is compared with the variant's descriptor number. A variant
+/// the module never allocates has no number and never matches.
+struct VariantIsPattern {
+    numbers: DescriptorNumbers,
+}
 
 impl RewritePattern for VariantIsPattern {
     fn match_and_rewrite(
@@ -373,15 +379,37 @@ impl RewritePattern for VariantIsPattern {
             return false;
         };
 
-        // Create variant-specific type for the ref.test
-        let variant_type = make_variant_type(ctx, enum_type, tag);
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let Some(&number) = self.numbers.get(&(enum_type, Some(tag))) else {
+            let never = wasm_dialect::I32Const::operands()
+                .value(0)
+                .results(result_ty)
+                .build(ctx, loc);
+            rewriter.replace_op(never.op_ref());
+            return true;
+        };
 
-        // Create wasm.ref_test with variant-specific type
-        let new_op = wasm_gc_dialect::RefTest::operands(ref_val)
-            .target_type(variant_type)
+        let object_ty = super::type_converter::object_adt_type(ctx);
+        let object = wasm_gc_dialect::RefCast::operands(ref_val)
+            .target_type(object_ty)
+            .results(object_ty)
+            .build(ctx, loc);
+        let descriptor = wasm_gc_dialect::StructGet::operands(object.result(ctx))
+            .r#type(object_ty)
+            .field_idx(0)
+            .results(i32_ty)
+            .build(ctx, loc);
+        let expected = wasm_dialect::I32Const::operands()
+            .value(number as i32)
+            .results(i32_ty)
+            .build(ctx, loc);
+        let matches = wasm_dialect::I32Eq::operands(descriptor.result(ctx), expected.result(ctx))
             .results(result_ty)
             .build(ctx, loc);
-        rewriter.replace_op(new_op.op_ref());
+        rewriter.insert_op(object.op_ref());
+        rewriter.insert_op(descriptor.op_ref());
+        rewriter.insert_op(expected.op_ref());
+        rewriter.replace_op(matches.op_ref());
         true
     }
 }
@@ -825,7 +853,7 @@ mod tests {
                 .iter()
                 .filter(|&&op| ctx.op(op).dialect == wasm_gc_dialect::DIALECT_NAME())
                 .count(),
-            13
+            14
         );
         let variant_get = ctx
             .block(block)
@@ -1001,11 +1029,12 @@ mod tests {
         let empty_tag = ctx.intern_str("Empty");
         let cons = make_variant_type(&mut ctx, list, cons_tag);
         let empty = make_variant_type(&mut ctx, list, empty_tag);
+        let object = crate::wasm::type_converter::object_adt_type(&mut ctx);
 
-        assert_eq!(variant_types.len(), 5);
-        assert_eq!(variant_types[0], empty);
-        assert_ne!(variant_types[0], cons);
-        assert!(variant_types.iter().skip(1).all(|ty| *ty == cons));
+        // `variant_is` reads the descriptor through the object supertype
+        // instead of testing for the variant's type.
+        assert_eq!(variant_types, [empty, cons, object, object, cons, cons]);
+        assert_ne!(empty, cons);
         assert_eq!(ctx.get_type(cons).attrs.get_type("base_enum"), Some(list));
 
         trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
@@ -1034,14 +1063,80 @@ mod tests {
                     })
             })
             .collect();
-        assert_eq!(indexed_variant_ops.len(), 5);
-        assert_ne!(indexed_variant_ops[0], indexed_variant_ops[1]);
-        assert!(
-            indexed_variant_ops
-                .iter()
-                .skip(1)
-                .all(|idx| *idx == indexed_variant_ops[1])
+        let object_idx = trunk_ir_wasm_backend::gc_types::OBJECT_IDX;
+        let [empty_idx, cons_idx, ..] = indexed_variant_ops[..] else {
+            panic!("variant allocations")
+        };
+        assert_ne!(empty_idx, cons_idx);
+        assert_eq!(
+            indexed_variant_ops,
+            [
+                empty_idx, cons_idx, object_idx, object_idx, cons_idx, cons_idx
+            ]
         );
+    }
+
+    #[test]
+    fn variant_is_compares_the_descriptor_and_is_false_for_an_unallocated_variant() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !ERef = adt.typeref<{name = "E"}>
+  !E = adt.enum<{name = "E", variants = [["None", []], ["Some", [core.i32]], ["Other", []]]}>
+
+  wasm.func @main(%input: !ERef) -> core.nil {
+    %one = wasm.i32_const {value = 1} : core.i32
+    %none = adt.variant_new {type = !E, tag = "None"} : !ERef
+    %some = adt.variant_new %one {type = !E, tag = "Some"} : !ERef
+    %is_some = adt.variant_is %input {type = !E, tag = "Some"} : core.i32
+    %is_other = adt.variant_is %input {type = !E, tag = "Other"} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+
+        lower(&mut ctx, module, TypeConverter::new());
+
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!printed.contains("ref_test"), "{printed}");
+        assert!(!printed.contains("adt.variant_is"), "{printed}");
+        let func = module.ops(&ctx)[0];
+        let block = ctx.region(ctx.op_region(func, 0).unwrap()).blocks[0];
+        let defining_op = |value| match ctx.value_def(value) {
+            trunk_ir::refs::ValueDef::OpResult(op, _) => op,
+            other => panic!("expected an operation result, found {other:?}"),
+        };
+        let comparisons: Vec<_> = ctx
+            .block(block)
+            .ops
+            .iter()
+            .filter_map(|&op| wasm::I32Eq::from_op(&ctx, op).ok())
+            .collect();
+        let [is_some] = comparisons[..] else {
+            panic!("one descriptor comparison: {printed}")
+        };
+
+        let descriptor = wasm_gc_dialect::StructGet::from_op(&ctx, defining_op(is_some.lhs(&ctx)))
+            .expect("descriptor read");
+        assert_eq!(descriptor.field_idx(&ctx), 0);
+        assert!(has_runtime_layout(
+            &ctx,
+            descriptor.r#type(&ctx),
+            runtime_layout::OBJECT
+        ));
+        let cast = wasm_gc_dialect::RefCast::from_op(&ctx, defining_op(descriptor.r#ref(&ctx)))
+            .expect("cast to the object supertype");
+        assert_eq!(cast.target_type(&ctx), descriptor.r#type(&ctx));
+        // `Some` is the second allocated descriptor of the module.
+        let expected = wasm::I32Const::from_op(&ctx, defining_op(is_some.rhs(&ctx)))
+            .expect("descriptor number");
+        assert_eq!(expected.value(&ctx), (FIRST_USER_TYPE_IDX + 1) as i32);
+
+        // `Other` is never allocated, so its test is the constant false.
+        let is_other = ctx.block(block).ops[ctx.block(block).ops.len() - 2];
+        let is_other = wasm::I32Const::from_op(&ctx, is_other).expect("constant result");
+        assert_eq!(is_other.value(&ctx), 0);
     }
 
     #[test]
