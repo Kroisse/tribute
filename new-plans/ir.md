@@ -1545,10 +1545,9 @@ descriptor로만 구별된다.
   `adt.struct`를 이름 없는 `mem.struct<T...>`로 내린다. `mem.struct`는 필드 타입만
   갖고 자연 정렬 memory layout을 뜻한다. 필드 타입은 target 표현이며, 해제 동작이
   다른 managed 참조(`tribute_rt.anyref`)와 unmanaged 포인터(`core.ptr`)는 크기가
-  같아도 구분한다. 할당이 해제하는 필드가 managed 참조이며, 이 판정은 그 layout의
-  descriptor 선언에서 읽고 선언이 없는 layout은 ownership 계획에서 읽는다.
-  `mem.struct`의 field offset과 크기는 같은 nominal layout에서 계산한 할당 크기와
-  일치한다.
+  같아도 구분한다. 할당이 해제하는 필드가 managed 참조이며, 이 판정은 ownership
+  계획의 것이고 물리 타입에서 다시 유도하지 않는다. `mem.struct`의 field offset과
+  크기는 같은 nominal layout에서 계산한 할당 크기와 일치한다.
 - 할당은 descriptor를 nominal layout 타입으로 찾으므로 RC header를 새기는 단계가
   nominal `adt.struct`의 마지막 사용처다. Field offset 계산은 타입 변환 없이
   `mem.struct`만 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
