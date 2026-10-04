@@ -6,7 +6,7 @@
 //! name so that verification and other tooling can look them up for any
 //! operation.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 use std::sync::LazyLock;
 
 use crate::op_schema::{OpSchema, SchemaViolation};

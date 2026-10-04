@@ -1,5 +1,6 @@
 use super::nominal_index::{Declaration, NominalDeclaration, NominalIndex};
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
 

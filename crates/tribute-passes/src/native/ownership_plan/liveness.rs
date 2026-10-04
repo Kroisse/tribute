@@ -1,6 +1,7 @@
 //! Cached native managed-liveness views over policy-neutral ownership facts.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::sync::{Arc, OnceLock};
 
 use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError};

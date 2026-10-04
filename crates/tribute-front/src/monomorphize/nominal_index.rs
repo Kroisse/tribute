@@ -1,5 +1,5 @@
 //! Source nominal declarations shared by collection and generation in one preparation.
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use crate::ast::{CtorId, Decl, EnumDecl, Module, NodeId, StructDecl, TypeDefId, TypedRef};
 

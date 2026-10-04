@@ -3,7 +3,8 @@
 //! Defines legality rules for dialect conversion: which operations/dialects
 //! are legal, illegal, or dynamically checked.
 
-use std::collections::{HashMap, HashSet, hash_map::Entry};
+use hashbrown::{HashMap, hash_map::Entry};
+use std::collections::HashSet;
 
 use derive_more::Error;
 

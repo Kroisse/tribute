@@ -255,7 +255,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            compiler_intrinsics: std::collections::HashMap::new(),
+            compiler_intrinsics: hashbrown::HashMap::new(),
         },
     )
     .expect("checked instances must specialize");
@@ -282,7 +282,7 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
         exhaustive_cases: mono.metadata.exhaustive_cases,
         evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: std::collections::HashMap::new(),
+        compiler_intrinsics: hashbrown::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let ir_text = print_module(&ir, output.module.op());
@@ -356,7 +356,7 @@ fn lower_specialized_source(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            compiler_intrinsics: std::collections::HashMap::new(),
+            compiler_intrinsics: hashbrown::HashMap::new(),
         },
     )
     .expect("checked instances must specialize");
@@ -383,7 +383,7 @@ fn lower_specialized_source(
         exhaustive_cases: mono.metadata.exhaustive_cases,
         evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: std::collections::HashMap::new(),
+        compiler_intrinsics: hashbrown::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     (ir, output)
@@ -464,7 +464,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .cloned()
             .collect(),
         well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: std::collections::HashMap::new(),
+        compiler_intrinsics: hashbrown::HashMap::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let declarations = &output.operation_declarations;
@@ -645,7 +645,7 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         validation.is_ok(),
         "including retained generic bodies: {validation}"
     );
-    let mut functions = std::collections::HashMap::new();
+    let mut functions = hashbrown::HashMap::new();
     let _: ControlFlow<()> =
         walk_typed::<Func, ()>(&ir, output.module.body(&ir).unwrap(), &mut |func| {
             functions.insert(func.sym_name(&ir), func);

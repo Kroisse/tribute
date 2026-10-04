@@ -3,7 +3,8 @@
 //! This module provides structures for tracking definitions and looking up names
 //! during the name resolution phase.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use std::collections::HashSet;
 
 use trunk_ir::Symbol;
 

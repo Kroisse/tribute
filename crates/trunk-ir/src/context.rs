@@ -4,8 +4,8 @@
 //! `PrimaryMap`s owned by `IrContext`. Entity lists (operands, results)
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
+use hashbrown::HashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_entity::{EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap};

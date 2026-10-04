@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use salsa_test_macros::salsa_test;
 use trunk_ir::Symbol;

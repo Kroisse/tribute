@@ -1,0 +1,3 @@
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "Use hashbrown::HashMap or rustc_hash::FxHashMap for compiler data structures." },
+]

@@ -1,6 +1,6 @@
 //! Resolve typed `wasm_gc` operations to indexed `wasm` instructions.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;

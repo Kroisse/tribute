@@ -3,7 +3,8 @@
 //! All expression checking methods take a `FunctionInferenceContext` as parameter,
 //! enabling per-function type inference with isolated constraints.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -3543,7 +3544,7 @@ impl<'db> TypeChecker<'db> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;

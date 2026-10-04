@@ -7,7 +7,7 @@
 //! nominal layouts still carry their names, so lower passes see only the
 //! index.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;

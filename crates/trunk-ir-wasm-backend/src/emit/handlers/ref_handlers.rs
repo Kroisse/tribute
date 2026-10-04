@@ -125,7 +125,7 @@ fn resolve_callee(path: &SymbolPath, module_info: &ModuleInfo) -> CompilationRes
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     use trunk_ir::Span;
     use trunk_ir::refs::PathRef;

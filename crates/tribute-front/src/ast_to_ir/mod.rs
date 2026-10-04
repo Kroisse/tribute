@@ -27,7 +27,8 @@
 mod context;
 mod lower;
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use tribute_ir::dialect::tribute_control::{CompilerIntrinsicDeclaration, OperationDeclaration};

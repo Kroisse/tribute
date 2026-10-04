@@ -10,7 +10,7 @@
 use std::fmt;
 use trunk_ir::attr_kind::Type;
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use trunk_ir::TypeRef;
 use trunk_ir::context::IrContext;

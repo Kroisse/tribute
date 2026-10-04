@@ -3,7 +3,8 @@
 //! This module provides an interface system similar to `type_interface.rs` but for operations.
 //! It uses the `inventory` crate to build a registry of operation properties at compile time.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::LazyLock;
 

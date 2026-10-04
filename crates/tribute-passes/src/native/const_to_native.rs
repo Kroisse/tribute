@@ -15,8 +15,9 @@
 //! Runs before `adt_rc_header` (Phase 1.95) so that `adt.variant_new` operations
 //! produced here are handled by the existing variant lowering.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use hashbrown::hash_map::Entry;
+use std::collections::HashSet;
 
 use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;

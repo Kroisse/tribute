@@ -19,7 +19,8 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 

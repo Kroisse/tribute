@@ -30,7 +30,8 @@ mod expr;
 mod finalize;
 mod func_check;
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use trunk_ir::{Span, Symbol};
 

@@ -1,6 +1,6 @@
 //! Calling-convention requirements derived from source effect rows.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use super::{AbilityId, EffectRow, Type, TypeKind};
 pub use tribute_core::CallingConvention;

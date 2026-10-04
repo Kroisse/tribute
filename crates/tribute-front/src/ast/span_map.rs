@@ -8,7 +8,7 @@
 //! - Span changes don't invalidate Salsa caches
 //! - Additional metadata can be added using the same pattern
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 

@@ -14,7 +14,8 @@
 //! 3. **Operation verifiers**: Check local operation invariants that do not
 //!    require whole-IR analysis or conversion-boundary state.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 
 use cranelift_entity::EntitySet;

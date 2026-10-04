@@ -15,7 +15,7 @@
 //! - Creates a function table with those functions
 //! - Generates `wasm.table` and `wasm.elem` operations
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 use std::ops::ControlFlow;
 
 use trunk_ir::context::{IrContext, OperationDataBuilder};

@@ -8,7 +8,8 @@ pub(crate) use collect::is_concrete_type;
 pub use validate::{InstanceError, InstanceErrorKind};
 pub mod specialize;
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use trunk_ir::Symbol;
 
@@ -245,6 +246,8 @@ pub fn monomorphize_functions<'db>(
             &nominal_index,
             &type_instantiations,
         );
+        // The index borrows source declarations; release it before rewriting them.
+        drop(nominal_index);
 
         // Build type rewrite map and rewrite Named types throughout the module
         let type_rewrite_map = rewrite::build_type_rewrite_map(db, &type_instantiations);
@@ -308,6 +311,7 @@ pub fn monomorphize_functions<'db>(
             .extend(specialized_enums.into_iter().map(Decl::Enum));
         module
     } else {
+        drop(nominal_index);
         module
     };
 

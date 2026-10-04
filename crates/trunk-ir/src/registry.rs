@@ -1,6 +1,6 @@
 //! Lookup tables of hooks that dialects register per `(dialect, name)`.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use crate::Symbol;
 

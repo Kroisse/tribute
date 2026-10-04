@@ -522,7 +522,7 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
-        let aliases: std::collections::HashMap<_, _> = ctx
+        let aliases: hashbrown::HashMap<_, _> = ctx
             .type_aliases()
             .iter()
             .map(|(name, ty)| (name.to_string(), *ty))

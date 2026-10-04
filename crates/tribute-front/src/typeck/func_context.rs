@@ -9,7 +9,8 @@
 //! UniVar IDs include the function name, making them globally unique across all
 //! functions without needing a global counter.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use trunk_ir::Symbol;
 
@@ -1828,7 +1829,7 @@ mod merge_effect_tests {
             super::super::context::AbilityInfo {
                 id: ability_id,
                 type_params: vec![crate::ast::TypeParam::anonymous()],
-                operations: std::collections::HashMap::new(),
+                operations: hashbrown::HashMap::new(),
             },
         );
         let func_id = FuncDefId::new(db, Symbol::new("test"));

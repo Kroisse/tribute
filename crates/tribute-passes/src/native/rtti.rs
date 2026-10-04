@@ -29,7 +29,8 @@
 //! Runs before `adt_rc_header` (Phase 1.95), which stores the declared
 //! `rtti_idx` values in allocation headers and then erases the declarations.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use tribute_ir::dialect::adt::layout::{

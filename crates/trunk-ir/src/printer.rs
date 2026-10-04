@@ -11,7 +11,8 @@
 //! }
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Write;
 use std::ops::ControlFlow;

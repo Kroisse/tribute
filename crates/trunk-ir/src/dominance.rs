@@ -1,6 +1,7 @@
 //! Dominance analysis for single-region control-flow graphs.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use crate::context::{BlockList, IrContext};
 use crate::{BlockRef, RegionRef};

@@ -4,7 +4,8 @@
 //! lowering and shared CPS legalization. It deliberately contains no physical
 //! evidence, closure-environment, continuation, or backend carrier layout.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;

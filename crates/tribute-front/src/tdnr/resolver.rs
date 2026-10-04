@@ -3,7 +3,7 @@
 //! Transforms `MethodCall` expressions into `Call` expressions by resolving
 //! the method name using the receiver's type.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use trunk_ir::Symbol;
 

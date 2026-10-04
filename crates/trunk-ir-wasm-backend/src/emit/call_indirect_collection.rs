@@ -3,7 +3,8 @@
 //! This module handles the collection of function types used in call_indirect
 //! operations and ref_func declarations.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -44,8 +45,7 @@ pub(crate) fn collect_call_indirect_types(
                 } else {
                     continue;
                 };
-                if let std::collections::hash_map::Entry::Vacant(entry) =
-                    type_idx_by_type.entry(signature)
+                if let hashbrown::hash_map::Entry::Vacant(entry) = type_idx_by_type.entry(signature)
                 {
                     let index = *next_type_idx;
                     *next_type_idx += 1;

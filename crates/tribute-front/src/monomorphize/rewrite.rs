@@ -4,7 +4,8 @@
 //! by matching the callee's concrete type against collected instantiations.
 //! Also rewrites Named types with type arguments to their mangled monomorphic versions.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use trunk_ir::Symbol;
 

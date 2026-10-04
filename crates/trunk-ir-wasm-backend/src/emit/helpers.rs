@@ -3,7 +3,7 @@
 //! This module contains type conversion and utility functions shared across
 //! the emit module.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;

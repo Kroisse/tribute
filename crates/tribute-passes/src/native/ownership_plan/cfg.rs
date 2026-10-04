@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;

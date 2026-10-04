@@ -3,7 +3,8 @@
 //! It emits only the documented `tribute_control` boundary and ordinary value
 //! dialects; shared CPS construction belongs to `tribute-passes`.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -38,7 +39,7 @@ struct Declarations<'db> {
     // through its debug representation.  Preserve first source use explicitly.
     values: Vec<OperationDeclaration>,
     compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
-    schemas: std::collections::HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
+    schemas: hashbrown::HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     handler_operations:
         SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations:

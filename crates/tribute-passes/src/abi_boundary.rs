@@ -5,7 +5,8 @@
 //! the point where target dialect lowering begins. This module reports every
 //! violation of that contract, and the pipeline rejects a module with any.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 

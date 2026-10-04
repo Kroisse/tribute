@@ -10,7 +10,7 @@
 //! 2. **IR build**: `ArenaIrBuilder` converts `Raw*` → arena `OpRef`,
 //!    `BlockRef`, `RegionRef`, etc.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use smallvec::smallvec;
 use winnow::prelude::*;
@@ -1057,7 +1057,7 @@ core.module @test {
             printed.contains("func.func_sig<(core.i32 {a = core.i32}, core.ptr) -> core.i32>"),
             "{printed}"
         );
-        let aliases: std::collections::HashMap<_, _> = ctx
+        let aliases: hashbrown::HashMap<_, _> = ctx
             .type_aliases()
             .iter()
             .map(|(name, ty)| (name.to_string(), *ty))

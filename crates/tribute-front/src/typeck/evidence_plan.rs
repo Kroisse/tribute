@@ -31,7 +31,7 @@
 //! Checking records each call against the evidence scope it runs in and
 //! computes the selections only after solving, when every row is known.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use crate::ast::{Effect, EffectRow, EffectVar, LocalId, NodeId};
 

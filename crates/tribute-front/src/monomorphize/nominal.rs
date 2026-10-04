@@ -1,5 +1,6 @@
 //! Close nominal instances over their checked constructor schemas before cloning.
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
 use crate::typeck::subst::{SubstResult, substitute_bound_vars};

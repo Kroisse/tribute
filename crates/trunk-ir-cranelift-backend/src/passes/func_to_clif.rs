@@ -10,7 +10,7 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;

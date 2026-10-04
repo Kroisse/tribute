@@ -1,5 +1,5 @@
+use hashbrown::{HashMap, hash_map::Entry};
 use std::cell::RefCell;
-use std::collections::{HashMap, hash_map::Entry};
 
 use lsp_types::Uri;
 use parking_lot::RwLock;

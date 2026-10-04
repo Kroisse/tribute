@@ -4,7 +4,8 @@
 //! ensuring that type variables (UniVars) are fully resolved within the function
 //! before moving to the next.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;

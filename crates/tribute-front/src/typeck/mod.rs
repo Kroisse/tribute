@@ -109,7 +109,7 @@ pub fn ability_schemas<'db>(
 /// Rebuild lowering's lookup representation from public deterministic schemas.
 pub fn ability_definitions_from_schemas<'db>(
     schemas: &[AbilitySchema<'db>],
-) -> std::collections::HashMap<AbilityId<'db>, AbilityInfo<'db>> {
+) -> hashbrown::HashMap<AbilityId<'db>, AbilityInfo<'db>> {
     schemas
         .iter()
         .map(|(id, type_params, operations)| {

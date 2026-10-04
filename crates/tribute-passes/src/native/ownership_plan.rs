@@ -4,7 +4,8 @@
 //! before `func_to_clif` erases semantic reference types.  Building and
 //! validating it never mutates the input IR.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 

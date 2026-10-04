@@ -3,7 +3,8 @@
 //! Manages state during AST-to-IR transformation.
 //! Emits arena IR (`IrContext` / `TypeRef` / `ValueRef`) directly.
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 
 use tribute_ir::dialect::adt;

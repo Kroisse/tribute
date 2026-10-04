@@ -4,7 +4,7 @@
 //! discover ownership from physical types, pointer provenance, aliases, or
 //! liveness after semantic references have been erased.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{

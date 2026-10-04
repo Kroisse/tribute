@@ -584,7 +584,7 @@ impl EffectAnnotationOrigins {
         db: &'db dyn salsa::Database,
         row: EffectRow<'db>,
     ) -> Option<DuplicateEffectAnnotations<'db>> {
-        use std::collections::HashMap;
+        use hashbrown::HashMap;
 
         let effects = row.effects(db);
         // Solving an open row may append inferred effects after the concrete

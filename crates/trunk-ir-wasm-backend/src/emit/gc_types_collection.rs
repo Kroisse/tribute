@@ -3,7 +3,7 @@
 //! This module traverses wasm operations to collect WebAssembly GC type
 //! definitions (structs and arrays) and build the type index mappings.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use tracing::debug;
 

@@ -3,7 +3,8 @@ use super::{MonomorphizeMetadata, collect::is_concrete_type};
 use crate::ast::{
     Decl, ExprKind, FuncDecl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
 };
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use trunk_ir::Symbol;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]

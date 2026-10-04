@@ -1,5 +1,6 @@
 use super::nominal_index::NominalIndex;
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use crate::ast::visit::{RefSite, Refs, walk_module};
 use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef};

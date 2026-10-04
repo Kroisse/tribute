@@ -3,7 +3,7 @@
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
 //! by looking up names in the module environment and local scopes.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use itertools::Itertools;
 use salsa::Accumulator as _;

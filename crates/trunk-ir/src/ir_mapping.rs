@@ -3,7 +3,7 @@
 //! `IrMapping` tracks correspondences between old and new IR entities
 //! during operations like deep cloning. Inspired by MLIR's `IRMapping`.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use crate::refs::{BlockRef, ValueRef};
 

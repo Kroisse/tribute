@@ -722,6 +722,9 @@ name = "hashbrown"
 version = "0.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "841d1cc9bed7f9236f321df977030373f4a4163ae1a7dbfe1a51a2c1a51d9100"
+dependencies = [
+ "foldhash",
+]
 
 [[package]]
 name = "hashbrown"
@@ -1756,6 +1759,7 @@ dependencies = [
  "crossbeam-channel",
  "derive_more",
  "fluent-uri",
+ "hashbrown 0.16.1",
  "insta",
  "itertools 0.14.0",
  "lsp-server",
@@ -1813,10 +1817,12 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "fluent-uri",
+ "hashbrown 0.16.1",
  "insta",
  "itertools 0.14.0",
  "proptest",
  "ropey",
+ "rustc-hash",
  "salsa",
  "salsa-test-macros",
  "smallvec",
@@ -1835,6 +1841,7 @@ name = "tribute-ir"
 version = "0.1.0"
 dependencies = [
  "derive_more",
+ "hashbrown 0.16.1",
  "inventory",
  "itertools 0.14.0",
  "rustc-hash",
@@ -1849,6 +1856,7 @@ name = "tribute-passes"
 version = "0.1.0"
 dependencies = [
  "derive_more",
+ "hashbrown 0.16.1",
  "insta",
  "itertools 0.14.0",
  "tracing",
@@ -1916,6 +1924,7 @@ dependencies = [
  "cranelift-module",
  "cranelift-object",
  "derive_more",
+ "hashbrown 0.16.1",
  "insta",
  "itertools 0.14.0",
  "object 0.40.0",
@@ -1941,6 +1950,7 @@ name = "trunk-ir-wasm-backend"
 version = "0.1.0"
 dependencies = [
  "derive_more",
+ "hashbrown 0.16.1",
  "itertools 0.14.0",
  "tempfile",
  "tracing",

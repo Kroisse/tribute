@@ -7,7 +7,8 @@
 
 mod matrix;
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;

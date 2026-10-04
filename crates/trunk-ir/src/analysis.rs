@@ -63,8 +63,9 @@
 //! `Arc<dyn Any + Send + Sync>` for future flexibility, but the cache
 //! itself is single-threaded.
 
+use hashbrown::HashMap;
 use std::any::{Any, TypeId, type_name};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;

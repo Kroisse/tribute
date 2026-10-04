@@ -10,7 +10,8 @@
 //! Functions and references use root-qualified names (e.g. `nested::helper`),
 //! as resolved by [`SymbolTable`].
 
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use std::collections::HashSet;
 use std::ops::ControlFlow;
 
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};

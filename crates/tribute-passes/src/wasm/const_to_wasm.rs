@@ -8,8 +8,9 @@
 //! A data index is the position of its segment among the module's `wasm.data`
 //! operations, so later steps read the segments from the IR itself.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use hashbrown::HashMap;
+use hashbrown::hash_map::Entry;
+use std::collections::HashSet;
 use std::fmt;
 use std::rc::Rc;
 

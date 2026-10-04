@@ -32,8 +32,9 @@ use handlers::{
 use helpers::*;
 use value_emission::*;
 
+use hashbrown::HashMap;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use tracing::debug;

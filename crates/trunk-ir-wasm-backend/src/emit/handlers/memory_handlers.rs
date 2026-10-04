@@ -549,7 +549,7 @@ pub(crate) fn handle_i64_store32(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     use trunk_ir::Span;
     use trunk_ir::refs::PathRef;

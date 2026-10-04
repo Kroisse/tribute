@@ -4,7 +4,7 @@
 //! only then maps logical CPS `core.never` results to the shared empty-result
 //! list used by target backends.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;

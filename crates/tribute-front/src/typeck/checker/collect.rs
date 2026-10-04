@@ -3,7 +3,7 @@
 //! Populates `ModuleTypeEnv` with function signatures, constructor types,
 //! and type definitions before type checking function bodies.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};

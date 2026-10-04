@@ -5,7 +5,7 @@
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use trunk_ir::SymbolPath;
 use trunk_ir::callable::{CallableBody, classify_callable_body};

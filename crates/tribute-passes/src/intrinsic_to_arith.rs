@@ -4,7 +4,7 @@
 //! It runs in the shared pipeline before backend-specific lowering, handling
 //! arithmetic and comparison intrinsics declared in the prelude for Int, Nat, and Float.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;

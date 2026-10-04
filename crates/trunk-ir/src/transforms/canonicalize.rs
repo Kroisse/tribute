@@ -31,7 +31,7 @@
 //! Float and div/rem folds are deferred until each one's edge cases
 //! (NaN/-0.0, division-by-zero) are pinned down.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use crate::context::IrContext;
 use crate::dialect::{arith, func};

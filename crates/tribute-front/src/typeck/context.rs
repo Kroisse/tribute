@@ -6,7 +6,7 @@
 //!
 //! For function-level type inference, see `FunctionInferenceContext` in `func_context.rs`.
 
-use std::collections::HashMap;
+use hashbrown::HashMap;
 
 use trunk_ir::Symbol;
 
@@ -794,7 +794,7 @@ fn ability_origin_rank(origin: AbilityOrigin) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use hashbrown::HashMap;
 
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;

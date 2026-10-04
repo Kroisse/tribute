@@ -4,8 +4,9 @@
 //! `ability` surface. It does not run closure extraction, evidence lowering,
 //! or target-specific conversion.
 
+use hashbrown::HashMap;
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
