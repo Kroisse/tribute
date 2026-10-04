@@ -77,6 +77,18 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     .as_type_ref()
 }
 
+/// Get the `Described` type: the supertype of every user struct and variant,
+/// holding only the runtime type descriptor field.
+pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
+    let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
+    let mut attrs = AttributeMap::new();
+    attrs.insert(
+        tribute_ir::runtime_layout::LAYOUT_ATTR,
+        ctx.string_attr(tribute_ir::runtime_layout::DESCRIBED),
+    );
+    adt::struct_type(ctx, "_described", [("descriptor", i32_ty)], attrs).as_type_ref()
+}
+
 /// Get the Evidence type of the WASM representation.
 ///
 /// Evidence keeps its runtime layout identifier through Wasm lowering: it is
@@ -596,6 +608,10 @@ mod tests {
         assert_eq!(
             tribute_ir::runtime_layout::BYTES_DATA,
             trunk_ir_wasm_backend::gc_types::BYTES_DATA_LAYOUT
+        );
+        assert_eq!(
+            tribute_ir::runtime_layout::DESCRIBED,
+            trunk_ir_wasm_backend::gc_types::DESCRIBED_LAYOUT
         );
         let mut ctx = IrContext::new();
         let closure = closure_adt_type(&mut ctx);
