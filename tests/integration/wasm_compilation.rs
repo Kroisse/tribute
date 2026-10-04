@@ -939,8 +939,8 @@ fn main() ->{std::io::Io} Nil {
 }
 
 #[salsa_test]
-fn test_variants_are_told_apart_by_descriptor_under_the_object_supertype(db: &salsa::DatabaseImpl) {
-    use trunk_ir_wasm_backend::gc_types::{FIRST_USER_TYPE_IDX, OBJECT_IDX};
+fn test_variants_are_told_apart_by_descriptor_under_the_any_supertype(db: &salsa::DatabaseImpl) {
+    use trunk_ir_wasm_backend::gc_types::{ANY_IDX, FIRST_USER_TYPE_IDX};
     use wasmparser::{CompositeInnerType, Operator, Payload};
 
     let source = SourceCst::from_source_str(
@@ -1002,18 +1002,18 @@ fn main() ->{std::io::Io} Nil {
         }
     }
 
-    let (object_fields, object_is_final, object_supertype) = struct_types[OBJECT_IDX as usize]
+    let (any_fields, any_is_final, any_supertype) = struct_types[ANY_IDX as usize]
         .clone()
-        .expect("the object type is a struct");
-    let [descriptor] = object_fields[..] else {
-        panic!("the object type holds the descriptor field alone")
+        .expect("the Any type is a struct");
+    let [descriptor] = any_fields[..] else {
+        panic!("the Any type holds the descriptor field alone")
     };
     assert_eq!(
         descriptor.element_type,
         wasmparser::StorageType::Val(wasmparser::ValType::I32)
     );
-    assert!(!object_is_final);
-    assert_eq!(object_supertype, None);
+    assert!(!any_is_final);
+    assert_eq!(any_supertype, None);
 
     let user_structs: Vec<_> = struct_types[FIRST_USER_TYPE_IDX as usize..]
         .iter()
@@ -1023,7 +1023,7 @@ fn main() ->{std::io::Io} Nil {
     for (fields, is_final, supertype) in user_structs {
         assert_eq!(fields.first(), Some(&descriptor));
         assert!(is_final);
-        assert_eq!(*supertype, Some(OBJECT_IDX));
+        assert_eq!(*supertype, Some(ANY_IDX));
     }
     assert_eq!(ref_tests, 0, "variants are not tested by GC type");
 

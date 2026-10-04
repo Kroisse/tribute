@@ -20,9 +20,10 @@ pub const EVIDENCE: &str = "evidence";
 pub const BYTES: &str = "bytes";
 /// The byte array a Wasm `Bytes` points into.
 pub const BYTES_DATA: &str = "bytes_data";
-/// The Wasm supertype of every user struct and variant object: its runtime
-/// type descriptor field alone.
-pub const OBJECT: &str = "object";
+/// The Wasm supertype of every user struct and variant: its runtime type
+/// descriptor field alone. It is not Wasm's `any` heap type; builtin layouts,
+/// arrays, and boxed scalars are not its subtypes.
+pub const ANY: &str = "any";
 
 /// Whether `ty` carries the runtime layout identifier `layout`.
 pub fn has_runtime_layout(ctx: &IrContext, ty: TypeRef, layout: &str) -> bool {

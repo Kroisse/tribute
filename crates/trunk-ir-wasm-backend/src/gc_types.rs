@@ -12,7 +12,7 @@
 //! Index 3: ClosureStruct - struct { i32, anyref } (table index + env)
 //! Index 4: Marker - struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref, shadowed: anyref } (evidence)
 //! Index 5: Evidence - array (ref Marker) (evidence array)
-//! Index 6: Object - struct { descriptor: i32 }, supertype of user structs and variants
+//! Index 6: Any - struct { descriptor: i32 }, supertype of user structs and variants
 //! Index 7+: User-defined types (structs, arrays, variants, closures, etc.)
 //! ```
 
@@ -45,11 +45,12 @@ pub const MARKER_IDX: u32 = 4;
 /// Evidence is a sorted array of markers for ability handler lookup.
 pub const EVIDENCE_IDX: u32 = 5;
 
-/// Type index for Object (struct { descriptor: i32 }).
+/// Type index for Any (struct { descriptor: i32 }). This is not Wasm's `any`
+/// heap type: only user structs and variants are its subtypes.
 /// This is always index 6 in the GC type section.
 /// Every user struct and variant type is declared as its subtype, so an
 /// erased reference can be cast to it to read the runtime type descriptor.
-pub const OBJECT_IDX: u32 = 6;
+pub const ANY_IDX: u32 = 6;
 
 /// Runtime layout identifier (the `layout` type attribute) of the builtin
 /// closure struct at [`CLOSURE_STRUCT_IDX`].
@@ -69,9 +70,9 @@ pub const BYTES_LAYOUT: &str = "bytes";
 /// [`BYTES_ARRAY_IDX`].
 pub const BYTES_DATA_LAYOUT: &str = "bytes_data";
 
-/// Runtime layout identifier of the builtin object supertype at
-/// [`OBJECT_IDX`].
-pub const OBJECT_LAYOUT: &str = "object";
+/// Runtime layout identifier of the builtin `Any` supertype at
+/// [`ANY_IDX`].
+pub const ANY_LAYOUT: &str = "any";
 
 /// The builtin GC type index of a type carrying a runtime layout identifier.
 pub fn builtin_layout_idx(layout: &str) -> Option<u32> {
@@ -85,8 +86,8 @@ pub fn builtin_layout_idx(layout: &str) -> Option<u32> {
         Some(MARKER_IDX)
     } else if layout == EVIDENCE_LAYOUT {
         Some(EVIDENCE_IDX)
-    } else if layout == OBJECT_LAYOUT {
-        Some(OBJECT_IDX)
+    } else if layout == ANY_LAYOUT {
+        Some(ANY_IDX)
     } else {
         None
     }
@@ -132,7 +133,7 @@ impl GcTypeDef {
 ///
 /// These must be prepended to the user-defined types when emitting.
 /// Indices: BoxedF64(0), BytesArray(1), BytesStruct(2), ClosureStruct(3),
-///          Marker(4), Evidence(5), Object(6).
+///          Marker(4), Evidence(5), Any(6).
 pub fn builtin_types() -> Vec<GcTypeDef> {
     vec![
         // Index 0: BoxedF64 - struct { value: f64 }
@@ -205,12 +206,12 @@ pub fn builtin_types() -> Vec<GcTypeDef> {
             })),
             mutable: true,
         }),
-        // Index 6: Object - struct { descriptor: i32 }
+        // Index 6: Any - struct { descriptor: i32 }
         GcTypeDef::Struct(vec![descriptor_field()]),
     ]
 }
 
-/// The runtime type descriptor field that starts [`OBJECT_IDX`] and each of
+/// The runtime type descriptor field that starts [`ANY_IDX`] and each of
 /// its subtypes.
 pub fn descriptor_field() -> FieldType {
     FieldType {
@@ -220,8 +221,8 @@ pub fn descriptor_field() -> FieldType {
 }
 
 /// Whether a user struct with these fields is declared as a subtype of
-/// [`OBJECT_IDX`]: it starts with the descriptor field.
-pub fn is_object_subtype(fields: &[FieldType]) -> bool {
+/// [`ANY_IDX`]: it starts with the descriptor field.
+pub fn is_any_subtype(fields: &[FieldType]) -> bool {
     fields.first() == Some(&descriptor_field())
 }
 
@@ -250,7 +251,7 @@ mod tests {
                 CLOSURE_STRUCT_IDX,
                 MARKER_IDX,
                 EVIDENCE_IDX,
-                OBJECT_IDX,
+                ANY_IDX,
                 FIRST_USER_TYPE_IDX
             ],
             [0, 1, 2, 3, 4, 5, 6, 7],
@@ -283,8 +284,8 @@ mod tests {
         assert!(matches!(&builtins[4], GcTypeDef::Struct(fields) if fields.len() == 5));
         // Evidence (array of Marker refs)
         assert!(matches!(&builtins[5], GcTypeDef::Array(_)));
-        // Object (the descriptor field alone)
-        assert!(matches!(&builtins[6], GcTypeDef::Struct(fields) if is_object_subtype(fields)));
+        // Any (the descriptor field alone)
+        assert!(matches!(&builtins[6], GcTypeDef::Struct(fields) if is_any_subtype(fields)));
     }
 
     #[test]

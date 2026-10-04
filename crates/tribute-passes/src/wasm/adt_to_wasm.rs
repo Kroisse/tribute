@@ -19,12 +19,12 @@
 //!
 //! Each variant gets its own struct type (e.g., `Expr$Add`, `Expr$Num`) with
 //! only the variant's fields after the descriptor field. A variant is told
-//! apart by its descriptor number, not by its type: every user object type is
-//! a subtype of the object supertype, which holds the descriptor field alone.
+//! apart by its descriptor number, not by its type: every user struct and variant type
+//! is a subtype of the `Any` type, which holds the descriptor field alone.
 //!
 //! - `adt.variant_new` -> `wasm.struct_new` with variant-specific type
 //!   - Result type is marked with `is_variant=true` and `variant_tag` attributes
-//! - `adt.variant_is` -> `wasm.ref_cast` to the object supertype, a read of
+//! - `adt.variant_is` -> `wasm.ref_cast` to the `Any` type, a read of
 //!   its descriptor field, and a comparison with the variant's number
 //! - `adt.variant_cast` -> `wasm.ref_cast` (casts to specific variant type)
 //! - `adt.variant_get` -> `wasm.struct_get` (field access after the descriptor field)
@@ -350,9 +350,9 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: StringRef) ->
     ctx.intern_type(builder.build())
 }
 
-/// Pattern for `adt.variant_is` -> a comparison of the object's descriptor.
+/// Pattern for `adt.variant_is` -> a comparison of the value's descriptor.
 ///
-/// The reference is cast to the object supertype to read its descriptor
+/// The reference is cast to the `Any` type to read its descriptor
 /// field, which is compared with the variant's descriptor number. A variant
 /// the module never allocates has no number and never matches.
 struct VariantIsPattern {
@@ -389,13 +389,13 @@ impl RewritePattern for VariantIsPattern {
             return true;
         };
 
-        let object_ty = super::type_converter::object_adt_type(ctx);
-        let object = wasm_gc_dialect::RefCast::operands(ref_val)
-            .target_type(object_ty)
-            .results(object_ty)
+        let any_ty = super::type_converter::any_adt_type(ctx);
+        let any = wasm_gc_dialect::RefCast::operands(ref_val)
+            .target_type(any_ty)
+            .results(any_ty)
             .build(ctx, loc);
-        let descriptor = wasm_gc_dialect::StructGet::operands(object.result(ctx))
-            .r#type(object_ty)
+        let descriptor = wasm_gc_dialect::StructGet::operands(any.result(ctx))
+            .r#type(any_ty)
             .field_idx(0)
             .results(i32_ty)
             .build(ctx, loc);
@@ -406,7 +406,7 @@ impl RewritePattern for VariantIsPattern {
         let matches = wasm_dialect::I32Eq::operands(descriptor.result(ctx), expected.result(ctx))
             .results(result_ty)
             .build(ctx, loc);
-        rewriter.insert_op(object.op_ref());
+        rewriter.insert_op(any.op_ref());
         rewriter.insert_op(descriptor.op_ref());
         rewriter.insert_op(expected.op_ref());
         rewriter.replace_op(matches.op_ref());
@@ -1029,11 +1029,11 @@ mod tests {
         let empty_tag = ctx.intern_str("Empty");
         let cons = make_variant_type(&mut ctx, list, cons_tag);
         let empty = make_variant_type(&mut ctx, list, empty_tag);
-        let object = crate::wasm::type_converter::object_adt_type(&mut ctx);
+        let any = crate::wasm::type_converter::any_adt_type(&mut ctx);
 
-        // `variant_is` reads the descriptor through the object supertype
+        // `variant_is` reads the descriptor through the `Any` type
         // instead of testing for the variant's type.
-        assert_eq!(variant_types, [empty, cons, object, object, cons, cons]);
+        assert_eq!(variant_types, [empty, cons, any, any, cons, cons]);
         assert_ne!(empty, cons);
         assert_eq!(ctx.get_type(cons).attrs.get_type("base_enum"), Some(list));
 
@@ -1063,16 +1063,14 @@ mod tests {
                     })
             })
             .collect();
-        let object_idx = trunk_ir_wasm_backend::gc_types::OBJECT_IDX;
+        let any_idx = trunk_ir_wasm_backend::gc_types::ANY_IDX;
         let [empty_idx, cons_idx, ..] = indexed_variant_ops[..] else {
             panic!("variant allocations")
         };
         assert_ne!(empty_idx, cons_idx);
         assert_eq!(
             indexed_variant_ops,
-            [
-                empty_idx, cons_idx, object_idx, object_idx, cons_idx, cons_idx
-            ]
+            [empty_idx, cons_idx, any_idx, any_idx, cons_idx, cons_idx]
         );
     }
 
@@ -1123,10 +1121,10 @@ mod tests {
         assert!(has_runtime_layout(
             &ctx,
             descriptor.r#type(&ctx),
-            runtime_layout::OBJECT
+            runtime_layout::ANY
         ));
         let cast = wasm_gc_dialect::RefCast::from_op(&ctx, defining_op(descriptor.r#ref(&ctx)))
-            .expect("cast to the object supertype");
+            .expect("cast to the Any type");
         assert_eq!(cast.target_type(&ctx), descriptor.r#type(&ctx));
         // `Some` is the second allocated descriptor of the module.
         let expected = wasm::I32Const::from_op(&ctx, defining_op(is_some.rhs(&ctx)))
