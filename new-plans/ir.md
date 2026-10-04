@@ -964,8 +964,8 @@ logical continuation으로 region을 lower한다:
 
 CPS 변환 뒤 Cps callable은 `Evidence, ContinuationFrame<R>, source args`를 받고
 `core.never`로 끝난다. 생성된 completion과 exact resume도 Evidence와
-ContinuationFrame을 명시적으로 받는다. Resume은 동적 ContinuationFrame에서 불변 어휘적 dispatcher를
-재구성한 뒤 suffix와 nested handle을 계속 실행한다. 세 dispatch 계층의 정확한
+ContinuationFrame을 명시적으로 받는다. Resume은 동적 ContinuationFrame에서 handle
+층의 dispatcher를 불변 값으로 다시 만든 뒤 suffix와 nested handle을 계속 실행한다. 세 dispatch 계층의 정확한
 형상은 [cps-effects.md](cps-effects.md#dispatch-layers)를 따른다.
 
 이 단일 region/suffix 규칙은 case arm과 guard, conditional, short-circuit

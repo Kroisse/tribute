@@ -759,7 +759,7 @@ struct HandleLayer {
     arms: Vec<HandlerArmInfo>,
     body_type: TypeRef,
     answer_type: TypeRef,
-    /// Builds the lexical dispatcher of an installed layer.
+    /// Builds the dispatcher of an installed layer.
     dispatch_factory: Symbol,
     /// Builds the dispatcher of a layer resumed from a lambda, which keeps
     /// only the handle's completion.
@@ -1211,7 +1211,7 @@ impl<'a> Converter<'a> {
             self.ctx.push_op(block, tr_op);
             dispatchers.push(tr_value);
             // General operations dispatch through the continuation frame's
-            // lexical dispatcher, so the marker's general slot only rejects.
+            // handle-layer dispatcher, so the marker's general slot only rejects.
             let (handler_op, handler_value) = self.build_general_reject_dispatcher(location);
             self.ctx.push_op(block, handler_op);
             dispatchers.push(handler_value);
@@ -2479,7 +2479,7 @@ impl<'a> Converter<'a> {
         body_mapping.insert(source_result, resume_input);
         let mut suffix_flow = flow.clone();
         // A resumed suffix receives the dynamic frame directly. It carries
-        // both the completion and lexical-dispatch provenance, so no closure
+        // both the completion and handle-layer dispatch provenance, so no closure
         // graph cloning or ambient-evidence reconstruction is permitted.
         suffix_flow.evidence = Some(resume_evidence);
         suffix_flow.exit_k = Some(resume_frame);
@@ -2537,7 +2537,7 @@ impl<'a> Converter<'a> {
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
-    /// Build an immutable factory for one lexical handle dispatcher. Each
+    /// Build an immutable factory for the dispatcher of one handle. Each
     /// installed layer of the handle calls it with the frame the handle exits
     /// to and the layer's outer evidence, so the dispatcher's arms run with
     /// the evidence and continuation of that layer.
@@ -2638,7 +2638,7 @@ impl<'a> Converter<'a> {
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
-    /// Build the lexical dispatcher of one installed handle layer. A general
+    /// Build the dispatcher of one installed handle layer. A general
     /// arm runs with the layer's outer evidence and exits to `exit_frame`.
     fn build_local_dispatcher_instance(
         &mut self,
@@ -2997,7 +2997,7 @@ impl<'a> Converter<'a> {
                 "general operation has no verified Dispatch boundary",
             )
         })?;
-        // The frame's dispatcher is the lexical dispatcher of the nearest
+        // The frame's dispatcher is the dispatcher of the nearest
         // handle layer as it is installed now.
         let (_, dispatch) = self.unpack_frame(block, location, flow.answer_type, frame);
         let perform = ability::Perform::operands(evidence, dispatch, continuation, args)
@@ -4305,7 +4305,7 @@ mod tests {
         );
         assert!(
             printed.matches("adt.struct_new").count() >= 4,
-            "suffixes and resumes must repack the lexical dispatcher with a new done target: {printed}"
+            "suffixes and resumes must repack the handle-layer dispatcher with a new done target: {printed}"
         );
         assert!(
             printed

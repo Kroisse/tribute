@@ -73,7 +73,7 @@ type과 source parameter/result만 사용하며 evidence, environment, `Continua
 | `Cps` | evidence, `ContinuationFrame<R>`, source parameter 순서 | logical `core.never`, physical empty result |
 
 Parameter 순서는 `CallableAbi`가 정의한다. `ContinuationFrame<R>`는 CPS callable이
-전달하는 continuation/control frame이며 `Done<R>`와 내부의 어휘적 `Dispatch<R>`를
+전달하는 continuation/control frame이며 `Done<R>`와 handle 층의 `Dispatch<R>`를
 함께 보존한다. `Completion<X, R>`와 `ResumeExact<I, R>`는 각각
 `(Evidence, ContinuationFrame<R>, X)`와 `(Evidence, ContinuationFrame<R>, I)`를 받아
 logical `core.never`로 끝난다. Target signature physicalization 뒤 worker와
@@ -208,9 +208,9 @@ branch, guard, 오른쪽 항만 실행한다.
    performed-computation suffix와 completion region을 건너뛴다.
 5. Nested handle은 같은 delimiter를 재귀적으로 만든다. Resumed path는 perform과
    handler 사이에서 capture된 모든 case/conditional/short-circuit/nested-handle
-   frame에 다시 진입한다. Resume은 동적 `ContinuationFrame<R>`에서 새 불변 어휘적
-   dispatcher를 만들고, 그 ContinuationFrame을 다음 suffix와 resume에 전달한다. Non-resumed
-   path는 해당 frame을 포기한다.
+   frame에 다시 진입한다. Resume은 동적 `ContinuationFrame<R>`에서 handle 층의
+   dispatcher를 새 불변 값으로 만들고, 그 ContinuationFrame을 다음 suffix와 resume에
+   전달한다. Non-resumed path는 해당 frame을 포기한다.
 
 Converter는 region, block suffix, `tribute_control.yield`, 검증된
 `operation_kind`, callable convention metadata에서 모든 continuation을
@@ -342,8 +342,9 @@ convention은 `Cps`, environment 위치는 각각 1과 0이다. 이미 낮춘 cl
 
 여기에는 서로 다른 세 dispatch 계층이 있다.
 
-1. `ContinuationFrame<R>`의 내부 `Dispatch<R>`는 resume에서 어휘적 dispatcher를 재구성하는
-   CPS closure이며 `(evidence, resume, prompt, ability_id, op_id, payload)`를 받는다.
+1. `ContinuationFrame<R>`의 내부 `Dispatch<R>`는 handle 층의 dispatcher다. Resume에서
+   다시 만드는 CPS closure이며 `(evidence, resume, prompt, ability_id, op_id,
+   payload)`를 받는다.
 2. `effect.dispatch_cps(evidence, dispatch, resume, payload)`는 필수
    `answer_type = R`을 보존하는 결과 없는 대상 독립적 operation이다.
 3. 대상 dispatch ABI는 compiler-owned
@@ -430,17 +431,19 @@ Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는
 `handle` lowering은 두 종류의 dispatch closure를 만든다. Environment를 포함한
 물리적 입력은 다음과 같다:
 
-- 어휘적 dispatcher: `(Evidence, Environment, Resume, Prompt, AbilityId,
+- Handle 층의 dispatcher: `(Evidence, Environment, Resume, Prompt, AbilityId,
   OperationIndex, Payload) -> ()`. General `op` handler용이며 body의
   `ContinuationFrame`이 [내부 `Dispatch<R>`](#dispatch-layers)로 운반한다. Prompt가
   자기 handle의 것이면 arm으로, 아니면 바깥 dispatcher로 indirect tail transfer한다.
 - `tr_dispatch_fn`: `(Evidence, Environment, OperationIndex, Payload) -> anyref`.
   `fn` handler용이며 marker에 저장된다. `anyref`는 erased source result다.
 
-General operation은 marker에서 prompt만 읽고 dispatch는 frame의 어휘적 dispatcher가 맡는다.
-Handle body의 frame은 그 층의 dispatcher를 담으며, body 안의 operation과 suffix는 lexical
-capture가 아니라 받은 frame에서 dispatcher를 읽는다. Marker의 `handler_dispatch` 칸에는 호출되지
-않는 typed reject closure를 둔다.
+General operation은 marker에서 prompt만 읽고 dispatch는 frame이 담은 handle 층의
+dispatcher가 맡는다. 이 dispatcher들은 source에서 handle 식이 중첩된 순서를 따라
+안쪽에서 바깥쪽으로 이어지는 사슬을 이룬다. 어느 handle 식의 dispatcher인지는
+정적으로 정해지지만, dispatcher 값은 층과 함께 다시 만들어진다. 그래서 body 안의
+operation과 suffix는 dispatcher를 capture하지 않고 받은 frame에서 읽는다. Marker의
+`handler_dispatch` 칸에는 호출되지 않는 typed reject closure를 둔다.
 
 Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 것과 재개된 계산이 다시
 만든 것([재개된 frame](#row-directed-evidence))을 각각 그 handle의 **층**이라 한다.
@@ -540,7 +543,7 @@ Handler와 evidence의 연결은 다음과 같다.
   바깥 row가 그 label을 명시하면 extend 전에 `mask`로 바깥 marker를 걷어 낸다
   ([type-inference.md](type-inference.md#호출의-evidence-선택)).
 - **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
-  General arm은 층의 어휘적 dispatcher에게서 이 evidence와 exit frame을 받고,
+  General arm은 handle 층의 dispatcher에게서 이 evidence와 exit frame을 받고,
   `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다. Perform 지점
   evidence는 arm에 전달하지 않는다.
 - **Arm 안의 `resume`:** [abilities.md](abilities.md#resume과-handler-선택)에 따라

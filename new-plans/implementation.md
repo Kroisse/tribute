@@ -558,7 +558,7 @@ region을 포함한 arm body의 `tribute_control.resume`을 verifier가 거부�
 ```
 
 `State::get()`은 evidence에서 가장 가까운 State marker를 조회한다. Shared CPS
-conversion이 만든 suffix continuation과 frame의 어휘적 dispatcher는 그 marker의
+conversion이 만든 suffix continuation과 frame이 담은 handle 층의 dispatcher는 그 marker의
 prompt(P3)를 기준으로 handler boundary와 resume 경로를 연결한다. 이 그림은
 논리적 delimiter 중첩이며 machine stack을 runtime에 탐색한다는 뜻이 아니다.
 
