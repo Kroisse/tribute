@@ -125,7 +125,7 @@ fn resolve_callee(path: &SymbolPath, module_info: &ModuleInfo) -> CompilationRes
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap as HashMap;
 
     use trunk_ir::Span;
     use trunk_ir::refs::PathRef;
@@ -154,8 +154,10 @@ mod tests {
             .build(&mut ctx, location);
         let cast_result = cast.result(&ctx);
         let emit_ctx = FunctionEmitContext {
-            value_locals: HashMap::from([(null_result, 0), (cast_result, 1)]),
-            effective_types: HashMap::new(),
+            value_locals: [(null_result, 0), (cast_result, 1)]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+            effective_types: HashMap::default(),
         };
         let module_info = ModuleInfo::default();
         let mut function = Function::new([(2, ValType::Ref(RefType::ANYREF))]);
@@ -168,7 +170,7 @@ mod tests {
     fn resolve_callee_reports_missing_symbols() {
         let found = SymbolPath::from("found");
         let module_info = ModuleInfo {
-            func_indices: HashMap::from([(found.clone(), 7)]),
+            func_indices: [(found.clone(), 7)].into_iter().collect::<HashMap<_, _>>(),
             ..ModuleInfo::default()
         };
 

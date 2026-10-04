@@ -32,8 +32,9 @@ use handlers::{
 use helpers::*;
 use value_emission::*;
 
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use tracing::debug;
@@ -712,8 +713,8 @@ fn emit_function(
     }
 
     let mut emit_ctx = FunctionEmitContext {
-        value_locals: HashMap::new(),
-        effective_types: HashMap::new(),
+        value_locals: HashMap::default(),
+        effective_types: HashMap::default(),
     };
     let mut locals: Vec<ValType> = Vec::new();
 

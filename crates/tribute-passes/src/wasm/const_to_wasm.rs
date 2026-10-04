@@ -8,8 +8,9 @@
 //! A data index is the position of its segment among the module's `wasm.data`
 //! operations, so later steps read the segments from the IR itself.
 
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
@@ -65,7 +66,7 @@ impl ConstCollector {
     fn new() -> Self {
         Self {
             contents: Vec::new(),
-            seen: HashSet::new(),
+            seen: HashSet::default(),
             has_string_consts: false,
         }
     }
@@ -200,7 +201,7 @@ fn declare_data_segments(
     module: Module,
     contents: &[Vec<u8>],
 ) -> DataSegments {
-    let mut segments = DataSegments::new();
+    let mut segments = DataSegments::default();
     let Some(module_block) = module.first_block(ctx) else {
         return segments;
     };

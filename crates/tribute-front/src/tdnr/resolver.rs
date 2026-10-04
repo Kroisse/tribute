@@ -3,7 +3,7 @@
 //! Transforms `MethodCall` expressions into `Call` expressions by resolving
 //! the method name using the receiver's type.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::Symbol;
 
@@ -38,7 +38,7 @@ pub struct TdnrResolver<'db> {
 impl<'db> TdnrResolver<'db> {
     /// Create a new TDNR resolver.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
-        let mut type_identities = HashMap::new();
+        let mut type_identities = HashMap::default();
         type_identities.insert(Symbol::new("List"), crate::ast::TypeDefId::builtin_list(db));
         type_identities.insert(
             Symbol::new("std::collections::List"),
@@ -46,7 +46,7 @@ impl<'db> TdnrResolver<'db> {
         );
         Self {
             db,
-            method_index: HashMap::new(),
+            method_index: HashMap::default(),
             type_identities,
             current_prefix: String::new(),
             string_type: None,

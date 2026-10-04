@@ -14,7 +14,8 @@
 //! Follows the [`CallGraph`] edges of calls and address references, then
 //! removes unreachable functions via BFS.
 
-use std::collections::{HashSet, VecDeque};
+use rustc_hash::FxHashSet as HashSet;
+use std::collections::VecDeque;
 
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
@@ -102,7 +103,7 @@ fn run(
     let reachable = compute_reachable(&graph, roots);
 
     // A function containing a reachable function definition is kept with it.
-    let mut kept = HashSet::new();
+    let mut kept = HashSet::default();
     for (_, op) in functions().filter(|(name, _)| reachable.contains(name)) {
         let mut current = Some(op);
         while let Some(op) = current
@@ -187,7 +188,7 @@ fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 
 /// Functions reachable from `roots` via BFS over call and reference edges.
 fn compute_reachable(graph: &CallGraph, roots: HashSet<SymbolPath>) -> HashSet<SymbolPath> {
-    let mut reachable = HashSet::new();
+    let mut reachable = HashSet::default();
     let mut worklist: VecDeque<SymbolPath> = roots.into_iter().collect();
 
     while let Some(func) = worklist.pop_front() {
@@ -489,7 +490,10 @@ mod tests {
 
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from(["exported", "captured", "named_by_module"].map(SymbolPath::from))
+            ["exported", "captured", "named_by_module"]
+                .map(SymbolPath::from)
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
     }
 
@@ -638,10 +642,12 @@ mod tests {
         assert_eq!(result.removed_count, 2);
         assert_eq!(
             HashSet::<SymbolPath>::from_iter(result.removed_functions),
-            HashSet::from([
+            [
                 SymbolPath::new(["nested", "main"]),
                 SymbolPath::new(["nested", "unused_in_nested"]),
-            ])
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
         );
     }
 
@@ -721,7 +727,9 @@ mod tests {
         assert_eq!(result.removed_functions, [SymbolPath::new(["b", "same"])]);
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from([SymbolPath::from("main"), SymbolPath::new(["a", "same"])])
+            [SymbolPath::from("main"), SymbolPath::new(["a", "same"])]
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
     }
 
@@ -788,18 +796,22 @@ mod tests {
 
         assert_eq!(
             HashSet::<SymbolPath>::from_iter(result.removed_functions),
-            HashSet::from([
+            [
                 SymbolPath::from("dead_host"),
                 SymbolPath::from("dead_inner")
-            ])
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
         );
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from([
+            [
                 SymbolPath::from("main"),
                 SymbolPath::from("host"),
                 SymbolPath::from("inner")
-            ])
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
         );
     }
 }

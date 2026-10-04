@@ -6,6 +6,7 @@ use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, Ind
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
 use itertools::Itertools;
+use rustc_hash::FxHashSet as HashSet;
 
 #[trunk_ir::dialect]
 mod clif {
@@ -389,7 +390,7 @@ impl crate::ops::Verify for Data {
     /// The relocation region holds only `func_reloc` declarations at distinct
     /// offsets.
     fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
-        let mut offsets = std::collections::HashSet::new();
+        let mut offsets = HashSet::default();
         for op in reloc_ops(ctx, self.op_ref()) {
             let Ok(reloc) = FuncReloc::from_op(ctx, op) else {
                 let data = ctx.op(op);

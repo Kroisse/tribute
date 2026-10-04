@@ -62,7 +62,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::{StringRef, Symbol};
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::tribute_rtti;
 use tribute_ir::runtime_layout::{self, has_runtime_layout};

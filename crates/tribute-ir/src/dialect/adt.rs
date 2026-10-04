@@ -474,6 +474,7 @@ fn parse_struct_type<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustc_hash::FxHashMap as HashMap;
     use trunk_ir::parser::{parse_module, parse_test_module};
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
@@ -522,7 +523,7 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
-        let aliases: std::collections::HashMap<_, _> = ctx
+        let aliases: HashMap<_, _> = ctx
             .type_aliases()
             .iter()
             .map(|(name, ty)| (name.to_string(), *ty))

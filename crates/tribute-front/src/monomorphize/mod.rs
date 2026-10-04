@@ -8,7 +8,8 @@ pub(crate) use collect::is_concrete_type;
 pub use validate::{InstanceError, InstanceErrorKind};
 pub mod specialize;
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
@@ -72,7 +73,7 @@ pub fn monomorphize_functions<'db>(
     let source_function_types = fn_types_vec.clone();
     let mut module = module;
     let mut all_function_types = fn_types_vec;
-    let mut instantiations = HashMap::new();
+    let mut instantiations: HashMap<_, HashSet<_>> = HashMap::default();
     let mut reached_fixpoint = false;
 
     // A concrete clone can reveal direct calls that were abstract in its
@@ -84,14 +85,14 @@ pub fn monomorphize_functions<'db>(
             &source_function_types,
             &metadata.function_instances,
         );
-        let mut new_instantiations = HashMap::new();
+        let mut new_instantiations: HashMap<_, HashSet<_>> = HashMap::default();
         for (func_id, type_arg_sets) in discovered {
-            let known = instantiations.entry(func_id).or_insert_with(HashSet::new);
+            let known = instantiations.entry(func_id).or_default();
             for type_args in type_arg_sets {
                 if known.insert(type_args.clone()) {
                     new_instantiations
                         .entry(func_id)
-                        .or_insert_with(HashSet::new)
+                        .or_default()
                         .insert(type_args);
                 }
             }
@@ -509,11 +510,12 @@ fn substitute_type<'db>(
 /// for use during call site rewriting.
 fn build_rewrite_map<'db>(
     db: &'db dyn salsa::Database,
-    instantiations: &HashMap<FuncDefId<'db>, std::collections::HashSet<Vec<Type<'db>>>>,
+    instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
 ) -> HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> {
     let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
-    let mut rewrite_map: HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> = HashMap::new();
+    let mut rewrite_map: HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> =
+        HashMap::default();
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
@@ -582,18 +584,20 @@ mod tests {
             result: bound,
         };
         let mut metadata = MonomorphizeMetadata {
-            constructor_types: HashMap::new(),
-            specialized_enum_variants: HashMap::new(),
-            node_types: HashMap::from([(origin, bound)]),
-            function_instances: HashMap::new(),
-            evidence_plans: HashMap::from([(
+            constructor_types: HashMap::default(),
+            specialized_enum_variants: HashMap::default(),
+            node_types: [(origin, bound)].into_iter().collect::<HashMap<_, _>>(),
+            function_instances: HashMap::default(),
+            evidence_plans: [(
                 origin,
                 vec![EvidenceStep::Mask(crate::ast::Effect {
                     ability_id: ability,
                     args: vec![bound],
                 })],
-            )]),
-            local_instances: HashMap::from([(
+            )]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+            local_instances: [(
                 origin,
                 crate::typeck::LocalCallableInstance {
                     binding: NodeId::from_raw(2),
@@ -602,9 +606,13 @@ mod tests {
                     callable: function,
                     row_arguments: vec![],
                 },
-            )]),
-            handler_operations: HashMap::from([(origin, operation(OpDeclKind::Op))]),
-            perform_operations: HashMap::from([(
+            )]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+            handler_operations: [(origin, operation(OpDeclKind::Op))]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
+            perform_operations: [(
                 origin,
                 InstantiatedPerformOperation {
                     ability,
@@ -613,19 +621,23 @@ mod tests {
                     params: vec![bound],
                     result: bound,
                 },
-            )]),
-            lambda_signatures: HashMap::from([(
+            )]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+            lambda_signatures: [(
                 origin,
                 LambdaSignature {
                     function_type: function,
                     convention: CallingConvention::Direct,
                 },
-            )]),
-            exhaustive_cases: HashSet::from([origin]),
-            compiler_intrinsics: HashMap::new(),
+            )]
+            .into_iter()
+            .collect::<HashMap<_, _>>(),
+            exhaustive_cases: [origin].into_iter().collect::<HashSet<_>>(),
+            compiler_intrinsics: HashMap::default(),
         };
         let type_args = vec![int];
-        let origins = HashSet::from([origin]);
+        let origins = [origin].into_iter().collect::<HashSet<_>>();
 
         specialize_metadata(&db, &mut metadata, &type_args, &origins);
 

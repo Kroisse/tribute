@@ -3,7 +3,8 @@
 //! It emits only the documented `tribute_control` boundary and ordinary value
 //! dialects; shared CPS construction belongs to `tribute-passes`.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -38,13 +39,13 @@ struct Declarations<'db> {
     // through its debug representation.  Preserve first source use explicitly.
     values: Vec<OperationDeclaration>,
     compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
-    schemas: std::collections::HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
+    schemas: HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     handler_operations:
         SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations:
         SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     lambda_signatures: SortedMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
-    exhaustive_cases: std::collections::HashSet<crate::ast::NodeId>,
+    exhaustive_cases: HashSet<crate::ast::NodeId>,
     evidence_plans: SortedMap<crate::ast::NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     local_instances: SortedMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
     local_callables: local_callables::Plan<'db>,
@@ -1625,7 +1626,7 @@ fn lower_record<'db>(
     };
     // Lower explicit fields in source order, then place their already-evaluated
     // values in declaration layout order.
-    let mut values = HashMap::new();
+    let mut values = HashMap::default();
     for (name, field) in fields {
         if !field_order.contains(&name) || values.contains_key(&name) {
             panic!("typechecked record has an invalid field layout");
@@ -1679,7 +1680,7 @@ fn lower_variant_record<'db>(
         .ctx
         .variant_field_names(layout, variant.clone())
         .unwrap_or_else(|| panic!("prescan did not register field names of variant {variant}"));
-    let mut values = HashMap::new();
+    let mut values = HashMap::default();
     for (name, field) in fields {
         if !field_order.contains(&name) || values.contains_key(&name) {
             panic!("typechecked variant record has an invalid field layout");
@@ -2589,8 +2590,8 @@ mod tests {
             db,
             path,
             crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );

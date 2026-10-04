@@ -214,7 +214,7 @@ fn collect_managed_values(
     blocks: &[BlockRef],
     managed_layouts: &HashSet<TypeRef>,
 ) -> HashSet<ValueRef> {
-    let mut values = HashSet::new();
+    let mut values = HashSet::default();
     for &block in blocks {
         for &value in ctx.block_args(block) {
             if is_managed_value(ctx, value, managed_layouts) {
@@ -238,7 +238,7 @@ fn build_aliases(
     managed: &mut HashSet<ValueRef>,
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<HashMap<ValueRef, ValueRef>, OwnershipPlanError> {
-    let mut aliases = HashMap::new();
+    let mut aliases = HashMap::default();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
             if !(adt::RefCast::matches(ctx, op)
@@ -365,7 +365,7 @@ fn collect_borrowed_loads(
     managed_layouts: &HashSet<TypeRef>,
     aliases: &HashMap<ValueRef, ValueRef>,
 ) -> Result<HashMap<ValueRef, ValueRef>, OwnershipPlanError> {
-    let mut borrowed = HashMap::new();
+    let mut borrowed = HashMap::default();
     for &block in blocks {
         for &op in &ctx.block(block).ops {
             let source = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
@@ -442,7 +442,7 @@ fn collect_block_flow(
     managed: &HashSet<ValueRef>,
     aliases: &HashMap<ValueRef, ValueRef>,
 ) -> HashMap<BlockRef, BlockFlowFacts> {
-    let mut flow = HashMap::new();
+    let mut flow = HashMap::default();
     for &block in cfg.blocks() {
         let mut events = Vec::new();
         for &argument in ctx.block_args(block) {

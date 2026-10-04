@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use salsa_test_macros::salsa_test;
 use trunk_ir::Symbol;
@@ -85,7 +85,7 @@ fn collect_deferred_resolution_univars_includes_callee_type(db: &salsa::Database
         },
     );
 
-    let mut deferred_resolutions = HashMap::new();
+    let mut deferred_resolutions = HashMap::default();
     deferred_resolutions.insert(
         NodeId::from_raw(2),
         (

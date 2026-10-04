@@ -5,7 +5,8 @@
 //! or target-specific conversion.
 
 use itertools::Itertools;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
@@ -213,8 +214,8 @@ impl<'a> Converter<'a> {
             ctx,
             module_block,
             funcs,
-            converted_types: HashMap::new(),
-            frames: HashMap::new(),
+            converted_types: HashMap::default(),
+            frames: HashMap::default(),
             frame_layout_aliases: Vec::new(),
             helper_index: 0,
         }
@@ -509,7 +510,7 @@ pub fn tribute_control_to_cps(
     });
     {
         let mut converter = Converter::new(ctx, new_block, funcs);
-        let mut mapping = HashMap::new();
+        let mut mapping = HashMap::default();
         let source_ops = converter.ctx.block(source_blocks[0]).ops.clone();
         for source in source_ops {
             if tribute_control::Func::matches(converter.ctx, source) {

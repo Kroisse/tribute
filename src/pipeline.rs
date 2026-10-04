@@ -80,6 +80,7 @@
 use crate::SourceCst;
 use itertools::Itertools;
 use ropey::Rope;
+use rustc_hash::FxHashMap as HashMap;
 use salsa::Accumulator;
 use tree_sitter::Parser;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -386,7 +387,7 @@ fn merge_and_lower_to_ir<'db>(
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 struct PreparedFrontend<'db> {
     typed: ast_typeck::TypeCheckOutput<'db>,
-    compiler_intrinsics: std::collections::HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
+    compiler_intrinsics: HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
 }
 
 /// Merge and specialize inside a tracked query so specialization failures
@@ -439,16 +440,14 @@ fn prepare_frontend_details<'db>(
         );
 
         // Merge function_types: prelude first, user overrides
-        let mut fn_types: std::collections::HashMap<_, _> =
-            prelude_fn_types.iter().cloned().collect();
+        let mut fn_types: HashMap<_, _> = prelude_fn_types.iter().cloned().collect();
         fn_types.extend(user_fn_types.iter().cloned());
 
         // Merge node_types: prelude first, user overrides
-        let mut node_types: std::collections::HashMap<_, _> =
-            prelude_node_types.iter().cloned().collect();
+        let mut node_types: HashMap<_, _> = prelude_node_types.iter().cloned().collect();
         node_types.extend(user_node_types.iter().cloned());
 
-        let mut ability_conventions: std::collections::HashMap<_, _> =
+        let mut ability_conventions: HashMap<_, _> =
             prelude_ability_conventions.iter().cloned().collect();
         ability_conventions.extend(user_ability_conventions.iter().cloned());
 
@@ -463,10 +462,9 @@ fn prepare_frontend_details<'db>(
             merged_span_map,
         )
     } else {
-        let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
-        let node_types: std::collections::HashMap<_, _> = user_node_types.iter().cloned().collect();
-        let ability_conventions: std::collections::HashMap<_, _> =
-            user_ability_conventions.iter().cloned().collect();
+        let fn_types: HashMap<_, _> = user_fn_types.iter().cloned().collect();
+        let node_types: HashMap<_, _> = user_node_types.iter().cloned().collect();
+        let ability_conventions: HashMap<_, _> = user_ability_conventions.iter().cloned().collect();
         (
             user_module.clone(),
             fn_types,
@@ -495,7 +493,7 @@ fn prepare_frontend_details<'db>(
         }
     };
 
-    let mut function_instances: std::collections::HashMap<_, _> = prelude_module(db)
+    let mut function_instances: HashMap<_, _> = prelude_module(db)
         .map(|prelude| {
             prelude
                 .expression_types(db)
@@ -1727,6 +1725,7 @@ pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::O
 mod tests {
     use super::*;
     use crate::link::link_native_binary;
+    use rustc_hash::FxHashSet as HashSet;
     use salsa_test_macros::salsa_test;
     use std::ops::ControlFlow;
     use trunk_ir::dialect::clif;
@@ -3331,7 +3330,7 @@ fn main() -> Nil {}
         let prepared =
             prepare_frontend_for_lowering(db, typed, source).expect("closed nominal dependencies");
         let schemas = &prepared.constructor_types(db).specialized_enum_variants;
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         for declaration in &prepared.module(db).decls {
             if let Decl::Enum(e) = declaration
                 && e.id.variant().is_some()
@@ -3894,7 +3893,7 @@ fn main() -> Nil { }
         ok: &impl Fn(&IrContext, trunk_ir::TypeRef) -> bool,
     ) -> bool {
         let mut pending = vec![ty];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;

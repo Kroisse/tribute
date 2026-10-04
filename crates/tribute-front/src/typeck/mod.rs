@@ -37,6 +37,7 @@ pub use context::{
 use crate::SortedMap;
 use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;
+use rustc_hash::FxHashMap as HashMap;
 pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 
 use trunk_ir::Symbol;
@@ -109,7 +110,7 @@ pub fn ability_schemas<'db>(
 /// Rebuild lowering's lookup representation from public deterministic schemas.
 pub fn ability_definitions_from_schemas<'db>(
     schemas: &[AbilitySchema<'db>],
-) -> std::collections::HashMap<AbilityId<'db>, AbilityInfo<'db>> {
+) -> HashMap<AbilityId<'db>, AbilityInfo<'db>> {
     schemas
         .iter()
         .map(|(id, type_params, operations)| {

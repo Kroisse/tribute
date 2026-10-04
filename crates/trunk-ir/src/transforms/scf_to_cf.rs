@@ -30,8 +30,9 @@
 //! ```
 
 use itertools::Itertools;
+use rustc_hash::FxHashSet as HashSet;
 use smallvec::SmallVec;
-use std::{collections::HashSet, ops::ControlFlow};
+use std::ops::ControlFlow;
 
 use super::scf_control_flow::StructuredControlAnalysis;
 use crate::analysis::AnalysisCache;
@@ -79,7 +80,7 @@ struct ScfToCfPlan {
 fn lower_region(ctx: &mut IrContext, target: OpRef, body: RegionRef, analyses: &mut AnalysisCache) {
     let analysis = analyses.require::<StructuredControlAnalysis>(ctx, target);
     let mut plan = ScfToCfPlan {
-        without_merge: HashSet::new(),
+        without_merge: HashSet::default(),
     };
     let _ = walk_op::<()>(ctx, target, &mut |op| {
         if (scf::If::matches(ctx, op) && analysis.has_terminal_unused_never_result(op))

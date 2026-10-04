@@ -4,8 +4,8 @@
 //! `PrimaryMap`s owned by `IrContext`. Entity lists (operands, results)
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
+use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_entity::{EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap};
@@ -293,8 +293,8 @@ impl IrContext {
             result_values: SecondaryMap::new(),
             block_arg_values: SecondaryMap::new(),
             type_aliases: Vec::new(),
-            type_alias_by_name: HashMap::new(),
-            type_alias_by_type: HashMap::new(),
+            type_alias_by_name: HashMap::default(),
+            type_alias_by_type: HashMap::default(),
             diagnostics: RefCell::new(Vec::new()),
         }
     }

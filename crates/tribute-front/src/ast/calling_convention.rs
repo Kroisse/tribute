@@ -1,6 +1,6 @@
 //! Calling-convention requirements derived from source effect rows.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use super::{AbilityId, EffectRow, Type, TypeKind};
 pub use tribute_core::CallingConvention;
@@ -67,7 +67,7 @@ mod tests {
         let db = salsa::DatabaseImpl::new();
         let logger = AbilityId::source(&db, Symbol::new("Logger"));
         let state = AbilityId::source(&db, Symbol::new("State"));
-        let mut abilities = HashMap::new();
+        let mut abilities = HashMap::default();
         abilities.insert(logger, CallingConvention::EvidenceDirect);
         abilities.insert(state, CallingConvention::Cps);
 
@@ -110,7 +110,7 @@ mod tests {
             None,
         );
         let open_row = EffectRow::open(&db, EffectVar { id: 0 });
-        let abilities = HashMap::new();
+        let abilities = HashMap::default();
 
         assert_eq!(
             calling_convention_for_effect_row(&db, unknown_row, &abilities),

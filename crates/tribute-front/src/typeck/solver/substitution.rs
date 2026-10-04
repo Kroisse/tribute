@@ -9,7 +9,7 @@ impl<'db> TypeSubst<'db> {
     /// Create an empty substitution.
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: HashMap::default(),
         }
     }
 
@@ -194,7 +194,7 @@ impl<'db> TypeSubst<'db> {
         self.collect_univars_from_type(db, ty, row_subst, &mut univars);
 
         if univars.is_empty() {
-            return (ty, Vec::new(), HashMap::new());
+            return (ty, Vec::new(), HashMap::default());
         }
 
         // Build UniVar → BoundVar index mapping
@@ -495,7 +495,13 @@ impl<'db> TypeSubst<'db> {
         row_subst: &RowSubst<'db>,
         var_to_index: &HashMap<UniVarId<'db>, u32>,
     ) -> Type<'db> {
-        self.replace_univars_with_bound_and_local(db, ty, row_subst, var_to_index, &HashMap::new())
+        self.replace_univars_with_bound_and_local(
+            db,
+            ty,
+            row_subst,
+            var_to_index,
+            &HashMap::default(),
+        )
     }
 }
 
@@ -503,7 +509,7 @@ impl<'db> RowSubst<'db> {
     /// Create an empty substitution.
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: HashMap::default(),
         }
     }
 

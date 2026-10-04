@@ -6,7 +6,7 @@
 //!
 //! For function-level type inference, see `FunctionInferenceContext` in `func_context.rs`.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::Symbol;
 
@@ -172,15 +172,15 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Create a new empty module type environment.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         let io = AbilityId::builtin_io(db);
-        let mut ability_conventions = HashMap::new();
+        let mut ability_conventions = HashMap::default();
         ability_conventions.insert(io, CallingConvention::EvidenceDirect);
-        let mut ability_defs = HashMap::new();
+        let mut ability_defs = HashMap::default();
         ability_defs.insert(
             io,
             AbilityInfo {
                 id: io,
                 type_params: vec![],
-                operations: HashMap::new(),
+                operations: HashMap::default(),
             },
         );
 
@@ -200,21 +200,21 @@ impl<'db> ModuleTypeEnv<'db> {
             Vec::new(),
             list_ty,
         );
-        let mut type_defs = HashMap::new();
+        let mut type_defs = HashMap::default();
         type_defs.insert(list_name, list_scheme);
         type_defs.insert(Symbol::new("std::collections::List"), list_scheme);
 
         Self {
             db,
-            function_types: HashMap::new(),
-            constructor_types: HashMap::new(),
+            function_types: HashMap::default(),
+            constructor_types: HashMap::default(),
             type_defs,
-            struct_fields: HashMap::new(),
-            enum_variants: HashMap::new(),
-            constructor_field_names: HashMap::new(),
+            struct_fields: HashMap::default(),
+            enum_variants: HashMap::default(),
+            constructor_field_names: HashMap::default(),
             ability_defs,
             ability_conventions,
-            method_index: HashMap::new(),
+            method_index: HashMap::default(),
             well_known_types: super::WellKnownTypes::empty(),
         }
     }
@@ -794,7 +794,7 @@ fn ability_origin_rank(origin: AbilityOrigin) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap as HashMap;
 
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
@@ -961,7 +961,7 @@ mod tests {
                 AbilityInfo {
                     id: ability,
                     type_params: vec![],
-                    operations: HashMap::new(),
+                    operations: HashMap::default(),
                 },
             );
         }

@@ -62,7 +62,7 @@ impl<'a> ActionPlanner<'a> {
         let borrowed = if elide_proven_field_borrows {
             facts.projection_owners().clone()
         } else {
-            HashMap::new()
+            HashMap::default()
         };
         let mut owned = facts.managed_values().clone();
         for (&value, entry) in ir.block_args(facts.cfg().entry()).iter().zip(entries) {
@@ -132,7 +132,7 @@ impl<'a> ActionPlanner<'a> {
 
     fn plan_block(&mut self, block: BlockRef) -> Result<(), OwnershipPlanError> {
         let ops = &self.ir.block(block).ops;
-        let mut transferred = HashSet::new();
+        let mut transferred = HashSet::default();
         for &op in ops {
             self.plan_operation(op, &mut transferred)?;
             if let Some(&result) = self.ir.op_results(op).first()
@@ -290,7 +290,7 @@ impl ActionPlanner<'_> {
                 }
             }
         } else if let Some(transfers) = self.facts.cfg().branch_transfers(op) {
-            let mut counts = HashMap::<ValueRef, u32>::new();
+            let mut counts = HashMap::<ValueRef, u32>::default();
             for (index, transfer) in transfers.enumerate() {
                 if is_managed_value(self.ir, transfer.destination, self.managed_layouts) {
                     let root = root_value(self.facts.aliases(), transfer.source);
@@ -421,7 +421,7 @@ pub(super) fn exact_into_raw_transfers(
         ));
     }
     let mut block = None;
-    let mut users = HashSet::new();
+    let mut users = HashSet::default();
     for use_ in ctx.uses(source) {
         let user = use_.user;
         if !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, user) {
@@ -557,7 +557,7 @@ impl ActionPlanner<'_> {
                 "call arity differs from entry contract",
             ));
         }
-        let mut transfers = HashMap::<ValueRef, u32>::new();
+        let mut transfers = HashMap::<ValueRef, u32>::default();
         for (index, (&argument, entry)) in args.iter().zip(entries).enumerate() {
             let managed = is_managed_value(self.ir, argument, self.managed_layouts);
             if managed != (entry != EntryOwnership::Plain) {
@@ -704,7 +704,7 @@ impl ActionPlanner<'_> {
         ops: &[OpRef],
         transferred: &HashSet<ValueRef>,
     ) {
-        let mut last_use = HashMap::new();
+        let mut last_use = HashMap::default();
         for (index, &op) in ops.iter().enumerate() {
             for &operand in self.ir.op_operands(op) {
                 let root = root_value(self.facts.aliases(), operand);
@@ -718,7 +718,7 @@ impl ActionPlanner<'_> {
                 }
             }
         }
-        let mut dying = HashSet::new();
+        let mut dying = HashSet::default();
         for value in &self.liveness.live_in[&block] {
             if self.owned.contains(value)
                 && !self.liveness.live_out[&block].contains(value)

@@ -6,7 +6,7 @@
 //! This replaces the ad-hoc approach of adding custom attributes to IR operations
 //! and provides a clean separation between IR and data section management.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 /// Registry for static data that will be emitted to WASM data section.
 #[derive(Debug, Clone)]
@@ -36,7 +36,7 @@ impl DataRegistry {
         Self {
             entries: Vec::new(),
             current_offset: 0,
-            content_map: HashMap::new(),
+            content_map: HashMap::default(),
         }
     }
 

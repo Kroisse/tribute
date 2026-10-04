@@ -4,7 +4,8 @@
 //! ensuring that type variables (UniVars) are fully resolved within the function
 //! before moving to the next.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -301,7 +302,7 @@ impl<'db> TypeChecker<'db> {
                 }
             })
         });
-        let mut var_to_index: HashMap<UniVarId<'db>, u32> = HashMap::new();
+        let mut var_to_index: HashMap<UniVarId<'db>, u32> = HashMap::default();
         for id in signature_vars.chain(all_univars) {
             let next = var_to_index.len() as u32;
             var_to_index.entry(id).or_insert(next);
@@ -571,7 +572,7 @@ impl<'db> TypeChecker<'db> {
         func_node_id: crate::ast::NodeId,
         instances: &mut HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     ) -> HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)> {
-        let mut resolved = HashMap::new();
+        let mut resolved = HashMap::default();
         loop {
             let mut new_constraints = ConstraintSet::new();
             let mut remaining = Vec::new();
@@ -763,7 +764,7 @@ impl<'db> TypeChecker<'db> {
         };
 
         // Rows the signature itself puts into the function's effects.
-        let mut declared = HashSet::from([own]);
+        let mut declared = [own].into_iter().collect::<HashSet<_>>();
         loop {
             let before = declared.len();
             for union in &instance.row_unions {
@@ -777,7 +778,8 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Rows each row flows into through the body's retained unions.
-        let mut flows: HashMap<crate::ast::EffectVar, Vec<crate::ast::EffectVar>> = HashMap::new();
+        let mut flows: HashMap<crate::ast::EffectVar, Vec<crate::ast::EffectVar>> =
+            HashMap::default();
         for union in retained {
             if let Some(result) = tail(&union.result) {
                 for source in union.sources.iter().filter_map(tail) {
@@ -786,7 +788,7 @@ impl<'db> TypeChecker<'db> {
             }
         }
         let reaches_own = |start: crate::ast::EffectVar| {
-            let mut seen = HashSet::from([start]);
+            let mut seen = [start].into_iter().collect::<HashSet<_>>();
             let mut pending = vec![start];
             while let Some(row) = pending.pop() {
                 if row == own {
@@ -801,7 +803,7 @@ impl<'db> TypeChecker<'db> {
             false
         };
 
-        let mut reported = HashSet::new();
+        let mut reported = HashSet::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let Some(row) = tail(row) else { continue };
             if declared.contains(&row) || !reaches_own(row) || !reported.insert(row) {
@@ -998,7 +1000,7 @@ impl<'db> TypeChecker<'db> {
                 .get(&(index as u32))
                 .map_or_else(|| format!("#{index}"), |name| name.to_string())
         };
-        let mut seen_types: HashMap<UniVarId<'db>, usize> = HashMap::new();
+        let mut seen_types: HashMap<UniVarId<'db>, usize> = HashMap::default();
         for (index, ty) in instance.type_args.iter().enumerate() {
             let resolved = type_subst.apply_with_rows(db, *ty, row_subst);
             match resolved.kind(db) {
@@ -1043,7 +1045,7 @@ impl<'db> TypeChecker<'db> {
             TypeKind::Func { effect, .. } => effect.rest(db),
             _ => None,
         };
-        let mut seen_rows: HashMap<crate::ast::EffectVar, usize> = HashMap::new();
+        let mut seen_rows: HashMap<crate::ast::EffectVar, usize> = HashMap::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let resolved = row_subst.apply(db, *row);
             let Some(tail) = resolved.rest(db) else {

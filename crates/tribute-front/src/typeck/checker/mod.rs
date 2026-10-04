@@ -30,7 +30,8 @@ mod expr;
 mod finalize;
 mod func_check;
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Span, Symbol};
 
@@ -197,17 +198,17 @@ impl<'db> TypeChecker<'db> {
             env: ModuleTypeEnv::new(db),
             prefix: String::new(),
             span_map,
-            node_types: HashMap::new(),
-            function_instances: HashMap::new(),
-            local_instances: HashMap::new(),
-            evidence_plans: HashMap::new(),
-            handler_operations: HashMap::new(),
-            perform_operations: HashMap::new(),
-            lambda_signatures: HashMap::new(),
+            node_types: HashMap::default(),
+            function_instances: HashMap::default(),
+            local_instances: HashMap::default(),
+            evidence_plans: HashMap::default(),
+            handler_operations: HashMap::default(),
+            perform_operations: HashMap::default(),
+            lambda_signatures: HashMap::default(),
             exhaustive_cases: Vec::new(),
-            effect_annotation_origins: HashMap::new(),
-            signature_row_names: HashMap::new(),
-            signature_type_names: HashMap::new(),
+            effect_annotation_origins: HashMap::default(),
+            signature_row_names: HashMap::default(),
+            signature_type_names: HashMap::default(),
         }
     }
 

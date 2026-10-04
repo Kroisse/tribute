@@ -3,7 +3,8 @@
 //! All expression checking methods take a `FunctionInferenceContext` as parameter,
 //! enabling per-function type inference with isolated constraints.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -1196,7 +1197,7 @@ impl<'db> TypeChecker<'db> {
         written: impl IntoIterator<Item = Symbol>,
         omits_rest: bool,
     ) {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         for name in written {
             if !declared.contains(&name) {
                 self.report_type_error(node, format!("unknown field `{name}` for {owner}"));
@@ -2325,7 +2326,7 @@ impl<'db> TypeChecker<'db> {
         // by the root pattern: the right-hand side is checked once, so a
         // variable shared by several names (`let f as g = ...`) must have a
         // single owner.
-        let mut let_quantifiers = HashMap::new();
+        let mut let_quantifiers = HashMap::default();
         let mut let_schemes = Vec::new();
         for PatternBinding {
             name,
@@ -3543,7 +3544,7 @@ impl<'db> TypeChecker<'db> {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
+    use rustc_hash::FxHashMap as HashMap;
 
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
@@ -3712,7 +3713,7 @@ mod tests {
             AbilityInfo {
                 id: ability_id,
                 type_params: vec![],
-                operations: HashMap::from([(
+                operations: [(
                     get.clone(),
                     AbilityOpInfo {
                         name: get.clone(),
@@ -3720,7 +3721,9 @@ mod tests {
                         param_types: vec![],
                         return_type: Type::new(db, TypeKind::Nat),
                     },
-                )]),
+                )]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
             },
         );
         let mut ctx = make_test_ctx(db, &checker.env);
@@ -3797,7 +3800,7 @@ mod tests {
             AbilityInfo {
                 id: ability_id,
                 type_params: vec![],
-                operations: HashMap::from([
+                operations: [
                     (
                         nat_op.clone(),
                         AbilityOpInfo {
@@ -3816,7 +3819,9 @@ mod tests {
                             return_type: Type::new(db, TypeKind::Nil),
                         },
                     ),
-                ]),
+                ]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
             },
         );
 

@@ -10,7 +10,8 @@
 //! 2. **IR build**: `ArenaIrBuilder` converts `Raw*` → arena `OpRef`,
 //!    `BlockRef`, `RegionRef`, etc.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use smallvec::smallvec;
 use winnow::prelude::*;
@@ -460,7 +461,7 @@ impl<'a> ArenaIrBuilder<'a> {
         }
 
         // --- Pass 1: Pre-create all blocks (with args) to get BlockRefs ---
-        let mut seen_labels = std::collections::HashSet::new();
+        let mut seen_labels = HashSet::default();
         let mut block_refs = Vec::with_capacity(raw.blocks.len());
 
         for (i, raw_block) in raw.blocks.iter().enumerate() {
@@ -476,7 +477,7 @@ impl<'a> ArenaIrBuilder<'a> {
             let all_args = self.resolve_block_args(i, raw_block, extra_entry_args)?;
 
             // Build BlockArgData
-            let mut seen_names = std::collections::HashSet::new();
+            let mut seen_names = HashSet::default();
             let mut block_arg_data = Vec::with_capacity(all_args.len());
             let mut arg_names = Vec::with_capacity(all_args.len());
 
@@ -1057,7 +1058,7 @@ core.module @test {
             printed.contains("func.func_sig<(core.i32 {a = core.i32}, core.ptr) -> core.i32>"),
             "{printed}"
         );
-        let aliases: std::collections::HashMap<_, _> = ctx
+        let aliases: HashMap<_, _> = ctx
             .type_aliases()
             .iter()
             .map(|(name, ty)| (name.to_string(), *ty))

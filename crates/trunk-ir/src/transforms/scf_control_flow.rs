@@ -1,6 +1,6 @@
 //! Conservative structured-control facts shared by target lowerings.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};

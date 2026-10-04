@@ -223,7 +223,7 @@ fn ordinary_result_contract_requires_one_value_and_preserves_zero_width_results(
     let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
     let entry = ctx.region(function.body(&ctx)).blocks[0];
     let values = ctx.block_args(entry);
-    let managed = HashSet::new();
+    let managed = HashSet::default();
     let check = |values: &[ValueRef], expected: &[TypeRef]| {
         actions::validate_result_contract(&ctx, values, expected, &managed, "test result")
     };

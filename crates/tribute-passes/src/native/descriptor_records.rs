@@ -7,7 +7,7 @@
 //! nominal layouts still carry their names, so lower passes see only the
 //! index.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
@@ -183,7 +183,7 @@ pub fn generate(
     let mut layout = Layout {
         bytes: vec![0; fields_base + field_count * FIELD_SIZE],
         next_fields: fields_base,
-        names: HashMap::new(),
+        names: HashMap::default(),
         name_bytes: Vec::new(),
         names_base: fields_base + field_count * FIELD_SIZE,
     };
@@ -352,7 +352,9 @@ mod tests {
             &mut ctx,
             block,
             vec![(5, record)],
-            &HashMap::from([(5, release.clone())]),
+            &[(5, release.clone())]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
             loc,
         );
 

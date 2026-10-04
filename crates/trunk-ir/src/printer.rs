@@ -11,7 +11,8 @@
 //! }
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::fmt::Write;
 use std::ops::ControlFlow;
@@ -47,11 +48,11 @@ impl<'a> PrintState<'a> {
     fn without_aliases(ctx: &'a IrContext) -> Self {
         Self {
             ctx,
-            value_names: HashMap::new(),
-            block_labels: HashMap::new(),
+            value_names: HashMap::default(),
+            block_labels: HashMap::default(),
             next_value_num: 0,
             next_block_num: 0,
-            type_alias_names: HashMap::new(),
+            type_alias_names: HashMap::default(),
         }
     }
 
@@ -654,7 +655,7 @@ const MIN_ALIAS_USES: usize = 2;
 /// Does not recurse into type params — nested types become aliased naturally
 /// when their parent is aliased.
 fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, usize> {
-    let mut counts: HashMap<TypeRef, usize> = HashMap::new();
+    let mut counts: HashMap<TypeRef, usize> = HashMap::default();
 
     let _ = walk_region::<()>(ctx, region, &mut |op| {
         let data = ctx.op(op);
@@ -794,7 +795,7 @@ fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)
     let deps: Vec<HashSet<TypeRef>> = aliases
         .iter()
         .map(|(_, ty)| {
-            let mut deps = HashSet::new();
+            let mut deps = HashSet::default();
             collect_type_deps(ctx, *ty, &alias_set, &mut deps);
             deps
         })
@@ -803,7 +804,7 @@ fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)
     // Simple stable topological sort via repeated extraction of dependency-free items
     let n = aliases.len();
     let mut sorted: Vec<(String, TypeRef)> = Vec::with_capacity(n);
-    let mut placed: HashSet<TypeRef> = HashSet::new();
+    let mut placed: HashSet<TypeRef> = HashSet::default();
     let mut remaining: Vec<bool> = vec![true; n];
 
     for _ in 0..n {

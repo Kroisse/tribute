@@ -31,7 +31,7 @@
 //! Checking records each call against the evidence scope it runs in and
 //! computes the selections only after solving, when every row is known.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::ast::{Effect, EffectRow, EffectVar, LocalId, NodeId};
 
@@ -189,8 +189,8 @@ impl<'db> EvidenceTracker<'db> {
         db: &'db dyn salsa::Database,
         resolve: impl Fn(EffectRow<'db>) -> EffectRow<'db>,
     ) -> HashMap<NodeId, Vec<EvidenceStep<'db>>> {
-        let mut explicit = HashMap::new();
-        let mut plans = HashMap::new();
+        let mut explicit = HashMap::default();
+        let mut plans = HashMap::default();
         for (node, site) in &self.sites {
             let plan = match site {
                 EvidenceSite::Call { scope, callee } => {

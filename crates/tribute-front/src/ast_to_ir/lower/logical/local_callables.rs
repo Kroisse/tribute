@@ -22,10 +22,10 @@ impl<'db> Plan<'db> {
     ) -> Self {
         let mut nodes = Vec::new();
         body.for_each(|expr| nodes.push(expr));
-        let mut origins: HashMap<LocalId, (NodeId, &Expr<TypedRef<'db>>)> = HashMap::new();
-        let mut bindings = HashMap::new();
-        let mut named = HashMap::new();
-        let mut aliases = HashSet::new();
+        let mut origins: HashMap<LocalId, (NodeId, &Expr<TypedRef<'db>>)> = HashMap::default();
+        let mut bindings = HashMap::default();
+        let mut named = HashMap::default();
+        let mut aliases = HashSet::default();
         for expr in &nodes {
             if let ExprKind::Block { stmts, .. } = &*expr.kind {
                 for stmt in stmts {
@@ -67,7 +67,7 @@ impl<'db> Plan<'db> {
         }
         // Named consumers may retain an open worker ABI even when this source
         // call's checked effect instance is pure.
-        let mut expected = HashMap::new();
+        let mut expected = HashMap::default();
         for expr in &nodes {
             if let ExprKind::Call { callee, args } = &*expr.kind {
                 let parameters = match &*callee.kind {
@@ -100,7 +100,7 @@ impl<'db> Plan<'db> {
             }
         }
         let mut plan = Self::default();
-        let mut unsupported = HashSet::new();
+        let mut unsupported = HashSet::default();
         for expr in nodes {
             let ExprKind::Var(reference) = &*expr.kind else {
                 continue;
@@ -438,10 +438,10 @@ pub(super) fn captures(
             }
         }
     }
-    let mut defined = HashSet::new();
+    let mut defined = HashSet::default();
     let mut uses = Vec::new();
     collect(ir, region, &mut defined, &mut uses);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let external: HashSet<_> = uses
         .iter()
         .copied()

@@ -3,7 +3,7 @@
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
 //! by looking up names in the module environment and local scopes.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use itertools::Itertools;
 use salsa::Accumulator as _;
@@ -115,11 +115,11 @@ impl<'db> Resolver<'db> {
         Self {
             db,
             env,
-            local_scopes: vec![HashMap::new()],
+            local_scopes: vec![HashMap::default()],
             local_id_gen: LocalIdGen::new(),
             resume_local_id_stack: Vec::new(),
             span_map,
-            effect_ops: HashMap::new(),
+            effect_ops: HashMap::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
             package_depth: 0,
@@ -135,7 +135,7 @@ impl<'db> Resolver<'db> {
 
     /// Enter a new local scope.
     fn push_scope(&mut self) {
-        self.local_scopes.push(HashMap::new());
+        self.local_scopes.push(HashMap::default());
     }
 
     /// Exit the current local scope.
@@ -562,7 +562,7 @@ impl<'db> Resolver<'db> {
 
     /// Find names in scope that are similar to the given name.
     fn find_similar_names(&self, name: &Symbol) -> Vec<Symbol> {
-        use std::collections::HashSet;
+        use rustc_hash::FxHashSet as HashSet;
 
         let candidates: HashSet<Symbol> = self
             .local_scopes
@@ -672,7 +672,7 @@ impl<'db> Resolver<'db> {
                 _ => None,
             })
             .collect();
-        self.module_imports.push(HashMap::new());
+        self.module_imports.push(HashMap::default());
         loop {
             let resolved: Vec<(Symbol, Vec<Symbol>)> = uses
                 .iter()

@@ -3,7 +3,8 @@
 //! This module handles the collection of function types used in call_indirect
 //! operations and ref_func declarations.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -95,7 +96,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symb
         }
     }
 
-    let mut ref_funcs = HashSet::new();
+    let mut ref_funcs = HashSet::default();
     let body = module.body(ctx).unwrap();
     collect_from_region(ctx, body, &mut ref_funcs);
     ref_funcs
@@ -144,7 +145,7 @@ mod tests {
             }";
         let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
         let seed = wasm_dialect::func_sig(&mut ctx, [], []).as_type_ref();
-        let mut indices = HashMap::from([(seed, 7)]);
+        let mut indices = [(seed, 7)].into_iter().collect::<HashMap<_, _>>();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap();
         assert_eq!(added.len(), 1);
         assert_eq!(indices[&seed], 7);
@@ -158,7 +159,7 @@ mod tests {
             "core.module @m { wasm.func {sym_name = \"f\", type = wasm.func_sig<() -> ()>} { wasm.return } }",
         );
         let before = trunk_ir::printer::print_module(&ctx, module.op());
-        let mut indices = HashMap::new();
+        let mut indices = HashMap::default();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap();
         assert!(added.is_empty());
         assert!(indices.is_empty());
@@ -190,8 +191,9 @@ mod tests {
         ] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(&mut ctx, source);
-            let error = collect_call_indirect_types(&mut ctx, module, &mut HashMap::new(), 0, 1)
-                .expect_err("missing exact signature must fail before type collection");
+            let error =
+                collect_call_indirect_types(&mut ctx, module, &mut HashMap::default(), 0, 1)
+                    .expect_err("missing exact signature must fail before type collection");
             assert!(error.to_string().contains("lacks signature"), "{error}");
         }
     }

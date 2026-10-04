@@ -31,7 +31,7 @@
 //! Float and div/rem folds are deferred until each one's edge cases
 //! (NaN/-0.0, division-by-zero) are pinned down.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::context::IrContext;
 use crate::dialect::{arith, func};
@@ -111,7 +111,7 @@ impl FoldDispatchPattern {
     /// triples. Panics on duplicate keys (in release builds too — see
     /// type-level docs).
     pub fn from_folds(folds: impl IntoIterator<Item = (Symbol, Symbol, FoldFn)>) -> Self {
-        let mut table = HashMap::new();
+        let mut table = HashMap::default();
         for (dialect, op_name, fold) in folds {
             assert!(
                 table

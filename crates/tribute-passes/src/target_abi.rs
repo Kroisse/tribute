@@ -4,7 +4,7 @@
 //! only then maps logical CPS `core.never` results to the shared empty-result
 //! list used by target backends.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
@@ -1067,7 +1067,7 @@ fn collect_functions(
     never: TypeRef,
     anyref: TypeRef,
 ) -> Result<HashMap<SymbolPath, FunctionIdentity>, TargetAbiError> {
-    let mut functions = HashMap::new();
+    let mut functions = HashMap::default();
     for &op in ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
@@ -1432,8 +1432,8 @@ impl<'a> PhysicalTypeConverter<'a> {
         Self {
             ctx,
             never,
-            embedded: HashMap::new(),
-            callable: HashMap::new(),
+            embedded: HashMap::default(),
+            callable: HashMap::default(),
         }
     }
 

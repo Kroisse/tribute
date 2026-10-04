@@ -15,7 +15,8 @@
 //! - Creates a function table with those functions
 //! - Generates `wasm.table` and `wasm.elem` operations
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
 use trunk_ir::context::{IrContext, OperationDataBuilder};
@@ -55,7 +56,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
             .add_pattern(FuncTailCallIndirectPattern)
             .add_pattern(FuncUnreachablePattern)
             .add_pattern(FuncConstantPattern {
-                table_indices: HashMap::new(),
+                table_indices: HashMap::default(),
             });
         applicator.apply_partial(ctx, module);
         return;
@@ -165,7 +166,7 @@ fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<SymbolPath
     }
 
     // Deduplicate while preserving order
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::default();
     funcs.retain(|sym| seen.insert(sym.clone()));
 
     funcs

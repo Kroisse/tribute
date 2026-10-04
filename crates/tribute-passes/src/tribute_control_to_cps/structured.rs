@@ -94,7 +94,7 @@ impl Converter<'_> {
             let previous_module_block = self.module_block;
             self.module_block = block;
             let conversion = (|| {
-                let mut mapping = HashMap::new();
+                let mut mapping = HashMap::default();
                 for (old, new) in self
                     .ctx
                     .block_args(source_block)

@@ -4,7 +4,8 @@
 //! before `func_to_clif` erases semantic reference types.  Building and
 //! validating it never mutates the input IR.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 
@@ -242,7 +243,7 @@ impl NativeOwnershipPlan {
             ));
         }
 
-        let mut current = HashSet::new();
+        let mut current = HashSet::default();
         walk_module(ctx, module, |op| {
             if let Some(descriptor) = allocation_descriptor(ctx, op) {
                 current.insert(descriptor);
@@ -272,7 +273,7 @@ impl NativeOwnershipPlan {
                 function_ops.push(op);
             }
         });
-        let mut current_functions = HashSet::new();
+        let mut current_functions = HashSet::default();
         for op in function_ops {
             if matches!(
                 ownership_callable_body(ctx, op)?,
@@ -462,7 +463,7 @@ fn collect_function_definitions(
     ctx: &IrContext,
     module_ops: &[OpRef],
 ) -> Result<HashMap<SymbolPath, OpRef>, OwnershipPlanError> {
-    let mut definitions = HashMap::new();
+    let mut definitions = HashMap::default();
     for &op in module_ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
@@ -483,14 +484,14 @@ fn collect_and_validate_managed_layouts(
     ctx: &IrContext,
     module: Module,
 ) -> Result<HashSet<TypeRef>, OwnershipPlanError> {
-    let mut layouts = HashSet::new();
-    let mut nominal_layouts: HashMap<StringRef, Vec<TypeRef>> = HashMap::new();
-    let mut typerefs = HashSet::new();
+    let mut layouts = HashSet::default();
+    let mut nominal_layouts: HashMap<StringRef, Vec<TypeRef>> = HashMap::default();
+    let mut typerefs = HashSet::default();
     let mut pending_typerefs = Vec::new();
     for &(_, ty) in ctx.type_aliases() {
         index_nominal_layout(ctx, ty, &mut nominal_layouts);
     }
-    let mut visited_types = HashSet::new();
+    let mut visited_types = HashSet::default();
     walk_module(ctx, module, |op| {
         for &ty in ctx.op_result_types(op) {
             collect_reachable_type_contract(
@@ -705,7 +706,7 @@ fn build_rtti_plan(
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Vec<RttiTypePlan>, OwnershipPlanError> {
     let mut order = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     walk_module(ctx, module, |op| {
         if let Some(descriptor) = allocation_descriptor(ctx, op)
             && managed_layouts.contains(&descriptor.0)
@@ -764,7 +765,7 @@ fn compute_entry_contracts(
     elide_proven_borrowed_parameters: bool,
 ) -> Result<HashMap<SymbolPath, Vec<EntryOwnership>>, OwnershipPlanError> {
     let recursive = recursive_functions(call_graph);
-    let mut summaries = HashMap::new();
+    let mut summaries = HashMap::default();
     for (symbol, &op) in definitions {
         let symbol = symbol.clone();
         let entry = match ownership_callable_body(ctx, op)? {
@@ -823,7 +824,7 @@ fn compute_entry_contracts(
             };
             for (index, &parameter) in ctx.block_args(entry).iter().enumerate() {
                 if summaries[&symbol][index] == EntryOwnership::Borrowed
-                    && !value_is_borrowed(ctx, body, parameter, &summaries, &mut HashSet::new())
+                    && !value_is_borrowed(ctx, body, parameter, &summaries, &mut HashSet::default())
                 {
                     summaries.get_mut(&symbol).unwrap()[index] = EntryOwnership::Retained;
                     changed = true;
@@ -1005,7 +1006,7 @@ fn validate_function_contract(
 }
 
 fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), OwnershipPlanError> {
-    let mut function_symbols = HashSet::new();
+    let mut function_symbols = HashSet::default();
     for function in &plan.functions {
         if !function_symbols.insert(function.symbol.clone()) {
             return Err(OwnershipPlanError::new(
@@ -1036,8 +1037,8 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
         {
             return Err(OwnershipPlanError::new("planned entry contract is stale"));
         }
-        let mut action_keys = HashSet::new();
-        let mut action_targets = HashMap::new();
+        let mut action_keys = HashSet::default();
+        let mut action_targets = HashMap::default();
         for action in &function.actions {
             if !action_keys.insert((action.anchor, action.kind, action.value, action.destination)) {
                 return Err(OwnershipPlanError::new(
@@ -1094,7 +1095,7 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
         }
         validate_into_raw_transfer_groups(ctx, function, body, plan)?;
     }
-    let mut rtti_types = HashSet::new();
+    let mut rtti_types = HashSet::default();
     for entry in &plan.rtti_types {
         if !rtti_types.insert(entry.key()) || !plan.managed_layouts.contains(&entry.ty) {
             return Err(OwnershipPlanError::new(
@@ -1141,7 +1142,7 @@ fn validate_into_raw_transfer_groups(
     body: RegionRef,
     plan: &NativeOwnershipPlan,
 ) -> Result<(), OwnershipPlanError> {
-    let mut sources = HashSet::new();
+    let mut sources = HashSet::default();
     for &block in &ctx.region(body).blocks {
         for &op in &ctx.block(block).ops {
             if !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, op) {

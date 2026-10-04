@@ -403,6 +403,10 @@ impl LspServer {
         tracing::debug!(edit_count = text_edits.len(), "Rename edits computed");
 
         // Build WorkspaceEdit with changes for current file
+        #[allow(
+            clippy::disallowed_types,
+            reason = "lsp_types::WorkspaceEdit requires a standard HashMap"
+        )]
         let mut changes = std::collections::HashMap::new();
         changes.insert(uri.clone(), text_edits);
 
@@ -583,6 +587,10 @@ impl LspServer {
                     new_text: format!(": {}", type_str),
                 };
 
+                #[allow(
+                    clippy::disallowed_types,
+                    reason = "lsp_types::WorkspaceEdit requires a standard HashMap"
+                )]
                 let mut changes = std::collections::HashMap::new();
                 changes.insert(uri.clone(), vec![edit]);
 

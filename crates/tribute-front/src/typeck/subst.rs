@@ -3,7 +3,7 @@
 //! This module provides shared substitution logic for replacing BoundVar types
 //! with actual types during type scheme instantiation.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeScheme};
 

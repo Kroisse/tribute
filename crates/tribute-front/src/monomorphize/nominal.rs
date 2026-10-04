@@ -1,5 +1,6 @@
 //! Close nominal instances over their checked constructor schemas before cloning.
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
 use crate::typeck::subst::{SubstResult, substitute_bound_vars};
@@ -100,8 +101,8 @@ fn close_dependencies<'db>(
     max_instances: usize,
 ) -> Result<NominalInstances<'db>, InstanceError> {
     let definitions = &index.declarations;
-    let mut instances = Instances::new();
-    let mut enum_variants = HashMap::new();
+    let mut instances = Instances::default();
+    let mut enum_variants = HashMap::default();
     let mut struct_constructors = Vec::new();
     let mut count = 0;
     let limit = || InstanceError {
@@ -116,7 +117,7 @@ fn close_dependencies<'db>(
                 enum_variants,
             });
         }
-        let mut discovered = Instances::new();
+        let mut discovered = Instances::default();
         for (owner, argument_sets) in pending {
             let declaration = &definitions[&owner];
             for arguments in argument_sets {
@@ -424,7 +425,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .unwrap();
             assert_eq!(
                 result.instances[&hidden_id],
-                HashSet::from([vec![Type::new(db, TypeKind::Int)]])
+                [vec![Type::new(db, TypeKind::Int)]]
+                    .into_iter()
+                    .collect::<HashSet<_>>()
             );
             let variant = result
                 .enum_variants

@@ -190,7 +190,7 @@ fn splice_callee_body_before(
 use super::call_graph::{CallGraph, directly_recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
 use crate::symbol::SymbolPath;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::Arc;
 
 /// Knobs for the inlining pass.

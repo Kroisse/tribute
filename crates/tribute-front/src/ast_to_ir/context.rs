@@ -3,7 +3,8 @@
 //! Manages state during AST-to-IR transformation.
 //! Emits arena IR (`IrContext` / `TypeRef` / `ValueRef`) directly.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::{Deref, DerefMut};
 
 use tribute_ir::dialect::adt;
@@ -144,23 +145,23 @@ impl<'db> IrLoweringCtx<'db> {
             db,
             path,
             span_map,
-            scopes: vec![HashMap::new()],
-            local_callable_values: vec![HashMap::new()],
-            resume_scopes: vec![HashSet::new()],
+            scopes: vec![HashMap::default()],
+            local_callable_values: vec![HashMap::default()],
+            resume_scopes: vec![HashSet::default()],
             function_types,
-            logical_generated_signatures: HashMap::new(),
-            logical_source_functions: HashSet::new(),
-            c_symbols: HashMap::new(),
-            logical_emitted_externs: HashSet::new(),
+            logical_generated_signatures: HashMap::default(),
+            logical_source_functions: HashSet::default(),
+            c_symbols: HashMap::default(),
+            logical_emitted_externs: HashSet::default(),
             ability_conventions,
-            definition_conventions: HashMap::new(),
+            definition_conventions: HashMap::default(),
             module_path,
             module_block: None,
-            struct_fields: HashMap::new(),
-            variant_field_names: HashMap::new(),
-            type_map: HashMap::new(),
-            logical_nominal_declarations: HashSet::new(),
-            compiler_intrinsics: HashMap::new(),
+            struct_fields: HashMap::default(),
+            variant_field_names: HashMap::default(),
+            type_map: HashMap::default(),
+            logical_nominal_declarations: HashSet::default(),
+            compiler_intrinsics: HashMap::default(),
             literal_equalities: LiteralEqualities::default(),
 
             node_types,
@@ -232,9 +233,9 @@ impl<'db> IrLoweringCtx<'db> {
 
     /// Enter a new scope (internal — use `scope()` guard instead).
     fn enter_scope(&mut self) {
-        self.scopes.push(HashMap::new());
-        self.local_callable_values.push(HashMap::new());
-        self.resume_scopes.push(HashSet::new());
+        self.scopes.push(HashMap::default());
+        self.local_callable_values.push(HashMap::default());
+        self.resume_scopes.push(HashSet::default());
     }
 
     /// Exit the current scope (internal — use `scope()` guard instead).
@@ -1011,8 +1012,8 @@ mod tests {
             db,
             path,
             crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         )
@@ -1125,8 +1126,8 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -1149,8 +1150,8 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -1462,8 +1463,8 @@ mod tests {
             &db,
             path,
             crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -1506,7 +1507,7 @@ mod tests {
         let body = AstType::new(&db, TypeKind::Int);
         let scheme = TypeScheme::new(&db, vec![], vec![], body);
 
-        let mut ft = HashMap::new();
+        let mut ft = HashMap::default();
         ft.insert(name.clone(), scheme);
 
         let ctx = IrLoweringCtx::new(
@@ -1514,7 +1515,7 @@ mod tests {
             path,
             crate::ast::SpanMap::default(),
             ft,
-            HashMap::new(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );

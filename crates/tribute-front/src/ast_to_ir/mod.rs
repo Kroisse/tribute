@@ -27,7 +27,8 @@
 mod context;
 mod lower;
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
 
 use tribute_ir::dialect::tribute_control::{CompilerIntrinsicDeclaration, OperationDeclaration};
@@ -149,7 +150,7 @@ pub fn registered_compiler_intrinsics<V>(
         }
     }
 
-    let mut result = HashMap::new();
+    let mut result = HashMap::default();
     let mut unsupported = Vec::new();
     collect(
         &module.decls,
@@ -183,7 +184,7 @@ pub struct TypedModule<'db> {
     /// Solved source-callable signatures for lambda expressions.
     pub lambda_signatures: SortedMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     /// Case expressions whose source coverage is known to be exhaustive.
-    pub exhaustive_cases: std::collections::HashSet<NodeId>,
+    pub exhaustive_cases: HashSet<NodeId>,
     /// Non-identity evidence selections of calls, resumes, and handles.
     pub evidence_plans: SortedMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
@@ -238,8 +239,8 @@ mod tests {
             &db,
             path,
             span_map,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -283,8 +284,8 @@ mod tests {
             &db,
             path,
             SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -315,8 +316,8 @@ mod tests {
             &db,
             path,
             SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -350,8 +351,8 @@ mod tests {
             &db,
             path,
             span_map,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );

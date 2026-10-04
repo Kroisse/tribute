@@ -4,8 +4,8 @@
 //! It runs in the shared pipeline before backend-specific lowering, handling
 //! arithmetic and comparison intrinsics declared in the prelude for Int, Nat, and Float.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
@@ -85,7 +85,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         return;
     }
     let symbols = SymbolTable::collect(ctx, module);
-    let mut referenced = HashSet::new();
+    let mut referenced = HashSet::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         for value in ctx.op(op).attributes.values() {
             if let Attribute::SymbolRef(reference) = value
@@ -150,7 +150,7 @@ struct ArithIntrinsicPattern {
 
 impl ArithIntrinsicPattern {
     fn new() -> Self {
-        let mut map = HashMap::new();
+        let mut map = HashMap::default();
 
         macro_rules! binary {
             ($name:expr, $op_fn:expr) => {
@@ -244,7 +244,7 @@ impl ArithIntrinsicPattern {
 
         Self {
             map,
-            eligible: Rc::new(HashSet::new()),
+            eligible: Rc::new(HashSet::default()),
         }
     }
 

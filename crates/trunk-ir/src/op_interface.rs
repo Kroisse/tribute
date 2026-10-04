@@ -3,7 +3,8 @@
 //! This module provides an interface system similar to `type_interface.rs` but for operations.
 //! It uses the `inventory` crate to build a registry of operation properties at compile time.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -37,7 +38,7 @@ struct PureOpRegistry {
 impl PureOpRegistry {
     fn new() -> Self {
         Self {
-            pure_ops: HashSet::new(),
+            pure_ops: HashSet::default(),
         }
     }
 
@@ -155,7 +156,7 @@ struct IsolatedFromAboveRegistry {
 impl IsolatedFromAboveRegistry {
     fn new() -> Self {
         Self {
-            isolated_ops: HashSet::new(),
+            isolated_ops: HashSet::default(),
         }
     }
 
@@ -413,7 +414,7 @@ inventory::collect!(CallableOwnerRegistration);
 static CALLABLE_OWNER_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static CallableOwnerRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<CallableOwnerRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),
@@ -525,7 +526,7 @@ inventory::collect!(CallableExitRegistration);
 static CALLABLE_EXIT_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static CallableExitRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<CallableExitRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),
@@ -606,7 +607,7 @@ inventory::collect!(CallLikeRegistration);
 
 static CALL_LIKE_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static CallLikeRegistration>> =
     LazyLock::new(|| {
-        let mut registry = HashMap::new();
+        let mut registry = HashMap::default();
         for registration in inventory::iter::<CallLikeRegistration> {
             let key = (
                 Symbol::from_dynamic(registration.dialect),
@@ -746,7 +747,7 @@ inventory::collect!(IndirectCallLikeRegistration);
 static INDIRECT_CALL_LIKE_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static IndirectCallLikeRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<IndirectCallLikeRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),
@@ -859,7 +860,7 @@ inventory::collect!(BranchRegistration);
 
 static BRANCH_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static BranchRegistration>> =
     LazyLock::new(|| {
-        let mut registry = HashMap::new();
+        let mut registry = HashMap::default();
         for registration in inventory::iter::<BranchRegistration> {
             let key = (
                 Symbol::from_dynamic(registration.dialect),
@@ -996,7 +997,7 @@ inventory::collect!(RegionBranchRegistration);
 static REGION_BRANCH_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static RegionBranchRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),
@@ -1134,7 +1135,7 @@ inventory::collect!(RegionBranchTerminatorRegistration);
 static REGION_BRANCH_TERMINATOR_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static RegionBranchTerminatorRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchTerminatorRegistration> {
         let key = (
             Symbol::from_dynamic(registration.dialect),

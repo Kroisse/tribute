@@ -63,8 +63,9 @@
 //! `Arc<dyn Any + Send + Sync>` for future flexibility, but the cache
 //! itself is single-threaded.
 
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::any::{Any, TypeId, type_name};
-use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -348,7 +349,7 @@ impl AnalysisCache {
             let mut computation = AnalysisContext {
                 ir: ctx,
                 cache: self,
-                dependencies: HashSet::new(),
+                dependencies: HashSet::default(),
             };
             let result = A::compute(&mut computation, target);
             (result, computation.dependencies)
@@ -479,7 +480,7 @@ impl AnalysisCache {
     }
 
     fn invalidate_keys(&mut self, roots: impl IntoIterator<Item = AnalysisKey>) {
-        let mut invalidated = HashSet::new();
+        let mut invalidated = HashSet::default();
         let mut pending = roots.into_iter().collect::<Vec<_>>();
         while let Some(key) = pending.pop() {
             if !invalidated.insert(key) {

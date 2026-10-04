@@ -3,6 +3,7 @@
 //! Parses the module body into structured types for code generation.
 
 use proc_macro2::{Delimiter, Ident, TokenTree};
+use rustc_hash::FxHashSet as HashSet;
 use unsynn::{Parser, ToTokenIter, TokenIter};
 
 mod constraint;
@@ -157,7 +158,7 @@ fn parse_module_inner(iter: &mut TokenIter) -> Result<DialectModule, String> {
     let mut body_iter = body.stream().to_token_iter();
 
     let mut items = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
+    let mut seen_names = HashSet::default();
     while has_remaining(&body_iter) {
         let item = parse_item(&mut body_iter)?;
         let item_name = match &item {
@@ -343,7 +344,7 @@ fn parse_outer_attr(iter: &mut TokenIter) -> Result<OuterAttr, String> {
 fn parse_attr_list(stream: proc_macro2::TokenStream) -> Result<Vec<AttrDef>, String> {
     let mut iter = stream.to_token_iter();
     let mut attrs = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
+    let mut seen_names = HashSet::default();
 
     while has_remaining(&iter) {
         let name_ident: Ident =
@@ -400,7 +401,7 @@ fn parse_operation(iter: &mut TokenIter) -> Result<OperationDef, String> {
 fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccessor>, String> {
     let mut iter = stream.to_token_iter();
     let mut items = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
+    let mut seen_names = HashSet::default();
 
     while has_remaining(&iter) {
         expect_punct(&mut iter, '#')?;
@@ -488,7 +489,7 @@ fn parse_struct_def(iter: &mut TokenIter, attrs: Vec<AttrDef>) -> Result<TypeDef
 fn parse_angle_params(iter: &mut TokenIter) -> Result<Vec<TypeParam>, String> {
     expect_punct(iter, '<')?;
     let mut params = Vec::new();
-    let mut seen_names = std::collections::HashSet::new();
+    let mut seen_names = HashSet::default();
     let mut seen_variadic = false;
 
     while !peek_punct(iter, '>') {

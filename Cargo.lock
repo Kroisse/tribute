@@ -1762,6 +1762,7 @@ dependencies = [
  "lsp-types",
  "parking_lot",
  "ropey",
+ "rustc-hash",
  "salsa",
  "salsa-test-macros",
  "serde",
@@ -1817,6 +1818,7 @@ dependencies = [
  "itertools 0.14.0",
  "proptest",
  "ropey",
+ "rustc-hash",
  "salsa",
  "salsa-test-macros",
  "smallvec",
@@ -1851,6 +1853,7 @@ dependencies = [
  "derive_more",
  "insta",
  "itertools 0.14.0",
+ "rustc-hash",
  "tracing",
  "tribute-core",
  "tribute-ir",
@@ -1933,6 +1936,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
+ "rustc-hash",
  "unsynn",
 ]
 
@@ -1942,6 +1946,7 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "itertools 0.14.0",
+ "rustc-hash",
  "tempfile",
  "tracing",
  "trunk-ir",

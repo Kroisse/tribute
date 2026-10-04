@@ -5,7 +5,7 @@
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::SymbolPath;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
@@ -73,7 +73,7 @@ fn validate_clif_contracts(ctx: &IrContext, module: Module) -> Vec<String> {
         return Vec::new();
     };
     let mut errors = Vec::new();
-    let mut functions = HashMap::new();
+    let mut functions = HashMap::default();
     collect_clif_function_signatures(ctx, body, &mut functions, &mut errors);
     validate_clif_region(ctx, body, None, &functions, &mut errors);
     errors

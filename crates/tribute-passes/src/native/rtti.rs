@@ -29,7 +29,8 @@
 //! Runs before `adt_rc_header` (Phase 1.95), which stores the declared
 //! `rtti_idx` values in allocation headers and then erases the declarations.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
 use tribute_ir::dialect::adt::layout::{
@@ -142,8 +143,8 @@ fn validate_declarations(
     module: Module,
     layouts: &[tribute_rtti::Layout],
 ) -> Result<(), RttiError> {
-    let mut declared = HashSet::new();
-    let mut indices = HashSet::new();
+    let mut declared = HashSet::default();
+    let mut indices = HashSet::default();
     for layout in layouts {
         if !declared.insert((layout.r#type(ctx), layout.tag_ref(ctx))) {
             return Err(RttiError("a descriptor is declared more than once".into()));
@@ -156,7 +157,7 @@ fn validate_declarations(
         }
     }
 
-    let mut allocated = HashSet::new();
+    let mut allocated = HashSet::default();
     if let Some(body) = module.body(ctx) {
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if let Some(descriptor) = tribute_rtti::allocation_descriptor(ctx, op) {
@@ -191,7 +192,7 @@ pub fn generate_rtti(
     };
 
     let loc = Location::new(ctx.intern_path("<rtti>"), Span::new(0, 0));
-    let mut release_fns = HashMap::new();
+    let mut release_fns = HashMap::default();
 
     // `anyref` and `intref` have no static nominal allocation layout. Their
     // release action carries a dynamic-size signal, resolved by the header
@@ -851,7 +852,9 @@ mod tests {
 
         assert_eq!(
             tribute_rtti::Layout::declared_indices(&ctx, module),
-            HashMap::from([((point_ty, None), RTTI_USER_START)])
+            [((point_ty, None), RTTI_USER_START)]
+                .into_iter()
+                .collect::<HashMap<_, _>>()
         );
     }
 

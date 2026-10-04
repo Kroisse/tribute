@@ -505,9 +505,9 @@ fn collect_external_in_order(
 }
 
 fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> {
-    let mut defined = HashSet::new();
+    let mut defined = HashSet::default();
     collect_defined_values(ctx, region, &mut defined);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut external = Vec::new();
     collect_external_in_order(ctx, region, &defined, &mut seen, &mut external);
     external

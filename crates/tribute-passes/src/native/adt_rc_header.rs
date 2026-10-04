@@ -13,7 +13,7 @@
 //! Runs at Phase 1.95, after RTTI assignment (Phase 1.9) and before
 //! `adt_to_clif` (Phase 2).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{

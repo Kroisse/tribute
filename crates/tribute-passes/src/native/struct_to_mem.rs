@@ -15,7 +15,7 @@
 //! allocates. The pass therefore runs after closure layout adaptation
 //! settles the declarations and before `adt_rc_header` erases them.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
 
 use tribute_ir::dialect::adt;
@@ -99,7 +99,7 @@ pub fn lower(
         ControlFlow::Continue(WalkAction::Advance)
     });
 
-    let mut converted: HashMap<TypeRef, TypeRef> = HashMap::new();
+    let mut converted: HashMap<TypeRef, TypeRef> = HashMap::default();
     for (op, layout) in accesses {
         let structural = match converted.get(&layout) {
             Some(&structural) => structural,

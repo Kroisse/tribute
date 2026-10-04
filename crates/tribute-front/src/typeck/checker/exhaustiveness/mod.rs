@@ -7,7 +7,8 @@
 
 mod matrix;
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -212,7 +213,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
             checker,
             families: Vec::new(),
             family_types: Vec::new(),
-            family_ids: HashMap::new(),
+            family_ids: HashMap::default(),
             saw_error: false,
             unanalyzable: false,
         }

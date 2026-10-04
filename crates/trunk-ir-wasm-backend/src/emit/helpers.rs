@@ -3,7 +3,7 @@
 //! This module contains type conversion and utility functions shared across
 //! the emit module.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
@@ -493,7 +493,7 @@ mod tests {
         let array_ty = ctx.intern_type(TypeDataBuilder::new("core", "array").param(i32_ty).build());
 
         assert_eq!(
-            type_to_valtype(&ctx, array_ty, &HashMap::new()).expect("core.array is supported"),
+            type_to_valtype(&ctx, array_ty, &HashMap::default()).expect("core.array is supported"),
             ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -511,7 +511,7 @@ mod tests {
         let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(
-            type_to_valtype(&ctx, signature, &HashMap::new())
+            type_to_valtype(&ctx, signature, &HashMap::default())
                 .expect("func.func_sig is a supported Wasm value type"),
             ValType::Ref(RefType::FUNCREF)
         );

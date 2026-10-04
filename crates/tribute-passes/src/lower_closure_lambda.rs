@@ -22,7 +22,7 @@
 //! %k = closure.new @foo::__clam_0, %env
 //! ```
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_core::calling_convention::{
     CLOSURE_ENVIRONMENT_INDEX_ATTR, get_physical_closure_environment_index,
@@ -449,7 +449,7 @@ struct LambdaNamer {
 impl LambdaNamer {
     fn new() -> Self {
         Self {
-            counters: HashMap::new(),
+            counters: HashMap::default(),
         }
     }
 

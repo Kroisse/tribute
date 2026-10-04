@@ -1,5 +1,6 @@
 use super::nominal_index::NominalIndex;
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use crate::ast::visit::{RefSite, Refs, walk_module};
 use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef};
@@ -150,7 +151,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
             db,
             schemes,
             function_instances,
-            instantiations: HashMap::new(),
+            instantiations: HashMap::default(),
         }
     }
 
@@ -182,7 +183,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
 }
 
 pub(crate) fn is_concrete_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    is_concrete_type_cached(db, ty, &mut HashMap::new())
+    is_concrete_type_cached(db, ty, &mut HashMap::default())
 }
 
 fn is_concrete_type_cached<'db>(
@@ -278,7 +279,7 @@ pub(super) fn collect_type_instantiations_with_index<'db>(
     extra_types: impl IntoIterator<Item = Type<'db>>,
     index: &NominalIndex<'_, 'db>,
 ) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let mut result: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = HashMap::new();
+    let mut result: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = HashMap::default();
 
     walk_module(
         &mut Refs(|site, _, value: &TypedRef<'db>| {
@@ -302,7 +303,7 @@ pub(super) fn collect_from_type<'db>(
     index: &NominalIndex<'_, 'db>,
     result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) {
-    collect_from_type_inner(db, ty, index, result, &mut HashSet::new());
+    collect_from_type_inner(db, ty, index, result, &mut HashSet::default());
 }
 
 // Interned types form a DAG. Visit shared arguments once, including during
@@ -736,7 +737,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::default();
         collect_from_type(&db, option_int, &index, &mut result);
 
         assert_eq!(result.len(), 1);
@@ -759,7 +760,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::default();
         collect_from_type(&db, option_bound, &index, &mut result);
 
         assert!(result.is_empty());
@@ -786,7 +787,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::default();
         collect_from_type(&db, option_bound, &index, &mut result);
 
         assert!(result.is_empty());
@@ -817,11 +818,14 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::default();
         collect_from_type(&db, result_bound_option_int, &index, &mut result);
 
         assert!(!result.contains_key(&result_id));
-        assert_eq!(result[&option_id], HashSet::from([vec![int]]));
+        assert_eq!(
+            result[&option_id],
+            [vec![int]].into_iter().collect::<HashSet<_>>()
+        );
     }
 
     #[test]
@@ -849,7 +853,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::default();
         collect_from_type(&db, list_option_int, &index, &mut result);
 
         assert_eq!(result.len(), 2);
@@ -882,7 +886,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = HashMap::default();
         collect_from_type(&db, func_ty, &index, &mut result);
 
         assert_eq!(result.len(), 1);
@@ -895,7 +899,7 @@ mod tests {
         let module = nominal_module();
         let index = NominalIndex::new(&db, &module);
         let int = Type::new(&db, TypeKind::Int);
-        let mut result = HashMap::new();
+        let mut result = HashMap::default();
         // Neither an unknown type nor an indexed non-generic declaration qualifies,
         // even if the type carries arguments.
         for id in [

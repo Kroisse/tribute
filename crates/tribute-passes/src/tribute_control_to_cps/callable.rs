@@ -289,7 +289,7 @@ impl Converter<'_> {
         let frame_ty = self.frame_types(source_result).reference;
         let params = abi.lowered_params(evidence_ty, frame_ty);
         let block = self.make_block(location, &params);
-        let mut mapping = HashMap::new();
+        let mut mapping = HashMap::default();
         for (old, new) in self.ctx.block_args(source_block).to_vec().into_iter().zip(
             self.ctx.block_args(block)[abi.source_param_offset()..]
                 .iter()

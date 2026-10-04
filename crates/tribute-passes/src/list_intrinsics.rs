@@ -1,6 +1,6 @@
 //! Lower the public prelude List construction intrinsic to shared `list.*` IR.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::rc::Rc;
 
 use tribute_ir::dialect::list;

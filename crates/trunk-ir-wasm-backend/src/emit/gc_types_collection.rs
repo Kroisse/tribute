@@ -3,7 +3,7 @@
 //! This module traverses wasm operations to collect WebAssembly GC type
 //! definitions (structs and arrays) and build the type index mappings.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tracing::debug;
 
@@ -141,7 +141,7 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
         let actual = if helpers::is_type(ctx, ty, "core", "ptr") {
             ValType::Ref(wasm_encoder::RefType::ANYREF)
         } else {
-            helpers::type_to_valtype(ctx, ty, &HashMap::new())?
+            helpers::type_to_valtype(ctx, ty, &HashMap::default())?
         };
         if StorageType::Val(actual) != expected.element_type {
             return Err(invalid());
@@ -353,7 +353,7 @@ pub(crate) fn collect_gc_types(
 ) -> CompilationResult<GcTypesResult> {
     let wasm_dialect = Symbol::new("wasm");
     let mut builders: Vec<GcTypeBuilder> = Vec::new();
-    let mut type_idx_by_type: HashMap<TypeRef, u32> = HashMap::new();
+    let mut type_idx_by_type: HashMap<TypeRef, u32> = HashMap::default();
     let body = module
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;

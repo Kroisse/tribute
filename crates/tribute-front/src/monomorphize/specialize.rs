@@ -1,5 +1,6 @@
 use super::nominal_index::{Declaration, NominalDeclaration, NominalIndex};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
 
@@ -133,7 +134,7 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
             self.0.insert(id);
         }
     }
-    let mut ids = Ids(HashSet::new());
+    let mut ids = Ids(HashSet::default());
     ids.visit_func_decl(func);
     ids.0
 }
@@ -434,7 +435,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 fn collect_func_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     let mut prefix = String::new();
     collect_func_decls_inner(&module.decls, &mut prefix, &mut map);
     map
@@ -466,7 +467,7 @@ fn collect_func_decls_inner<'a, 'db>(
 fn collect_extern_function_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<Symbol, &'a ExternFuncDecl> {
-    let mut declarations = HashMap::new();
+    let mut declarations = HashMap::default();
     let mut prefix = String::new();
     collect_extern_function_decls_inner(&module.decls, &mut prefix, &mut declarations);
     declarations
@@ -895,10 +896,10 @@ mod tests {
             .build(&db);
         let function_types = vec![(func_name, scheme)];
 
-        let mut type_arg_sets = HashSet::new();
+        let mut type_arg_sets = HashSet::default();
         type_arg_sets.insert(vec![int]);
         type_arg_sets.insert(vec![float]);
-        let mut instantiations = HashMap::new();
+        let mut instantiations = HashMap::default();
         instantiations.insert(func_id, type_arg_sets);
 
         let specializations = generate_specializations(
@@ -906,7 +907,7 @@ mod tests {
             &module,
             &instantiations,
             &function_types,
-            &HashMap::new(),
+            &HashMap::default(),
         );
 
         assert_eq!(specializations.specialized_declarations.len(), 2);

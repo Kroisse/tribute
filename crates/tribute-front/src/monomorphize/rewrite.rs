@@ -4,7 +4,8 @@
 //! by matching the callee's concrete type against collected instantiations.
 //! Also rewrites Named types with type arguments to their mangled monomorphic versions.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
@@ -87,7 +88,7 @@ pub fn build_type_rewrite_map<'db>(
     db: &'db dyn salsa::Database,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> TypeRewriteMap<'db> {
-    let mut map = TypeRewriteMap::new();
+    let mut map = TypeRewriteMap::default();
     for (id, type_arg_sets) in instantiations {
         let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
             .iter()
@@ -349,7 +350,7 @@ mod tests {
         db: &'db dyn salsa::Database,
         entries: Vec<(Symbol, Vec<Type<'db>>, Symbol)>,
     ) -> TypeRewriteMap<'db> {
-        let mut map = TypeRewriteMap::new();
+        let mut map = TypeRewriteMap::default();
         for (name, args, mangled) in entries {
             let id = TypeDefId::synthetic(db, name);
             map.entry(id).or_default().push((args, mangled));
@@ -391,9 +392,9 @@ mod tests {
         let builtin_id = TypeDefId::builtin_list(&db);
         let source_id =
             TypeDefId::source(&db, Symbol::new("List"), crate::ast::NodeId::from_raw(1));
-        let mut instantiations = HashMap::new();
-        instantiations.insert(builtin_id, HashSet::from([vec![int]]));
-        instantiations.insert(source_id, HashSet::from([vec![int]]));
+        let mut instantiations = HashMap::default();
+        instantiations.insert(builtin_id, [vec![int]].into_iter().collect::<HashSet<_>>());
+        instantiations.insert(source_id, [vec![int]].into_iter().collect::<HashSet<_>>());
 
         let map = build_type_rewrite_map(&db, &instantiations);
 
@@ -416,9 +417,9 @@ mod tests {
             Symbol::new("B::Thing"),
             crate::ast::NodeId::from_raw(2),
         );
-        let mut instantiations = HashMap::new();
-        instantiations.insert(a_id, HashSet::from([vec![int]]));
-        instantiations.insert(b_id, HashSet::from([vec![int]]));
+        let mut instantiations = HashMap::default();
+        instantiations.insert(a_id, [vec![int]].into_iter().collect::<HashSet<_>>());
+        instantiations.insert(b_id, [vec![int]].into_iter().collect::<HashSet<_>>());
 
         let map = build_type_rewrite_map(&db, &instantiations);
 
@@ -431,7 +432,7 @@ mod tests {
     fn test_rewrite_type_leaves_primitives() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let map = TypeRewriteMap::new();
+        let map = TypeRewriteMap::default();
         assert_eq!(rewrite_type(&db, int, &map), int);
     }
 
@@ -446,7 +447,7 @@ mod tests {
                 args: vec![],
             },
         );
-        let map = TypeRewriteMap::new();
+        let map = TypeRewriteMap::default();
         assert_eq!(rewrite_type(&db, text, &map), text);
     }
 
@@ -501,7 +502,7 @@ mod tests {
                 args: vec![int],
             },
         );
-        let map = TypeRewriteMap::new(); // empty
+        let map = TypeRewriteMap::default(); // empty
 
         let result = rewrite_type(&db, unknown, &map);
         // Should be unchanged
