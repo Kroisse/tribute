@@ -36,7 +36,6 @@ use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout,
 };
 use tribute_ir::dialect::tribute_rtti::FieldKind;
-use trunk_ir::Symbol;
 use trunk_ir::TypeDataBuilder;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
@@ -46,6 +45,7 @@ use trunk_ir::rewrite::{Module, TypeConverter};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
 use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, TypeRef, ValueRef};
+use trunk_ir::{Symbol, SymbolPath};
 
 use tribute_ir::dialect::{tribute_rt, tribute_rtti};
 
@@ -233,8 +233,8 @@ pub fn generate_rtti(
 }
 
 /// The release function of an RTTI index.
-fn release_fn_symbol(rtti_idx: u32) -> Symbol {
-    Symbol::from_dynamic(&format!("{RELEASE_FN_PREFIX}{rtti_idx}"))
+fn release_fn_symbol(rtti_idx: u32) -> SymbolPath {
+    SymbolPath::from_text(&format!("{RELEASE_FN_PREFIX}{rtti_idx}"))
 }
 
 /// Build `__tribute_deep_release(payload_ptr, alloc_size)`.
@@ -314,7 +314,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
         .build(ctx, loc);
     push(ctx, entry, entry_offset.op_ref());
     let table = clif::SymbolAddr::operands()
-        .sym(Symbol::new(RTTI_TABLE))
+        .sym(SymbolPath::from(RTTI_TABLE))
         .results(tys.ptr)
         .build(ctx, loc);
     push(ctx, entry, table.op_ref());
@@ -361,7 +361,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
     push(ctx, shallow, branch.op_ref());
 
     let call = clif::Call::operands([raw_ptr, alloc_size])
-        .callee(Symbol::new(DEALLOC_FN))
+        .callee(SymbolPath::from(DEALLOC_FN))
         .results([tys.nil])
         .build(ctx, loc);
     push(ctx, dealloc, call.op_ref());
@@ -711,7 +711,7 @@ fn gen_dealloc_and_return_with_size(
     ctx.push_op(block, size_op.op_ref());
 
     let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size_op.result(ctx)])
-        .callee(Symbol::new(DEALLOC_FN))
+        .callee(SymbolPath::from(DEALLOC_FN))
         .results([nil_ty])
         .build(ctx, loc);
     ctx.push_op(block, dealloc_call.op_ref());

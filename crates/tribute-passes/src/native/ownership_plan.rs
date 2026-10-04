@@ -22,7 +22,8 @@ use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::target_abi::{CONSUMED, OWNERSHIP_ATTR};
 use trunk_ir::{
-    Attribute, BlockRef, OpRef, RegionRef, StringRef, Symbol, TypeRef, ValueDef, ValueRef,
+    Attribute, BlockRef, OpRef, RegionRef, StringRef, Symbol, SymbolPath, TypeRef, ValueDef,
+    ValueRef,
 };
 
 mod actions;
@@ -114,15 +115,15 @@ pub struct OwnershipAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionOwnershipPlan {
-    symbol: Symbol,
+    symbol: SymbolPath,
     operation: OpRef,
     entries: Vec<EntryOwnership>,
     actions: Vec<OwnershipAction>,
 }
 
 impl FunctionOwnershipPlan {
-    pub fn symbol(&self) -> Symbol {
-        self.symbol.clone()
+    pub fn symbol(&self) -> &SymbolPath {
+        &self.symbol
     }
 
     pub fn operation(&self) -> OpRef {
@@ -361,8 +362,8 @@ pub fn build_native_ownership_plan(
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        let symbol =
-            qualified_name(ctx, op).unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
+        let symbol = qualified_name(ctx, op)
+            .unwrap_or_else(|| SymbolPath::from_text(function.sym_name(ctx)));
         if let CallableBody::Declaration = ownership_callable_body(ctx, op)? {
             validate_bodyless_signature(ctx, op, &managed_layouts)?;
             continue;
@@ -460,15 +461,15 @@ fn collect_closure_layout(
 fn collect_function_definitions(
     ctx: &IrContext,
     module_ops: &[OpRef],
-) -> Result<HashMap<Symbol, OpRef>, OwnershipPlanError> {
+) -> Result<HashMap<SymbolPath, OpRef>, OwnershipPlanError> {
     let mut definitions = HashMap::new();
     for &op in module_ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
         // Direct callees name their targets by root-qualified path.
-        let symbol =
-            qualified_name(ctx, op).unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
+        let symbol = qualified_name(ctx, op)
+            .unwrap_or_else(|| SymbolPath::from_text(function.sym_name(ctx)));
         if definitions.insert(symbol.clone(), op).is_some() {
             return Err(OwnershipPlanError::new(format!(
                 "duplicate function identity @{symbol}"
@@ -758,10 +759,10 @@ fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) 
 fn compute_entry_contracts(
     ctx: &IrContext,
     call_graph: &CallGraph,
-    definitions: &HashMap<Symbol, OpRef>,
+    definitions: &HashMap<SymbolPath, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
     elide_proven_borrowed_parameters: bool,
-) -> Result<HashMap<Symbol, Vec<EntryOwnership>>, OwnershipPlanError> {
+) -> Result<HashMap<SymbolPath, Vec<EntryOwnership>>, OwnershipPlanError> {
     let recursive = recursive_functions(call_graph);
     let mut summaries = HashMap::new();
     for (symbol, &op) in definitions {
@@ -893,7 +894,7 @@ fn value_is_borrowed(
     ctx: &IrContext,
     body: RegionRef,
     value: ValueRef,
-    summaries: &HashMap<Symbol, Vec<EntryOwnership>>,
+    summaries: &HashMap<SymbolPath, Vec<EntryOwnership>>,
     visiting: &mut HashSet<ValueRef>,
 ) -> bool {
     if !visiting.insert(value) {

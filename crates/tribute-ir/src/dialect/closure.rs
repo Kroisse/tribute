@@ -305,7 +305,7 @@ mod tests {
 
         // Create closure.new with func_ref attribute
         let op = super::New::operands(env_val)
-            .func_ref(Symbol::new("my_func"))
+            .func_ref(trunk_ir::SymbolPath::from("my_func"))
             .results(closure_ty)
             .build(&mut ctx, loc);
 
@@ -339,7 +339,7 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
         let closure_op = super::New::operands(env_val)
-            .func_ref(Symbol::new("f"))
+            .func_ref(trunk_ir::SymbolPath::from("f"))
             .results(closure_ty)
             .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
@@ -380,7 +380,7 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
         let closure_op = super::New::operands(env_val)
-            .func_ref(Symbol::new("f"))
+            .func_ref(trunk_ir::SymbolPath::from("f"))
             .results(closure_ty)
             .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
@@ -511,7 +511,7 @@ mod tests {
         let env_val = env_op.result(&ctx);
 
         let closure_new = super::New::operands(env_val)
-            .func_ref(Symbol::new("f"))
+            .func_ref(trunk_ir::SymbolPath::from("f"))
             .results(closure_ty)
             .build(&mut ctx, loc);
 

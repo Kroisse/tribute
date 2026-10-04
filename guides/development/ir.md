@@ -223,13 +223,23 @@ attribute.visit_types(&mut |ty| seen.push(ty));
 ```
 
 A name that refers to a symbol table definition is an `Attribute::SymbolRef`
-(`callee = @foo`, declared `Attr<SymbolRef>`). Definition names and other
-fixed names are strings. Collect the references an operation makes with the
-shared traversal rather than by listing attribute names:
+(`callee = @foo`, declared `Attr<SymbolRef>`). It holds a `SymbolPath`: the
+enclosing module names, then the definition's own name, one `Symbol` each.
+Definition names and other fixed names are strings. Collect the references an
+operation makes with the shared traversal rather than by listing attribute
+names:
 
 ```rust
-ctx.op(op).attributes.visit_symbol_refs(&mut |symbol| referenced.push(symbol));
+ctx.op(op).attributes.visit_symbol_refs(&mut |path| referenced.push(path.clone()));
 ```
+
+Build a path from qualified text with `SymbolPath::from_text("left::helper")`
+or `SymbolPath::from("main")`; a `Symbol` holding qualified text converts the
+same way. Read it with `leaf()`, `modules()`, and `components()`, and compare
+it with text directly (`*path == "main"`). `SymbolTable` and the analyses that
+name functions (call graph, global DCE, backends' function tables) are keyed
+by `SymbolPath`, so take `&SymbolPath` rather than joining it back into one
+symbol.
 
 A direct call operation registers `CallLike` so analyses can tell its callee
 from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;

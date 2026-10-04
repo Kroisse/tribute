@@ -110,7 +110,7 @@ impl RewritePattern for NativeWritePattern {
         let loc = ctx.op(op).location;
         let result_ty = ctx.op_result_types(op)[0];
         let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
-            .callee(Symbol::new(WRITE_FN))
+            .callee(trunk_ir::SymbolPath::from(WRITE_FN))
             .results([result_ty])
             .build(ctx, loc);
         rewriter.replace_op(call.op_ref());
@@ -144,7 +144,7 @@ impl RewritePattern for NativeReadLinePattern {
         let nil_ty = core::nil(ctx).as_type_ref();
 
         let descriptor = func::Call::operands([])
-            .callee(Symbol::new(READ_LINE_FN))
+            .callee(trunk_ir::SymbolPath::from(READ_LINE_FN))
             .results([ptr_ty])
             .build(ctx, loc);
         let descriptor_value = descriptor.result(ctx);
@@ -174,7 +174,7 @@ impl RewritePattern for NativeReadLinePattern {
             .results(bytes_ty)
             .build(ctx, loc);
         let dealloc = func::Call::operands([descriptor_value])
-            .callee(Symbol::new(DEALLOC_RESULT_FN))
+            .callee(trunk_ir::SymbolPath::from(DEALLOC_RESULT_FN))
             .results([nil_ty])
             .build(ctx, loc);
 

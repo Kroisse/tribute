@@ -552,6 +552,7 @@ mod tests {
 #[cfg(test)]
 mod result_list_tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::dialect::core;
     use crate::{Symbol, ops::DialectOp, parser::parse_test_module};
 
@@ -580,7 +581,7 @@ mod result_list_tests {
                 );
                 attrs.insert(
                     Symbol::new("tag"),
-                    Attribute::SymbolRef(Symbol::new("keep")),
+                    Attribute::SymbolRef(SymbolPath::from("keep")),
                 );
                 let signature = func::func_sig_with_attrs(
                     &mut ctx,
@@ -614,7 +615,7 @@ mod result_list_tests {
                 );
                 assert_eq!(
                     ctx.get_type(converted).attrs.get_symbol_ref("tag"),
-                    Some(&Symbol::new("keep"))
+                    Some(&crate::SymbolPath::from("keep"))
                 );
             }
         }

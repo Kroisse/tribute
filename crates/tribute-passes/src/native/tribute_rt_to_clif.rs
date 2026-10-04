@@ -19,7 +19,6 @@
 
 use tribute_ir::dialect::tribute_rt;
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -66,7 +65,7 @@ fn box_value(
 
     // 2. Allocate heap memory
     let call_op = clif::Call::operands([size_val])
-        .callee(Symbol::new(ALLOC_FN))
+        .callee(trunk_ir::SymbolPath::from(ALLOC_FN))
         .results([ptr_ty])
         .build(ctx, loc);
     let raw_ptr = call_op.results(ctx)[0];

@@ -92,7 +92,7 @@ pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize:
     init_calls.push(init_sym);
     for callee in init_calls.into_iter().rev() {
         let call = func::Call::operands([])
-            .callee(callee)
+            .callee(callee.into())
             .results([nil_ty])
             .build(ctx, loc);
         prepend_op(ctx, entry, call.op_ref());

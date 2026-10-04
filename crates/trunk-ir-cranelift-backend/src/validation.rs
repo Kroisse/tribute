@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
@@ -82,7 +82,7 @@ fn validate_clif_contracts(ctx: &IrContext, module: Module) -> Vec<String> {
 fn collect_clif_function_signatures(
     ctx: &IrContext,
     region: RegionRef,
-    functions: &mut HashMap<Symbol, clif::FuncSig>,
+    functions: &mut HashMap<SymbolPath, clif::FuncSig>,
     errors: &mut Vec<String>,
 ) {
     for &block in &ctx.region(region).blocks {
@@ -92,7 +92,7 @@ fn collect_clif_function_signatures(
                 let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
                 // References resolve by root-qualified path.
                 let name = qualified_name(ctx, op)
-                    .unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
+                    .unwrap_or_else(|| SymbolPath::from_text(function.sym_name(ctx)));
                 let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
                     .expect("schema-verified clif.func_sig");
                 if functions.insert(name.clone(), signature).is_some() {
@@ -225,7 +225,7 @@ fn validate_clif_function(
 ) -> Option<clif::FuncSig> {
     let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
     let name =
-        qualified_name(ctx, op).unwrap_or_else(|| Symbol::from_dynamic(function.sym_name(ctx)));
+        qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from_text(function.sym_name(ctx)));
     let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
         .expect("schema-verified clif.func_sig");
     let has_abi = ctx.op(op).attributes.contains_key("abi");
@@ -268,7 +268,7 @@ fn validate_clif_region(
     ctx: &IrContext,
     region: RegionRef,
     owner: Option<clif::FuncSig>,
-    functions: &HashMap<Symbol, clif::FuncSig>,
+    functions: &HashMap<SymbolPath, clif::FuncSig>,
     errors: &mut Vec<String>,
 ) {
     for &block in &ctx.region(region).blocks {
@@ -297,7 +297,7 @@ fn validate_clif_region(
             if let Ok(data) = clif::Data::from_op(ctx, op) {
                 // Data objects link under their root-qualified path.
                 let name = qualified_name(ctx, op)
-                    .unwrap_or_else(|| Symbol::from_dynamic(data.sym_name(ctx)));
+                    .unwrap_or_else(|| SymbolPath::from_text(data.sym_name(ctx)));
                 if name.with_str(|name| RESERVED_RUNTIME_SYMBOLS.contains(&name)) {
                     errors.push(format!(
                         "clif.data @{name}: symbol is reserved for the native runtime"

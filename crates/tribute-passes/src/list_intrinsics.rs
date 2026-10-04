@@ -5,7 +5,6 @@ use std::rc::Rc;
 
 use tribute_ir::dialect::list;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
-use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -15,10 +14,11 @@ use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::{Symbol, SymbolPath};
 
 const PREPEND_INTRINSIC: &str = "std::collections::List::__tribute_list_prepend_intrinsic";
 
-fn is_prepend_intrinsic(name: &Symbol) -> bool {
+fn is_prepend_intrinsic(name: &SymbolPath) -> bool {
     name.with_str(|name| {
         name == PREPEND_INTRINSIC
             || name
@@ -27,14 +27,14 @@ fn is_prepend_intrinsic(name: &Symbol) -> bool {
     })
 }
 
-fn intrinsic_declaration(name: &Symbol) -> Option<Symbol> {
+fn intrinsic_declaration(name: &SymbolPath) -> Option<Symbol> {
     is_prepend_intrinsic(name).then(|| Symbol::new(PREPEND_INTRINSIC))
 }
 
 #[derive(Default)]
 struct IntrinsicDeclarations {
-    all: HashSet<Symbol>,
-    eligible: HashSet<Symbol>,
+    all: HashSet<SymbolPath>,
+    eligible: HashSet<SymbolPath>,
 }
 
 pub struct LowerListIntrinsics;
@@ -59,8 +59,8 @@ impl Pass for LowerListIntrinsics {
                 continue;
             };
             let name = Symbol::from_dynamic(function.sym_name(ctx));
-            intrinsic_declarations.all.insert(name.clone());
-            if is_prepend_intrinsic(&name)
+            intrinsic_declarations.all.insert(name.clone().into());
+            if is_prepend_intrinsic(&SymbolPath::from(&name))
                 && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
                     == Some(PREPEND_INTRINSIC)
                 && {
@@ -80,7 +80,7 @@ impl Pass for LowerListIntrinsics {
                         && ctx.op(op).attributes.get_str(ctx, "abi") == Some("intrinsic")
                 }
             {
-                intrinsic_declarations.eligible.insert(name);
+                intrinsic_declarations.eligible.insert(name.into());
             }
         }
         let intrinsic_declarations = Rc::new(intrinsic_declarations);
@@ -123,7 +123,7 @@ impl RewritePattern for PrependCallPattern {
         } else {
             self.intrinsic_declarations
                 .eligible
-                .contains(&base_declaration)
+                .contains(&SymbolPath::from(&base_declaration))
         };
         if !eligible {
             return false;
@@ -159,7 +159,9 @@ impl RewritePattern for PrependDeclarationPattern {
         if !self
             .intrinsic_declarations
             .eligible
-            .contains(&Symbol::from_dynamic(function.sym_name(ctx)))
+            .contains(&SymbolPath::from(&Symbol::from_dynamic(
+                function.sym_name(ctx),
+            )))
         {
             return false;
         }

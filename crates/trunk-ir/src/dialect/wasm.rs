@@ -765,6 +765,7 @@ fn set_indirect_call_signature_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::op_interface::IndirectCallLikeOps;
     use crate::ops::DialectType;
     use crate::parser::parse_test_module;
@@ -898,7 +899,7 @@ mod tests {
                 .param(i32)
                 .attr(
                     NUM_INPUTS_ATTR,
-                    crate::Attribute::SymbolRef(crate::Symbol::new("one")),
+                    crate::Attribute::SymbolRef(SymbolPath::from("one")),
                 )
                 .attr(NUM_RESULTS_ATTR, crate::Attribute::Int(0))
                 .build(),

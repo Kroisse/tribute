@@ -17,7 +17,7 @@ use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
-use trunk_ir::{BlockRef, OpRef, StringRef, Symbol, TypeRef};
+use trunk_ir::{BlockRef, OpRef, StringRef, Symbol, SymbolPath, TypeRef};
 
 use super::rtti::{RTTI_BOOL, RTTI_FLOAT, RTTI_INT, RTTI_NAT, RTTI_NIL};
 
@@ -144,7 +144,7 @@ pub fn generate(
     ctx: &mut IrContext,
     module_block: BlockRef,
     records: Vec<(u32, DescriptorRecord)>,
-    release_fns: &HashMap<u32, Symbol>,
+    release_fns: &HashMap<u32, SymbolPath>,
     loc: Location,
 ) {
     let records = reserved_records()
@@ -279,7 +279,7 @@ impl Layout {
 
 fn reloc_region(
     ctx: &mut IrContext,
-    relocs: Vec<(usize, Symbol)>,
+    relocs: Vec<(usize, SymbolPath)>,
     loc: Location,
 ) -> Option<trunk_ir::RegionRef> {
     if relocs.is_empty() {
@@ -347,7 +347,7 @@ mod tests {
 
         let block = module.first_block(&ctx).unwrap();
         let loc = ctx.op(module.op()).location;
-        let release = Symbol::new("__tribute_release_5");
+        let release = trunk_ir::SymbolPath::from("__tribute_release_5");
         generate(
             &mut ctx,
             block,

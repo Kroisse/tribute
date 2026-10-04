@@ -275,7 +275,7 @@ fn emit_bytes_alloc(
 
     // 1. Get rodata address
     let data_ptr_op = clif::SymbolAddr::operands()
-        .sym(data_sym)
+        .sym(data_sym.into())
         .results(ptr_ty)
         .build(ctx, loc);
     ops.push(data_ptr_op.op_ref());
@@ -298,7 +298,7 @@ fn emit_bytes_alloc(
     ops.push(size_op.op_ref());
 
     let call_op = clif::Call::operands([size_op.result(ctx)])
-        .callee(Symbol::new(ALLOC_FN))
+        .callee(trunk_ir::SymbolPath::from(ALLOC_FN))
         .results([ptr_ty])
         .build(ctx, loc);
     ops.push(call_op.op_ref());

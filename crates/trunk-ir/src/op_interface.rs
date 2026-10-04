@@ -9,9 +9,9 @@ use std::sync::LazyLock;
 
 use smallvec::SmallVec;
 
-use crate::Symbol;
 use crate::ops::DialectOp;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
+use crate::{Symbol, SymbolPath};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
 ///
@@ -581,7 +581,7 @@ impl CallableExitOps {
 pub trait CallLikeModel: DialectOp {
     /// `None` for a malformed call; read fallibly since unverified IR may be
     /// queried.
-    fn direct_callee(self, ctx: &IrContext) -> Option<Symbol> {
+    fn direct_callee(self, ctx: &IrContext) -> Option<SymbolPath> {
         ctx.op(self.op_ref())
             .attributes
             .get_symbol_ref("callee")
@@ -593,10 +593,10 @@ pub trait CallLikeModel: DialectOp {
 pub struct CallLikeRegistration {
     dialect: &'static str,
     op_name: &'static str,
-    callee: fn(&IrContext, OpRef) -> Option<Symbol>,
+    callee: fn(&IrContext, OpRef) -> Option<SymbolPath>,
 }
 
-fn call_like_model_callee<T: CallLikeModel>(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
+fn call_like_model_callee<T: CallLikeModel>(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
     T::from_op(ctx, op)
         .ok()
         .and_then(|model| model.direct_callee(ctx))
@@ -637,7 +637,7 @@ impl CallLikeOps {
 
     /// The callee of a direct call, or `None` if `op` is not one or is
     /// malformed.
-    pub fn callee(ctx: &IrContext, op: OpRef) -> Option<Symbol> {
+    pub fn callee(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
         let data = ctx.op(op);
         CALL_LIKE_REGISTRY
             .get(&(data.dialect.clone(), data.name.clone()))

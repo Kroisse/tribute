@@ -39,7 +39,9 @@ fn main() -> Nil {{
         let mut conventions = Vec::new();
         let _ = walk_op::<()>(&ir, module.op(), &mut |op| {
             if let Ok(call) = tribute_control::Call::from_op(&ir, op)
-                && [Symbol::new("pure"), Symbol::new("open")].contains(call.callee(&ir))
+                && ["pure", "open"]
+                    .iter()
+                    .any(|name| call.callee(&ir) == *name)
             {
                 let callback = ir.op_operands(op)[0];
                 let ValueDef::OpResult(producer, _) = ir.value_def(callback) else {

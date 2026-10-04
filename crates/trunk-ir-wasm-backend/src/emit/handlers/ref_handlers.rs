@@ -4,7 +4,7 @@
 //! ref.cast, and ref.test.
 
 use trunk_ir::IrContext;
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
@@ -115,7 +115,7 @@ pub(crate) fn handle_ref_test(
 }
 
 /// Resolve a callee symbol to a function index.
-fn resolve_callee(path: &Symbol, module_info: &ModuleInfo) -> CompilationResult<u32> {
+fn resolve_callee(path: &SymbolPath, module_info: &ModuleInfo) -> CompilationResult<u32> {
     module_info
         .func_indices
         .get(path)
@@ -166,13 +166,16 @@ mod tests {
 
     #[test]
     fn resolve_callee_reports_missing_symbols() {
-        let found = Symbol::new("found");
+        let found = SymbolPath::from("found");
         let module_info = ModuleInfo {
             func_indices: HashMap::from([(found.clone(), 7)]),
             ..ModuleInfo::default()
         };
 
-        assert_eq!(resolve_callee(&found, &module_info).unwrap(), 7);
-        assert!(resolve_callee(&Symbol::new("missing"), &module_info).is_err());
+        assert_eq!(
+            resolve_callee(&SymbolPath::from(&found), &module_info).unwrap(),
+            7
+        );
+        assert!(resolve_callee(&SymbolPath::from("missing"), &module_info).is_err());
     }
 }

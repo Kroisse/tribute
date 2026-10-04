@@ -34,7 +34,7 @@ use super::symbol_table::SymbolTable;
 use super::type_verifier::lookup_type_verifier;
 use super::walk;
 
-use crate::Symbol;
+use crate::{Symbol, SymbolPath};
 
 // ============================================================================
 // Error types
@@ -601,7 +601,7 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
     // References name their targets by root-qualified path. None is genuinely
     // undeclared. A found but invalid or duplicated declaration is Some(None),
     // so compatibility cannot hide malformed known contracts.
-    let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
+    let resolve = |name: SymbolPath| -> Option<Option<func::FuncSig>> {
         let found = *symbols.definitions_of(&name).first()?;
         if symbols.resolve(&name).is_none() || !func::Func::matches(ctx, found) {
             return Some(None);
@@ -1149,7 +1149,10 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 ///
 /// Builds a map from function symbol to expected parameter count by inspecting
 /// `func.func`, `wasm.func`, and `clif.func` operations.
-fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashMap<Symbol, usize> {
+fn collect_function_signatures(
+    ctx: &IrContext,
+    module_body: RegionRef,
+) -> HashMap<SymbolPath, usize> {
     let func_name_sym = Symbol::new("func");
     let func_dialect = Symbol::new("func");
     let wasm_dialect = Symbol::new("wasm");
@@ -1174,7 +1177,7 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
             let Some(sym_name) = data
                 .attributes
                 .get_str(ctx, &sym_name_key)
-                .map(Symbol::from_dynamic)
+                .map(SymbolPath::from_text)
             else {
                 continue;
             };
@@ -1197,7 +1200,7 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
 fn check_call_arity_in_region(
     ctx: &IrContext,
     region: RegionRef,
-    signatures: &HashMap<Symbol, usize>,
+    signatures: &HashMap<SymbolPath, usize>,
     enclosing_fn: &str,
 ) {
     let func_dialect = Symbol::new("func");
@@ -1406,7 +1409,7 @@ mod tests {
         let bodyless = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
             .attr(
                 Symbol::new("sym_name"),
-                Attribute::SymbolRef(Symbol::new("m")),
+                Attribute::SymbolRef(SymbolPath::from("m")),
             )
             .build(&mut ctx);
         let bodyless = ctx.create_op(bodyless);

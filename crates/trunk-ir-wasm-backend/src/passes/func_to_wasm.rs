@@ -18,7 +18,6 @@
 use std::collections::HashMap;
 use std::ops::ControlFlow;
 
-use trunk_ir::Symbol;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -31,6 +30,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{BlockData, RegionData};
+use trunk_ir::{Symbol, SymbolPath};
 
 use trunk_ir::smallvec::smallvec;
 
@@ -65,7 +65,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     let mut sorted_funcs: Vec<_> = func_refs.into_iter().collect();
     sorted_funcs.sort_by(|a, b| a.with_str(|a_str| b.with_str(|b_str| a_str.cmp(b_str))));
 
-    let table_indices: HashMap<Symbol, u32> = sorted_funcs
+    let table_indices: HashMap<SymbolPath, u32> = sorted_funcs
         .iter()
         .enumerate()
         .map(|(idx, sym)| (sym.clone(), idx as u32))
@@ -158,7 +158,7 @@ fn materialize_nested_callable_value_types(
 }
 
 /// Collect all function symbols referenced by func.constant operations.
-fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<Symbol> {
+fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<SymbolPath> {
     let mut funcs = Vec::new();
     if let Some(body) = module.body(ctx) {
         collect_refs_in_region(ctx, body, &mut funcs);
@@ -171,7 +171,7 @@ fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<Symbol> {
     funcs
 }
 
-fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Symbol>) {
+fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<SymbolPath>) {
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
@@ -188,7 +188,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
 }
 
 /// Add wasm.table and wasm.elem operations to the module for the function table.
-fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], table_size: u32) {
+fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[SymbolPath], table_size: u32) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
@@ -304,14 +304,14 @@ fn convert_nested_callable_attributes(
     ctx: &mut IrContext,
     attributes: &trunk_ir::AttributeMap,
     converter: &TypeConverter,
-    skip: impl Fn(Symbol) -> bool,
+    skip: impl Fn(SymbolPath) -> bool,
 ) -> Option<trunk_ir::AttributeMap> {
     attributes
         .iter()
         .map(|(key, value)| {
             Some((
                 key.clone(),
-                if skip(key.clone()) {
+                if skip(key.clone().into()) {
                     value.clone()
                 } else {
                     convert_nested_callable_attribute(ctx, value, converter)?
@@ -664,7 +664,7 @@ impl RewritePattern for FuncUnreachablePattern {
 /// Transforms function constant references to i32 table indices.
 /// Used for closures where lifted functions are stored via function table.
 struct FuncConstantPattern {
-    table_indices: HashMap<Symbol, u32>,
+    table_indices: HashMap<SymbolPath, u32>,
 }
 
 impl RewritePattern for FuncConstantPattern {

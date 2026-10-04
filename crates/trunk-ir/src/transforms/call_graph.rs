@@ -20,11 +20,11 @@ use crate::op_interface::CallLikeOps;
 use crate::ops::DialectOp;
 use crate::refs::{OpRef, RegionRef};
 use crate::rewrite::Module;
-use crate::symbol::Symbol;
+use crate::symbol::SymbolPath;
 use crate::symbol_table::SymbolTable;
 use crate::walk::{WalkAction, walk_op, walk_region};
 
-type Edges = HashMap<Symbol, HashSet<Symbol>>;
+type Edges = HashMap<SymbolPath, HashSet<SymbolPath>>;
 
 /// A function call graph over a module.
 ///
@@ -35,21 +35,21 @@ type Edges = HashMap<Symbol, HashSet<Symbol>>;
 #[derive(Debug, Default)]
 pub struct CallGraph {
     /// Caller → set of callees (includes direct calls and address references).
-    pub edges: HashMap<Symbol, HashSet<Symbol>>,
+    pub edges: HashMap<SymbolPath, HashSet<SymbolPath>>,
     /// Caller → callees of its direct calls only; a subset of `edges`.
-    pub calls: HashMap<Symbol, HashSet<Symbol>>,
+    pub calls: HashMap<SymbolPath, HashSet<SymbolPath>>,
     /// Function name (possibly qualified) → its defining `func.func` op.
-    pub func_ops: HashMap<Symbol, OpRef>,
+    pub func_ops: HashMap<SymbolPath, OpRef>,
     /// Functions whose address is taken: referenced other than as the callee
     /// of a direct call in a function body. Includes `module_references`.
-    pub address_taken: HashSet<Symbol>,
+    pub address_taken: HashSet<SymbolPath>,
     /// Functions referenced by an operation outside every function
     /// definition, such as an export.
-    pub module_references: HashSet<Symbol>,
+    pub module_references: HashSet<SymbolPath>,
     /// Callee → number of static direct-call sites across the whole module.
     /// Address references are *not* counted here (they are tracked in
     /// `address_taken`).
-    pub call_site_count: HashMap<Symbol, usize>,
+    pub call_site_count: HashMap<SymbolPath, usize>,
 }
 
 /// Build a call graph for `module`, recursing into nested `core.module` ops.
@@ -69,7 +69,7 @@ fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> Cal
         }
         ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
             graph.module_references.insert(reference.clone());
-            graph.address_taken.insert(reference);
+            graph.address_taken.insert(reference.clone());
         });
         ControlFlow::Continue(WalkAction::Advance)
     });
@@ -81,7 +81,7 @@ fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> Cal
         }
         for &op in ops.iter().filter(|&&op| func::Func::matches(ctx, op)) {
             for region in ctx.op_regions(op) {
-                collect_calls(ctx, region, &name, &mut graph);
+                collect_calls(ctx, region, name, &mut graph);
             }
         }
     }
@@ -90,30 +90,30 @@ fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> Cal
 
 /// Record the calls and references in `region` as edges from `caller`.
 /// Nested function definitions record their own edges.
-fn collect_calls(ctx: &IrContext, region: RegionRef, caller: &Symbol, graph: &mut CallGraph) {
+fn collect_calls(ctx: &IrContext, region: RegionRef, caller: &SymbolPath, graph: &mut CallGraph) {
     let _ = walk_region::<()>(ctx, region, &mut |op| {
         if func::Func::matches(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
         let mut callee = CallLikeOps::callee(ctx, op);
         ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
-            if callee == Some(reference.clone()) {
+            if callee.as_ref() == Some(reference) {
                 callee = None;
-                record_call(graph, caller.clone(), reference);
+                record_call(graph, caller.clone(), reference.clone());
             } else {
                 graph
                     .edges
                     .entry(caller.clone())
                     .or_default()
                     .insert(reference.clone());
-                graph.address_taken.insert(reference);
+                graph.address_taken.insert(reference.clone());
             }
         });
         ControlFlow::Continue(WalkAction::Advance)
     });
 }
 
-fn record_call(graph: &mut CallGraph, caller: Symbol, callee: Symbol) {
+fn record_call(graph: &mut CallGraph, caller: SymbolPath, callee: SymbolPath) {
     graph
         .edges
         .entry(caller.clone())
@@ -144,11 +144,11 @@ impl InfallibleAnalysis for CallGraph {}
 /// Only functions defined in `graph.func_ops` are assigned an id. External
 /// callees (callees that appear in edges but have no corresponding `func.func`)
 /// are skipped.
-pub fn tarjan_scc(graph: &CallGraph) -> HashMap<Symbol, u32> {
+pub fn tarjan_scc(graph: &CallGraph) -> HashMap<SymbolPath, u32> {
     scc_over(graph, &graph.edges)
 }
 
-fn scc_over(graph: &CallGraph, edges: &Edges) -> HashMap<Symbol, u32> {
+fn scc_over(graph: &CallGraph, edges: &Edges) -> HashMap<SymbolPath, u32> {
     let mut state = TarjanState::default();
     for v in graph.func_ops.keys() {
         if !state.index.contains_key(v) {
@@ -162,7 +162,7 @@ fn scc_over(graph: &CallGraph, edges: &Edges) -> HashMap<Symbol, u32> {
 ///
 /// A function is "recursive" if it belongs to an SCC of size > 1 **or** its
 /// singleton SCC contains a self-edge (direct self-recursion).
-pub fn recursive_functions(graph: &CallGraph) -> HashSet<Symbol> {
+pub fn recursive_functions(graph: &CallGraph) -> HashSet<SymbolPath> {
     cyclic_functions(graph, &graph.edges)
 }
 
@@ -171,13 +171,13 @@ pub fn recursive_functions(graph: &CallGraph) -> HashSet<Symbol> {
 /// Address references are ignored: a reference copied into a caller does not
 /// add a call site, so only these functions can be instantiated without
 /// bound by inlining.
-pub fn directly_recursive_functions(graph: &CallGraph) -> HashSet<Symbol> {
+pub fn directly_recursive_functions(graph: &CallGraph) -> HashSet<SymbolPath> {
     cyclic_functions(graph, &graph.calls)
 }
 
-fn cyclic_functions(graph: &CallGraph, edges: &Edges) -> HashSet<Symbol> {
+fn cyclic_functions(graph: &CallGraph, edges: &Edges) -> HashSet<SymbolPath> {
     let scc_ids = scc_over(graph, edges);
-    let mut by_scc: HashMap<u32, Vec<Symbol>> = HashMap::new();
+    let mut by_scc: HashMap<u32, Vec<SymbolPath>> = HashMap::new();
     for (v, &id) in &scc_ids {
         by_scc.entry(id).or_default().push(v.clone());
     }
@@ -202,15 +202,15 @@ fn cyclic_functions(graph: &CallGraph, edges: &Edges) -> HashSet<Symbol> {
 #[derive(Default)]
 struct TarjanState {
     next_index: u32,
-    stack: Vec<Symbol>,
-    on_stack: HashSet<Symbol>,
-    index: HashMap<Symbol, u32>,
-    lowlink: HashMap<Symbol, u32>,
-    scc_id: HashMap<Symbol, u32>,
+    stack: Vec<SymbolPath>,
+    on_stack: HashSet<SymbolPath>,
+    index: HashMap<SymbolPath, u32>,
+    lowlink: HashMap<SymbolPath, u32>,
+    scc_id: HashMap<SymbolPath, u32>,
     next_scc: u32,
 }
 
-fn strongconnect(v: &Symbol, state: &mut TarjanState, graph: &CallGraph, edges: &Edges) {
+fn strongconnect(v: &SymbolPath, state: &mut TarjanState, graph: &CallGraph, edges: &Edges) {
     let v_index = state.next_index;
     state.next_index += 1;
     state.index.insert(v.clone(), v_index);
@@ -219,7 +219,7 @@ fn strongconnect(v: &Symbol, state: &mut TarjanState, graph: &CallGraph, edges: 
     state.on_stack.insert(v.clone());
 
     if let Some(successors) = edges.get(v) {
-        let successors: Vec<Symbol> = successors.iter().cloned().collect();
+        let successors: Vec<SymbolPath> = successors.iter().cloned().collect();
         for w in successors {
             // Skip external callees (not defined in this module).
             if !graph.func_ops.contains_key(&w) {
@@ -299,7 +299,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(Symbol::from_dynamic(name))
+            .sym_name(SymbolPath::from_text(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -317,7 +317,7 @@ mod tests {
         });
         for callee in callees {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::from_dynamic(callee))
+                .callee(SymbolPath::from_text(callee))
                 .results([i32_ty])
                 .build(ctx, loc);
             ctx.push_op(entry, call.op_ref());
@@ -330,7 +330,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(Symbol::from_dynamic(name))
+            .sym_name(SymbolPath::from_text(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -351,7 +351,7 @@ mod tests {
             parent_region: None,
         });
         let c = func::Constant::operands()
-            .func_ref(Symbol::from_dynamic(target))
+            .func_ref(SymbolPath::from_text(target))
             .results(fn_ty)
             .build(ctx, loc);
         ctx.push_op(entry, c.op_ref());
@@ -363,7 +363,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(Symbol::from_dynamic(name))
+            .sym_name(SymbolPath::from_text(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -409,19 +409,19 @@ mod tests {
         let g = build_call_graph(&ctx, module);
         assert!(
             g.edges
-                .get(&Symbol::new("main"))
+                .get(&SymbolPath::from("main"))
                 .unwrap()
-                .contains(&Symbol::new("mid"))
+                .contains(&SymbolPath::from("mid"))
         );
         assert!(
             g.edges
-                .get(&Symbol::new("mid"))
+                .get(&SymbolPath::from("mid"))
                 .unwrap()
-                .contains(&Symbol::new("leaf"))
+                .contains(&SymbolPath::from("leaf"))
         );
-        assert!(g.func_ops.contains_key(&Symbol::new("leaf")));
-        assert!(g.func_ops.contains_key(&Symbol::new("mid")));
-        assert!(g.func_ops.contains_key(&Symbol::new("main")));
+        assert!(g.func_ops.contains_key(&SymbolPath::from("leaf")));
+        assert!(g.func_ops.contains_key(&SymbolPath::from("mid")));
+        assert!(g.func_ops.contains_key(&SymbolPath::from("main")));
     }
 
     #[test]
@@ -434,13 +434,16 @@ mod tests {
         let g = build_call_graph(&ctx, module);
         assert!(
             g.edges
-                .get(&Symbol::new("holder"))
+                .get(&SymbolPath::from("holder"))
                 .unwrap()
-                .contains(&Symbol::new("target"))
+                .contains(&SymbolPath::from("target"))
         );
-        assert!(g.address_taken.contains(&Symbol::new("target")));
+        assert!(g.address_taken.contains(&SymbolPath::from("target")));
         // func.constant should NOT count toward call_site_count
-        assert_eq!(g.call_site_count.get(&Symbol::new("target")).copied(), None);
+        assert_eq!(
+            g.call_site_count.get(&SymbolPath::from("target")).copied(),
+            None
+        );
     }
 
     #[test]
@@ -468,9 +471,9 @@ mod tests {
         );
 
         let g = build_call_graph(&ctx, module);
-        let [called, captured, listed] = ["called", "captured", "listed"].map(Symbol::new);
+        let [called, captured, listed] = ["called", "captured", "listed"].map(SymbolPath::from);
         assert_eq!(
-            g.edges[&Symbol::new("holder")],
+            g.edges[&SymbolPath::from("holder")],
             HashSet::from([called.clone(), captured.clone(), listed.clone()])
         );
         // `callee` is a call only on an operation registered as a direct call.
@@ -503,7 +506,7 @@ mod tests {
         );
 
         let g = build_call_graph(&ctx, module);
-        let [make, body, looping] = ["make", "body", "looping"].map(Symbol::new);
+        let [make, body, looping] = ["make", "body", "looping"].map(SymbolPath::from);
         assert_eq!(
             recursive_functions(&g),
             HashSet::from([make, body, looping.clone()])
@@ -529,7 +532,7 @@ mod tests {
         );
 
         let g = build_call_graph(&ctx, module);
-        let exported = Symbol::new("exported");
+        let exported = SymbolPath::from("exported");
         assert_eq!(g.module_references, HashSet::from([exported.clone()]));
         assert_eq!(g.address_taken, HashSet::from([exported.clone()]));
         assert_eq!(g.call_site_count, HashMap::from([(exported.clone(), 1)]));
@@ -545,7 +548,7 @@ mod tests {
         let module = build_module(&mut ctx, loc, vec![leaf, main]);
 
         let g = build_call_graph(&ctx, module);
-        assert_eq!(g.call_site_count[&Symbol::new("leaf")], 2);
+        assert_eq!(g.call_site_count[&SymbolPath::from("leaf")], 2);
     }
 
     #[test]
@@ -559,14 +562,14 @@ mod tests {
         let module = build_module(&mut ctx, loc, vec![leaf, other, caller]);
         let mut analyses = AnalysisCache::new();
         let old = analyses.require::<CallGraph>(&ctx, module.op());
-        assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
+        assert_eq!(old.call_site_count.get(&SymbolPath::from("leaf")), Some(&1));
 
         let body = ctx.op_region(caller, 0).unwrap();
         let block = ctx.region(body).blocks[0];
         let call = ctx.block(block).ops[0];
         ctx.op_mut(call).attributes.insert(
             Symbol::new("callee"),
-            Attribute::SymbolRef(Symbol::new("other")),
+            Attribute::SymbolRef(SymbolPath::from("other")),
         );
         assert!(
             analyses
@@ -574,9 +577,12 @@ mod tests {
                 .is_none()
         );
         let fresh = analyses.require::<CallGraph>(&ctx, module.op());
-        assert_eq!(fresh.call_site_count.get(&Symbol::new("leaf")), None);
-        assert_eq!(fresh.call_site_count.get(&Symbol::new("other")), Some(&1));
-        assert_eq!(old.call_site_count.get(&Symbol::new("leaf")), Some(&1));
+        assert_eq!(fresh.call_site_count.get(&SymbolPath::from("leaf")), None);
+        assert_eq!(
+            fresh.call_site_count.get(&SymbolPath::from("other")),
+            Some(&1)
+        );
+        assert_eq!(old.call_site_count.get(&SymbolPath::from("leaf")), Some(&1));
         assert!(!std::sync::Arc::ptr_eq(&old, &fresh));
     }
 
@@ -588,7 +594,7 @@ mod tests {
 
         let g = build_call_graph(&ctx, module);
         let rec = recursive_functions(&g);
-        assert!(rec.contains(&Symbol::new("f")));
+        assert!(rec.contains(&SymbolPath::from("f")));
     }
 
     #[test]
@@ -600,8 +606,8 @@ mod tests {
 
         let g = build_call_graph(&ctx, module);
         let rec = recursive_functions(&g);
-        assert!(rec.contains(&Symbol::new("a")));
-        assert!(rec.contains(&Symbol::new("b")));
+        assert!(rec.contains(&SymbolPath::from("a")));
+        assert!(rec.contains(&SymbolPath::from("b")));
     }
 
     #[test]
@@ -629,14 +635,15 @@ mod tests {
 
         let g = build_call_graph(&ctx, module);
         assert!(
-            g.func_ops.contains_key(&Symbol::from_dynamic("inner::foo")),
+            g.func_ops
+                .contains_key(&SymbolPath::from_text("inner::foo")),
             "expected qualified symbol `inner::foo`, got: {:?}",
             g.func_ops.keys().collect::<Vec<_>>()
         );
         // Unqualified symbol should not leak through.
-        assert!(!g.func_ops.contains_key(&Symbol::new("foo")));
+        assert!(!g.func_ops.contains_key(&SymbolPath::from("foo")));
         // Top-level function stays unqualified.
-        assert!(g.func_ops.contains_key(&Symbol::new("top")));
+        assert!(g.func_ops.contains_key(&SymbolPath::from("top")));
     }
 
     #[test]
@@ -666,8 +673,8 @@ mod tests {
         for (caller, callees) in &direct.edges {
             assert_eq!(Some(callees), cached.edges.get(caller));
         }
-        assert!(cached.func_ops.contains_key(&Symbol::new("leaf")));
-        assert!(cached.edges.contains_key(&Symbol::new("main")));
+        assert!(cached.func_ops.contains_key(&SymbolPath::from("leaf")));
+        assert!(cached.edges.contains_key(&SymbolPath::from("main")));
 
         // Second call should hit the cache.
         let cached2 = am.require::<CallGraph>(&ctx, module.op());
@@ -685,7 +692,7 @@ mod tests {
         let ids = tarjan_scc(&g);
         assert_eq!(ids.len(), 2);
         // Two non-recursive functions → two distinct SCCs
-        assert_ne!(ids[&Symbol::new("a")], ids[&Symbol::new("b")]);
+        assert_ne!(ids[&SymbolPath::from("a")], ids[&SymbolPath::from("b")]);
     }
 
     #[test]
@@ -713,9 +720,9 @@ mod tests {
 }"#,
         );
         let g = build_call_graph(&ctx, module);
-        let outer = Symbol::from_dynamic("outer::same");
-        let inner = Symbol::from_dynamic("outer::inner::same");
-        assert!(g.edges[&Symbol::new("main")].contains(&outer));
+        let outer = SymbolPath::from_text("outer::same");
+        let inner = SymbolPath::from_text("outer::inner::same");
+        assert!(g.edges[&SymbolPath::from("main")].contains(&outer));
         assert!(g.edges[&outer].contains(&inner));
         assert_eq!(g.call_site_count[&inner], 2);
         // Only the innermost function calls itself.
@@ -741,8 +748,8 @@ mod tests {
 }"#,
         );
         let g = build_call_graph(&ctx, module);
-        assert!(!g.func_ops.contains_key(&Symbol::new("twice")));
+        assert!(!g.func_ops.contains_key(&SymbolPath::from("twice")));
         // Calls in each duplicate body are still recorded.
-        assert_eq!(g.call_site_count[&Symbol::new("leaf")], 1);
+        assert_eq!(g.call_site_count[&SymbolPath::from("leaf")], 1);
     }
 }

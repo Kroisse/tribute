@@ -17,7 +17,7 @@ use std::collections::HashSet;
 
 use trunk_ir::IrContext;
 use trunk_ir::Module;
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -60,7 +60,7 @@ impl FunctionReference {
 
 /// A surviving function-symbol reference, for diagnostics.
 pub(crate) struct ResolvedReference {
-    pub symbol: Symbol,
+    pub symbol: SymbolPath,
     pub kind: FunctionReference,
 }
 
@@ -168,7 +168,7 @@ pub(crate) fn dispose_bodyless_declarations(
     imports: &[ImportFuncDef],
     references: &[ResolvedReference],
 ) -> CompilationResult<()> {
-    let mut bound: HashSet<Symbol> = imports.iter().map(|import| import.sym.clone()).collect();
+    let mut bound: HashSet<SymbolPath> = imports.iter().map(|import| import.sym.clone()).collect();
     let mut definitions = HashSet::new();
     let mut declarations = HashSet::new();
     // Validate every shape before removing anything from the emission list.
@@ -438,8 +438,8 @@ mod tests {
         let ret = ctx.block(inner).ops[0];
         assert!(wasm_dialect::Return::matches(&ctx, ret));
         ctx.op_mut(ret).attributes.insert(
-            Symbol::new("callee"),
-            Attribute::SymbolRef(Symbol::new("helper")),
+            trunk_ir::Symbol::new("callee"),
+            Attribute::SymbolRef(SymbolPath::from("helper")),
         );
 
         let error = collect_function_references(&ctx, module)

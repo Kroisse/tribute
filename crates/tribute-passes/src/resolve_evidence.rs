@@ -250,7 +250,7 @@ fn resolve_delimiters(
                     ensure_prompt_tag_runtime(ctx, module);
                     let i32_ty = i32_type_ref(ctx);
                     let prompt = func::Call::operands(std::iter::empty::<ValueRef>())
-                        .callee(Symbol::new("__tribute_next_tag"))
+                        .callee(trunk_ir::SymbolPath::from("__tribute_next_tag"))
                         .results([i32_ty])
                         .build(ctx, location);
                     let resolved = prompt.result(ctx);

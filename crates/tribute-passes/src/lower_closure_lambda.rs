@@ -262,7 +262,7 @@ fn lower_single_lambda(
 
     // Create closure.new replacing the lambda.
     let closure_new_op = closure::New::operands(closure_env)
-        .func_ref(lifted_name)
+        .func_ref(lifted_name.into())
         .results(result_ty)
         .build(ctx, location);
     if let Some(convention) = convention {
@@ -552,9 +552,12 @@ mod tests {
 
         // closure type: closure.closure<func.func_sig<i32, i32>>, whose input
         // carries a parameter attribute.
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
-            .into_iter()
-            .collect();
+        let marked: AttributeMap = [(
+            Symbol::new("k"),
+            Attribute::SymbolRef(trunk_ir::SymbolPath::from("v")),
+        )]
+        .into_iter()
+        .collect();
         let func_ty = func::func_sig_with_param_attrs(
             &mut ctx,
             [(i32_ty, marked.clone())],

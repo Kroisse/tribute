@@ -416,8 +416,8 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   legalization에서 실제 adapter를 생성해야 한다.
 - `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
   nil을 만들지 않는다.
-- Operation과 type의 이름은 `Symbol`이다. Qualified path는 `::`로 구분한 하나의
-  `Symbol`로 저장한다.
+- Operation과 type의 이름은 `Symbol`이다. Symbol table 정의의 qualified path는
+  component마다 `Symbol` 하나인 `SymbolPath`로 저장한다.
 - `Symbol`은 8바이트 atom이며 세 형태 중 하나다. 7바이트 이하의 이름은 값 안에
   직접 담는다. IR 기반 계층이 선언한 dialect, operation, type, 속성 이름은 빌드
   때 만든 static 집합의 색인이다. 그 밖의 이름은 프로세스 전역 동적 집합의
@@ -429,11 +429,16 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   이름을 읽기만 하는 곳은 `&Symbol`을 받는다.
 - 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접 호출과 주소 참조)는
   항상 root module 기준 qualified path이다. 정의는 자기 module 안의 `sym_name`을
-  가지며, 정의의 qualified name은 root module을 제외한 중첩 `core.module` 이름 경로와
-  `sym_name`을 `::`로 이은 것이다. 이름 없는 `core.module`은 경로에 기여하지 않는다.
-  참조는 참조하는 operation이 속한 module을 기준으로 해석하거나 바깥 module로 찾아
-  올라가지 않는다. Qualified name은 module tree 전체에서 유일해야 하며, 중복 정의는
-  모호한 참조가 아니라 IR 오류다.
+  가지며, 정의의 qualified path는 root module을 제외한 중첩 `core.module` 이름들과
+  `sym_name`을 차례로 component로 둔 것이다. 이름 없는 `core.module`은 경로에
+  기여하지 않는다. 참조는 참조하는 operation이 속한 module을 기준으로 해석하거나
+  바깥 module로 찾아 올라가지 않는다. Qualified path는 module tree 전체에서 유일해야
+  하며, 중복 정의는 모호한 참조가 아니라 IR 오류다.
+- `SymbolPath`의 textual form은 component를 `::`로 이은 것이고(`@left::helper`),
+  이 텍스트를 `::`로 나누면 같은 path가 된다. 따라서 두 path는 텍스트가 같을 때에만
+  같다. `sym_name`이나 module 이름이 `::`를 포함하면 그 이름은 나뉜 component
+  각각을 경로에 기여하므로, `sym_name`이 `outer::f`인 root 정의와 module `outer` 안의
+  `f`는 같은 path다. Path의 순서는 textual form의 순서와 같다.
 - 함수 참조를 모으는 분석(call graph, global DCE)은 참조하는 operation이나 속성의
   이름을 나열하지 않고 operation 속성의 모든 symbol 참조를 모은다. 직접 호출
   operation은 `CallLike` interface로 callee를 게시하며, 그 callee 참조만 호출이다.
@@ -1393,7 +1398,7 @@ func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_con
 Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
 정수, 부동소수점, 문자열, bytes, symbol 참조, type, location, list, dictionary.
 
-Symbol 참조는 symbol table의 정의를 한정 이름으로 가리킨다(`callee = @foo`). 참조가
+Symbol 참조는 symbol table의 정의를 qualified path로 가리킨다(`callee = @foo`). 참조가
 아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
 `predicate = "slt"`로 쓴다. Ability 이름(`core.ability_ref`의 `name`)과 operation

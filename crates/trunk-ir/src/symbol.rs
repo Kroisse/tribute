@@ -190,6 +190,182 @@ impl std::fmt::Display for Symbol {
     }
 }
 
+// ============================================================================
+// Symbol paths
+// ============================================================================
+
+/// The name of a symbol table definition: the names of its enclosing modules
+/// below the root, then its own name.
+///
+/// The textual form joins the components with `::` (`left::helper`), and
+/// [`SymbolPath::from_text`] splits it again, so two paths are equal exactly
+/// when their texts are. Up to two components are stored inline.
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct SymbolPath(SmallVec<[Symbol; 2]>);
+
+impl SymbolPath {
+    /// The separator between components in the textual form.
+    pub const SEPARATOR: &'static str = "::";
+
+    /// Split a qualified name into its components.
+    pub fn from_text(text: &str) -> Self {
+        SymbolPath(
+            text.split(Self::SEPARATOR)
+                .map(Symbol::from_dynamic)
+                .collect(),
+        )
+    }
+
+    /// The path of the definition named `name` inside the modules `modules`.
+    /// Each argument may itself be a qualified name.
+    pub fn in_modules(modules: &[Symbol], name: &str) -> Self {
+        let mut components: SmallVec<[Symbol; 2]> = modules.iter().cloned().collect();
+        components.extend(name.split(Self::SEPARATOR).map(Symbol::from_dynamic));
+        SymbolPath(components)
+    }
+
+    pub fn components(&self) -> &[Symbol] {
+        &self.0
+    }
+
+    /// The definition's own name, without its modules.
+    pub fn leaf(&self) -> &Symbol {
+        self.0.last().expect("a symbol path has a component")
+    }
+
+    /// The enclosing modules, outermost first.
+    pub fn modules(&self) -> &[Symbol] {
+        &self.0[..self.0.len() - 1]
+    }
+
+    /// Whether the path has no enclosing module.
+    pub fn is_simple(&self) -> bool {
+        self.0.len() == 1
+    }
+
+    /// The path of `name` inside this path, such as a function's helper.
+    pub fn child(&self, name: &str) -> Self {
+        Self::in_modules(&self.0, name)
+    }
+
+    /// The qualified name as one symbol.
+    pub fn to_symbol(&self) -> Symbol {
+        match self.0.as_slice() {
+            [name] => name.clone(),
+            _ => Symbol::from_dynamic(&self.to_string()),
+        }
+    }
+
+    /// Access the qualified name as text. A path with modules is joined
+    /// first.
+    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
+        match self.0.as_slice() {
+            [name] => f(name.as_str()),
+            _ => f(&self.to_string()),
+        }
+    }
+
+    /// The bytes of the textual form.
+    fn text_bytes(&self) -> impl Iterator<Item = u8> + '_ {
+        self.0.iter().enumerate().flat_map(|(index, component)| {
+            let separator = if index == 0 { "" } else { Self::SEPARATOR };
+            separator.bytes().chain(component.as_str().bytes())
+        })
+    }
+}
+
+impl PartialOrd for SymbolPath {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+/// Paths order as their texts do, so sorting by path and sorting by
+/// qualified name agree.
+impl Ord for SymbolPath {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        self.text_bytes().cmp(other.text_bytes())
+    }
+}
+
+impl std::fmt::Display for SymbolPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, component) in self.0.iter().enumerate() {
+            if index != 0 {
+                f.write_str(Self::SEPARATOR)?;
+            }
+            f.write_str(component.as_str())?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for SymbolPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "SymbolPath(\"{self}\")")
+    }
+}
+
+impl From<&str> for SymbolPath {
+    fn from(text: &str) -> Self {
+        SymbolPath::from_text(text)
+    }
+}
+
+impl From<&Symbol> for SymbolPath {
+    fn from(name: &Symbol) -> Self {
+        SymbolPath::from_text(name.as_str())
+    }
+}
+
+impl From<Symbol> for SymbolPath {
+    fn from(name: Symbol) -> Self {
+        SymbolPath::from(&name)
+    }
+}
+
+impl From<&SymbolPath> for SymbolPath {
+    fn from(path: &SymbolPath) -> Self {
+        path.clone()
+    }
+}
+
+impl PartialEq<SymbolPath> for str {
+    fn eq(&self, other: &SymbolPath) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<SymbolPath> for &str {
+    fn eq(&self, other: &SymbolPath) -> bool {
+        other == *self
+    }
+}
+
+impl PartialEq<Symbol> for SymbolPath {
+    fn eq(&self, other: &Symbol) -> bool {
+        *self == *other.as_str()
+    }
+}
+
+impl PartialEq<Symbol> for &SymbolPath {
+    fn eq(&self, other: &Symbol) -> bool {
+        **self == *other.as_str()
+    }
+}
+
+impl PartialEq<str> for SymbolPath {
+    fn eq(&self, other: &str) -> bool {
+        self.text_bytes().eq(other.bytes())
+    }
+}
+
+impl PartialEq<&str> for SymbolPath {
+    fn eq(&self, other: &&str) -> bool {
+        *self == **other
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +387,27 @@ mod tests {
             }
         }
         assert!(dynamic.is_empty(), "{dynamic:#?}");
+    }
+
+    #[test]
+    fn symbol_paths_split_and_order_like_their_text() {
+        let path = SymbolPath::from_text("outer::inner::same");
+        assert_eq!(path.components().len(), 3);
+        assert_eq!(path.leaf(), "same");
+        assert_eq!(path.modules().len(), 2);
+        assert_eq!(path.to_string(), "outer::inner::same");
+        assert_eq!(path, "outer::inner::same");
+        assert_eq!(path, SymbolPath::from("outer::inner::same"));
+        assert_eq!(SymbolPath::from_text("outer").child("inner::same"), path);
+        assert!(SymbolPath::from_text("top").is_simple());
+
+        // `$` sorts below `:`, so text order and component order disagree.
+        let nested = SymbolPath::from_text("a::b");
+        let mangled = SymbolPath::from_text("a$x");
+        assert!(mangled < nested);
+        assert!("a$x" < "a::b");
+        assert_eq!(std::mem::size_of::<SymbolPath>(), 24);
+        assert_eq!(std::mem::size_of::<crate::types::Attribute>(), 32);
     }
 
     #[test]

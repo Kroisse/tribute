@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use super::refs::{PathRef, TypeRef};
 use crate::IrContext;
 use crate::location::Span;
-use crate::symbol::Symbol;
+use crate::symbol::{Symbol, SymbolPath};
 
 // ============================================================================
 // Location
@@ -49,7 +49,7 @@ pub enum Attribute {
     Bytes(SmallVec<[u8; 16]>),
     Type(TypeRef),
     /// Reference to a symbol table definition, by its qualified name.
-    SymbolRef(Symbol),
+    SymbolRef(SymbolPath),
     /// List of attributes.
     List(Vec<Attribute>),
     /// Dictionary of attributes keyed by symbol, ordered by key.
@@ -78,8 +78,8 @@ impl fmt::Display for IntegerOutOfRange {
 impl std::error::Error for IntegerOutOfRange {}
 
 impl Attribute {
-    /// Extract the inner `Symbol` if this is `Attribute::SymbolRef`.
-    pub fn as_symbol_ref(&self) -> Option<&Symbol> {
+    /// Extract the referenced path if this is `Attribute::SymbolRef`.
+    pub fn as_symbol_ref(&self) -> Option<&SymbolPath> {
         match self {
             Attribute::SymbolRef(s) => Some(s),
             _ => None,
@@ -170,9 +170,9 @@ impl Attribute {
 
     /// Visit every symbol reference nested in this attribute, including those
     /// inside lists and dictionaries, in printing order.
-    pub fn visit_symbol_refs(&self, f: &mut impl FnMut(Symbol)) {
+    pub fn visit_symbol_refs(&self, f: &mut impl FnMut(&SymbolPath)) {
         match self {
-            Attribute::SymbolRef(symbol) => f(symbol.clone()),
+            Attribute::SymbolRef(path) => f(path),
             Attribute::List(items) => {
                 for item in items {
                     item.visit_symbol_refs(f);
@@ -242,7 +242,7 @@ impl Attribute {
             Attribute::FloatBits(_) => 8,
             Attribute::String(s) => strings.get(*s).len() + 2,
             Attribute::Bytes(b) => b.len() * 4 + 7,
-            Attribute::SymbolRef(sym) => sym.with_str(|s| s.len()) + 1,
+            Attribute::SymbolRef(path) => path.with_str(str::len) + 1,
             Attribute::Type(_) => 10, // rough estimate; actual depends on type
             Attribute::List(list) => {
                 list.iter()
@@ -300,6 +300,12 @@ impl From<Vec<Attribute>> for Attribute {
 
 impl From<Symbol> for Attribute {
     fn from(value: Symbol) -> Self {
+        Attribute::SymbolRef(value.into())
+    }
+}
+
+impl From<SymbolPath> for Attribute {
+    fn from(value: SymbolPath) -> Self {
         Attribute::SymbolRef(value)
     }
 }
@@ -414,7 +420,7 @@ impl AttributeMap {
         self.get_string_ref(key).map(|s| ctx.str(s))
     }
 
-    pub fn get_symbol_ref(&self, key: impl AttributeKey) -> Option<&Symbol> {
+    pub fn get_symbol_ref(&self, key: impl AttributeKey) -> Option<&SymbolPath> {
         self.get(key).and_then(Attribute::as_symbol_ref)
     }
 
@@ -480,7 +486,7 @@ impl AttributeMap {
 
     /// Visit every symbol reference in these attributes; see
     /// [`Attribute::visit_symbol_refs`].
-    pub fn visit_symbol_refs(&self, f: &mut impl FnMut(Symbol)) {
+    pub fn visit_symbol_refs(&self, f: &mut impl FnMut(&SymbolPath)) {
         for value in self.values() {
             value.visit_symbol_refs(f);
         }
@@ -1069,6 +1075,18 @@ impl From<crate::Symbol> for StringArg {
     }
 }
 
+impl From<&SymbolPath> for StringArg {
+    fn from(value: &SymbolPath) -> Self {
+        StringArg::Text(value.to_string().into())
+    }
+}
+
+impl From<SymbolPath> for StringArg {
+    fn from(value: SymbolPath) -> Self {
+        StringArg::from(&value)
+    }
+}
+
 impl From<StringRef> for StringArg {
     fn from(value: StringRef) -> Self {
         StringArg::Ref(value)
@@ -1136,9 +1154,12 @@ mod tests {
     fn parameter_attributes_are_canonical_and_part_of_identity() {
         let mut ctx = IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
-            .into_iter()
-            .collect();
+        let marked: AttributeMap = [(
+            Symbol::new("k"),
+            Attribute::SymbolRef(SymbolPath::from("v")),
+        )]
+        .into_iter()
+        .collect();
 
         let plain = ctx.intern_type(
             TypeDataBuilder::new("core", "tuple")
@@ -1246,7 +1267,7 @@ mod tests {
     #[test]
     fn symbol_refs_are_visited_through_lists_and_dicts() {
         let mut ctx = IrContext::new();
-        let reference = |name| Attribute::SymbolRef(Symbol::new(name));
+        let reference = |name| Attribute::SymbolRef(SymbolPath::from(name));
         let mut attrs = AttributeMap::new();
         attrs.insert("callee", reference("direct"));
         attrs.insert("name", ctx.string_attr("not_a_reference"));
@@ -1263,7 +1284,7 @@ mod tests {
         );
 
         let mut visited = Vec::new();
-        attrs.visit_symbol_refs(&mut |symbol| visited.push(symbol));
+        attrs.visit_symbol_refs(&mut |symbol| visited.push(symbol.clone()));
         assert_eq!(
             visited,
             ["direct", "first", "nested"].map(Symbol::new).to_vec()
@@ -1281,7 +1302,7 @@ mod tests {
                     (Symbol::new("ty"), Attribute::Type(ty)),
                     (
                         Symbol::new("tag"),
-                        Attribute::SymbolRef(Symbol::new("keep")),
+                        Attribute::SymbolRef(SymbolPath::from("keep")),
                     ),
                 ]
                 .into_iter()

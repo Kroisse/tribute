@@ -12,7 +12,6 @@
 
 use std::collections::HashMap;
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -26,6 +25,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::Attribute;
+use trunk_ir::{Symbol, SymbolPath};
 
 /// Lower func dialect to clif dialect.
 pub fn lower(
@@ -443,12 +443,12 @@ impl RewritePattern for FuncUnreachablePattern {
 
 /// Each uniquely defined `func.func` by root-qualified name, with its exact
 /// signature captured before lowering converts it.
-fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<Symbol, TypeRef> {
+fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<SymbolPath, TypeRef> {
     let table = SymbolTable::collect(ctx, module);
     table
         .iter()
         .filter_map(|(name, ops)| match ops {
-            &[op] => Some((name, func::Func::from_op(ctx, op).ok()?.r#type(ctx))),
+            &[op] => Some((name.clone(), func::Func::from_op(ctx, op).ok()?.r#type(ctx))),
             _ => None,
         })
         .collect()
@@ -460,7 +460,7 @@ fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<Symbol, TypeR
 /// reference must carry exactly its target's signature, calling convention
 /// included, before it is erased.
 struct FuncConstantPattern {
-    functions: HashMap<Symbol, TypeRef>,
+    functions: HashMap<SymbolPath, TypeRef>,
 }
 
 impl RewritePattern for FuncConstantPattern {
@@ -604,7 +604,7 @@ mod tests {
         let mut inner_attrs = AttributeMap::new();
         inner_attrs.insert(
             Symbol::new("tag"),
-            Attribute::SymbolRef(Symbol::new("preserved")),
+            Attribute::SymbolRef(trunk_ir::SymbolPath::from("preserved")),
         );
         inner_attrs.insert(
             Symbol::new("nested"),

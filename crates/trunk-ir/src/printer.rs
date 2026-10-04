@@ -246,7 +246,7 @@ impl<'a> PrintState<'a> {
                 write_escaped_bytes(f, bytes)?;
                 f.write_char('"')
             }
-            Attribute::SymbolRef(sym) => write_symbol(f, sym),
+            Attribute::SymbolRef(path) => path.with_str(|text| write_symbol_text(f, text)),
             Attribute::Type(ty) => self.write_type(f, *ty),
             Attribute::List(list) => {
                 f.write_char('[')?;
@@ -1144,6 +1144,7 @@ fn print_module_op(
 mod tests {
     use super::*;
     use crate::Symbol;
+    use crate::SymbolPath;
     use crate::dialect::{arith, core, func};
     use crate::{BlockArgData, BlockData, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
@@ -1549,7 +1550,12 @@ mod tests {
 
         // Symbol
         out.clear();
-        write_attribute(&ctx, &mut out, &Attribute::SymbolRef(Symbol::new("foo"))).unwrap();
+        write_attribute(
+            &ctx,
+            &mut out,
+            &Attribute::SymbolRef(SymbolPath::from("foo")),
+        )
+        .unwrap();
         assert_eq!(out, "@foo");
 
         // Symbol with path (needs quoting)
@@ -1557,7 +1563,7 @@ mod tests {
         write_attribute(
             &ctx,
             &mut out,
-            &Attribute::SymbolRef(Symbol::from_dynamic("std::List::map")),
+            &Attribute::SymbolRef(SymbolPath::from_text("std::List::map")),
         )
         .unwrap();
         assert_eq!(out, r#"@"std::List::map""#);

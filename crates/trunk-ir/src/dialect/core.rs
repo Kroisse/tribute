@@ -293,6 +293,7 @@ pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Opt
 #[cfg(test)]
 mod canonicalize_tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::dialect::func::{FuncSig, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR};
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
@@ -335,7 +336,7 @@ mod canonicalize_tests {
         let metadata = AttributeMap::from_iter([
             (
                 Symbol::new("tag"),
-                Attribute::SymbolRef(Symbol::new("kept")),
+                Attribute::SymbolRef(SymbolPath::from("kept")),
             ),
             (
                 Symbol::new("nested"),

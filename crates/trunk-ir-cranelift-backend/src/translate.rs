@@ -14,7 +14,6 @@ use cranelift_module::{
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use target_lexicon::{OperatingSystem, Triple};
-use trunk_ir::Symbol;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -22,6 +21,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::qualified_name;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::function::{FunctionTranslator, is_nil_type, translate_signature, translate_type};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
@@ -79,7 +79,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     let ptr_ty = obj_module.target_config().pointer_type();
 
     // 3. First pass — declare all functions
-    let mut func_ids: FxHashMap<Symbol, cranelift_module::FuncId> = FxHashMap::default();
+    let mut func_ids: FxHashMap<SymbolPath, cranelift_module::FuncId> = FxHashMap::default();
     let all_func_ops = collect_clif_funcs(ctx, module);
 
     for &func_op in &all_func_ops {
@@ -89,7 +89,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         // declaration still links under its own external symbol.
         let local_name = func_wrapped.sym_name(ctx);
         let name_sym =
-            qualified_name(ctx, func_op).unwrap_or_else(|| Symbol::from_dynamic(local_name));
+            qualified_name(ctx, func_op).unwrap_or_else(|| SymbolPath::from_text(local_name));
         let func_type_ref = func_wrapped.r#type(ctx);
 
         let shape = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -121,11 +121,11 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     declare_runtime_functions(&mut obj_module, &mut func_ids, call_conv)?;
 
     // 3d. Declare and define the module's read-only data objects
-    let mut data_ids: FxHashMap<Symbol, cranelift_module::DataId> = FxHashMap::default();
+    let mut data_ids: FxHashMap<SymbolPath, cranelift_module::DataId> = FxHashMap::default();
     for data in collect_clif_data(ctx, module) {
         // References name data objects by root-qualified path, like functions.
         let symbol = qualified_name(ctx, data.op_ref())
-            .unwrap_or_else(|| Symbol::from_dynamic(data.sym_name(ctx)));
+            .unwrap_or_else(|| SymbolPath::from_text(data.sym_name(ctx)));
         let data_id = obj_module
             .declare_data(
                 &symbol.to_string(),
@@ -178,7 +178,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = qualified_name(ctx, func_op)
-            .unwrap_or_else(|| Symbol::from_dynamic(func_wrapped.sym_name(ctx)));
+            .unwrap_or_else(|| SymbolPath::from_text(func_wrapped.sym_name(ctx)));
         let CallableBody::Definition {
             region: func_body, ..
         } = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -402,7 +402,7 @@ fn collect_clif_funcs_from_region(ctx: &IrContext, region: RegionRef, funcs: &mu
 /// with custom allocator implementations.
 fn declare_runtime_functions(
     obj_module: &mut ObjectModule,
-    func_ids: &mut FxHashMap<Symbol, cranelift_module::FuncId>,
+    func_ids: &mut FxHashMap<SymbolPath, cranelift_module::FuncId>,
     call_conv: isa::CallConv,
 ) -> CompilationResult<()> {
     let ptr_ty = obj_module.target_config().pointer_type();
@@ -414,7 +414,7 @@ fn declare_runtime_functions(
     alloc_sig.returns.push(cl_ir::AbiParam::new(ptr_ty));
 
     let alloc_sym = Symbol::new("__tribute_alloc");
-    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym) {
+    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym.into()) {
         let func_id = obj_module
             .declare_function("__tribute_alloc", Linkage::Import, &alloc_sig)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
@@ -427,7 +427,7 @@ fn declare_runtime_functions(
     dealloc_sig.params.push(cl_ir::AbiParam::new(i64_ty));
 
     let dealloc_sym = Symbol::new("__tribute_dealloc");
-    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(dealloc_sym) {
+    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(dealloc_sym.into()) {
         let func_id = obj_module
             .declare_function("__tribute_dealloc", Linkage::Import, &dealloc_sig)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;

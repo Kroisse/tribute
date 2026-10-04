@@ -16,6 +16,7 @@ pub mod wasm_gc;
 mod tests {
     use crate::Span;
     use crate::Symbol;
+    use crate::SymbolPath;
     use crate::ops::{DialectOp, DialectType};
     use crate::refs::PathRef;
     use crate::types::Location;
@@ -84,7 +85,7 @@ mod tests {
 
         // Create func.call with variadic args
         let call = super::func::Call::operands([v1, v2])
-            .callee(Symbol::new("add"))
+            .callee(SymbolPath::from("add"))
             .results([i32_ty])
             .build(&mut ctx, loc);
 
@@ -347,7 +348,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         let call = super::wasm::Call::operands([])
-            .callee(Symbol::new("multi_return"))
+            .callee(SymbolPath::from("multi_return"))
             .results([i32_ty, i32_ty])
             .build(&mut ctx, loc);
 

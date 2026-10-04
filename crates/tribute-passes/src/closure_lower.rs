@@ -1348,7 +1348,7 @@ mod tests {
                 .iter()
                 .copied()
                 .filter_map(|op| func::Func::from_op(&ctx, op).ok())
-                .find(|function| function.sym_name(&ctx) == name)
+                .find(|function| *name == function.sym_name(&ctx))
                 .expect("referenced function must exist");
             assert_eq!(
                 ctx.op_result_types(reference.op_ref()),

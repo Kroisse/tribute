@@ -460,7 +460,7 @@ impl WasmLowerer {
             let name = ctx.intern_str("_start");
             let export_op = wasm_dialect::ExportFunc::operands()
                 .name(name)
-                .func(Symbol::new("main"))
+                .func(trunk_ir::SymbolPath::from("main"))
                 .build(ctx, location);
             ctx.push_op(module_block, export_op.op_ref());
         }
@@ -585,7 +585,7 @@ mod tests {
             .filter_map(|op| wasm_dialect::ExportFunc::from_op(&ctx, op).ok())
             .map(|export| (export.name(&ctx), export.func(&ctx).clone()))
             .collect();
-        assert_eq!(exports, [("_start", Symbol::new("main"))]);
+        assert_eq!(exports, [("_start", trunk_ir::SymbolPath::from("main"))]);
         assert!(
             module
                 .ops(&ctx)
