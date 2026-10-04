@@ -44,7 +44,7 @@ tribute-passes/           # tribute-ir 의존
 ├── wasm/bytes.rs         # bytes layout 타입과 경계 안 bytes 읽기 intrinsic lowering
 ├── wasm/intrinsic_to_wasm.rs
 │                         # 출구 뒤: extern "C" bytes helper를 GC 연산으로 바인딩
-├── wasm/normalize_primitive_types.rs
+├── wasm/convert_signatures.rs
 │                         # 함수와 간접 호출 signature의 Wasm 타입 변환
 └── ...
 

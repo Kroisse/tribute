@@ -145,7 +145,7 @@ convert_builtin_layouts
 io_to_wasm
 arith_to_wasm
 scf_to_wasm
-normalize_primitive_types
+convert_signatures
 func_to_wasm
 wasm_func_signature_conversion
 tribute_rt_to_wasm

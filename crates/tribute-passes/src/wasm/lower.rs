@@ -133,13 +133,10 @@ fn wasm_lowering_passes() -> PassManager {
         Ok(())
     }))
     // Convert function and indirect-call signatures before target lowering.
-    .add_pass(pass_fn(
-        "normalize-primitive-types",
-        |ctx, m: core::Module, _| {
-            super::normalize_primitive_types::lower(ctx, m.into());
-            Ok(())
-        },
-    ))
+    .add_pass(pass_fn("convert-signatures", |ctx, m: core::Module, _| {
+        super::convert_signatures::lower(ctx, m.into());
+        Ok(())
+    }))
     .add_pass(pass_fn("func-to-wasm", |ctx, m: core::Module, _| {
         let tc = wasm_type_converter(ctx);
         trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, m.into(), tc);

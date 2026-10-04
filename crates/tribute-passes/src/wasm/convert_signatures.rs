@@ -29,7 +29,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
     let applicator = PatternApplicator::new(type_converter)
         .add_pattern(FuncSignatureConversionPattern)
         .add_pattern(WasmFuncSignatureConversionPattern)
-        .add_pattern(NormalizeIndirectCallPattern);
+        .add_pattern(IndirectCallSignaturePattern);
     applicator.apply_partial(ctx, module);
 }
 
@@ -37,7 +37,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 // Patterns
 // ============================================================================
 
-/// Normalize the exact signature of indirect calls.
+/// Convert the exact signature of indirect calls.
 ///
 /// `func.call_indirect` and `func.tail_call_indirect` declare their operand
 /// and result types through the `signature` attribute, including for
@@ -45,9 +45,9 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 /// patterns. An input slot therefore follows its argument only once the
 /// argument holds a conversion of the declared type, which keeps the signature
 /// equal to the argument types whatever order the patterns apply in.
-struct NormalizeIndirectCallPattern;
+struct IndirectCallSignaturePattern;
 
-impl RewritePattern for NormalizeIndirectCallPattern {
+impl RewritePattern for IndirectCallSignaturePattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
@@ -87,7 +87,7 @@ impl RewritePattern for NormalizeIndirectCallPattern {
 
         let data = ctx.op(op);
         debug!(
-            "normalize_primitive_types: {}.{} signature normalized",
+            "convert_signatures: {}.{} signature converted",
             data.dialect, data.name
         );
         let mut builder = trunk_ir::context::OperationDataBuilder::new(
@@ -111,7 +111,7 @@ impl RewritePattern for NormalizeIndirectCallPattern {
     }
 
     fn name(&self) -> &'static str {
-        "NormalizeIndirectCallPattern"
+        "IndirectCallSignaturePattern"
     }
 }
 
