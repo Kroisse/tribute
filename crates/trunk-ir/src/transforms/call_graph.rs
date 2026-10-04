@@ -299,7 +299,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(SymbolPath::from_text(name))
+            .sym_name(SymbolPath::from(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -317,7 +317,7 @@ mod tests {
         });
         for callee in callees {
             let call = func::Call::operands(std::iter::empty())
-                .callee(SymbolPath::from_text(callee))
+                .callee(SymbolPath::from(*callee))
                 .results([i32_ty])
                 .build(ctx, loc);
             ctx.push_op(entry, call.op_ref());
@@ -330,7 +330,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(SymbolPath::from_text(name))
+            .sym_name(SymbolPath::from(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -351,7 +351,7 @@ mod tests {
             parent_region: None,
         });
         let c = func::Constant::operands()
-            .func_ref(SymbolPath::from_text(target))
+            .func_ref(SymbolPath::from(target))
             .results(fn_ty)
             .build(ctx, loc);
         ctx.push_op(entry, c.op_ref());
@@ -363,7 +363,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(SymbolPath::from_text(name))
+            .sym_name(SymbolPath::from(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -635,8 +635,7 @@ mod tests {
 
         let g = build_call_graph(&ctx, module);
         assert!(
-            g.func_ops
-                .contains_key(&SymbolPath::from_text("inner::foo")),
+            g.func_ops.contains_key(&SymbolPath::new(["inner", "foo"])),
             "expected qualified symbol `inner::foo`, got: {:?}",
             g.func_ops.keys().collect::<Vec<_>>()
         );
@@ -702,17 +701,17 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @"outer::same"}
+    func.call {callee = @outer::@same}
     func.return
   }
   core.module @outer {
     func.func @same() {
-      func.call {callee = @"outer::inner::same"}
+      func.call {callee = @outer::@inner::@same}
       func.return
     }
     core.module @inner {
       func.func @same() {
-        func.call {callee = @"outer::inner::same"}
+        func.call {callee = @outer::@inner::@same}
         func.return
       }
     }
@@ -720,8 +719,8 @@ mod tests {
 }"#,
         );
         let g = build_call_graph(&ctx, module);
-        let outer = SymbolPath::from_text("outer::same");
-        let inner = SymbolPath::from_text("outer::inner::same");
+        let outer = SymbolPath::new(["outer", "same"]);
+        let inner = SymbolPath::new(["outer", "inner", "same"]);
         assert!(g.edges[&SymbolPath::from("main")].contains(&outer));
         assert!(g.edges[&outer].contains(&inner));
         assert_eq!(g.call_site_count[&inner], 2);

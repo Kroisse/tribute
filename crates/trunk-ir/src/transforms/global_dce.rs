@@ -234,7 +234,7 @@ mod tests {
 
     fn build_simple_func(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
         let fn_ty = fn_type(ctx);
-        let sym_name = SymbolPath::from_text(name);
+        let sym_name = SymbolPath::from(name);
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -259,8 +259,8 @@ mod tests {
     fn build_func_with_call(ctx: &mut IrContext, loc: Location, name: &str, callee: &str) -> OpRef {
         let fn_ty = fn_type(ctx);
         let i32_ty = i32_type(ctx);
-        let sym_name = SymbolPath::from_text(name);
-        let sym_callee = SymbolPath::from_text(callee);
+        let sym_name = SymbolPath::from(name);
+        let sym_callee = SymbolPath::from(callee);
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -639,8 +639,8 @@ mod tests {
         assert_eq!(
             HashSet::<SymbolPath>::from_iter(result.removed_functions),
             HashSet::from([
-                SymbolPath::from_text("nested::main"),
-                SymbolPath::from_text("nested::unused_in_nested"),
+                SymbolPath::new(["nested", "main"]),
+                SymbolPath::new(["nested", "unused_in_nested"]),
             ])
         );
     }
@@ -700,7 +700,7 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @"a::same"}
+    func.call {callee = @a::@same}
     func.return
   }
   core.module @a {
@@ -718,10 +718,10 @@ mod tests {
 
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
-        assert_eq!(result.removed_functions, [SymbolPath::from_text("b::same")]);
+        assert_eq!(result.removed_functions, [SymbolPath::new(["b", "same"])]);
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from([SymbolPath::from("main"), SymbolPath::from_text("a::same")])
+            HashSet::from([SymbolPath::from("main"), SymbolPath::new(["a", "same"])])
         );
     }
 

@@ -88,8 +88,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         // References name functions by root-qualified path; a foreign
         // declaration still links under its own external symbol.
         let local_name = func_wrapped.sym_name(ctx);
-        let name_sym =
-            qualified_name(ctx, func_op).unwrap_or_else(|| SymbolPath::from_text(local_name));
+        let name_sym = qualified_name(ctx, func_op).unwrap_or_else(|| SymbolPath::from(local_name));
         let func_type_ref = func_wrapped.r#type(ctx);
 
         let shape = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -125,7 +124,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     for data in collect_clif_data(ctx, module) {
         // References name data objects by root-qualified path, like functions.
         let symbol = qualified_name(ctx, data.op_ref())
-            .unwrap_or_else(|| SymbolPath::from_text(data.sym_name(ctx)));
+            .unwrap_or_else(|| SymbolPath::from(data.sym_name(ctx)));
         let data_id = obj_module
             .declare_data(
                 &symbol.to_string(),
@@ -178,7 +177,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
         let name_sym = qualified_name(ctx, func_op)
-            .unwrap_or_else(|| SymbolPath::from_text(func_wrapped.sym_name(ctx)));
+            .unwrap_or_else(|| SymbolPath::from(func_wrapped.sym_name(ctx)));
         let CallableBody::Definition {
             region: func_body, ..
         } = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -602,9 +601,9 @@ mod tests {
                 }
             }
             clif.func {sym_name = "main", type = clif.func_sig<() -> ()>} {
-                %left = clif.call {callee = @"left::helper"} : core.i32
-                %right = clif.call {callee = @"right::helper"} : core.i32
-                clif.call {callee = @"left::main"}
+                %left = clif.call {callee = @left::@helper} : core.i32
+                %right = clif.call {callee = @right::@helper} : core.i32
+                clif.call {callee = @left::@main}
                 clif.return
             }
         }"#,
@@ -752,8 +751,8 @@ mod tests {
     clif.data {sym_name = "text", bytes = b"right", align = 1}
   }
   clif.func @main() -> core.i32 {
-    %left = clif.symbol_addr {sym = @"left::text"} : core.ptr
-    %right = clif.symbol_addr {sym = @"right::text"} : core.ptr
+    %left = clif.symbol_addr {sym = @left::@text} : core.ptr
+    %right = clif.symbol_addr {sym = @right::@text} : core.ptr
     %result = clif.iconst {value = 0} : core.i32
     clif.return %result
   }

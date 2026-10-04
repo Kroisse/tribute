@@ -1177,7 +1177,7 @@ fn collect_function_signatures(
             let Some(sym_name) = data
                 .attributes
                 .get_str(ctx, &sym_name_key)
-                .map(SymbolPath::from_text)
+                .map(SymbolPath::from)
             else {
                 continue;
             };
@@ -3777,6 +3777,6 @@ mod tests {
         };
         // The bare name names the root definition, not the sibling in `inner`.
         assert!(errors("@target").is_empty());
-        assert!(!errors(r#"@"inner::target""#).is_empty());
+        assert!(!errors("@inner::@target").is_empty());
     }
 }

@@ -1008,7 +1008,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @"inner::helper"} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant {func_ref = @inner::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
       func.return
     }
   }
@@ -1052,7 +1052,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @"left::helper"} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
+      %reference = func.constant {func_ref = @left::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
       func.return
     }
   }

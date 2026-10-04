@@ -434,11 +434,12 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   기여하지 않는다. 참조는 참조하는 operation이 속한 module을 기준으로 해석하거나
   바깥 module로 찾아 올라가지 않는다. Qualified path는 module tree 전체에서 유일해야
   하며, 중복 정의는 모호한 참조가 아니라 IR 오류다.
-- `SymbolPath`의 textual form은 component를 `::`로 이은 것이고(`@left::helper`),
-  이 텍스트를 `::`로 나누면 같은 path가 된다. 따라서 두 path는 텍스트가 같을 때에만
-  같다. `sym_name`이나 module 이름이 `::`를 포함하면 그 이름은 나뉜 component
-  각각을 경로에 기여하므로, `sym_name`이 `outer::f`인 root 정의와 module `outer` 안의
-  `f`는 같은 path다. Path의 순서는 textual form의 순서와 같다.
+- `SymbolPath`의 component는 이름 하나를 쓰인 그대로 담는다. 이름이 `::`를
+  포함해도 component 하나이며, 같은 텍스트를 중첩 module로 풀어 쓴 path와는 다른
+  path다. Textual form은 component마다 `@`를 붙여 `::`로 잇는다
+  (`@left::@helper`). Identifier가 아닌 component는 따옴표로 감싸므로, `::`를 포함한
+  이름 하나는 `@"left::helper"`로 쓴다. Path의 순서는 component를 차례로 비교한
+  순서다.
 - 함수 참조를 모으는 분석(call graph, global DCE)은 참조하는 operation이나 속성의
   이름을 나열하지 않고 operation 속성의 모든 symbol 참조를 모은다. 직접 호출
   operation은 `CallLike` interface로 callee를 게시하며, 그 callee 참조만 호출이다.

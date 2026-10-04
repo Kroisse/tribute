@@ -884,7 +884,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @"left::same"} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant {func_ref = @left::@same} : func.func_sig<(core.i32) -> ()>
       func.return
     }
   }

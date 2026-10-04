@@ -4351,7 +4351,7 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @inner_call(%value: core.i1) -> core.i1 convention(evidence_direct) {
-      %result = tribute_control.call %value {callee = @"inner::same"} : core.i1
+      %result = tribute_control.call %value {callee = @inner::@same} : core.i1
       tribute_control.return %result
     }
   }

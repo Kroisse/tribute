@@ -508,7 +508,7 @@ mod mechanics {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(SymbolPath::from_text(name))
+            .sym_name(SymbolPath::from(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -902,7 +902,7 @@ mod pass {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(SymbolPath::from_text(name))
+            .sym_name(SymbolPath::from(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -933,10 +933,10 @@ mod pass {
         Module::new(ctx, module_op).unwrap()
     }
 
-    fn count_calls_to(ctx: &IrContext, func_op: OpRef, callee: &str) -> usize {
+    fn count_calls_to(ctx: &IrContext, func_op: OpRef, callee: impl Into<SymbolPath>) -> usize {
         use crate::walk::{WalkAction, walk_region};
         use std::ops::ControlFlow;
-        let target = SymbolPath::from_text(callee);
+        let target = callee.into();
         let mut count = 0;
         let body = ctx.op_region(func_op, 0).unwrap();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
@@ -991,7 +991,7 @@ mod pass {
             &mut ctx,
             r#"core.module @root {
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @"inner::helper"} : core.i32
+    %0 = func.call {callee = @inner::@helper} : core.i32
     func.return %0
   }
   core.module @inner {
@@ -1013,7 +1013,10 @@ mod pass {
         let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
-        assert_eq!(count_calls_to(&ctx, main, "inner::helper"), 0);
+        assert_eq!(
+            count_calls_to(&ctx, main, SymbolPath::new(["inner", "helper"])),
+            0
+        );
         let body = ctx.op_region(main, 0).unwrap();
         let consts: Vec<_> = ctx
             .block(ctx.region(body).blocks[0])

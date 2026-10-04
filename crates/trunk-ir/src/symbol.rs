@@ -197,35 +197,32 @@ impl std::fmt::Display for Symbol {
 /// The name of a symbol table definition: the names of its enclosing modules
 /// below the root, then its own name.
 ///
-/// The textual form joins the components with `::` (`left::helper`), and
-/// [`SymbolPath::from_text`] splits it again, so two paths are equal exactly
-/// when their texts are. Up to two components are stored inline.
-///
-/// Splitting is purely textual. A name whose own spelling contains `::`, such
-/// as a specialization suffix naming a qualified type, contributes several
-/// components, so [`leaf`](Self::leaf) and [`modules`](Self::modules) describe
-/// the text, not necessarily the module structure.
-#[derive(Clone, PartialEq, Eq, Hash)]
+/// Each component is one name, taken as it is: a name that contains `::` is
+/// still a single component, so a path built from one qualified name differs
+/// from the path that spells the same text as nested modules. Up to two
+/// components are stored inline.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SymbolPath(SmallVec<[Symbol; 2]>);
 
 impl SymbolPath {
     /// The separator between components in the textual form.
     pub const SEPARATOR: &'static str = "::";
 
-    /// Split a qualified name into its components.
-    pub fn from_text(text: &str) -> Self {
-        SymbolPath(
-            text.split(Self::SEPARATOR)
-                .map(Symbol::from_dynamic)
-                .collect(),
-        )
+    /// A path from its components, outermost module first.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `components` is empty.
+    pub fn new(components: impl IntoIterator<Item = impl Into<Symbol>>) -> Self {
+        let components: SmallVec<[Symbol; 2]> = components.into_iter().map(Into::into).collect();
+        assert!(!components.is_empty(), "a symbol path has a component");
+        SymbolPath(components)
     }
 
     /// The path of the definition named `name` inside the modules `modules`.
-    /// Each argument may itself be a qualified name.
-    pub fn in_modules(modules: &[Symbol], name: &str) -> Self {
+    pub fn in_modules(modules: &[Symbol], name: Symbol) -> Self {
         let mut components: SmallVec<[Symbol; 2]> = modules.iter().cloned().collect();
-        components.extend(name.split(Self::SEPARATOR).map(Symbol::from_dynamic));
+        components.push(name);
         SymbolPath(components)
     }
 
@@ -243,63 +240,32 @@ impl SymbolPath {
         &self.0[..self.0.len() - 1]
     }
 
+    /// The name of a definition directly in the root module.
+    pub fn as_simple(&self) -> Option<&Symbol> {
+        match self.0.as_slice() {
+            [name] => Some(name),
+            _ => None,
+        }
+    }
+
     /// Whether the path has no enclosing module.
     pub fn is_simple(&self) -> bool {
         self.0.len() == 1
     }
 
-    /// The path of `name` inside this path, such as a function's helper.
-    pub fn child(&self, name: &str) -> Self {
-        Self::in_modules(&self.0, name)
-    }
-
-    /// The qualified name as one symbol.
+    /// The components joined into one symbol, as [`Display`](std::fmt::Display)
+    /// writes them.
     pub fn to_symbol(&self) -> Symbol {
-        match self.0.as_slice() {
-            [name] => name.clone(),
-            _ => Symbol::from_dynamic(&self.to_string()),
+        match self.as_simple() {
+            Some(name) => name.clone(),
+            None => Symbol::from_dynamic(&self.to_string()),
         }
     }
-
-    /// The length of the textual form in bytes.
-    pub fn text_len(&self) -> usize {
-        self.text_bytes().count()
-    }
-
-    /// Whether the textual form starts with `prefix`, and if so the byte
-    /// that follows it. Use this instead of joining the path when a name is
-    /// recognized by its spelling.
-    pub fn text_after_prefix(&self, prefix: &str) -> Option<Option<u8>> {
-        let mut bytes = self.text_bytes();
-        prefix
-            .bytes()
-            .all(|expected| bytes.next() == Some(expected))
-            .then(|| bytes.next())
-    }
-
-    /// The bytes of the textual form.
-    fn text_bytes(&self) -> impl Iterator<Item = u8> + '_ {
-        self.0.iter().enumerate().flat_map(|(index, component)| {
-            let separator = if index == 0 { "" } else { Self::SEPARATOR };
-            separator.bytes().chain(component.as_str().bytes())
-        })
-    }
 }
 
-impl PartialOrd for SymbolPath {
-    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
-        Some(self.cmp(other))
-    }
-}
-
-/// Paths order as their texts do, so sorting by path and sorting by
-/// qualified name agree.
-impl Ord for SymbolPath {
-    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
-        self.text_bytes().cmp(other.text_bytes())
-    }
-}
-
+/// Joins the components with `::`. The result does not tell a component that
+/// contains `::` from nested modules; the IR printer writes each component
+/// separately.
 impl std::fmt::Display for SymbolPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for (index, component) in self.0.iter().enumerate() {
@@ -314,31 +280,48 @@ impl std::fmt::Display for SymbolPath {
 
 impl std::fmt::Debug for SymbolPath {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "SymbolPath(\"{self}\")")
+        f.write_str("SymbolPath")?;
+        f.debug_list()
+            .entries(self.0.iter().map(Symbol::as_str))
+            .finish()
     }
 }
 
-impl From<&str> for SymbolPath {
-    fn from(text: &str) -> Self {
-        SymbolPath::from_text(text)
+/// A single name is the path of a definition in the root module.
+impl From<Symbol> for SymbolPath {
+    fn from(name: Symbol) -> Self {
+        SymbolPath(smallvec::smallvec![name])
     }
 }
 
 impl From<&Symbol> for SymbolPath {
     fn from(name: &Symbol) -> Self {
-        SymbolPath::from_text(name.as_str())
+        SymbolPath::from(name.clone())
     }
 }
 
-impl From<Symbol> for SymbolPath {
-    fn from(name: Symbol) -> Self {
-        SymbolPath::from(&name)
+impl From<&str> for SymbolPath {
+    fn from(name: &str) -> Self {
+        SymbolPath::from(Symbol::from_dynamic(name))
     }
 }
 
 impl From<&SymbolPath> for SymbolPath {
     fn from(path: &SymbolPath) -> Self {
         path.clone()
+    }
+}
+
+/// A path equals a name when it is that name in the root module.
+impl PartialEq<str> for SymbolPath {
+    fn eq(&self, other: &str) -> bool {
+        self.as_simple().is_some_and(|name| name == other)
+    }
+}
+
+impl PartialEq<&str> for SymbolPath {
+    fn eq(&self, other: &&str) -> bool {
+        *self == **other
     }
 }
 
@@ -356,25 +339,13 @@ impl PartialEq<SymbolPath> for &str {
 
 impl PartialEq<Symbol> for SymbolPath {
     fn eq(&self, other: &Symbol) -> bool {
-        *self == *other.as_str()
+        self.as_simple() == Some(other)
     }
 }
 
 impl PartialEq<Symbol> for &SymbolPath {
     fn eq(&self, other: &Symbol) -> bool {
-        **self == *other.as_str()
-    }
-}
-
-impl PartialEq<str> for SymbolPath {
-    fn eq(&self, other: &str) -> bool {
-        self.text_bytes().eq(other.bytes())
-    }
-}
-
-impl PartialEq<&str> for SymbolPath {
-    fn eq(&self, other: &&str) -> bool {
-        *self == **other
+        **self == *other
     }
 }
 
@@ -402,26 +373,28 @@ mod tests {
     }
 
     #[test]
-    fn symbol_paths_split_and_order_like_their_text() {
-        let path = SymbolPath::from_text("outer::inner::same");
+    fn symbol_paths_keep_each_name_as_one_component() {
+        let path = SymbolPath::new(["outer", "inner", "same"]);
         assert_eq!(path.components().len(), 3);
         assert_eq!(path.leaf(), "same");
-        assert_eq!(path.modules().len(), 2);
+        assert_eq!(path.modules(), [Symbol::new("outer"), Symbol::new("inner")]);
         assert_eq!(path.to_string(), "outer::inner::same");
-        assert_eq!(path, "outer::inner::same");
-        assert_eq!(path, SymbolPath::from("outer::inner::same"));
-        assert_eq!(SymbolPath::from_text("outer").child("inner::same"), path);
-        assert!(SymbolPath::from_text("top").is_simple());
-        assert_eq!(path.text_after_prefix("outer::in"), Some(Some(b'n')));
-        assert_eq!(path.text_after_prefix("outer::inner::same"), Some(None));
-        assert_eq!(path.text_after_prefix("outer::other"), None);
-        assert_eq!(path.text_len(), "outer::inner::same".len());
+        assert_eq!(path.as_simple(), None);
 
-        // `$` sorts below `:`, so text order and component order disagree.
-        let nested = SymbolPath::from_text("a::b");
-        let mangled = SymbolPath::from_text("a$x");
-        assert!(mangled < nested);
-        assert!("a$x" < "a::b");
+        // A qualified name is one component, not the modules it spells.
+        let flat = SymbolPath::from("outer::inner::same");
+        assert!(flat.is_simple());
+        assert_eq!(flat, "outer::inner::same");
+        assert_ne!(flat, path);
+        assert_ne!(path, "outer::inner::same");
+        assert_eq!(flat.to_symbol(), path.to_symbol());
+
+        assert_eq!(
+            SymbolPath::in_modules(path.modules(), Symbol::new("same")),
+            path
+        );
+        let root = SymbolPath::from("a");
+        assert!(root < SymbolPath::new(["a", "b"]));
         assert_eq!(std::mem::size_of::<SymbolPath>(), 24);
         assert_eq!(std::mem::size_of::<crate::types::Attribute>(), 32);
     }

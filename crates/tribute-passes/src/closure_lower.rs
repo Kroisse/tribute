@@ -1390,13 +1390,13 @@ mod tests {
         };
 
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &source(r#"@"left::helper""#));
+        let module = parse_test_module(&mut ctx, &source("@left::@helper"));
         lower_prepared_closures(&mut ctx, module).unwrap();
         let ir = print_module(&ctx, module.op());
         assert!(!ir.contains("closure.new"), "{ir}");
         assert!(
             ir.contains(
-                r#"func.constant {func_ref = @"left::helper"} : func.func_sig<(tribute_rt.anyref, core.i32) -> core.i32>"#
+                r#"func.constant {func_ref = @left::@helper} : func.func_sig<(tribute_rt.anyref, core.i32) -> core.i32>"#
             ),
             "{ir}"
         );

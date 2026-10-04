@@ -233,13 +233,16 @@ names:
 ctx.op(op).attributes.visit_symbol_refs(&mut |path| referenced.push(path.clone()));
 ```
 
-Build a path from qualified text with `SymbolPath::from_text("left::helper")`
-or `SymbolPath::from("main")`; a `Symbol` holding qualified text converts the
-same way. Read it with `leaf()`, `modules()`, and `components()`, and compare
-it with text directly (`*path == "main"`). `SymbolTable` and the analyses that
-name functions (call graph, global DCE, backends' function tables) are keyed
-by `SymbolPath`, so take `&SymbolPath` rather than joining it back into one
-symbol.
+`SymbolPath::from("main")` (or a `Symbol`) is a definition in the root
+module, and `SymbolPath::new(["left", "helper"])` is `helper` in the module
+`left`. A name is never split: `SymbolPath::from("left::helper")` is one
+component, a root definition whose name contains `::`. The printer writes
+`@left::@helper` for the nested path and `@"left::helper"` for the single
+name. Read a path with `leaf()`, `modules()`, `components()`, and
+`as_simple()`; `*path == "main"` holds only for the root definition `main`.
+`SymbolTable` and the analyses that name functions (call graph, global DCE,
+backends' function tables) are keyed by `SymbolPath`, so take `&SymbolPath`
+rather than joining it back into one symbol.
 
 A direct call operation registers `CallLike` so analyses can tell its callee
 from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;

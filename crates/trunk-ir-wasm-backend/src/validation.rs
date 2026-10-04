@@ -868,7 +868,7 @@ mod tests {
         validate_wasm_ir(&ctx, module).expect("root target has the caller's result");
 
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &source(r#"@"inner::target""#));
+        let module = parse_test_module(&mut ctx, &source("@inner::@target"));
         let error = validate_wasm_ir(&ctx, module).expect_err("nested target has Unit result");
         assert!(
             error

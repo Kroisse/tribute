@@ -4480,8 +4480,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i32) -> core.i32 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @"integers::id"} : !callable
-      %direct = tribute_control.call %value {callee = @"integers::id"} : core.i32
+      %reference = tribute_control.func_ref {func_ref = @integers::@id} : !callable
+      %direct = tribute_control.call %value {callee = @integers::@id} : core.i32
       %indirect = tribute_control.call_indirect %reference, %direct : core.i32
       tribute_control.return %indirect
     }
@@ -4492,8 +4492,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i1) -> core.i1 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @"booleans::id"} : !callable
-      %direct = tribute_control.call %value {callee = @"booleans::id"} : core.i1
+      %reference = tribute_control.func_ref {func_ref = @booleans::@id} : !callable
+      %direct = tribute_control.call %value {callee = @booleans::@id} : core.i1
       %indirect = tribute_control.call_indirect %reference, %direct : core.i1
       tribute_control.return %indirect
     }
@@ -5660,7 +5660,7 @@ mod tests {
             r#"core.module @outer {
   core.module @inner {
     tribute_control.func @loop(%value: core.i32) -> core.i32 convention(direct) {
-      %again = tribute_control.call %value {callee = @"inner::loop"} : core.i32
+      %again = tribute_control.call %value {callee = @inner::@loop} : core.i32
       tribute_control.return %again
     }
   }

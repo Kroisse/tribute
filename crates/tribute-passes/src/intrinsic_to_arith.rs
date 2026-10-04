@@ -42,7 +42,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
             .copied()
             .filter_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                let symbol = SymbolPath::from_text(function.sym_name(ctx));
+                let symbol = SymbolPath::from(function.sym_name(ctx));
                 (ctx.op(op)
                     .attributes
                     .get_str(ctx, COMPILER_INTRINSIC_ATTR)
@@ -154,17 +154,17 @@ impl ArithIntrinsicPattern {
 
         macro_rules! binary {
             ($name:expr, $op_fn:expr) => {
-                map.insert(SymbolPath::from_text($name), ArithMapping::BinaryOp($op_fn));
+                map.insert(SymbolPath::from($name), ArithMapping::BinaryOp($op_fn));
             };
         }
         macro_rules! cmpi {
             ($name:expr, $pred:expr) => {
-                map.insert(SymbolPath::from_text($name), ArithMapping::CmpI($pred));
+                map.insert(SymbolPath::from($name), ArithMapping::CmpI($pred));
             };
         }
         macro_rules! cmpf {
             ($name:expr, $pred:expr) => {
-                map.insert(SymbolPath::from_text($name), ArithMapping::CmpF($pred));
+                map.insert(SymbolPath::from($name), ArithMapping::CmpF($pred));
             };
         }
 
@@ -433,7 +433,10 @@ fn exact_signature(
         ArithMapping::BinaryOp(_) => {
             result.dialect == operand.dialect
                 && result.name == operand.name
-                && if symbol.text_after_prefix("std::Float::").is_some() {
+                && if symbol
+                    .as_simple()
+                    .is_some_and(|name| name.as_str().starts_with("std::Float::"))
+                {
                     operand_is_f64
                 } else {
                     operand_is_i32

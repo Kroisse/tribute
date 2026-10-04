@@ -614,19 +614,16 @@ fn write_symbol(f: &mut dyn Write, sym: &crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| write_symbol_text(f, s))
 }
 
-/// Write `@path`. A path with modules contains `::`, so it is always quoted.
+/// Write a symbol path as `@outer::@name`, each component quoted when
+/// needed.
 fn write_symbol_path(f: &mut dyn Write, path: &crate::symbol::SymbolPath) -> fmt::Result {
-    let [name] = path.components() else {
-        f.write_str("@\"")?;
-        for (index, component) in path.components().iter().enumerate() {
-            if index != 0 {
-                f.write_str(crate::symbol::SymbolPath::SEPARATOR)?;
-            }
-            write_escaped_string(f, component.as_str())?;
+    for (index, component) in path.components().iter().enumerate() {
+        if index != 0 {
+            f.write_str(crate::symbol::SymbolPath::SEPARATOR)?;
         }
-        return f.write_char('"');
-    };
-    write_symbol_text(f, name.as_str())
+        write_symbol_text(f, component.as_str())?;
+    }
+    Ok(())
 }
 
 /// Write `@name` for symbol text, quoting it when needed.
@@ -1578,10 +1575,25 @@ mod tests {
         write_attribute(
             &ctx,
             &mut out,
-            &Attribute::SymbolRef(SymbolPath::from_text("std::List::map")),
+            &Attribute::SymbolRef(SymbolPath::from("std::List::map")),
         )
         .unwrap();
         assert_eq!(out, r#"@"std::List::map""#);
+
+        // Nested modules: one `@name` per component
+        out.clear();
+        let nested = SymbolPath::new(["outer", "odd::name", "leaf"]);
+        write_attribute(&ctx, &mut out, &Attribute::SymbolRef(nested.clone())).unwrap();
+        assert_eq!(out, r#"@outer::@"odd::name"::@leaf"#);
+        let mut input = out.as_str();
+        let parsed = crate::parser::raw::symbol_path(&mut input).expect("a symbol path");
+        assert!(input.is_empty());
+        assert!(
+            parsed
+                .iter()
+                .map(String::as_str)
+                .eq(nested.components().iter().map(Symbol::as_str))
+        );
 
         // Empty symbol (should quote)
         out.clear();

@@ -234,7 +234,7 @@ pub fn generate_rtti(
 
 /// The release function of an RTTI index.
 fn release_fn_symbol(rtti_idx: u32) -> SymbolPath {
-    SymbolPath::from_text(&format!("{RELEASE_FN_PREFIX}{rtti_idx}"))
+    SymbolPath::from(format!("{RELEASE_FN_PREFIX}{rtti_idx}").as_str())
 }
 
 /// Build `__tribute_deep_release(payload_ptr, alloc_size)`.

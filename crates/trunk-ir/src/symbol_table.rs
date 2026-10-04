@@ -3,8 +3,7 @@
 //! A symbol reference always names its target by its path from the root
 //! module: the names of the nested `core.module`s that enclose the
 //! definition, excluding the root module itself, followed by the definition's
-//! `sym_name`. A `sym_name` that is itself a qualified name contributes each
-//! of its components. References are never resolved relative to
+//! `sym_name`. Each name is one path component as it is written. References are never resolved relative to
 //! the referencing operation's module. Every operation other than a
 //! `core.module` that carries a symbol `sym_name` is a definition, and all
 //! definitions share one namespace: a qualified name defined more than once is
@@ -51,16 +50,19 @@ impl SymbolTable {
             for &op in &ctx.block(block).ops {
                 if core::Module::matches(ctx, op) {
                     let mut nested = path.to_vec();
-                    if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
-                        nested.extend(SymbolPath::from_text(name).components().iter().cloned());
-                    }
+                    nested.extend(
+                        ctx.op(op)
+                            .attributes
+                            .get_str(ctx, SYM_NAME)
+                            .map(Symbol::from_dynamic),
+                    );
                     for region in ctx.op_regions(op) {
                         self.collect_region(ctx, region, &nested);
                     }
                 } else {
                     if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
                         self.definitions
-                            .entry(SymbolPath::in_modules(path, name))
+                            .entry(SymbolPath::in_modules(path, Symbol::from_dynamic(name)))
                             .or_default()
                             .push(op);
                     }
@@ -132,7 +134,7 @@ impl InfallibleAnalysis for SymbolTable {}
 pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
     let name = ctx.op(op).attributes.get_str(ctx, SYM_NAME)?;
     let path = parent_op(ctx, op).map_or_else(Vec::new, |parent| module_path(ctx, parent));
-    Some(SymbolPath::in_modules(&path, name))
+    Some(SymbolPath::in_modules(&path, Symbol::from_dynamic(name)))
 }
 
 /// The root-qualified path of the modules enclosing `op`, including `op`
@@ -148,15 +150,13 @@ fn module_path(ctx: &IrContext, op: OpRef) -> Vec<Symbol> {
                 ctx.op(op)
                     .attributes
                     .get_str(ctx, SYM_NAME)
-                    .map(SymbolPath::from_text),
+                    .map(Symbol::from_dynamic),
             );
         }
         current = parent;
     }
     path.reverse();
-    path.iter()
-        .flat_map(|module| module.components().iter().cloned())
-        .collect()
+    path
 }
 
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
@@ -185,10 +185,10 @@ mod tests {
   }
 }"#;
 
-    /// A qualified `sym_name` names the same definition as the nested
-    /// modules it spells out.
+    /// A `sym_name` containing `::` is one component, distinct from the
+    /// nested modules it spells out.
     #[test]
-    fn qualified_sym_name_matches_nested_modules() {
+    fn qualified_sym_name_is_not_a_module_path() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -204,14 +204,16 @@ mod tests {
 }"#,
         );
         let table = SymbolTable::collect(&ctx, module);
-        for name in ["outer::flat", "outer::nested"] {
-            let path = SymbolPath::from_text(name);
-            assert_eq!(path.modules(), [Symbol::new("outer")]);
+        let flat = SymbolPath::from("outer::flat");
+        let nested = SymbolPath::new(["outer", "nested"]);
+        for path in [&flat, &nested] {
             let op = table
-                .resolve(&path)
-                .unwrap_or_else(|| panic!("{name} must resolve"));
-            assert_eq!(qualified_name(&ctx, op), Some(path));
+                .resolve(path)
+                .unwrap_or_else(|| panic!("{path} must resolve"));
+            assert_eq!(qualified_name(&ctx, op).as_ref(), Some(path));
         }
+        assert_eq!(table.resolve(&SymbolPath::new(["outer", "flat"])), None);
+        assert_eq!(table.resolve(&SymbolPath::from("outer::nested")), None);
     }
 
     #[test]
@@ -220,11 +222,15 @@ mod tests {
         let module = parse_test_module(&mut ctx, NESTED);
         let table = SymbolTable::collect(&ctx, module);
 
-        for name in ["top", "outer::same", "outer::inner::same"] {
+        for path in [
+            SymbolPath::from("top"),
+            SymbolPath::new(["outer", "same"]),
+            SymbolPath::new(["outer", "inner", "same"]),
+        ] {
             let op = table
-                .resolve(&SymbolPath::from_text(name))
-                .unwrap_or_else(|| panic!("{name} must resolve"));
-            assert_eq!(qualified_name(&ctx, op), Some(SymbolPath::from_text(name)));
+                .resolve(&path)
+                .unwrap_or_else(|| panic!("{path} must resolve"));
+            assert_eq!(qualified_name(&ctx, op), Some(path));
         }
         // A reference is never resolved relative to a nested module.
         assert_eq!(table.resolve(&SymbolPath::from("same")), None);
@@ -247,11 +253,7 @@ mod tests {
         for (name, op) in table.all_definitions() {
             assert_eq!(qualified_name(&ctx, op), Some(name).cloned());
         }
-        assert!(
-            table
-                .resolve(&SymbolPath::from_text("outer::same"))
-                .is_some()
-        );
+        assert!(table.resolve(&SymbolPath::new(["outer", "same"])).is_some());
         assert!(table.resolve(&SymbolPath::from("same")).is_none());
     }
 
@@ -272,16 +274,13 @@ mod tests {
 }"#,
         );
         let table = SymbolTable::collect(&ctx, module);
-        let twice = Symbol::from_dynamic("outer::twice");
-        assert_eq!(table.resolve(&SymbolPath::from(&twice)), None);
+        let twice = SymbolPath::new(["outer", "twice"]);
+        assert_eq!(table.resolve(&twice), None);
         let duplicates = table.duplicates();
         assert_eq!(duplicates.len(), 1);
-        assert_eq!(duplicates[0].0, twice);
+        assert_eq!(duplicates[0].0, &twice);
         assert_eq!(duplicates[0].1.len(), 2);
-        assert_eq!(
-            table.definitions_of(&SymbolPath::from(&twice)),
-            duplicates[0].1
-        );
+        assert_eq!(table.definitions_of(&twice), duplicates[0].1);
         assert_eq!(table.all_definitions().count(), 2);
     }
 
@@ -303,11 +302,11 @@ mod tests {
         );
         let table = SymbolTable::collect(&ctx, module);
         let hidden = table
-            .resolve(&SymbolPath::from_text("outer::hidden"))
+            .resolve(&SymbolPath::new(["outer", "hidden"]))
             .expect("a definition nested in a function body is still collected");
         assert_eq!(
             qualified_name(&ctx, hidden),
-            Some(SymbolPath::from_text("outer::hidden"))
+            Some(SymbolPath::new(["outer", "hidden"]))
         );
     }
 

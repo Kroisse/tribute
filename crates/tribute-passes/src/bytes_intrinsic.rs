@@ -82,7 +82,7 @@ pub(crate) fn lower_get_or_panic(
     let names: Vec<SymbolPath> = declarations
         .iter()
         .map(|&op| {
-            SymbolPath::from_text(
+            SymbolPath::from(
                 func::Func::from_op(ctx, op)
                     .expect("func.func")
                     .sym_name(ctx),
