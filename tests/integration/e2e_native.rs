@@ -2462,6 +2462,30 @@ fn main() -> Nil {
     );
 }
 
+#[test]
+fn test_native_bytes_case_mixes_literal_and_parameter() {
+    assert_native_output(
+        "bytes_case_literal_and_parameter.trb",
+        r#"
+use std::io::{Io, print_line}
+
+fn pick(x: Bytes, f: Bool) -> Bytes {
+    case f {
+        True -> x
+        False -> b"no"
+    }
+}
+
+fn main() ->{Io} Nil {
+    print_line(String::from_bytes(pick(b"ab", True)))
+    let picked = pick(b"ab", False)
+    print_line(String::from_bytes(picked))
+}
+"#,
+        "ab\nno",
+    );
+}
+
 // =========================================================================
 // String::empty() and Bytes::empty() tests
 // =========================================================================

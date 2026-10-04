@@ -132,15 +132,11 @@ fn wasm_lowering_passes() -> PassManager {
         trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, m.into(), tc, analyses)?;
         Ok(())
     }))
-    // Normalize tribute_rt primitive types (int, nat, bool, float) to core
-    // types before target lowering, so later steps see primitive target types.
-    .add_pass(pass_fn(
-        "normalize-primitive-types",
-        |ctx, m: core::Module, _| {
-            super::normalize_primitive_types::lower(ctx, m.into());
-            Ok(())
-        },
-    ))
+    // Convert function and indirect-call signatures before target lowering.
+    .add_pass(pass_fn("convert-signatures", |ctx, m: core::Module, _| {
+        super::convert_signatures::lower(ctx, m.into());
+        Ok(())
+    }))
     .add_pass(pass_fn("func-to-wasm", |ctx, m: core::Module, _| {
         let tc = wasm_type_converter(ctx);
         trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, m.into(), tc);
