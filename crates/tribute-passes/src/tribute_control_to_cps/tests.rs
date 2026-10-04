@@ -93,8 +93,9 @@ fn assert_nested_resume_frames(printed: &str) {
         2,
         "{printed}"
     );
-    assert!(
-        printed.matches("ability.handle_dispatch").count() > 2,
+    assert_eq!(
+        printed.matches("ability.handle_dispatch").count(),
+        4,
         "{printed}"
     );
     assert_eq!(printed.matches("ability.perform").count(), 2, "{printed}");
@@ -1272,10 +1273,10 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
     assert_eq!(consumed_get, consumed_set);
     assert!(consumed_get.is_some(), "one-shot state was not emitted");
     let printed = print_module(&ctx, module.op());
-    // One installation under a fresh prompt, and one more wherever a
-    // resumed continuation rebuilds the layer under that prompt.
+    // One installation under a fresh prompt, and one more in the function
+    // every resumption of the handle shares to install the layer again.
     assert_eq!(printed.matches("effect.fresh_prompt_tag").count(), 1);
-    assert!(printed.matches("ability.handle_dispatch").count() > 1);
+    assert_eq!(printed.matches("ability.handle_dispatch").count(), 2);
     assert!(printed.contains("ability_refs = [core.ability_ref"));
     assert!(printed.contains("func.tail_call_indirect"));
     assert!(printed.contains("adt.struct_set"));
@@ -1365,8 +1366,9 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher_pair() {
         }
     }
     collect_delimiters(&ctx, module.op(), &mut delimiters);
-    // The installation, and the layers a resumed continuation rebuilds.
-    assert!(delimiters.len() > 1, "expected the handle's delimiters");
+    // The installation, and the one shared by every resumption that installs
+    // the layer again: the count does not grow with the resumptive arms.
+    assert_eq!(delimiters.len(), 2, "expected the handle's two delimiters");
     for delimiter in delimiters {
         assert_eq!(ctx.op_operands(delimiter).len(), 4);
         let Some(Attribute::List(ability_refs)) = ctx.op(delimiter).attributes.get("ability_refs")

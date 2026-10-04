@@ -212,15 +212,120 @@ impl Converter<'_> {
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
-    /// Build one resume token of a general arm: the exact-typed entry to the
-    /// `rebound` resumption of its handle layer.
-    pub(super) fn build_exact_handler_token(
+    /// Build the function that makes a resumption of one handle's layer, so
+    /// every token and dispatcher of the handle shares one copy of it.
+    ///
+    /// The function's parameters are `(completion, prompt, resume_body,
+    /// arms...)` for a resumption that installs the layer again, and
+    /// `(completion, resume_body)` for one resumed from a lambda.
+    fn build_layer_resume_factory(
         &mut self,
         location: Location,
+        layer: &HandleLayer,
+        installed: bool,
+    ) -> Result<(), TributeControlToCpsError> {
+        let evidence_type = self.evidence_type();
+        let anyref = self.anyref_type();
+        let completion_type = self.completion_type(layer.body_type, layer.answer_type);
+        let body_frame = self.frame_types(layer.body_type).reference;
+        let answer_frame = self.frame_types(layer.answer_type).reference;
+        let resume_body_type = cps_resume_type(self.ctx, evidence_type, body_frame, anyref);
+        let resume_type = cps_resume_type(self.ctx, evidence_type, answer_frame, anyref);
+        let params = if installed {
+            let mut params = vec![completion_type, self.i32_type(), resume_body_type];
+            params.extend(layer.arms.iter().map(|arm| self.ctx.value_ty(arm.value)));
+            params
+        } else {
+            vec![completion_type, resume_body_type]
+        };
+        let block = self.make_block(location, &params);
+        let args = self.ctx.block_args(block).to_vec();
+        let (resume_op, resume) = if installed {
+            let values = LayerValues {
+                completion: args[0],
+                prompt: args[1],
+                arms: args[3..].to_vec(),
+            };
+            self.build_handle_rebound(location, layer, &values, args[2])?
+        } else {
+            // A resume in a lambda carries the lambda's evidence, whose
+            // handlers the resumed computation keeps: the layer leaves only
+            // its completion behind.
+            let completion_only = SuffixLayer {
+                value_type: layer.body_type,
+                boundary: layer.answer_type,
+                dispatch_factory: layer.passthrough_factory.clone(),
+                plan: None,
+            };
+            self.build_suffix_rebound(location, &completion_only, args[1], args[0])?
+        };
+        self.ctx.push_op(block, resume_op);
+        let ret = func::Return::operands([resume]).build(self.ctx, location);
+        self.ctx.push_op(block, ret.op_ref());
+        let region = self.single_block_region(location, block);
+        let symbol = if installed {
+            layer.installed_resume_factory.clone()
+        } else {
+            layer.passthrough_resume_factory.clone()
+        };
+        let factory_type = func::func_sig(self.ctx, params, [resume_type]).as_type_ref();
+        let factory = func::Func::operands()
+            .sym_name(symbol)
+            .r#type(factory_type)
+            .regions(region)
+            .build(self.ctx, location);
+        set_calling_convention(self.ctx, factory.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(self.module_block, factory.op_ref());
+        Ok(())
+    }
+
+    /// Call a handle's resumption factory for `resume_body`: the resumption
+    /// that installs the layer again, or the one resumed from a lambda.
+    fn call_layer_resume_factory(
+        &mut self,
+        block: BlockRef,
+        location: Location,
+        layer: &HandleLayer,
+        values: &LayerValues,
+        resume_body: ValueRef,
+        installed: bool,
+    ) -> ValueRef {
+        let (symbol, args) = if installed {
+            let mut args = vec![values.completion, values.prompt, resume_body];
+            args.extend(values.arms.iter().copied());
+            (layer.installed_resume_factory.clone(), args)
+        } else {
+            (
+                layer.passthrough_resume_factory.clone(),
+                vec![values.completion, resume_body],
+            )
+        };
+        let evidence_type = self.evidence_type();
+        let anyref = self.anyref_type();
+        let answer_frame = self.frame_types(layer.answer_type).reference;
+        let resume_type = cps_resume_type(self.ctx, evidence_type, answer_frame, anyref);
+        let resume = func::Call::operands(args)
+            .callee(symbol.into())
+            .results([resume_type])
+            .build(self.ctx, location);
+        set_calling_convention(self.ctx, resume.op_ref(), CallingConvention::Direct);
+        self.ctx.push_op(block, resume.op_ref());
+        resume.result(self.ctx)
+    }
+
+    /// Build one resume token of a general arm: the exact-typed entry to a
+    /// resumption of its handle layer, made by the handle's factory when the
+    /// token is used.
+    fn build_exact_handler_token(
+        &mut self,
+        location: Location,
+        layer: &HandleLayer,
+        values: &LayerValues,
         input_type: TypeRef,
-        answer_type: TypeRef,
-        (rebound_op, rebound): (OpRef, ValueRef),
+        resume_body: ValueRef,
+        installed: bool,
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
+        let answer_type = layer.answer_type;
         let evidence_type = self.evidence_type();
         let frame_type = self.frame_types(answer_type).reference;
         let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
@@ -230,7 +335,8 @@ impl Converter<'_> {
             .results(anyref)
             .build(self.ctx, location);
         self.ctx.push_op(block, erased_input.op_ref());
-        self.ctx.push_op(block, rebound_op);
+        let rebound =
+            self.call_layer_resume_factory(block, location, layer, values, resume_body, installed);
         self.emit_cps_tail_call_indirect(
             block,
             location,
@@ -326,8 +432,7 @@ impl Converter<'_> {
             ],
         );
         let args = self.ctx.block_args(block).to_vec();
-        let (rebound_op, rebound) = self.build_handle_rebound(location, layer, values, args[1])?;
-        self.ctx.push_op(block, rebound_op);
+        let rebound = self.call_layer_resume_factory(block, location, layer, values, args[1], true);
         self.emit_cps_tail_call_indirect(
             block,
             location,
@@ -403,40 +508,21 @@ impl Converter<'_> {
                             "handler resume token lacks an exact callable input",
                         )
                     })?;
-                // A resume in a lambda carries the lambda's evidence, whose
-                // handlers the resumed computation keeps: the layer leaves
-                // only its completion behind.
-                let completion_only = SuffixLayer {
-                    value_type: layer.body_type,
-                    boundary: layer.answer_type,
-                    dispatch_factory: layer.passthrough_factory.clone(),
-                    plan: None,
-                };
-                let passthrough = self.build_suffix_rebound(
-                    location,
-                    &completion_only,
-                    args[1],
-                    values.completion,
-                )?;
-                let (token_op, token) = self.build_exact_handler_token(
-                    location,
-                    token_input,
-                    layer.answer_type,
-                    passthrough,
-                )?;
-                self.ctx.push_op(local_block, token_op);
-                call_args.push(token);
-                // A resume in the arm body continues under this handle,
-                // installed again on the arm's evidence at the resume.
-                let installed = self.build_handle_rebound(location, layer, values, args[1])?;
-                let (token_op, token) = self.build_exact_handler_token(
-                    location,
-                    token_input,
-                    layer.answer_type,
-                    installed,
-                )?;
-                self.ctx.push_op(local_block, token_op);
-                call_args.push(token);
+                // The source token resumes from a lambda; the second token
+                // resumes from the arm body, under this handle installed
+                // again on the arm's evidence at the resume.
+                for installed in [false, true] {
+                    let (token_op, token) = self.build_exact_handler_token(
+                        location,
+                        layer,
+                        values,
+                        token_input,
+                        args[1],
+                        installed,
+                    )?;
+                    self.ctx.push_op(local_block, token_op);
+                    call_args.push(token);
+                }
             }
             self.emit_cps_tail_call_indirect(local_block, location, arm_value, call_args)?;
             let local_region = self.single_block_region(location, local_block);
@@ -1082,8 +1168,14 @@ impl Converter<'_> {
                 handle_answer,
                 None,
             )?,
+            installed_resume_factory: self.fresh_helper("make_installed_resume"),
+            passthrough_resume_factory: self.fresh_helper("make_passthrough_resume"),
         };
         self.build_local_dispatcher_factory(location, &layer)?;
+        self.build_layer_resume_factory(location, &layer, true)?;
+        if layer.arms.iter().any(|arm| arm.has_resume_token) {
+            self.build_layer_resume_factory(location, &layer, false)?;
+        }
         let arm_values: Vec<_> = layer.arms.iter().map(|arm| arm.value).collect();
 
         // The arms and the `do` arm run with the evidence the handle is
