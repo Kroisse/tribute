@@ -115,7 +115,7 @@ flowchart TB
     output[".o (object file)\n→ cc 링크 → 실행 파일"]
 
     input --> abi --> effect --> bytes --> storage --> list_lower --> cfg --> rc_plan --> rc_pass
-    rc_pass --> func --> cf --> structural --> adt --> arith --> intrinsic
+    rc_pass --> structural --> func --> cf --> adt --> arith --> intrinsic
     intrinsic --> validate --> codegen --> obj --> output
 ```
 
