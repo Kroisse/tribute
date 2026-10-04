@@ -175,7 +175,7 @@ fn register_builtin_evidence_type(
 
 /// Normalize a type for GC struct field comparison.
 ///
-/// Normalizes tribute_rt types and variant instances to their canonical form.
+/// Normalizes ADT references and variant instances to their canonical form.
 fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // Wasm has no i1 storage type. Match type_to_valtype before comparing
     // constructor, getter, and setter observations of the same field.
@@ -200,8 +200,6 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
         return intern_wasm_structref(ctx);
     }
 
-    // Note: tribute_rt types (int, nat, bool, float, any, intref) should be
-    // converted to core/wasm types by normalize_primitive_types pass before emit.
     ty
 }
 

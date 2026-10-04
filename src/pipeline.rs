@@ -3894,6 +3894,54 @@ fn main() -> Nil { }
         true
     }
 
+    /// The places where a type failing `ok` survives Wasm lowering of `text`:
+    /// type aliases and operations, including nested type parameters,
+    /// attributes, results, and block arguments.
+    fn types_surviving_wasm_lowering(
+        db: &salsa::DatabaseImpl,
+        path: &str,
+        text: &str,
+        ok: &impl Fn(&IrContext, trunk_ir::TypeRef) -> bool,
+    ) -> std::collections::BTreeSet<String> {
+        let source = source_from_str(path, text);
+        let (mut ctx, module) = run_shared_pipeline(db, source)
+            .expect("shared pipeline must succeed")
+            .expect("fixture must lower");
+        run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
+        tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut AnalysisCache::new())
+            .expect("Wasm lowering");
+
+        let mut sites = std::collections::BTreeSet::new();
+        for (name, ty) in ctx.type_aliases().iter().cloned() {
+            if !type_tree_all(&ctx, ty, ok) {
+                sites.insert(format!("alias !{name}"));
+            }
+        }
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            let data = ctx.op(op);
+            let site = format!("{}.{}", data.dialect, data.name);
+            let mut types: Vec<_> = ctx.op_result_types(op).to_vec();
+            for value in data.attributes.values() {
+                value.visit_types(&mut |ty| types.push(ty));
+            }
+            for region in ctx.op_regions(op) {
+                for &block in &ctx.region(region).blocks {
+                    for argument in ctx.block(block).args.iter() {
+                        types.push(argument.ty);
+                        for value in argument.attrs.values() {
+                            value.visit_types(&mut |ty| types.push(ty));
+                        }
+                    }
+                }
+            }
+            if types.into_iter().any(|ty| !type_tree_all(&ctx, ty, ok)) {
+                sites.insert(site);
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        sites
+    }
+
     #[salsa_test]
     fn wasm_lowering_leaves_no_core_bytes(db: &salsa::DatabaseImpl) {
         let not_core_bytes = |ctx: &IrContext, ty| {
@@ -3921,48 +3969,34 @@ fn main() ->{std::io::Io} Nil {
 "#,
             ),
         ] {
-            let source = source_from_str(path, text);
-            let (mut ctx, module) = run_shared_pipeline(db, source)
-                .expect("shared pipeline must succeed")
-                .expect("fixture must lower");
-            run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
-            tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut AnalysisCache::new())
-                .expect("Wasm lowering");
-
-            let mut sites = std::collections::BTreeSet::new();
-            for (name, ty) in ctx.type_aliases().iter().cloned() {
-                if !type_tree_all(&ctx, ty, &not_core_bytes) {
-                    sites.insert(format!("alias !{name}"));
-                }
-            }
-            let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-                let data = ctx.op(op);
-                let site = format!("{}.{}", data.dialect, data.name);
-                let mut types: Vec<_> = ctx.op_result_types(op).to_vec();
-                for value in data.attributes.values() {
-                    value.visit_types(&mut |ty| types.push(ty));
-                }
-                for region in ctx.op_regions(op) {
-                    for &block in &ctx.region(region).blocks {
-                        for argument in ctx.block(block).args.iter() {
-                            types.push(argument.ty);
-                            for value in argument.attrs.values() {
-                                value.visit_types(&mut |ty| types.push(ty));
-                            }
-                        }
-                    }
-                }
-                if types
-                    .into_iter()
-                    .any(|ty| !type_tree_all(&ctx, ty, &not_core_bytes))
-                {
-                    sites.insert(site);
-                }
-                std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-            });
+            let sites = types_surviving_wasm_lowering(db, path, text, &not_core_bytes);
             assert!(
                 sites.is_empty(),
                 "{path}: core.bytes survives Wasm lowering at {sites:#?}"
+            );
+        }
+    }
+
+    #[salsa_test]
+    fn wasm_lowering_leaves_no_tribute_rt_types(db: &salsa::DatabaseImpl) {
+        let not_tribute_rt =
+            |ctx: &IrContext, ty| ctx.get_type(ty).dialect != trunk_ir::Symbol::new("tribute_rt");
+        for (path, text) in [
+            (
+                "native_effects.trb",
+                include_str!("../lang-examples/native_effects.trb"),
+            ),
+            ("lambda.trb", include_str!("../lang-examples/lambda.trb")),
+            ("float.trb", include_str!("../lang-examples/float.trb")),
+            (
+                "record-patterns.trb",
+                include_str!("../lang-examples/record-patterns.trb"),
+            ),
+        ] {
+            let sites = types_surviving_wasm_lowering(db, path, text, &not_tribute_rt);
+            assert!(
+                sites.is_empty(),
+                "{path}: a tribute_rt type survives Wasm lowering at {sites:#?}"
             );
         }
     }
