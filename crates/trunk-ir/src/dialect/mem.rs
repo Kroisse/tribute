@@ -11,6 +11,10 @@ use crate::dialect::core::{IntegerLike, Ptr, ScalarLike};
 
 #[trunk_ir::dialect]
 mod mem {
+    /// A nameless structural layout: its fields in order, each at its
+    /// natural alignment. Field types are target representations.
+    struct Struct<#[rest] Fields>;
+
     /// The address of immutable data holding `bytes`.
     fn data(bytes: Attr<Bytes>) -> Value<Ptr> {}
 
@@ -44,6 +48,36 @@ mod tests {
             ),
         );
         validate_op_schemas(&ctx, module.op()).is_ok()
+    }
+
+    #[test]
+    fn struct_is_identified_by_its_field_types_alone() {
+        use crate::ops::DialectType;
+
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            "core.module @test {\n  !Pair = mem.struct<core.i32, core.ptr>\n  !Empty = mem.struct<>\n}",
+        );
+        let alias = |ctx: &IrContext, name: &str| {
+            ctx.type_aliases()
+                .iter()
+                .find_map(|(alias, ty)| (*alias == name).then_some(*ty))
+                .expect("declared alias")
+        };
+        let i32_ty = ctx.intern_type(crate::types::TypeDataBuilder::new("core", "i32").build());
+        let ptr_ty = crate::dialect::core::ptr(&mut ctx).as_type_ref();
+
+        let pair = super::r#struct(&mut ctx, [i32_ty, ptr_ty]);
+        assert_eq!(pair.as_type_ref(), alias(&ctx, "Pair"));
+        assert_eq!(pair.fields(&ctx), [i32_ty, ptr_ty]);
+        let empty = super::Struct::from_type_ref(&ctx, alias(&ctx, "Empty")).expect("mem.struct");
+        assert!(empty.fields(&ctx).is_empty());
+        let printed = crate::printer::print_module(&ctx, module.op());
+        assert!(
+            printed.contains("mem.struct<core.i32, core.ptr>"),
+            "{printed}"
+        );
     }
 
     #[test]

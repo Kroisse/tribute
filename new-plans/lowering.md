@@ -204,6 +204,7 @@ finalize_closure_storage_layout + boundary exit verification
 native String/Bytes/I/O/List lowering
 scf_to_cf
 typed ownership/RTTI planning + explicit RC materialization
+struct_to_mem
 func_to_clif
 cf_to_clif
 adt_to_clif
