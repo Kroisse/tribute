@@ -24,7 +24,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
@@ -261,8 +261,7 @@ fn declare_rodata(
 
 /// Emit clif ops to allocate an RC-managed TributeBytes from a rodata symbol.
 ///
-/// Returns (ops_to_insert, last_op_to_replace_with).
-/// The result value of the last op is the payload pointer.
+/// Returns the ops to insert, in order, and the payload pointer they produce.
 fn emit_bytes_alloc(
     ctx: &mut IrContext,
     loc: trunk_ir::types::Location,
@@ -271,7 +270,7 @@ fn emit_bytes_alloc(
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
-) -> (Vec<OpRef>, OpRef) {
+) -> (Vec<OpRef>, ValueRef) {
     let mut ops: Vec<OpRef> = Vec::new();
 
     // 1. Get rodata address
@@ -349,20 +348,7 @@ fn emit_bytes_alloc(
         .build(ctx, loc);
     ops.push(store_len.op_ref());
 
-    // 7. Identity iadd(payload, 0) to produce a fresh SSA value that the
-    //    rewrite pattern can use as the replacement result.
-    let zero_op = clif::Iconst::operands()
-        .value(0)
-        .results(i64_ty)
-        .build(ctx, loc);
-    ops.push(zero_op.op_ref());
-    let identity_op = clif::Iadd::operands(payload, zero_op.result(ctx))
-        .results(ptr_ty)
-        .build(ctx, loc);
-    ops.push(identity_op.op_ref());
-
-    let last = ops.pop().unwrap();
-    (ops, last)
+    (ops, payload)
 }
 
 /// Pattern for `adt.bytes_const` → clif ops (rodata + alloc).
@@ -391,7 +377,7 @@ impl RewritePattern for BytesConstNativePattern {
         };
 
         let loc = ctx.op(op).location;
-        let (insert_ops, last_op) = emit_bytes_alloc(
+        let (insert_ops, payload) = emit_bytes_alloc(
             ctx,
             loc,
             data_sym,
@@ -403,9 +389,6 @@ impl RewritePattern for BytesConstNativePattern {
 
         // The allocation is a `core.ptr`; uses still declare the constant's
         // type until native type conversion runs.
-        let payload = clif::Iadd::from_op(ctx, last_op)
-            .expect("last op is iadd")
-            .result(ctx);
         let result_ty = ctx.op_result_types(op)[0];
         let typed = core::UnrealizedConversionCast::operands(payload)
             .results(result_ty)
@@ -414,7 +397,6 @@ impl RewritePattern for BytesConstNativePattern {
         for o in insert_ops {
             rewriter.insert_op(o);
         }
-        rewriter.insert_op(last_op);
         rewriter.replace_op(typed.op_ref());
         true
     }
@@ -458,7 +440,7 @@ impl RewritePattern for StringConstNativePattern {
         let loc = ctx.op(op).location;
 
         // Emit bytes allocation
-        let (insert_ops, bytes_last_op) = emit_bytes_alloc(
+        let (insert_ops, bytes_payload) = emit_bytes_alloc(
             ctx,
             loc,
             data_sym,
@@ -467,9 +449,6 @@ impl RewritePattern for StringConstNativePattern {
             self.i64_ty,
             self.i32_ty,
         );
-        let bytes_payload = clif::Iadd::from_op(ctx, bytes_last_op)
-            .expect("last op is iadd")
-            .result(ctx);
 
         // Get the result type of the original string_const
         let result_ty = ctx.op_result_types(op)[0];
@@ -486,7 +465,6 @@ impl RewritePattern for StringConstNativePattern {
         for o in insert_ops {
             rewriter.insert_op(o);
         }
-        rewriter.insert_op(bytes_last_op);
         rewriter.replace_op(variant_new.op_ref());
         true
     }
