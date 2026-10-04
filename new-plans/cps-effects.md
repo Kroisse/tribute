@@ -537,9 +537,10 @@ Handler와 evidence의 연결은 다음과 같다.
 - **Handle body:** 처리하는 label마다 `effect.extend`로 새 marker를 쌓은 evidence를 받는다.
   바깥 row가 그 label을 명시하면 extend 전에 `mask`로 바깥 marker를 걷어 낸다
   ([type-inference.md](type-inference.md#호출의-evidence-선택)).
-- **Handler arm, `do` arm:** handle을 설치한 지점의 evidence(바깥)로 실행한다.
-  `handler_dispatch`와 `tr_dispatch_fn` closure는 이 evidence를 environment에
-  capture하며, dispatch가 넘기는 perform 지점 evidence를 arm에 전달하지 않는다.
+- **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
+  General arm은 층의 어휘적 dispatcher에게서 이 evidence와 exit frame을 받고,
+  `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다. Perform 지점
+  evidence는 arm에 전달하지 않는다.
 - **Arm 안의 `resume`:** [abilities.md](abilities.md#resume과-handler-선택)에 따라
   arm 본문의 resume은 자기 handle body의 evidence를, arm 안 lambda의 resume은 그
   lambda가 받은 evidence를 continuation에 넘긴다. Arm 본문의 resume은 resume하는
