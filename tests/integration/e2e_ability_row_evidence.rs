@@ -276,3 +276,44 @@ fn main() ->{Io} Nil {
 "#;
     assert_program("abort_after_reinstall.trb", code, "65\n6");
 }
+
+/// A resume written in a handle body nested in an arm resumes under the
+/// arm's own handle: the nested handler handles the nested body's operations
+/// but not those of the resumed computation.
+#[test]
+fn test_resume_in_a_handle_nested_in_an_arm() {
+    let code = r#"
+ability Reader {
+    op ask() -> Int
+}
+
+fn with_reader(comp: fn() ->{e, Reader} a, value: Int) ->{e} a {
+    handle comp() {
+        do result { result }
+        op Reader::ask() { resume value }
+    }
+}
+
+fn with_state(comp: fn() ->{e, State(Int), Reader} Int) ->{e, Reader} Int {
+    handle comp() {
+        do result { result }
+        op State::get() {
+            handle resume Reader::ask() {
+                do inner { inner + +1000 }
+                op Reader::ask() { resume +9 }
+            }
+        }
+        op State::set(v) { resume Nil }
+    }
+}
+
+fn main() ->{Io} Nil {
+    show(with_reader(fn() {
+        with_state(fn() { State::get() * +10 + Reader::ask() })
+    }, +4))
+}
+"#;
+    // The nested handler answers the resume argument (9); the resumed
+    // computation's `ask` reaches the outer handler (4).
+    assert_program("resume_in_nested_handle.trb", code, "1094");
+}

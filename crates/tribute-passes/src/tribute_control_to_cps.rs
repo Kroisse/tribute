@@ -757,6 +757,18 @@ struct HandleLayer {
     passthrough_factory: Symbol,
 }
 
+/// A call, resume, or structured suffix layer of a continuation.
+#[derive(Clone)]
+struct SuffixLayer {
+    value_type: TypeRef,
+    boundary: TypeRef,
+    /// Builds the dispatcher that rebuilds this layer when it is resumed.
+    dispatch_factory: Symbol,
+    /// The call or resume whose `evidence_plan` selects the evidence of the
+    /// computation the layer continues.
+    plan: Option<OpRef>,
+}
+
 /// The values one installed layer of a handle runs with.
 #[derive(Clone)]
 struct LayerValues {
@@ -1014,17 +1026,19 @@ impl<'a> Converter<'a> {
     ///
     /// The suffix keeps the evidence the layer is resumed with; the resumed
     /// computation receives that evidence after the selection of `plan`.
-    #[allow(clippy::too_many_arguments)]
     fn build_suffix_rebound(
         &mut self,
         location: Location,
-        value_type: TypeRef,
-        boundary: TypeRef,
+        layer: &SuffixLayer,
         resume_body: ValueRef,
         completion: ValueRef,
-        dispatch_factory: Symbol,
-        plan: Option<OpRef>,
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
+        let SuffixLayer {
+            value_type,
+            boundary,
+            dispatch_factory,
+            plan,
+        } = layer.clone();
         let evidence_type = self.evidence_type();
         let anyref = self.anyref_type();
         let boundary_frame = self.frame_types(boundary).reference;
@@ -1252,15 +1266,14 @@ impl<'a> Converter<'a> {
             ],
         );
         let dispatch_args = self.ctx.block_args(dispatch_block).to_vec();
-        let (resume_op, rebound_resume) = self.build_suffix_rebound(
-            location,
+        let layer = SuffixLayer {
             value_type,
             boundary,
-            dispatch_args[1],
-            factory_args[0],
-            symbol.clone(),
+            dispatch_factory: symbol.clone(),
             plan,
-        )?;
+        };
+        let (resume_op, rebound_resume) =
+            self.build_suffix_rebound(location, &layer, dispatch_args[1], factory_args[0])?;
         self.ctx.push_op(dispatch_block, resume_op);
         self.emit_cps_tail_call_indirect(
             dispatch_block,
@@ -2684,14 +2697,17 @@ impl<'a> Converter<'a> {
                 // A resume in a lambda carries the lambda's evidence, whose
                 // handlers the resumed computation keeps: the layer leaves
                 // only its completion behind.
+                let completion_only = SuffixLayer {
+                    value_type: layer.body_type,
+                    boundary: layer.answer_type,
+                    dispatch_factory: layer.passthrough_factory.clone(),
+                    plan: None,
+                };
                 let passthrough = self.build_suffix_rebound(
                     location,
-                    layer.body_type,
-                    layer.answer_type,
+                    &completion_only,
                     args[1],
                     values.completion,
-                    layer.passthrough_factory.clone(),
-                    None,
                 )?;
                 let (token_op, token) = self.build_exact_handler_token(
                     location,
