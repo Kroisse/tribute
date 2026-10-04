@@ -80,7 +80,7 @@ pub use smallvec;
 
 pub use location::{Span, Spanned};
 pub use ops::ConversionError;
-pub use symbol::{BlockId, IdVec, Symbol, SymbolVec};
+pub use symbol::{BlockId, IdVec, Symbol, SymbolPath, SymbolVec};
 
 pub use smallvec::smallvec as idvec;
 

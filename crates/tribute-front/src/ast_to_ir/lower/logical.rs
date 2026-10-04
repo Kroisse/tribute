@@ -205,7 +205,7 @@ fn lower_function_ref<'db>(
     let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
         builder
             .result(ty)
-            .attr("func_ref", Attribute::SymbolRef(symbol))
+            .attr("func_ref", Attribute::SymbolRef(symbol.into()))
     });
     result(builder.ir, op)
 }
@@ -231,11 +231,11 @@ fn lower_expr_for_callable_parameter<'db>(
                         builder.ir.value_def(value)
                     && let Ok(named) = tribute_control::FuncRef::from_op(builder.ir, producer)
                 {
-                    let name = named.func_ref(builder.ir);
+                    let name = named.func_ref(builder.ir).to_symbol();
                     return Some(lower_function_ref(
                         builder,
                         builder.location(expr.id),
-                        name.clone(),
+                        name,
                         Some(expected_ty),
                     ));
                 }
@@ -2013,7 +2013,7 @@ fn named_call(
         builder
             .operands(values)
             .result(signature.return_type)
-            .attr("callee", Attribute::SymbolRef(symbol))
+            .attr("callee", Attribute::SymbolRef(symbol.into()))
     })
 }
 

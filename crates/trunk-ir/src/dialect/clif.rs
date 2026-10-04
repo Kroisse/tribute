@@ -367,7 +367,7 @@ impl crate::ops::Verify for CallIndirect {
 impl Data {
     /// The `(offset, function)` relocations of a verified data object, in
     /// declaration order.
-    pub fn relocations(self, ctx: &crate::IrContext) -> Vec<(u32, crate::Symbol)> {
+    pub fn relocations(self, ctx: &crate::IrContext) -> Vec<(u32, crate::SymbolPath)> {
         reloc_ops(ctx, self.op_ref())
             .map(|op| {
                 let reloc = FuncReloc::from_op(ctx, op).expect("verified clif.data relocations");
@@ -502,6 +502,7 @@ fn set_indirect_call_signature_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::dialect::func;
     use crate::op_interface::IndirectCallLikeOps;
     use crate::ops::DialectType;
@@ -652,7 +653,7 @@ mod tests {
                 .param(i32)
                 .attr(
                     NUM_INPUTS_ATTR,
-                    Attribute::SymbolRef(crate::Symbol::new("one")),
+                    Attribute::SymbolRef(SymbolPath::from("one")),
                 )
                 .attr(NUM_RESULTS_ATTR, Attribute::Int(0))
                 .build(),

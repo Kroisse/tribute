@@ -52,7 +52,6 @@
 use std::collections::HashSet;
 
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectOp;
@@ -63,6 +62,7 @@ use trunk_ir::{BlockData, BlockRef, RegionRef, TypeRef, ValueRef};
 use tribute_ir::dialect::tribute_rt;
 
 use super::rtti::DEEP_RELEASE_FN;
+use trunk_ir::SymbolPath;
 
 /// Lower all `tribute_rt.retain` and `tribute_rt.release` operations to
 /// inline `clif.*` operations.
@@ -436,7 +436,7 @@ fn gen_deep_release_call(
 
     // call @__tribute_deep_release(payload_ptr, size)
     let call = clif::Call::operands([payload_ptr, size.result(ctx)])
-        .callee(Symbol::new(DEEP_RELEASE_FN))
+        .callee(SymbolPath::from(DEEP_RELEASE_FN))
         .results([nil_ty])
         .build(ctx, loc);
     ctx.push_op(block, call.op_ref());

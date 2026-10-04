@@ -1348,7 +1348,7 @@ mod tests {
                 .iter()
                 .copied()
                 .filter_map(|op| func::Func::from_op(&ctx, op).ok())
-                .find(|function| function.sym_name(&ctx) == name)
+                .find(|function| *name == function.sym_name(&ctx))
                 .expect("referenced function must exist");
             assert_eq!(
                 ctx.op_result_types(reference.op_ref()),
@@ -1390,13 +1390,13 @@ mod tests {
         };
 
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &source(r#"@"left::helper""#));
+        let module = parse_test_module(&mut ctx, &source("@left::@helper"));
         lower_prepared_closures(&mut ctx, module).unwrap();
         let ir = print_module(&ctx, module.op());
         assert!(!ir.contains("closure.new"), "{ir}");
         assert!(
             ir.contains(
-                r#"func.constant {func_ref = @"left::helper"} : func.func_sig<(tribute_rt.anyref, core.i32) -> core.i32>"#
+                r#"func.constant {func_ref = @left::@helper} : func.func_sig<(tribute_rt.anyref, core.i32) -> core.i32>"#
             ),
             "{ir}"
         );

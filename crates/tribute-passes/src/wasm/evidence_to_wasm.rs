@@ -36,7 +36,6 @@
 
 use tribute_ir::dialect::ability::{self as ability, MarkerField, evidence_abi};
 use tribute_ir::dialect::effect;
-use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{core, func, wasm as wasm_dialect};
@@ -50,6 +49,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
+use trunk_ir::{Symbol, SymbolPath};
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
 use crate::effect_dispatch;
@@ -275,7 +275,7 @@ impl RewritePattern for LowerEffectExtendToWasm {
             tr_dispatch,
             handler_dispatch,
         ])
-        .callee(Symbol::new(evidence_abi::EXTEND))
+        .callee(SymbolPath::from(evidence_abi::EXTEND))
         .results([result_ty])
         .build(ctx, loc);
         rewriter.insert_op(call.op_ref());
@@ -309,7 +309,7 @@ impl RewritePattern for LowerEffectStackOpToWasm {
         let ability_id = effect_dispatch::insert_ability_id(ctx, loc, ability_ref, rewriter);
         let result_ty = ctx.op_result_types(op)[0];
         let call = func::Call::operands([evidence, ability_id])
-            .callee(Symbol::new(helper))
+            .callee(SymbolPath::from(helper))
             .results([result_ty])
             .build(ctx, loc);
         rewriter.insert_op(call.op_ref());
@@ -341,7 +341,7 @@ impl RewritePattern for LowerEffectDispatchTailToWasm {
         let ability_id =
             effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
         let dispatch_closure = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
-            .callee(Symbol::new(evidence_abi::LOOKUP_TR))
+            .callee(SymbolPath::from(evidence_abi::LOOKUP_TR))
             .results([closure_ty])
             .build(ctx, loc);
         rewriter.insert_op(dispatch_closure.op_ref());
@@ -373,7 +373,7 @@ impl RewritePattern for LowerEffectDispatchCpsToWasm {
         let ability_id =
             effect_dispatch::insert_ability_id(ctx, loc, dispatch_op.ability_ref(ctx), rewriter);
         let prompt = func::Call::operands([dispatch_op.evidence(ctx), ability_id])
-            .callee(Symbol::new(evidence_abi::LOOKUP))
+            .callee(SymbolPath::from(evidence_abi::LOOKUP))
             .results([i32_ty])
             .build(ctx, loc);
         rewriter.insert_op(prompt.op_ref());
@@ -537,7 +537,7 @@ fn build_helper(
     // The top marker of the ability in `args[1]`, or null.
     let find_marker = |ctx: &mut IrContext| {
         let marker = wasm_dialect::Call::operands([args[0], args[1]])
-            .callee(Symbol::new(FIND_MARKER))
+            .callee(SymbolPath::from(FIND_MARKER))
             .results([marker_ty])
             .build(ctx, location);
         ctx.push_op(block, marker.op_ref());
@@ -560,7 +560,7 @@ fn build_helper(
             .build(ctx, location);
         ctx.push_op(block, marker.op_ref());
         let call = wasm_dialect::Call::operands([args[0], marker.result(ctx)])
-            .callee(Symbol::new(SET_MARKER))
+            .callee(SymbolPath::from(SET_MARKER))
             .results([result_ty])
             .build(ctx, location);
         ctx.push_op(block, call.op_ref());
@@ -602,7 +602,7 @@ fn build_helper(
             let remove_slot = {
                 let inner = empty_block(ctx, location);
                 let call = wasm_dialect::Call::operands([args[0], args[1]])
-                    .callee(Symbol::new(REMOVE_MARKER))
+                    .callee(SymbolPath::from(REMOVE_MARKER))
                     .results([result_ty])
                     .build(ctx, location);
                 ctx.push_op(inner, call.op_ref());
@@ -620,7 +620,7 @@ fn build_helper(
                     .build(ctx, location);
                 ctx.push_op(inner, marker.op_ref());
                 let call = wasm_dialect::Call::operands([args[0], marker.result(ctx)])
-                    .callee(Symbol::new(SET_MARKER))
+                    .callee(SymbolPath::from(SET_MARKER))
                     .results([result_ty])
                     .build(ctx, location);
                 ctx.push_op(inner, call.op_ref());
@@ -1045,7 +1045,7 @@ fn find_slot(
 ) -> ValueRef {
     let i32_ty = intern_i32(ctx);
     let call = wasm_dialect::Call::operands([ev, ability_id, low, high])
-        .callee(Symbol::new(FIND_SLOT))
+        .callee(SymbolPath::from(FIND_SLOT))
         .results([i32_ty])
         .build(ctx, location);
     ctx.push_op(block, call.op_ref());
@@ -1240,8 +1240,8 @@ mod tests {
         assert_eq!(
             calls,
             [
-                (Symbol::new(evidence_abi::MASK), 2),
-                (Symbol::new(evidence_abi::DUP), 2)
+                (SymbolPath::from(evidence_abi::MASK), 2),
+                (SymbolPath::from(evidence_abi::DUP), 2)
             ],
             "{printed}"
         );
@@ -1298,7 +1298,11 @@ mod tests {
             }
             std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
         });
-        assert_eq!(calls, [(Symbol::new(evidence_abi::EXTEND), 5)], "{printed}");
+        assert_eq!(
+            calls,
+            [(SymbolPath::from(evidence_abi::EXTEND), 5)],
+            "{printed}"
+        );
     }
 
     #[test]

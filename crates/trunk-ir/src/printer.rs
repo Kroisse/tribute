@@ -246,7 +246,7 @@ impl<'a> PrintState<'a> {
                 write_escaped_bytes(f, bytes)?;
                 f.write_char('"')
             }
-            Attribute::SymbolRef(sym) => write_symbol(f, sym),
+            Attribute::SymbolRef(path) => write_symbol_path(f, path),
             Attribute::Type(ty) => self.write_type(f, *ty),
             Attribute::List(list) => {
                 f.write_char('[')?;
@@ -612,6 +612,18 @@ fn write_name(f: &mut dyn Write, name: &str) -> fmt::Result {
 
 fn write_symbol(f: &mut dyn Write, sym: &crate::symbol::Symbol) -> fmt::Result {
     sym.with_str(|s| write_symbol_text(f, s))
+}
+
+/// Write a symbol path as `@outer::@name`, each component quoted when
+/// needed.
+fn write_symbol_path(f: &mut dyn Write, path: &crate::symbol::SymbolPath) -> fmt::Result {
+    for (index, component) in path.components().iter().enumerate() {
+        if index != 0 {
+            f.write_str(crate::symbol::SymbolPath::SEPARATOR)?;
+        }
+        write_symbol_text(f, component.as_str())?;
+    }
+    Ok(())
 }
 
 /// Write `@name` for symbol text, quoting it when needed.
@@ -1144,6 +1156,7 @@ fn print_module_op(
 mod tests {
     use super::*;
     use crate::Symbol;
+    use crate::SymbolPath;
     use crate::dialect::{arith, core, func};
     use crate::{BlockArgData, BlockData, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
@@ -1549,7 +1562,12 @@ mod tests {
 
         // Symbol
         out.clear();
-        write_attribute(&ctx, &mut out, &Attribute::SymbolRef(Symbol::new("foo"))).unwrap();
+        write_attribute(
+            &ctx,
+            &mut out,
+            &Attribute::SymbolRef(SymbolPath::from("foo")),
+        )
+        .unwrap();
         assert_eq!(out, "@foo");
 
         // Symbol with path (needs quoting)
@@ -1557,10 +1575,25 @@ mod tests {
         write_attribute(
             &ctx,
             &mut out,
-            &Attribute::SymbolRef(Symbol::from_dynamic("std::List::map")),
+            &Attribute::SymbolRef(SymbolPath::from("std::List::map")),
         )
         .unwrap();
         assert_eq!(out, r#"@"std::List::map""#);
+
+        // Nested modules: one `@name` per component
+        out.clear();
+        let nested = SymbolPath::new(["outer", "odd::name", "leaf"]);
+        write_attribute(&ctx, &mut out, &Attribute::SymbolRef(nested.clone())).unwrap();
+        assert_eq!(out, r#"@outer::@"odd::name"::@leaf"#);
+        let mut input = out.as_str();
+        let parsed = crate::parser::raw::symbol_path(&mut input).expect("a symbol path");
+        assert!(input.is_empty());
+        assert!(
+            parsed
+                .iter()
+                .map(String::as_str)
+                .eq(nested.components().iter().map(Symbol::as_str))
+        );
 
         // Empty symbol (should quote)
         out.clear();

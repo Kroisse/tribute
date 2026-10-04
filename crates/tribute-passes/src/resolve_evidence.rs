@@ -11,6 +11,7 @@ use std::fmt;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
@@ -250,7 +251,7 @@ fn resolve_delimiters(
                     ensure_prompt_tag_runtime(ctx, module);
                     let i32_ty = i32_type_ref(ctx);
                     let prompt = func::Call::operands(std::iter::empty::<ValueRef>())
-                        .callee(Symbol::new("__tribute_next_tag"))
+                        .callee(SymbolPath::from("__tribute_next_tag"))
                         .results([i32_ty])
                         .build(ctx, location);
                     let resolved = prompt.result(ctx);

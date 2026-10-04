@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::Symbol;
+use crate::SymbolPath;
 use crate::attr_kind::Dict;
 use crate::dialect::core::{BoolLike, I32, IntegerLike, Ptr};
 use crate::dialect::func;
@@ -93,10 +94,13 @@ mod test_typed {
         }
 
         fn write(_: &mut IrContext, value: Linkage) -> Attribute {
-            Attribute::SymbolRef(Symbol::new(match value {
-                Linkage::Private => "private",
-                Linkage::Public => "public",
-            }))
+            Attribute::SymbolRef(
+                Symbol::new(match value {
+                    Linkage::Private => "private",
+                    Linkage::Public => "public",
+                })
+                .into(),
+            )
         }
     }
 
@@ -681,7 +685,7 @@ fn a_dialect_defines_its_own_attribute_kind() {
     );
     assert_eq!(
         ctx.op(op.op_ref()).attributes.get("linkage"),
-        Some(&Attribute::SymbolRef(Symbol::new("public")))
+        Some(&Attribute::SymbolRef(SymbolPath::from("public")))
     );
     assert!(test_typed::Export::DEF.verify(&ctx, op.op_ref()).is_empty());
 }

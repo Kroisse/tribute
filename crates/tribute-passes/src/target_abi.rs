@@ -20,7 +20,6 @@ use tribute_core::{
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, effect, tribute_rt};
-use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::op_interface::IndirectCallLikeOps;
@@ -31,6 +30,7 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeData, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
+use trunk_ir::{Symbol, SymbolPath};
 
 const ROOT_SOURCE_RESULT_ATTR: &str = "tribute.root_source_result";
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
@@ -417,8 +417,8 @@ pub fn compose_root_entry_bridge(
         return Ok(());
     };
     let top_level_ops = ctx.block(module_block).ops.clone();
-    let main = Symbol::new("main");
-    let root_main = Symbol::new(ROOT_MAIN_SYMBOL);
+    let main = SymbolPath::from("main");
+    let root_main = SymbolPath::from(ROOT_MAIN_SYMBOL);
     let mut roots = top_level_ops.iter().copied().filter(|&op| {
         func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == main)
     });
@@ -521,7 +521,7 @@ fn build_cps_root_call(
     module_block: BlockRef,
     entry: BlockRef,
     contract: RootEntryContract,
-    worker: Symbol,
+    worker: SymbolPath,
 ) -> Result<ValueRef, TargetAbiError> {
     let RootEntryContract {
         worker_op,
@@ -636,7 +636,7 @@ fn build_cps_root_call(
         .build(ctx, location);
     ctx.push_op(entry, erased_cell.op_ref());
     let done_constant = func::Constant::operands()
-        .func_ref(root_done_k)
+        .func_ref(root_done_k.into())
         .results(done_function_ty)
         .build(ctx, location);
     ctx.push_op(entry, done_constant.op_ref());
@@ -653,7 +653,7 @@ fn build_cps_root_call(
     ctx.push_op(entry, typed_done.op_ref());
 
     let dispatch_constant = func::Constant::operands()
-        .func_ref(root_dispatch)
+        .func_ref(root_dispatch.into())
         .results(dispatch_function_ty)
         .build(ctx, location);
     ctx.push_op(entry, dispatch_constant.op_ref());
@@ -1022,7 +1022,7 @@ fn remove_root_contract(ctx: &mut IrContext, op: OpRef) {
     ctx.op_mut(op).attributes.remove(ROOT_SOURCE_RESULT_ATTR);
 }
 
-fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &Symbol, new: &Symbol) {
+fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &SymbolPath, new: &SymbolPath) {
     if core::Module::from_op(ctx, op).is_ok() {
         return;
     }
@@ -1066,7 +1066,7 @@ fn collect_functions(
     ops: &[OpRef],
     never: TypeRef,
     anyref: TypeRef,
-) -> Result<HashMap<Symbol, FunctionIdentity>, TargetAbiError> {
+) -> Result<HashMap<SymbolPath, FunctionIdentity>, TargetAbiError> {
     let mut functions = HashMap::new();
     for &op in ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
@@ -1103,7 +1103,7 @@ fn collect_functions(
 fn validate_transfers(
     ctx: &IrContext,
     ops: &[OpRef],
-    functions: &HashMap<Symbol, FunctionIdentity>,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
     never: TypeRef,
 ) -> Result<(), TargetAbiError> {
     for &op in ops {
@@ -1272,22 +1272,22 @@ fn is_cps_never_caller(ctx: &IrContext, op: OpRef, never: TypeRef) -> Result<boo
 
 /// The tagged function named by a root-qualified reference.
 fn function_for_symbol(
-    symbol: &Symbol,
-    functions: &HashMap<Symbol, FunctionIdentity>,
+    symbol: &SymbolPath,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
 ) -> Result<FunctionIdentity, TargetAbiError> {
     function_for_symbol_optional(symbol, functions)
         .ok_or_else(|| TargetAbiError::new(format!("target ABI: unknown callable `{symbol}`")))
 }
 
 fn function_for_symbol_optional(
-    symbol: &Symbol,
-    functions: &HashMap<Symbol, FunctionIdentity>,
+    symbol: &SymbolPath,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
 ) -> Option<FunctionIdentity> {
     functions.get(symbol).copied()
 }
 
 /// The root-qualified name a definition is referenced by.
-fn defined_function_name(ctx: &IrContext, op: OpRef) -> Result<Symbol, TargetAbiError> {
+fn defined_function_name(ctx: &IrContext, op: OpRef) -> Result<SymbolPath, TargetAbiError> {
     qualified_name(ctx, op)
         .ok_or_else(|| TargetAbiError::new("target ABI: function definition has no symbol"))
 }
@@ -2028,7 +2028,7 @@ mod tests {
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
             ctx.op(call).attributes.get_symbol_ref("callee"),
-            Some(&Symbol::new(ROOT_MAIN_SYMBOL))
+            Some(&SymbolPath::from(ROOT_MAIN_SYMBOL))
         );
         let worker_callable = func::FuncSig::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();
         let [worker_evidence, worker_frame] = worker_callable.inputs(&ctx) else {

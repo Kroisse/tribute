@@ -11,11 +11,11 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module as _};
 use cranelift_object::ObjectModule;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -170,13 +170,13 @@ pub(crate) struct FunctionTranslator<'a> {
     /// The object module that owns the function and data declarations.
     module: &'a mut ObjectModule,
     /// Module-level functions a body may reference.
-    func_ids: &'a FxHashMap<Symbol, FuncId>,
+    func_ids: &'a FxHashMap<SymbolPath, FuncId>,
     /// Module-level data objects a body may reference.
-    data_ids: &'a FxHashMap<Symbol, DataId>,
+    data_ids: &'a FxHashMap<SymbolPath, DataId>,
     /// Functions this body referenced, declared on first reference.
-    func_refs: FxHashMap<Symbol, cl_ir::FuncRef>,
+    func_refs: FxHashMap<SymbolPath, cl_ir::FuncRef>,
     /// Data objects this body referenced, declared on first reference.
-    data_refs: FxHashMap<Symbol, cl_ir::GlobalValue>,
+    data_refs: FxHashMap<SymbolPath, cl_ir::GlobalValue>,
     /// Maps TrunkIR block refs to Cranelift blocks.
     pub(crate) block_map: FxHashMap<BlockRef, cl_ir::Block>,
     /// The platform's ordinary calling convention for non-CPS indirect calls.
@@ -190,8 +190,8 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &'a IrContext,
         builder: FunctionBuilder<'a>,
         module: &'a mut ObjectModule,
-        func_ids: &'a FxHashMap<Symbol, FuncId>,
-        data_ids: &'a FxHashMap<Symbol, DataId>,
+        func_ids: &'a FxHashMap<SymbolPath, FuncId>,
+        data_ids: &'a FxHashMap<SymbolPath, DataId>,
         default_call_conv: CallConv,
         ptr_ty: cl_types::Type,
     ) -> Self {
@@ -212,7 +212,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The reference to a module function, declared in this function the
     /// first time the body references it.
-    fn func_ref(&mut self, sym: Symbol) -> Option<cl_ir::FuncRef> {
+    fn func_ref(&mut self, sym: SymbolPath) -> Option<cl_ir::FuncRef> {
         if let Some(&func_ref) = self.func_refs.get(&sym) {
             return Some(func_ref);
         }
@@ -224,7 +224,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The reference to a module data object, declared in this function the
     /// first time the body references it.
-    fn data_ref(&mut self, sym: Symbol) -> Option<cl_ir::GlobalValue> {
+    fn data_ref(&mut self, sym: SymbolPath) -> Option<cl_ir::GlobalValue> {
         if let Some(&gv) = self.data_refs.get(&sym) {
             return Some(gv);
         }

@@ -24,6 +24,7 @@ use trunk_ir::types::Location;
 use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
 use super::type_converter::wasm_type_converter;
+use trunk_ir::SymbolPath;
 
 const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
 
@@ -460,7 +461,7 @@ impl WasmLowerer {
             let name = ctx.intern_str("_start");
             let export_op = wasm_dialect::ExportFunc::operands()
                 .name(name)
-                .func(Symbol::new("main"))
+                .func(SymbolPath::from("main"))
                 .build(ctx, location);
             ctx.push_op(module_block, export_op.op_ref());
         }
@@ -470,6 +471,7 @@ impl WasmLowerer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::{BlockData, RegionData};
     use trunk_ir::refs::TypeRef;
     use trunk_ir::smallvec::smallvec;
@@ -585,7 +587,7 @@ mod tests {
             .filter_map(|op| wasm_dialect::ExportFunc::from_op(&ctx, op).ok())
             .map(|export| (export.name(&ctx), export.func(&ctx).clone()))
             .collect();
-        assert_eq!(exports, [("_start", Symbol::new("main"))]);
+        assert_eq!(exports, [("_start", SymbolPath::from("main"))]);
         assert!(
             module
                 .ops(&ctx)

@@ -7,10 +7,10 @@
 //! any other.
 
 use tribute_ir::dialect::ability::evidence_abi;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::refs::OpRef;
 use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::{Symbol, SymbolPath};
 
 use super::evidence_to_wasm::NEXT_TAG;
 use super::intrinsic_to_wasm::{BYTES_CONCAT, BYTES_LEN, BYTES_RANGE_EQUAL, BYTES_SLICE_OR_PANIC};
@@ -44,7 +44,11 @@ pub fn is_c_declaration(ctx: &IrContext, op: OpRef) -> bool {
 
 /// The C link name of the declaration `callee` resolves to, if it is a
 /// bodyless `abi = "C"` declaration.
-pub(crate) fn c_helper(ctx: &IrContext, symbols: &SymbolTable, callee: &Symbol) -> Option<Symbol> {
+pub(crate) fn c_helper(
+    ctx: &IrContext,
+    symbols: &SymbolTable,
+    callee: &SymbolPath,
+) -> Option<Symbol> {
     let declaration = symbols.resolve(callee)?;
     is_c_declaration(ctx, declaration)
         .then(|| {
