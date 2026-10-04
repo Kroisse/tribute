@@ -6,6 +6,7 @@
 
 use tribute_ir::dialect::tribute_io;
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::{core, func};
@@ -198,7 +199,7 @@ impl RewritePattern for WritePattern {
             return false;
         };
         let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
-            .callee(Symbol::new(WRITE_HELPER))
+            .callee(SymbolPath::from(WRITE_HELPER))
             .results([ctx.op_result_types(op)[0]])
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(call.op_ref());
@@ -472,7 +473,7 @@ fn write_loop(
     let one_iovec = i32_const(ctx, loop_block, loc, i32_ty, 1);
     let nwritten = i32_const(ctx, loop_block, loc, i32_ty, NWRITTEN_OFFSET);
     let call = wasm_dialect::Call::operands([stdout, iovec, one_iovec, nwritten])
-        .callee(Symbol::new(FD_WRITE))
+        .callee(SymbolPath::from(FD_WRITE))
         .results([i32_ty])
         .build(ctx, loc);
     ctx.push_op(loop_block, call.op_ref());

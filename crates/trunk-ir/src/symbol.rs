@@ -190,6 +190,165 @@ impl std::fmt::Display for Symbol {
     }
 }
 
+// ============================================================================
+// Symbol paths
+// ============================================================================
+
+/// The name of a symbol table definition: the names of its enclosing modules
+/// below the root, then its own name.
+///
+/// Each component is one name, taken as it is: a name that contains `::` is
+/// still a single component, so a path built from one qualified name differs
+/// from the path that spells the same text as nested modules. Up to two
+/// components are stored inline.
+#[derive(Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct SymbolPath(SmallVec<[Symbol; 2]>);
+
+impl SymbolPath {
+    /// The separator between components in the textual form.
+    pub const SEPARATOR: &'static str = "::";
+
+    /// A path from its components, outermost module first.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `components` is empty.
+    pub fn new(components: impl IntoIterator<Item = impl Into<Symbol>>) -> Self {
+        let components: SmallVec<[Symbol; 2]> = components.into_iter().map(Into::into).collect();
+        assert!(!components.is_empty(), "a symbol path has a component");
+        SymbolPath(components)
+    }
+
+    /// The path of the definition named `name` inside the modules `modules`.
+    pub fn in_modules(modules: &[Symbol], name: Symbol) -> Self {
+        let mut components: SmallVec<[Symbol; 2]> = modules.iter().cloned().collect();
+        components.push(name);
+        SymbolPath(components)
+    }
+
+    pub fn components(&self) -> &[Symbol] {
+        &self.0
+    }
+
+    /// The definition's own name, without its modules.
+    pub fn leaf(&self) -> &Symbol {
+        self.0.last().expect("a symbol path has a component")
+    }
+
+    /// The enclosing modules, outermost first.
+    pub fn modules(&self) -> &[Symbol] {
+        &self.0[..self.0.len() - 1]
+    }
+
+    /// The name of a definition directly in the root module.
+    pub fn as_simple(&self) -> Option<&Symbol> {
+        match self.0.as_slice() {
+            [name] => Some(name),
+            _ => None,
+        }
+    }
+
+    /// Whether the path has no enclosing module.
+    pub fn is_simple(&self) -> bool {
+        self.0.len() == 1
+    }
+
+    /// The components joined into one symbol, as [`Display`](std::fmt::Display)
+    /// writes them.
+    pub fn to_symbol(&self) -> Symbol {
+        match self.as_simple() {
+            Some(name) => name.clone(),
+            None => Symbol::from_dynamic(&self.to_string()),
+        }
+    }
+}
+
+/// Joins the components with `::`. The result does not tell a component that
+/// contains `::` from nested modules; the IR printer writes each component
+/// separately.
+impl std::fmt::Display for SymbolPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        for (index, component) in self.0.iter().enumerate() {
+            if index != 0 {
+                f.write_str(Self::SEPARATOR)?;
+            }
+            f.write_str(component.as_str())?;
+        }
+        Ok(())
+    }
+}
+
+impl std::fmt::Debug for SymbolPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SymbolPath")?;
+        f.debug_list()
+            .entries(self.0.iter().map(Symbol::as_str))
+            .finish()
+    }
+}
+
+/// A single name is the path of a definition in the root module.
+impl From<Symbol> for SymbolPath {
+    fn from(name: Symbol) -> Self {
+        SymbolPath(smallvec::smallvec![name])
+    }
+}
+
+impl From<&Symbol> for SymbolPath {
+    fn from(name: &Symbol) -> Self {
+        SymbolPath::from(name.clone())
+    }
+}
+
+impl From<&str> for SymbolPath {
+    fn from(name: &str) -> Self {
+        SymbolPath::from(Symbol::from_dynamic(name))
+    }
+}
+
+impl From<&SymbolPath> for SymbolPath {
+    fn from(path: &SymbolPath) -> Self {
+        path.clone()
+    }
+}
+
+/// A path equals a name when it is that name in the root module.
+impl PartialEq<str> for SymbolPath {
+    fn eq(&self, other: &str) -> bool {
+        self.as_simple().is_some_and(|name| name == other)
+    }
+}
+
+impl PartialEq<&str> for SymbolPath {
+    fn eq(&self, other: &&str) -> bool {
+        *self == **other
+    }
+}
+
+impl PartialEq<SymbolPath> for str {
+    fn eq(&self, other: &SymbolPath) -> bool {
+        other == self
+    }
+}
+
+impl PartialEq<SymbolPath> for &str {
+    fn eq(&self, other: &SymbolPath) -> bool {
+        other == *self
+    }
+}
+
+impl PartialEq<Symbol> for SymbolPath {
+    fn eq(&self, other: &Symbol) -> bool {
+        self.as_simple() == Some(other)
+    }
+}
+
+impl PartialEq<Symbol> for &SymbolPath {
+    fn eq(&self, other: &Symbol) -> bool {
+        **self == *other
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +370,33 @@ mod tests {
             }
         }
         assert!(dynamic.is_empty(), "{dynamic:#?}");
+    }
+
+    #[test]
+    fn symbol_paths_keep_each_name_as_one_component() {
+        let path = SymbolPath::new(["outer", "inner", "same"]);
+        assert_eq!(path.components().len(), 3);
+        assert_eq!(path.leaf(), "same");
+        assert_eq!(path.modules(), [Symbol::new("outer"), Symbol::new("inner")]);
+        assert_eq!(path.to_string(), "outer::inner::same");
+        assert_eq!(path.as_simple(), None);
+
+        // A qualified name is one component, not the modules it spells.
+        let flat = SymbolPath::from("outer::inner::same");
+        assert!(flat.is_simple());
+        assert_eq!(flat, "outer::inner::same");
+        assert_ne!(flat, path);
+        assert_ne!(path, "outer::inner::same");
+        assert_eq!(flat.to_symbol(), path.to_symbol());
+
+        assert_eq!(
+            SymbolPath::in_modules(path.modules(), Symbol::new("same")),
+            path
+        );
+        let root = SymbolPath::from("a");
+        assert!(root < SymbolPath::new(["a", "b"]));
+        assert_eq!(std::mem::size_of::<SymbolPath>(), 24);
+        assert_eq!(std::mem::size_of::<crate::types::Attribute>(), 32);
     }
 
     #[test]

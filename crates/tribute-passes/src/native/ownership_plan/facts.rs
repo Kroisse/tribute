@@ -16,7 +16,7 @@ use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError};
 /// function-scope analysis and every planner consumer reuses them.
 pub struct NativeOwnershipModuleFacts {
     function_ops: Vec<OpRef>,
-    definitions: HashMap<Symbol, OpRef>,
+    definitions: HashMap<SymbolPath, OpRef>,
     managed_layouts: HashSet<TypeRef>,
 }
 
@@ -27,7 +27,7 @@ impl NativeOwnershipModuleFacts {
     }
 
     /// Unique function symbol to its operation.
-    pub fn definitions(&self) -> &HashMap<Symbol, OpRef> {
+    pub fn definitions(&self) -> &HashMap<SymbolPath, OpRef> {
         &self.definitions
     }
 

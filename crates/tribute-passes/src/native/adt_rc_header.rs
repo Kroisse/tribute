@@ -20,7 +20,7 @@ use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout,
 };
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -140,7 +140,7 @@ impl RewritePattern for StructNewPattern {
 
         // 2. Call __tribute_alloc
         let call_op = clif::Call::operands([size_val])
-            .callee(Symbol::new(ALLOC_FN))
+            .callee(SymbolPath::from(ALLOC_FN))
             .results([self.ptr_ty])
             .build(ctx, loc);
         let raw_ptr = call_op.results(ctx)[0];
@@ -306,7 +306,7 @@ impl RewritePattern for VariantNewPattern {
 
         // 2. Call __tribute_alloc
         let call_op = clif::Call::operands([size_val])
-            .callee(Symbol::new(ALLOC_FN))
+            .callee(SymbolPath::from(ALLOC_FN))
             .results([self.ptr_ty])
             .build(ctx, loc);
         let raw_ptr = call_op.results(ctx)[0];
@@ -414,6 +414,7 @@ impl RewritePattern for VariantNewPattern {
 mod tests {
     use super::*;
     use trunk_ir::Span;
+    use trunk_ir::Symbol;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;

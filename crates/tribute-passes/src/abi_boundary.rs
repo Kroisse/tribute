@@ -10,6 +10,7 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::IndirectCallLikeOps;
@@ -191,7 +192,7 @@ impl<'a> Verifier<'a> {
             let mut references = Vec::new();
             ctx.op(op)
                 .attributes
-                .visit_symbol_refs(&mut |reference| references.push(reference));
+                .visit_symbol_refs(&mut |reference| references.push(reference.clone()));
             for reference in references {
                 let Some(declaration) = functions.resolve(&reference) else {
                     continue;
@@ -234,7 +235,7 @@ impl<'a> Verifier<'a> {
     /// the platform convention.
     fn check_root_entry(&mut self, functions: &SymbolTable) {
         let ctx = self.ctx;
-        let Some(main) = functions.resolve(&Symbol::new("main")) else {
+        let Some(main) = functions.resolve(&SymbolPath::from("main")) else {
             return;
         };
         let Ok(function) = func::Func::from_op(ctx, main) else {
@@ -883,7 +884,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @"left::same"} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant {func_ref = @left::@same} : func.func_sig<(core.i32) -> ()>
       func.return
     }
   }

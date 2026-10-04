@@ -12,7 +12,7 @@ use smallvec::SmallVec;
 use crate::context::IrContext;
 use crate::op_schema::AttributeKind;
 use crate::refs::TypeRef;
-use crate::symbol::Symbol;
+use crate::symbol::{Symbol, SymbolPath};
 use crate::types::{Attribute, AttributeIter, AttributeKey, AttributeMap, StringArg, StringRef};
 
 /// The value domain and typed access of a declared attribute.
@@ -182,17 +182,17 @@ pub struct SymbolRef;
 
 impl AttrKind for SymbolRef {
     const KIND: AttributeKind = AttributeKind::SymbolRef;
-    type Out<'ctx> = &'ctx Symbol;
-    type In = Symbol;
+    type Out<'ctx> = &'ctx SymbolPath;
+    type In = SymbolPath;
 
-    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> &'ctx Symbol {
+    fn read<'ctx>(_: &'ctx IrContext, attr: &'ctx Attribute) -> &'ctx SymbolPath {
         match attr {
             Attribute::SymbolRef(symbol) => symbol,
             _ => panic!("expected SymbolRef attribute"),
         }
     }
 
-    fn write(_: &mut IrContext, value: Symbol) -> Attribute {
+    fn write(_: &mut IrContext, value: SymbolPath) -> Attribute {
         Attribute::SymbolRef(value)
     }
 }

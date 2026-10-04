@@ -23,7 +23,7 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
-use trunk_ir::{IrContext, Symbol};
+use trunk_ir::{IrContext, Symbol, SymbolPath};
 
 use super::list;
 
@@ -989,15 +989,15 @@ pub struct OperationDeclaration {
 /// registered identity and complete logical callable type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerIntrinsicDeclaration {
-    pub symbol: Symbol,
+    pub symbol: SymbolPath,
     pub identity: Symbol,
     pub callable_type: TypeRef,
 }
 
 impl CompilerIntrinsicDeclaration {
-    pub fn new(symbol: Symbol, identity: Symbol, callable_type: TypeRef) -> Self {
+    pub fn new(symbol: impl Into<SymbolPath>, identity: Symbol, callable_type: TypeRef) -> Self {
         Self {
-            symbol,
+            symbol: symbol.into(),
             identity,
             callable_type,
         }
@@ -2323,7 +2323,7 @@ fn compiler_intrinsic_map<'a>(
     ctx: &IrContext,
     declarations: &'a [CompilerIntrinsicDeclaration],
     errors: &mut Vec<ValidationError>,
-) -> HashMap<Symbol, &'a CompilerIntrinsicDeclaration> {
+) -> HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration> {
     let mut map = HashMap::new();
     let mut previous = None;
     for declaration in declarations {
@@ -2428,7 +2428,7 @@ fn variant_field_type(
 
 struct CallableProvenance<'a> {
     functions: &'a SymbolTable,
-    registered: &'a HashMap<Symbol, &'a CompilerIntrinsicDeclaration>,
+    registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
     declarations: &'a HashMap<(TypeRef, StringRef), &'a OperationDeclaration>,
     nominal_layouts: &'a HashMap<StringRef, TypeRef>,
 }
@@ -2554,7 +2554,7 @@ fn callable_has_semantic_provenance(
 fn verified_callable_declaration(
     ctx: &IrContext,
     function: OpRef,
-    registered: &HashMap<Symbol, &CompilerIntrinsicDeclaration>,
+    registered: &HashMap<SymbolPath, &CompilerIntrinsicDeclaration>,
 ) -> bool {
     if ctx.op_has_regions(function) {
         return true;
@@ -3337,13 +3337,13 @@ mod tests {
         let x = ctx.block_arg(entry, 0);
 
         let function_ref = FuncRef::operands()
-            .func_ref(Symbol::new("id"))
+            .func_ref(SymbolPath::from("id"))
             .results(direct)
             .build(&mut ctx, loc);
         ctx.push_op(entry, function_ref.op_ref());
         let function_ref_value = function_ref.result(&ctx);
         let direct_call = Call::operands([x])
-            .callee(Symbol::new("id"))
+            .callee(SymbolPath::from("id"))
             .results(i32_ty)
             .build(&mut ctx, loc);
         ctx.push_op(entry, direct_call.op_ref());
@@ -3832,7 +3832,7 @@ mod tests {
         ));
         assert_eq!(
             ctx.op(declaration).attributes.get_symbol_ref("metadata"),
-            Some(&Symbol::new("declaration"))
+            Some(&SymbolPath::from("declaration"))
         );
 
         let inline = r#"core.module @test {
@@ -4480,8 +4480,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i32) -> core.i32 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @"integers::id"} : !callable
-      %direct = tribute_control.call %value {callee = @"integers::id"} : core.i32
+      %reference = tribute_control.func_ref {func_ref = @integers::@id} : !callable
+      %direct = tribute_control.call %value {callee = @integers::@id} : core.i32
       %indirect = tribute_control.call_indirect %reference, %direct : core.i32
       tribute_control.return %indirect
     }
@@ -4492,8 +4492,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i1) -> core.i1 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @"booleans::id"} : !callable
-      %direct = tribute_control.call %value {callee = @"booleans::id"} : core.i1
+      %reference = tribute_control.func_ref {func_ref = @booleans::@id} : !callable
+      %direct = tribute_control.call %value {callee = @booleans::@id} : core.i1
       %indirect = tribute_control.call_indirect %reference, %direct : core.i1
       tribute_control.return %indirect
     }
@@ -5660,7 +5660,7 @@ mod tests {
             r#"core.module @outer {
   core.module @inner {
     tribute_control.func @loop(%value: core.i32) -> core.i32 convention(direct) {
-      %again = tribute_control.call %value {callee = @"inner::loop"} : core.i32
+      %again = tribute_control.call %value {callee = @inner::@loop} : core.i32
       tribute_control.return %again
     }
   }

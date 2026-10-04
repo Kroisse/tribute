@@ -7,11 +7,11 @@
 
 use trunk_ir::IrContext;
 use trunk_ir::Module;
-use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -125,7 +125,7 @@ fn enclosing_wasm_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<wasm_
 fn resolve_wasm_callee(
     ctx: &IrContext,
     symbols: &SymbolTable,
-    name: &Symbol,
+    name: &SymbolPath,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
     let found = *symbols.definitions_of(name).first()?;
     if symbols.resolve(name).is_none()
@@ -868,7 +868,7 @@ mod tests {
         validate_wasm_ir(&ctx, module).expect("root target has the caller's result");
 
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &source(r#"@"inner::target""#));
+        let module = parse_test_module(&mut ctx, &source("@inner::@target"));
         let error = validate_wasm_ir(&ctx, module).expect_err("nested target has Unit result");
         assert!(
             error

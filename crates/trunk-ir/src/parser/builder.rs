@@ -18,13 +18,13 @@ use winnow::prelude::*;
 use super::raw::{
     self, ParseError, RawAttrDict, RawAttribute, RawOperation, RawParam, RawRegion, RawType,
 };
-use crate::Symbol;
 use crate::context::{IrContext, OperationDataBuilder};
 use crate::ops::DialectType;
 use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
 use crate::{BlockArgData, BlockData, RegionData};
+use crate::{Symbol, SymbolPath};
 
 /// The types of `params`, without their attributes.
 fn param_types(params: &[(TypeRef, AttributeMap)]) -> impl ExactSizeIterator<Item = TypeRef> + '_ {
@@ -366,7 +366,9 @@ impl<'a> ArenaIrBuilder<'a> {
             RawAttribute::Int(n) => Attribute::Int(*n),
             RawAttribute::Float(f) => Attribute::FloatBits(f.to_bits()),
             RawAttribute::String(s) => self.ctx.string_attr(s),
-            RawAttribute::SymbolRef(s) => Attribute::SymbolRef(Symbol::from_dynamic(s.as_str())),
+            RawAttribute::SymbolRef(components) => Attribute::SymbolRef(SymbolPath::new(
+                components.iter().map(|name| Symbol::from_dynamic(name)),
+            )),
             RawAttribute::Type(t) => Attribute::Type(self.build_type(t)?),
             RawAttribute::List(items) => {
                 let list: Vec<Attribute> = items
@@ -1371,7 +1373,7 @@ core.module @test {
             parent_region: None,
         });
         let call = func::Call::operands([])
-            .callee(Symbol::new("callee"))
+            .callee(SymbolPath::from("callee"))
             .results([i32_ty])
             .build(&mut ctx, loc);
         ctx.push_op(entry2, call.op_ref());

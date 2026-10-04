@@ -22,7 +22,7 @@ use crate::dialect::{core, func};
 use crate::ops::DialectOp;
 use crate::refs::OpRef;
 use crate::rewrite::Module;
-use crate::symbol::Symbol;
+use crate::symbol::SymbolPath;
 use crate::symbol_table::SymbolTable;
 use crate::transforms::call_graph::CallGraph;
 
@@ -49,7 +49,7 @@ pub struct GlobalDceResult {
     /// Number of functions removed.
     pub removed_count: usize,
     /// Names of removed functions (for debugging).
-    pub removed_functions: Vec<Symbol>,
+    pub removed_functions: Vec<SymbolPath>,
 }
 
 /// Eliminate unreachable functions from a module using default configuration.
@@ -90,12 +90,12 @@ fn run(
             .filter(|&(_, op)| func::Func::matches(ctx, op))
     };
     let is_candidate = |op| config.recursive || !in_nested_module(ctx, module, op);
-    let candidates: Vec<(Symbol, OpRef)> =
+    let candidates: Vec<(&SymbolPath, OpRef)> =
         functions().filter(|&(_, op)| is_candidate(op)).collect();
 
-    let mut roots: HashSet<Symbol> = functions()
+    let mut roots: HashSet<SymbolPath> = functions()
         .filter(|(name, op)| !is_candidate(*op) || is_root(ctx, name, *op, config))
-        .map(|(name, _)| name)
+        .map(|(name, _)| name.clone())
         .collect();
     let graph = analyses.require::<CallGraph>(ctx, module.op());
     roots.extend(graph.module_references.iter().cloned());
@@ -112,9 +112,10 @@ fn run(
             current = parent_op(ctx, op);
         }
     }
-    let dead: Vec<(Symbol, OpRef)> = candidates
+    let dead: Vec<(SymbolPath, OpRef)> = candidates
         .into_iter()
         .filter(|(_, op)| !kept.contains(op))
+        .map(|(name, op)| (name.clone(), op))
         .collect();
     let dead_ops: HashSet<OpRef> = dead.iter().map(|&(_, op)| op).collect();
 
@@ -142,11 +143,14 @@ fn run(
 /// Whether `name` is a reachability root: the root `main` or `_start`, a
 /// function definition with an `abi` attribute (externally callable), or a
 /// configured extra entry point.
-fn is_root(ctx: &IrContext, name: &Symbol, op: OpRef, config: &GlobalDceConfig) -> bool {
-    *name == Symbol::new("main")
-        || *name == Symbol::new("_start")
+fn is_root(ctx: &IrContext, name: &SymbolPath, op: OpRef, config: &GlobalDceConfig) -> bool {
+    *name == "main"
+        || *name == "_start"
         || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
-        || name.with_str(|name| config.extra_entry_points.iter().any(|extra| extra == name))
+        || config
+            .extra_entry_points
+            .iter()
+            .any(|extra| *name == extra.as_str())
 }
 
 /// Whether `op` lies inside a `core.module` nested in `module`.
@@ -182,9 +186,9 @@ fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 }
 
 /// Functions reachable from `roots` via BFS over call and reference edges.
-fn compute_reachable(graph: &CallGraph, roots: HashSet<Symbol>) -> HashSet<Symbol> {
+fn compute_reachable(graph: &CallGraph, roots: HashSet<SymbolPath>) -> HashSet<SymbolPath> {
     let mut reachable = HashSet::new();
-    let mut worklist: VecDeque<Symbol> = roots.into_iter().collect();
+    let mut worklist: VecDeque<SymbolPath> = roots.into_iter().collect();
 
     while let Some(func) = worklist.pop_front() {
         if !reachable.insert(func.clone()) {
@@ -208,7 +212,7 @@ mod tests {
     use super::*;
     use crate::dialect::func;
     use crate::location::Span;
-    use crate::symbol::Symbol;
+    use crate::symbol::SymbolPath;
     use crate::*;
     use smallvec::smallvec;
 
@@ -230,7 +234,7 @@ mod tests {
 
     fn build_simple_func(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
         let fn_ty = fn_type(ctx);
-        let sym_name = Symbol::from_dynamic(name);
+        let sym_name = SymbolPath::from(name);
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -255,8 +259,8 @@ mod tests {
     fn build_func_with_call(ctx: &mut IrContext, loc: Location, name: &str, callee: &str) -> OpRef {
         let fn_ty = fn_type(ctx);
         let i32_ty = i32_type(ctx);
-        let sym_name = Symbol::from_dynamic(name);
-        let sym_callee = Symbol::from_dynamic(callee);
+        let sym_name = SymbolPath::from(name);
+        let sym_callee = SymbolPath::from(callee);
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -374,7 +378,7 @@ mod tests {
             parent_region: None,
         });
         let const_op = func::Constant::operands()
-            .func_ref(Symbol::new("callback"))
+            .func_ref(SymbolPath::from("callback"))
             .results(fn_ty)
             .build(&mut ctx, loc);
         ctx.push_op(entry, const_op.op_ref());
@@ -386,7 +390,7 @@ mod tests {
             parent_op: None,
         });
         let main = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name(SymbolPath::from("main"))
             .r#type(fn_ty)
             .regions(body)
             .build(&mut ctx, loc)
@@ -436,7 +440,10 @@ mod tests {
         let export_data =
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("export_func"))
                 .attr("name", ctx.string_attr("my_export"))
-                .attr("func", Attribute::SymbolRef(Symbol::new("exported_func")))
+                .attr(
+                    "func",
+                    Attribute::SymbolRef(SymbolPath::from("exported_func")),
+                )
                 .build(&mut ctx);
         let export_op = ctx.create_op(export_data);
 
@@ -475,14 +482,14 @@ mod tests {
         );
         ctx.op_mut(module.op()).attributes.insert(
             "entry",
-            Attribute::SymbolRef(Symbol::new("named_by_module")),
+            Attribute::SymbolRef(SymbolPath::from("named_by_module")),
         );
 
         eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from(["exported", "captured", "named_by_module"].map(Symbol::new))
+            HashSet::from(["exported", "captured", "named_by_module"].map(SymbolPath::from))
         );
     }
 
@@ -537,7 +544,7 @@ mod tests {
 
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
-        assert_eq!(result.removed_functions, [Symbol::new("unused")]);
+        assert_eq!(result.removed_functions, [SymbolPath::from("unused")]);
         assert_eq!(count_funcs(&ctx, module), 2);
     }
 
@@ -560,7 +567,7 @@ mod tests {
         });
         let i32_ty = i32_type(&mut ctx);
         let call = func::Call::operands(std::iter::empty())
-            .callee(Symbol::new("helper"))
+            .callee(SymbolPath::from("helper"))
             .results([i32_ty])
             .build(&mut ctx, loc);
         ctx.push_op(entry, call.op_ref());
@@ -630,10 +637,10 @@ mod tests {
 
         assert_eq!(result.removed_count, 2);
         assert_eq!(
-            HashSet::<Symbol>::from_iter(result.removed_functions),
+            HashSet::<SymbolPath>::from_iter(result.removed_functions),
             HashSet::from([
-                Symbol::from_dynamic("nested::main"),
-                Symbol::from_dynamic("nested::unused_in_nested"),
+                SymbolPath::new(["nested", "main"]),
+                SymbolPath::new(["nested", "unused_in_nested"]),
             ])
         );
     }
@@ -678,11 +685,11 @@ mod tests {
         assert_eq!(result.removed_count, 0);
     }
 
-    fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
+    fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
         SymbolTable::collect(ctx, module)
             .all_definitions()
             .filter(|&(_, op)| func::Func::matches(ctx, op))
-            .map(|(name, _)| name)
+            .map(|(name, _)| name.clone())
             .collect()
     }
 
@@ -693,7 +700,7 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @"a::same"}
+    func.call {callee = @a::@same}
     func.return
   }
   core.module @a {
@@ -711,10 +718,10 @@ mod tests {
 
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
-        assert_eq!(result.removed_functions, [Symbol::from_dynamic("b::same")]);
+        assert_eq!(result.removed_functions, [SymbolPath::new(["b", "same"])]);
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from([Symbol::new("main"), Symbol::from_dynamic("a::same")])
+            HashSet::from([SymbolPath::from("main"), SymbolPath::new(["a", "same"])])
         );
     }
 
@@ -749,7 +756,7 @@ mod tests {
         let result =
             eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
 
-        assert_eq!(result.removed_functions, [Symbol::new("unused")]);
+        assert_eq!(result.removed_functions, [SymbolPath::from("unused")]);
     }
 
     #[test]
@@ -780,15 +787,18 @@ mod tests {
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(
-            HashSet::<Symbol>::from_iter(result.removed_functions),
-            HashSet::from([Symbol::new("dead_host"), Symbol::new("dead_inner")])
+            HashSet::<SymbolPath>::from_iter(result.removed_functions),
+            HashSet::from([
+                SymbolPath::from("dead_host"),
+                SymbolPath::from("dead_inner")
+            ])
         );
         assert_eq!(
             surviving_functions(&ctx, module),
             HashSet::from([
-                Symbol::new("main"),
-                Symbol::new("host"),
-                Symbol::new("inner")
+                SymbolPath::from("main"),
+                SymbolPath::from("host"),
+                SymbolPath::from("inner")
             ])
         );
     }

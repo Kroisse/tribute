@@ -262,7 +262,7 @@ fn lower_single_lambda(
 
     // Create closure.new replacing the lambda.
     let closure_new_op = closure::New::operands(closure_env)
-        .func_ref(lifted_name)
+        .func_ref(lifted_name.into())
         .results(result_ty)
         .build(ctx, location);
     if let Some(convention) = convention {
@@ -472,6 +472,7 @@ fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
 mod tests {
     use super::*;
     use tribute_core::CallingConvention;
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::RegionData;
     use trunk_ir::dialect::{arith, core};
     use trunk_ir::printer::print_module;
@@ -552,9 +553,12 @@ mod tests {
 
         // closure type: closure.closure<func.func_sig<i32, i32>>, whose input
         // carries a parameter attribute.
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
-            .into_iter()
-            .collect();
+        let marked: AttributeMap = [(
+            Symbol::new("k"),
+            Attribute::SymbolRef(SymbolPath::from("v")),
+        )]
+        .into_iter()
+        .collect();
         let func_ty = func::func_sig_with_param_attrs(
             &mut ctx,
             [(i32_ty, marked.clone())],

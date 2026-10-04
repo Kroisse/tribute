@@ -40,11 +40,11 @@ use tracing::debug;
 
 use trunk_ir::IrContext;
 use trunk_ir::Module as IrModule;
-use trunk_ir::Symbol;
 use trunk_ir::callable::CallableBody;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::{Symbol, SymbolPath};
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -225,11 +225,11 @@ struct ModuleInfo {
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<TypeRef, u32>,
     /// Function type lookup map (wasm.func_sig TypeRef).
-    func_types: HashMap<Symbol, TypeRef>,
+    func_types: HashMap<SymbolPath, TypeRef>,
     /// Function index lookup map (import index or func index).
-    func_indices: HashMap<Symbol, u32>,
+    func_indices: HashMap<SymbolPath, u32>,
     /// Functions referenced via ref.func that need declarative elem segment.
-    ref_funcs: HashSet<Symbol>,
+    ref_funcs: HashSet<SymbolPath>,
     /// Additional target function types from call_indirect that need to be added to the type section.
     /// Stored as (type_idx, wasm.func_sig TypeRef) pairs.
     call_indirect_types: Vec<(u32, TypeRef)>,
@@ -1111,7 +1111,7 @@ fn set_result_local(
     Ok(())
 }
 
-fn resolve_callee(path: &Symbol, module_info: &ModuleInfo) -> CompilationResult<u32> {
+fn resolve_callee(path: &SymbolPath, module_info: &ModuleInfo) -> CompilationResult<u32> {
     module_info
         .func_indices
         .get(path)

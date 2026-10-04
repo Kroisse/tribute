@@ -890,6 +890,7 @@ inventory::submit! { crate::op_interface::CallableOwnerOps::register::<Func>() }
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::op_interface::{CallableExitOps, IndirectCallLikeOps};
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
@@ -922,7 +923,7 @@ mod tests {
         let mut attrs = AttributeMap::new();
         attrs.insert(
             Symbol::new("note"),
-            Attribute::SymbolRef(Symbol::new("kept")),
+            Attribute::SymbolRef(SymbolPath::from("kept")),
         );
         let platform = func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs);
         assert_eq!(platform.call_conv(&ctx), Some(CallConv::Platform));
@@ -944,9 +945,12 @@ mod tests {
         let mut ctx = crate::IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
         let ptr_ty = ctx.intern_type(TypeDataBuilder::new("core", "ptr").build());
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
-            .into_iter()
-            .collect();
+        let marked: AttributeMap = [(
+            Symbol::new("k"),
+            Attribute::SymbolRef(SymbolPath::from("v")),
+        )]
+        .into_iter()
+        .collect();
         let source = func_sig_with_param_attrs(
             &mut ctx,
             [(i32_ty, marked.clone())],
@@ -1106,12 +1110,13 @@ mod tests {
 #[cfg(test)]
 mod result_list_tests {
     use super::*;
+    use crate::IrContext;
+    use crate::SymbolPath;
     use crate::dialect::core;
     use crate::parser::parse_module;
     use crate::printer::print_module;
     use crate::rewrite::Module;
     use crate::validation::validate_all;
-    use crate::{IrContext, Symbol};
 
     #[test]
     fn function_assembly_preserves_arity_and_type_attributes() {
@@ -1169,12 +1174,12 @@ mod result_list_tests {
         for results in [vec![], vec![nil]] {
             let signature = func_sig(&mut ctx, [], results.clone()).as_type_ref();
             let callee = Constant::operands()
-                .func_ref(Symbol::new("f"))
+                .func_ref(SymbolPath::from("f"))
                 .results(signature)
                 .build(&mut ctx, loc)
                 .result(&ctx);
             let direct = Call::operands([])
-                .callee(Symbol::new("f"))
+                .callee(SymbolPath::from("f"))
                 .results(results.clone())
                 .build(&mut ctx, loc);
             let indirect = CallIndirect::operands(callee, [])

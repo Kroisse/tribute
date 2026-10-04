@@ -30,7 +30,7 @@ use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{ConversionMode, ConversionTarget, Module};
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
-use trunk_ir::{OperationDataBuilder, Symbol};
+use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 
 pub const PRE_CPS_BOUNDARY: &str = "tribute-control-pre-cps";
 pub const POST_CPS_BOUNDARY: &str = "tribute-control-post-cps";
@@ -329,7 +329,7 @@ fn verify_physical_callable_graph(
     fn visit(
         ctx: &IrContext,
         op: OpRef,
-        signatures: &HashMap<Symbol, (TypeRef, Option<i64>)>,
+        signatures: &HashMap<SymbolPath, (TypeRef, Option<i64>)>,
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let data = ctx.op(op);
@@ -457,7 +457,7 @@ fn verify_physical_callable_graph(
     }
 
     // Callees resolve by root-qualified name across the whole module tree.
-    let signatures: HashMap<Symbol, (TypeRef, Option<i64>)> = symbols
+    let signatures: HashMap<SymbolPath, (TypeRef, Option<i64>)> = symbols
         .iter()
         .filter_map(|(name, ops)| {
             let &[op] = ops else { return None };
@@ -466,7 +466,7 @@ fn verify_physical_callable_graph(
             }
             let attributes = &ctx.op(op).attributes;
             let convention = attributes.get_i64(CALLING_CONVENTION_ATTR).ok().flatten();
-            Some((name, (attributes.get_type("type")?, convention)))
+            Some((name.clone(), (attributes.get_type("type")?, convention)))
         })
         .collect();
     let mut failures = Vec::new();
@@ -705,7 +705,7 @@ fn convert_convention(convention: tribute_control::CallingConvention) -> Calling
 
 #[derive(Clone)]
 struct CallableInfo {
-    symbol: Symbol,
+    symbol: SymbolPath,
     convention: CallingConvention,
     source_result: TypeRef,
     source_params: Vec<TypeRef>,
@@ -726,7 +726,7 @@ struct Converter<'a> {
     ctx: &'a mut IrContext,
     module_block: BlockRef,
     /// Callables by root-qualified name across the whole module tree.
-    funcs: HashMap<Symbol, CallableInfo>,
+    funcs: HashMap<SymbolPath, CallableInfo>,
     converted_types: HashMap<TypeRef, TypeRef>,
     frames: HashMap<TypeRef, FrameTypes>,
     frame_layout_aliases: Vec<(Symbol, TypeRef)>,
@@ -813,7 +813,7 @@ impl<'a> Converter<'a> {
     fn new(
         ctx: &'a mut IrContext,
         module_block: BlockRef,
-        funcs: HashMap<Symbol, CallableInfo>,
+        funcs: HashMap<SymbolPath, CallableInfo>,
     ) -> Self {
         Self {
             ctx,
@@ -826,7 +826,7 @@ impl<'a> Converter<'a> {
         }
     }
 
-    fn current_func(&self, symbol: &Symbol) -> Option<CallableInfo> {
+    fn current_func(&self, symbol: &SymbolPath) -> Option<CallableInfo> {
         self.funcs.get(symbol).cloned()
     }
 
@@ -1050,7 +1050,7 @@ impl<'a> Converter<'a> {
         let (_, outer_dispatch) = self.unpack_frame(block, location, boundary, args[1]);
         let dispatch_type = self.frame_types(value_type).dispatch;
         let dispatch = func::Call::operands([completion, outer_dispatch])
-            .callee(dispatch_factory)
+            .callee(dispatch_factory.into())
             .results([dispatch_type])
             .build(self.ctx, location);
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -1147,7 +1147,7 @@ impl<'a> Converter<'a> {
         args.extend(values.arms.iter().copied());
         let dispatch_type = self.frame_types(layer.body_type).dispatch;
         let dispatch = func::Call::operands(args)
-            .callee(layer.dispatch_factory.clone())
+            .callee(layer.dispatch_factory.clone().into())
             .results([dispatch_type])
             .build(self.ctx, location);
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -1356,7 +1356,7 @@ impl<'a> Converter<'a> {
         self.ctx.push_op(block, typed_completion.op_ref());
         let dispatch_type = self.frame_types(value_type).dispatch;
         let dispatch = func::Call::operands([typed_completion.result(self.ctx), outer_dispatch])
-            .callee(dispatch_factory)
+            .callee(dispatch_factory.into())
             .results([dispatch_type])
             .build(self.ctx, location);
         set_calling_convention(self.ctx, dispatch.op_ref(), CallingConvention::Direct);
@@ -2394,7 +2394,7 @@ impl<'a> Converter<'a> {
             .results(empty_env_ty)
             .build(self.ctx, location);
         let closure_new = closure::New::operands(empty_env.result(self.ctx))
-            .func_ref(adapter_symbol)
+            .func_ref(adapter_symbol.into())
             .results(closure_ty)
             .build(self.ctx, location);
         set_calling_convention(self.ctx, closure_new.op_ref(), result_convention);
@@ -3961,7 +3961,10 @@ fn ordered_external_values(ctx: &IrContext, region: RegionRef) -> Vec<ValueRef> 
 }
 
 /// Every source callable, keyed by its root-qualified name.
-fn collect_callable_graph(ctx: &IrContext, symbols: &SymbolTable) -> HashMap<Symbol, CallableInfo> {
+fn collect_callable_graph(
+    ctx: &IrContext,
+    symbols: &SymbolTable,
+) -> HashMap<SymbolPath, CallableInfo> {
     symbols
         .iter()
         .filter(|&(_, ops)| tribute_control::Func::matches(ctx, ops[0]))
@@ -3980,7 +3983,7 @@ fn collect_callable_graph(ctx: &IrContext, symbols: &SymbolTable) -> HashMap<Sym
             (
                 symbol.clone(),
                 CallableInfo {
-                    symbol,
+                    symbol: symbol.clone(),
                     convention: convert_convention(convention),
                     source_result: callable.result(ctx),
                     source_params: callable.inputs(ctx).to_vec(),
@@ -4579,7 +4582,7 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @inner_call(%value: core.i1) -> core.i1 convention(evidence_direct) {
-      %result = tribute_control.call %value {callee = @"inner::same"} : core.i1
+      %result = tribute_control.call %value {callee = @inner::@same} : core.i1
       tribute_control.return %result
     }
   }
@@ -5810,7 +5813,7 @@ mod tests {
         let never = core::never(&mut ctx).as_type_ref();
         let raw_type = func::func_sig(&mut ctx, [], [never]).as_type_ref();
         let raw = func::Constant::operands()
-            .func_ref(Symbol::new("raw"))
+            .func_ref(SymbolPath::from("raw"))
             .results(raw_type)
             .build(&mut ctx, location);
         let before = ctx.block(module_block).ops.clone();
@@ -5933,9 +5936,12 @@ mod tests {
   }
 }"#;
         let (mut ctx, module) = parse(input);
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::SymbolRef(Symbol::new("v")))]
-            .into_iter()
-            .collect();
+        let marked: AttributeMap = [(
+            Symbol::new("k"),
+            Attribute::SymbolRef(SymbolPath::from("v")),
+        )]
+        .into_iter()
+        .collect();
         let empty = AttributeMap::new;
         let adapter_type = |ctx: &IrContext| {
             let adapter = module

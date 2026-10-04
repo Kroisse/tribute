@@ -8,7 +8,7 @@ use std::collections::{HashMap, HashSet};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{RegionRef, TypeRef};
-use trunk_ir::{IrContext, Module, Symbol};
+use trunk_ir::{IrContext, Module, SymbolPath};
 
 use crate::errors::CompilationResult;
 
@@ -74,11 +74,11 @@ pub(crate) fn collect_call_indirect_types(
 /// Collect function names referenced via wasm.ref_func.
 ///
 /// These functions need to be declared in a declarative elem segment.
-pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
+pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
     fn collect_from_region(
         ctx: &IrContext,
         region_ref: RegionRef,
-        ref_funcs: &mut HashSet<Symbol>,
+        ref_funcs: &mut HashSet<SymbolPath>,
     ) {
         for &block_ref in &ctx.region(region_ref).blocks {
             for &op in &ctx.block(block_ref).ops {

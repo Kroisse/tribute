@@ -10,7 +10,6 @@ use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
-use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
@@ -25,6 +24,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::walk::{WalkAction, walk_op};
+use trunk_ir::{Symbol, SymbolPath};
 
 /// Lower intrinsic arithmetic/comparison calls to arith dialect operations.
 ///
@@ -34,15 +34,15 @@ use trunk_ir::walk::{WalkAction, walk_op};
 /// valid when used as first-class values (closures, `func.constant`, etc.).
 pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let pattern = ArithIntrinsicPattern::new();
-    let intrinsic_map: HashMap<Symbol, ArithMapping> = pattern.map.clone();
-    let eligible: Rc<HashSet<Symbol>> = Rc::new(
+    let intrinsic_map: HashMap<SymbolPath, ArithMapping> = pattern.map.clone();
+    let eligible: Rc<HashSet<SymbolPath>> = Rc::new(
         module
             .ops(ctx)
             .iter()
             .copied()
             .filter_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                let symbol = Symbol::from_dynamic(function.sym_name(ctx));
+                let symbol = SymbolPath::from(function.sym_name(ctx));
                 (ctx.op(op)
                     .attributes
                     .get_str(ctx, COMPILER_INTRINSIC_ATTR)
@@ -75,7 +75,9 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         .copied()
         .filter(|&op| {
             func::Func::from_op(ctx, op).is_ok_and(|function| {
-                eligible.contains(&Symbol::from_dynamic(function.sym_name(ctx)))
+                eligible.contains(&SymbolPath::from(&Symbol::from_dynamic(
+                    function.sym_name(ctx),
+                )))
             })
         })
         .collect();
@@ -142,8 +144,8 @@ enum ArithMapping {
 /// Pattern that matches `func.call` to known arithmetic intrinsics and
 /// rewrites them to the corresponding `arith.*` dialect operations.
 struct ArithIntrinsicPattern {
-    map: HashMap<Symbol, ArithMapping>,
-    eligible: Rc<HashSet<Symbol>>,
+    map: HashMap<SymbolPath, ArithMapping>,
+    eligible: Rc<HashSet<SymbolPath>>,
 }
 
 impl ArithIntrinsicPattern {
@@ -152,17 +154,17 @@ impl ArithIntrinsicPattern {
 
         macro_rules! binary {
             ($name:expr, $op_fn:expr) => {
-                map.insert(Symbol::from_dynamic($name), ArithMapping::BinaryOp($op_fn));
+                map.insert(SymbolPath::from($name), ArithMapping::BinaryOp($op_fn));
             };
         }
         macro_rules! cmpi {
             ($name:expr, $pred:expr) => {
-                map.insert(Symbol::from_dynamic($name), ArithMapping::CmpI($pred));
+                map.insert(SymbolPath::from($name), ArithMapping::CmpI($pred));
             };
         }
         macro_rules! cmpf {
             ($name:expr, $pred:expr) => {
-                map.insert(Symbol::from_dynamic($name), ArithMapping::CmpF($pred));
+                map.insert(SymbolPath::from($name), ArithMapping::CmpF($pred));
             };
         }
 
@@ -246,7 +248,7 @@ impl ArithIntrinsicPattern {
         }
     }
 
-    fn with_eligible(mut self, eligible: Rc<HashSet<Symbol>>) -> Self {
+    fn with_eligible(mut self, eligible: Rc<HashSet<SymbolPath>>) -> Self {
         self.eligible = eligible;
         self
     }
@@ -306,8 +308,8 @@ impl RewritePattern for ArithIntrinsicPattern {
 /// `func.constant` references) while also removing the `abi = "intrinsic"`
 /// marker so the backend treats them as normal functions.
 struct ArithIntrinsicFuncDeclPattern {
-    intrinsic_map: HashMap<Symbol, ArithMapping>,
-    eligible: Rc<HashSet<Symbol>>,
+    intrinsic_map: HashMap<SymbolPath, ArithMapping>,
+    eligible: Rc<HashSet<SymbolPath>>,
 }
 
 impl RewritePattern for ArithIntrinsicFuncDeclPattern {
@@ -323,10 +325,10 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
 
         // Check if this is one of our known arithmetic intrinsics
         let sym_name = Symbol::from_dynamic(func_op.sym_name(ctx));
-        if !self.eligible.contains(&sym_name) {
+        if !self.eligible.contains(&SymbolPath::from(&sym_name)) {
             return false;
         }
-        let Some(mapping) = self.intrinsic_map.get(&sym_name) else {
+        let Some(mapping) = self.intrinsic_map.get(&SymbolPath::from(&sym_name)) else {
             return false;
         };
 
@@ -403,7 +405,12 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
     }
 }
 
-fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: &Symbol, mapping: &ArithMapping) -> bool {
+fn exact_signature(
+    ctx: &IrContext,
+    ty: TypeRef,
+    symbol: &SymbolPath,
+    mapping: &ArithMapping,
+) -> bool {
     let Some(function) = func::FuncSig::from_type_ref(ctx, ty) else {
         return false;
     };
@@ -426,13 +433,14 @@ fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: &Symbol, mapping: &Arit
         ArithMapping::BinaryOp(_) => {
             result.dialect == operand.dialect
                 && result.name == operand.name
-                && symbol.with_str(|symbol| {
-                    if symbol.starts_with("std::Float::") {
-                        operand_is_f64
-                    } else {
-                        operand_is_i32
-                    }
-                })
+                && if symbol
+                    .as_simple()
+                    .is_some_and(|name| name.as_str().starts_with("std::Float::"))
+                {
+                    operand_is_f64
+                } else {
+                    operand_is_i32
+                }
         }
         ArithMapping::CmpI(_) => {
             operand_is_i32
