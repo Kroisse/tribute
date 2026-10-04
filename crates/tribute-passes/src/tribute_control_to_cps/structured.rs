@@ -187,12 +187,10 @@ impl Converter<'_> {
         })
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_structured_if(
         &mut self,
         source: OpRef,
-        source_ops: &[OpRef],
-        index: usize,
+        rest: Rest<'_>,
         block: BlockRef,
         mapping: &mut HashMap<ValueRef, ValueRef>,
         flow: &Flow,
@@ -210,8 +208,7 @@ impl Converter<'_> {
         let continuation = if is_cps {
             Some(if let [source_result_type] = result_types.as_slice() {
                 self.build_suffix_continuation(
-                    source_ops,
-                    index + 1,
+                    rest,
                     self.ctx.op_result(source, 0),
                     *source_result_type,
                     mapping,
@@ -219,7 +216,7 @@ impl Converter<'_> {
                     location,
                 )?
             } else {
-                self.build_void_suffix_continuation(source_ops, index + 1, mapping, flow, location)?
+                self.build_void_suffix_continuation(rest, mapping, flow, location)?
             })
         } else {
             None
@@ -349,15 +346,13 @@ impl Converter<'_> {
         {
             mapping.insert(old, new);
         }
-        self.convert_sequence(OpList::from(source_ops), index + 1, block, mapping, flow)
+        self.convert_sequence(OpList::from(rest.ops), rest.start, block, mapping, flow)
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn lower_structured_switch(
         &mut self,
         source: OpRef,
-        source_ops: &[OpRef],
-        index: usize,
+        rest: Rest<'_>,
         block: BlockRef,
         mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
@@ -371,8 +366,7 @@ impl Converter<'_> {
             ));
         }
         let location = self.ctx.op(source).location;
-        let continuation =
-            self.build_void_suffix_continuation(source_ops, index + 1, mapping, flow, location)?;
+        let continuation = self.build_void_suffix_continuation(rest, mapping, flow, location)?;
         let continuation_op = match self.ctx.value_def(continuation) {
             trunk_ir::ValueDef::OpResult(op, _) => op,
             _ => unreachable!("structured continuation is a closure.lambda"),

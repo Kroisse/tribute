@@ -379,8 +379,7 @@ impl Converter<'_> {
 
     pub(super) fn build_void_suffix_continuation(
         &mut self,
-        source_ops: &[OpRef],
-        start: usize,
+        rest: Rest<'_>,
         mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
         location: Location,
@@ -397,8 +396,8 @@ impl Converter<'_> {
             ..flow.clone()
         };
         self.convert_sequence(
-            OpList::from(source_ops),
-            start,
+            OpList::from(rest.ops),
+            rest.start,
             block,
             &mut suffix_mapping,
             &suffix_flow,
@@ -411,11 +410,9 @@ impl Converter<'_> {
         Ok(lambda.result(self.ctx))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn build_suffix_continuation(
         &mut self,
-        source_ops: &[OpRef],
-        start: usize,
+        rest: Rest<'_>,
         source_result: ValueRef,
         result_type: TypeRef,
         mapping: &HashMap<ValueRef, ValueRef>,
@@ -435,8 +432,8 @@ impl Converter<'_> {
             ..flow.clone()
         };
         self.convert_sequence(
-            OpList::from(source_ops),
-            start,
+            OpList::from(rest.ops),
+            rest.start,
             block,
             &mut body_mapping,
             &suffix_flow,

@@ -174,11 +174,9 @@ impl Converter<'_> {
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
-    #[allow(clippy::too_many_arguments)]
     pub(super) fn build_raw_resumption(
         &mut self,
-        source_ops: &[OpRef],
-        start: usize,
+        rest: Rest<'_>,
         source_result: ValueRef,
         input_type: TypeRef,
         mapping: &HashMap<ValueRef, ValueRef>,
@@ -202,8 +200,8 @@ impl Converter<'_> {
         suffix_flow.exit_k = Some(resume_frame);
         suffix_flow.root_exit_k = Some(resume_frame);
         self.convert_sequence(
-            OpList::from(source_ops),
-            start,
+            OpList::from(rest.ops),
+            rest.start,
             block,
             &mut body_mapping,
             &suffix_flow,
@@ -623,8 +621,7 @@ impl Converter<'_> {
     pub(super) fn lower_general_perform(
         &mut self,
         source: OpRef,
-        source_ops: &[OpRef],
-        index: usize,
+        rest: Rest<'_>,
         block: BlockRef,
         mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
@@ -644,15 +641,8 @@ impl Converter<'_> {
             self.ctx.push_op(block, op);
             value
         } else {
-            let (raw_op, raw) = self.build_raw_resumption(
-                source_ops,
-                index + 1,
-                old_result,
-                input_type,
-                mapping,
-                flow,
-                location,
-            )?;
+            let (raw_op, raw) =
+                self.build_raw_resumption(rest, old_result, input_type, mapping, flow, location)?;
             self.ctx.push_op(block, raw_op);
             let converted_input = self.convert_type(input_type);
             let (ops, one_shot) =
@@ -702,8 +692,7 @@ impl Converter<'_> {
     pub(super) fn lower_resume(
         &mut self,
         source: OpRef,
-        source_ops: &[OpRef],
-        index: usize,
+        rest: Rest<'_>,
         block: BlockRef,
         mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
@@ -748,15 +737,8 @@ impl Converter<'_> {
         let value = mapping.get(&value_source).copied().unwrap_or(value_source);
         let old_result = self.ctx.op_result(source, 0);
         let result_type = self.ctx.op_result_types(source)[0];
-        let suffix = self.build_suffix_continuation(
-            source_ops,
-            index + 1,
-            old_result,
-            result_type,
-            mapping,
-            flow,
-            location,
-        )?;
+        let suffix =
+            self.build_suffix_continuation(rest, old_result, result_type, mapping, flow, location)?;
         let suffix_op = match self.ctx.value_def(suffix) {
             trunk_ir::ValueDef::OpResult(op, _) => op,
             _ => unreachable!("suffix is produced by closure.lambda"),
@@ -1046,8 +1028,7 @@ impl Converter<'_> {
     pub(super) fn lower_handle(
         &mut self,
         source: OpRef,
-        source_ops: &[OpRef],
-        index: usize,
+        rest: Rest<'_>,
         block: BlockRef,
         mapping: &HashMap<ValueRef, ValueRef>,
         flow: &Flow,
@@ -1064,8 +1045,7 @@ impl Converter<'_> {
         let handle_answer_source = self.ctx.op_result_types(source)[0];
         let handle_answer = self.convert_type(handle_answer_source);
         let after_handle = self.build_suffix_continuation(
-            source_ops,
-            index + 1,
+            rest,
             handle_result_source,
             handle_answer_source,
             mapping,

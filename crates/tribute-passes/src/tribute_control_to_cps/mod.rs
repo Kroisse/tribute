@@ -176,6 +176,13 @@ enum ArmEvidence {
     Captured(ValueRef),
 }
 
+/// The operations of a source block that follow the one being converted.
+#[derive(Clone, Copy)]
+struct Rest<'a> {
+    ops: &'a [OpRef],
+    start: usize,
+}
+
 #[derive(Clone)]
 struct Flow {
     convention: CallingConvention,
@@ -279,6 +286,10 @@ impl<'a> Converter<'a> {
     ) -> Result<(), TributeControlToCpsError> {
         while index < source_ops.len() {
             let source = source_ops[index];
+            let rest = Rest {
+                ops: &source_ops,
+                start: index + 1,
+            };
             let location = self.ctx.op(source).location;
             let dialect = self.ctx.op(source).dialect.clone();
             let name = self.ctx.op(source).name.clone();
@@ -308,14 +319,14 @@ impl<'a> Converter<'a> {
                 && name == Symbol::new("switch")
                 && self.contains_tribute_control(source)
             {
-                self.lower_structured_switch(source, &source_ops, index, block, mapping, flow)?;
+                self.lower_structured_switch(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
             if dialect == Symbol::new("scf")
                 && name == Symbol::new("if")
                 && self.contains_tribute_control(source)
             {
-                self.lower_structured_if(source, &source_ops, index, block, mapping, flow)?;
+                self.lower_structured_if(source, rest, block, mapping, flow)?;
                 return Ok(());
             }
             if dialect != Symbol::new("tribute_control") {
@@ -368,8 +379,7 @@ impl<'a> Converter<'a> {
                         let old_result = self.ctx.op_result(source, 0);
                         let result_type = self.ctx.op_result_types(source)[0];
                         let continuation = self.build_suffix_continuation(
-                            &source_ops,
-                            index + 1,
+                            rest,
                             old_result,
                             result_type,
                             mapping,
@@ -432,8 +442,7 @@ impl<'a> Converter<'a> {
                         let old_result = self.ctx.op_result(source, 0);
                         let result_type = self.ctx.op_result_types(source)[0];
                         let continuation = self.build_suffix_continuation(
-                            &source_ops,
-                            index + 1,
+                            rest,
                             old_result,
                             result_type,
                             mapping,
@@ -539,23 +548,16 @@ impl<'a> Converter<'a> {
                         mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
                         index += 1;
                     } else {
-                        self.lower_general_perform(
-                            source,
-                            &source_ops,
-                            index,
-                            block,
-                            mapping,
-                            flow,
-                        )?;
+                        self.lower_general_perform(source, rest, block, mapping, flow)?;
                         return Ok(());
                     }
                 }
                 "resume" => {
-                    self.lower_resume(source, &source_ops, index, block, mapping, flow)?;
+                    self.lower_resume(source, rest, block, mapping, flow)?;
                     return Ok(());
                 }
                 "handle" => {
-                    self.lower_handle(source, &source_ops, index, block, mapping, flow)?;
+                    self.lower_handle(source, rest, block, mapping, flow)?;
                     return Ok(());
                 }
                 other => {
