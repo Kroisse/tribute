@@ -261,10 +261,9 @@ impl<'a> Converter<'a> {
         flow: &Flow,
     ) -> Result<ValueRef, TributeControlToCpsError> {
         flow.evidence.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(self.ctx.op(source).location),
+            TributeControlToCpsError::post_op(
+                source,
+                self.ctx.op(source).location,
                 "operation requires evidence but the enclosing callable convention is Direct",
             )
         })
@@ -295,10 +294,9 @@ impl<'a> Converter<'a> {
                     return Ok(());
                 }
                 if values.len() != 1 {
-                    return Err(TributeControlToCpsError::one(
-                        POST_CPS_BOUNDARY,
-                        Some(source),
-                        Some(location),
+                    return Err(TributeControlToCpsError::post_op(
+                        source,
+                        location,
                         "CPS structured exit requires exactly one scf.yield value",
                     ));
                 }
@@ -361,10 +359,9 @@ impl<'a> Converter<'a> {
                         .expect("pre-CPS validation resolved direct callee in this module");
                     if target.convention == CallingConvention::Cps {
                         if flow.convention != CallingConvention::Cps {
-                            return Err(TributeControlToCpsError::one(
-                                POST_CPS_BOUNDARY,
-                                Some(source),
-                                Some(location),
+                            return Err(TributeControlToCpsError::post_op(
+                                source,
+                                location,
                                 "a non-CPS callable cannot call a CPS target",
                             ));
                         }
@@ -426,10 +423,9 @@ impl<'a> Converter<'a> {
                     let source_args = self.ctx.op_operands(source)[1..].to_vec();
                     if convention == CallingConvention::Cps {
                         if flow.convention != CallingConvention::Cps {
-                            return Err(TributeControlToCpsError::one(
-                                POST_CPS_BOUNDARY,
-                                Some(source),
-                                Some(location),
+                            return Err(TributeControlToCpsError::post_op(
+                                source,
+                                location,
                                 "a non-CPS callable cannot make a CPS indirect call",
                             ));
                         }
@@ -488,10 +484,9 @@ impl<'a> Converter<'a> {
                         convention,
                     )
                     .ok_or_else(|| {
-                        TributeControlToCpsError::one(
-                            POST_CPS_BOUNDARY,
-                            Some(source),
-                            Some(location),
+                        TributeControlToCpsError::post_op(
+                            source,
+                            location,
                             "indirect callee has no exact provenance-bearing closure contract",
                         )
                     })?;
@@ -564,10 +559,9 @@ impl<'a> Converter<'a> {
                     return Ok(());
                 }
                 other => {
-                    return Err(TributeControlToCpsError::one(
-                        POST_CPS_BOUNDARY,
-                        Some(source),
-                        Some(location),
+                    return Err(TributeControlToCpsError::post_op(
+                        source,
+                        location,
                         format!("unsupported tribute_control operation '{other}'"),
                     ));
                 }

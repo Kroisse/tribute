@@ -18,18 +18,14 @@ impl Converter<'_> {
         let args = args.into_iter().collect::<Vec<_>>();
         let closure_type = self.ctx.value_ty(callee);
         let signature = cps_closure_function_type(self.ctx, closure_type).ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
+            TributeControlToCpsError::post_at(
+                location,
                 "CPS indirect tail callee has no exact provenance-bearing closure contract",
             )
         })?;
         let callable = func::FuncSig::from_type_ref(self.ctx, signature).ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
+            TributeControlToCpsError::post_at(
+                location,
                 "CPS indirect tail callee contract is not func.func_sig",
             )
         })?;
@@ -42,10 +38,8 @@ impl Converter<'_> {
                 .zip(&args)
                 .any(|(expected, actual)| *expected != self.ctx.value_ty(*actual))
         {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
+            return Err(TributeControlToCpsError::post_at(
+                location,
                 "CPS indirect tail operands differ from the exact closure contract",
             ));
         }
@@ -298,20 +292,13 @@ impl Converter<'_> {
         plan: Option<Attribute>,
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let outer = flow.exit_k.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
+            TributeControlToCpsError::post_at(
+                location,
                 "CPS transfer has no verified ContinuationFrame",
             )
         })?;
         let evidence = flow.evidence.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
-                "CPS transfer has no verified evidence",
-            )
+            TributeControlToCpsError::post_at(location, "CPS transfer has no verified evidence")
         })?;
         let (done_op, done) =
             self.build_done_adapter(value_type, suffix, evidence, outer, location)?;
@@ -343,10 +330,8 @@ impl Converter<'_> {
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention == CallingConvention::Cps {
             let exit_k = flow.exit_k.ok_or_else(|| {
-                TributeControlToCpsError::one(
-                    POST_CPS_BOUNDARY,
-                    None,
-                    Some(location),
+                TributeControlToCpsError::post_at(
+                    location,
                     "CPS region has no verified exit continuation",
                 )
             })?;
@@ -367,18 +352,14 @@ impl Converter<'_> {
     ) -> Result<(), TributeControlToCpsError> {
         if let Some(void_exit) = flow.void_exit_k {
             let evidence = flow.evidence.ok_or_else(|| {
-                TributeControlToCpsError::one(
-                    POST_CPS_BOUNDARY,
-                    None,
-                    Some(location),
+                TributeControlToCpsError::post_at(
+                    location,
                     "zero-result suffix has no verified evidence",
                 )
             })?;
             let frame = flow.exit_k.ok_or_else(|| {
-                TributeControlToCpsError::one(
-                    POST_CPS_BOUNDARY,
-                    None,
-                    Some(location),
+                TributeControlToCpsError::post_at(
+                    location,
                     "zero-result suffix has no verified ContinuationFrame",
                 )
             })?;
@@ -386,10 +367,8 @@ impl Converter<'_> {
             return Ok(());
         }
         let exit_k = flow.exit_k.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                None,
-                Some(location),
+            TributeControlToCpsError::post_at(
+                location,
                 "structured region has no verified exit continuation",
             )
         })?;

@@ -10,10 +10,9 @@ impl Converter<'_> {
     ) -> Result<OpRef, TributeControlToCpsError> {
         let data = self.ctx.op(source);
         if data.dialect == Symbol::new("tribute_control") {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(data.location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                data.location,
                 format!(
                     "unsupported tribute_control operation {} reached plain cloning",
                     data.name
@@ -201,10 +200,9 @@ impl Converter<'_> {
         let result_types = self.ctx.op_result_types(source).to_vec();
         let is_cps = flow.convention == CallingConvention::Cps;
         if is_cps && result_types.len() > 1 {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(self.ctx.op(source).location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                self.ctx.op(source).location,
                 "effectful scf.if requires zero or one result inside a CPS callable",
             ));
         }
@@ -242,10 +240,9 @@ impl Converter<'_> {
         for source_region in source_regions {
             let source_blocks = self.ctx.region(source_region).blocks.clone();
             let [source_block] = source_blocks.as_slice() else {
-                return Err(TributeControlToCpsError::one(
-                    POST_CPS_BOUNDARY,
-                    Some(source),
-                    Some(location),
+                return Err(TributeControlToCpsError::post_op(
+                    source,
+                    location,
                     "effectful scf.if regions must contain one block",
                 ));
             };
@@ -311,10 +308,9 @@ impl Converter<'_> {
             converted_regions.push(self.single_block_region(location, converted_block));
         }
         let [then_region, else_region] = converted_regions.as_slice() else {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                location,
                 "scf.if requires exactly two regions",
             ));
         };
@@ -368,10 +364,9 @@ impl Converter<'_> {
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention != CallingConvention::Cps || !self.ctx.op_result_types(source).is_empty()
         {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(self.ctx.op(source).location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                self.ctx.op(source).location,
                 "effectful scf.switch must be resultless inside a CPS callable",
             ));
         }
@@ -385,19 +380,17 @@ impl Converter<'_> {
         self.ctx.push_op(block, continuation_op);
 
         let Ok(source_body) = self.ctx.op_regions(source).exactly_one() else {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                location,
                 "scf.switch requires exactly one body region",
             ));
         };
         let source_body_blocks = self.ctx.region(source_body).blocks.clone();
         let [source_body_block] = source_body_blocks.as_slice() else {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                location,
                 "scf.switch body requires exactly one block",
             ));
         };
@@ -411,28 +404,25 @@ impl Converter<'_> {
             let is_default =
                 case_data.dialect == Symbol::new("scf") && case_data.name == Symbol::new("default");
             if !is_case && !is_default {
-                return Err(TributeControlToCpsError::one(
-                    POST_CPS_BOUNDARY,
-                    Some(case),
-                    Some(case_location),
+                return Err(TributeControlToCpsError::post_op(
+                    case,
+                    case_location,
                     "scf.switch body may contain only scf.case and scf.default",
                 ));
             }
             let case_value = case_data.attributes.get("value").cloned();
             let Ok(source_region) = self.ctx.op_regions(case).exactly_one() else {
-                return Err(TributeControlToCpsError::one(
-                    POST_CPS_BOUNDARY,
-                    Some(case),
-                    Some(case_location),
+                return Err(TributeControlToCpsError::post_op(
+                    case,
+                    case_location,
                     "scf switch arm requires exactly one region",
                 ));
             };
             let source_case_blocks = &self.ctx.region(source_region).blocks;
             let [source_case_block] = source_case_blocks.as_slice() else {
-                return Err(TributeControlToCpsError::one(
-                    POST_CPS_BOUNDARY,
-                    Some(case),
-                    Some(case_location),
+                return Err(TributeControlToCpsError::post_op(
+                    case,
+                    case_location,
                     "scf switch arm requires exactly one block",
                 ));
             };

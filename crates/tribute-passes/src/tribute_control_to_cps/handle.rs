@@ -400,10 +400,8 @@ impl Converter<'_> {
                     .and_then(|function| func::FuncSig::from_type_ref(self.ctx, function))
                     .and_then(|function| function.inputs(self.ctx).get(2).copied())
                     .ok_or_else(|| {
-                        TributeControlToCpsError::one(
-                            POST_CPS_BOUNDARY,
-                            None,
-                            Some(location),
+                        TributeControlToCpsError::post_at(
+                            location,
                             "handler resume token lacks an exact callable input",
                         )
                     })?;
@@ -632,10 +630,9 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention != CallingConvention::Cps {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(self.ctx.op(source).location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                self.ctx.op(source).location,
                 "general operation appears in a non-CPS callable",
             ));
         }
@@ -685,10 +682,9 @@ impl Converter<'_> {
             .expect("pre-CPS validation checked perform operation");
         let evidence = self.current_evidence(source, flow)?;
         let frame = flow.exit_k.ok_or_else(|| {
-            TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(location),
+            TributeControlToCpsError::post_op(
+                source,
+                location,
                 "general operation has no verified Dispatch boundary",
             )
         })?;
@@ -713,10 +709,9 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention != CallingConvention::Cps {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(self.ctx.op(source).location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                self.ctx.op(source).location,
                 "resume appears outside a CPS handler arm",
             ));
         }
@@ -968,10 +963,9 @@ impl Converter<'_> {
                 CallingConvention::EvidenceDirect,
             )
             .ok_or_else(|| {
-                TributeControlToCpsError::one(
-                    POST_CPS_BOUNDARY,
-                    Some(arm.op),
-                    Some(location),
+                TributeControlToCpsError::post_op(
+                    arm.op,
+                    location,
                     "fn handler indirect callee has no exact provenance-bearing closure contract",
                 )
             })?;
@@ -1059,10 +1053,9 @@ impl Converter<'_> {
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention != CallingConvention::Cps {
-            return Err(TributeControlToCpsError::one(
-                POST_CPS_BOUNDARY,
-                Some(source),
-                Some(self.ctx.op(source).location),
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                self.ctx.op(source).location,
                 "handle appears in a non-CPS callable",
             ));
         }
