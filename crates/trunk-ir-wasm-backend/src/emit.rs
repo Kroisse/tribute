@@ -54,7 +54,7 @@ use wasm_encoder::{
     TypeSection, ValType,
 };
 
-use crate::gc_types::GcTypeDef;
+use crate::gc_types::{self, GcTypeDef};
 use crate::{CompilationError, CompilationResult};
 
 trunk_ir::symbols! {
@@ -272,14 +272,19 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
     let gc_type_count = module_info.gc_types.len() as u32;
     let mut next_type_index = gc_type_count;
 
-    // All GC types must be in a single rec group for nominal typing.
+    // All GC types must be in a single rec group for nominal typing. A user
+    // struct that starts with the descriptor field is a subtype of the
+    // builtin `Described` type, which is therefore the only non-final type.
     let gc_subtypes: Vec<SubType> = module_info
         .gc_types
         .iter()
-        .map(|gc_type| match gc_type {
+        .enumerate()
+        .map(|(index, gc_type)| match gc_type {
             GcTypeDef::Struct(fields) => SubType {
-                is_final: true,
-                supertype_idx: None,
+                is_final: index as u32 != gc_types::DESCRIBED_IDX,
+                supertype_idx: (index as u32 >= gc_types::FIRST_USER_TYPE_IDX
+                    && gc_types::is_described_subtype(fields))
+                .then_some(gc_types::DESCRIBED_IDX),
                 composite_type: CompositeType {
                     shared: false,
                     inner: CompositeInnerType::Struct(StructType {

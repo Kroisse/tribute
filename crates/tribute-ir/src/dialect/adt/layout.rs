@@ -34,6 +34,7 @@
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::type_converter::TypeConverter;
@@ -186,23 +187,14 @@ pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef,
     Some(result)
 }
 
-/// Compute the memory layout for an `adt.struct` type.
-///
-/// Uses the `TypeConverter` to determine the native size of each field type.
-/// Returns `None` if the type is not an `adt.struct` or fields cannot be extracted.
-pub fn compute_struct_layout(
-    ctx: &IrContext,
-    struct_ty: TypeRef,
-    type_converter: &TypeConverter,
-) -> Option<StructLayout> {
-    let fields = get_struct_fields(ctx, struct_ty)?;
-
+/// Lay out fields of the given native types in order, each at its natural
+/// alignment.
+fn natural_layout(ctx: &IrContext, fields: impl IntoIterator<Item = TypeRef>) -> StructLayout {
     let mut offset: u32 = 0;
     let mut max_align: u32 = 1;
-    let mut field_offsets = Vec::with_capacity(fields.len());
+    let mut field_offsets = Vec::new();
 
-    for (_name, field_ty) in &fields {
-        let native_ty = type_converter.convert_type_or_identity(ctx, *field_ty);
+    for native_ty in fields {
         let (size, align) = type_size_align(ctx, native_ty);
 
         offset = (offset + align - 1) & !(align - 1);
@@ -213,11 +205,38 @@ pub fn compute_struct_layout(
 
     let total_size = (offset + max_align - 1) & !(max_align - 1);
 
-    Some(StructLayout {
+    StructLayout {
         field_offsets,
         total_size,
         alignment: max_align,
-    })
+    }
+}
+
+/// Compute the memory layout for an `adt.struct` type.
+///
+/// Uses the `TypeConverter` to determine the native size of each field type.
+/// Returns `None` if the type is not an `adt.struct` or fields cannot be extracted.
+pub fn compute_struct_layout(
+    ctx: &IrContext,
+    struct_ty: TypeRef,
+    type_converter: &TypeConverter,
+) -> Option<StructLayout> {
+    let fields = get_struct_fields(ctx, struct_ty)?;
+    Some(natural_layout(
+        ctx,
+        fields
+            .into_iter()
+            .map(|(_name, field_ty)| type_converter.convert_type_or_identity(ctx, field_ty)),
+    ))
+}
+
+/// Compute the memory layout of a `mem.struct` type.
+///
+/// Its fields are already target representations, so no type converter is
+/// involved. Returns `None` if the type is not a `mem.struct`.
+pub fn compute_mem_struct_layout(ctx: &IrContext, struct_ty: TypeRef) -> Option<StructLayout> {
+    let fields = mem::Struct::from_type_ref(ctx, struct_ty)?.fields(ctx);
+    Some(natural_layout(ctx, fields.iter().copied()))
 }
 
 /// Compute the memory layout for an `adt.enum` type.

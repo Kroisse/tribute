@@ -129,6 +129,10 @@ struct HandleLayer {
     /// Builds the dispatcher of a layer resumed from a lambda, which keeps
     /// only the handle's completion.
     passthrough_factory: Symbol,
+    /// Builds the resumption that installs a layer again.
+    installed_resume_factory: Symbol,
+    /// Builds the resumption of a layer resumed from a lambda.
+    passthrough_resume_factory: Symbol,
 }
 
 /// A call, resume, or structured suffix layer of a continuation.

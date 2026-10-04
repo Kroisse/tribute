@@ -1338,6 +1338,23 @@ fn prepare_module_to_native(
             ownership_plan.rtti_types(),
         );
         tribute_passes::native::adapt_closure_layout::lower(ctx, module);
+        // Field accesses need only the structural `mem.struct` layout. The
+        // nominal layouts stay on allocations, which RC header lowering
+        // resolves to descriptors.
+        let core_module = core_dialect::Module::from_op(ctx, module.op()).map_err(|_| {
+            trunk_ir_cranelift_backend::CompilationError::ir_validation(
+                "native lowering requires a core.module".to_owned(),
+            )
+        })?;
+        // No debug verifier: closure layout adaptation retypes loaded
+        // values in place, so this IR is not schema-clean until the clif
+        // lowerings below finish.
+        let mut pm = PassManager::new();
+        pm.add_pass(tribute_passes::native::struct_to_mem::StructToMem::new(
+            ownership_plan,
+        ));
+        pm.run(ctx, core_module, &mut analyses)
+            .map_err(native_pass_failure)?;
         func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
