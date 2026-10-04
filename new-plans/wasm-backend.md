@@ -353,14 +353,14 @@ user-defined type은 그 뒤에 배치된다:
 | 3 | `_closure { table_idx: i32, env: anyref }` |
 | 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref, shadowed: anyref }` |
 | 5 | `Evidence` array |
-| 6 | `Any { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
+| 6 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
 | 7+ | user-defined structs, arrays, variants, closures |
 
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
-verifier는 closure 3, marker 4, evidence 5, any 6, user-defined type 7+를 정확히
+verifier는 closure 3, marker 4, evidence 5, described 6, user-defined type 7+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
 Index 1은 `"bytes_data"`, index 2는 `"bytes"`, index 3-6은 `"closure"`,
-`"evidence_marker"`, `"evidence"`, `"any"`
+`"evidence_marker"`, `"evidence"`, `"described"`
 [runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. 경계 출구의
 명목 타입 `core.bytes`는 Wasm lowering의 첫 단계에서 `"bytes"` layout struct로
 바뀐다. 이 변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant
@@ -392,12 +392,12 @@ erasure이므로 계속 `anyref`를 사용할 수 있다.
 같으면 같은 GC 타입을 쓴다. 대신 첫 필드에 `i32` [runtime 타입
 descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 표현한다.
 
-- 사용자 struct와 variant의 GC 타입은 descriptor 필드 하나만 가진 `Any` 타입의
-  subtype으로 선언한다. `Any`는 final이 아니고, 그 subtype은 final이다.
-  Descriptor 필드의 mutability는 `Any`와 subtype에서 같다. `Any`는 Wasm의 `any` heap
-  type이 아니다. Builtin layout, 배열, boxing된 scalar는 `Any`의 subtype이 아니므로
-  `anyref`에서 `Any`로의 cast는 실패할 수 있다.
-- Variant 판별은 descriptor 필드를 비교한다. Enum 참조를 `Any`로 cast해
+- 사용자 struct와 variant의 GC 타입은 descriptor 필드 하나만 가진 `Described` 타입의
+  subtype으로 선언한다. `Described`는 final이 아니고, 그 subtype은 final이다.
+  Descriptor 필드의 mutability는 `Described`와 subtype에서 같다. Builtin layout, 배열,
+  boxing된 scalar는 `Described`의 subtype이 아니므로 `anyref`에서 `Described`로의
+  cast는 실패할 수 있다.
+- Variant 판별은 descriptor 필드를 비교한다. Enum 참조를 `Described`로 cast해
   descriptor를 읽고 그 variant의 descriptor 번호와 비교한다. Variant마다 별개의 GC
   타입 index를 두고 `ref.test`로 구별하지 않는다. 프로그램이 할당하지 않는 variant는
   descriptor 번호가 없으며, 그 variant에 대한 판별은 항상 거짓이다.

@@ -77,16 +77,16 @@ pub fn closure_adt_type(ctx: &mut IrContext) -> TypeRef {
     .as_type_ref()
 }
 
-/// Get the `Any` type: the supertype of every user struct and variant,
+/// Get the `Described` type: the supertype of every user struct and variant,
 /// holding only the runtime type descriptor field.
-pub fn any_adt_type(ctx: &mut IrContext) -> TypeRef {
+pub fn described_adt_type(ctx: &mut IrContext) -> TypeRef {
     let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
     let mut attrs = AttributeMap::new();
     attrs.insert(
         tribute_ir::runtime_layout::LAYOUT_ATTR,
-        ctx.string_attr(tribute_ir::runtime_layout::ANY),
+        ctx.string_attr(tribute_ir::runtime_layout::DESCRIBED),
     );
-    adt::struct_type(ctx, "_any", [("descriptor", i32_ty)], attrs).as_type_ref()
+    adt::struct_type(ctx, "_described", [("descriptor", i32_ty)], attrs).as_type_ref()
 }
 
 /// Get the Evidence type of the WASM representation.
@@ -610,8 +610,8 @@ mod tests {
             trunk_ir_wasm_backend::gc_types::BYTES_DATA_LAYOUT
         );
         assert_eq!(
-            tribute_ir::runtime_layout::ANY,
-            trunk_ir_wasm_backend::gc_types::ANY_LAYOUT
+            tribute_ir::runtime_layout::DESCRIBED,
+            trunk_ir_wasm_backend::gc_types::DESCRIBED_LAYOUT
         );
         let mut ctx = IrContext::new();
         let closure = closure_adt_type(&mut ctx);
