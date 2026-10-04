@@ -10,7 +10,7 @@
 //! functions without needing a global counter.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
@@ -226,7 +226,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             name_scopes: vec![HashMap::default()],
             node_types: HashMap::default(),
             checked_lambdas: HashMap::default(),
-            checked_record_shapes: HashSet::new(),
+            checked_record_shapes: HashSet::default(),
             constructor_reference_types: HashMap::default(),
             local_generalizations: HashMap::default(),
             let_schemes: HashMap::default(),
@@ -235,9 +235,9 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             local_binding_owners: HashMap::default(),
             local_instances: HashMap::default(),
             handler_operations: HashMap::default(),
-            reported_handler_errors: HashSet::new(),
+            reported_handler_errors: HashSet::default(),
             non_resumptive_resume_locals: HashMap::default(),
-            reported_module_values: HashSet::new(),
+            reported_module_values: HashSet::default(),
             perform_operations: HashMap::default(),
             ability_op_callee_types: HashMap::default(),
             lambda_signatures: HashMap::default(),

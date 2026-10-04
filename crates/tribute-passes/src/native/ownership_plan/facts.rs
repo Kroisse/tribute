@@ -214,7 +214,7 @@ fn collect_managed_values(
     blocks: &[BlockRef],
     managed_layouts: &HashSet<TypeRef>,
 ) -> HashSet<ValueRef> {
-    let mut values = HashSet::new();
+    let mut values = HashSet::default();
     for &block in blocks {
         for &value in ctx.block_args(block) {
             if is_managed_value(ctx, value, managed_layouts) {

@@ -4,7 +4,7 @@
 //! enabling per-function type inference with isolated constraints.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -1197,7 +1197,7 @@ impl<'db> TypeChecker<'db> {
         written: impl IntoIterator<Item = Symbol>,
         omits_rest: bool,
     ) {
-        let mut seen = HashSet::new();
+        let mut seen = HashSet::default();
         for name in written {
             if !declared.contains(&name) {
                 self.report_type_error(node, format!("unknown field `{name}` for {owner}"));

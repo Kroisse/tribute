@@ -5,7 +5,7 @@
 //! before moving to the next.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -764,7 +764,7 @@ impl<'db> TypeChecker<'db> {
         };
 
         // Rows the signature itself puts into the function's effects.
-        let mut declared = HashSet::from([own]);
+        let mut declared = [own].into_iter().collect::<HashSet<_>>();
         loop {
             let before = declared.len();
             for union in &instance.row_unions {
@@ -788,7 +788,7 @@ impl<'db> TypeChecker<'db> {
             }
         }
         let reaches_own = |start: crate::ast::EffectVar| {
-            let mut seen = HashSet::from([start]);
+            let mut seen = [start].into_iter().collect::<HashSet<_>>();
             let mut pending = vec![start];
             while let Some(row) = pending.pop() {
                 if row == own {
@@ -803,7 +803,7 @@ impl<'db> TypeChecker<'db> {
             false
         };
 
-        let mut reported = HashSet::new();
+        let mut reported = HashSet::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let Some(row) = tail(row) else { continue };
             if declared.contains(&row) || !reaches_own(row) || !reported.insert(row) {

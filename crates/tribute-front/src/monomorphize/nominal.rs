@@ -1,6 +1,6 @@
 //! Close nominal instances over their checked constructor schemas before cloning.
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
 use crate::typeck::subst::{SubstResult, substitute_bound_vars};
@@ -425,7 +425,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .unwrap();
             assert_eq!(
                 result.instances[&hidden_id],
-                HashSet::from([vec![Type::new(db, TypeKind::Int)]])
+                [vec![Type::new(db, TypeKind::Int)]]
+                    .into_iter()
+                    .collect::<HashSet<_>>()
             );
             let variant = result
                 .enum_variants

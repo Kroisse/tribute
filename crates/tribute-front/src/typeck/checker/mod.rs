@@ -31,7 +31,7 @@ mod finalize;
 mod func_check;
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Span, Symbol};
 

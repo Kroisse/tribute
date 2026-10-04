@@ -4,7 +4,7 @@
 //! Emits arena IR (`IrContext` / `TypeRef` / `ValueRef`) directly.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::{Deref, DerefMut};
 
 use tribute_ir::dialect::adt;
@@ -147,12 +147,12 @@ impl<'db> IrLoweringCtx<'db> {
             span_map,
             scopes: vec![HashMap::default()],
             local_callable_values: vec![HashMap::default()],
-            resume_scopes: vec![HashSet::new()],
+            resume_scopes: vec![HashSet::default()],
             function_types,
             logical_generated_signatures: HashMap::default(),
-            logical_source_functions: HashSet::new(),
+            logical_source_functions: HashSet::default(),
             c_symbols: HashMap::default(),
-            logical_emitted_externs: HashSet::new(),
+            logical_emitted_externs: HashSet::default(),
             ability_conventions,
             definition_conventions: HashMap::default(),
             module_path,
@@ -160,7 +160,7 @@ impl<'db> IrLoweringCtx<'db> {
             struct_fields: HashMap::default(),
             variant_field_names: HashMap::default(),
             type_map: HashMap::default(),
-            logical_nominal_declarations: HashSet::new(),
+            logical_nominal_declarations: HashSet::default(),
             compiler_intrinsics: HashMap::default(),
             literal_equalities: LiteralEqualities::default(),
 
@@ -235,7 +235,7 @@ impl<'db> IrLoweringCtx<'db> {
     fn enter_scope(&mut self) {
         self.scopes.push(HashMap::default());
         self.local_callable_values.push(HashMap::default());
-        self.resume_scopes.push(HashSet::new());
+        self.resume_scopes.push(HashSet::default());
     }
 
     /// Exit the current scope (internal — use `scope()` guard instead).

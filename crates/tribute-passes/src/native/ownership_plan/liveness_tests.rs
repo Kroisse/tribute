@@ -1,6 +1,6 @@
 //! Cached liveness values and their dependency on typed ownership facts.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::Arc;
 
 use trunk_ir::analysis::AnalysisCache;
@@ -126,7 +126,7 @@ fn both_views_reuse_facts_but_extend_only_proven_owner_liveness() {
     for view in [conservative, extended] {
         assert_eq!(
             view.defs(*entry).unwrap(),
-            &HashSet::from([child, owner, loaded])
+            &[child, owner, loaded].into_iter().collect::<HashSet<_>>()
         );
         assert!(view.defs(*next).unwrap().is_empty());
         assert!(view.live_in(*entry).unwrap().is_empty());
@@ -134,19 +134,19 @@ fn both_views_reuse_facts_but_extend_only_proven_owner_liveness() {
     }
     assert_eq!(
         conservative.live_in(*next).unwrap(),
-        &HashSet::from([loaded])
+        &[loaded].into_iter().collect::<HashSet<_>>()
     );
     assert_eq!(
         conservative.live_out(*entry).unwrap(),
-        &HashSet::from([loaded])
+        &[loaded].into_iter().collect::<HashSet<_>>()
     );
     assert_eq!(
         extended.live_in(*next).unwrap(),
-        &HashSet::from([loaded, owner])
+        &[loaded, owner].into_iter().collect::<HashSet<_>>()
     );
     assert_eq!(
         extended.live_out(*entry).unwrap(),
-        &HashSet::from([loaded, owner])
+        &[loaded, owner].into_iter().collect::<HashSet<_>>()
     );
     assert!(Arc::ptr_eq(
         &liveness,
@@ -172,14 +172,26 @@ fn branch_merge_and_loop_reach_a_stable_fixed_point() {
     };
     let value = ctx.block_args(*entry)[1];
     for view in [conservative, extended] {
-        assert_eq!(view.defs(*entry).unwrap(), &HashSet::from([value]));
+        assert_eq!(
+            view.defs(*entry).unwrap(),
+            &[value].into_iter().collect::<HashSet<_>>()
+        );
         assert!(view.live_in(*entry).unwrap().is_empty());
         for block in [*left, *right, *join, *loop_block] {
             assert!(view.defs(block).unwrap().is_empty());
-            assert_eq!(view.live_in(block).unwrap(), &HashSet::from([value]));
-            assert_eq!(view.live_out(block).unwrap(), &HashSet::from([value]));
+            assert_eq!(
+                view.live_in(block).unwrap(),
+                &[value].into_iter().collect::<HashSet<_>>()
+            );
+            assert_eq!(
+                view.live_out(block).unwrap(),
+                &[value].into_iter().collect::<HashSet<_>>()
+            );
         }
-        assert_eq!(view.live_out(*entry).unwrap(), &HashSet::from([value]));
+        assert_eq!(
+            view.live_out(*entry).unwrap(),
+            &[value].into_iter().collect::<HashSet<_>>()
+        );
         assert!(view.defs(*exit).unwrap().is_empty());
         assert!(view.live_in(*exit).unwrap().is_empty());
         assert!(view.live_out(*exit).unwrap().is_empty());
@@ -206,18 +218,21 @@ fn exact_aliases_do_not_become_separate_managed_definitions() {
     let restored = ctx.op_result(ctx.block(*entry).ops[1], 0);
     let child = ctx.op_result(ctx.block(*entry).ops[2], 0);
     for view in [conservative, extended] {
-        assert_eq!(view.defs(*entry).unwrap(), &HashSet::from([root, child]));
+        assert_eq!(
+            view.defs(*entry).unwrap(),
+            &[root, child].into_iter().collect::<HashSet<_>>()
+        );
         assert!(view.defs(*next).unwrap().is_empty());
     }
     assert!(!facts.managed_values().contains(&erased));
     assert!(!facts.managed_values().contains(&restored));
     assert_eq!(
         conservative.live_in(*next).unwrap(),
-        &HashSet::from([child])
+        &[child].into_iter().collect::<HashSet<_>>()
     );
     assert_eq!(
         extended.live_in(*next).unwrap(),
-        &HashSet::from([root, child])
+        &[root, child].into_iter().collect::<HashSet<_>>()
     );
 }
 

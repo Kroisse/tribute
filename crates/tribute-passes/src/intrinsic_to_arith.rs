@@ -5,7 +5,7 @@
 //! arithmetic and comparison intrinsics declared in the prelude for Int, Nat, and Float.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
@@ -85,7 +85,7 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         return;
     }
     let symbols = SymbolTable::collect(ctx, module);
-    let mut referenced = HashSet::new();
+    let mut referenced = HashSet::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         for value in ctx.op(op).attributes.values() {
             if let Attribute::SymbolRef(reference) = value
@@ -244,7 +244,7 @@ impl ArithIntrinsicPattern {
 
         Self {
             map,
-            eligible: Rc::new(HashSet::new()),
+            eligible: Rc::new(HashSet::default()),
         }
     }
 

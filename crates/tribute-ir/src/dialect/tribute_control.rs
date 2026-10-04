@@ -5,7 +5,7 @@
 //! evidence, closure-environment, continuation, or backend carrier layout.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 use trunk_ir::attr_kind::SymbolRef;
@@ -258,7 +258,7 @@ fn verify_evidence_plan(ctx: &IrContext, op: OpRef, mask_only: bool) -> Result<(
     if items.is_empty() {
         return Err("evidence_plan must not be empty; omit it to keep the evidence".into());
     }
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for item in items.iter() {
         let step = EvidenceStep::from_attribute(ctx, item)?;
         if mask_only && matches!(step, EvidenceStep::Dup(_)) {
@@ -1171,7 +1171,7 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 continue;
             }
             for component in data.params.iter().copied() {
-                if contains_forbidden_logical_component(ctx, component, &mut HashSet::new()) {
+                if contains_forbidden_logical_component(ctx, component, &mut HashSet::default()) {
                     push_type_error(
                         errors,
                         format!(
@@ -1190,7 +1190,8 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 );
             } else {
                 for component in data.params.iter().copied() {
-                    if contains_forbidden_logical_component(ctx, component, &mut HashSet::new()) {
+                    if contains_forbidden_logical_component(ctx, component, &mut HashSet::default())
+                    {
                         push_type_error(
                             errors,
                             format!(
@@ -1389,7 +1390,7 @@ fn validate_func_isolation(
     body: RegionRef,
     errors: &mut Vec<ValidationError>,
 ) {
-    let mut defined = HashSet::new();
+    let mut defined = HashSet::default();
     collect_region_values(ctx, body, &mut defined);
     let mut invalid = Vec::new();
     walk_region_ops(ctx, body, &mut |nested| {
@@ -1436,7 +1437,7 @@ fn validate_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) 
     let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
         .into_iter()
         .chain(ctx.op_result_types(op).iter().copied())
-        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::new()));
+        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
     if has_unresolved_type {
         push_op_error(ctx, op, errors, "operands and result must be resolved");
     }
@@ -1495,7 +1496,7 @@ fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
     let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
         .into_iter()
         .chain(ctx.op_result_types(op).iter().copied())
-        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::new()));
+        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
     if has_unresolved_type {
         push_op_error(ctx, op, errors, "operands and result must be resolved");
     }
@@ -1569,7 +1570,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             "completion yield type must match handle result type",
         );
     }
-    let mut clauses = HashSet::new();
+    let mut clauses = HashSet::default();
     for child in ctx.block(handlers_block).ops.iter().copied() {
         if !is_control_op(ctx, child, "handler") {
             push_op_error(
@@ -1987,9 +1988,9 @@ fn validate_lambda_captures(ctx: &IrContext, body: RegionRef, errors: &mut Vec<V
         if capture_set.len() != captures.len() {
             push_op_error(ctx, op, errors, "capture list contains duplicate values");
         }
-        let mut defined = HashSet::new();
+        let mut defined = HashSet::default();
         collect_region_values(ctx, region, &mut defined);
-        let mut external = HashSet::new();
+        let mut external = HashSet::default();
         collect_external_references(ctx, region, &defined, &mut external);
         for missing in external.difference(&capture_set) {
             push_op_error(
@@ -2078,7 +2079,7 @@ fn canonical_nominal_layouts(
     errors: &mut Vec<ValidationError>,
 ) -> HashMap<StringRef, TypeRef> {
     let mut layouts = HashMap::default();
-    let mut referenced_names = HashSet::new();
+    let mut referenced_names = HashSet::default();
     let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
     sorted_reachable_types.sort_unstable();
     for ty in sorted_reachable_types {
@@ -2186,7 +2187,7 @@ fn collect_reachable_ir_types(ctx: &IrContext, module: OpRef) -> HashSet<TypeRef
         }
     }
 
-    let mut types = HashSet::new();
+    let mut types = HashSet::default();
     collect_op_types(ctx, module, &mut types);
     for region in ctx.op_regions(module) {
         walk_region_ops(ctx, region, &mut |op| collect_op_types(ctx, op, &mut types));
@@ -2307,7 +2308,7 @@ fn validate_managed_reference_boundaries(
         }
         for result in ctx.op_results(op) {
             if is_adt_typeref(ctx, ctx.value_ty(*result))
-                && raw_pointer_cast_origin(ctx, *result, &mut HashSet::new())
+                && raw_pointer_cast_origin(ctx, *result, &mut HashSet::default())
             {
                 push_op_error(
                     ctx,
@@ -2590,7 +2591,7 @@ fn validate_callable_origins(
         declarations: operation_declarations,
         nominal_layouts,
     };
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
         if is_control_op(ctx, op, "func") {
             let data = ctx.op(op);
@@ -2643,7 +2644,7 @@ fn validate_callable_origins(
                 let trusted_c_ffi = data.attributes.get_str(ctx, "abi") == Some("C");
                 if !exact_intrinsic
                     && !trusted_c_ffi
-                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())
+                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::default())
                 {
                     push_op_error(
                         ctx,
@@ -2655,7 +2656,7 @@ fn validate_callable_origins(
             }
         } else if is_control_op(ctx, op, "call_indirect")
             && let Some(callee) = ctx.op_operands(op).first().copied()
-            && !callable_has_semantic_provenance(ctx, callee, &provenance, &mut HashSet::new())
+            && !callable_has_semantic_provenance(ctx, callee, &provenance, &mut HashSet::default())
         {
             push_op_error(
                 ctx,
@@ -3054,7 +3055,7 @@ fn validate_token_path(
             );
         }
     }
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     for capture in captures {
         if let Some(&closure_value) = ctx.op_results(capture).first() {
             validate_affine_lambda_carrier(ctx, handler, closure_value, &mut visited, errors);
@@ -3689,7 +3690,7 @@ mod tests {
         // constructor/accessor and preservation of caller-provided locations.
         let fixture = builder_fixture();
         let ctx = &fixture.ctx;
-        let mut names = HashSet::new();
+        let mut names = HashSet::default();
         let body = fixture.module.body(ctx).expect("module body");
         walk_region_ops(ctx, body, &mut |op| {
             let data = ctx.op(op);
@@ -4059,7 +4060,11 @@ mod tests {
                     .then_some(ty)
             })
             .expect("core.never");
-        assert!(!contains_unresolved_type(&ctx, never, &mut HashSet::new()));
+        assert!(!contains_unresolved_type(
+            &ctx,
+            never,
+            &mut HashSet::default()
+        ));
 
         let result = validate_local(&ctx, module);
         for op in [

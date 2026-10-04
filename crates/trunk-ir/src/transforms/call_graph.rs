@@ -11,7 +11,7 @@
 //! as resolved by [`SymbolTable`].
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
 use crate::analysis::{Analysis, AnalysisContext, AnalysisError, InfallibleAnalysis};
@@ -182,7 +182,7 @@ fn cyclic_functions(graph: &CallGraph, edges: &Edges) -> HashSet<SymbolPath> {
     for (v, &id) in &scc_ids {
         by_scc.entry(id).or_default().push(v.clone());
     }
-    let mut result = HashSet::new();
+    let mut result = HashSet::default();
     for members in by_scc.into_values() {
         if members.len() > 1 {
             result.extend(members);
@@ -475,12 +475,16 @@ mod tests {
         let [called, captured, listed] = ["called", "captured", "listed"].map(SymbolPath::from);
         assert_eq!(
             g.edges[&SymbolPath::from("holder")],
-            HashSet::from([called.clone(), captured.clone(), listed.clone()])
+            [called.clone(), captured.clone(), listed.clone()]
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
         // `callee` is a call only on an operation registered as a direct call.
         assert_eq!(
             g.address_taken,
-            HashSet::from([called.clone(), captured, listed])
+            [called.clone(), captured, listed]
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
         assert_eq!(
             g.call_site_count,
@@ -513,9 +517,14 @@ mod tests {
         let [make, body, looping] = ["make", "body", "looping"].map(SymbolPath::from);
         assert_eq!(
             recursive_functions(&g),
-            HashSet::from([make, body, looping.clone()])
+            [make, body, looping.clone()]
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
-        assert_eq!(directly_recursive_functions(&g), HashSet::from([looping]));
+        assert_eq!(
+            directly_recursive_functions(&g),
+            [looping].into_iter().collect::<HashSet<_>>()
+        );
     }
 
     #[test]
@@ -537,8 +546,14 @@ mod tests {
 
         let g = build_call_graph(&ctx, module);
         let exported = SymbolPath::from("exported");
-        assert_eq!(g.module_references, HashSet::from([exported.clone()]));
-        assert_eq!(g.address_taken, HashSet::from([exported.clone()]));
+        assert_eq!(
+            g.module_references,
+            [exported.clone()].into_iter().collect::<HashSet<_>>()
+        );
+        assert_eq!(
+            g.address_taken,
+            [exported.clone()].into_iter().collect::<HashSet<_>>()
+        );
         assert_eq!(
             g.call_site_count,
             [(exported.clone(), 1)]
@@ -734,7 +749,10 @@ mod tests {
         assert!(g.edges[&outer].contains(&inner));
         assert_eq!(g.call_site_count[&inner], 2);
         // Only the innermost function calls itself.
-        assert_eq!(recursive_functions(&g), HashSet::from([inner]));
+        assert_eq!(
+            recursive_functions(&g),
+            [inner].into_iter().collect::<HashSet<_>>()
+        );
     }
 
     #[test]

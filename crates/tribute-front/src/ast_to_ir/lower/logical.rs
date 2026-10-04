@@ -4,7 +4,7 @@
 //! dialects; shared CPS construction belongs to `tribute-passes`.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -45,7 +45,7 @@ struct Declarations<'db> {
     perform_operations:
         SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     lambda_signatures: SortedMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
-    exhaustive_cases: std::collections::HashSet<crate::ast::NodeId>,
+    exhaustive_cases: HashSet<crate::ast::NodeId>,
     evidence_plans: SortedMap<crate::ast::NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     local_instances: SortedMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
     local_callables: local_callables::Plan<'db>,

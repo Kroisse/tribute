@@ -6,7 +6,7 @@
 //! violation of that contract, and the pipeline rejects a module with any.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
@@ -170,7 +170,7 @@ impl<'a> Verifier<'a> {
         Self {
             ctx,
             type_violations: HashMap::default(),
-            computing: HashSet::new(),
+            computing: HashSet::default(),
             violations: Vec::new(),
         }
     }

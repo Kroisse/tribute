@@ -13,7 +13,7 @@
 //! the IR, which keeps it distinct from generic DCE reachability and
 //! authenticated intrinsic deletion.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::IrContext;
 use trunk_ir::Module;
@@ -169,8 +169,8 @@ pub(crate) fn dispose_bodyless_declarations(
     references: &[ResolvedReference],
 ) -> CompilationResult<()> {
     let mut bound: HashSet<SymbolPath> = imports.iter().map(|import| import.sym.clone()).collect();
-    let mut definitions = HashSet::new();
-    let mut declarations = HashSet::new();
+    let mut definitions = HashSet::default();
+    let mut declarations = HashSet::default();
     // Validate every shape before removing anything from the emission list.
     for func in funcs.iter() {
         match function_body(ctx, func)? {

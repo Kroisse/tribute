@@ -16,7 +16,7 @@
 //!   dead casts. A cast it cannot remove stays for the target's legality
 //!   boundary to reject.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
 use crate::context::IrContext;
@@ -123,7 +123,7 @@ impl RewritePattern for UnrealizedCastConversionPattern {
 pub fn reconcile_unrealized_casts(ctx: &mut IrContext, module: Module) {
     let mut worklist = collect_casts(ctx, module);
     let mut queued: HashSet<OpRef> = worklist.iter().copied().collect();
-    let mut erased: HashSet<OpRef> = HashSet::new();
+    let mut erased: HashSet<OpRef> = HashSet::default();
 
     while let Some(op) = worklist.pop() {
         queued.remove(&op);

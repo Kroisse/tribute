@@ -1708,6 +1708,7 @@ pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::O
 mod tests {
     use super::*;
     use crate::link::link_native_binary;
+    use rustc_hash::FxHashSet as HashSet;
     use salsa_test_macros::salsa_test;
     use std::ops::ControlFlow;
     use trunk_ir::dialect::clif;
@@ -3312,7 +3313,7 @@ fn main() -> Nil {}
         let prepared =
             prepare_frontend_for_lowering(db, typed, source).expect("closed nominal dependencies");
         let schemas = &prepared.constructor_types(db).specialized_enum_variants;
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         for declaration in &prepared.module(db).decls {
             if let Decl::Enum(e) = declaration
                 && e.id.variant().is_some()
@@ -3875,7 +3876,7 @@ fn main() -> Nil { }
         ok: &impl Fn(&IrContext, trunk_ir::TypeRef) -> bool,
     ) -> bool {
         let mut pending = vec![ty];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;

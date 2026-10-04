@@ -20,7 +20,7 @@
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -514,7 +514,7 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
 /// bounded without relying on function names or target-specific pipeline
 /// ordering.
 pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunResult {
-    let mut lowered = HashSet::new();
+    let mut lowered = HashSet::default();
 
     loop {
         let mut discovered = Vec::new();
@@ -706,7 +706,7 @@ impl<'a, F: Fn(&IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> 
             ctx,
             substitute,
             cache: HashMap::default(),
-            visiting: HashSet::new(),
+            visiting: HashSet::default(),
         }
     }
 

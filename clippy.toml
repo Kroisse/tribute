@@ -1,3 +1,4 @@
 disallowed-types = [
     { path = "std::collections::HashMap", reason = "Import rustc_hash::FxHashMap as HashMap for compiler data structures." },
+    { path = "std::collections::HashSet", reason = "Import rustc_hash::FxHashSet as HashSet for compiler data structures." },
 ]

@@ -49,7 +49,7 @@
 //!   // remaining ops
 //! ```
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use tribute_ir::dialect::tribute_rt::RC_HEADER_SIZE;
 use trunk_ir::context::IrContext;

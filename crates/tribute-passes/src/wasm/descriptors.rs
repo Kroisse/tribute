@@ -7,7 +7,7 @@
 //! declarations. Builtin layouts carry no descriptor field; their reserved GC
 //! type index is their descriptor number, and user numbers follow it.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
 use tribute_ir::dialect::tribute_rtti::{
@@ -30,7 +30,7 @@ pub fn has_descriptor_field(ctx: &IrContext, ty: TypeRef) -> bool {
 /// Declare the module's user allocation descriptors in allocation order.
 pub fn declare(ctx: &mut IrContext, module: Module) {
     let mut descriptors = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     if let Some(body) = module.body(ctx) {
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if let Some(descriptor) = allocation_descriptor(ctx, op)

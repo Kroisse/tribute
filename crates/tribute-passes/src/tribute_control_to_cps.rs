@@ -6,7 +6,7 @@
 
 use itertools::Itertools;
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;

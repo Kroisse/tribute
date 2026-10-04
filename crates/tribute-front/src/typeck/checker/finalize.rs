@@ -9,7 +9,7 @@ use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut};
 use crate::ast::{Expr, ExprKind, FuncDefId, ResolvedRef, Type, TypedRef, UniVarId};
 use crate::typeck::solver::{RowSubst, TypeSubst};
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 impl<'db> TypeChecker<'db> {
     // =========================================================================

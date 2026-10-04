@@ -4,7 +4,7 @@ use crate::ast::{
     Decl, ExprKind, FuncDecl, FuncDefId, Module, NodeId, ResolvedRef, Type, TypeScheme, TypedRef,
 };
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::Symbol;
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -76,7 +76,7 @@ pub(super) fn validate<'db>(
         }
     }
     let mut functions = HashMap::default();
-    let mut fields = HashSet::new();
+    let mut fields = HashSet::default();
     declarations(
         db,
         &module.decls,
@@ -95,7 +95,7 @@ pub(super) fn validate<'db>(
         })
         .map(|(id, _)| (*id, Vec::new()))
         .collect();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut errors = Vec::new();
     while let Some((id, arguments)) = queue.pop() {
         if !seen.insert((id, arguments.clone())) {

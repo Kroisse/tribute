@@ -151,7 +151,7 @@ fn check_op_types(
     failures: &mut Vec<BoundaryFailure>,
 ) {
     let mut errors = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     for operand in ctx.op_operands(op) {
         walk_type(
             ctx,
@@ -191,7 +191,7 @@ fn verify_type_boundary(
 ) -> Vec<BoundaryFailure> {
     let mut failures = Vec::new();
     check_op_types(ctx, module.op(), boundary, &mut failures);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let mut alias_errors = Vec::new();
     for (_, ty) in ctx.type_aliases() {
         walk_type(ctx, *ty, boundary, &mut seen, &mut alias_errors);

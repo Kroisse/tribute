@@ -15,7 +15,7 @@
 //!    require whole-IR analysis or conversion-boundary state.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 
 use cranelift_entity::EntitySet;
@@ -229,7 +229,13 @@ fn validate_functions_in_region(
                 // Check operands with visibility-based scoping.
                 // No values from outside the function body are visible.
                 for func_region in ctx.op_regions(op) {
-                    check_operands_in_region(ctx, func_region, &HashSet::new(), &fn_name, errors);
+                    check_operands_in_region(
+                        ctx,
+                        func_region,
+                        &HashSet::default(),
+                        &fn_name,
+                        errors,
+                    );
                 }
             }
 
@@ -951,7 +957,7 @@ fn validate_region_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec
             return;
         }
     };
-    let mut unique = HashSet::new();
+    let mut unique = HashSet::default();
     for &successor in successors.as_slice() {
         if !unique.insert(successor) {
             errors.push(operation_verifier_error(
@@ -1038,7 +1044,7 @@ fn validate_region_branch_terminator_interface(
                         ));
                         return;
                     }
-                    let mut unique = HashSet::new();
+                    let mut unique = HashSet::default();
                     for &successor in successors.as_slice() {
                         if !unique.insert(successor) {
                             errors.push(operation_verifier_error(

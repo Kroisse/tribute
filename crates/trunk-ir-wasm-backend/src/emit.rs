@@ -33,8 +33,8 @@ use helpers::*;
 use value_emission::*;
 
 use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::sync::LazyLock;
 
 use tracing::debug;

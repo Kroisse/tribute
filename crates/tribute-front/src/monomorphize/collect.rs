@@ -1,6 +1,6 @@
 use super::nominal_index::NominalIndex;
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use crate::ast::visit::{RefSite, Refs, walk_module};
 use crate::ast::{FuncDefId, Module, ResolvedRef, Type, TypeDefId, TypeKind, TypeScheme, TypedRef};
@@ -303,7 +303,7 @@ pub(super) fn collect_from_type<'db>(
     index: &NominalIndex<'_, 'db>,
     result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) {
-    collect_from_type_inner(db, ty, index, result, &mut HashSet::new());
+    collect_from_type_inner(db, ty, index, result, &mut HashSet::default());
 }
 
 // Interned types form a DAG. Visit shared arguments once, including during
@@ -822,7 +822,10 @@ mod tests {
         collect_from_type(&db, result_bound_option_int, &index, &mut result);
 
         assert!(!result.contains_key(&result_id));
-        assert_eq!(result[&option_id], HashSet::from([vec![int]]));
+        assert_eq!(
+            result[&option_id],
+            [vec![int]].into_iter().collect::<HashSet<_>>()
+        );
     }
 
     #[test]

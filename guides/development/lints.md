@@ -8,30 +8,37 @@ runner is required:
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## Hash maps
+## Hash maps and sets
 
 Use `rustc_hash::FxHashMap` as the project's `HashMap`, including Salsa's
-module environment:
+module environment. Import `rustc_hash::FxHashSet` as `HashSet` for sets:
 
 ```rust
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 let mut map = HashMap::default();
 map.insert("key", 1);
+let mut set = HashSet::default();
+set.insert("key");
 ```
 
 Construct empty maps with `HashMap::default()` and initialize maps from entries
 with `entries.into_iter().collect::<HashMap<_, _>>()`. `HashMap::new()` and the
 standard map's array `From` implementation do not support this hasher. To reserve
 capacity, use `HashMap::with_capacity_and_hasher(capacity, Default::default())`.
-Keep hashbrown for the existing `HashTable` interner.
+For sets, use `HashSet::default()`,
+`entries.into_iter().collect::<HashSet<_>>()`, or
+`HashSet::with_capacity_and_hasher(capacity, Default::default())`; the same
+constructor restrictions apply. Keep hashbrown for the existing `HashTable`
+interner.
 
 Clippy's `disallowed_types` lint rejects paths resolving to
-`std::collections::HashMap`, including renamed imports and explicit custom
-hasher parameters. It checks named definitions rather than expanding aliases,
+`std::collections::HashMap` and `std::collections::HashSet`, including renamed
+imports and explicit custom hasher parameters. It checks named definitions rather
+than expanding aliases,
 so `rustc_hash::FxHashMap as HashMap` is allowed even though its underlying type
 is a standard-library HashMap. Defining a local alias for the standard type still
-warns at the alias definition. `HashSet` is outside this restriction's scope.
+warns at the alias definition. The same rule allows `FxHashSet as HashSet`.
 
 If an external API requires the standard map, allow it only at the boundary:
 

@@ -132,7 +132,7 @@ impl<'a> ActionPlanner<'a> {
 
     fn plan_block(&mut self, block: BlockRef) -> Result<(), OwnershipPlanError> {
         let ops = &self.ir.block(block).ops;
-        let mut transferred = HashSet::new();
+        let mut transferred = HashSet::default();
         for &op in ops {
             self.plan_operation(op, &mut transferred)?;
             if let Some(&result) = self.ir.op_results(op).first()
@@ -421,7 +421,7 @@ pub(super) fn exact_into_raw_transfers(
         ));
     }
     let mut block = None;
-    let mut users = HashSet::new();
+    let mut users = HashSet::default();
     for use_ in ctx.uses(source) {
         let user = use_.user;
         if !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, user) {
@@ -718,7 +718,7 @@ impl ActionPlanner<'_> {
                 }
             }
         }
-        let mut dying = HashSet::new();
+        let mut dying = HashSet::default();
         for value in &self.liveness.live_in[&block] {
             if self.owned.contains(value)
                 && !self.liveness.live_out[&block].contains(value)

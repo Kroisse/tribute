@@ -4,7 +4,7 @@
 //! It uses the `inventory` crate to build a registry of operation properties at compile time.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::sync::LazyLock;
 
@@ -38,7 +38,7 @@ struct PureOpRegistry {
 impl PureOpRegistry {
     fn new() -> Self {
         Self {
-            pure_ops: HashSet::new(),
+            pure_ops: HashSet::default(),
         }
     }
 
@@ -156,7 +156,7 @@ struct IsolatedFromAboveRegistry {
 impl IsolatedFromAboveRegistry {
     fn new() -> Self {
         Self {
-            isolated_ops: HashSet::new(),
+            isolated_ops: HashSet::default(),
         }
     }
 

@@ -4,7 +4,7 @@
 //! are legal, illegal, or dynamically checked.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::collections::hash_map::Entry;
 
 use derive_more::Error;
@@ -95,12 +95,12 @@ impl ConversionTarget {
     /// [`LegalityCheck::Unknown`].
     pub fn new() -> Self {
         Self {
-            legal_dialects: HashSet::new(),
-            illegal_dialects: HashSet::new(),
-            legal_ops: HashSet::new(),
-            illegal_ops: HashSet::new(),
-            recursive_legal_ops: HashSet::new(),
-            recursive_dynamic_ops: HashSet::new(),
+            legal_dialects: HashSet::default(),
+            illegal_dialects: HashSet::default(),
+            legal_ops: HashSet::default(),
+            illegal_ops: HashSet::default(),
+            recursive_legal_ops: HashSet::default(),
+            recursive_dynamic_ops: HashSet::default(),
             dynamic_ops: HashMap::default(),
             dynamic_dialects: HashMap::default(),
             dynamic_unknown: None,

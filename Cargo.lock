@@ -1936,6 +1936,7 @@ dependencies = [
  "heck",
  "proc-macro2",
  "quote",
+ "rustc-hash",
  "unsynn",
 ]
 

@@ -5,7 +5,7 @@
 //! Also rewrites Named types with type arguments to their mangled monomorphic versions.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
@@ -393,8 +393,8 @@ mod tests {
         let source_id =
             TypeDefId::source(&db, Symbol::new("List"), crate::ast::NodeId::from_raw(1));
         let mut instantiations = HashMap::default();
-        instantiations.insert(builtin_id, HashSet::from([vec![int]]));
-        instantiations.insert(source_id, HashSet::from([vec![int]]));
+        instantiations.insert(builtin_id, [vec![int]].into_iter().collect::<HashSet<_>>());
+        instantiations.insert(source_id, [vec![int]].into_iter().collect::<HashSet<_>>());
 
         let map = build_type_rewrite_map(&db, &instantiations);
 
@@ -418,8 +418,8 @@ mod tests {
             crate::ast::NodeId::from_raw(2),
         );
         let mut instantiations = HashMap::default();
-        instantiations.insert(a_id, HashSet::from([vec![int]]));
-        instantiations.insert(b_id, HashSet::from([vec![int]]));
+        instantiations.insert(a_id, [vec![int]].into_iter().collect::<HashSet<_>>());
+        instantiations.insert(b_id, [vec![int]].into_iter().collect::<HashSet<_>>());
 
         let map = build_type_rewrite_map(&db, &instantiations);
 

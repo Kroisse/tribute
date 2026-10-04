@@ -16,6 +16,7 @@
 //! - Generates `wasm.table` and `wasm.elem` operations
 
 use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
 use trunk_ir::context::{IrContext, OperationDataBuilder};
@@ -165,7 +166,7 @@ fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<SymbolPath
     }
 
     // Deduplicate while preserving order
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = HashSet::default();
     funcs.retain(|sym| seen.insert(sym.clone()));
 
     funcs

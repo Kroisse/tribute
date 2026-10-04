@@ -9,7 +9,7 @@
 //! operations, so later steps read the segments from the IR itself.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::collections::hash_map::Entry;
 use std::fmt;
 use std::rc::Rc;
@@ -66,7 +66,7 @@ impl ConstCollector {
     fn new() -> Self {
         Self {
             contents: Vec::new(),
-            seen: HashSet::new(),
+            seen: HashSet::default(),
             has_string_consts: false,
         }
     }

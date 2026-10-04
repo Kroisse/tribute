@@ -25,7 +25,7 @@ impl<'db> Plan<'db> {
         let mut origins: HashMap<LocalId, (NodeId, &Expr<TypedRef<'db>>)> = HashMap::default();
         let mut bindings = HashMap::default();
         let mut named = HashMap::default();
-        let mut aliases = HashSet::new();
+        let mut aliases = HashSet::default();
         for expr in &nodes {
             if let ExprKind::Block { stmts, .. } = &*expr.kind {
                 for stmt in stmts {
@@ -100,7 +100,7 @@ impl<'db> Plan<'db> {
             }
         }
         let mut plan = Self::default();
-        let mut unsupported = HashSet::new();
+        let mut unsupported = HashSet::default();
         for expr in nodes {
             let ExprKind::Var(reference) = &*expr.kind else {
                 continue;
@@ -438,10 +438,10 @@ pub(super) fn captures(
             }
         }
     }
-    let mut defined = HashSet::new();
+    let mut defined = HashSet::default();
     let mut uses = Vec::new();
     collect(ir, region, &mut defined, &mut uses);
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     let external: HashSet<_> = uses
         .iter()
         .copied()

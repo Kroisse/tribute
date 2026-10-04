@@ -1,7 +1,7 @@
 //! Cached native managed-liveness views over policy-neutral ownership facts.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::{Arc, OnceLock};
 
 use trunk_ir::analysis::{Analysis, AnalysisContext, AnalysisError};
@@ -87,8 +87,8 @@ fn compute_liveness(
     let mut uses = HashMap::default();
     let mut defs = HashMap::default();
     for &block in blocks {
-        let mut block_uses = HashSet::new();
-        let mut block_defs = HashSet::new();
+        let mut block_uses = HashSet::default();
+        let mut block_defs = HashSet::default();
         // Preserve the original scan order: block arguments, then operation
         // operands followed by results.
         for event in facts.block_flow(block).events() {
@@ -117,13 +117,13 @@ fn compute_liveness(
     }
     let mut live_in = blocks
         .iter()
-        .map(|&b| (b, HashSet::new()))
+        .map(|&b| (b, HashSet::default()))
         .collect::<HashMap<_, _>>();
     let mut live_out = live_in.clone();
     loop {
         let mut changed = false;
         for &block in blocks.iter().rev() {
-            let mut out = HashSet::new();
+            let mut out = HashSet::default();
             for successor in cfg.successors(block) {
                 out.extend(live_in[successor].iter().copied());
             }

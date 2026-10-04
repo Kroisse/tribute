@@ -16,7 +16,7 @@
 //! produced here are handled by the existing variant lowering.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::collections::hash_map::Entry;
 
 use tribute_ir::dialect::adt;
@@ -68,7 +68,7 @@ impl ConstCollector {
     fn new() -> Self {
         Self {
             contents: Vec::new(),
-            seen: HashSet::new(),
+            seen: HashSet::default(),
             has_string_consts: false,
         }
     }
@@ -216,7 +216,7 @@ fn declare_rodata(
         return content_to_symbol;
     };
 
-    let mut taken = HashSet::new();
+    let mut taken = HashSet::default();
     for &op in ctx.block(module_block).ops.iter() {
         if let Some(name) = ctx
             .op(op)

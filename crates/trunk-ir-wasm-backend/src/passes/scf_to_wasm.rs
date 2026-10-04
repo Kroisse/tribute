@@ -7,7 +7,7 @@
 //! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
 //! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 

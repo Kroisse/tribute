@@ -4,7 +4,7 @@
 //! operations and ref_func declarations.
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -96,7 +96,7 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symb
         }
     }
 
-    let mut ref_funcs = HashSet::new();
+    let mut ref_funcs = HashSet::default();
     let body = module.body(ctx).unwrap();
     collect_from_region(ctx, body, &mut ref_funcs);
     ref_funcs

@@ -12,7 +12,7 @@
 //! ```
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::fmt::Write;
 use std::ops::ControlFlow;
@@ -795,7 +795,7 @@ fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)
     let deps: Vec<HashSet<TypeRef>> = aliases
         .iter()
         .map(|(_, ty)| {
-            let mut deps = HashSet::new();
+            let mut deps = HashSet::default();
             collect_type_deps(ctx, *ty, &alias_set, &mut deps);
             deps
         })
@@ -804,7 +804,7 @@ fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)
     // Simple stable topological sort via repeated extraction of dependency-free items
     let n = aliases.len();
     let mut sorted: Vec<(String, TypeRef)> = Vec::with_capacity(n);
-    let mut placed: HashSet<TypeRef> = HashSet::new();
+    let mut placed: HashSet<TypeRef> = HashSet::default();
     let mut remaining: Vec<bool> = vec![true; n];
 
     for _ in 0..n {

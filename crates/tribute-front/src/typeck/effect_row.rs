@@ -168,10 +168,10 @@ pub fn find_conflicting_effects<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
 ) -> Option<(AbilityId<'db>, Vec<Effect<'db>>)> {
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet as HashSet;
 
     let effects = row.effects(db);
-    let mut seen: HashSet<&Effect<'db>> = HashSet::new();
+    let mut seen: HashSet<&Effect<'db>> = HashSet::default();
 
     for effect in effects.iter() {
         if !seen.insert(effect) {

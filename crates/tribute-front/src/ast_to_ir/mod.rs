@@ -28,7 +28,7 @@ mod context;
 mod lower;
 
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
 
 use tribute_ir::dialect::tribute_control::{CompilerIntrinsicDeclaration, OperationDeclaration};
@@ -184,7 +184,7 @@ pub struct TypedModule<'db> {
     /// Solved source-callable signatures for lambda expressions.
     pub lambda_signatures: SortedMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     /// Case expressions whose source coverage is known to be exhaustive.
-    pub exhaustive_cases: std::collections::HashSet<NodeId>,
+    pub exhaustive_cases: HashSet<NodeId>,
     /// Non-identity evidence selections of calls, resumes, and handles.
     pub evidence_plans: SortedMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,

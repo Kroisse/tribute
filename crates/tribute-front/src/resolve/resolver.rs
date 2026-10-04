@@ -562,7 +562,7 @@ impl<'db> Resolver<'db> {
 
     /// Find names in scope that are similar to the given name.
     fn find_similar_names(&self, name: &Symbol) -> Vec<Symbol> {
-        use std::collections::HashSet;
+        use rustc_hash::FxHashSet as HashSet;
 
         let candidates: HashSet<Symbol> = self
             .local_scopes

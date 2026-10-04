@@ -7,6 +7,7 @@
 use super::*;
 use proc_macro2::{Span, TokenStream};
 use quote::{ToTokens, quote};
+use rustc_hash::FxHashSet as HashSet;
 
 // ============================================================================
 // Parsed constraint model
@@ -370,7 +371,7 @@ pub(super) fn parse_typed_operation(
 
     let mut attrs = Vec::new();
     let mut operands = Vec::new();
-    let mut names = std::collections::HashSet::new();
+    let mut names = HashSet::default();
     for (ident, ty) in &params {
         let name = ident_str(ident);
         check_name(&name, &mut names)?;
@@ -544,7 +545,7 @@ fn parse_params(stream: TokenStream) -> Result<Vec<(Ident, Ty)>, String> {
     Ok(params)
 }
 
-fn check_name(name: &str, names: &mut std::collections::HashSet<String>) -> Result<(), String> {
+fn check_name(name: &str, names: &mut HashSet<String>) -> Result<(), String> {
     if [
         "operands",
         "results",

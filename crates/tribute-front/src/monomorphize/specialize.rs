@@ -1,6 +1,6 @@
 use super::nominal_index::{Declaration, NominalDeclaration, NominalIndex};
 use rustc_hash::FxHashMap as HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
 
@@ -134,7 +134,7 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
             self.0.insert(id);
         }
     }
-    let mut ids = Ids(HashSet::new());
+    let mut ids = Ids(HashSet::default());
     ids.visit_func_decl(func);
     ids.0
 }
@@ -896,7 +896,7 @@ mod tests {
             .build(&db);
         let function_types = vec![(func_name, scheme)];
 
-        let mut type_arg_sets = HashSet::new();
+        let mut type_arg_sets = HashSet::default();
         type_arg_sets.insert(vec![int]);
         type_arg_sets.insert(vec![float]);
         let mut instantiations = HashMap::default();
