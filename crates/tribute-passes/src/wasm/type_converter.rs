@@ -223,19 +223,36 @@ fn unbox_via_i31(
 // Main entry point
 // =============================================================================
 
-/// Replace the shared closure storage and `core.bytes` with their Wasm layout
-/// structs everywhere they occur, including inside ADT layouts, aliases,
-/// signatures, and attributes, before target instructions.
+/// Replace the shared closure storage, `core.bytes`, and the `tribute_rt`
+/// primitives with their Wasm types everywhere they occur, including inside
+/// ADT layouts, aliases, signatures, and attributes, before target
+/// instructions.
 pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {
     let shared_closure = crate::closure_lower::closure_struct_type_ref(ctx);
     let closure = closure_adt_type(ctx);
     let bytes = super::bytes::bytes_struct_type(ctx);
+    let i32_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("i32"));
+    let f64_ty = intern_type(ctx, Symbol::new("core"), Symbol::new("f64"));
+    let anyref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("anyref"));
+    let i31ref_ty = intern_type(ctx, Symbol::new("wasm"), Symbol::new("i31ref"));
     crate::closure_lower::substitute_module_types(ctx, module, move |ctx, ty| {
         if ty == shared_closure {
-            Some(closure)
-        } else {
-            is_type(ctx, ty, "core", "bytes").then_some(bytes)
+            return Some(closure);
         }
+        if is_type(ctx, ty, "core", "bytes") {
+            return Some(bytes);
+        }
+        let data = ctx.get_type(ty);
+        if data.dialect != Symbol::new("tribute_rt") {
+            return None;
+        }
+        data.name.with_str(|name| match name {
+            "int" | "nat" | "bool" => Some(i32_ty),
+            "float" => Some(f64_ty),
+            "anyref" => Some(anyref_ty),
+            "intref" => Some(i31ref_ty),
+            _ => None,
+        })
     });
 }
 
@@ -696,6 +713,40 @@ mod tests {
         assert_eq!(
             ctx.block(block).args[0].attrs.get("storage"),
             Some(&nested(target))
+        );
+    }
+
+    #[test]
+    fn builtin_layout_conversion_replaces_nested_tribute_rt_primitives() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Option = adt.enum<{name = "Option", variants = [["None", []], ["Some", [tribute_rt.anyref]]]}>
+  !Sample = adt.struct<Sample(count: tribute_rt.nat, delta: tribute_rt.int, flag: tribute_rt.bool, ratio: tribute_rt.float, small: tribute_rt.intref, any: tribute_rt.anyref)>
+  func.func @f(%sample: !Sample, %callee: core.i32, %value: tribute_rt.anyref) -> tribute_rt.int {
+    %null = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
+    %some = adt.variant_new %null {tag = "Some", type = !Option} : !Option
+    %result = func.call_indirect %callee, %value {signature = func.func_sig<(tribute_rt.anyref) -> tribute_rt.int>} : tribute_rt.int
+    func.return %result
+  }
+}"#,
+        );
+
+        convert_builtin_layouts(&mut ctx, module);
+
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!printed.contains("tribute_rt."), "{printed}");
+        assert!(
+            printed.contains(
+                "Sample(count: core.i32, delta: core.i32, flag: core.i32, ratio: core.f64, small: wasm.i31ref, any: wasm.anyref)"
+            ),
+            "{printed}"
+        );
+        assert!(printed.contains(r#"["Some", [wasm.anyref]]"#), "{printed}");
+        assert!(
+            printed.contains("func.func_sig<(wasm.anyref) -> core.i32>"),
+            "{printed}"
         );
     }
 
