@@ -6,7 +6,7 @@ impl Converter<'_> {
     pub(super) fn clone_plain_op(
         &mut self,
         source: OpRef,
-        mapping: &mut HashMap<ValueRef, ValueRef>,
+        mapping: &mut FxHashMap<ValueRef, ValueRef>,
     ) -> Result<OpRef, TributeControlToCpsError> {
         let data = self.ctx.op(source);
         if data.dialect == Symbol::new("tribute_control") {
@@ -94,7 +94,7 @@ impl Converter<'_> {
             let previous_module_block = self.module_block;
             self.module_block = block;
             let conversion = (|| {
-                let mut mapping = HashMap::new();
+                let mut mapping = FxHashMap::default();
                 for (old, new) in self
                     .ctx
                     .block_args(source_block)
@@ -136,7 +136,7 @@ impl Converter<'_> {
     pub(super) fn clone_plain_region(
         &mut self,
         source: RegionRef,
-        mapping: &mut HashMap<ValueRef, ValueRef>,
+        mapping: &mut FxHashMap<ValueRef, ValueRef>,
     ) -> Result<RegionRef, TributeControlToCpsError> {
         let location = self.ctx.region(source).location;
         let source_blocks = self.ctx.region(source).blocks.clone();
@@ -192,7 +192,7 @@ impl Converter<'_> {
         source: OpRef,
         rest: Rest<'_>,
         block: BlockRef,
-        mapping: &mut HashMap<ValueRef, ValueRef>,
+        mapping: &mut FxHashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         let result_types = self.ctx.op_result_types(source).to_vec();
@@ -354,7 +354,7 @@ impl Converter<'_> {
         source: OpRef,
         rest: Rest<'_>,
         block: BlockRef,
-        mapping: &HashMap<ValueRef, ValueRef>,
+        mapping: &FxHashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         if flow.convention != CallingConvention::Cps || !self.ctx.op_result_types(source).is_empty()

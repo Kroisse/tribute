@@ -27,7 +27,7 @@
 mod context;
 mod lower;
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::sync::LazyLock;
 
@@ -116,11 +116,11 @@ pub struct UnsupportedCompilerIntrinsic {
 /// the validation boundary; return every unknown directive for source diagnostics.
 pub fn registered_compiler_intrinsics<V>(
     module: &AstModule<V>,
-) -> Result<HashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>> {
+) -> Result<FxHashMap<NodeId, Symbol>, Vec<UnsupportedCompilerIntrinsic>> {
     fn collect<V>(
         declarations: &[crate::ast::Decl<V>],
         prefix: &mut String,
-        result: &mut HashMap<NodeId, Symbol>,
+        result: &mut FxHashMap<NodeId, Symbol>,
         unsupported: &mut Vec<UnsupportedCompilerIntrinsic>,
     ) {
         for declaration in declarations {
@@ -150,7 +150,7 @@ pub fn registered_compiler_intrinsics<V>(
         }
     }
 
-    let mut result = HashMap::new();
+    let mut result = FxHashMap::default();
     let mut unsupported = Vec::new();
     collect(
         &module.decls,
@@ -172,13 +172,13 @@ pub fn registered_compiler_intrinsics<V>(
 pub struct TypedModule<'db> {
     pub ast: AstModule<TypedRef<'db>>,
     pub span_map: SpanMap,
-    pub function_types: HashMap<Symbol, TypeScheme<'db>>,
-    pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
+    pub function_types: FxHashMap<Symbol, TypeScheme<'db>>,
+    pub constructor_types: FxHashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
     pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
     pub node_types: SortedMap<NodeId, Type<'db>>,
     pub local_instances: SortedMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
-    pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
-    pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
+    pub ability_conventions: FxHashMap<AbilityId<'db>, CallingConvention>,
+    pub ability_definitions: FxHashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
     pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     pub perform_operations: SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     /// Solved source-callable signatures for lambda expressions.
@@ -189,7 +189,7 @@ pub struct TypedModule<'db> {
     pub evidence_plans: SortedMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
     /// Exact intrinsic-directive declaration IDs and canonical identities.
-    pub compiler_intrinsics: HashMap<NodeId, Symbol>,
+    pub compiler_intrinsics: FxHashMap<NodeId, Symbol>,
 }
 
 impl<'db> TypedModule<'db> {
@@ -239,8 +239,8 @@ mod tests {
             &db,
             path,
             span_map,
-            HashMap::new(),
-            HashMap::new(),
+            FxHashMap::default(),
+            FxHashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -284,8 +284,8 @@ mod tests {
             &db,
             path,
             SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            FxHashMap::default(),
+            FxHashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -316,8 +316,8 @@ mod tests {
             &db,
             path,
             SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            FxHashMap::default(),
+            FxHashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );
@@ -351,8 +351,8 @@ mod tests {
             &db,
             path,
             span_map,
-            HashMap::new(),
-            HashMap::new(),
+            FxHashMap::default(),
+            FxHashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
             SortedMap::default(),
         );

@@ -1,5 +1,5 @@
 use super::nominal_index::{Declaration, NominalDeclaration, NominalIndex};
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
@@ -39,13 +39,13 @@ struct SpecializationEntry<'db> {
 pub(super) fn generate_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
-    instantiations: &HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: &FxHashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
-    compiler_intrinsics: &HashMap<NodeId, Symbol>,
+    compiler_intrinsics: &FxHashMap<NodeId, Symbol>,
 ) -> GeneratedSpecializations<'db> {
     let func_decls = collect_func_decls(module);
     let extern_functions = collect_extern_function_decls(module);
-    let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
+    let scheme_map: FxHashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
 
     let mut entries: Vec<SpecializationEntry<'db>> = Vec::new();
     let mut extern_function_types = Vec::new();
@@ -102,7 +102,7 @@ pub(super) fn generate_specializations<'db>(
         }
     }
 
-    // Sort by mangled name for deterministic output (HashMap/HashSet iteration is unordered)
+    // Sort by mangled name for deterministic output (FxHashMap/HashSet iteration is unordered)
     entries.sort_by_key(|entry| entry.name.clone());
 
     let mut new_decls = Vec::with_capacity(entries.len());
@@ -147,7 +147,7 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
 pub fn generate_struct_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
-    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: &FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<StructDecl> {
     let index = NominalIndex::new(db, module);
     generate_struct_specializations_with_index(db, &index, instantiations)
@@ -156,7 +156,7 @@ pub fn generate_struct_specializations<'db>(
 pub(super) fn generate_struct_specializations_with_index<'db>(
     db: &'db dyn salsa::Database,
     index: &NominalIndex<'_, 'db>,
-    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: &FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<StructDecl> {
     let mut entries: Vec<(Symbol, StructDecl)> = Vec::new();
 
@@ -187,7 +187,7 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
 pub fn generate_enum_specializations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
-    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: &FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<EnumDecl> {
     let index = NominalIndex::new(db, module);
     generate_enum_specializations_with_index(db, &index, instantiations)
@@ -196,7 +196,7 @@ pub fn generate_enum_specializations<'db>(
 pub(super) fn generate_enum_specializations_with_index<'db>(
     db: &'db dyn salsa::Database,
     index: &NominalIndex<'_, 'db>,
-    instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    instantiations: &FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> Vec<EnumDecl> {
     let mut entries: Vec<(Symbol, EnumDecl)> = Vec::new();
 
@@ -434,8 +434,8 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 
 fn collect_func_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
-) -> HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>> {
-    let mut map = HashMap::new();
+) -> FxHashMap<Symbol, &'a FuncDecl<TypedRef<'db>>> {
+    let mut map = FxHashMap::default();
     let mut prefix = String::new();
     collect_func_decls_inner(&module.decls, &mut prefix, &mut map);
     map
@@ -444,7 +444,7 @@ fn collect_func_decls<'a, 'db>(
 fn collect_func_decls_inner<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut String,
-    map: &mut HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>>,
+    map: &mut FxHashMap<Symbol, &'a FuncDecl<TypedRef<'db>>>,
 ) {
     for decl in decls {
         match decl {
@@ -466,8 +466,8 @@ fn collect_func_decls_inner<'a, 'db>(
 
 fn collect_extern_function_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
-) -> HashMap<Symbol, &'a ExternFuncDecl> {
-    let mut declarations = HashMap::new();
+) -> FxHashMap<Symbol, &'a ExternFuncDecl> {
+    let mut declarations = FxHashMap::default();
     let mut prefix = String::new();
     collect_extern_function_decls_inner(&module.decls, &mut prefix, &mut declarations);
     declarations
@@ -476,7 +476,7 @@ fn collect_extern_function_decls<'a, 'db>(
 fn collect_extern_function_decls_inner<'a, 'db>(
     decls: &'a [Decl<TypedRef<'db>>],
     prefix: &mut String,
-    declarations: &mut HashMap<Symbol, &'a ExternFuncDecl>,
+    declarations: &mut FxHashMap<Symbol, &'a ExternFuncDecl>,
 ) {
     for decl in decls {
         match decl {
@@ -899,7 +899,7 @@ mod tests {
         let mut type_arg_sets = HashSet::new();
         type_arg_sets.insert(vec![int]);
         type_arg_sets.insert(vec![float]);
-        let mut instantiations = HashMap::new();
+        let mut instantiations = FxHashMap::default();
         instantiations.insert(func_id, type_arg_sets);
 
         let specializations = generate_specializations(
@@ -907,7 +907,7 @@ mod tests {
             &module,
             &instantiations,
             &function_types,
-            &HashMap::new(),
+            &FxHashMap::default(),
         );
 
         assert_eq!(specializations.specialized_declarations.len(), 2);

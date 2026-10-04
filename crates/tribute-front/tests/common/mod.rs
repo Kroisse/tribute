@@ -92,12 +92,13 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let mut tdnr_ast = result.module;
     tribute_front::tdnr::resolve_tdnr(db, &mut tdnr_ast, prelude_modules.iter().copied());
 
-    let function_types_map: hashbrown::HashMap<_, _> = result.function_types.into_iter().collect();
-    let constructor_types: hashbrown::HashMap<_, _> =
+    let function_types_map: rustc_hash::FxHashMap<_, _> =
+        result.function_types.into_iter().collect();
+    let constructor_types: rustc_hash::FxHashMap<_, _> =
         result.constructor_types.into_iter().collect();
-    let ability_conventions: hashbrown::HashMap<_, _> =
+    let ability_conventions: rustc_hash::FxHashMap<_, _> =
         result.ability_conventions.into_iter().collect();
-    let ability_definitions: hashbrown::HashMap<_, _> =
+    let ability_definitions: rustc_hash::FxHashMap<_, _> =
         result.ability_definitions.into_iter().collect();
     let compiler_intrinsics = prelude
         .as_ref()

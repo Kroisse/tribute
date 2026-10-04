@@ -3,7 +3,7 @@
 //! This module provides shared substitution logic for replacing BoundVar types
 //! with actual types during type scheme instantiation.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeScheme};
 
@@ -221,7 +221,7 @@ pub fn instantiate_with_arguments<'db>(
 ) -> SchemeInstance<'db> {
     assert_eq!(scheme.type_params(db).len(), type_args.len());
     assert_eq!(scheme.effect_params(db).len(), row_vars.len());
-    let mut mapping: HashMap<_, _> = scheme
+    let mut mapping: FxHashMap<_, _> = scheme
         .effect_params(db)
         .iter()
         .zip(&row_vars)
@@ -324,10 +324,10 @@ fn freshen_effect_vars_inner<'db>(
     ty: Type<'db>,
     quantified_rows: &[EffectVar],
     fresh_row_var: &mut impl FnMut() -> EffectVar,
-    row_vars: &mut HashMap<u64, EffectVar>,
+    row_vars: &mut FxHashMap<u64, EffectVar>,
 ) -> Type<'db> {
     let freshen_row =
-        |row: EffectRow<'db>, fresh_row_var: &mut _, row_vars: &mut HashMap<u64, EffectVar>| {
+        |row: EffectRow<'db>, fresh_row_var: &mut _, row_vars: &mut FxHashMap<u64, EffectVar>| {
             let effects: Vec<_> = row
                 .effects(db)
                 .iter()

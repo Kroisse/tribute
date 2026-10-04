@@ -1,6 +1,6 @@
 //! Dominance analysis for single-region control-flow graphs.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use crate::context::{BlockList, IrContext};
@@ -11,10 +11,10 @@ use crate::{BlockRef, RegionRef};
 pub struct DominatorTree {
     region: RegionRef,
     entry: Option<BlockRef>,
-    predecessors: HashMap<BlockRef, BlockList>,
-    successors: HashMap<BlockRef, BlockList>,
+    predecessors: FxHashMap<BlockRef, BlockList>,
+    successors: FxHashMap<BlockRef, BlockList>,
     reachable: HashSet<BlockRef>,
-    dominators: HashMap<BlockRef, HashSet<BlockRef>>,
+    dominators: FxHashMap<BlockRef, HashSet<BlockRef>>,
     valid: bool,
 }
 
@@ -24,12 +24,12 @@ impl DominatorTree {
         let blocks = &ctx.region(region).blocks;
         let block_set: HashSet<_> = blocks.iter().copied().collect();
         let entry = blocks.first().copied();
-        let mut predecessors: HashMap<_, BlockList> = blocks
+        let mut predecessors: FxHashMap<_, BlockList> = blocks
             .iter()
             .copied()
             .map(|block| (block, BlockList::new()))
             .collect();
-        let mut successors = HashMap::new();
+        let mut successors = FxHashMap::default();
         let mut valid = true;
 
         for &block in blocks {
@@ -70,7 +70,7 @@ impl DominatorTree {
             }
         }
 
-        let mut dominators = HashMap::new();
+        let mut dominators = FxHashMap::default();
         if let Some(entry) = entry {
             for &block in &reachable {
                 let initial = if block == entry {

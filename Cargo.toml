@@ -38,7 +38,7 @@ proc-macro2 = "1.0"
 quote = "1.0"
 ropey = "1.6"
 rustc-hash = "2.1"
-hashbrown = { version = "0.16", default-features = false, features = ["default-hasher"] }
+hashbrown = { version = "0.16", default-features = false }
 salsa = "0.28.4"
 salsa-test-macros = { path = "crates/salsa-test-macros" }
 serde = { version = "1.0", features = ["derive"] }
@@ -77,7 +77,7 @@ authors.workspace = true
 license.workspace = true
 
 [dependencies]
-hashbrown.workspace = true
+rustc-hash.workspace = true
 ariadne.workspace = true
 clap.workspace = true
 crossbeam-channel.workspace = true

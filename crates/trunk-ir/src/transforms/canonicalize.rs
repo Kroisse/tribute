@@ -9,7 +9,7 @@
 //! here.
 //!
 //! The driver dispatches each visited op to its fold (if any) by
-//! `(dialect, op_name)` HashMap lookup. A fold returns one of:
+//! `(dialect, op_name)` FxHashMap lookup. A fold returns one of:
 //!
 //! - [`FoldResult::Forward`] — RAUW the op's result with an existing
 //!   value.
@@ -31,7 +31,7 @@
 //! Float and div/rem folds are deferred until each one's edge cases
 //! (NaN/-0.0, division-by-zero) are pinned down.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::context::IrContext;
 use crate::dialect::{arith, func};
@@ -96,14 +96,14 @@ pub type FoldFn = fn(&IrContext, OpRef) -> Option<FoldResult>;
 /// Replaces N individual self-filtering patterns (one per op kind) with
 /// a single O(1) dispatcher: instead of every pattern testing
 /// `op.dialect == "arith" && op.name == "addi"`, the dispatcher does one
-/// `HashMap::get((dialect, name))` and calls the fold directly.
+/// `FxHashMap::get((dialect, name))` and calls the fold directly.
 ///
 /// The hashmap is built once at pass-construction time. Duplicate
 /// registrations for the same (dialect, op_name) panic via `assert!`
 /// in all build profiles — silently overwriting one fold with another
 /// is always a bug.
 pub struct FoldDispatchPattern {
-    table: HashMap<(Symbol, Symbol), FoldFn>,
+    table: FxHashMap<(Symbol, Symbol), FoldFn>,
 }
 
 impl FoldDispatchPattern {
@@ -111,7 +111,7 @@ impl FoldDispatchPattern {
     /// triples. Panics on duplicate keys (in release builds too — see
     /// type-level docs).
     pub fn from_folds(folds: impl IntoIterator<Item = (Symbol, Symbol, FoldFn)>) -> Self {
-        let mut table = HashMap::new();
+        let mut table = FxHashMap::default();
         for (dialect, op_name, fold) in folds {
             assert!(
                 table

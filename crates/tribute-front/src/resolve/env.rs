@@ -3,7 +3,7 @@
 //! This module provides structures for tracking definitions and looking up names
 //! during the name resolution phase.
 
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
@@ -69,23 +69,23 @@ pub enum Binding<'db> {
 #[derive(Clone, Debug, Default, PartialEq, Eq, salsa::SalsaValue)]
 pub struct ModuleEnv<'db> {
     /// Names defined in this module (simple name → binding).
-    definitions: HashMap<Symbol, Binding<'db>>,
+    definitions: FxHashMap<Symbol, Binding<'db>>,
     /// Names imported via `use` statements (simple name → binding).
-    imports: HashMap<Symbol, Binding<'db>>,
+    imports: FxHashMap<Symbol, Binding<'db>>,
     /// Qualified paths (namespace → name → binding).
-    namespaces: HashMap<Symbol, HashMap<Symbol, Binding<'db>>>,
+    namespaces: FxHashMap<Symbol, FxHashMap<Symbol, Binding<'db>>>,
     /// Original paths for resolved `use` imports (import name → original path).
     /// Used to rewrite effect annotations from imported names to qualified paths.
-    use_paths: HashMap<Symbol, Vec<Symbol>>,
+    use_paths: FxHashMap<Symbol, Vec<Symbol>>,
     /// Names the prelude and the compiler supply, visible in every module.
-    library: HashMap<Symbol, Binding<'db>>,
+    library: FxHashMap<Symbol, Binding<'db>>,
     /// First segments of the namespaces the prelude and the compiler supply.
     library_roots: HashSet<Symbol>,
     /// The package path of each library name, e.g. `Option` → `std::Option`.
-    library_paths: HashMap<Symbol, Vec<Symbol>>,
+    library_paths: FxHashMap<Symbol, Vec<Symbol>>,
     /// Library namespaces under their short first segment, e.g. `Option` →
     /// `std::Option` and `List` → `std::collections::List`.
-    library_namespaces: HashMap<Symbol, Symbol>,
+    library_namespaces: FxHashMap<Symbol, Symbol>,
 }
 
 impl<'db> ModuleEnv<'db> {

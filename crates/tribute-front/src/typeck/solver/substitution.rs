@@ -1,7 +1,7 @@
 //! Solver substitutions and binder-aware generalization.
 
 use super::{
-    EffectRow, EffectVar, HashMap, RowSubst, SmallVec, Type, TypeKind, TypeParam, TypeSubst,
+    EffectRow, EffectVar, FxHashMap, RowSubst, SmallVec, Type, TypeKind, TypeParam, TypeSubst,
     UniVarId, map_effect_row_type_args,
 };
 
@@ -9,7 +9,7 @@ impl<'db> TypeSubst<'db> {
     /// Create an empty substitution.
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: FxHashMap::default(),
         }
     }
 
@@ -164,12 +164,12 @@ impl<'db> TypeSubst<'db> {
         ty: Type<'db>,
         row_subst: &RowSubst<'db>,
         excluded: &[UniVarId<'db>],
-    ) -> (Type<'db>, Vec<TypeParam>, HashMap<UniVarId<'db>, u32>) {
+    ) -> (Type<'db>, Vec<TypeParam>, FxHashMap<UniVarId<'db>, u32>) {
         let mut univars = Vec::new();
         self.collect_univars_from_type(db, ty, row_subst, &mut univars);
         univars.retain(|id| !excluded.contains(id));
 
-        let var_to_index: HashMap<UniVarId<'db>, u32> = univars
+        let var_to_index: FxHashMap<UniVarId<'db>, u32> = univars
             .iter()
             .enumerate()
             .map(|(index, &id)| (id, index as u32))
@@ -188,17 +188,17 @@ impl<'db> TypeSubst<'db> {
         db: &'db dyn salsa::Database,
         ty: Type<'db>,
         row_subst: &RowSubst<'db>,
-    ) -> (Type<'db>, Vec<TypeParam>, HashMap<UniVarId<'db>, u32>) {
+    ) -> (Type<'db>, Vec<TypeParam>, FxHashMap<UniVarId<'db>, u32>) {
         // Pass 1: collect unresolved UniVars in appearance order
         let mut univars: Vec<UniVarId<'db>> = Vec::new();
         self.collect_univars_from_type(db, ty, row_subst, &mut univars);
 
         if univars.is_empty() {
-            return (ty, Vec::new(), HashMap::new());
+            return (ty, Vec::new(), FxHashMap::default());
         }
 
         // Build UniVar → BoundVar index mapping
-        let var_to_index: HashMap<UniVarId<'db>, u32> = univars
+        let var_to_index: FxHashMap<UniVarId<'db>, u32> = univars
             .iter()
             .enumerate()
             .map(|(i, &id)| (id, i as u32))
@@ -222,7 +222,7 @@ impl<'db> TypeSubst<'db> {
         db: &'db dyn salsa::Database,
         ty: Type<'db>,
         row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
+        var_to_index: &FxHashMap<UniVarId<'db>, u32>,
     ) -> Type<'db> {
         self.replace_univars_with_bound(db, ty, row_subst, var_to_index)
     }
@@ -236,8 +236,8 @@ impl<'db> TypeSubst<'db> {
         db: &'db dyn salsa::Database,
         ty: Type<'db>,
         row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-        local_vars: &HashMap<UniVarId<'db>, (crate::ast::NodeId, u32)>,
+        var_to_index: &FxHashMap<UniVarId<'db>, u32>,
+        local_vars: &FxHashMap<UniVarId<'db>, (crate::ast::NodeId, u32)>,
     ) -> Type<'db> {
         self.replace_univars_with_bound_and_local(db, ty, row_subst, var_to_index, local_vars)
     }
@@ -247,8 +247,8 @@ impl<'db> TypeSubst<'db> {
         db: &'db dyn salsa::Database,
         ty: Type<'db>,
         row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
-        local_vars: &HashMap<UniVarId<'db>, (crate::ast::NodeId, u32)>,
+        var_to_index: &FxHashMap<UniVarId<'db>, u32>,
+        local_vars: &FxHashMap<UniVarId<'db>, (crate::ast::NodeId, u32)>,
     ) -> Type<'db> {
         match ty.kind(db) {
             TypeKind::UniVar { id } => {
@@ -493,9 +493,15 @@ impl<'db> TypeSubst<'db> {
         db: &'db dyn salsa::Database,
         ty: Type<'db>,
         row_subst: &RowSubst<'db>,
-        var_to_index: &HashMap<UniVarId<'db>, u32>,
+        var_to_index: &FxHashMap<UniVarId<'db>, u32>,
     ) -> Type<'db> {
-        self.replace_univars_with_bound_and_local(db, ty, row_subst, var_to_index, &HashMap::new())
+        self.replace_univars_with_bound_and_local(
+            db,
+            ty,
+            row_subst,
+            var_to_index,
+            &FxHashMap::default(),
+        )
     }
 }
 
@@ -503,7 +509,7 @@ impl<'db> RowSubst<'db> {
     /// Create an empty substitution.
     pub fn new() -> Self {
         Self {
-            map: HashMap::new(),
+            map: FxHashMap::default(),
         }
     }
 

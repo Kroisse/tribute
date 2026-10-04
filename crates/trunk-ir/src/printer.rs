@@ -11,7 +11,7 @@
 //! }
 //! ```
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::fmt::Write;
@@ -26,12 +26,12 @@ use super::walk::{WalkAction, walk_region};
 /// Print state for value numbering and block labeling.
 struct PrintState<'a> {
     ctx: &'a IrContext,
-    value_names: HashMap<ValueRef, String>,
-    block_labels: HashMap<BlockRef, String>,
+    value_names: FxHashMap<ValueRef, String>,
+    block_labels: FxHashMap<BlockRef, String>,
     next_value_num: usize,
     next_block_num: usize,
     /// Reverse map: TypeRef → alias name for substitution during printing.
-    type_alias_names: HashMap<TypeRef, String>,
+    type_alias_names: FxHashMap<TypeRef, String>,
 }
 
 impl<'a> PrintState<'a> {
@@ -48,11 +48,11 @@ impl<'a> PrintState<'a> {
     fn without_aliases(ctx: &'a IrContext) -> Self {
         Self {
             ctx,
-            value_names: HashMap::new(),
-            block_labels: HashMap::new(),
+            value_names: FxHashMap::default(),
+            block_labels: FxHashMap::default(),
             next_value_num: 0,
             next_block_num: 0,
-            type_alias_names: HashMap::new(),
+            type_alias_names: FxHashMap::default(),
         }
     }
 
@@ -654,8 +654,8 @@ const MIN_ALIAS_USES: usize = 2;
 /// Only counts direct usage sites (result types, block args, attributes).
 /// Does not recurse into type params — nested types become aliased naturally
 /// when their parent is aliased.
-fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, usize> {
-    let mut counts: HashMap<TypeRef, usize> = HashMap::new();
+fn collect_module_types(ctx: &IrContext, region: RegionRef) -> FxHashMap<TypeRef, usize> {
+    let mut counts: FxHashMap<TypeRef, usize> = FxHashMap::default();
 
     let _ = walk_region::<()>(ctx, region, &mut |op| {
         let data = ctx.op(op);
@@ -696,7 +696,7 @@ fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, 
     counts
 }
 
-fn count_attr_types(counts: &mut HashMap<TypeRef, usize>, attr: &Attribute) {
+fn count_attr_types(counts: &mut FxHashMap<TypeRef, usize>, attr: &Attribute) {
     attr.visit_types(&mut |ty| *counts.entry(ty).or_default() += 1);
 }
 
@@ -704,7 +704,7 @@ fn count_attr_types(counts: &mut HashMap<TypeRef, usize>, attr: &Attribute) {
 fn generate_auto_aliases(
     ctx: &IrContext,
     region: RegionRef,
-    existing: &HashMap<TypeRef, String>,
+    existing: &FxHashMap<TypeRef, String>,
 ) -> Vec<(String, TypeRef)> {
     let counts = collect_module_types(ctx, region);
     let mut candidates: Vec<(TypeRef, usize, usize, String)> = Vec::new();

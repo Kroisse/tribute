@@ -3,7 +3,7 @@
 //! `IrMapping` tracks correspondences between old and new IR entities
 //! during operations like deep cloning. Inspired by MLIR's `IRMapping`.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::refs::{BlockRef, ValueRef};
 
@@ -14,8 +14,8 @@ use crate::refs::{BlockRef, ValueRef};
 /// the mapping) pass through unchanged via `lookup_or_default`.
 #[derive(Clone, Debug, Default)]
 pub struct IrMapping {
-    values: HashMap<ValueRef, ValueRef>,
-    blocks: HashMap<BlockRef, BlockRef>,
+    values: FxHashMap<ValueRef, ValueRef>,
+    blocks: FxHashMap<BlockRef, BlockRef>,
 }
 
 impl IrMapping {
@@ -26,12 +26,12 @@ impl IrMapping {
 
     /// Create a mapping pre-populated with value correspondences.
     ///
-    /// Useful for converting existing `HashMap<ValueRef, ValueRef>` into
+    /// Useful for converting existing `FxHashMap<ValueRef, ValueRef>` into
     /// an `IrMapping`.
     pub fn from_values(iter: impl IntoIterator<Item = (ValueRef, ValueRef)>) -> Self {
         Self {
             values: iter.into_iter().collect(),
-            blocks: HashMap::new(),
+            blocks: FxHashMap::default(),
         }
     }
 

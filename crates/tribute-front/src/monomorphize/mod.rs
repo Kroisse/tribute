@@ -8,7 +8,7 @@ pub(crate) use collect::is_concrete_type;
 pub use validate::{InstanceError, InstanceErrorKind};
 pub mod specialize;
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
@@ -23,20 +23,20 @@ const MAX_TRANSITIVE_SPECIALIZATION_ROUNDS: usize = 64;
 
 /// Exact typechecking metadata keyed by source NodeId.
 pub struct MonomorphizeMetadata<'db> {
-    pub constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
-    pub specialized_enum_variants: HashMap<NodeId, TypeScheme<'db>>,
-    pub node_types: HashMap<NodeId, Type<'db>>,
-    pub function_instances: HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
-    pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
-    pub evidence_plans: HashMap<NodeId, Vec<EvidenceStep<'db>>>,
-    pub handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
-    pub perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
-    pub lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
+    pub constructor_types: FxHashMap<CtorId<'db>, TypeScheme<'db>>,
+    pub specialized_enum_variants: FxHashMap<NodeId, TypeScheme<'db>>,
+    pub node_types: FxHashMap<NodeId, Type<'db>>,
+    pub function_instances: FxHashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+    pub local_instances: FxHashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    pub evidence_plans: FxHashMap<NodeId, Vec<EvidenceStep<'db>>>,
+    pub handler_operations: FxHashMap<NodeId, InstantiatedHandlerOperation<'db>>,
+    pub perform_operations: FxHashMap<NodeId, InstantiatedPerformOperation<'db>>,
+    pub lambda_signatures: FxHashMap<NodeId, LambdaSignature<'db>>,
     pub exhaustive_cases: HashSet<NodeId>,
     /// Exact base identities transported to generated generic extern declarations.
     ///
     /// This is specialization metadata, not source-provenance or ownership data.
-    pub compiler_intrinsics: HashMap<NodeId, Symbol>,
+    pub compiler_intrinsics: FxHashMap<NodeId, Symbol>,
 }
 
 /// Result of monomorphization: updated module + function types.
@@ -56,7 +56,7 @@ pub struct MonomorphizeResult<'db> {
 pub fn monomorphize_functions<'db>(
     db: &'db dyn salsa::Database,
     module: Module<TypedRef<'db>>,
-    function_types: HashMap<Symbol, TypeScheme<'db>>,
+    function_types: FxHashMap<Symbol, TypeScheme<'db>>,
     mut metadata: MonomorphizeMetadata<'db>,
 ) -> Result<MonomorphizeResult<'db>, Vec<InstanceError>> {
     let errors = validate::validate(db, &module, &function_types, &metadata);
@@ -73,7 +73,7 @@ pub fn monomorphize_functions<'db>(
     let source_function_types = fn_types_vec.clone();
     let mut module = module;
     let mut all_function_types = fn_types_vec;
-    let mut instantiations = HashMap::new();
+    let mut instantiations = FxHashMap::default();
     let mut reached_fixpoint = false;
 
     // A concrete clone can reveal direct calls that were abstract in its
@@ -85,7 +85,7 @@ pub fn monomorphize_functions<'db>(
             &source_function_types,
             &metadata.function_instances,
         );
-        let mut new_instantiations = HashMap::new();
+        let mut new_instantiations = FxHashMap::default();
         for (func_id, type_arg_sets) in discovered {
             let known = instantiations.entry(func_id).or_insert_with(HashSet::new);
             for type_args in type_arg_sets {
@@ -246,8 +246,6 @@ pub fn monomorphize_functions<'db>(
             &nominal_index,
             &type_instantiations,
         );
-        // The index borrows source declarations; release it before rewriting them.
-        drop(nominal_index);
 
         // Build type rewrite map and rewrite Named types throughout the module
         let type_rewrite_map = rewrite::build_type_rewrite_map(db, &type_instantiations);
@@ -311,7 +309,6 @@ pub fn monomorphize_functions<'db>(
             .extend(specialized_enums.into_iter().map(Decl::Enum));
         module
     } else {
-        drop(nominal_index);
         module
     };
 
@@ -485,7 +482,7 @@ fn specialize_metadata<'db>(
 
 fn clone_type_table<'db>(
     db: &'db dyn salsa::Database,
-    table: &mut HashMap<NodeId, Type<'db>>,
+    table: &mut FxHashMap<NodeId, Type<'db>>,
     variant: std::num::NonZero<u64>,
     type_args: &[Type<'db>],
     origins: &HashSet<NodeId>,
@@ -513,11 +510,12 @@ fn substitute_type<'db>(
 /// for use during call site rewriting.
 fn build_rewrite_map<'db>(
     db: &'db dyn salsa::Database,
-    instantiations: &HashMap<FuncDefId<'db>, std::collections::HashSet<Vec<Type<'db>>>>,
+    instantiations: &FxHashMap<FuncDefId<'db>, std::collections::HashSet<Vec<Type<'db>>>>,
     function_types: &[(Symbol, TypeScheme<'db>)],
-) -> HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> {
-    let scheme_map: HashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
-    let mut rewrite_map: HashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> = HashMap::new();
+) -> FxHashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> {
+    let scheme_map: FxHashMap<Symbol, TypeScheme<'db>> = function_types.iter().cloned().collect();
+    let mut rewrite_map: FxHashMap<FuncDefId<'db>, Vec<(Vec<Type<'db>>, Symbol)>> =
+        FxHashMap::default();
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
@@ -586,18 +584,20 @@ mod tests {
             result: bound,
         };
         let mut metadata = MonomorphizeMetadata {
-            constructor_types: HashMap::new(),
-            specialized_enum_variants: HashMap::new(),
-            node_types: HashMap::from([(origin, bound)]),
-            function_instances: HashMap::new(),
-            evidence_plans: HashMap::from([(
+            constructor_types: FxHashMap::default(),
+            specialized_enum_variants: FxHashMap::default(),
+            node_types: [(origin, bound)].into_iter().collect::<FxHashMap<_, _>>(),
+            function_instances: FxHashMap::default(),
+            evidence_plans: [(
                 origin,
                 vec![EvidenceStep::Mask(crate::ast::Effect {
                     ability_id: ability,
                     args: vec![bound],
                 })],
-            )]),
-            local_instances: HashMap::from([(
+            )]
+            .into_iter()
+            .collect::<FxHashMap<_, _>>(),
+            local_instances: [(
                 origin,
                 crate::typeck::LocalCallableInstance {
                     binding: NodeId::from_raw(2),
@@ -606,9 +606,13 @@ mod tests {
                     callable: function,
                     row_arguments: vec![],
                 },
-            )]),
-            handler_operations: HashMap::from([(origin, operation(OpDeclKind::Op))]),
-            perform_operations: HashMap::from([(
+            )]
+            .into_iter()
+            .collect::<FxHashMap<_, _>>(),
+            handler_operations: [(origin, operation(OpDeclKind::Op))]
+                .into_iter()
+                .collect::<FxHashMap<_, _>>(),
+            perform_operations: [(
                 origin,
                 InstantiatedPerformOperation {
                     ability,
@@ -617,16 +621,20 @@ mod tests {
                     params: vec![bound],
                     result: bound,
                 },
-            )]),
-            lambda_signatures: HashMap::from([(
+            )]
+            .into_iter()
+            .collect::<FxHashMap<_, _>>(),
+            lambda_signatures: [(
                 origin,
                 LambdaSignature {
                     function_type: function,
                     convention: CallingConvention::Direct,
                 },
-            )]),
+            )]
+            .into_iter()
+            .collect::<FxHashMap<_, _>>(),
             exhaustive_cases: HashSet::from([origin]),
-            compiler_intrinsics: HashMap::new(),
+            compiler_intrinsics: FxHashMap::default(),
         };
         let type_args = vec![int];
         let origins = HashSet::from([origin]);

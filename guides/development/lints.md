@@ -10,11 +10,11 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Hash maps
 
-Use `hashbrown::HashMap` for compiler data structures. The workspace enables
-its `default-hasher` feature, so standard constructors such as `HashMap::new()`
-remain available. Existing `rustc_hash::FxHashMap` uses are also supported.
-The Salsa module environment uses `FxHashMap` because Salsa supports its hasher
-as a `SalsaValue`; hashbrown's default hasher does not satisfy that bound.
+Use `rustc_hash::FxHashMap` for compiler data structures, including Salsa's module
+environment. Construct empty maps with `FxHashMap::default()` and initialize
+maps from entries with `entries.into_iter().collect::<FxHashMap<_, _>>()`.
+`FxHashMap::new()` and the standard map's array `From` implementation do not
+support this hasher. Keep hashbrown for the existing `HashTable` interner.
 
 Clippy's `disallowed_types` lint rejects paths resolving to
 `std::collections::HashMap`, including renamed imports and explicit custom
@@ -30,6 +30,6 @@ If an external API requires the standard map, allow it only at the boundary:
 let mut map = std::collections::HashMap::new();
 ```
 
-Neither hashbrown's default hasher nor FxHasher is designed to defend against
-deliberate hash collisions. Review the hasher choice for externally controlled
+FxHasher is not designed to defend against deliberate hash collisions.
+Review the hasher choice for externally controlled
 keys; retaining the standard hasher at those boundaries is valid.

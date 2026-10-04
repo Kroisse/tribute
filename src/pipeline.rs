@@ -386,7 +386,7 @@ fn merge_and_lower_to_ir<'db>(
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 struct PreparedFrontend<'db> {
     typed: ast_typeck::TypeCheckOutput<'db>,
-    compiler_intrinsics: hashbrown::HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
+    compiler_intrinsics: rustc_hash::FxHashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
 }
 
 /// Merge and specialize inside a tracked query so specialization failures
@@ -439,14 +439,15 @@ fn prepare_frontend_details<'db>(
         );
 
         // Merge function_types: prelude first, user overrides
-        let mut fn_types: hashbrown::HashMap<_, _> = prelude_fn_types.iter().cloned().collect();
+        let mut fn_types: rustc_hash::FxHashMap<_, _> = prelude_fn_types.iter().cloned().collect();
         fn_types.extend(user_fn_types.iter().cloned());
 
         // Merge node_types: prelude first, user overrides
-        let mut node_types: hashbrown::HashMap<_, _> = prelude_node_types.iter().cloned().collect();
+        let mut node_types: rustc_hash::FxHashMap<_, _> =
+            prelude_node_types.iter().cloned().collect();
         node_types.extend(user_node_types.iter().cloned());
 
-        let mut ability_conventions: hashbrown::HashMap<_, _> =
+        let mut ability_conventions: rustc_hash::FxHashMap<_, _> =
             prelude_ability_conventions.iter().cloned().collect();
         ability_conventions.extend(user_ability_conventions.iter().cloned());
 
@@ -461,9 +462,9 @@ fn prepare_frontend_details<'db>(
             merged_span_map,
         )
     } else {
-        let fn_types: hashbrown::HashMap<_, _> = user_fn_types.iter().cloned().collect();
-        let node_types: hashbrown::HashMap<_, _> = user_node_types.iter().cloned().collect();
-        let ability_conventions: hashbrown::HashMap<_, _> =
+        let fn_types: rustc_hash::FxHashMap<_, _> = user_fn_types.iter().cloned().collect();
+        let node_types: rustc_hash::FxHashMap<_, _> = user_node_types.iter().cloned().collect();
+        let ability_conventions: rustc_hash::FxHashMap<_, _> =
             user_ability_conventions.iter().cloned().collect();
         (
             user_module.clone(),
@@ -493,7 +494,7 @@ fn prepare_frontend_details<'db>(
         }
     };
 
-    let mut function_instances: hashbrown::HashMap<_, _> = prelude_module(db)
+    let mut function_instances: rustc_hash::FxHashMap<_, _> = prelude_module(db)
         .map(|prelude| {
             prelude
                 .expression_types(db)

@@ -1,5 +1,5 @@
 //! Source nominal declarations shared by collection and generation in one preparation.
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::ast::{CtorId, Decl, EnumDecl, Module, NodeId, StructDecl, TypeDefId, TypedRef};
 
@@ -34,14 +34,14 @@ impl Declaration<'_, '_> {
 
 pub(super) struct NominalIndex<'ast, 'db> {
     pub module: NodeId,
-    pub declarations: HashMap<TypeDefId<'db>, Declaration<'ast, 'db>>,
+    pub declarations: FxHashMap<TypeDefId<'db>, Declaration<'ast, 'db>>,
 }
 
 impl<'ast, 'db> NominalIndex<'ast, 'db> {
     pub fn new(db: &'db dyn salsa::Database, module: &'ast Module<TypedRef<'db>>) -> Self {
         let mut index = Self {
             module: module.id,
-            declarations: HashMap::new(),
+            declarations: FxHashMap::default(),
         };
         index.collect(db, &module.decls, &mut String::new());
         index

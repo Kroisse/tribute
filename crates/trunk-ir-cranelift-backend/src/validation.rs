@@ -5,7 +5,7 @@
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use trunk_ir::SymbolPath;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
@@ -73,7 +73,7 @@ fn validate_clif_contracts(ctx: &IrContext, module: Module) -> Vec<String> {
         return Vec::new();
     };
     let mut errors = Vec::new();
-    let mut functions = HashMap::new();
+    let mut functions = FxHashMap::default();
     collect_clif_function_signatures(ctx, body, &mut functions, &mut errors);
     validate_clif_region(ctx, body, None, &functions, &mut errors);
     errors
@@ -82,7 +82,7 @@ fn validate_clif_contracts(ctx: &IrContext, module: Module) -> Vec<String> {
 fn collect_clif_function_signatures(
     ctx: &IrContext,
     region: RegionRef,
-    functions: &mut HashMap<SymbolPath, clif::FuncSig>,
+    functions: &mut FxHashMap<SymbolPath, clif::FuncSig>,
     errors: &mut Vec<String>,
 ) {
     for &block in &ctx.region(region).blocks {
@@ -267,7 +267,7 @@ fn validate_clif_region(
     ctx: &IrContext,
     region: RegionRef,
     owner: Option<clif::FuncSig>,
-    functions: &HashMap<SymbolPath, clif::FuncSig>,
+    functions: &FxHashMap<SymbolPath, clif::FuncSig>,
     errors: &mut Vec<String>,
 ) {
     for &block in &ctx.region(region).blocks {

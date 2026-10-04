@@ -13,8 +13,8 @@ pub(super) fn plan_function_actions(
     ir: &IrContext,
     inputs: ActionInputs<'_>,
     entries: &[EntryOwnership],
-    entry_contracts: &HashMap<SymbolPath, Vec<EntryOwnership>>,
-    definitions: &HashMap<SymbolPath, OpRef>,
+    entry_contracts: &FxHashMap<SymbolPath, Vec<EntryOwnership>>,
+    definitions: &FxHashMap<SymbolPath, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
     elide_proven_field_borrows: bool,
 ) -> Result<Vec<OwnershipAction>, OwnershipPlanError> {
@@ -34,15 +34,15 @@ struct ActionPlanner<'a> {
     ir: &'a IrContext,
     facts: &'a NativeOwnershipFunctionFacts,
     entries: &'a [EntryOwnership],
-    entry_contracts: &'a HashMap<SymbolPath, Vec<EntryOwnership>>,
-    definitions: &'a HashMap<SymbolPath, OpRef>,
+    entry_contracts: &'a FxHashMap<SymbolPath, Vec<EntryOwnership>>,
+    definitions: &'a FxHashMap<SymbolPath, OpRef>,
     managed_layouts: &'a HashSet<TypeRef>,
-    borrowed: HashMap<ValueRef, ValueRef>,
+    borrowed: FxHashMap<ValueRef, ValueRef>,
     owned: HashSet<ValueRef>,
     liveness: &'a BlockLiveness,
     /// Position of each value's definition in program order, which orders
     /// actions independently of arena numbering.
-    definition_order: HashMap<ValueRef, usize>,
+    definition_order: FxHashMap<ValueRef, usize>,
     actions: Vec<OwnershipAction>,
 }
 
@@ -51,8 +51,8 @@ impl<'a> ActionPlanner<'a> {
         ir: &'a IrContext,
         inputs: ActionInputs<'a>,
         entries: &'a [EntryOwnership],
-        entry_contracts: &'a HashMap<SymbolPath, Vec<EntryOwnership>>,
-        definitions: &'a HashMap<SymbolPath, OpRef>,
+        entry_contracts: &'a FxHashMap<SymbolPath, Vec<EntryOwnership>>,
+        definitions: &'a FxHashMap<SymbolPath, OpRef>,
         managed_layouts: &'a HashSet<TypeRef>,
         elide_proven_field_borrows: bool,
     ) -> Self {
@@ -62,7 +62,7 @@ impl<'a> ActionPlanner<'a> {
         let borrowed = if elide_proven_field_borrows {
             facts.projection_owners().clone()
         } else {
-            HashMap::new()
+            FxHashMap::default()
         };
         let mut owned = facts.managed_values().clone();
         for (&value, entry) in ir.block_args(facts.cfg().entry()).iter().zip(entries) {
@@ -290,7 +290,7 @@ impl ActionPlanner<'_> {
                 }
             }
         } else if let Some(transfers) = self.facts.cfg().branch_transfers(op) {
-            let mut counts = HashMap::<ValueRef, u32>::new();
+            let mut counts = FxHashMap::<ValueRef, u32>::default();
             for (index, transfer) in transfers.enumerate() {
                 if is_managed_value(self.ir, transfer.destination, self.managed_layouts) {
                     let root = root_value(self.facts.aliases(), transfer.source);
@@ -557,7 +557,7 @@ impl ActionPlanner<'_> {
                 "call arity differs from entry contract",
             ));
         }
-        let mut transfers = HashMap::<ValueRef, u32>::new();
+        let mut transfers = FxHashMap::<ValueRef, u32>::default();
         for (index, (&argument, entry)) in args.iter().zip(entries).enumerate() {
             let managed = is_managed_value(self.ir, argument, self.managed_layouts);
             if managed != (entry != EntryOwnership::Plain) {
@@ -704,7 +704,7 @@ impl ActionPlanner<'_> {
         ops: &[OpRef],
         transferred: &HashSet<ValueRef>,
     ) {
-        let mut last_use = HashMap::new();
+        let mut last_use = FxHashMap::default();
         for (index, &op) in ops.iter().enumerate() {
             for &operand in self.ir.op_operands(op) {
                 let root = root_value(self.facts.aliases(), operand);

@@ -4,8 +4,8 @@
 //! `ability` surface. It does not run closure extraction, evidence lowering,
 //! or target-specific conversion.
 
-use hashbrown::HashMap;
 use itertools::Itertools;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::error::Error;
 use std::fmt;
@@ -100,9 +100,9 @@ struct Converter<'a> {
     ctx: &'a mut IrContext,
     module_block: BlockRef,
     /// Callables by root-qualified name across the whole module tree.
-    funcs: HashMap<SymbolPath, CallableInfo>,
-    converted_types: HashMap<TypeRef, TypeRef>,
-    frames: HashMap<TypeRef, FrameTypes>,
+    funcs: FxHashMap<SymbolPath, CallableInfo>,
+    converted_types: FxHashMap<TypeRef, TypeRef>,
+    frames: FxHashMap<TypeRef, FrameTypes>,
     frame_layout_aliases: Vec<(Symbol, TypeRef)>,
     helper_index: u32,
 }
@@ -204,14 +204,14 @@ impl<'a> Converter<'a> {
     fn new(
         ctx: &'a mut IrContext,
         module_block: BlockRef,
-        funcs: HashMap<SymbolPath, CallableInfo>,
+        funcs: FxHashMap<SymbolPath, CallableInfo>,
     ) -> Self {
         Self {
             ctx,
             module_block,
             funcs,
-            converted_types: HashMap::new(),
-            frames: HashMap::new(),
+            converted_types: FxHashMap::default(),
+            frames: FxHashMap::default(),
             frame_layout_aliases: Vec::new(),
             helper_index: 0,
         }
@@ -283,7 +283,7 @@ impl<'a> Converter<'a> {
         source_ops: OpList,
         mut index: usize,
         block: BlockRef,
-        mapping: &mut HashMap<ValueRef, ValueRef>,
+        mapping: &mut FxHashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
         while index < source_ops.len() {
@@ -417,7 +417,7 @@ impl<'a> Converter<'a> {
 fn collect_callable_graph(
     ctx: &IrContext,
     symbols: &SymbolTable,
-) -> HashMap<SymbolPath, CallableInfo> {
+) -> FxHashMap<SymbolPath, CallableInfo> {
     symbols
         .iter()
         .filter(|&(_, ops)| tribute_control::Func::matches(ctx, ops[0]))
@@ -506,7 +506,7 @@ pub fn tribute_control_to_cps(
     });
     {
         let mut converter = Converter::new(ctx, new_block, funcs);
-        let mut mapping = HashMap::new();
+        let mut mapping = FxHashMap::default();
         let source_ops = converter.ctx.block(source_blocks[0]).ops.clone();
         for source in source_ops {
             if tribute_control::Func::matches(converter.ctx, source) {

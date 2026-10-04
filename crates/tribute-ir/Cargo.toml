@@ -7,7 +7,6 @@ license.workspace = true
 description = "Tribute language-specific IR dialects"
 
 [dependencies]
-hashbrown.workspace = true
 derive_more.workspace = true
 inventory.workspace = true
 itertools.workspace = true

@@ -30,7 +30,7 @@ mod expr;
 mod finalize;
 mod func_check;
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use trunk_ir::{Span, Symbol};
@@ -88,19 +88,19 @@ pub struct ModuleCheckResult<'db> {
 /// order.
 #[derive(Default)]
 pub(crate) struct FunctionCheck<'db> {
-    pub(super) node_types: HashMap<NodeId, Type<'db>>,
-    pub(super) function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
-    pub(super) local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
-    pub(super) evidence_plans: HashMap<NodeId, Vec<super::EvidenceStep<'db>>>,
+    pub(super) node_types: FxHashMap<NodeId, Type<'db>>,
+    pub(super) function_instances: FxHashMap<NodeId, super::FunctionInstance<'db>>,
+    pub(super) local_instances: FxHashMap<NodeId, super::LocalCallableInstance<'db>>,
+    pub(super) evidence_plans: FxHashMap<NodeId, Vec<super::EvidenceStep<'db>>>,
     pub(super) handler_operations:
-        HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+        FxHashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     pub(super) perform_operations:
-        HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
-    pub(super) lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+        FxHashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    pub(super) lambda_signatures: FxHashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     pub(super) exhaustive_cases: Vec<NodeId>,
     /// Quantifiers owned by generalized local schemes in this function. They
     /// remain separate from exported function schemes.
-    pub(super) local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
+    pub(super) local_generalizations: FxHashMap<UniVarId<'db>, (NodeId, u32)>,
     /// Case scrutinees whose exhaustiveness diagnostics were already reported.
     pub(super) exhaustiveness_reported: HashSet<NodeId>,
 }
@@ -128,19 +128,19 @@ pub struct TypeChecker<'db> {
     pub(crate) span_map: SpanMap,
     /// Accumulated node types from all functions.
     /// Collects NodeId → Type mappings during type checking.
-    node_types: HashMap<NodeId, Type<'db>>,
-    function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
-    local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
-    evidence_plans: HashMap<NodeId, Vec<super::EvidenceStep<'db>>>,
+    node_types: FxHashMap<NodeId, Type<'db>>,
+    function_instances: FxHashMap<NodeId, super::FunctionInstance<'db>>,
+    local_instances: FxHashMap<NodeId, super::LocalCallableInstance<'db>>,
+    evidence_plans: FxHashMap<NodeId, Vec<super::EvidenceStep<'db>>>,
     /// Exact handler operation instances collected from each checked function.
-    handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
-    perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
-    lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    handler_operations: FxHashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    perform_operations: FxHashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    lambda_signatures: FxHashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     exhaustive_cases: Vec<NodeId>,
     /// Source origins for concrete effects in each collected function signature.
-    effect_annotation_origins: HashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
-    signature_row_names: HashMap<FuncDefId<'db>, HashMap<Symbol, crate::ast::EffectVar>>,
-    signature_type_names: HashMap<FuncDefId<'db>, HashMap<Symbol, u32>>,
+    effect_annotation_origins: FxHashMap<FuncDefId<'db>, crate::ast::EffectAnnotationOrigins>,
+    signature_row_names: FxHashMap<FuncDefId<'db>, FxHashMap<Symbol, crate::ast::EffectVar>>,
+    signature_type_names: FxHashMap<FuncDefId<'db>, FxHashMap<Symbol, u32>>,
 }
 
 impl<'db> TypeChecker<'db> {
@@ -198,17 +198,17 @@ impl<'db> TypeChecker<'db> {
             env: ModuleTypeEnv::new(db),
             prefix: String::new(),
             span_map,
-            node_types: HashMap::new(),
-            function_instances: HashMap::new(),
-            local_instances: HashMap::new(),
-            evidence_plans: HashMap::new(),
-            handler_operations: HashMap::new(),
-            perform_operations: HashMap::new(),
-            lambda_signatures: HashMap::new(),
+            node_types: FxHashMap::default(),
+            function_instances: FxHashMap::default(),
+            local_instances: FxHashMap::default(),
+            evidence_plans: FxHashMap::default(),
+            handler_operations: FxHashMap::default(),
+            perform_operations: FxHashMap::default(),
+            lambda_signatures: FxHashMap::default(),
             exhaustive_cases: Vec::new(),
-            effect_annotation_origins: HashMap::new(),
-            signature_row_names: HashMap::new(),
-            signature_type_names: HashMap::new(),
+            effect_annotation_origins: FxHashMap::default(),
+            signature_row_names: FxHashMap::default(),
+            signature_type_names: FxHashMap::default(),
         }
     }
 

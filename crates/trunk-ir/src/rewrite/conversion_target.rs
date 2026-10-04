@@ -3,8 +3,9 @@
 //! Defines legality rules for dialect conversion: which operations/dialects
 //! are legal, illegal, or dynamically checked.
 
-use hashbrown::{HashMap, hash_map::Entry};
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::Entry;
 
 use derive_more::Error;
 
@@ -80,9 +81,9 @@ pub struct ConversionTarget {
     /// Dynamically legal operations whose nested regions are recursively legal.
     recursive_dynamic_ops: HashSet<(Symbol, Symbol)>,
     /// Dynamic legality checks for specific operations: (dialect, op_name).
-    dynamic_ops: HashMap<(Symbol, Symbol), Box<DynamicCheckFn>>,
+    dynamic_ops: FxHashMap<(Symbol, Symbol), Box<DynamicCheckFn>>,
     /// Dynamic legality checks for entire dialects.
-    dynamic_dialects: HashMap<Symbol, Box<DynamicCheckFn>>,
+    dynamic_dialects: FxHashMap<Symbol, Box<DynamicCheckFn>>,
     /// Dynamic fallback for operations not decided by op or dialect rules.
     dynamic_unknown: Option<Box<DynamicCheckFn>>,
 }
@@ -100,8 +101,8 @@ impl ConversionTarget {
             illegal_ops: HashSet::new(),
             recursive_legal_ops: HashSet::new(),
             recursive_dynamic_ops: HashSet::new(),
-            dynamic_ops: HashMap::new(),
-            dynamic_dialects: HashMap::new(),
+            dynamic_ops: FxHashMap::default(),
+            dynamic_dialects: FxHashMap::default(),
             dynamic_unknown: None,
         }
     }

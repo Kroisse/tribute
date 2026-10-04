@@ -1,6 +1,6 @@
 //! Lookup tables of hooks that dialects register per `(dialect, name)`.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use crate::Symbol;
 
@@ -13,11 +13,11 @@ pub(crate) trait Registered: inventory::Collect {
 }
 
 /// Hooks of one kind by `(dialect, name)`, built once from `inventory`.
-pub(crate) struct Registry<F: 'static>(HashMap<(Symbol, Symbol), &'static F>);
+pub(crate) struct Registry<F: 'static>(FxHashMap<(Symbol, Symbol), &'static F>);
 
 impl<F: Registered> Registry<F> {
     pub(crate) fn collect() -> Self {
-        let mut map = HashMap::new();
+        let mut map = FxHashMap::default();
         for hook in inventory::iter::<F> {
             let (dialect, name) = hook.key();
             let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(name));

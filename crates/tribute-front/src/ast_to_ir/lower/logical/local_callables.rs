@@ -8,8 +8,8 @@ type Key<'db> = (NodeId, Type<'db>, TypeRef);
 
 #[derive(Default)]
 pub(super) struct Plan<'db> {
-    requests: HashMap<NodeId, Vec<Key<'db>>>,
-    uses: HashMap<NodeId, Key<'db>>,
+    requests: FxHashMap<NodeId, Vec<Key<'db>>>,
+    uses: FxHashMap<NodeId, Key<'db>>,
 }
 
 impl<'db> Plan<'db> {
@@ -22,9 +22,9 @@ impl<'db> Plan<'db> {
     ) -> Self {
         let mut nodes = Vec::new();
         body.for_each(|expr| nodes.push(expr));
-        let mut origins: HashMap<LocalId, (NodeId, &Expr<TypedRef<'db>>)> = HashMap::new();
-        let mut bindings = HashMap::new();
-        let mut named = HashMap::new();
+        let mut origins: FxHashMap<LocalId, (NodeId, &Expr<TypedRef<'db>>)> = FxHashMap::default();
+        let mut bindings = FxHashMap::default();
+        let mut named = FxHashMap::default();
         let mut aliases = HashSet::new();
         for expr in &nodes {
             if let ExprKind::Block { stmts, .. } = &*expr.kind {
@@ -67,7 +67,7 @@ impl<'db> Plan<'db> {
         }
         // Named consumers may retain an open worker ABI even when this source
         // call's checked effect instance is pure.
-        let mut expected = HashMap::new();
+        let mut expected = FxHashMap::default();
         for expr in &nodes {
             if let ExprKind::Call { callee, args } = &*expr.kind {
                 let parameters = match &*callee.kind {

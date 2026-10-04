@@ -4,7 +4,7 @@
 //! ensuring that type variables (UniVars) are fully resolved within the function
 //! before moving to the next.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use itertools::Itertools;
@@ -302,7 +302,7 @@ impl<'db> TypeChecker<'db> {
                 }
             })
         });
-        let mut var_to_index: HashMap<UniVarId<'db>, u32> = HashMap::new();
+        let mut var_to_index: FxHashMap<UniVarId<'db>, u32> = FxHashMap::default();
         for id in signature_vars.chain(all_univars) {
             let next = var_to_index.len() as u32;
             var_to_index.entry(id).or_insert(next);
@@ -530,7 +530,7 @@ impl<'db> TypeChecker<'db> {
             .env
             .export_ability_conventions()
             .into_iter()
-            .collect::<HashMap<_, _>>();
+            .collect::<FxHashMap<_, _>>();
         for (lambda_id, signature) in func_lambda_signatures {
             let function_type = substitution.apply(signature.function_type);
             let convention = crate::ast::calling_convention_for_function_type(
@@ -570,9 +570,9 @@ impl<'db> TypeChecker<'db> {
         solver: &mut TypeSolver<'db>,
         mut deferred: Vec<crate::typeck::func_context::DeferredMethodCall<'db>>,
         func_node_id: crate::ast::NodeId,
-        instances: &mut HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    ) -> HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)> {
-        let mut resolved = HashMap::new();
+        instances: &mut FxHashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+    ) -> FxHashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)> {
+        let mut resolved = FxHashMap::default();
         loop {
             let mut new_constraints = ConstraintSet::new();
             let mut remaining = Vec::new();
@@ -778,7 +778,8 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Rows each row flows into through the body's retained unions.
-        let mut flows: HashMap<crate::ast::EffectVar, Vec<crate::ast::EffectVar>> = HashMap::new();
+        let mut flows: FxHashMap<crate::ast::EffectVar, Vec<crate::ast::EffectVar>> =
+            FxHashMap::default();
         for union in retained {
             if let Some(result) = tail(&union.result) {
                 for source in union.sources.iter().filter_map(tail) {
@@ -987,7 +988,7 @@ impl<'db> TypeChecker<'db> {
             .accumulate(db);
         };
 
-        let type_names: HashMap<u32, Symbol> = self
+        let type_names: FxHashMap<u32, Symbol> = self
             .signature_type_names
             .get(&func_id)
             .into_iter()
@@ -999,7 +1000,7 @@ impl<'db> TypeChecker<'db> {
                 .get(&(index as u32))
                 .map_or_else(|| format!("#{index}"), |name| name.to_string())
         };
-        let mut seen_types: HashMap<UniVarId<'db>, usize> = HashMap::new();
+        let mut seen_types: FxHashMap<UniVarId<'db>, usize> = FxHashMap::default();
         for (index, ty) in instance.type_args.iter().enumerate() {
             let resolved = type_subst.apply_with_rows(db, *ty, row_subst);
             match resolved.kind(db) {
@@ -1023,7 +1024,7 @@ impl<'db> TypeChecker<'db> {
             }
         }
 
-        let row_names: HashMap<crate::ast::EffectVar, Symbol> = self
+        let row_names: FxHashMap<crate::ast::EffectVar, Symbol> = self
             .signature_row_names
             .get(&func_id)
             .into_iter()
@@ -1044,7 +1045,7 @@ impl<'db> TypeChecker<'db> {
             TypeKind::Func { effect, .. } => effect.rest(db),
             _ => None,
         };
-        let mut seen_rows: HashMap<crate::ast::EffectVar, usize> = HashMap::new();
+        let mut seen_rows: FxHashMap<crate::ast::EffectVar, usize> = FxHashMap::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let resolved = row_subst.apply(db, *row);
             let Some(tail) = resolved.rest(db) else {

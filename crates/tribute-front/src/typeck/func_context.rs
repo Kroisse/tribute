@@ -9,7 +9,7 @@
 //! UniVar IDs include the function name, making them globally unique across all
 //! functions without needing a global counter.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use trunk_ir::Symbol;
@@ -80,17 +80,17 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Types of local variables (by LocalId), organized as a stack of scopes.
     /// The last element is the innermost (current) scope.
-    local_scopes: Vec<HashMap<LocalId, TypeScheme<'db>>>,
+    local_scopes: Vec<FxHashMap<LocalId, TypeScheme<'db>>>,
 
     /// Types of local variables by name, organized as a stack of scopes.
     /// The last element is the innermost (current) scope.
-    name_scopes: Vec<HashMap<Symbol, TypeScheme<'db>>>,
+    name_scopes: Vec<FxHashMap<Symbol, TypeScheme<'db>>>,
 
     /// Types of AST nodes (for TypedRef construction).
-    node_types: HashMap<NodeId, Type<'db>>,
+    node_types: FxHashMap<NodeId, Type<'db>>,
 
     /// Completed lambda checks, shared by inference and typed AST conversion.
-    checked_lambdas: HashMap<NodeId, (Option<Type<'db>>, Expr<TypedRef<'db>>)>,
+    checked_lambdas: FxHashMap<NodeId, (Option<Type<'db>>, Expr<TypedRef<'db>>)>,
 
     /// Record layouts already checked during this function's infer/check visits.
     /// Child expression checking still runs on every visit.
@@ -98,57 +98,57 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// One full constructor instance per value occurrence, shared by inference
     /// and conversion so phantom arguments and callable field rows stay linked.
-    constructor_reference_types: HashMap<NodeId, Type<'db>>,
+    constructor_reference_types: FxHashMap<NodeId, Type<'db>>,
 
     /// Function-local quantifiers introduced by pure `let` generalization.
     /// These are distinct from the enclosing function scheme's binders when
     /// the solved typed body and callable metadata are materialized.
-    local_generalizations: HashMap<UniVarId<'db>, (NodeId, u32)>,
+    local_generalizations: FxHashMap<UniVarId<'db>, (NodeId, u32)>,
 
     /// The schemes each generalized `let` pattern bound on its first visit,
     /// rebound unchanged when inference and conversion revisit it.
-    let_schemes: HashMap<NodeId, Vec<LetSchemeBinding<'db>>>,
+    let_schemes: FxHashMap<NodeId, Vec<LetSchemeBinding<'db>>>,
 
     /// The solved function type selected for each direct call callee.
-    function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
+    function_instances: FxHashMap<NodeId, super::FunctionInstance<'db>>,
 
     /// Inference-time instances for quantified local reference occurrences.
     /// Conversion reuses only these polymorphic instances; monomorphic locals
     /// are deliberately looked up again.
-    quantified_local_reference_types: HashMap<NodeId, Type<'db>>,
-    local_binding_owners: HashMap<LocalId, NodeId>,
-    local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
+    quantified_local_reference_types: FxHashMap<NodeId, Type<'db>>,
+    local_binding_owners: FxHashMap<LocalId, NodeId>,
+    local_instances: FxHashMap<NodeId, super::LocalCallableInstance<'db>>,
 
     /// Fully instantiated operation metadata for handler arms.
-    handler_operations: HashMap<NodeId, InstantiatedHandlerOperation<'db>>,
+    handler_operations: FxHashMap<NodeId, InstantiatedHandlerOperation<'db>>,
 
     /// Handler validation is revisited during conversion; report each error once.
     reported_handler_errors: HashSet<(NodeId, &'static str)>,
 
     /// Synthetic `resume` locals of `op` arms whose operation returns `Never`,
     /// mapped to the ability and operation names for diagnostics.
-    non_resumptive_resume_locals: HashMap<LocalId, (Symbol, Symbol)>,
+    non_resumptive_resume_locals: FxHashMap<LocalId, (Symbol, Symbol)>,
 
     /// Module references in value position, each reported once.
     reported_module_values: HashSet<NodeId>,
 
     /// Exact instantiated metadata for ability-operation call expressions.
-    perform_operations: HashMap<NodeId, InstantiatedPerformOperation<'db>>,
+    perform_operations: FxHashMap<NodeId, InstantiatedPerformOperation<'db>>,
 
     /// Inference-time types for ability-operation callees. This is deliberately
     /// separate from `node_types`: conversion revisits the callee and must be
     /// constrained to the same instantiated operation without changing the
     /// concrete expression node-type table.
-    ability_op_callee_types: HashMap<NodeId, Type<'db>>,
+    ability_op_callee_types: FxHashMap<NodeId, Type<'db>>,
 
     /// Source-logical callable signatures for lambda nodes.
-    lambda_signatures: HashMap<NodeId, LambdaSignature<'db>>,
+    lambda_signatures: FxHashMap<NodeId, LambdaSignature<'db>>,
 
     /// Generated constraints for this function.
     constraints: ConstraintSet<'db>,
 
     /// One common-result relation per source expression, shared by infer/check visits.
-    result_joins: HashMap<NodeId, Constraint<'db>>,
+    result_joins: FxHashMap<NodeId, Constraint<'db>>,
 
     /// Counter for fresh type variables (local to this function).
     next_type_var: u64,
@@ -157,11 +157,11 @@ pub struct FunctionInferenceContext<'a, 'db> {
     next_row_var: u64,
 
     /// Named rows share the function declaration's annotation scope.
-    annotation_rows: HashMap<Symbol, EffectVar>,
+    annotation_rows: FxHashMap<Symbol, EffectVar>,
     /// Parent signature parameters are shared by all body annotations.
-    annotation_type_parameters: HashMap<Symbol, Type<'db>>,
+    annotation_type_parameters: FxHashMap<Symbol, Type<'db>>,
     /// Annotation revisits must not allocate unrelated inference variables.
-    annotation_types: HashMap<NodeId, Type<'db>>,
+    annotation_types: FxHashMap<NodeId, Type<'db>>,
 
     /// Current accumulated effects.
     current_effect: EffectRow<'db>,
@@ -179,7 +179,7 @@ pub struct FunctionInferenceContext<'a, 'db> {
 
     /// Resolved UFCS methods: NodeId → (FuncDefId, instantiated callee type).
     /// Populated during inference phase, consumed during conversion phase.
-    resolved_methods: HashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
+    resolved_methods: FxHashMap<NodeId, (FuncDefId<'db>, Type<'db>)>,
 
     /// Deferred UFCS method calls whose receiver type is still a UniVar.
     /// Resolved after constraint solving when UniVars have been substituted.
@@ -222,39 +222,39 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             env,
             func_id,
             // Start with one scope (the function's top-level scope)
-            local_scopes: vec![HashMap::new()],
-            name_scopes: vec![HashMap::new()],
-            node_types: HashMap::new(),
-            checked_lambdas: HashMap::new(),
+            local_scopes: vec![FxHashMap::default()],
+            name_scopes: vec![FxHashMap::default()],
+            node_types: FxHashMap::default(),
+            checked_lambdas: FxHashMap::default(),
             checked_record_shapes: HashSet::new(),
-            constructor_reference_types: HashMap::new(),
-            local_generalizations: HashMap::new(),
-            let_schemes: HashMap::new(),
-            function_instances: HashMap::new(),
-            quantified_local_reference_types: HashMap::new(),
-            local_binding_owners: HashMap::new(),
-            local_instances: HashMap::new(),
-            handler_operations: HashMap::new(),
+            constructor_reference_types: FxHashMap::default(),
+            local_generalizations: FxHashMap::default(),
+            let_schemes: FxHashMap::default(),
+            function_instances: FxHashMap::default(),
+            quantified_local_reference_types: FxHashMap::default(),
+            local_binding_owners: FxHashMap::default(),
+            local_instances: FxHashMap::default(),
+            handler_operations: FxHashMap::default(),
             reported_handler_errors: HashSet::new(),
-            non_resumptive_resume_locals: HashMap::new(),
+            non_resumptive_resume_locals: FxHashMap::default(),
             reported_module_values: HashSet::new(),
-            perform_operations: HashMap::new(),
-            ability_op_callee_types: HashMap::new(),
-            lambda_signatures: HashMap::new(),
+            perform_operations: FxHashMap::default(),
+            ability_op_callee_types: FxHashMap::default(),
+            lambda_signatures: FxHashMap::default(),
             constraints: ConstraintSet::new(),
-            result_joins: HashMap::new(),
+            result_joins: FxHashMap::default(),
             next_type_var: 0,
             // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
-            annotation_rows: HashMap::new(),
-            annotation_type_parameters: HashMap::new(),
-            annotation_types: HashMap::new(),
+            annotation_rows: FxHashMap::default(),
+            annotation_type_parameters: FxHashMap::default(),
+            annotation_types: FxHashMap::default(),
             current_effect: EffectRow::pure(db),
             effect_contract: None,
             lambda_resume_effects: Vec::new(),
             handle_ctx_stack: Vec::new(),
-            resolved_methods: HashMap::new(),
+            resolved_methods: FxHashMap::default(),
             deferred_methods: Vec::new(),
             evidence: Default::default(),
         }
@@ -364,8 +364,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Push a new scope. Call this when entering a lambda body or case arm.
     pub fn push_scope(&mut self) {
-        self.local_scopes.push(HashMap::new());
-        self.name_scopes.push(HashMap::new());
+        self.local_scopes.push(FxHashMap::default());
+        self.name_scopes.push(FxHashMap::default());
     }
 
     /// Pop the current scope. Call this when exiting a lambda body or case arm.
@@ -514,7 +514,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     ///
     /// This consumes the node_types, leaving an empty map.
     /// Used for collecting all node types after type checking a function.
-    pub fn take_node_types(&mut self) -> HashMap<NodeId, Type<'db>> {
+    pub fn take_node_types(&mut self) -> FxHashMap<NodeId, Type<'db>> {
         std::mem::take(&mut self.node_types)
     }
 
@@ -525,7 +525,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     pub fn record_local_generalization(
         &mut self,
         scope: NodeId,
-        mapping: HashMap<UniVarId<'db>, u32>,
+        mapping: FxHashMap<UniVarId<'db>, u32>,
     ) {
         for (var, index) in mapping {
             let owner = *self
@@ -555,7 +555,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.let_schemes.get(&pattern).cloned()
     }
 
-    pub fn take_local_generalizations(&mut self) -> HashMap<UniVarId<'db>, (NodeId, u32)> {
+    pub fn take_local_generalizations(&mut self) -> FxHashMap<UniVarId<'db>, (NodeId, u32)> {
         std::mem::take(&mut self.local_generalizations)
     }
 
@@ -622,7 +622,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub(crate) fn take_local_instances(
         &mut self,
-    ) -> HashMap<NodeId, super::LocalCallableInstance<'db>> {
+    ) -> FxHashMap<NodeId, super::LocalCallableInstance<'db>> {
         std::mem::take(&mut self.local_instances)
     }
 
@@ -638,7 +638,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Take handler operation metadata collected for this function.
     pub fn take_handler_operations(
         &mut self,
-    ) -> HashMap<NodeId, InstantiatedHandlerOperation<'db>> {
+    ) -> FxHashMap<NodeId, InstantiatedHandlerOperation<'db>> {
         std::mem::take(&mut self.handler_operations)
     }
 
@@ -652,7 +652,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     pub fn take_perform_operations(
         &mut self,
-    ) -> HashMap<NodeId, InstantiatedPerformOperation<'db>> {
+    ) -> FxHashMap<NodeId, InstantiatedPerformOperation<'db>> {
         std::mem::take(&mut self.perform_operations)
     }
 
@@ -682,7 +682,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.lambda_signatures.insert(lambda, signature);
     }
 
-    pub fn take_lambda_signatures(&mut self) -> HashMap<NodeId, LambdaSignature<'db>> {
+    pub fn take_lambda_signatures(&mut self) -> FxHashMap<NodeId, LambdaSignature<'db>> {
         std::mem::take(&mut self.lambda_signatures)
     }
 
@@ -754,7 +754,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.function_instances.entry(node).or_insert(instance);
     }
 
-    pub fn take_function_instances(&mut self) -> HashMap<NodeId, super::FunctionInstance<'db>> {
+    pub fn take_function_instances(&mut self) -> FxHashMap<NodeId, super::FunctionInstance<'db>> {
         std::mem::take(&mut self.function_instances)
     }
 
@@ -1829,7 +1829,7 @@ mod merge_effect_tests {
             super::super::context::AbilityInfo {
                 id: ability_id,
                 type_params: vec![crate::ast::TypeParam::anonymous()],
-                operations: hashbrown::HashMap::new(),
+                operations: rustc_hash::FxHashMap::default(),
             },
         );
         let func_id = FuncDefId::new(db, Symbol::new("test"));

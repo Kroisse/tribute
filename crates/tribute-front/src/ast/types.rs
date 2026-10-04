@@ -584,7 +584,7 @@ impl EffectAnnotationOrigins {
         db: &'db dyn salsa::Database,
         row: EffectRow<'db>,
     ) -> Option<DuplicateEffectAnnotations<'db>> {
-        use hashbrown::HashMap;
+        use rustc_hash::FxHashMap;
 
         let effects = row.effects(db);
         // Solving an open row may append inferred effects after the concrete
@@ -592,7 +592,7 @@ impl EffectAnnotationOrigins {
         // annotation origins and can represent duplicate annotations.
         let annotated_effects = &effects[..effects.len().min(self.concrete.len())];
 
-        let mut first_origins = HashMap::<Effect<'db>, NodeId>::new();
+        let mut first_origins = FxHashMap::<Effect<'db>, NodeId>::default();
         for (effect, &annotation_id) in annotated_effects.iter().zip(&self.concrete) {
             if let Some(&first_annotation_id) = first_origins.get(effect) {
                 let duplicates = annotated_effects

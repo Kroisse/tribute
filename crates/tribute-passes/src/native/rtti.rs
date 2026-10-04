@@ -29,7 +29,7 @@
 //! Runs before `adt_rc_header` (Phase 1.95), which stores the declared
 //! `rtti_idx` values in allocation headers and then erases the declarations.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 
@@ -192,7 +192,7 @@ pub fn generate_rtti(
     };
 
     let loc = Location::new(ctx.intern_path("<rtti>"), Span::new(0, 0));
-    let mut release_fns = HashMap::new();
+    let mut release_fns = FxHashMap::default();
 
     // `anyref` and `intref` have no static nominal allocation layout. Their
     // release action carries a dynamic-size signal, resolved by the header
@@ -852,7 +852,9 @@ mod tests {
 
         assert_eq!(
             tribute_rtti::Layout::declared_indices(&ctx, module),
-            HashMap::from([((point_ty, None), RTTI_USER_START)])
+            [((point_ty, None), RTTI_USER_START)]
+                .into_iter()
+                .collect::<FxHashMap<_, _>>()
         );
     }
 

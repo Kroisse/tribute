@@ -10,7 +10,7 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -443,7 +443,7 @@ impl RewritePattern for FuncUnreachablePattern {
 
 /// Each uniquely defined `func.func` by root-qualified name, with its exact
 /// signature captured before lowering converts it.
-fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<SymbolPath, TypeRef> {
+fn function_signatures(ctx: &IrContext, module: Module) -> FxHashMap<SymbolPath, TypeRef> {
     let table = SymbolTable::collect(ctx, module);
     table
         .iter()
@@ -460,7 +460,7 @@ fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<SymbolPath, T
 /// reference must carry exactly its target's signature, calling convention
 /// included, before it is erased.
 struct FuncConstantPattern {
-    functions: HashMap<SymbolPath, TypeRef>,
+    functions: FxHashMap<SymbolPath, TypeRef>,
 }
 
 impl RewritePattern for FuncConstantPattern {

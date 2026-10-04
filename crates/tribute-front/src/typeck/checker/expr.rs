@@ -3,7 +3,7 @@
 //! All expression checking methods take a `FunctionInferenceContext` as parameter,
 //! enabling per-function type inference with isolated constraints.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use itertools::Itertools;
@@ -2326,7 +2326,7 @@ impl<'db> TypeChecker<'db> {
         // by the root pattern: the right-hand side is checked once, so a
         // variable shared by several names (`let f as g = ...`) must have a
         // single owner.
-        let mut let_quantifiers = HashMap::new();
+        let mut let_quantifiers = FxHashMap::default();
         let mut let_schemes = Vec::new();
         for PatternBinding {
             name,
@@ -3544,7 +3544,7 @@ impl<'db> TypeChecker<'db> {
 
 #[cfg(test)]
 mod tests {
-    use hashbrown::HashMap;
+    use rustc_hash::FxHashMap;
 
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
@@ -3713,7 +3713,7 @@ mod tests {
             AbilityInfo {
                 id: ability_id,
                 type_params: vec![],
-                operations: HashMap::from([(
+                operations: [(
                     get.clone(),
                     AbilityOpInfo {
                         name: get.clone(),
@@ -3721,7 +3721,9 @@ mod tests {
                         param_types: vec![],
                         return_type: Type::new(db, TypeKind::Nat),
                     },
-                )]),
+                )]
+                .into_iter()
+                .collect::<FxHashMap<_, _>>(),
             },
         );
         let mut ctx = make_test_ctx(db, &checker.env);
@@ -3798,7 +3800,7 @@ mod tests {
             AbilityInfo {
                 id: ability_id,
                 type_params: vec![],
-                operations: HashMap::from([
+                operations: [
                     (
                         nat_op.clone(),
                         AbilityOpInfo {
@@ -3817,7 +3819,9 @@ mod tests {
                             return_type: Type::new(db, TypeKind::Nil),
                         },
                     ),
-                ]),
+                ]
+                .into_iter()
+                .collect::<FxHashMap<_, _>>(),
             },
         );
 

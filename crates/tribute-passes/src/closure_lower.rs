@@ -19,7 +19,7 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -696,7 +696,7 @@ fn erase_identity_casts(ctx: &mut IrContext, module: Module) {
 struct TypeSubstitution<'a, F> {
     ctx: &'a mut IrContext,
     substitute: F,
-    cache: HashMap<TypeRef, TypeRef>,
+    cache: FxHashMap<TypeRef, TypeRef>,
     visiting: HashSet<TypeRef>,
 }
 
@@ -705,7 +705,7 @@ impl<'a, F: Fn(&IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> 
         Self {
             ctx,
             substitute,
-            cache: HashMap::new(),
+            cache: FxHashMap::default(),
             visiting: HashSet::new(),
         }
     }

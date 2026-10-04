@@ -3,7 +3,7 @@
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
 //! by looking up names in the module environment and local scopes.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use itertools::Itertools;
 use salsa::Accumulator as _;
@@ -87,7 +87,7 @@ pub struct Resolver<'db> {
     /// Module-level environment with function and type definitions.
     env: ModuleEnv<'db>,
     /// Stack of local scopes (function parameters, let bindings, etc.).
-    local_scopes: Vec<HashMap<Symbol, LocalId>>,
+    local_scopes: Vec<FxHashMap<Symbol, LocalId>>,
     /// Generator for unique LocalIds.
     local_id_gen: LocalIdGen,
     /// Span map for emitting diagnostics with source locations.
@@ -96,14 +96,14 @@ pub struct Resolver<'db> {
     resume_local_id_stack: Vec<LocalId>,
     /// Ability operations injected from effect annotations (effect-directed resolution).
     /// Maps unqualified operation name → Binding. Cleared on each function scope.
-    effect_ops: HashMap<Symbol, Binding<'db>>,
+    effect_ops: FxHashMap<Symbol, Binding<'db>>,
     /// Lexical nested-module namespace used for unqualified references in an
     /// inline module body.
     module_path: Vec<Symbol>,
     /// For each inline module entered, its imports: the imported name and the
     /// package-root path it names. An import is visible only in the body of
     /// the module that declares it.
-    module_imports: Vec<HashMap<Symbol, Vec<Symbol>>>,
+    module_imports: Vec<FxHashMap<Symbol, Vec<Symbol>>>,
     /// How many leading segments of `module_path` are the package root:
     /// zero for a user package, one for the prelude inside its `std` module.
     package_depth: usize,
@@ -115,11 +115,11 @@ impl<'db> Resolver<'db> {
         Self {
             db,
             env,
-            local_scopes: vec![HashMap::new()],
+            local_scopes: vec![FxHashMap::default()],
             local_id_gen: LocalIdGen::new(),
             resume_local_id_stack: Vec::new(),
             span_map,
-            effect_ops: HashMap::new(),
+            effect_ops: FxHashMap::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
             package_depth: 0,
@@ -135,7 +135,7 @@ impl<'db> Resolver<'db> {
 
     /// Enter a new local scope.
     fn push_scope(&mut self) {
-        self.local_scopes.push(HashMap::new());
+        self.local_scopes.push(FxHashMap::default());
     }
 
     /// Exit the current local scope.
@@ -672,7 +672,7 @@ impl<'db> Resolver<'db> {
                 _ => None,
             })
             .collect();
-        self.module_imports.push(HashMap::new());
+        self.module_imports.push(FxHashMap::default());
         loop {
             let resolved: Vec<(Symbol, Vec<Symbol>)> = uses
                 .iter()

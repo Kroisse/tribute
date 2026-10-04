@@ -1,5 +1,5 @@
 use super::nominal_index::NominalIndex;
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use crate::ast::visit::{RefSite, Refs, walk_module};
@@ -14,8 +14,8 @@ pub fn collect_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
-    function_instances: &HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-) -> HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
+    function_instances: &FxHashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+) -> FxHashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let mut collector = InstantiationCollector::new(db, function_types, function_instances);
     walk_module(
         &mut Refs(|site, node, value: &TypedRef<'db>| {
@@ -131,16 +131,16 @@ fn extract_recursive<'db>(
 
 struct InstantiationCollector<'a, 'db> {
     db: &'db dyn salsa::Database,
-    schemes: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
-    function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
-    instantiations: HashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    schemes: FxHashMap<FuncDefId<'db>, TypeScheme<'db>>,
+    function_instances: &'a FxHashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+    instantiations: FxHashMap<FuncDefId<'db>, HashSet<Vec<Type<'db>>>>,
 }
 
 impl<'a, 'db> InstantiationCollector<'a, 'db> {
     fn new(
         db: &'db dyn salsa::Database,
         function_types: &[(trunk_ir::Symbol, TypeScheme<'db>)],
-        function_instances: &'a HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
+        function_instances: &'a FxHashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     ) -> Self {
         let schemes = function_types
             .iter()
@@ -151,7 +151,7 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
             db,
             schemes,
             function_instances,
-            instantiations: HashMap::new(),
+            instantiations: FxHashMap::default(),
         }
     }
 
@@ -183,13 +183,13 @@ impl<'a, 'db> InstantiationCollector<'a, 'db> {
 }
 
 pub(crate) fn is_concrete_type<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> bool {
-    is_concrete_type_cached(db, ty, &mut HashMap::new())
+    is_concrete_type_cached(db, ty, &mut FxHashMap::default())
 }
 
 fn is_concrete_type_cached<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
-    cache: &mut HashMap<Type<'db>, bool>,
+    cache: &mut FxHashMap<Type<'db>, bool>,
 ) -> bool {
     if let Some(concrete) = cache.get(&ty) {
         return *concrete;
@@ -243,7 +243,7 @@ fn is_concrete_type_cached<'db>(
 fn is_concrete_effect_row_cached<'db>(
     db: &'db dyn salsa::Database,
     row: crate::ast::EffectRow<'db>,
-    cache: &mut HashMap<Type<'db>, bool>,
+    cache: &mut FxHashMap<Type<'db>, bool>,
 ) -> bool {
     row.rest(db).is_none()
         && row.effects(db).iter().all(|effect| {
@@ -268,7 +268,7 @@ pub fn collect_type_instantiations<'db>(
     db: &'db dyn salsa::Database,
     module: &Module<TypedRef<'db>>,
     extra_types: impl IntoIterator<Item = Type<'db>>,
-) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
+) -> FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
     let index = NominalIndex::new(db, module);
     collect_type_instantiations_with_index(db, module, extra_types, &index)
 }
@@ -278,8 +278,8 @@ pub(super) fn collect_type_instantiations_with_index<'db>(
     module: &Module<TypedRef<'db>>,
     extra_types: impl IntoIterator<Item = Type<'db>>,
     index: &NominalIndex<'_, 'db>,
-) -> HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
-    let mut result: HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = HashMap::new();
+) -> FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> {
+    let mut result: FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>> = FxHashMap::default();
 
     walk_module(
         &mut Refs(|site, _, value: &TypedRef<'db>| {
@@ -301,7 +301,7 @@ pub(super) fn collect_from_type<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     index: &NominalIndex<'_, 'db>,
-    result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    result: &mut FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) {
     collect_from_type_inner(db, ty, index, result, &mut HashSet::new());
 }
@@ -312,7 +312,7 @@ fn collect_from_type_inner<'db>(
     db: &'db dyn salsa::Database,
     ty: Type<'db>,
     index: &NominalIndex<'_, 'db>,
-    result: &mut HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
+    result: &mut FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
     seen: &mut HashSet<Type<'db>>,
 ) {
     if !seen.insert(ty) {
@@ -737,7 +737,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = FxHashMap::default();
         collect_from_type(&db, option_int, &index, &mut result);
 
         assert_eq!(result.len(), 1);
@@ -760,7 +760,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = FxHashMap::default();
         collect_from_type(&db, option_bound, &index, &mut result);
 
         assert!(result.is_empty());
@@ -787,7 +787,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = FxHashMap::default();
         collect_from_type(&db, option_bound, &index, &mut result);
 
         assert!(result.is_empty());
@@ -818,7 +818,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = FxHashMap::default();
         collect_from_type(&db, result_bound_option_int, &index, &mut result);
 
         assert!(!result.contains_key(&result_id));
@@ -850,7 +850,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = FxHashMap::default();
         collect_from_type(&db, list_option_int, &index, &mut result);
 
         assert_eq!(result.len(), 2);
@@ -883,7 +883,7 @@ mod tests {
             },
         );
 
-        let mut result = HashMap::new();
+        let mut result = FxHashMap::default();
         collect_from_type(&db, func_ty, &index, &mut result);
 
         assert_eq!(result.len(), 1);
@@ -896,7 +896,7 @@ mod tests {
         let module = nominal_module();
         let index = NominalIndex::new(&db, &module);
         let int = Type::new(&db, TypeKind::Int);
-        let mut result = HashMap::new();
+        let mut result = FxHashMap::default();
         // Neither an unknown type nor an indexed non-generic declaration qualifies,
         // even if the type carries arguments.
         for id in [

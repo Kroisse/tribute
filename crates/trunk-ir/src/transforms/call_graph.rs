@@ -10,7 +10,7 @@
 //! Functions and references use root-qualified names (e.g. `nested::helper`),
 //! as resolved by [`SymbolTable`].
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::ops::ControlFlow;
 
@@ -25,7 +25,7 @@ use crate::symbol::SymbolPath;
 use crate::symbol_table::SymbolTable;
 use crate::walk::{WalkAction, walk_op, walk_region};
 
-type Edges = HashMap<SymbolPath, HashSet<SymbolPath>>;
+type Edges = FxHashMap<SymbolPath, HashSet<SymbolPath>>;
 
 /// A function call graph over a module.
 ///
@@ -36,11 +36,11 @@ type Edges = HashMap<SymbolPath, HashSet<SymbolPath>>;
 #[derive(Debug, Default)]
 pub struct CallGraph {
     /// Caller → set of callees (includes direct calls and address references).
-    pub edges: HashMap<SymbolPath, HashSet<SymbolPath>>,
+    pub edges: FxHashMap<SymbolPath, HashSet<SymbolPath>>,
     /// Caller → callees of its direct calls only; a subset of `edges`.
-    pub calls: HashMap<SymbolPath, HashSet<SymbolPath>>,
+    pub calls: FxHashMap<SymbolPath, HashSet<SymbolPath>>,
     /// Function name (possibly qualified) → its defining `func.func` op.
-    pub func_ops: HashMap<SymbolPath, OpRef>,
+    pub func_ops: FxHashMap<SymbolPath, OpRef>,
     /// Functions whose address is taken: referenced other than as the callee
     /// of a direct call in a function body. Includes `module_references`.
     pub address_taken: HashSet<SymbolPath>,
@@ -50,7 +50,7 @@ pub struct CallGraph {
     /// Callee → number of static direct-call sites across the whole module.
     /// Address references are *not* counted here (they are tracked in
     /// `address_taken`).
-    pub call_site_count: HashMap<SymbolPath, usize>,
+    pub call_site_count: FxHashMap<SymbolPath, usize>,
 }
 
 /// Build a call graph for `module`, recursing into nested `core.module` ops.
@@ -145,11 +145,11 @@ impl InfallibleAnalysis for CallGraph {}
 /// Only functions defined in `graph.func_ops` are assigned an id. External
 /// callees (callees that appear in edges but have no corresponding `func.func`)
 /// are skipped.
-pub fn tarjan_scc(graph: &CallGraph) -> HashMap<SymbolPath, u32> {
+pub fn tarjan_scc(graph: &CallGraph) -> FxHashMap<SymbolPath, u32> {
     scc_over(graph, &graph.edges)
 }
 
-fn scc_over(graph: &CallGraph, edges: &Edges) -> HashMap<SymbolPath, u32> {
+fn scc_over(graph: &CallGraph, edges: &Edges) -> FxHashMap<SymbolPath, u32> {
     let mut state = TarjanState::default();
     for v in graph.func_ops.keys() {
         if !state.index.contains_key(v) {
@@ -178,7 +178,7 @@ pub fn directly_recursive_functions(graph: &CallGraph) -> HashSet<SymbolPath> {
 
 fn cyclic_functions(graph: &CallGraph, edges: &Edges) -> HashSet<SymbolPath> {
     let scc_ids = scc_over(graph, edges);
-    let mut by_scc: HashMap<u32, Vec<SymbolPath>> = HashMap::new();
+    let mut by_scc: FxHashMap<u32, Vec<SymbolPath>> = FxHashMap::default();
     for (v, &id) in &scc_ids {
         by_scc.entry(id).or_default().push(v.clone());
     }
@@ -205,9 +205,9 @@ struct TarjanState {
     next_index: u32,
     stack: Vec<SymbolPath>,
     on_stack: HashSet<SymbolPath>,
-    index: HashMap<SymbolPath, u32>,
-    lowlink: HashMap<SymbolPath, u32>,
-    scc_id: HashMap<SymbolPath, u32>,
+    index: FxHashMap<SymbolPath, u32>,
+    lowlink: FxHashMap<SymbolPath, u32>,
+    scc_id: FxHashMap<SymbolPath, u32>,
     next_scc: u32,
 }
 
@@ -482,7 +482,10 @@ mod tests {
             g.address_taken,
             HashSet::from([called.clone(), captured, listed])
         );
-        assert_eq!(g.call_site_count, HashMap::from([(called, 1)]));
+        assert_eq!(
+            g.call_site_count,
+            [(called, 1)].into_iter().collect::<FxHashMap<_, _>>()
+        );
     }
 
     #[test]
@@ -536,7 +539,12 @@ mod tests {
         let exported = SymbolPath::from("exported");
         assert_eq!(g.module_references, HashSet::from([exported.clone()]));
         assert_eq!(g.address_taken, HashSet::from([exported.clone()]));
-        assert_eq!(g.call_site_count, HashMap::from([(exported.clone(), 1)]));
+        assert_eq!(
+            g.call_site_count,
+            [(exported.clone(), 1)]
+                .into_iter()
+                .collect::<FxHashMap<_, _>>()
+        );
         assert!(!g.edges.contains_key(&exported));
     }
 

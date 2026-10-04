@@ -1,5 +1,5 @@
 //! Close nominal instances over their checked constructor schemas before cloning.
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
@@ -11,12 +11,12 @@ use super::{InstanceError, InstanceErrorKind, collect, specialize};
 const MAX_NOMINAL_ROUNDS: usize = 64;
 const MAX_NOMINAL_INSTANCES: usize = 4096;
 
-type Instances<'db> = HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>;
+type Instances<'db> = FxHashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>;
 
 pub(super) struct NominalInstances<'db> {
     pub instances: Instances<'db>,
     pub struct_constructors: Vec<(TypeDefId<'db>, Vec<Type<'db>>, TypeScheme<'db>)>,
-    pub enum_variants: HashMap<NodeId, TypeScheme<'db>>,
+    pub enum_variants: FxHashMap<NodeId, TypeScheme<'db>>,
 }
 
 fn instantiate<'db>(
@@ -24,7 +24,7 @@ fn instantiate<'db>(
     owner: TypeDefId<'db>,
     declaration: &Declaration<'_, 'db>,
     constructor: &Constructor<'db>,
-    schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
+    schemes: &FxHashMap<CtorId<'db>, TypeScheme<'db>>,
     arguments: &[Type<'db>],
 ) -> Result<TypeScheme<'db>, InstanceError> {
     let fail = |kind| InstanceError {
@@ -78,7 +78,7 @@ fn instantiate<'db>(
 pub(super) fn collect<'db>(
     db: &'db dyn salsa::Database,
     index: &NominalIndex<'_, 'db>,
-    schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
+    schemes: &FxHashMap<CtorId<'db>, TypeScheme<'db>>,
     seeds: Instances<'db>,
 ) -> Result<NominalInstances<'db>, Vec<InstanceError>> {
     close_dependencies(
@@ -95,14 +95,14 @@ pub(super) fn collect<'db>(
 fn close_dependencies<'db>(
     db: &'db dyn salsa::Database,
     index: &NominalIndex<'_, 'db>,
-    schemes: &HashMap<CtorId<'db>, TypeScheme<'db>>,
+    schemes: &FxHashMap<CtorId<'db>, TypeScheme<'db>>,
     mut pending: Instances<'db>,
     max_rounds: usize,
     max_instances: usize,
 ) -> Result<NominalInstances<'db>, InstanceError> {
     let definitions = &index.declarations;
-    let mut instances = Instances::new();
-    let mut enum_variants = HashMap::new();
+    let mut instances = Instances::default();
+    let mut enum_variants = FxHashMap::default();
     let mut struct_constructors = Vec::new();
     let mut count = 0;
     let limit = || InstanceError {
@@ -117,7 +117,7 @@ fn close_dependencies<'db>(
                 enum_variants,
             });
         }
-        let mut discovered = Instances::new();
+        let mut discovered = Instances::default();
         for (owner, argument_sets) in pending {
             let declaration = &definitions[&owner];
             for arguments in argument_sets {
@@ -300,7 +300,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             ),
         );
         let index = NominalIndex::new(db, input.module(db));
-        let schemas: HashMap<_, _> = input
+        let schemas: FxHashMap<_, _> = input
             .constructor_types(db)
             .schemes
             .iter()
@@ -386,7 +386,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         );
         let ctor = CtorId::new(db, Symbol::new("Value"));
         for removal in [false, true] {
-            let mut schemas: HashMap<_, _> = input
+            let mut schemas: FxHashMap<_, _> = input
                 .constructor_types(db)
                 .schemes
                 .iter()
@@ -561,7 +561,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 &format!("{declaration}\nextern \"C\" fn hold(value: Cell(Int)) -> Nil"),
             );
             let input = checked(db, source);
-            let original: HashMap<_, _> = input
+            let original: FxHashMap<_, _> = input
                 .constructor_types(db)
                 .schemes
                 .iter()
@@ -642,7 +642,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                         .schemes
                         .iter()
                         .copied()
-                        .collect::<HashMap<_, _>>(),
+                        .collect::<FxHashMap<_, _>>(),
                     original
                 );
             }

@@ -6,7 +6,7 @@
 //! name so that verification and other tooling can look them up for any
 //! operation.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::sync::LazyLock;
 
 use crate::op_schema::{OpSchema, SchemaViolation};
@@ -69,8 +69,8 @@ pub struct OpDefRegistration(pub &'static OpDef);
 
 inventory::collect!(OpDefRegistration);
 
-static REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpDef>> = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+static REGISTRY: LazyLock<FxHashMap<(Symbol, Symbol), &'static OpDef>> = LazyLock::new(|| {
+    let mut registry = FxHashMap::default();
     for OpDefRegistration(def) in inventory::iter::<OpDefRegistration> {
         let schema = &def.schema;
         let key = (

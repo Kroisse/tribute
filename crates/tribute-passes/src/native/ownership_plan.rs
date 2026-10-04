@@ -4,7 +4,7 @@
 //! before `func_to_clif` erases semantic reference types.  Building and
 //! validating it never mutates the input IR.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
@@ -462,8 +462,8 @@ fn collect_closure_layout(
 fn collect_function_definitions(
     ctx: &IrContext,
     module_ops: &[OpRef],
-) -> Result<HashMap<SymbolPath, OpRef>, OwnershipPlanError> {
-    let mut definitions = HashMap::new();
+) -> Result<FxHashMap<SymbolPath, OpRef>, OwnershipPlanError> {
+    let mut definitions = FxHashMap::default();
     for &op in module_ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
@@ -485,7 +485,7 @@ fn collect_and_validate_managed_layouts(
     module: Module,
 ) -> Result<HashSet<TypeRef>, OwnershipPlanError> {
     let mut layouts = HashSet::new();
-    let mut nominal_layouts: HashMap<StringRef, Vec<TypeRef>> = HashMap::new();
+    let mut nominal_layouts: FxHashMap<StringRef, Vec<TypeRef>> = FxHashMap::default();
     let mut typerefs = HashSet::new();
     let mut pending_typerefs = Vec::new();
     for &(_, ty) in ctx.type_aliases() {
@@ -593,7 +593,7 @@ fn collect_and_validate_managed_layouts(
 fn index_nominal_layout(
     ctx: &IrContext,
     ty: TypeRef,
-    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
+    nominal_layouts: &mut FxHashMap<StringRef, Vec<TypeRef>>,
 ) {
     let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("adt")
@@ -612,7 +612,7 @@ fn collect_reachable_type_contract(
     ty: TypeRef,
     typerefs: &mut HashSet<TypeRef>,
     pending_typerefs: &mut Vec<TypeRef>,
-    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
+    nominal_layouts: &mut FxHashMap<StringRef, Vec<TypeRef>>,
     layouts: &mut HashSet<TypeRef>,
     visited_types: &mut HashSet<TypeRef>,
 ) {
@@ -661,7 +661,7 @@ fn collect_reachable_attribute_type_contract(
     attribute: &trunk_ir::Attribute,
     typerefs: &mut HashSet<TypeRef>,
     pending_typerefs: &mut Vec<TypeRef>,
-    nominal_layouts: &mut HashMap<StringRef, Vec<TypeRef>>,
+    nominal_layouts: &mut FxHashMap<StringRef, Vec<TypeRef>>,
     layouts: &mut HashSet<TypeRef>,
     visited_types: &mut HashSet<TypeRef>,
 ) {
@@ -760,12 +760,12 @@ fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) 
 fn compute_entry_contracts(
     ctx: &IrContext,
     call_graph: &CallGraph,
-    definitions: &HashMap<SymbolPath, OpRef>,
+    definitions: &FxHashMap<SymbolPath, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
     elide_proven_borrowed_parameters: bool,
-) -> Result<HashMap<SymbolPath, Vec<EntryOwnership>>, OwnershipPlanError> {
+) -> Result<FxHashMap<SymbolPath, Vec<EntryOwnership>>, OwnershipPlanError> {
     let recursive = recursive_functions(call_graph);
-    let mut summaries = HashMap::new();
+    let mut summaries = FxHashMap::default();
     for (symbol, &op) in definitions {
         let symbol = symbol.clone();
         let entry = match ownership_callable_body(ctx, op)? {
@@ -895,7 +895,7 @@ fn value_is_borrowed(
     ctx: &IrContext,
     body: RegionRef,
     value: ValueRef,
-    summaries: &HashMap<SymbolPath, Vec<EntryOwnership>>,
+    summaries: &FxHashMap<SymbolPath, Vec<EntryOwnership>>,
     visiting: &mut HashSet<ValueRef>,
 ) -> bool {
     if !visiting.insert(value) {
@@ -1038,7 +1038,7 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
             return Err(OwnershipPlanError::new("planned entry contract is stale"));
         }
         let mut action_keys = HashSet::new();
-        let mut action_targets = HashMap::new();
+        let mut action_targets = FxHashMap::default();
         for action in &function.actions {
             if !action_keys.insert((action.anchor, action.kind, action.value, action.destination)) {
                 return Err(OwnershipPlanError::new(

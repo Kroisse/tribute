@@ -1,7 +1,7 @@
 //! Effect-row equality, set matching, and retained relations.
 
 use super::{
-    EffectRow, EffectVar, HashMap, LocatedSolveError, SolveError, Type, TypeKind, TypeSolver,
+    EffectRow, EffectVar, FxHashMap, LocatedSolveError, SolveError, Type, TypeKind, TypeSolver,
     UniVarId, collect_effect_vars, map_effect_row_type_args,
 };
 
@@ -239,7 +239,7 @@ impl<'db> TypeSolver<'db> {
     pub fn generalize_row_union(
         &self,
         union: &crate::ast::RowUnion<'db>,
-        mapping: &HashMap<UniVarId<'db>, u32>,
+        mapping: &FxHashMap<UniVarId<'db>, u32>,
     ) -> crate::ast::RowUnion<'db> {
         let mut union = union.clone();
         union.for_each_row_mut(|row| {
@@ -418,7 +418,7 @@ impl<'db> TypeSolver<'db> {
     pub fn generalize_row_removal(
         &self,
         removal: &crate::ast::RowRemoval<'db>,
-        mapping: &HashMap<UniVarId<'db>, u32>,
+        mapping: &FxHashMap<UniVarId<'db>, u32>,
     ) -> crate::ast::RowRemoval<'db> {
         let mut removal = removal.clone();
         removal.for_each_row_mut(|row| {

@@ -6,7 +6,7 @@
 //! This replaces the ad-hoc approach of adding custom attributes to IR operations
 //! and provides a clean separation between IR and data section management.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 /// Registry for static data that will be emitted to WASM data section.
 #[derive(Debug, Clone)]
@@ -16,7 +16,7 @@ pub struct DataRegistry {
     /// Current offset in data section
     current_offset: u32,
     /// Map from content hash to entry index for deduplication
-    content_map: HashMap<Vec<u8>, usize>,
+    content_map: FxHashMap<Vec<u8>, usize>,
 }
 
 /// A single entry in the data section.
@@ -36,7 +36,7 @@ impl DataRegistry {
         Self {
             entries: Vec::new(),
             current_offset: 0,
-            content_map: HashMap::new(),
+            content_map: FxHashMap::default(),
         }
     }
 

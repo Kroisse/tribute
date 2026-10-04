@@ -3,7 +3,7 @@
 //! Transforms `MethodCall` expressions into `Call` expressions by resolving
 //! the method name using the receiver's type.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use trunk_ir::Symbol;
 
@@ -25,10 +25,10 @@ pub struct TdnrResolver<'db> {
     /// Keyed by the method name only; receiver type filtering happens at lookup time.
     /// Multiple candidates with different receiver types can share the same method name
     /// (e.g., `String::len` and `Bytes::len` both register under `len`).
-    method_index: HashMap<Symbol, Vec<MethodEntry<'db>>>,
+    method_index: FxHashMap<Symbol, Vec<MethodEntry<'db>>>,
     /// Declaration-backed nominal identities used when rebuilding types from
     /// source annotations during TDNR.
-    type_identities: HashMap<Symbol, crate::ast::TypeDefId<'db>>,
+    type_identities: FxHashMap<Symbol, crate::ast::TypeDefId<'db>>,
     /// Lexical module prefix used while resolving expression-local annotations.
     current_prefix: String,
     /// Canonical prelude String type, when an external prelude is indexed.
@@ -38,7 +38,7 @@ pub struct TdnrResolver<'db> {
 impl<'db> TdnrResolver<'db> {
     /// Create a new TDNR resolver.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
-        let mut type_identities = HashMap::new();
+        let mut type_identities = FxHashMap::default();
         type_identities.insert(Symbol::new("List"), crate::ast::TypeDefId::builtin_list(db));
         type_identities.insert(
             Symbol::new("std::collections::List"),
@@ -46,7 +46,7 @@ impl<'db> TdnrResolver<'db> {
         );
         Self {
             db,
-            method_index: HashMap::new(),
+            method_index: FxHashMap::default(),
             type_identities,
             current_prefix: String::new(),
             string_type: None,

@@ -1,6 +1,6 @@
 //! Resolve typed `wasm_gc` operations to indexed `wasm` instructions.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
@@ -89,7 +89,7 @@ fn collect_typed_ops(ctx: &IrContext, region: RegionRef, types: &mut Vec<TypeRef
 }
 
 struct LowerTypedGcPattern {
-    indices: HashMap<TypeRef, u32>,
+    indices: FxHashMap<TypeRef, u32>,
 }
 
 impl LowerTypedGcPattern {
@@ -255,7 +255,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
     }
 
     let mut next = FIRST_USER_TYPE_IDX;
-    let mut indices = HashMap::new();
+    let mut indices = FxHashMap::default();
     for ty in types {
         let idx = builtin_type_idx(ctx, ty).unwrap_or_else(|| {
             let idx = next;

@@ -6,7 +6,7 @@
 //!
 //! For function-level type inference, see `FunctionInferenceContext` in `func_context.rs`.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 
 use trunk_ir::Symbol;
 
@@ -45,7 +45,7 @@ pub struct AbilityInfo<'db> {
     /// Type parameters for the ability.
     pub type_params: Vec<TypeParam>,
     /// Operations defined by this ability.
-    pub operations: HashMap<Symbol, AbilityOpInfo<'db>>,
+    pub operations: FxHashMap<Symbol, AbilityOpInfo<'db>>,
 }
 
 /// A candidate method entry for UFCS resolution.
@@ -133,37 +133,37 @@ pub struct ModuleTypeEnv<'db> {
     db: &'db dyn salsa::Database,
 
     /// Function signatures (polymorphic).
-    function_types: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
+    function_types: FxHashMap<FuncDefId<'db>, TypeScheme<'db>>,
 
     /// Constructor types.
-    constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
+    constructor_types: FxHashMap<CtorId<'db>, TypeScheme<'db>>,
 
     /// Type definitions (struct/enum names to their types).
-    type_defs: HashMap<Symbol, TypeScheme<'db>>,
+    type_defs: FxHashMap<Symbol, TypeScheme<'db>>,
 
     /// Struct field definitions keyed by nominal declaration identity.
-    struct_fields: HashMap<TypeDefId<'db>, StructFieldInfo<'db>>,
+    struct_fields: FxHashMap<TypeDefId<'db>, StructFieldInfo<'db>>,
 
     /// Enum variant information: enum_name → [variant_names]
     /// Used for exhaustiveness checking in case expressions.
-    enum_variants: HashMap<Symbol, Vec<Symbol>>,
+    enum_variants: FxHashMap<Symbol, Vec<Symbol>>,
 
     /// Field names of constructors whose fields are all named, in
     /// declaration order: structs, named-field variants, and constructors
     /// without fields. Positional-only variants are absent.
-    constructor_field_names: HashMap<CtorId<'db>, Vec<Symbol>>,
+    constructor_field_names: FxHashMap<CtorId<'db>, Vec<Symbol>>,
 
     /// Ability definitions: AbilityId → AbilityInfo
     /// Used for handler arm type checking.
-    ability_defs: HashMap<AbilityId<'db>, AbilityInfo<'db>>,
+    ability_defs: FxHashMap<AbilityId<'db>, AbilityInfo<'db>>,
 
     /// Ability-level upper bounds used to derive function calling conventions.
-    ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
+    ability_conventions: FxHashMap<AbilityId<'db>, CallingConvention>,
 
     /// Method index for UFCS resolution: method_name → candidates.
     /// Populated from function declarations (first param = receiver)
     /// and struct field accessors.
-    method_index: HashMap<Symbol, Vec<MethodEntry<'db>>>,
+    method_index: FxHashMap<Symbol, Vec<MethodEntry<'db>>>,
 
     well_known_types: super::WellKnownTypes<'db>,
 }
@@ -172,15 +172,15 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Create a new empty module type environment.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
         let io = AbilityId::builtin_io(db);
-        let mut ability_conventions = HashMap::new();
+        let mut ability_conventions = FxHashMap::default();
         ability_conventions.insert(io, CallingConvention::EvidenceDirect);
-        let mut ability_defs = HashMap::new();
+        let mut ability_defs = FxHashMap::default();
         ability_defs.insert(
             io,
             AbilityInfo {
                 id: io,
                 type_params: vec![],
-                operations: HashMap::new(),
+                operations: FxHashMap::default(),
             },
         );
 
@@ -200,21 +200,21 @@ impl<'db> ModuleTypeEnv<'db> {
             Vec::new(),
             list_ty,
         );
-        let mut type_defs = HashMap::new();
+        let mut type_defs = FxHashMap::default();
         type_defs.insert(list_name, list_scheme);
         type_defs.insert(Symbol::new("std::collections::List"), list_scheme);
 
         Self {
             db,
-            function_types: HashMap::new(),
-            constructor_types: HashMap::new(),
+            function_types: FxHashMap::default(),
+            constructor_types: FxHashMap::default(),
             type_defs,
-            struct_fields: HashMap::new(),
-            enum_variants: HashMap::new(),
-            constructor_field_names: HashMap::new(),
+            struct_fields: FxHashMap::default(),
+            enum_variants: FxHashMap::default(),
+            constructor_field_names: FxHashMap::default(),
             ability_defs,
             ability_conventions,
-            method_index: HashMap::new(),
+            method_index: FxHashMap::default(),
             well_known_types: super::WellKnownTypes::empty(),
         }
     }
@@ -609,7 +609,7 @@ impl<'db> ModuleTypeEnv<'db> {
         result
     }
 
-    /// Export prelude ability schemas without a HashMap so Salsa can track them.
+    /// Export prelude ability schemas without a FxHashMap so Salsa can track them.
     pub fn export_ability_defs_for_prelude(
         &self,
     ) -> Vec<(AbilityId<'db>, Vec<TypeParam>, Vec<AbilityOpInfo<'db>>)> {
@@ -794,7 +794,7 @@ fn ability_origin_rank(origin: AbilityOrigin) -> u8 {
 
 #[cfg(test)]
 mod tests {
-    use hashbrown::HashMap;
+    use rustc_hash::FxHashMap;
 
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
@@ -961,7 +961,7 @@ mod tests {
                 AbilityInfo {
                     id: ability,
                     type_params: vec![],
-                    operations: HashMap::new(),
+                    operations: FxHashMap::default(),
                 },
             );
         }

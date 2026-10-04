@@ -3,7 +3,7 @@
 //! This module handles the collection of function types used in call_indirect
 //! operations and ref_func declarations.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -22,14 +22,14 @@ use super::helpers;
 pub(crate) fn collect_call_indirect_types(
     ctx: &mut IrContext,
     module: Module,
-    type_idx_by_type: &mut HashMap<TypeRef, u32>,
+    type_idx_by_type: &mut FxHashMap<TypeRef, u32>,
     gc_type_count: usize,
     func_type_count: usize,
 ) -> CompilationResult<Vec<(u32, TypeRef)>> {
     fn collect_from_region(
         ctx: &IrContext,
         region: RegionRef,
-        type_idx_by_type: &mut HashMap<TypeRef, u32>,
+        type_idx_by_type: &mut FxHashMap<TypeRef, u32>,
         next_type_idx: &mut u32,
         new_types: &mut Vec<(u32, TypeRef)>,
     ) -> CompilationResult<()> {
@@ -45,7 +45,8 @@ pub(crate) fn collect_call_indirect_types(
                 } else {
                     continue;
                 };
-                if let hashbrown::hash_map::Entry::Vacant(entry) = type_idx_by_type.entry(signature)
+                if let std::collections::hash_map::Entry::Vacant(entry) =
+                    type_idx_by_type.entry(signature)
                 {
                     let index = *next_type_idx;
                     *next_type_idx += 1;
@@ -144,7 +145,7 @@ mod tests {
             }";
         let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
         let seed = wasm_dialect::func_sig(&mut ctx, [], []).as_type_ref();
-        let mut indices = HashMap::from([(seed, 7)]);
+        let mut indices = [(seed, 7)].into_iter().collect::<FxHashMap<_, _>>();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap();
         assert_eq!(added.len(), 1);
         assert_eq!(indices[&seed], 7);
@@ -158,7 +159,7 @@ mod tests {
             "core.module @m { wasm.func {sym_name = \"f\", type = wasm.func_sig<() -> ()>} { wasm.return } }",
         );
         let before = trunk_ir::printer::print_module(&ctx, module.op());
-        let mut indices = HashMap::new();
+        let mut indices = FxHashMap::default();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap();
         assert!(added.is_empty());
         assert!(indices.is_empty());
@@ -190,8 +191,9 @@ mod tests {
         ] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(&mut ctx, source);
-            let error = collect_call_indirect_types(&mut ctx, module, &mut HashMap::new(), 0, 1)
-                .expect_err("missing exact signature must fail before type collection");
+            let error =
+                collect_call_indirect_types(&mut ctx, module, &mut FxHashMap::default(), 0, 1)
+                    .expect_err("missing exact signature must fail before type collection");
             assert!(error.to_string().contains("lacks signature"), "{error}");
         }
     }

@@ -32,7 +32,7 @@ use handlers::{
 use helpers::*;
 use value_emission::*;
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::borrow::Cow;
 use std::collections::HashSet;
 use std::sync::LazyLock;
@@ -85,7 +85,7 @@ trunk_ir::symbols! {
 
 /// Simple wasm operations that follow the pattern:
 /// emit operands → single instruction → set result local
-static SIMPLE_OPS: LazyLock<HashMap<Symbol, Instruction<'static>>> = LazyLock::new(|| {
+static SIMPLE_OPS: LazyLock<FxHashMap<Symbol, Instruction<'static>>> = LazyLock::new(|| {
     [
         // i32 arithmetic
         ("i32_add", Instruction::I32Add),
@@ -224,11 +224,11 @@ struct ModuleInfo {
     elements: Vec<ElementDef>,
     globals: Vec<GlobalDef>,
     gc_types: Vec<GcTypeDef>,
-    type_idx_by_type: HashMap<TypeRef, u32>,
+    type_idx_by_type: FxHashMap<TypeRef, u32>,
     /// Function type lookup map (wasm.func_sig TypeRef).
-    func_types: HashMap<SymbolPath, TypeRef>,
+    func_types: FxHashMap<SymbolPath, TypeRef>,
     /// Function index lookup map (import index or func index).
-    func_indices: HashMap<SymbolPath, u32>,
+    func_indices: FxHashMap<SymbolPath, u32>,
     /// Functions referenced via ref.func that need declarative elem segment.
     ref_funcs: HashSet<SymbolPath>,
     /// Additional target function types from call_indirect that need to be added to the type section.
@@ -240,9 +240,9 @@ struct ModuleInfo {
 /// Context for emitting a single function's code.
 struct FunctionEmitContext {
     /// Maps values to their local indices.
-    value_locals: HashMap<ValueRef, u32>,
+    value_locals: FxHashMap<ValueRef, u32>,
     /// Effective types for values (after unification).
-    effective_types: HashMap<ValueRef, TypeRef>,
+    effective_types: FxHashMap<ValueRef, TypeRef>,
 }
 
 pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationResult<Vec<u8>> {
@@ -708,8 +708,8 @@ fn emit_function(
     }
 
     let mut emit_ctx = FunctionEmitContext {
-        value_locals: HashMap::new(),
-        effective_types: HashMap::new(),
+        value_locals: FxHashMap::default(),
+        effective_types: FxHashMap::default(),
     };
     let mut locals: Vec<ValType> = Vec::new();
 

@@ -7,7 +7,6 @@ license.workspace = true
 description = "Front-end utilities for Tribute (CST parsing and text helpers)"
 
 [dependencies]
-hashbrown.workspace = true
 derive_more.workspace = true
 fluent-uri.workspace = true
 itertools.workspace = true

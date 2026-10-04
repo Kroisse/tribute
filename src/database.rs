@@ -1,5 +1,6 @@
-use hashbrown::{HashMap, hash_map::Entry};
+use rustc_hash::FxHashMap;
 use std::cell::RefCell;
+use std::collections::hash_map::Entry;
 
 use lsp_types::Uri;
 use parking_lot::RwLock;
@@ -29,7 +30,7 @@ pub fn parse_with_thread_local(rope: &Rope, old_tree: Option<&Tree>) -> Option<T
 #[salsa::db]
 pub struct TributeDatabaseImpl {
     storage: salsa::Storage<Self>,
-    documents: RwLock<HashMap<String, SourceCst>>,
+    documents: RwLock<FxHashMap<String, SourceCst>>,
 }
 
 #[salsa::db]

@@ -15,7 +15,7 @@
 //! - Creates a function table with those functions
 //! - Generates `wasm.table` and `wasm.elem` operations
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::ops::ControlFlow;
 
 use trunk_ir::context::{IrContext, OperationDataBuilder};
@@ -55,7 +55,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
             .add_pattern(FuncTailCallIndirectPattern)
             .add_pattern(FuncUnreachablePattern)
             .add_pattern(FuncConstantPattern {
-                table_indices: HashMap::new(),
+                table_indices: FxHashMap::default(),
             });
         applicator.apply_partial(ctx, module);
         return;
@@ -65,7 +65,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
     let mut sorted_funcs: Vec<_> = func_refs.into_iter().collect();
     sorted_funcs.sort();
 
-    let table_indices: HashMap<SymbolPath, u32> = sorted_funcs
+    let table_indices: FxHashMap<SymbolPath, u32> = sorted_funcs
         .iter()
         .enumerate()
         .map(|(idx, sym)| (sym.clone(), idx as u32))
@@ -664,7 +664,7 @@ impl RewritePattern for FuncUnreachablePattern {
 /// Transforms function constant references to i32 table indices.
 /// Used for closures where lifted functions are stored via function table.
 struct FuncConstantPattern {
-    table_indices: HashMap<SymbolPath, u32>,
+    table_indices: FxHashMap<SymbolPath, u32>,
 }
 
 impl RewritePattern for FuncConstantPattern {

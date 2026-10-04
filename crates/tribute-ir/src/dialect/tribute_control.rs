@@ -4,7 +4,7 @@
 //! lowering and shared CPS legalization. It deliberately contains no physical
 //! evidence, closure-environment, continuation, or backend carrier layout.
 
-use hashbrown::HashMap;
+use rustc_hash::FxHashMap;
 use std::collections::HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
@@ -2014,8 +2014,8 @@ fn declaration_map<'a>(
     ctx: &IrContext,
     declarations: &'a [OperationDeclaration],
     errors: &mut Vec<ValidationError>,
-) -> HashMap<(TypeRef, StringRef), &'a OperationDeclaration> {
-    let mut map = HashMap::new();
+) -> FxHashMap<(TypeRef, StringRef), &'a OperationDeclaration> {
+    let mut map = FxHashMap::default();
     for declaration in declarations {
         let key = (declaration.ability_ref, declaration.op_name);
         if map.insert(key, declaration).is_some() {
@@ -2076,8 +2076,8 @@ fn canonical_nominal_layouts(
     ctx: &IrContext,
     reachable_types: &HashSet<TypeRef>,
     errors: &mut Vec<ValidationError>,
-) -> HashMap<StringRef, TypeRef> {
-    let mut layouts = HashMap::new();
+) -> FxHashMap<StringRef, TypeRef> {
+    let mut layouts = FxHashMap::default();
     let mut referenced_names = HashSet::new();
     let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
     sorted_reachable_types.sort_unstable();
@@ -2222,7 +2222,7 @@ fn validate_managed_reference_boundaries(
     ctx: &IrContext,
     body: RegionRef,
     reachable_types: &HashSet<TypeRef>,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
+    nominal_layouts: &FxHashMap<StringRef, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
     for ty in reachable_types.iter().copied() {
@@ -2324,8 +2324,8 @@ fn compiler_intrinsic_map<'a>(
     ctx: &IrContext,
     declarations: &'a [CompilerIntrinsicDeclaration],
     errors: &mut Vec<ValidationError>,
-) -> HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration> {
-    let mut map = HashMap::new();
+) -> FxHashMap<SymbolPath, &'a CompilerIntrinsicDeclaration> {
+    let mut map = FxHashMap::default();
     let mut previous = None;
     for declaration in declarations {
         let key = (declaration.symbol.clone(), declaration.identity.clone());
@@ -2365,7 +2365,7 @@ fn adt_projection_has_exact_callable_type(
     ctx: &IrContext,
     producer: OpRef,
     result_type: TypeRef,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
+    nominal_layouts: &FxHashMap<StringRef, TypeRef>,
 ) -> bool {
     if ctx.op_result_types(producer) != [result_type] {
         return false;
@@ -2388,7 +2388,7 @@ fn projection_source_matches_layout(
     ctx: &IrContext,
     source: ValueRef,
     layout: TypeRef,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
+    nominal_layouts: &FxHashMap<StringRef, TypeRef>,
 ) -> bool {
     let layout_identity = nominal_identity(ctx, layout);
     layout_identity.is_some_and(|identity| nominal_layouts.get(&identity) == Some(&layout))
@@ -2429,9 +2429,9 @@ fn variant_field_type(
 
 struct CallableProvenance<'a> {
     functions: &'a SymbolTable,
-    registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
-    declarations: &'a HashMap<(TypeRef, StringRef), &'a OperationDeclaration>,
-    nominal_layouts: &'a HashMap<StringRef, TypeRef>,
+    registered: &'a FxHashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
+    declarations: &'a FxHashMap<(TypeRef, StringRef), &'a OperationDeclaration>,
+    nominal_layouts: &'a FxHashMap<StringRef, TypeRef>,
 }
 
 fn callable_block_arg_has_source_contract(
@@ -2555,7 +2555,7 @@ fn callable_has_semantic_provenance(
 fn verified_callable_declaration(
     ctx: &IrContext,
     function: OpRef,
-    registered: &HashMap<SymbolPath, &CompilerIntrinsicDeclaration>,
+    registered: &FxHashMap<SymbolPath, &CompilerIntrinsicDeclaration>,
 ) -> bool {
     if ctx.op_has_regions(function) {
         return true;
@@ -2579,8 +2579,8 @@ fn validate_callable_origins(
     body: RegionRef,
     functions: &SymbolTable,
     declarations: &[CompilerIntrinsicDeclaration],
-    operation_declarations: &HashMap<(TypeRef, StringRef), &OperationDeclaration>,
-    nominal_layouts: &HashMap<StringRef, TypeRef>,
+    operation_declarations: &FxHashMap<(TypeRef, StringRef), &OperationDeclaration>,
+    nominal_layouts: &FxHashMap<StringRef, TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) {
     let registered = compiler_intrinsic_map(ctx, declarations, errors);
@@ -2756,7 +2756,7 @@ fn validate_return_contracts(ctx: &IrContext, body: RegionRef, errors: &mut Vec<
 fn validate_declaration_uses(
     ctx: &IrContext,
     body: RegionRef,
-    declarations: &HashMap<(TypeRef, StringRef), &OperationDeclaration>,
+    declarations: &FxHashMap<(TypeRef, StringRef), &OperationDeclaration>,
     errors: &mut Vec<ValidationError>,
 ) {
     walk_region_ops(ctx, body, &mut |op| {
