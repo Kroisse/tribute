@@ -90,15 +90,12 @@ fn canonical_typeref_enum_type(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> 
     canonical_enum_type(ctx, enum_ty)
 }
 
-/// Convert logical enum field types that remain in enum attributes to their
-/// existing Wasm physical representation.
+/// Convert a logical ADT reference that remains in enum attributes to its
+/// Wasm physical representation.
 fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref") {
         return ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
-    }
-    if data.dialect == Symbol::new("tribute_rt") && data.name == Symbol::new("anyref") {
-        return ctx.intern_type(TypeDataBuilder::new("wasm", "anyref").build());
     }
     ty
 }

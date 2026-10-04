@@ -45,6 +45,7 @@ tribute-passes/           # tribute-ir 의존
 ├── wasm/intrinsic_to_wasm.rs
 │                         # 출구 뒤: extern "C" bytes helper를 GC 연산으로 바인딩
 ├── wasm/normalize_primitive_types.rs
+│                         # 함수와 간접 호출 signature의 Wasm 타입 변환
 └── ...
 
 tribute/                  # main crate - 파이프라인 조율
@@ -365,6 +366,13 @@ Index 1은 `"bytes_data"`, index 2는 `"bytes"`, index 3-5는 `"closure"`,
 payload, signature처럼 다른 타입 안에 들어 있는 `core.bytes`까지 구조적으로 바꾼다.
 이후 단계가 만드는 bytes 값도 `"bytes"` struct 타입을 가지므로, 그 뒤의 Wasm IR과
 backend에는 `core.bytes`가 나타나지 않는다.
+같은 첫 단계가 `tribute_rt` primitive 타입도 같은 범위에서 Wasm 표현으로 바꾼다.
+`tribute_rt.int`/`nat`/`bool`은 `core.i32`, `tribute_rt.float`는 `core.f64`,
+`tribute_rt.anyref`는 `wasm.anyref`, `tribute_rt.intref`는 `wasm.i31ref`가 된다.
+선언된 field 타입과 그 field의 값이 같은 타입 표기를 쓰므로, 이후 단계는 두 표기를
+use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입이 나타나지 않는다.
+`adt.typeref`는 이 변환의 대상이 아니다. 재귀 ADT 참조는 선언 타입에 남고, 사용하는
+단계가 `wasm.structref`로 읽는다.
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 원소가 `core.i8`인 배열도 `"bytes_data"`가 없으면 bytes 배열이 아니다.
 `_closure` environment와 Marker의 dispatch closure field는 일반 reference

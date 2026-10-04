@@ -5,7 +5,7 @@
 //!
 //! ## Passes
 //!
-//! - `normalize_primitive_types`: Normalize tribute_rt types to core/wasm types
+//! - `normalize_primitive_types`: Convert function and indirect-call signatures to Wasm types
 //! - `tribute_rt_to_wasm`: Lower boxing/unboxing operations to wasm equivalents
 //! - `const_to_wasm`: Lower string/bytes constants to wasm data segments
 //! - `bytes`: Bytes layout types and the in-boundary bytes read intrinsic

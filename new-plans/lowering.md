@@ -141,6 +141,7 @@ then verifies the boundary exit. Wasm dialect lowering then runs:
 
 ```text
 validate_lowerable_structured_control
+convert_builtin_layouts
 io_to_wasm
 arith_to_wasm
 scf_to_wasm
