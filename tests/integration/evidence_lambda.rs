@@ -417,11 +417,19 @@ fn main() -> Nil { }
                         tribute_ir::dialect::ability::is_evidence_type_ref(&ctx, ctx.value_ty(arg))
                     })
                     .count();
+                // A handle's dispatcher factory takes the outer evidence its
+                // arms run with and the evidence of the handle body.
+                let expected = if name.starts_with("__tribute_make_local_dispatch_") {
+                    2
+                } else {
+                    1
+                };
                 assert!(
-                    evidence_count <= 1,
-                    "Function '{}' has {} evidence parameters, expected at most 1",
+                    evidence_count <= expected,
+                    "Function '{}' has {} evidence parameters, expected at most {}",
                     name,
-                    evidence_count
+                    evidence_count,
+                    expected
                 );
             }
         }

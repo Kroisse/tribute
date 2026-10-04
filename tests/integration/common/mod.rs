@@ -387,3 +387,49 @@ fn compile_native_test_binary_impl(
         NativeTestBinary::from_object_bytes(object_bytes)
     })
 }
+
+/// Compile Tribute source code to a Wasm module and run it with wasmtime.
+///
+/// Panics if compilation fails or the module is not valid Wasm.
+#[allow(dead_code)]
+pub fn compile_and_run_wasm(source_name: &str, source_code: &str) -> Output {
+    let binary = TributeDatabaseImpl::default().attach(|db| {
+        let source = SourceCst::from_source_str(db, source_name, source_code);
+        tribute::pipeline::compile_to_wasm_binary(db, source)
+            .unwrap_or_else(|diagnostics| panic!("Wasm compilation failed: {diagnostics:?}"))
+            .to_vec()
+    });
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary)
+        .expect("compiled source must produce a valid Wasm binary");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary).expect("write Wasm module");
+    Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime")
+}
+
+/// Run a program on the native and Wasm targets and assert that both print
+/// the expected output.
+#[allow(dead_code)]
+pub fn assert_output_on_both_targets(source_name: &str, source_code: &str, expected_stdout: &str) {
+    for (target, output) in [
+        ("native", compile_and_run_native(source_name, source_code)),
+        ("wasm", compile_and_run_wasm(source_name, source_code)),
+    ] {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success(),
+            "{target}: exit={:?}, stdout='{stdout}', stderr='{}'",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert_eq!(
+            stdout.trim(),
+            expected_stdout,
+            "{target}: stdout mismatch for {source_name}"
+        );
+    }
+}

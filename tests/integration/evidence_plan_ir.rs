@@ -82,7 +82,22 @@ fn cps_legalization_carries_evidence_plans(db: &salsa::DatabaseImpl) {
     let ir = print_module(&ctx, module.op());
     let lines = planned_lines(&ir);
     assert_line(&lines, "call_indirect", "[{mask = ", &ir);
-    assert_line(&lines, "func.", "[{dup = ", &ir);
+    assert_line(&lines, "func.tail_call ", "[{dup = ", &ir);
     assert_line(&lines, "ability.handle_dispatch", "[{mask = ", &ir);
-    assert_eq!(lines.len(), 3, "{ir}");
+    // Each selection also appears wherever a resumed continuation rebuilds
+    // the layer that passes the evidence: the frame of the call, and each
+    // installation of the handle.
+    let count = |op: &str, plan: &str| {
+        lines
+            .iter()
+            .filter(|line| line.contains(op) && line.contains(plan))
+            .count()
+    };
+    let call_masks = count("call_indirect", "[{mask = ");
+    let call_dups = count("call", "[{dup = ");
+    let handle_masks = count("ability.handle_dispatch", "[{mask = ");
+    assert_eq!(call_masks, 2, "{ir}");
+    assert_eq!(call_dups, 2, "{ir}");
+    assert!(handle_masks > 1, "{ir}");
+    assert_eq!(lines.len(), call_masks + call_dups + handle_masks, "{ir}");
 }
