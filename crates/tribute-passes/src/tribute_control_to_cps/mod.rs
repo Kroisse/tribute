@@ -8,6 +8,7 @@ use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
+use std::ops::ControlFlow;
 use tribute_ir::continuation_frame;
 
 use tribute_core::calling_convention::{
@@ -358,156 +359,21 @@ impl<'a> Converter<'a> {
                     index += 1;
                 }
                 "call" => {
-                    let target_symbol = self
-                        .ctx
-                        .op(source)
-                        .attributes
-                        .get_symbol_ref("callee")
-                        .expect("pre-CPS validation checked direct callee")
-                        .clone();
-                    let target = self
-                        .current_func(&target_symbol)
-                        .expect("pre-CPS validation resolved direct callee in this module");
-                    if target.convention == CallingConvention::Cps {
-                        if flow.convention != CallingConvention::Cps {
-                            return Err(TributeControlToCpsError::post_op(
-                                source,
-                                location,
-                                "a non-CPS callable cannot call a CPS target",
-                            ));
-                        }
-                        let old_result = self.ctx.op_result(source, 0);
-                        let result_type = self.ctx.op_result_types(source)[0];
-                        let continuation = self.build_suffix_continuation(
-                            rest,
-                            old_result,
-                            result_type,
-                            mapping,
-                            flow,
-                            location,
-                        )?;
-                        let continuation_op = match self.ctx.value_def(continuation) {
-                            trunk_ir::ValueDef::OpResult(op, _) => op,
-                            _ => unreachable!("continuation is produced by closure.lambda"),
-                        };
-                        self.ctx.push_op(block, continuation_op);
-                        let converted_result = self.convert_type(result_type);
-                        let frame = self.frame_for_suffix(
-                            block,
-                            location,
-                            converted_result,
-                            flow,
-                            continuation,
-                            evidence_plan_of(self.ctx, source),
-                        )?;
-                        let mut args = vec![self.current_evidence(source, flow)?, frame];
-                        args.extend(
-                            self.ctx
-                                .op_operands(source)
-                                .iter()
-                                .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
-                        );
-                        let tail = func::TailCall::operands(args)
-                            .callee(target_symbol)
-                            .build(self.ctx, location);
-                        set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
-                        carry_evidence_plan(self.ctx, source, tail.op_ref());
-                        self.ctx.push_op(block, tail.op_ref());
+                    if self
+                        .lower_call(source, rest, block, mapping, flow)?
+                        .is_break()
+                    {
                         return Ok(());
                     }
-                    let call = self.lower_direct_call(source, &target, mapping, flow)?;
-                    self.ctx.push_op(block, call.op_ref());
-                    mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
                     index += 1;
                 }
                 "call_indirect" => {
-                    let source_callee = self.ctx.op_operands(source)[0];
-                    let logical_type = self.ctx.value_ty(source_callee);
-                    let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
-                        .map(convert_convention)
-                        .expect("pre-CPS validation checked indirect callee convention");
-                    let callee = mapping
-                        .get(&source_callee)
-                        .copied()
-                        .unwrap_or(source_callee);
-                    let source_args = self.ctx.op_operands(source)[1..].to_vec();
-                    if convention == CallingConvention::Cps {
-                        if flow.convention != CallingConvention::Cps {
-                            return Err(TributeControlToCpsError::post_op(
-                                source,
-                                location,
-                                "a non-CPS callable cannot make a CPS indirect call",
-                            ));
-                        }
-                        let old_result = self.ctx.op_result(source, 0);
-                        let result_type = self.ctx.op_result_types(source)[0];
-                        let continuation = self.build_suffix_continuation(
-                            rest,
-                            old_result,
-                            result_type,
-                            mapping,
-                            flow,
-                            location,
-                        )?;
-                        let continuation_op = match self.ctx.value_def(continuation) {
-                            trunk_ir::ValueDef::OpResult(op, _) => op,
-                            _ => unreachable!("continuation is produced by closure.lambda"),
-                        };
-                        self.ctx.push_op(block, continuation_op);
-                        let converted_result = self.convert_type(result_type);
-                        let frame = self.frame_for_suffix(
-                            block,
-                            location,
-                            converted_result,
-                            flow,
-                            continuation,
-                            evidence_plan_of(self.ctx, source),
-                        )?;
-                        let mut args = vec![self.current_evidence(source, flow)?, frame];
-                        args.extend(
-                            source_args
-                                .iter()
-                                .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
-                        );
-                        let transfer =
-                            self.emit_cps_tail_call_indirect(block, location, callee, args)?;
-                        carry_evidence_plan(self.ctx, source, transfer);
+                    if self
+                        .lower_call_indirect(source, rest, block, mapping, flow)?
+                        .is_break()
+                    {
                         return Ok(());
                     }
-                    let mut args = Vec::new();
-                    if convention.needs_evidence() {
-                        args.push(self.current_evidence(source, flow)?);
-                    }
-                    args.extend(
-                        source_args
-                            .iter()
-                            .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
-                    );
-                    // The source-data callee keeps its exact callable contract in its
-                    // converted closure type. Carry that contract onto the transfer
-                    // instead of inferring it from the physical operands later.
-                    let converted_callee = self.convert_type(logical_type);
-                    let signature = physical_closure_function_type(
-                        self.ctx,
-                        converted_callee,
-                        convention,
-                    )
-                    .ok_or_else(|| {
-                        TributeControlToCpsError::post_op(
-                            source,
-                            location,
-                            "indirect callee has no exact provenance-bearing closure contract",
-                        )
-                    })?;
-                    let call = func::CallIndirect::operands(callee, args)
-                        .signature(signature)
-                        .build(self.ctx, location);
-                    set_calling_convention(self.ctx, call.op_ref(), convention);
-                    if convention.needs_evidence() {
-                        carry_evidence_plan(self.ctx, source, call.op_ref());
-                    }
-                    self.ctx.push_op(block, call.op_ref());
-                    mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
                     index += 1;
                 }
                 "perform" => {
@@ -518,34 +384,7 @@ impl<'a> Converter<'a> {
                         .get_str(self.ctx, "operation_kind")
                         .expect("pre-CPS validation checked operation kind");
                     if kind == "fn" {
-                        let evidence = self.current_evidence(source, flow)?;
-                        let _ = evidence;
-                        let args: Vec<_> = self
-                            .ctx
-                            .op_operands(source)
-                            .iter()
-                            .map(|arg| mapping.get(arg).copied().unwrap_or(*arg))
-                            .collect();
-                        let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
-                        let ability_ref = self
-                            .ctx
-                            .op(source)
-                            .attributes
-                            .get_type("ability_ref")
-                            .expect("pre-CPS validation checked perform ability");
-                        let op_name = self
-                            .ctx
-                            .op(source)
-                            .attributes
-                            .get_string_ref("op_name")
-                            .expect("pre-CPS validation checked perform operation");
-                        let call = ability::Call::operands(args)
-                            .ability_ref(ability_ref)
-                            .op_name(op_name)
-                            .results(result_type)
-                            .build(self.ctx, location);
-                        self.ctx.push_op(block, call.op_ref());
-                        mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
+                        self.lower_tail_perform(source, block, mapping, flow)?;
                         index += 1;
                     } else {
                         self.lower_general_perform(source, rest, block, mapping, flow)?;

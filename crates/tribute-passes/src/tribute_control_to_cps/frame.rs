@@ -443,6 +443,32 @@ impl Converter<'_> {
         let lambda = self.closure_over(location, region, closure_ty, CallingConvention::Cps);
         Ok(lambda.result(self.ctx))
     }
+
+    /// Build the suffix continuation of the rest of a block after `source`
+    /// and the frame it is entered through, pushing both to `block`. The
+    /// suffix receives the result of `source`.
+    pub(super) fn push_suffix_frame(
+        &mut self,
+        source: OpRef,
+        rest: Rest<'_>,
+        block: BlockRef,
+        mapping: &HashMap<ValueRef, ValueRef>,
+        flow: &Flow,
+        plan: Option<Attribute>,
+    ) -> Result<ValueRef, TributeControlToCpsError> {
+        let location = self.ctx.op(source).location;
+        let old_result = self.ctx.op_result(source, 0);
+        let result_type = self.ctx.op_result_types(source)[0];
+        let continuation =
+            self.build_suffix_continuation(rest, old_result, result_type, mapping, flow, location)?;
+        let continuation_op = match self.ctx.value_def(continuation) {
+            trunk_ir::ValueDef::OpResult(op, _) => op,
+            _ => unreachable!("continuation is produced by closure.lambda"),
+        };
+        self.ctx.push_op(block, continuation_op);
+        let converted_result = self.convert_type(result_type);
+        self.frame_for_suffix(block, location, converted_result, flow, continuation, plan)
+    }
 }
 
 fn collect_defined_values(ctx: &IrContext, region: RegionRef, defined: &mut HashSet<ValueRef>) {

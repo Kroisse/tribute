@@ -336,4 +336,130 @@ impl Converter<'_> {
         set_calling_convention(self.ctx, function.op_ref(), info.convention);
         Ok(function.op_ref())
     }
+
+    /// Convert a direct call. A CPS call ends its block: the rest of the
+    /// block becomes the suffix the callee continues with.
+    pub(super) fn lower_call(
+        &mut self,
+        source: OpRef,
+        rest: Rest<'_>,
+        block: BlockRef,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
+        flow: &Flow,
+    ) -> Result<ControlFlow<()>, TributeControlToCpsError> {
+        let location = self.ctx.op(source).location;
+        let target_symbol = self
+            .ctx
+            .op(source)
+            .attributes
+            .get_symbol_ref("callee")
+            .expect("pre-CPS validation checked direct callee")
+            .clone();
+        let target = self
+            .current_func(&target_symbol)
+            .expect("pre-CPS validation resolved direct callee in this module");
+        if target.convention == CallingConvention::Cps {
+            if flow.convention != CallingConvention::Cps {
+                return Err(TributeControlToCpsError::post_op(
+                    source,
+                    location,
+                    "a non-CPS callable cannot call a CPS target",
+                ));
+            }
+            let plan = evidence_plan_of(self.ctx, source);
+            let frame = self.push_suffix_frame(source, rest, block, mapping, flow, plan)?;
+            let mut args = vec![self.current_evidence(source, flow)?, frame];
+            args.extend(
+                self.ctx
+                    .op_operands(source)
+                    .iter()
+                    .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
+            );
+            let tail = func::TailCall::operands(args)
+                .callee(target_symbol)
+                .build(self.ctx, location);
+            set_calling_convention(self.ctx, tail.op_ref(), CallingConvention::Cps);
+            carry_evidence_plan(self.ctx, source, tail.op_ref());
+            self.ctx.push_op(block, tail.op_ref());
+            return Ok(ControlFlow::Break(()));
+        }
+        let call = self.lower_direct_call(source, &target, mapping, flow)?;
+        self.ctx.push_op(block, call.op_ref());
+        mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
+        Ok(ControlFlow::Continue(()))
+    }
+
+    /// Convert an indirect call. A CPS call ends its block: the rest of the
+    /// block becomes the suffix the callee continues with.
+    pub(super) fn lower_call_indirect(
+        &mut self,
+        source: OpRef,
+        rest: Rest<'_>,
+        block: BlockRef,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
+        flow: &Flow,
+    ) -> Result<ControlFlow<()>, TributeControlToCpsError> {
+        let location = self.ctx.op(source).location;
+        let source_callee = self.ctx.op_operands(source)[0];
+        let logical_type = self.ctx.value_ty(source_callee);
+        let convention = tribute_control::func_sig_convention(self.ctx, logical_type)
+            .map(convert_convention)
+            .expect("pre-CPS validation checked indirect callee convention");
+        let callee = mapping
+            .get(&source_callee)
+            .copied()
+            .unwrap_or(source_callee);
+        let source_args = self.ctx.op_operands(source)[1..].to_vec();
+        if convention == CallingConvention::Cps {
+            if flow.convention != CallingConvention::Cps {
+                return Err(TributeControlToCpsError::post_op(
+                    source,
+                    location,
+                    "a non-CPS callable cannot make a CPS indirect call",
+                ));
+            }
+            let plan = evidence_plan_of(self.ctx, source);
+            let frame = self.push_suffix_frame(source, rest, block, mapping, flow, plan)?;
+            let mut args = vec![self.current_evidence(source, flow)?, frame];
+            args.extend(
+                source_args
+                    .iter()
+                    .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
+            );
+            let transfer = self.emit_cps_tail_call_indirect(block, location, callee, args)?;
+            carry_evidence_plan(self.ctx, source, transfer);
+            return Ok(ControlFlow::Break(()));
+        }
+        let mut args = Vec::new();
+        if convention.needs_evidence() {
+            args.push(self.current_evidence(source, flow)?);
+        }
+        args.extend(
+            source_args
+                .iter()
+                .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
+        );
+        // The source-data callee keeps its exact callable contract in its
+        // converted closure type. Carry that contract onto the transfer
+        // instead of inferring it from the physical operands later.
+        let converted_callee = self.convert_type(logical_type);
+        let signature = physical_closure_function_type(self.ctx, converted_callee, convention)
+            .ok_or_else(|| {
+                TributeControlToCpsError::post_op(
+                    source,
+                    location,
+                    "indirect callee has no exact provenance-bearing closure contract",
+                )
+            })?;
+        let call = func::CallIndirect::operands(callee, args)
+            .signature(signature)
+            .build(self.ctx, location);
+        set_calling_convention(self.ctx, call.op_ref(), convention);
+        if convention.needs_evidence() {
+            carry_evidence_plan(self.ctx, source, call.op_ref());
+        }
+        self.ctx.push_op(block, call.op_ref());
+        mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
+        Ok(ControlFlow::Continue(()))
+    }
 }

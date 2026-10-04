@@ -735,18 +735,8 @@ impl Converter<'_> {
             ),
         };
         let value = mapping.get(&value_source).copied().unwrap_or(value_source);
-        let old_result = self.ctx.op_result(source, 0);
-        let result_type = self.ctx.op_result_types(source)[0];
-        let suffix =
-            self.build_suffix_continuation(rest, old_result, result_type, mapping, flow, location)?;
-        let suffix_op = match self.ctx.value_def(suffix) {
-            trunk_ir::ValueDef::OpResult(op, _) => op,
-            _ => unreachable!("suffix is produced by closure.lambda"),
-        };
-        self.ctx.push_op(block, suffix_op);
-        let resume_result = self.convert_type(result_type);
         let resume_frame =
-            self.frame_for_suffix(block, location, resume_result, flow, suffix, plan.clone())?;
+            self.push_suffix_frame(source, rest, block, mapping, flow, plan.clone())?;
         let transfer = self.emit_cps_tail_call_indirect(
             block,
             location,
@@ -1195,5 +1185,45 @@ impl Converter<'_> {
             outer_evidence,
             body_region,
         )
+    }
+
+    /// Convert a `fn` operation: an `ability.call` whose result flows to the
+    /// rest of the block, with no continuation captured.
+    pub(super) fn lower_tail_perform(
+        &mut self,
+        source: OpRef,
+        block: BlockRef,
+        mapping: &mut HashMap<ValueRef, ValueRef>,
+        flow: &Flow,
+    ) -> Result<(), TributeControlToCpsError> {
+        let location = self.ctx.op(source).location;
+        self.current_evidence(source, flow)?;
+        let args: Vec<_> = self
+            .ctx
+            .op_operands(source)
+            .iter()
+            .map(|arg| mapping.get(arg).copied().unwrap_or(*arg))
+            .collect();
+        let result_type = self.convert_type(self.ctx.op_result_types(source)[0]);
+        let ability_ref = self
+            .ctx
+            .op(source)
+            .attributes
+            .get_type("ability_ref")
+            .expect("pre-CPS validation checked perform ability");
+        let op_name = self
+            .ctx
+            .op(source)
+            .attributes
+            .get_string_ref("op_name")
+            .expect("pre-CPS validation checked perform operation");
+        let call = ability::Call::operands(args)
+            .ability_ref(ability_ref)
+            .op_name(op_name)
+            .results(result_type)
+            .build(self.ctx, location);
+        self.ctx.push_op(block, call.op_ref());
+        mapping.insert(self.ctx.op_result(source, 0), call.result(self.ctx));
+        Ok(())
     }
 }
