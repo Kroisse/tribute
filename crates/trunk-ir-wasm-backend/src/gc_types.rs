@@ -53,6 +53,10 @@ pub const EVIDENCE_IDX: u32 = 5;
 pub const DESCRIBED_IDX: u32 = 6;
 
 /// Runtime layout identifier (the `layout` type attribute) of the builtin
+/// boxed float at [`BOXED_F64_IDX`].
+pub const BOXED_F64_LAYOUT: &str = "boxed_f64";
+
+/// Runtime layout identifier of the builtin
 /// closure struct at [`CLOSURE_STRUCT_IDX`].
 pub const CLOSURE_LAYOUT: &str = "closure";
 
@@ -76,7 +80,9 @@ pub const DESCRIBED_LAYOUT: &str = "described";
 
 /// The builtin GC type index of a type carrying a runtime layout identifier.
 pub fn builtin_layout_idx(layout: &str) -> Option<u32> {
-    if layout == BYTES_DATA_LAYOUT {
+    if layout == BOXED_F64_LAYOUT {
+        Some(BOXED_F64_IDX)
+    } else if layout == BYTES_DATA_LAYOUT {
         Some(BYTES_ARRAY_IDX)
     } else if layout == BYTES_LAYOUT {
         Some(BYTES_STRUCT_IDX)

@@ -153,6 +153,7 @@ const_to_wasm
 adt_to_wasm
 intrinsic_to_wasm
 wasm_lowerer
+convert_struct_layouts
 verify_wasm_backend_ready
 cast legalization + reference upcast elision + reconcile_unrealized_casts
 finalize_wasm_gc_types

@@ -41,6 +41,8 @@ tribute-passes/           # tribute-ir 의존
 ├── wasm/tribute_rt_to_wasm.rs
 ├── wasm/const_to_wasm.rs
 ├── wasm/adt_to_wasm.rs   # adt.* → wasm_gc.*
+├── wasm/struct_layouts.rs
+│                         # 사용자 struct와 variant의 wasm_gc.struct 타입
 ├── wasm/bytes.rs         # bytes layout 타입과 경계 안 bytes 읽기 intrinsic lowering
 ├── wasm/intrinsic_to_wasm.rs
 │                         # 출구 뒤: extern "C" bytes helper를 GC 연산으로 바인딩
@@ -359,8 +361,8 @@ user-defined type은 그 뒤에 배치된다:
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
 verifier는 closure 3, marker 4, evidence 5, described 6, user-defined type 7+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
-Index 1은 `"bytes_data"`, index 2는 `"bytes"`, index 3-6은 `"closure"`,
-`"evidence_marker"`, `"evidence"`, `"described"`
+Index 0은 `"boxed_f64"`, index 1은 `"bytes_data"`, index 2는 `"bytes"`,
+index 3-6은 `"closure"`, `"evidence_marker"`, `"evidence"`, `"described"`
 [runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. 경계 출구의
 명목 타입 `core.bytes`는 Wasm lowering의 첫 단계에서 `"bytes"` layout struct로
 바뀐다. 이 변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant
@@ -372,8 +374,8 @@ backend에는 `core.bytes`가 나타나지 않는다.
 `tribute_rt.anyref`는 `wasm.anyref`, `tribute_rt.intref`는 `wasm.i31ref`가 된다.
 선언된 field 타입과 그 field의 값이 같은 타입 표기를 쓰므로, 이후 단계는 두 표기를
 use site에서 맞추지 않으며 그 뒤의 Wasm IR에는 `tribute_rt` 타입이 나타나지 않는다.
-`adt.typeref`는 이 변환의 대상이 아니다. 재귀 ADT 참조는 선언 타입에 남고, 사용하는
-단계가 `wasm.structref`로 읽는다.
+`adt.typeref`는 이 첫 단계의 대상이 아니다. `adt` 연산이 nominal layout을 읽는
+동안에는 값과 signature에 남고, Wasm dialect lowering의 마지막 단계가 없앤다.
 Struct 이름이나 원소 타입이 같더라도 식별자가 없는 타입은 builtin layout이 아니다.
 원소가 `core.i8`인 배열도 `"bytes_data"`가 없으면 bytes 배열이 아니다.
 `_closure` environment와 Marker의 dispatch closure field는 일반 reference
@@ -391,6 +393,35 @@ erasure이므로 계속 `anyref`를 사용할 수 있다.
 사용자 struct와 variant의 GC 타입은 structural이다. 소스 이름이 달라도 필드 표현이
 같으면 같은 GC 타입을 쓴다. 대신 첫 필드에 `i32` [runtime 타입
 descriptor](runtime-types.md#wasm-배치) index를 두어 runtime identity를 표현한다.
+
+- 사용자 struct와 variant의 타입은 `wasm_gc.struct<T...>`이다. 매개변수는
+  descriptor 필드의 `core.i32`와 각 소스 필드의 Wasm 저장 표현이며, 같은 매개변수
+  목록은 interning으로 같은 타입이 된다.
+- 소스 필드의 저장 표현은 다음과 같다. `core.i1`은 `core.i32`, `adt.typeref`는
+  `wasm.structref`, `adt.enum` 값은 emission이 쓰는 erased `wasm.anyref`, 중첩된
+  사용자 struct는 그 struct의 `wasm_gc.struct`이다. Builtin layout을 포함한 나머지
+  타입은 그대로 둔다.
+- Variant의 타입은 그 variant 자신의 필드로 만든다. Enum의 다른 variant 필드를
+  복사하지 않는다.
+- Nominal layout을 마지막으로 읽는 단계는 `adt_to_wasm`이다. 그 뒤
+  `convert_struct_layouts`가 모듈 전체(alias, 연산 속성, 결과, block 인자, 함수
+  signature)의 사용자 `adt.struct`를 `wasm_gc.struct`로 바꾼다. Variant 연산은
+  `adt_to_wasm`이 처음부터 `wasm_gc.struct`로 낮춘다. 같은 단계가 `adt.typeref`도
+  없앤다. Struct를 가리키는 `adt.typeref`는 그 struct의 `wasm_gc.struct`가 되고,
+  enum을 가리키거나 이름을 해석할 수 없는 `adt.typeref`는 variant마다 타입이 다르므로
+  `wasm.structref`가 된다.
+- Backend에 도달하는 `adt` 타입은 [`layout`](ir.md#runtime-layout-식별자)을 가진
+  builtin layout뿐이다. Backend는 builtin layout을 `layout` 식별자로만 식별하고,
+  그 타입의 dialect나 이름을 보지 않는다. 연산이나 값이 가리키지 않는 소스 layout
+  선언(alias와 module metadata)은 backend가 해석하지 않는다.
+- 이 단계 전의 backend pass는 아직 변환되지 않은 값의 타입을 직접 판정하지 않는다.
+  Indirect call의 exact signature를 인자와 비교할 때는 인자 타입을 Wasm target
+  `TypeConverter`로 변환한 결과와 비교한다.
+- GC 인덱스 할당은 모듈이 언급하는 모든 `wasm_gc.struct`(연산의 타입 속성, 값과
+  signature의 타입, 다른 struct의 필드)에 concrete index를 준다. 사용자 index를 받은
+  타입 목록은 index 순서대로 module의 `wasm_gc.types` 속성에 남고, emission은
+  structural struct의 필드를 접근 연산에서 추론하지 않고 그 타입의 매개변수에서
+  읽는다.
 
 - 사용자 struct와 variant의 GC 타입은 descriptor 필드 하나만 가진 `Described` 타입의
   subtype으로 선언한다. `Described`는 final이 아니고, 그 subtype은 final이다.
@@ -418,8 +449,9 @@ Evidence 배열은 type 변환 뒤에도 `layout = "evidence"`를 가진 타입�
 
 ### GC struct 필드의 scalar 표현
 
-GC struct 필드 수집은 타입 비교와 저장 전에 Wasm의 물리적 scalar 표현을
-정규화한다. `core.i1`과 `core.i32`는 모두 Wasm `i32` 필드로 표현하므로,
+필드를 선언하는 structural 타입이 없는 GC struct는 접근 연산에서 필드를 수집한다.
+이 수집은 타입 비교와 저장 전에 Wasm의 물리적 scalar 표현을 정규화한다.
+`core.i1`과 `core.i32`는 모두 Wasm `i32` 필드로 표현하므로,
 생성·읽기·쓰기에서 두 타입이 섞이더라도 수집 순서와 무관하게 `i32`를 사용한다.
 이 동등성은 Bool의 target 표현에 한정한다. `i64`, 부동소수점, 참조 타입의
 불일치를 같은 크기나 비슷한 레이아웃으로 허용하지 않는다.
@@ -455,19 +487,18 @@ WasmGC의 서브타이핑은 non-coercive이고 concrete struct 타입은 `struc
 | --- | --- | --- |
 | builtin 레이아웃 인덱스를 갖는 타입 | 같은 인덱스를 갖는 다른 표기 | 허용 |
 | builtin 레이아웃 인덱스를 갖는 struct (`"bytes"`, closure, marker 등) | `structref`, `anyref` | 허용 |
-| `adt.typeref` | `structref`, `anyref` | 허용 |
 | `wasm_gc.struct` (사용자 struct와 variant) | `structref`, `anyref` | 허용 |
 | builtin 배열 레이아웃 (Bytes backing array, Evidence array) | `arrayref`, `anyref` | 허용 |
 | `core.array` | `arrayref`, `anyref` | 허용 |
-| 등록 근거가 없는 ADT 표기 (선언 타입 등) | `structref` | 거부 |
+| 등록 근거가 없는 타입 표기 | `structref`, `anyref` | 거부 |
 | `anyref` | `structref` | 거부 (downcast) |
 | `arrayref`, `funcref`, `externref`, `i31ref` | `structref` | 거부 |
 | `structref` 또는 등록된 struct | `arrayref` | 거부 |
 
 여기서 "등록"은 backend-ready 경계에서 해당 타입이 concrete GC 인덱스를
-받는지를 뜻한다. 근거가 되는 것은 builtin 레이아웃 인덱스, `adt.typeref`,
-그리고 타입 변환이 만든 `wasm_gc.struct`뿐이며, ADT 이름이나 레이아웃 모양만으로는
-등록을 추론하지 않는다. 추상 참조에서 concrete 타입으로
+받는지를 뜻한다. 근거가 되는 것은 builtin 레이아웃 인덱스와 사용자 struct와
+variant의 `wasm_gc.struct`뿐이며, 타입 이름이나 레이아웃 모양만으로는 등록을
+추론하지 않는다. 추상 참조에서 concrete 타입으로
 좁히는 방향은 `wasm.ref_cast`가 필요하므로 검증에서 거부한다.
 
 ---

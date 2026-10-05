@@ -1,30 +1,23 @@
 //! Resolve typed `wasm_gc` operations to indexed `wasm` instructions.
 
-use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::{FxHashMap as HashMap, FxHashSet as HashSet};
 
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{wasm, wasm_gc};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::smallvec::SmallVec;
+use trunk_ir::types::Attribute;
 
-use crate::gc_types::{BOXED_F64_IDX, FIRST_USER_TYPE_IDX};
-
-fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
-    let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("adt") && data.attrs.get_str(ctx, "name") == Some(expected)
-}
+use crate::gc_types::FIRST_USER_TYPE_IDX;
 
 /// The reserved GC type index of a builtin runtime layout, if `ty` is one.
 pub fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
-    if named_adt(ctx, ty, "_BoxedF64") {
-        Some(BOXED_F64_IDX)
-    } else {
-        crate::emit::helpers::builtin_layout_type_idx(ctx, ty)
-    }
+    crate::emit::helpers::builtin_layout_type_idx(ctx, ty)
 }
 
 fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -43,49 +36,111 @@ fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
         .any(|name| data.name == Symbol::new(name))
 }
 
-fn collect_typed_ops(ctx: &IrContext, region: RegionRef, types: &mut Vec<TypeRef>) {
-    for &block in &ctx.region(region).blocks {
-        for &op in &ctx.block(block).ops {
-            let mut push = |ty| {
-                if !types.contains(&ty) && !is_abstract_heap_type(ctx, ty) {
-                    types.push(ty);
-                }
-            };
-            if let Ok(op) = wasm_gc::StructNew::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::StructGet::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::StructSet::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::ArrayNew::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::ArrayNewDefault::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::ArrayNewData::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::ArrayGet::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::ArrayGetS::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::ArrayGetU::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::ArraySet::from_op(ctx, op) {
-                push(op.r#type(ctx));
-            } else if let Ok(op) = wasm_gc::ArrayCopy::from_op(ctx, op) {
-                push(op.dst_type(ctx));
-                push(op.src_type(ctx));
-            } else if let Ok(op) = wasm_gc::RefNull::from_op(ctx, op) {
-                push(op.target_type(ctx));
-            } else if let Ok(op) = wasm_gc::RefCast::from_op(ctx, op) {
-                push(op.target_type(ctx));
-            } else if let Ok(op) = wasm_gc::RefTest::from_op(ctx, op) {
-                push(op.target_type(ctx));
-            }
-            for nested in ctx.op_regions(op) {
-                collect_typed_ops(ctx, nested, types);
+/// Module attribute listing the GC types that received user indices, in
+/// index order from [`FIRST_USER_TYPE_IDX`]. Emission reads each structural
+/// struct's fields from its type.
+pub const GC_TYPES_ATTR: &str = "wasm_gc.types";
+
+/// The GC types a module uses, in first-use order.
+#[derive(Default)]
+struct TypeCollector {
+    types: Vec<TypeRef>,
+    /// Types already considered for `types`.
+    considered: HashSet<TypeRef>,
+    /// Types already searched for structural structs.
+    searched: HashSet<TypeRef>,
+}
+
+impl TypeCollector {
+    /// Add `ty`, then every structural struct among its fields.
+    fn push_type(&mut self, ctx: &IrContext, ty: TypeRef) {
+        if !self.considered.insert(ty) || is_abstract_heap_type(ctx, ty) {
+            return;
+        }
+        self.types.push(ty);
+        if let Some(fields) = wasm_gc::Struct::from_type_ref(ctx, ty) {
+            for &field in fields.fields(ctx) {
+                self.push_structural(ctx, field);
             }
         }
     }
+
+    /// Add every structural struct `ty` mentions. Each one receives an
+    /// index, so the value types that name it have a concrete GC type.
+    fn push_structural(&mut self, ctx: &IrContext, ty: TypeRef) {
+        if !self.searched.insert(ty) {
+            return;
+        }
+        if wasm_gc::Struct::matches(ctx, ty) {
+            self.push_type(ctx, ty);
+            return;
+        }
+        let data = ctx.get_type(ty);
+        for &param in data.params.iter() {
+            self.push_structural(ctx, param);
+        }
+        for (_, attr) in data.attrs.iter() {
+            attr.visit_types(&mut |ty| self.push_structural(ctx, ty));
+        }
+    }
+
+    fn collect_region(&mut self, ctx: &IrContext, region: RegionRef) {
+        for &block in &ctx.region(region).blocks {
+            for arg in ctx.block(block).args.iter() {
+                self.push_structural(ctx, arg.ty);
+            }
+            for &op in &ctx.block(block).ops {
+                for ty in typed_op_types(ctx, op) {
+                    self.push_type(ctx, ty);
+                }
+                for (_, attr) in ctx.op(op).attributes.iter() {
+                    attr.visit_types(&mut |ty| self.push_structural(ctx, ty));
+                }
+                for &ty in ctx.op_result_types(op) {
+                    self.push_structural(ctx, ty);
+                }
+                for nested in ctx.op_regions(op) {
+                    self.collect_region(ctx, nested);
+                }
+            }
+        }
+    }
+}
+
+/// The GC types a typed `wasm_gc` operation names in its attributes.
+fn typed_op_types(ctx: &IrContext, op: OpRef) -> SmallVec<[TypeRef; 2]> {
+    let mut types = SmallVec::new();
+    if let Ok(op) = wasm_gc::StructNew::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::StructGet::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::StructSet::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArrayNew::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArrayNewDefault::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArrayNewData::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArrayGet::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArrayGetS::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArrayGetU::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArraySet::from_op(ctx, op) {
+        types.push(op.r#type(ctx));
+    } else if let Ok(op) = wasm_gc::ArrayCopy::from_op(ctx, op) {
+        types.push(op.dst_type(ctx));
+        types.push(op.src_type(ctx));
+    } else if let Ok(op) = wasm_gc::RefNull::from_op(ctx, op) {
+        types.push(op.target_type(ctx));
+    } else if let Ok(op) = wasm_gc::RefCast::from_op(ctx, op) {
+        types.push(op.target_type(ctx));
+    } else if let Ok(op) = wasm_gc::RefTest::from_op(ctx, op) {
+        types.push(op.target_type(ctx));
+    }
+    types
 }
 
 struct LowerTypedGcPattern {
@@ -249,21 +304,23 @@ impl RewritePattern for LowerTypedGcPattern {
 
 /// Assign module-local GC type indices and fully lower typed GC operations.
 pub fn lower(ctx: &mut IrContext, module: Module) {
-    let mut types = Vec::new();
+    let mut collector = TypeCollector::default();
     if let Some(body) = module.body(ctx) {
-        collect_typed_ops(ctx, body, &mut types);
+        collector.collect_region(ctx, body);
     }
 
-    let mut next = FIRST_USER_TYPE_IDX;
+    let mut user_types = Vec::new();
     let mut indices = HashMap::default();
-    for ty in types {
+    for ty in collector.types {
         let idx = builtin_type_idx(ctx, ty).unwrap_or_else(|| {
-            let idx = next;
-            next += 1;
-            idx
+            user_types.push(Attribute::Type(ty));
+            FIRST_USER_TYPE_IDX + user_types.len() as u32 - 1
         });
         indices.insert(ty, idx);
     }
+    ctx.op_mut(module.op())
+        .attributes
+        .insert(GC_TYPES_ATTR, Attribute::List(user_types));
 
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(LowerTypedGcPattern { indices })
@@ -275,18 +332,18 @@ mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
     #[test]
-    fn nominal_types_with_equal_layout_receive_distinct_indices() {
+    fn structs_with_equal_fields_share_one_index() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !A = adt.struct<core.i32 {name = "value"}, {name = "A"}>
-  !B = adt.struct<core.i32 {name = "value"}, {name = "B"}>
+  !A = wasm_gc.struct<core.i32, core.i32>
+  !B = wasm_gc.struct<core.i32, core.i32>
 
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
-    %a = wasm_gc.struct_new %zero {type = !A} : !A
-    %b = wasm_gc.struct_new %zero {type = !B} : !B
+    %a = wasm_gc.struct_new %zero, %zero {type = !A} : !A
+    %b = wasm_gc.struct_new %zero, %zero {type = !B} : !B
     wasm.return
   }
 }"#,
@@ -304,12 +361,47 @@ mod tests {
             .filter_map(|&op| wasm::StructNew::from_op(&ctx, op).ok())
             .map(|op| op.type_idx(&ctx))
             .collect();
-        assert_eq!(indices, vec![FIRST_USER_TYPE_IDX, FIRST_USER_TYPE_IDX + 1]);
+        assert_eq!(indices, vec![FIRST_USER_TYPE_IDX, FIRST_USER_TYPE_IDX]);
         assert!(
             ctx.block(block)
                 .ops
                 .iter()
                 .all(|&op| ctx.op(op).dialect != wasm_gc::DIALECT_NAME())
+        );
+    }
+
+    #[test]
+    fn every_structural_struct_the_module_names_is_listed_by_index() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Inner = wasm_gc.struct<core.i32, core.f64>
+  !Outer = wasm_gc.struct<core.i32, !Inner>
+  !Param = wasm_gc.struct<core.i32, core.i64>
+  !A = core.array<core.i32>
+
+  wasm.func @main(%param: !Param) -> core.nil {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %array = wasm_gc.array_new_default %zero {type = !A} : !A
+    %outer = wasm_gc.ref_null {target_type = !Outer} : !Outer
+    wasm.return
+  }
+}"#,
+        );
+        let alias = |ctx: &IrContext, name: &'static str| {
+            ctx.type_alias_by_text(name).expect("fixture alias")
+        };
+        let expected =
+            ["Param", "A", "Outer", "Inner"].map(|name| Attribute::Type(alias(&ctx, name)));
+
+        lower(&mut ctx, module);
+
+        // A struct named only by a signature or by another struct's field
+        // still receives an index, so every value type naming it is concrete.
+        assert_eq!(
+            ctx.op(module.op()).attributes.get(GC_TYPES_ATTR),
+            Some(&Attribute::List(expected.to_vec()))
         );
     }
 
@@ -320,7 +412,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !data = core.array<core.i8, {layout = "bytes_data"}>
-  !bytes = adt.struct<!data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
+  !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
     %bytes = wasm_gc.struct_new %zero {type = !bytes} : !bytes
@@ -352,8 +444,8 @@ mod tests {
   !data = core.array<core.i8, {layout = "bytes_data"}>
   !plain = core.array<core.i8>
   !plain_ref = core.ref<core.array<core.i8>>
-  !bytes = adt.struct<!data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
-  !lookalike = adt.struct<!plain {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes"}>
+  !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
+  !lookalike = test.layout<!plain, core.i32, core.i32>
 }"#,
         );
         fn alias(ctx: &IrContext, name: &'static str) -> TypeRef {
@@ -378,12 +470,31 @@ mod tests {
     }
 
     #[test]
+    fn boxed_floats_are_identified_by_their_layout_alone() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !boxed = test.layout<core.f64, {name = "_BoxedF64", layout = "boxed_f64"}>
+  !lookalike = test.layout<core.f64, {name = "_BoxedF64"}>
+}"#,
+        );
+        let alias = |name| ctx.type_alias_by_text(name).expect("fixture alias");
+
+        assert_eq!(
+            builtin_type_idx(&ctx, alias("boxed")),
+            Some(crate::gc_types::BOXED_F64_IDX)
+        );
+        assert_eq!(builtin_type_idx(&ctx, alias("lookalike")), None);
+    }
+
+    #[test]
     fn only_concrete_heap_types_receive_indices() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !A = adt.struct<{name = "A"}>
+  !A = test.nominal<{name = "A"}>
 
   wasm.func @main() -> core.nil {
     %null = wasm.ref_null {heap_type = "anyref"} : wasm.anyref
@@ -415,7 +526,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<core.i32 {name = "value"}, {name = "S"}>
+  !S = test.nominal<core.i32, {name = "S"}>
   !A = core.array<core.i32>
   !B = core.array<core.i32>
 

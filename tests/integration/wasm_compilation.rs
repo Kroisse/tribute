@@ -1020,7 +1020,23 @@ fn main() ->{std::io::Io} Nil {
         .iter()
         .flatten()
         .collect();
-    assert!(user_structs.len() >= 3, "one type per Shape variant");
+    // `Circle(Int)` and `Square(Int)` have equal fields, so they share one
+    // structural type and only their descriptors tell them apart.
+    for (index, (fields, ..)) in user_structs.iter().enumerate() {
+        assert!(
+            user_structs[..index]
+                .iter()
+                .all(|(earlier, ..)| earlier != fields),
+            "struct types with equal fields are one type"
+        );
+    }
+    let int_payload = [descriptor, descriptor];
+    assert!(
+        user_structs
+            .iter()
+            .any(|(fields, ..)| fields[..] == int_payload),
+        "the shared Circle and Square type"
+    );
     for (fields, is_final, supertype) in user_structs {
         assert_eq!(fields.first(), Some(&descriptor));
         assert!(is_final);

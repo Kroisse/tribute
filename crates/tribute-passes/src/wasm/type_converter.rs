@@ -112,15 +112,10 @@ fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
     is_type(ctx, ty, "adt", "typeref")
 }
 
-/// Check if a type has the `is_variant` attribute set to true.
-fn is_variant_instance_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    ctx.get_type(ty).attrs.get_bool("is_variant") == Some(true)
-}
-
 /// Check if a type is a struct-like reference type.
 ///
 /// This includes `wasm.structref`, `wasm.anyref`, ADT struct/typeref types,
-/// and variant instance types.
+/// and the structural `wasm_gc.struct` of user structs and variants.
 fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
     // wasm.structref or wasm.anyref
     if is_type(ctx, ty, "wasm", "structref") || is_type(ctx, ty, "wasm", "anyref") {
@@ -137,8 +132,8 @@ fn is_struct_like(ctx: &IrContext, ty: TypeRef) -> bool {
         return true;
     }
 
-    // Check for variant instance types (have is_variant attribute)
-    if is_variant_instance_type(ctx, ty) {
+    // Structural user struct and variant types
+    if is_type(ctx, ty, "wasm_gc", "struct") {
         return true;
     }
 
@@ -612,6 +607,10 @@ mod tests {
         assert_eq!(
             tribute_ir::runtime_layout::DESCRIBED,
             trunk_ir_wasm_backend::gc_types::DESCRIBED_LAYOUT
+        );
+        assert_eq!(
+            tribute_ir::runtime_layout::BOXED_F64,
+            trunk_ir_wasm_backend::gc_types::BOXED_F64_LAYOUT
         );
         let mut ctx = IrContext::new();
         let closure = closure_adt_type(&mut ctx);

@@ -193,7 +193,16 @@ fn wasm_lowering_passes() -> PassManager {
     .add_pass(pass_fn("wasm-lowerer", |ctx, m: core::Module, _| {
         WasmLowerer::new().lower_module(ctx, m.into());
         Ok(())
-    }));
+    }))
+    // Replace user struct layouts with their structural GC types once no
+    // `adt` operation reads a nominal layout.
+    .add_pass(pass_fn(
+        "convert-struct-layouts",
+        |ctx, m: core::Module, _| {
+            super::struct_layouts::convert(ctx, m.into());
+            Ok(())
+        },
+    ));
     pm.with_debug_verifier()
         .with_instrumentation(|ctx, name, op| {
             if let Some(module) = Module::new(ctx, op) {
