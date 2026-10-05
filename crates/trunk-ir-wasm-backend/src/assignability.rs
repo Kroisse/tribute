@@ -5,7 +5,6 @@
 //! and callers outside this crate share it.
 
 use trunk_ir::IrContext;
-use trunk_ir::Symbol;
 use trunk_ir::refs::TypeRef;
 
 use crate::emit::helpers::is_type;
@@ -17,11 +16,10 @@ use crate::emit::helpers::is_type;
 /// Registration follows the same structure the rest of the backend uses: builtin
 /// layouts at their reserved indices (`@bytes`, `_closure`,
 /// `_Marker`, ...), the structural `wasm_gc.struct` types, each of which
-/// receives an index, and the ADT types that
+/// receives an index, and `adt.typeref`, which
 /// `emit::gc_types_collection::normalize_type_for_gc` physicalizes as the
-/// abstract struct supertype (`adt.typeref` and concrete variant instances
-/// carrying `base_enum`). An ADT spelling without that registration evidence
-/// proves nothing and stays rejected.
+/// abstract struct supertype. An ADT spelling without that registration
+/// evidence proves nothing and stays rejected.
 fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     if let Some(index) = crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) {
         return crate::gc_types::is_builtin_struct_index(index);
@@ -29,9 +27,7 @@ fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     if is_type(ctx, ty, "wasm_gc", "struct") {
         return true;
     }
-    let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("adt")
-        && (data.name == Symbol::new("typeref") || data.attrs.get_type("base_enum").is_some())
+    is_type(ctx, ty, "adt", "typeref")
 }
 
 /// Whether this IR type is registered by the backend as a concrete WasmGC array
@@ -102,10 +98,9 @@ pub fn is_wasm_physical_argument_assignable(
     }
 
     // An unregistered `adt.struct` spelling is emitted as the erased `anyref`
-    // reference, so it satisfies an `anyref` slot. A variant-marked type is not
-    // a second spelling of that erasure: it must carry registration evidence
-    // (`base_enum`), which the registered-struct rule above already accepts, and
-    // a variant instance without it is malformed rather than erased.
+    // reference, so it satisfies an `anyref` slot. Other `adt` spellings, such
+    // as an enum carrying variant markers, are not that erasure and stay
+    // rejected.
     if parameter_is_anyref && is_type(ctx, argument, "adt", "struct") {
         return true;
     }

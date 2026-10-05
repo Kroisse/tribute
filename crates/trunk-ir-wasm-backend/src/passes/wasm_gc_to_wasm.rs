@@ -13,20 +13,11 @@ use trunk_ir::rewrite::{
 use trunk_ir::smallvec::SmallVec;
 use trunk_ir::types::Attribute;
 
-use crate::gc_types::{BOXED_F64_IDX, FIRST_USER_TYPE_IDX};
-
-fn named_adt(ctx: &IrContext, ty: TypeRef, expected: &'static str) -> bool {
-    let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("adt") && data.attrs.get_str(ctx, "name") == Some(expected)
-}
+use crate::gc_types::FIRST_USER_TYPE_IDX;
 
 /// The reserved GC type index of a builtin runtime layout, if `ty` is one.
 pub fn builtin_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u32> {
-    if named_adt(ctx, ty, "_BoxedF64") {
-        Some(BOXED_F64_IDX)
-    } else {
-        crate::emit::helpers::builtin_layout_type_idx(ctx, ty)
-    }
+    crate::emit::helpers::builtin_layout_type_idx(ctx, ty)
 }
 
 fn is_abstract_heap_type(ctx: &IrContext, ty: TypeRef) -> bool {
@@ -476,6 +467,25 @@ mod tests {
                 "{shape_only}"
             );
         }
+    }
+
+    #[test]
+    fn boxed_floats_are_identified_by_their_layout_alone() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !boxed = adt.struct<core.f64 {name = "value"}, {name = "_BoxedF64", layout = "boxed_f64"}>
+  !lookalike = adt.struct<core.f64 {name = "value"}, {name = "_BoxedF64"}>
+}"#,
+        );
+        let alias = |name| ctx.type_alias_by_text(name).expect("fixture alias");
+
+        assert_eq!(
+            builtin_type_idx(&ctx, alias("boxed")),
+            Some(crate::gc_types::BOXED_F64_IDX)
+        );
+        assert_eq!(builtin_type_idx(&ctx, alias("lookalike")), None);
     }
 
     #[test]
