@@ -79,7 +79,8 @@ impl Converter<'_> {
 
     /// Build the marker dispatch closures of one installed layer: for each
     /// handled instance, the `fn` dispatcher running its arms with
-    /// `outer_evidence` and the marker's general slot.
+    /// `outer_evidence`. General operations read only the marker's prompt and
+    /// dispatch through the continuation frame.
     pub(super) fn build_marker_dispatchers(
         &mut self,
         block: BlockRef,
@@ -104,11 +105,6 @@ impl Converter<'_> {
                 self.build_tail_dispatcher(location, &ability_arms, outer_evidence)?;
             self.ctx.push_op(block, tr_op);
             dispatchers.push(tr_value);
-            // General operations dispatch through the continuation frame's
-            // handle-layer dispatcher, so the marker's general slot only rejects.
-            let (handler_op, handler_value) = self.build_general_reject_dispatcher(location);
-            self.ctx.push_op(block, handler_op);
-            dispatchers.push(handler_value);
         }
         Ok(dispatchers)
     }
@@ -1074,31 +1070,6 @@ impl Converter<'_> {
             CallingConvention::EvidenceDirect,
         );
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
-    }
-
-    /// Build the closure for a marker's general dispatch slot, which nothing
-    /// transfers to.
-    pub(super) fn build_general_reject_dispatcher(
-        &mut self,
-        location: Location,
-    ) -> (OpRef, ValueRef) {
-        let evidence_type = self.evidence_type();
-        let anyref = self.anyref_type();
-        let i32_type = self.i32_type();
-        let params = vec![evidence_type, anyref, i32_type, anyref];
-        let block = self.make_block(location, &params);
-        let unreachable = func::Unreachable::operands().build(self.ctx, location);
-        self.ctx.push_op(block, unreachable.op_ref());
-        let region = self.single_block_region(location, block);
-        let never = self.never_type();
-        let function = func::func_sig(self.ctx, params, [never]).as_type_ref();
-        let closure_type = physical_closure_type(self.ctx, function, CallingConvention::Cps);
-        let lambda = closure::Lambda::operands(std::iter::empty::<ValueRef>())
-            .results(closure_type)
-            .regions(region)
-            .build(self.ctx, location);
-        set_calling_convention(self.ctx, lambda.op_ref(), CallingConvention::Cps);
-        (lambda.op_ref(), lambda.result(self.ctx))
     }
 
     pub(super) fn lower_handle(

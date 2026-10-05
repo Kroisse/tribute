@@ -101,3 +101,39 @@ fn cps_legalization_carries_evidence_plans(db: &salsa::DatabaseImpl) {
     assert!(handle_masks > 1, "{ir}");
     assert_eq!(lines.len(), call_masks + call_dups + handle_masks, "{ir}");
 }
+
+/// A program whose calls all pass their evidence unchanged carries no
+/// selection, so evidence resolution adds no `effect.mask` or `effect.dup`.
+#[salsa_test]
+fn identity_selections_leave_no_evidence_plan(db: &salsa::DatabaseImpl) {
+    let code = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn bump() ->{State(Nat)} Nat {
+    State::set(State::get() + 1)
+    State::get()
+}
+
+fn main() -> Nil {
+    let _ = run_state(fn() { bump() }, 0)
+    Nil
+}
+"#;
+    let source = SourceCst::from_source_str(db, "identity.trb", code);
+    let (ctx, module) = run_through_cps_lowering(db, source)
+        .expect("CPS legalization should accept frontend output")
+        .expect("frontend should lower");
+    let ir = print_module(&ctx, module.op());
+    assert!(planned_lines(&ir).is_empty(), "{ir}");
+}

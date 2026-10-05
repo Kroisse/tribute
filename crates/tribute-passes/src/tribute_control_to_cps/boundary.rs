@@ -210,7 +210,6 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
         owner: OpRef,
         value: ValueRef,
         evidence: TypeRef,
-        general: bool,
         failures: &mut Vec<BoundaryFailure>,
     ) {
         let closure_ty = ctx.get_type(ctx.value_ty(value));
@@ -221,20 +220,11 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             func::FuncSig::from_type_ref(ctx, closure_ty.params[0]).is_some_and(|function| {
                 let params = function.inputs(ctx);
                 let result = function.single_result(ctx);
-                if general {
-                    result.is_some_and(|result| type_is(ctx, result, "core", "never"))
-                        && params.len() == 4
-                        && params[0] == evidence
-                        && type_is(ctx, params[1], "tribute_rt", "anyref")
-                        && type_is(ctx, params[2], "core", "i32")
-                        && type_is(ctx, params[3], "tribute_rt", "anyref")
-                } else {
-                    result.is_some_and(|result| type_is(ctx, result, "tribute_rt", "anyref"))
-                        && params.len() == 3
-                        && params[0] == evidence
-                        && type_is(ctx, params[1], "core", "i32")
-                        && type_is(ctx, params[2], "tribute_rt", "anyref")
-                }
+                result.is_some_and(|result| type_is(ctx, result, "tribute_rt", "anyref"))
+                    && params.len() == 3
+                    && params[0] == evidence
+                    && type_is(ctx, params[1], "core", "i32")
+                    && type_is(ctx, params[2], "tribute_rt", "anyref")
             })
         } else {
             false
@@ -243,21 +233,10 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
             failures.push(BoundaryFailure {
                 op: Some(owner),
                 location: Some(ctx.op(owner).location),
-                message: format!(
-                    "{} dispatcher has the wrong typed closure ABI",
-                    if general {
-                        "general"
-                    } else {
-                        "tail-resumptive"
-                    }
-                ),
+                message: "tail-resumptive dispatcher has the wrong typed closure ABI".into(),
             });
         }
-        let expected = if general {
-            CallingConvention::Cps as i64
-        } else {
-            CallingConvention::EvidenceDirect as i64
-        };
+        let expected = CallingConvention::EvidenceDirect as i64;
         let trunk_ir::ValueDef::OpResult(def, _) = ctx.value_def(value) else {
             failures.push(BoundaryFailure {
                 op: Some(owner),
@@ -283,9 +262,8 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
                 && let Some((_, dispatchers)) = rest.split_first()
             {
                 let evidence_ty = ctx.value_ty(*evidence);
-                for pair in dispatchers.as_chunks::<2>().0 {
-                    check_dispatcher(ctx, op, pair[0], evidence_ty, false, failures);
-                    check_dispatcher(ctx, op, pair[1], evidence_ty, true, failures);
+                for &dispatcher in dispatchers {
+                    check_dispatcher(ctx, op, dispatcher, evidence_ty, failures);
                 }
             }
         }

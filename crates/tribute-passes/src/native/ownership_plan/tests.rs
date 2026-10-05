@@ -416,8 +416,7 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %tr = mem.null : core.ptr
-    %extended = effect.extend %evidence, %prompt, %tr, %closure {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %closure {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
     func.return
   }
 }"#,
@@ -440,11 +439,6 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
         lowered.matches("tribute_rt.into_raw").count(),
         1,
         "{lowered}"
-    );
-    assert_eq!(
-        lowered.matches("core.unrealized_conversion_cast").count(),
-        1,
-        "the existing raw dispatcher remains unmanaged: {lowered}"
     );
     assert!(
         !install.actions().iter().any(|action| {
@@ -470,7 +464,7 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
 }
 
 #[test]
-fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
+fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -480,8 +474,7 @@ fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %tr = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %handler = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %extended = effect.extend %evidence, %prompt, %tr, %handler {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %tr {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
     func.return
   }
 }"#,
@@ -489,11 +482,11 @@ fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
     lower_evidence_to_native(&mut ctx, module);
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
     let install = plan.function(&Symbol::new("install")).unwrap();
-    assert_eq!(count(install, ActionKind::IntoRawTransfer), 2);
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
     let lowered = print_module(&ctx, module.op());
     assert_eq!(
         lowered.matches("tribute_rt.into_raw").count(),
-        2,
+        1,
         "{lowered}"
     );
 }

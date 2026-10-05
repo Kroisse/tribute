@@ -21,7 +21,6 @@ use super::intrinsic_to_wasm::{BYTES_CONCAT, BYTES_LEN, BYTES_RANGE_EQUAL, BYTES
 pub const PROVIDED: &[&str] = &[
     evidence_abi::LOOKUP,
     evidence_abi::LOOKUP_TR,
-    evidence_abi::LOOKUP_HANDLER,
     evidence_abi::EXTEND,
     evidence_abi::MASK,
     evidence_abi::DUP,

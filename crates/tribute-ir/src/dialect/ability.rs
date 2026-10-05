@@ -28,12 +28,11 @@ mod ability {
     /// Resultless proper-tail handler delimiter emitted by
     /// `tribute_control_to_cps`.
     ///
-    /// `ability_refs` is ordered to match pairs in `dispatchers`. Each pair is
-    /// `(tr_dispatch_fn, handler_dispatch)`, using typed reject closures when a
-    /// handled ability has no operation of that kind. `resolve_evidence`
-    /// allocates one runtime-unique prompt identity for the delimiter and
-    /// shares it across every pair. The body entry block receives the extended
-    /// evidence. Every body path ends in a proper tail transfer or
+    /// `ability_refs` is ordered to match `dispatchers`: one `tr_dispatch_fn`
+    /// per handled ability instance, which rejects when the instance has no
+    /// `fn` operation handled here. `resolve_evidence` allocates one
+    /// runtime-unique prompt identity for the delimiter and shares it across
+    /// every instance. The body entry block receives the extended evidence. Every body path ends in a proper tail transfer or
     /// `func.unreachable`.
     fn handle_dispatch(
         ability_refs: Attr<[Type]>,
@@ -250,8 +249,7 @@ pub enum MarkerField {
     AbilityId = 0,
     PromptTag = 1,
     TrDispatchFn = 2,
-    HandlerDispatch = 3,
-    Shadowed = 4,
+    Shadowed = 3,
 }
 
 impl MarkerField {
@@ -285,7 +283,7 @@ pub struct MarkerFieldSpec {
 }
 
 /// Canonical field layout for the `_Marker` ADT.
-pub const MARKER_FIELDS: [MarkerFieldSpec; 5] = [
+pub const MARKER_FIELDS: [MarkerFieldSpec; 4] = [
     MarkerFieldSpec {
         field: MarkerField::AbilityId,
         symbol_name: "ability_id",
@@ -299,11 +297,6 @@ pub const MARKER_FIELDS: [MarkerFieldSpec; 5] = [
     MarkerFieldSpec {
         field: MarkerField::TrDispatchFn,
         symbol_name: "tr_dispatch_fn",
-        field_type: MarkerFieldType::Ptr,
-    },
-    MarkerFieldSpec {
-        field: MarkerField::HandlerDispatch,
-        symbol_name: "handler_dispatch",
         field_type: MarkerFieldType::Ptr,
     },
     MarkerFieldSpec {
@@ -351,10 +344,9 @@ pub mod evidence_abi {
     pub const MASK: &str = "__tribute_evidence_mask";
     pub const DUP: &str = "__tribute_evidence_dup";
     pub const LOOKUP_TR: &str = "__tribute_evidence_lookup_tr";
-    pub const LOOKUP_HANDLER: &str = "__tribute_evidence_lookup_handler";
 }
 
-pub fn evidence_runtime_symbols() -> [Symbol; 7] {
+pub fn evidence_runtime_symbols() -> [Symbol; 6] {
     [
         Symbol::new(evidence_abi::EMPTY),
         Symbol::new(evidence_abi::LOOKUP),
@@ -362,7 +354,6 @@ pub fn evidence_runtime_symbols() -> [Symbol; 7] {
         Symbol::new(evidence_abi::MASK),
         Symbol::new(evidence_abi::DUP),
         Symbol::new(evidence_abi::LOOKUP_TR),
-        Symbol::new(evidence_abi::LOOKUP_HANDLER),
     ]
 }
 
@@ -374,15 +365,14 @@ pub fn evidence_runtime_symbols() -> [Symbol; 7] {
 ///     ability_id: i32,
 ///     prompt_tag: i32,
 ///     tr_dispatch_fn: ptr,
-///     handler_dispatch: ptr,
 ///     shadowed: ptr,
 /// }
 /// ```
 ///
 /// `shadowed` is the marker of the same ability this one shadows, or null.
-/// Dispatch fields store erased closure references. Tail-resumptive operations
-/// return their source result; general CPS dispatch uses the exact resultless
-/// dispatch ABI. Shared lowering installs typed reject closures for missing kinds.
+/// `tr_dispatch_fn` stores an erased closure reference whose tail-resumptive
+/// operations return their source result. General operations read only the
+/// prompt and dispatch through the continuation frame.
 pub fn marker_adt_type_ref(ctx: &mut IrContext) -> TypeRef {
     let fields: Vec<_> = MARKER_FIELDS
         .into_iter()
@@ -477,13 +467,12 @@ mod tests {
         assert_eq!(MarkerField::AbilityId.index(), 0);
         assert_eq!(MarkerField::PromptTag.index(), 1);
         assert_eq!(MarkerField::TrDispatchFn.index(), 2);
-        assert_eq!(MarkerField::HandlerDispatch.index(), 3);
-        assert_eq!(MarkerField::Shadowed.index(), 4);
+        assert_eq!(MarkerField::Shadowed.index(), 3);
     }
 
     #[test]
     fn test_marker_field_specs_are_canonical() {
-        assert_eq!(MARKER_FIELDS.len(), 5);
+        assert_eq!(MARKER_FIELDS.len(), 4);
         assert_eq!(
             MARKER_FIELDS,
             [
@@ -500,11 +489,6 @@ mod tests {
                 MarkerFieldSpec {
                     field: MarkerField::TrDispatchFn,
                     symbol_name: "tr_dispatch_fn",
-                    field_type: MarkerFieldType::Ptr,
-                },
-                MarkerFieldSpec {
-                    field: MarkerField::HandlerDispatch,
-                    symbol_name: "handler_dispatch",
                     field_type: MarkerFieldType::Ptr,
                 },
                 MarkerFieldSpec {
@@ -527,7 +511,6 @@ mod tests {
                 Symbol::new(evidence_abi::MASK),
                 Symbol::new(evidence_abi::DUP),
                 Symbol::new(evidence_abi::LOOKUP_TR),
-                Symbol::new(evidence_abi::LOOKUP_HANDLER),
             ]
         );
     }
