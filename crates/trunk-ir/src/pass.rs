@@ -656,7 +656,7 @@ mod tests {
             parent_op: None,
         });
         core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(region)
             .build(ctx, loc)
     }

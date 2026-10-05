@@ -3288,7 +3288,7 @@ mod tests {
         }
         let body = region(ctx, loc, body_block);
         let module = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(body)
             .build(ctx, loc);
         Module::new(ctx, module.op_ref()).expect("core.module")
@@ -3307,7 +3307,7 @@ mod tests {
         ctx.push_op(entry, ret.op_ref());
         let body = region(ctx, loc, entry);
         Func::operands()
-            .sym_name(Symbol::new(symbol))
+            .sym_name(ctx.intern_str(symbol))
             .r#type(ty)
             .regions(body)
             .build(ctx, loc)
@@ -3408,7 +3408,7 @@ mod tests {
         ctx.push_op(entry, ret.op_ref());
         let control_body = region(&mut ctx, loc, entry);
         let control = Func::operands()
-            .sym_name(Symbol::new("control"))
+            .sym_name("control")
             .r#type(direct)
             .regions(control_body)
             .build(&mut ctx, loc);

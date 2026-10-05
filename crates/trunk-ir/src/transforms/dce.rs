@@ -436,7 +436,7 @@ mod tests {
             let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
             let nested_func = func::Func::operands()
-                .sym_name(Symbol::new("nested"))
+                .sym_name("nested")
                 .r#type(fn_ty)
                 .regions(inner_region)
                 .build(ctx, loc);
@@ -510,7 +510,7 @@ mod tests {
             let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
             let nested_func = func::Func::operands()
-                .sym_name(Symbol::new("nested"))
+                .sym_name("nested")
                 .r#type(fn_ty)
                 .regions(inner_region)
                 .build(ctx, loc);

@@ -909,7 +909,7 @@ mod tests {
             parent_op: None,
         });
         core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc)
             .op_ref()
@@ -946,7 +946,7 @@ mod tests {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1144,7 +1144,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("add"))
+            .sym_name("add")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1246,7 +1246,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("choose"))
+            .sym_name("choose")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1282,7 +1282,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("pure"))
+            .sym_name("pure")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1320,7 +1320,7 @@ core.module @test {
                 parent_op: None,
             });
             let f = func::Func::operands()
-                .sym_name(Symbol::new(name))
+                .sym_name(*name)
                 .r#type(func_ty)
                 .regions(body)
                 .build(&mut ctx, loc);
@@ -1359,7 +1359,7 @@ core.module @test {
             parent_op: None,
         });
         let callee = func::Func::operands()
-            .sym_name(Symbol::new("callee"))
+            .sym_name("callee")
             .r#type(callee_ty)
             .regions(body1)
             .build(&mut ctx, loc);
@@ -1386,7 +1386,7 @@ core.module @test {
             parent_op: None,
         });
         let main_fn = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(main_ty)
             .regions(body2)
             .build(&mut ctx, loc);
@@ -1937,7 +1937,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("identity"))
+            .sym_name("identity")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);

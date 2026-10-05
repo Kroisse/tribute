@@ -157,7 +157,7 @@ mod tests {
 
         // Constructor order: ctx, location, attrs (sym_name, r#type), regions (body)
         let f = super::func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(func_ty)
             .regions(region)
             .build(&mut ctx, loc);

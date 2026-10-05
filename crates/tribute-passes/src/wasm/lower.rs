@@ -683,7 +683,7 @@ mod tests {
         });
         let func_ty = intern_func_type(&mut ctx, vec![], nil_ty);
         let memory_func = wasm_dialect::Func::operands()
-            .sym_name(Symbol::new("memory_ops"))
+            .sym_name("memory_ops")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, location);
@@ -737,7 +737,7 @@ mod tests {
         });
         let main_ty = intern_func_type(&mut ctx, vec![i32_ty], nil_ty);
         let main = wasm_dialect::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(main_ty)
             .regions(main_body)
             .build(&mut ctx, location);

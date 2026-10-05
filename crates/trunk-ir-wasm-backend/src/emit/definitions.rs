@@ -301,7 +301,6 @@ pub(crate) fn extract_global_def(
 mod tests {
     use super::*;
     use trunk_ir::Span;
-    use trunk_ir::Symbol;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::{Location, TypeDataBuilder};
 
@@ -313,7 +312,7 @@ mod tests {
         let import = wasm_dialect::ImportFunc::operands()
             .module("env")
             .name("run")
-            .sym_name(Symbol::new("run"))
+            .sym_name("run")
             .r#type(malformed)
             .build(&mut ctx, location);
 

@@ -1583,7 +1583,7 @@ mod tests {
         });
         let func_ty = make_func_type(ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("bad_if"))
+            .sym_name("bad_if")
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -1601,7 +1601,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc);
         Module::new(ctx, module_op.op_ref()).unwrap()
@@ -1648,7 +1648,7 @@ mod tests {
 
         let func_ty = make_func_type(ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("add"))
+            .sym_name("add")
             .r#type(func_ty)
             .regions(body_region)
             .build(ctx, loc);
@@ -1667,7 +1667,7 @@ mod tests {
             parent_op: None,
         });
         let module = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc);
 
@@ -1711,7 +1711,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_a = func::Func::operands()
-            .sym_name(Symbol::new("func_a"))
+            .sym_name("func_a")
             .r#type(func_ty)
             .regions(body_a)
             .build(&mut ctx, loc);
@@ -1732,7 +1732,7 @@ mod tests {
             parent_op: None,
         });
         let func_b = func::Func::operands()
-            .sym_name(Symbol::new("func_b"))
+            .sym_name("func_b")
             .r#type(func_ty)
             .regions(body_b)
             .build(&mut ctx, loc);
@@ -1752,7 +1752,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -1792,7 +1792,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
         let func_a = func::Func::operands()
-            .sym_name(Symbol::new("func_a"))
+            .sym_name("func_a")
             .r#type(func_ty)
             .regions(body_a)
             .build(&mut ctx, loc);
@@ -1814,7 +1814,7 @@ mod tests {
         });
         let func_ty_b = make_func_type(&mut ctx, &[], i32_ty);
         let func_b = func::Func::operands()
-            .sym_name(Symbol::new("func_b"))
+            .sym_name("func_b")
             .r#type(func_ty_b)
             .regions(body_b)
             .build(&mut ctx, loc);
@@ -1833,7 +1833,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -1939,7 +1939,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("nested_fn"))
+            .sym_name("nested_fn")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1957,7 +1957,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -1998,7 +1998,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_a = func::Func::operands()
-            .sym_name(Symbol::new("func_a"))
+            .sym_name("func_a")
             .r#type(func_ty)
             .regions(body_a)
             .build(&mut ctx, loc);
@@ -2026,7 +2026,7 @@ mod tests {
             parent_op: None,
         });
         let func_b = func::Func::operands()
-            .sym_name(Symbol::new("func_b"))
+            .sym_name("func_b")
             .r#type(func_ty)
             .regions(body_b)
             .build(&mut ctx, loc);
@@ -2045,7 +2045,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -2091,7 +2091,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_a = func::Func::operands()
-            .sym_name(Symbol::new("func_a"))
+            .sym_name("func_a")
             .r#type(func_ty)
             .regions(body_a)
             .build(&mut ctx, loc);
@@ -2134,7 +2134,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -2240,7 +2240,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("bad_scope"))
+            .sym_name("bad_scope")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -2258,7 +2258,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -2406,7 +2406,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("f"))
+            .sym_name("f")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -2424,7 +2424,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -3680,7 +3680,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("malformed"))
+            .sym_name("malformed")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -3696,7 +3696,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(module_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();

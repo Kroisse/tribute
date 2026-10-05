@@ -593,7 +593,7 @@ mod tests {
         let outer_func_ty =
             func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]).as_type_ref();
         let outer_func = func::Func::operands()
-            .sym_name(Symbol::new("test_fn"))
+            .sym_name("test_fn")
             .r#type(outer_func_ty)
             .regions(outer_body)
             .build(&mut ctx, loc);
@@ -711,7 +711,7 @@ mod tests {
             });
             let outer_ty = func::func_sig(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
             let outer = func::Func::operands()
-                .sym_name(Symbol::new("test_fn"))
+                .sym_name("test_fn")
                 .r#type(outer_ty)
                 .regions(outer_body)
                 .build(&mut ctx, loc);
@@ -797,7 +797,7 @@ mod tests {
         });
         let outer_func_ty = func::func_sig(&mut ctx, [i32_ty], [anyref_ty]).as_type_ref();
         let outer_func = func::Func::operands()
-            .sym_name(Symbol::new("test_fn"))
+            .sym_name("test_fn")
             .r#type(outer_func_ty)
             .regions(outer_body)
             .build(&mut ctx, loc);

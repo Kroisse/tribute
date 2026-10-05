@@ -300,7 +300,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(SymbolPath::from(name))
+            .sym_name(ctx.intern_str(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -331,7 +331,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(SymbolPath::from(name))
+            .sym_name(ctx.intern_str(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -364,7 +364,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(SymbolPath::from(name))
+            .sym_name(ctx.intern_str(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)

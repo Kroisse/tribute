@@ -134,7 +134,7 @@ fn declare_host_resources(
         let import = wasm_dialect::ImportFunc::operands()
             .module(WASI_MODULE)
             .name(FD_WRITE)
-            .sym_name(Symbol::new(FD_WRITE))
+            .sym_name(FD_WRITE)
             .r#type(import_ty)
             .build(ctx, loc);
         preamble.push(import.op_ref());
@@ -296,7 +296,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     });
     let fn_ty = func::func_sig(ctx, [bytes_ty, i32_ty], [nil_ty]).as_type_ref();
     func::Func::operands()
-        .sym_name(Symbol::new(WRITE_HELPER))
+        .sym_name(WRITE_HELPER)
         .r#type(fn_ty)
         .regions(body)
         .build(ctx, loc)

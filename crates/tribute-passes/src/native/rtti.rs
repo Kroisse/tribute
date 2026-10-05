@@ -37,6 +37,7 @@ use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout,
 };
 use tribute_ir::dialect::tribute_rtti::FieldKind;
+use trunk_ir::SymbolPath;
 use trunk_ir::TypeDataBuilder;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
@@ -46,7 +47,6 @@ use trunk_ir::rewrite::{Module, TypeConverter};
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
 use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, TypeRef, ValueRef};
-use trunk_ir::{Symbol, SymbolPath};
 
 use tribute_ir::dialect::{tribute_rt, tribute_rtti};
 
@@ -383,7 +383,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
     });
     let func_ty = clif::func_sig(ctx, [tys.ptr, tys.i64], [tys.nil]).as_type_ref();
     clif::Func::operands()
-        .sym_name(Symbol::new(DEEP_RELEASE_FN))
+        .sym_name(DEEP_RELEASE_FN)
         .r#type(func_ty)
         .regions(body)
         .build(ctx, loc)
@@ -467,7 +467,7 @@ fn generate_fixed_release_function(
         parent_op: None,
     });
     clif::Func::operands()
-        .sym_name(Symbol::new(&format!("{RELEASE_FN_PREFIX}{rtti_idx}")))
+        .sym_name(format!("{RELEASE_FN_PREFIX}{rtti_idx}"))
         .r#type(func_ty)
         .regions(body)
         .build(ctx, loc)
@@ -589,7 +589,7 @@ fn generate_release_function(
         });
 
         let func_op = clif::Func::operands()
-            .sym_name(Symbol::new(&func_name))
+            .sym_name(func_name)
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -673,7 +673,7 @@ fn generate_release_function(
     });
 
     let func_op = clif::Func::operands()
-        .sym_name(Symbol::new(&func_name))
+        .sym_name(func_name)
         .r#type(func_ty)
         .regions(body)
         .build(ctx, loc);
@@ -731,6 +731,7 @@ pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, Typ
 mod tests {
     use super::*;
     use trunk_ir::Span;
+    use trunk_ir::Symbol;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
@@ -809,7 +810,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("create_struct"))
+            .sym_name("create_struct")
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -1097,7 +1098,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("create"))
+            .sym_name("create")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);

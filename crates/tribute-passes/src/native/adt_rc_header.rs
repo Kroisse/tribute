@@ -484,7 +484,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("create_struct"))
+            .sym_name("create_struct")
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);

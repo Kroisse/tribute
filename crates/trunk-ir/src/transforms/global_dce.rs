@@ -391,7 +391,7 @@ mod tests {
             parent_op: None,
         });
         let main = func::Func::operands()
-            .sym_name(SymbolPath::from("main"))
+            .sym_name("main")
             .r#type(fn_ty)
             .regions(body)
             .build(&mut ctx, loc)

@@ -914,7 +914,7 @@ fn helper_function(
     let func_ty = wasm_dialect::func_sig(ctx, params.iter().copied(), [result]).as_type_ref();
     let body = single_block_region(ctx, location, body);
     wasm_dialect::Func::operands()
-        .sym_name(Symbol::new(name))
+        .sym_name(name)
         .r#type(func_ty)
         .regions(body)
         .build(ctx, location)
