@@ -196,8 +196,9 @@ branch, guard, 오른쪽 항만 실행한다.
 
 1. 정상 body yield는 completion region에 정확히 한 번 들어가며 completion
    yield는 enclosing `exit_k`를 계속 실행한다.
-2. Dynamic하게 설치된 handler 중 가장 가까운 일치 handler가 operation
-   argument를 받는다. `fn` arm은 operation result를 yield하고 자동으로 resume한다.
+2. Operation을 수행한 지점의 row에서 그 label에 묶인 handler가 operation
+   argument를 받는다([Row 위치에 따른 evidence 선택](#row-directed-evidence)).
+   `fn` arm은 operation result를 yield하고 자동으로 resume한다.
 3. Resumptive general `op` arm은 affine resumption을 받는다.
    `tribute_control.resume`은 수행된 operation result를 공급하고 capture한 body
    continuation을 실행한 뒤, 반환된 handle answer로 arm-local suffix를 실행한다.
@@ -442,8 +443,8 @@ General operation은 marker에서 prompt만 읽고 dispatch는 frame이 담은 h
 dispatcher가 맡는다. 이 dispatcher들은 source에서 handle 식이 중첩된 순서를 따라
 안쪽에서 바깥쪽으로 이어지는 사슬을 이룬다. 어느 handle 식의 dispatcher인지는
 정적으로 정해지지만, dispatcher 값은 층과 함께 다시 만들어진다. 그래서 body 안의
-operation과 suffix는 dispatcher를 capture하지 않고 받은 frame에서 읽는다. Marker의
-`handler_dispatch` 칸에는 호출되지 않는 typed reject closure를 둔다.
+operation과 suffix는 dispatcher를 capture하지 않고 받은 frame에서 읽는다. Marker는
+general operation의 dispatch closure를 담지 않는다.
 
 Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 것과 재개된 계산이 다시
 만든 것([재개된 frame](#row-directed-evidence))을 각각 그 handle의 **층**이라 한다.
@@ -468,7 +469,7 @@ CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 
 이 pass는 함수 signature나 본문 형상에서 hidden evidence를 추론하지 않는다.
 
 ```text
-%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %handler_dispatch
+%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn
   { ability_ref = core.ability_ref<{name = "State"}> }
 ```
 
@@ -480,7 +481,6 @@ struct Marker {
     ability_id: i32,
     prompt_tag: i32,
     tr_dispatch_fn: ptr,
-    handler_dispatch: ptr,
     shadowed: ptr,
 }
 ```
@@ -499,8 +499,7 @@ Marker layout과 evidence runtime ABI는 `tribute-ir`의
 | `ability_id` | 0 | `i32` | stable ability key for sorted evidence lookup |
 | `prompt_tag` | 1 | `i32` | prompt installed for the active handler |
 | `tr_dispatch_fn` | 2 | `ptr` | tail-resumptive dispatch closure or null |
-| `handler_dispatch` | 3 | `ptr` | typed reject closure; general dispatch does not read it |
-| `shadowed` | 4 | `ptr` | marker of the same ability this one shadows, or null |
+| `shadowed` | 3 | `ptr` | marker of the same ability this one shadows, or null |
 
 WasmGC uses the same field order and shared field identifiers, but its concrete
 GC marker type stores the dispatch closures as `anyref` closure references
@@ -592,12 +591,10 @@ __tribute_evidence_extend(
     ability_id: i32,
     prompt_tag: i32,
     tr_dispatch_fn: ptr,
-    handler_dispatch: ptr,
 ) -> ptr
 __tribute_evidence_mask(ev: ptr, ability_id: i32) -> ptr
 __tribute_evidence_dup(ev: ptr, ability_id: i32) -> ptr
 __tribute_evidence_lookup_tr(ev: ptr, ability_id: i32) -> ptr
-__tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
 ```
 
 `extend`는 같은 ability의 기존 marker를 새 marker의 `shadowed`로 둔다. `mask`는
@@ -663,7 +660,7 @@ semantics and concrete runtime layout.
 
 Operations:
 
-- `effect.extend(evidence, prompt_tag, tr_dispatch_fn, handler_dispatch)
+- `effect.extend(evidence, prompt_tag, tr_dispatch_fn)
   { ability_ref } -> evidence`
 - `effect.mask(evidence) { ability_ref } -> evidence`
 - `effect.dup(evidence) { ability_ref } -> evidence`

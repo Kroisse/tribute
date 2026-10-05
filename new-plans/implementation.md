@@ -557,7 +557,8 @@ region을 포함한 arm body의 `tribute_control.resume`을 verifier가 거부�
 ─────────────────────
 ```
 
-`State::get()`은 evidence에서 가장 가까운 State marker를 조회한다. Shared CPS
+`State::get()`은 evidence에서 State의 가장 위 marker를 조회한다. 그 marker는 호출
+지점의 row가 명시한 State에 묶인 handler의 것이다. Shared CPS
 conversion이 만든 suffix continuation과 frame이 담은 handle 층의 dispatcher는 그 marker의
 prompt(P3)를 기준으로 handler boundary와 resume 경로를 연결한다. 이 그림은
 논리적 delimiter 중첩이며 machine stack을 runtime에 탐색한다는 뜻이 아니다.
@@ -595,7 +596,7 @@ fn nested_state_example() -> Int {
 **조회 흐름:**
 
 1. `State::get()` 호출
-2. Evidence에서 `ability_id`(STATE_ID)로 marker 조회 → 가장 안쪽 handler의 marker 반환
+2. Evidence에서 `ability_id`(STATE_ID)로 marker 조회 → 그 instance의 가장 위 marker 반환
 3. Marker의 `prompt_tag`(P2)와 ability/operation identity를 frame의 dispatcher에 전달
 4. Dispatcher가 이미 생성된 suffix continuation과 inner handler를 연결
 
@@ -950,8 +951,10 @@ Instance key는 frontend가 typecheck된 source type argument에서 만들어
 서로 다른 nominal 타입도 별도 instance다. `core.ability_ref`의 type parameter는
 이 identity에 참여하지 않으므로, 이후 단계의 타입 변환이 parameter를 바꾸어도
 runtime key는 변하지 않는다. Runtime array는 이 key로 정렬하고 binary
-search로 가장 가까운 설치된 handler를 선택한다. 표준 ability와 사용자 ability에
-별도 연속 번호 대역을 예약하지 않는다.
+search로 그 instance의 marker 칸을 찾는다. 칸의 가장 위 marker가 선택되며, 어느
+handler가 가장 위에 오는지는
+[row 위치에 따른 evidence 선택](cps-effects.md#row-directed-evidence)이 정한다.
+표준 ability와 사용자 ability에 별도 연속 번호 대역을 예약하지 않는다.
 
 `Io`의 canonical builtin identity는 frontend/type system의 ambient semantics를
 판정한다. `Io`는 runtime handler lookup이나 dispatch를 요구하지 않는다.
