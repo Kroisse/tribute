@@ -2,7 +2,10 @@ use std::fmt;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CallingConvention, EffectRow, EffectVar, Type, TypeDefId, TypeKind};
+use crate::ast::{
+    AbilityOrigin, BuiltinAbility, CallingConvention, EffectRow, EffectVar, Type, TypeDefId,
+    TypeKind,
+};
 
 /// Generate a mangled symbol for a specialized generic function or type.
 ///
@@ -11,7 +14,8 @@ use crate::ast::{CallingConvention, EffectRow, EffectVar, Type, TypeDefId, TypeK
 /// Tribute identifiers cannot start with a digit). Before its result, a
 /// function type writes its effect row between `$2` and `$1`, or `$3$n` for
 /// the `n`th row variable of an open row, and a calling-convention floor
-/// above `Direct` after `$4`. Distinct type argument lists get distinct names:
+/// above `Direct` after `$4`. `$5` precedes a compiler-owned ability.
+/// Distinct type argument lists get distinct names:
 ///
 /// - `identity + [Int]`              → `identity$Int`
 /// - `first + [Int, Text]`           → `first$Int$Text`
@@ -143,6 +147,10 @@ fn write_effect_row_mangled(
     f.write_str("2")?;
     for effect in row.effects(db) {
         f.write_char('$')?;
+        match effect.ability_id.origin(db) {
+            AbilityOrigin::Source => {}
+            AbilityOrigin::Builtin(BuiltinAbility::Io) => f.write_str("5$")?,
+        }
         effect
             .ability_id
             .qualified(db)
@@ -440,6 +448,24 @@ mod tests {
                 ability(&db, "Ask", vec![])
             ])
         );
+    }
+
+    #[test]
+    fn test_builtin_and_source_abilities_mangle_distinctly() {
+        let db = TestDb::default();
+        let base = Symbol::new("f");
+        let builtin = crate::ast::AbilityId::builtin_io(&db);
+        let source = crate::ast::AbilityId::source(&db, builtin.qualified(&db).clone());
+        let mangle = |ability_id| {
+            let effect = crate::ast::Effect {
+                ability_id,
+                args: vec![],
+            };
+            mangle_name(&db, &base, &[thunk(&db, EffectRow::single(&db, effect))]).to_string()
+        };
+
+        assert_eq!(mangle(source), "f$Fn$0$$1$2$std::io::Io$1$Nat");
+        assert_eq!(mangle(builtin), "f$Fn$0$$1$2$5$std::io::Io$1$Nat");
     }
 
     #[test]
