@@ -274,8 +274,8 @@ fn example(xs: List(Int), opt: Option(String)) {
 
 1. **Qualified name**: `List::map(xs, f)` — 항상 명시적으로 지정된 함수 사용
 2. **UFCS**: `xs.map(f)` — 첫 번째 인자 타입에 맞는 함수 검색.
-   Qualified UFCS `x.a::b(y)`는 호출 위치 스코프의 `a::b`를 먼저 쓰고, 없으면
-   receiver 타입 `T`의 `T::a::b`를 쓴다([syntax.md](syntax.md#call-and-ufcs)).
+   Qualified UFCS `x.a::b(y)`는 스코프의 `a::b`와 스코프 안 모듈 `m`의 `m::a::b`를
+   후보로 같은 규칙을 따른다([syntax.md](syntax.md#call-and-ufcs)).
 3. **Unqualified**: `map(xs, f)` — use된 모듈 중 타입이 맞는 함수 검색
 
 ### 모호성 처리
