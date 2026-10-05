@@ -396,6 +396,8 @@ user.age::modify(fn(n) n + 1)    // User::age::modify(user, fn(n) n + 1)
 - `T::f`는 값 namespace의 getter이면서 `set`·`modify`를 담는 모듈 `T::f`이기도
   하다. Companion `mod T`가 `f::set`이나 `f::modify`를 직접 선언하면 생성된
   함수와 충돌하는 중복 정의 오류이다.
+- 생성된 `set`·`modify`는 경로로만 호출한다. 비한정 UFCS `x.set(v)`의 후보가
+  아니다.
 
 ### Spread vs Setter
 
