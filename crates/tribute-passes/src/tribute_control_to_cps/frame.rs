@@ -270,7 +270,7 @@ impl Converter<'_> {
         self.ctx.push_op(factory_block, ret.op_ref());
         let factory_region = self.single_block_region(location, factory_block);
         let factory = func::Func::operands()
-            .sym_name(symbol.clone())
+            .sym_name(self.ctx.intern_symbol_text(&symbol))
             .r#type(factory_type)
             .regions(factory_region)
             .build(self.ctx, location);

@@ -222,7 +222,7 @@ mod tests {
         build_body: impl FnOnce(&mut IrContext, Location, BlockRef),
     ) -> OpRef {
         let fn_ty = fn_type(ctx);
-        let sym_name = Symbol::new(name);
+        let sym_name = ctx.intern_str(name);
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],

@@ -374,7 +374,7 @@ pub(super) fn lower_module<'db>(
         parent_op: None,
     });
     let module = core::Module::operands()
-        .sym_name(module_name)
+        .sym_name(ir.intern_symbol_text(&module_name))
         .regions(region)
         .build(ir, location);
     well_known_types.attach(ir, module.op_ref());

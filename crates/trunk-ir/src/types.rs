@@ -1063,32 +1063,10 @@ pub struct StringRef(lasso::Spur);
 
 /// A string attribute value given to an operation builder: a pooled handle,
 /// or text the builder interns when it creates the operation.
-///
-/// `Symbol` carries a name (such as a function's qualified name) without an
-/// intermediate allocation.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StringArg {
     Ref(StringRef),
     Text(std::borrow::Cow<'static, str>),
-    Symbol(crate::Symbol),
-}
-
-impl From<crate::Symbol> for StringArg {
-    fn from(value: crate::Symbol) -> Self {
-        StringArg::Symbol(value)
-    }
-}
-
-impl From<&SymbolPath> for StringArg {
-    fn from(value: &SymbolPath) -> Self {
-        StringArg::Text(value.to_string().into())
-    }
-}
-
-impl From<SymbolPath> for StringArg {
-    fn from(value: SymbolPath) -> Self {
-        StringArg::from(&value)
-    }
 }
 
 impl From<StringRef> for StringArg {

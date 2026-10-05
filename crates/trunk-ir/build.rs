@@ -15,6 +15,8 @@ fn main() {
     let mut atoms = BTreeSet::new();
     scan_dir(&src, &mut atoms);
 
+    // Keep short names for literal macro arms. Codegen stores names of at most
+    // 7 bytes inline and puts only longer names in the static set.
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("symbol_atom.rs");
     string_cache_codegen::AtomType::new("symbol::atom::SymbolAtom", "symbol_atom!")
         .atoms(atoms)

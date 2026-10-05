@@ -247,7 +247,7 @@ fn declare_rodata(
             }
         };
         let data = clif::Data::operands()
-            .sym_name(sym.clone())
+            .sym_name(ctx.intern_symbol_text(&sym))
             .bytes(content.as_slice().into())
             .align(1)
             .regions(None)

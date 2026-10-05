@@ -201,8 +201,11 @@ or text as a `Cow<'static, str>` (a `&'static str` or an owned `String`).
 The builder interns text when it creates the operation, so
 `.predicate("slt")` and `.sym_name("main")` need no context. Pass text directly
 instead of constructing a `Symbol` solely for a string attribute. For a borrowed
-runtime name, pass `ctx.intern_str(name)`; an existing `Symbol` can also be passed
-when the name already exists in that form.
+runtime name, pass `ctx.intern_str(name)`. `Symbol` and `SymbolPath` do not convert
+to a string argument automatically. For an existing symbol, pass
+`ctx.intern_symbol_text(&symbol)` explicitly. `SymbolPath` represents a symbol
+reference; use `path.to_string()` when its textual spelling is needed as a
+string value.
 
 A generated string accessor returns the text, like MLIR's `getValue()`.
 `<name>_ref` returns the `StringRef`; use it to copy the

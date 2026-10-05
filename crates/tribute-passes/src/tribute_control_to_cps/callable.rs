@@ -198,7 +198,7 @@ impl Converter<'_> {
         let region = self.single_block_region(location, block);
         let adapter_symbol = self.fresh_helper("func_ref_adapter");
         let adapter = func::Func::operands()
-            .sym_name(adapter_symbol.clone())
+            .sym_name(self.ctx.intern_symbol_text(&adapter_symbol))
             .r#type(adapter_ty)
             .regions(region)
             .build(self.ctx, location);
@@ -324,7 +324,7 @@ impl Converter<'_> {
         )?;
         let region = self.single_block_region(location, block);
         let function = func::Func::operands()
-            .sym_name(symbol)
+            .sym_name(self.ctx.intern_symbol_text(&symbol))
             .r#type(physical_type)
             .regions(region)
             .build(self.ctx, location);

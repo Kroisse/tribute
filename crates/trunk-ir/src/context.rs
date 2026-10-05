@@ -391,7 +391,6 @@ impl IrContext {
         match arg {
             StringArg::Ref(r) => r,
             StringArg::Text(text) => self.intern_str(&text),
-            StringArg::Symbol(symbol) => self.intern_symbol_text(&symbol),
         }
     }
 

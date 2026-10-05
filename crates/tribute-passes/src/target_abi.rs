@@ -500,7 +500,7 @@ pub fn compose_root_entry_bridge(
     });
     let wrapper_ty = func::func_sig(ctx, [], [nil_ty]).as_type_ref();
     let wrapper = func::Func::operands()
-        .sym_name(main)
+        .sym_name(main.to_string())
         .r#type(wrapper_ty)
         .regions(body)
         .build(ctx, location);
@@ -581,7 +581,7 @@ fn build_cps_root_call(
         parent_op: None,
     });
     let done_function = func::Func::operands()
-        .sym_name(root_done_k.clone())
+        .sym_name(ctx.intern_symbol_text(&root_done_k))
         .r#type(done_function_ty)
         .regions(done_region)
         .build(ctx, location);
@@ -616,7 +616,7 @@ fn build_cps_root_call(
         parent_op: None,
     });
     let dispatch_function = func::Func::operands()
-        .sym_name(root_dispatch.clone())
+        .sym_name(ctx.intern_symbol_text(&root_dispatch))
         .r#type(dispatch_function_ty)
         .regions(dispatch_region)
         .build(ctx, location);

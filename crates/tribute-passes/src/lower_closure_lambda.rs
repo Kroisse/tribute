@@ -223,7 +223,7 @@ fn lower_single_lambda(
         .as_type_ref();
 
     let func_op = func::Func::operands()
-        .sym_name(lifted_name.clone())
+        .sym_name(ctx.intern_symbol_text(&lifted_name))
         .r#type(func_ty)
         .regions(func_body_region)
         .build(ctx, location);

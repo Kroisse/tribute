@@ -266,7 +266,7 @@ impl Converter<'_> {
         };
         let factory_type = func::func_sig(self.ctx, params, [resume_type]).as_type_ref();
         let factory = func::Func::operands()
-            .sym_name(symbol)
+            .sym_name(self.ctx.intern_symbol_text(&symbol))
             .r#type(factory_type)
             .regions(region)
             .build(self.ctx, location);
@@ -387,7 +387,7 @@ impl Converter<'_> {
         self.ctx.push_op(factory_block, ret.op_ref());
         let region = self.single_block_region(location, factory_block);
         let factory = func::Func::operands()
-            .sym_name(layer.dispatch_factory.clone())
+            .sym_name(self.ctx.intern_symbol_text(&layer.dispatch_factory))
             .r#type(factory_type)
             .regions(region)
             .build(self.ctx, location);
