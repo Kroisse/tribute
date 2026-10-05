@@ -219,15 +219,26 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     ty
 }
 
+/// [`normalize_type_for_gc`], with a structural struct as the struct
+/// supertype.
+fn normalize_type_for_comparison(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
+    let ty = normalize_type_for_gc(ctx, ty);
+    if wasm_gc::Struct::matches(ctx, ty) {
+        return intern_wasm_structref(ctx);
+    }
+    ty
+}
+
 /// Check if two types are semantically equivalent for GC struct fields.
 fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> bool {
     // First try direct comparison
     if ty1 == ty2 {
         return true;
     }
-    // Normalize both types
-    let ty1_norm = normalize_type_for_gc(ctx, ty1);
-    let ty2_norm = normalize_type_for_gc(ctx, ty2);
+    // Normalize both types. A structural struct is compared as the struct
+    // supertype, as a recursive ADT reference or variant is.
+    let ty1_norm = normalize_type_for_comparison(ctx, ty1);
+    let ty2_norm = normalize_type_for_comparison(ctx, ty2);
     if ty1_norm == ty2_norm {
         return true;
     }
@@ -275,10 +286,6 @@ fn record_struct_field(
             "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
         )));
     }
-    // A structural type declares its fields; accesses do not refine them.
-    if builder.declared {
-        return Ok(());
-    }
     let idx = field_idx as usize;
     if builder.fields.len() <= idx {
         builder.fields.resize_with(idx + 1, || None);
@@ -297,6 +304,10 @@ fn record_struct_field(
                 new_data.dialect,
                 new_data.name,
             )));
+        }
+        // A structural type declares its fields; accesses do not refine them.
+        if builder.declared {
+            return Ok(());
         }
         // `anyref` is the widest compatible reference type. Otherwise, keep
         // the physical struct supertype rather than an equivalent concrete
@@ -1083,5 +1094,29 @@ wasm.return
                 if *outer == [field(ValType::I32), field(inner_ref), field(structref)]
                     && *inner == [field(ValType::I32), field(ValType::F64)]
         ));
+    }
+
+    #[test]
+    fn accesses_must_match_declared_field_types() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !S = wasm_gc.struct<core.i32, core.f64>
+  wasm.func @main() -> core.nil {
+    %s = wasm_gc.ref_null {target_type = !S} : !S
+    %field = wasm_gc.struct_get %s {type = !S, field_idx = 1} : core.i32
+    wasm.return
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+
+        let error = collect_gc_types(&mut ctx, module).unwrap_err();
+
+        assert!(
+            error.to_string().contains("field 1 type mismatch"),
+            "{error}"
+        );
     }
 }
