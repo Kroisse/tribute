@@ -24,10 +24,17 @@ evidence 전달과 target ABI 물리화는 필수 lowering이며 선택적인 �
 | 경계 | 변환 | 보존해야 하는 계약 |
 | ---- | ---- | ----------------- |
 | Frontend preparation | 함수·nominal 타입 monomorphization | 해석된 선언 identity, checked instance와 치환된 semantic metadata |
+| Shared CPS 이후, 일반 inlining 이전 | 도달 불가능한 함수를 지우는 global DCE | reachability root와 모든 symbol 참조([ir.md](ir.md)의 함수 참조 수집 규칙) |
 | Shared CPS 이후, target closure storage 이전 | 일반 함수 inlining | exact callable ABI, 명시적 evidence·ContinuationFrame, proper-tail control flow |
 | Target cleanup | global DCE, canonicalization, local DCE, 실제 operation이 필요한 conversion cast materialization | side effect, reachable transfer와 target type legality |
 | Native typed ownership planning | proven borrowed parameter·field temporary elision | managed layout, entry ownership와 사용·탈출 증명 |
 | Native RC lowering 이전 | paired retain/release elimination | alias barrier, 각 reference의 수명과 소유권 |
+
+Target lowering은 도달 가능한 함수에만 적용한다. Prelude를 포함한 module 전체가
+shared middle-end를 지나므로, target pipeline은 다른 변환보다 먼저 global DCE를
+실행한다. 이 시점에는 closure가 아직 `closure.new`이므로 call graph는 모든 symbol
+참조를 따라야 한다. Target cleanup의 global DCE는 inlining과 lowering이 남긴 함수를
+다시 지운다.
 
 일반 inlining은 지원되는 single-block, `cf` 없는 함수만 변환한다. 효과 호출을
 인라인해도 operation declaration이나 handler의 의미를 다시 추론하지 않는다.

@@ -22,6 +22,7 @@ mod checker;
 mod constraint;
 mod context;
 pub mod effect_row;
+mod evidence_plan;
 mod func_context;
 mod solver;
 pub mod subst;
@@ -33,8 +34,10 @@ pub use context::{
     receiver_type_matches,
 };
 
+use crate::SortedMap;
 use crate::ast::SpanMap;
 pub use func_context::FunctionInferenceContext;
+use rustc_hash::FxHashMap as HashMap;
 pub use solver::{RowSubst, SolveError, TypeSolver, TypeSubst};
 
 use trunk_ir::Symbol;
@@ -107,14 +110,14 @@ pub fn ability_schemas<'db>(
 /// Rebuild lowering's lookup representation from public deterministic schemas.
 pub fn ability_definitions_from_schemas<'db>(
     schemas: &[AbilitySchema<'db>],
-) -> std::collections::HashMap<AbilityId<'db>, AbilityInfo<'db>> {
+) -> HashMap<AbilityId<'db>, AbilityInfo<'db>> {
     schemas
         .iter()
         .map(|(id, type_params, operations)| {
             let operations = operations
                 .iter()
                 .cloned()
-                .map(|operation| (operation.name, operation))
+                .map(|operation| (operation.name.clone(), operation))
                 .collect();
             (
                 *id,
@@ -225,25 +228,63 @@ pub struct LocalCallableInstance<'db> {
     pub callable: Type<'db>,
 }
 
+/// One change a call makes to its caller's evidence before the callee runs.
+///
+/// A call keeps the caller's evidence except for the ability instances its
+/// plan names (`new-plans/type-inference.md`, 호출의 evidence 선택).
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum EvidenceStep<'db> {
+    /// The callee reaches this caller-explicit instance only through its row
+    /// tail, so the caller's handler is hidden from it.
+    Mask(crate::ast::Effect<'db>),
+    /// One more callee position takes the caller's handler for this instance.
+    Dup(crate::ast::Effect<'db>),
+}
+
+impl<'db> EvidenceStep<'db> {
+    /// The ability instance this step changes.
+    pub fn instance(&self) -> &crate::ast::Effect<'db> {
+        match self {
+            Self::Mask(instance) | Self::Dup(instance) => instance,
+        }
+    }
+
+    /// Apply `map` to the type arguments of the instance.
+    pub fn map_types(&self, mut map: impl FnMut(Type<'db>) -> Type<'db>) -> Self {
+        let instance = self.instance();
+        let instance = crate::ast::Effect {
+            ability_id: instance.ability_id,
+            args: instance.args.iter().map(|ty| map(*ty)).collect(),
+        };
+        match self {
+            Self::Mask(_) => Self::Mask(instance),
+            Self::Dup(_) => Self::Dup(instance),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ExpressionTypeMetadata<'db> {
-    pub node_types: Vec<(NodeId, Type<'db>)>,
-    pub function_instances: Vec<(NodeId, FunctionInstance<'db>)>,
-    pub local_instances: Vec<(NodeId, LocalCallableInstance<'db>)>,
+    pub node_types: SortedMap<NodeId, Type<'db>>,
+    pub function_instances: SortedMap<NodeId, FunctionInstance<'db>>,
+    pub local_instances: SortedMap<NodeId, LocalCallableInstance<'db>>,
+    /// Non-identity evidence selections of calls, resumes, and handle
+    /// installations, keyed by their expressions.
+    pub evidence_plans: SortedMap<NodeId, Vec<EvidenceStep<'db>>>,
 }
 
 /// Constructor declarations and exact schemes for cloned enum variants.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub struct ConstructorTypeMetadata<'db> {
     pub schemes: Vec<(CtorId<'db>, TypeScheme<'db>)>,
-    pub specialized_enum_variants: Vec<(NodeId, TypeScheme<'db>)>,
+    pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
 }
 
 impl<'db> From<Vec<(CtorId<'db>, TypeScheme<'db>)>> for ConstructorTypeMetadata<'db> {
     fn from(schemes: Vec<(CtorId<'db>, TypeScheme<'db>)>) -> Self {
         Self {
             schemes,
-            specialized_enum_variants: Vec::new(),
+            specialized_enum_variants: SortedMap::default(),
         }
     }
 }
@@ -269,14 +310,14 @@ pub struct TypeCheckOutput<'db> {
     #[returns(deref)]
     pub ability_definitions: Vec<AbilitySchema<'db>>,
     /// Exact semantic operation instances for handler arms.
-    #[returns(deref)]
-    pub handler_operations: Vec<(NodeId, InstantiatedHandlerOperation<'db>)>,
+    #[returns(ref)]
+    pub handler_operations: SortedMap<NodeId, InstantiatedHandlerOperation<'db>>,
     /// Exact semantic operation instances for ability-operation calls.
-    #[returns(deref)]
-    pub perform_operations: Vec<(NodeId, InstantiatedPerformOperation<'db>)>,
+    #[returns(ref)]
+    pub perform_operations: SortedMap<NodeId, InstantiatedPerformOperation<'db>>,
     /// Fully solved callable signatures for lambda expressions.
-    #[returns(deref)]
-    pub lambda_signatures: Vec<(NodeId, LambdaSignature<'db>)>,
+    #[returns(ref)]
+    pub lambda_signatures: SortedMap<NodeId, LambdaSignature<'db>>,
     /// Case expressions which type checking proved exhaustive.
     #[returns(deref)]
     pub exhaustive_cases: Vec<NodeId>,
@@ -359,6 +400,7 @@ pub fn typecheck_module<'db>(
             node_types: result.node_types,
             function_instances: result.function_instances,
             local_instances: result.local_instances,
+            evidence_plans: result.evidence_plans,
         },
         result.ability_conventions,
         ability_schemas(&result.ability_definitions),

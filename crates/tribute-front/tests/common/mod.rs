@@ -1,6 +1,7 @@
 //\! Shared test helpers for tribute-front integration tests.
 #![allow(dead_code)]
 
+use rustc_hash::FxHashMap as HashMap;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::SourceCst;
 use tribute_front::ast::{Decl, Expr, ExprKind, Module, ResolvedRef, Stmt, TypedRef};
@@ -32,7 +33,7 @@ fn load_prelude(db: &dyn salsa::Database) -> Option<PreludeData<'_>> {
     )?;
 
     let prelude_ast = &tribute_front::resolve::library_package_module(parsed.module(db));
-    let prelude_span_map = parsed.span_map(db).clone();
+    let prelude_span_map = parsed.span_map(db);
 
     // Build env for name resolution merging
     let env = tribute_front::resolve::build_env(db, prelude_ast);
@@ -68,7 +69,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
 
     let parsed = parsed.unwrap();
     let ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
 
     // Load prelude for operator declarations (Int::(+) etc.)
     let prelude = load_prelude(db);
@@ -92,19 +93,10 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
     let mut tdnr_ast = result.module;
     tribute_front::tdnr::resolve_tdnr(db, &mut tdnr_ast, prelude_modules.iter().copied());
 
-    let function_types_map: std::collections::HashMap<_, _> =
-        result.function_types.into_iter().collect();
-    let constructor_types: std::collections::HashMap<_, _> =
-        result.constructor_types.into_iter().collect();
-    let node_types_map: std::collections::HashMap<_, _> = result.node_types.into_iter().collect();
-    let ability_conventions: std::collections::HashMap<_, _> =
-        result.ability_conventions.into_iter().collect();
-    let ability_definitions: std::collections::HashMap<_, _> =
-        result.ability_definitions.into_iter().collect();
-    let handler_operations: std::collections::HashMap<_, _> =
-        result.handler_operations.into_iter().collect();
-    let perform_operations: std::collections::HashMap<_, _> =
-        result.perform_operations.into_iter().collect();
+    let function_types_map: HashMap<_, _> = result.function_types.into_iter().collect();
+    let constructor_types: HashMap<_, _> = result.constructor_types.into_iter().collect();
+    let ability_conventions: HashMap<_, _> = result.ability_conventions.into_iter().collect();
+    let ability_definitions: HashMap<_, _> = result.ability_definitions.into_iter().collect();
     let compiler_intrinsics = prelude
         .as_ref()
         .map(|prelude| {
@@ -119,14 +111,15 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         function_types: function_types_map,
         constructor_types,
         specialized_enum_variants: Default::default(),
-        node_types: node_types_map,
-        local_instances: result.local_instances.into_iter().collect(),
+        node_types: result.node_types,
+        local_instances: result.local_instances,
         ability_conventions,
         ability_definitions,
-        handler_operations,
-        perform_operations,
-        lambda_signatures: result.lambda_signatures.into_iter().collect(),
+        handler_operations: result.handler_operations,
+        perform_operations: result.perform_operations,
+        lambda_signatures: result.lambda_signatures,
         exhaustive_cases: result.exhaustive_cases.into_iter().collect(),
+        evidence_plans: result.evidence_plans,
         well_known_types: result.well_known_types,
         compiler_intrinsics,
     }
@@ -152,7 +145,7 @@ fn run_frontend_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) {
 
     let parsed = parsed.unwrap();
     let ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
     let prelude = load_prelude(db);
 
     let mut env = tribute_front::resolve::build_env(db, ast);
@@ -183,7 +176,7 @@ fn tdnr_function_summary_inner(
 
     let parsed = parsed.unwrap();
     let ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
 
     let prelude = load_prelude(db);
 

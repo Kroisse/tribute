@@ -20,6 +20,13 @@ pub const EVIDENCE: &str = "evidence";
 pub const BYTES: &str = "bytes";
 /// The byte array a Wasm `Bytes` points into.
 pub const BYTES_DATA: &str = "bytes_data";
+/// A boxed `Float`: one `f64` field, stored where a uniform reference is
+/// expected.
+pub const BOXED_F64: &str = "boxed_f64";
+/// The Wasm supertype of every user struct and variant: its runtime type
+/// descriptor field alone. Builtin layouts, arrays, and boxed scalars are not
+/// its subtypes.
+pub const DESCRIBED: &str = "described";
 
 /// Whether `ty` carries the runtime layout identifier `layout`.
 pub fn has_runtime_layout(ctx: &IrContext, ty: TypeRef, layout: &str) -> bool {

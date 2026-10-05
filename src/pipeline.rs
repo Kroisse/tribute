@@ -52,6 +52,7 @@
 //! Module (ability.handle_dispatch lowered)
 //!     │
 //!     ├─── Representation/ABI Boundary (run_target_to_boundary_exit) ──┤
+//!     ▼ global DCE (unreachable functions skip target lowering)
 //!     ▼ inline_functions
 //!     ▼ target ABI validation → CPS signature physicalization
 //!     ▼ root entry bridge
@@ -79,6 +80,7 @@
 use crate::SourceCst;
 use itertools::Itertools;
 use ropey::Rope;
+use rustc_hash::FxHashMap as HashMap;
 use salsa::Accumulator;
 use tree_sitter::Parser;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -284,7 +286,7 @@ fn checked_prelude<'db>(
 ) -> Option<(ast_typeck::TypeCheckOutput<'db>, PreludeExports<'db>)> {
     let (parsed, _) = parse_prelude(db)?;
     let prelude_ast = &ast_resolve::library_package_module(parsed.module(db));
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
     let prelude_env = ast_resolve::build_env(db, prelude_ast);
     let resolved =
         ast_resolve::resolve_library_with_env(db, prelude_ast, prelude_env, span_map.clone());
@@ -306,6 +308,7 @@ fn checked_prelude<'db>(
             node_types: result.node_types,
             function_instances: result.function_instances,
             local_instances: result.local_instances,
+            evidence_plans: result.evidence_plans,
         },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
@@ -384,7 +387,7 @@ fn merge_and_lower_to_ir<'db>(
 #[derive(Clone, PartialEq, Eq, salsa::SalsaValue)]
 struct PreparedFrontend<'db> {
     typed: ast_typeck::TypeCheckOutput<'db>,
-    compiler_intrinsics: std::collections::HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
+    compiler_intrinsics: HashMap<tribute_front::ast::NodeId, trunk_ir::Symbol>,
 }
 
 /// Merge and specialize inside a tracked query so specialization failures
@@ -432,21 +435,19 @@ fn prepare_frontend_details<'db>(
 
         let merged_ast = tribute_front::ast::Module::<TypedRef<'db>>::new(
             user_module.id,
-            user_module.name,
+            user_module.name.clone(),
             merged_decls,
         );
 
         // Merge function_types: prelude first, user overrides
-        let mut fn_types: std::collections::HashMap<_, _> =
-            prelude_fn_types.iter().cloned().collect();
+        let mut fn_types: HashMap<_, _> = prelude_fn_types.iter().cloned().collect();
         fn_types.extend(user_fn_types.iter().cloned());
 
         // Merge node_types: prelude first, user overrides
-        let mut node_types: std::collections::HashMap<_, _> =
-            prelude_node_types.iter().cloned().collect();
+        let mut node_types: HashMap<_, _> = prelude_node_types.iter().cloned().collect();
         node_types.extend(user_node_types.iter().cloned());
 
-        let mut ability_conventions: std::collections::HashMap<_, _> =
+        let mut ability_conventions: HashMap<_, _> =
             prelude_ability_conventions.iter().cloned().collect();
         ability_conventions.extend(user_ability_conventions.iter().cloned());
 
@@ -461,16 +462,15 @@ fn prepare_frontend_details<'db>(
             merged_span_map,
         )
     } else {
-        let fn_types: std::collections::HashMap<_, _> = user_fn_types.iter().cloned().collect();
-        let node_types: std::collections::HashMap<_, _> = user_node_types.iter().cloned().collect();
-        let ability_conventions: std::collections::HashMap<_, _> =
-            user_ability_conventions.iter().cloned().collect();
+        let fn_types: HashMap<_, _> = user_fn_types.iter().cloned().collect();
+        let node_types: HashMap<_, _> = user_node_types.iter().cloned().collect();
+        let ability_conventions: HashMap<_, _> = user_ability_conventions.iter().cloned().collect();
         (
             user_module.clone(),
             fn_types,
             node_types,
             ability_conventions,
-            user_span_map.clone(),
+            user_span_map,
         )
     };
 
@@ -493,7 +493,7 @@ fn prepare_frontend_details<'db>(
         }
     };
 
-    let mut function_instances: std::collections::HashMap<_, _> = prelude_module(db)
+    let mut function_instances: HashMap<_, _> = prelude_module(db)
         .map(|prelude| {
             prelude
                 .expression_types(db)
@@ -535,6 +535,11 @@ fn prepare_frontend_details<'db>(
                 .chain(typed.expression_types(db).local_instances.iter().cloned())
                 .collect(),
             function_instances,
+            evidence_plans: prelude_module(db)
+                .into_iter()
+                .flat_map(|prelude| prelude.expression_types(db).evidence_plans.clone())
+                .chain(typed.expression_types(db).evidence_plans.iter().cloned())
+                .collect(),
             handler_operations: prelude_module(db)
                 .into_iter()
                 .flat_map(|prelude| prelude.handler_operations(db).iter().cloned())
@@ -576,16 +581,8 @@ fn prepare_frontend_details<'db>(
             return None;
         }
     };
-    let mut node_types: Vec<_> = mono_result.metadata.node_types.into_iter().collect();
-    node_types.sort_by_key(|(id, _)| *id);
-    let mut instances: Vec<_> = mono_result
-        .metadata
-        .function_instances
-        .into_iter()
-        .collect();
-    instances.sort_by_key(|(id, _)| *id);
-    let mut local_instances: Vec<_> = mono_result.metadata.local_instances.into_iter().collect();
-    local_instances.sort_by_key(|(id, _)| *id);
+    let mut exhaustive_cases: Vec<_> = mono_result.metadata.exhaustive_cases.into_iter().collect();
+    exhaustive_cases.sort();
     let compiler_intrinsics = mono_result.metadata.compiler_intrinsics;
     let typed = ast_typeck::TypeCheckOutput::new(
         db,
@@ -593,20 +590,21 @@ fn prepare_frontend_details<'db>(
         mono_result.function_types,
         ast_typeck::ConstructorTypeMetadata {
             schemes: mono_result.metadata.constructor_types.into_iter().collect(),
-            specialized_enum_variants: {
-                let mut variants: Vec<_> = mono_result
-                    .metadata
-                    .specialized_enum_variants
-                    .into_iter()
-                    .collect();
-                variants.sort_by_key(|(id, _)| *id);
-                variants
-            },
+            specialized_enum_variants: mono_result
+                .metadata
+                .specialized_enum_variants
+                .into_iter()
+                .collect(),
         },
         ast_typeck::ExpressionTypeMetadata {
-            node_types,
-            function_instances: instances,
-            local_instances,
+            node_types: mono_result.metadata.node_types.into_iter().collect(),
+            function_instances: mono_result
+                .metadata
+                .function_instances
+                .into_iter()
+                .collect(),
+            local_instances: mono_result.metadata.local_instances.into_iter().collect(),
+            evidence_plans: mono_result.metadata.evidence_plans.into_iter().collect(),
         },
         merged_ability_conventions.into_iter().collect::<Vec<_>>(),
         typed.ability_definitions(db).to_vec(),
@@ -614,22 +612,14 @@ fn prepare_frontend_details<'db>(
             .metadata
             .handler_operations
             .into_iter()
-            .collect::<Vec<_>>(),
+            .collect(),
         mono_result
             .metadata
             .perform_operations
             .into_iter()
-            .collect::<Vec<_>>(),
-        mono_result
-            .metadata
-            .lambda_signatures
-            .into_iter()
-            .collect::<Vec<_>>(),
-        mono_result
-            .metadata
-            .exhaustive_cases
-            .into_iter()
-            .collect::<Vec<_>>(),
+            .collect(),
+        mono_result.metadata.lambda_signatures.into_iter().collect(),
+        exhaustive_cases,
         *typed.well_known_types(db),
         merged_span_map,
     );
@@ -653,12 +643,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
     let module = lower(
         ast_to_ir::TypedModule {
             ast: typed.module(db).clone(),
-            local_instances: typed
-                .expression_types(db)
-                .local_instances
-                .iter()
-                .cloned()
-                .collect(),
+            local_instances: typed.expression_types(db).local_instances.clone(),
             span_map: typed.span_map(db).clone(),
             function_types: typed.function_types(db).iter().cloned().collect(),
             constructor_types: typed
@@ -670,23 +655,17 @@ fn merge_and_lower_to_ir_with<'db, M>(
             specialized_enum_variants: typed
                 .constructor_types(db)
                 .specialized_enum_variants
-                .iter()
-                .cloned()
-                .collect(),
-            node_types: typed
-                .expression_types(db)
-                .node_types
-                .iter()
-                .cloned()
-                .collect(),
+                .clone(),
+            node_types: typed.expression_types(db).node_types.clone(),
             ability_conventions: typed.ability_conventions(db).iter().cloned().collect(),
             ability_definitions: ast_typeck::ability_definitions_from_schemas(
                 typed.ability_definitions(db),
             ),
-            handler_operations: typed.handler_operations(db).iter().cloned().collect(),
-            perform_operations: typed.perform_operations(db).iter().cloned().collect(),
-            lambda_signatures: typed.lambda_signatures(db).iter().cloned().collect(),
+            handler_operations: typed.handler_operations(db).clone(),
+            perform_operations: typed.perform_operations(db).clone(),
+            lambda_signatures: typed.lambda_signatures(db).clone(),
             exhaustive_cases: typed.exhaustive_cases(db).iter().copied().collect(),
+            evidence_plans: typed.expression_types(db).evidence_plans.clone(),
             well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
         },
@@ -1012,6 +991,9 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 
     let mut analyses = AnalysisCache::new();
 
+    // Drop unreachable functions first, so that no later pass lowers them.
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, &mut analyses);
+
     // General function inlining. The pass is single-block-only and cf-free,
     // so its output stays within dialects WASM lowering already handles.
     trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
@@ -1040,11 +1022,15 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
 fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIrError> {
     debug_validate_value_integrity(ctx, m, "before native target lowering");
 
+    let mut analyses = AnalysisCache::new();
+
+    // Drop unreachable functions first, so that no later pass lowers them.
+    trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, &mut analyses);
+
     // General function inlining. Single-block-only (no `cf` dialect
     // dependency), so it preserves the caller's block structure. That
     // keeps `evidence_to_native`'s per-block producer/consumer correlation
     // assumptions intact, and lets the same pass work on both backend paths.
-    let mut analyses = AnalysisCache::new();
     trunk_ir::transforms::inline::inline_functions(ctx, m, &mut analyses);
 
     enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
@@ -1352,6 +1338,23 @@ fn prepare_module_to_native(
             ownership_plan.rtti_types(),
         );
         tribute_passes::native::adapt_closure_layout::lower(ctx, module);
+        // Field accesses need only the structural `mem.struct` layout. The
+        // nominal layouts stay on allocations, which RC header lowering
+        // resolves to descriptors.
+        let core_module = core_dialect::Module::from_op(ctx, module.op()).map_err(|_| {
+            trunk_ir_cranelift_backend::CompilationError::ir_validation(
+                "native lowering requires a core.module".to_owned(),
+            )
+        })?;
+        // No debug verifier: closure layout adaptation retypes loaded
+        // values in place, so this IR is not schema-clean until the clif
+        // lowerings below finish.
+        let mut pm = PassManager::new();
+        pm.add_pass(tribute_passes::native::struct_to_mem::StructToMem::new(
+            ownership_plan,
+        ));
+        pm.run(ctx, core_module, &mut analyses)
+            .map_err(native_pass_failure)?;
         func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
     }
 
@@ -1550,7 +1553,7 @@ pub fn parse_and_lower_ast<'db>(
     let parsed = ast_query::parsed_ast(db, source)?;
 
     let user_ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
     tracing::debug!(
         "Phase 1: parsed AST has {} declarations",
         user_ast.decls.len()
@@ -1598,6 +1601,7 @@ pub fn parse_and_lower_ast<'db>(
             node_types: result.node_types,
             function_instances: result.function_instances,
             local_instances: result.local_instances,
+            evidence_plans: result.evidence_plans,
         },
         result.ability_conventions,
         ast_typeck::ability_schemas(&result.ability_definitions),
@@ -1721,6 +1725,7 @@ pub fn compare_diagnostics(left: &Diagnostic, right: &Diagnostic) -> std::cmp::O
 mod tests {
     use super::*;
     use crate::link::link_native_binary;
+    use rustc_hash::FxHashSet as HashSet;
     use salsa_test_macros::salsa_test;
     use std::ops::ControlFlow;
     use trunk_ir::dialect::clif;
@@ -1730,7 +1735,7 @@ mod tests {
     fn source_logical_cps_root_module(body: &str) -> (IrContext, Module) {
         let mut ctx = IrContext::new();
         let source = r#"core.module @test {
-            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
             !Frame = adt.typeref<{name = "__tribute_continuation_frame_root_nil", tribute.cps_continuation_frame_result = core.nil}>
             !Done = closure.closure<func.func_sig<(core.nil) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
@@ -1760,7 +1765,6 @@ mod tests {
 
     #[test]
     fn empty_result_cps_root_executes_native_done_continuation() {
-        use trunk_ir::Symbol;
         let (mut ctx, module) = source_logical_cps_root_module(
             r#"
             %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
@@ -1778,7 +1782,7 @@ mod tests {
                 .copied()
                 .find_map(|op| {
                     let function = func_dialect::Func::from_op(&ctx, op).ok()?;
-                    (function.sym_name(&ctx) == Symbol::from_dynamic(name)).then_some(function)
+                    (function.sym_name(&ctx) == name).then_some(function)
                 })
                 .expect("root bridge function remains present");
             // The convention is consumed inside the boundary; the empty
@@ -1821,7 +1825,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-                func.func @__tribute_evidence_lookup(%ev: core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>, %id: core.i32) -> core.i32 attributes {abi = "C"}
+                func.func @__tribute_evidence_lookup(%ev: core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>, %id: core.i32) -> core.i32 attributes {abi = "C"}
             }"#,
         );
         tribute_passes::wasm::evidence_to_wasm::bind_wasm_evidence_runtime(&mut ctx, module);
@@ -1834,7 +1838,6 @@ mod tests {
 
     #[test]
     fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_binary() {
-        use trunk_ir::Symbol;
         use trunk_ir::dialect::wasm;
         let (mut ctx, module) = source_logical_cps_root_module(
             r#"
@@ -1858,8 +1861,7 @@ mod tests {
             .copied()
             .find_map(|op| {
                 let function = wasm::Func::from_op(&ctx, op).ok()?;
-                (function.sym_name(&ctx) == Symbol::new("__tribute_unhandled"))
-                    .then_some(function.r#type(&ctx))
+                (function.sym_name(&ctx) == "__tribute_unhandled").then_some(function.r#type(&ctx))
             })
             .unwrap();
         let mut signatures = Vec::new();
@@ -2184,12 +2186,11 @@ fn main() -> Nil {
         db: &crate::TributeDatabaseImpl,
         target: tribute_passes::abi_boundary::TargetKind,
     ) {
-        use trunk_ir::Symbol;
         use trunk_ir::op_interface::IndirectCallLikeOps;
         let consumed = |ctx: &IrContext, signature: func_dialect::FuncSig| {
             signature
                 .input_attrs(ctx)
-                .all(|attrs| attrs.get_symbol("tribute.ownership") == Some(Symbol::new("consumed")))
+                .all(|attrs| attrs.get_str(ctx, "tribute.ownership") == Some("consumed"))
         };
         let mut tail_signatures = 0;
         for (path, text) in BOUNDARY_EXIT_PROGRAMS {
@@ -2513,14 +2514,14 @@ fn main() -> Nil {
     func.return
   }}
 
-  func.func @step(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}} {{
+  func.func @step(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
     %done = func.constant {{func_ref = @done}} : func.func_sig<(core.i32) -> (){reference_call_conv}>
-    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}}
+    func.tail_call_indirect %done, %next {{signature = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}}
   }}
 
-  func.func @start(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}} {{
+  func.func @start(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
     %one = arith.const {{value = 1}} : core.i32
     %next = arith.addi %value, %one : core.i32
     func.tail_call %next {{callee = @step}}
@@ -2541,7 +2542,7 @@ fn main() -> Nil {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            &physical_tail_chain_module(", {call_conv = @tail}", ", {call_conv = @tail}"),
+            &physical_tail_chain_module(", {call_conv = \"tail\"}", ", {call_conv = \"tail\"}"),
         );
         let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verified.is_ok(), "{verified}");
@@ -2586,7 +2587,7 @@ fn main() -> Nil {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            &physical_tail_chain_module("", ", {call_conv = @tail}"),
+            &physical_tail_chain_module("", ", {call_conv = \"tail\"}"),
         );
         let verified = trunk_ir::validation::validate_operation_verifiers(&ctx, module);
         assert!(verified.is_ok(), "{verified}");
@@ -3156,7 +3157,7 @@ fn main() -> Nil {
             let logical = trunk_ir::printer::print_module(&frontend.context, frontend.module.op());
             assert!(
                 logical.contains(
-                    r#"tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic""#
+                    r#"tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic""#
                 ),
                 "the concrete declaration must carry its exact intrinsic identity:\n{logical}"
             );
@@ -3283,9 +3284,9 @@ fn main() -> Nil {
         use trunk_ir::{Symbol, TypeRef};
 
         fn alias(ir: &IrContext, name: &str) -> TypeRef {
-            let name = Symbol::from_dynamic(name);
+            let name = Symbol::new(name);
             let ty = ir
-                .type_alias_by_name(name)
+                .type_alias_by_name(&name)
                 .expect("dependency layout is published");
             assert!(
                 ir.get_type(ty)
@@ -3326,7 +3327,7 @@ fn main() -> Nil {}
         let prepared =
             prepare_frontend_for_lowering(db, typed, source).expect("closed nominal dependencies");
         let schemas = &prepared.constructor_types(db).specialized_enum_variants;
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         for declaration in &prepared.module(db).decls {
             if let Decl::Enum(e) = declaration
                 && e.id.variant().is_some()
@@ -3386,7 +3387,7 @@ fn main() -> Nil {}
             for (suffix, primitive) in [("Int", "i32"), ("Bool", "i1")] {
                 let inner = alias(&ir, &format!("Inner${suffix}"));
                 let value = get_struct_fields(&ir, inner).unwrap()[0].1;
-                assert_eq!(ir.get_type(value).name, Symbol::from_dynamic(primitive));
+                assert_eq!(ir.get_type(value).name, Symbol::new(primitive));
                 let outer = get_enum_variants(&ir, alias(&ir, &format!("Outer${suffix}"))).unwrap();
                 assert_eq!(ir.str(outer[0].0), "Wrap");
                 assert_eq!(target(&ir, outer[0].1[0]), inner);
@@ -3419,10 +3420,7 @@ fn main() -> Nil {}
             for (name, primitive) in [("A::Token$Int", "i32"), ("B::Token$Bool", "i1")] {
                 let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
                 assert_eq!(ir.str(variants[0].0), "Item");
-                assert_eq!(
-                    ir.get_type(variants[0].1[0]).name,
-                    Symbol::from_dynamic(primitive)
-                );
+                assert_eq!(ir.get_type(variants[0].1[0]).name, Symbol::new(primitive));
             }
             let output = trunk_ir::printer::print_module(&ir, logical.module.op());
             for (name, primitive) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
@@ -3442,13 +3440,13 @@ fn main() -> Nil {}
         use tribute_ir::dialect::tribute_control;
         use trunk_ir::{Symbol, TypeRef};
 
-        fn layout(ir: &IrContext, name: Symbol, kind: &str) -> TypeRef {
+        fn layout(ir: &IrContext, name: &Symbol, kind: &str) -> TypeRef {
             let ty = ir
                 .type_alias_by_name(name)
                 .expect("published nominal layout");
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
-            assert_eq!(data.name, Symbol::from_dynamic(kind));
+            assert_eq!(data.name, Symbol::new(kind));
             assert!(
                 data.attrs
                     .get_str(ir, "name")
@@ -3474,7 +3472,7 @@ fn main() -> Nil {}
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::new("typeref"));
-            Symbol::from_dynamic(data.attrs.get_str(ir, "name").expect("nominal identity"))
+            Symbol::new(data.attrs.get_str(ir, "name").expect("nominal identity"))
         }
 
         // These specializations occur only in signatures, never in allocations.
@@ -3530,14 +3528,14 @@ fn main() -> Nil {}
                     .find_map(|op| {
                         if after_cps {
                             let f = func_dialect::Func::from_op(&ir, op).ok()?;
-                            (f.sym_name(&ir) == Symbol::from_dynamic(function)).then(|| {
+                            (f.sym_name(&ir) == function).then(|| {
                                 func_dialect::FuncSig::from_type_ref(&ir, f.r#type(&ir))
                                     .unwrap()
                                     .inputs(&ir)[0]
                             })
                         } else {
                             let f = tribute_control::Func::from_op(&ir, op).ok()?;
-                            (f.sym_name(&ir) == Symbol::from_dynamic(function)).then(|| {
+                            (f.sym_name(&ir) == function).then(|| {
                                 tribute_control::FuncSig::from_type_ref(&ir, f.r#type(&ir))
                                     .unwrap()
                                     .inputs(&ir)[0]
@@ -3546,23 +3544,23 @@ fn main() -> Nil {}
                     })
                     .expect("signature-only specialization");
                 let name = reference_name(&ir, parameter);
-                assert_eq!(name, Symbol::from_dynamic(nominal));
-                layout(&ir, name, kind);
+                assert_eq!(name, Symbol::new(nominal));
+                layout(&ir, &name, kind);
             }
             assert_ne!(
-                layout(&ir, Symbol::new("A::Token$Nat"), "struct"),
-                layout(&ir, Symbol::new("B::Token$Nat"), "struct")
+                layout(&ir, &Symbol::new("A::Token$Nat"), "struct"),
+                layout(&ir, &Symbol::new("B::Token$Nat"), "struct")
             );
             for (owner, target) in [("Node", "Node"), ("First", "Second"), ("Second", "First")] {
-                let owner = layout(&ir, Symbol::from_dynamic(owner), "struct");
+                let owner = layout(&ir, &Symbol::new(owner), "struct");
                 let field = get_struct_fields(&ir, owner).unwrap()[0].1;
                 let name = reference_name(&ir, field);
-                assert_eq!(name, Symbol::from_dynamic(target));
-                layout(&ir, name, "struct");
+                assert_eq!(name, Symbol::new(target));
+                layout(&ir, &name, "struct");
             }
-            let holder = layout(&ir, Symbol::new("Holder"), "struct");
+            let holder = layout(&ir, &Symbol::new("Holder"), "struct");
             let pair = get_struct_fields(&ir, holder).unwrap()[0].1;
-            let tuple = layout(&ir, reference_name(&ir, pair), "struct");
+            let tuple = layout(&ir, &reference_name(&ir, pair), "struct");
             let fields = get_struct_fields(&ir, tuple).unwrap();
             let callback = ir.get_type(fields[1].1);
             if after_cps {
@@ -3595,7 +3593,7 @@ fn main() -> Nil {}
             let Ok(function) = tribute_control::Func::from_op(&ir, operation) else {
                 continue;
             };
-            if function.sym_name(&ir) == Symbol::new("std::collections::List::prepend") {
+            if function.sym_name(&ir) == "std::collections::List::prepend" {
                 let signature = tribute_control::FuncSig::from_type_ref(&ir, function.r#type(&ir))
                     .expect("logical signature");
                 let result = ir.get_type(signature.result(&ir));
@@ -3786,12 +3784,15 @@ mod Nested {
         let identity = |name: &'static str| {
             module.ops(&ctx).iter().copied().find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
-                (function.sym_name(&ctx) == trunk_ir::Symbol::new(name)).then(|| {
+                (function.sym_name(&ctx) == name).then(|| {
                     assert_eq!(
                         ctx.op(op).attributes.get_str(&ctx, "abi"),
                         Some("intrinsic")
                     );
-                    ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
+                    ctx.op(op)
+                        .attributes
+                        .get_str(&ctx, COMPILER_INTRINSIC_ATTR)
+                        .map(str::to_owned)
                 })
             })
         };
@@ -3803,7 +3804,7 @@ mod Nested {
         );
         assert_eq!(
             identity("std::__bytes_get_or_panic"),
-            Some(Some(trunk_ir::Symbol::new("std::__bytes_get_or_panic"))),
+            Some(Some("std::__bytes_get_or_panic".to_owned())),
             "bytes lowering consumes its identity inside the target boundary"
         );
     }
@@ -3833,9 +3834,8 @@ mod Nested {
                     ctx.op(op).attributes.get(COMPILER_INTRINSIC_ATTR).is_none(),
                     "{target:?}: the identity is consumed at the boundary exit"
                 );
-                let declares_intrinsic = func::Func::from_op(&ctx, op).is_ok_and(|function| {
-                    function.sym_name(&ctx) == trunk_ir::Symbol::new("__bytes_get_or_panic")
-                });
+                let declares_intrinsic = func::Func::from_op(&ctx, op)
+                    .is_ok_and(|function| function.sym_name(&ctx) == "__bytes_get_or_panic");
                 assert!(
                     !declares_intrinsic,
                     "{target:?}: the intrinsic declaration is removed"
@@ -3886,7 +3886,7 @@ fn main() -> Nil { }
         ok: &impl Fn(&IrContext, trunk_ir::TypeRef) -> bool,
     ) -> bool {
         let mut pending = vec![ty];
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = HashSet::default();
         while let Some(ty) = pending.pop() {
             if !seen.insert(ty) {
                 continue;
@@ -3901,6 +3901,54 @@ fn main() -> Nil { }
             }
         }
         true
+    }
+
+    /// The places where a type failing `ok` survives Wasm lowering of `text`:
+    /// type aliases and operations, including nested type parameters,
+    /// attributes, results, and block arguments.
+    fn types_surviving_wasm_lowering(
+        db: &salsa::DatabaseImpl,
+        path: &str,
+        text: &str,
+        ok: &impl Fn(&IrContext, trunk_ir::TypeRef) -> bool,
+    ) -> std::collections::BTreeSet<String> {
+        let source = source_from_str(path, text);
+        let (mut ctx, module) = run_shared_pipeline(db, source)
+            .expect("shared pipeline must succeed")
+            .expect("fixture must lower");
+        run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
+        tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut AnalysisCache::new())
+            .expect("Wasm lowering");
+
+        let mut sites = std::collections::BTreeSet::new();
+        for (name, ty) in ctx.type_aliases().iter().cloned() {
+            if !type_tree_all(&ctx, ty, ok) {
+                sites.insert(format!("alias !{name}"));
+            }
+        }
+        let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            let data = ctx.op(op);
+            let site = format!("{}.{}", data.dialect, data.name);
+            let mut types: Vec<_> = ctx.op_result_types(op).to_vec();
+            for value in data.attributes.values() {
+                value.visit_types(&mut |ty| types.push(ty));
+            }
+            for region in ctx.op_regions(op) {
+                for &block in &ctx.region(region).blocks {
+                    for argument in ctx.block(block).args.iter() {
+                        types.push(argument.ty);
+                        for value in argument.attrs.values() {
+                            value.visit_types(&mut |ty| types.push(ty));
+                        }
+                    }
+                }
+            }
+            if types.into_iter().any(|ty| !type_tree_all(&ctx, ty, ok)) {
+                sites.insert(site);
+            }
+            std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
+        });
+        sites
     }
 
     #[salsa_test]
@@ -3930,48 +3978,68 @@ fn main() ->{std::io::Io} Nil {
 "#,
             ),
         ] {
-            let source = source_from_str(path, text);
-            let (mut ctx, module) = run_shared_pipeline(db, source)
-                .expect("shared pipeline must succeed")
-                .expect("fixture must lower");
-            run_wasm_target_pipeline(&mut ctx, module).expect("Wasm boundary");
-            tribute_passes::wasm::lower::lower_to_wasm(&mut ctx, module, &mut AnalysisCache::new())
-                .expect("Wasm lowering");
-
-            let mut sites = std::collections::BTreeSet::new();
-            for &(name, ty) in ctx.type_aliases() {
-                if !type_tree_all(&ctx, ty, &not_core_bytes) {
-                    sites.insert(format!("alias !{name}"));
-                }
-            }
-            let _ = trunk_ir::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-                let data = ctx.op(op);
-                let site = format!("{}.{}", data.dialect, data.name);
-                let mut types: Vec<_> = ctx.op_result_types(op).to_vec();
-                for value in data.attributes.values() {
-                    value.visit_types(&mut |ty| types.push(ty));
-                }
-                for region in ctx.op_regions(op) {
-                    for &block in &ctx.region(region).blocks {
-                        for argument in ctx.block(block).args.iter() {
-                            types.push(argument.ty);
-                            for value in argument.attrs.values() {
-                                value.visit_types(&mut |ty| types.push(ty));
-                            }
-                        }
-                    }
-                }
-                if types
-                    .into_iter()
-                    .any(|ty| !type_tree_all(&ctx, ty, &not_core_bytes))
-                {
-                    sites.insert(site);
-                }
-                std::ops::ControlFlow::Continue(trunk_ir::walk::WalkAction::Advance)
-            });
+            let sites = types_surviving_wasm_lowering(db, path, text, &not_core_bytes);
             assert!(
                 sites.is_empty(),
                 "{path}: core.bytes survives Wasm lowering at {sites:#?}"
+            );
+        }
+    }
+
+    #[salsa_test]
+    fn wasm_lowering_leaves_no_tribute_rt_types(db: &salsa::DatabaseImpl) {
+        let not_tribute_rt =
+            |ctx: &IrContext, ty| ctx.get_type(ty).dialect != trunk_ir::Symbol::new("tribute_rt");
+        for (path, text) in [
+            (
+                "native_effects.trb",
+                include_str!("../lang-examples/native_effects.trb"),
+            ),
+            ("lambda.trb", include_str!("../lang-examples/lambda.trb")),
+            ("float.trb", include_str!("../lang-examples/float.trb")),
+            (
+                "record-patterns.trb",
+                include_str!("../lang-examples/record-patterns.trb"),
+            ),
+        ] {
+            let sites = types_surviving_wasm_lowering(db, path, text, &not_tribute_rt);
+            assert!(
+                sites.is_empty(),
+                "{path}: a tribute_rt type survives Wasm lowering at {sites:#?}"
+            );
+        }
+    }
+
+    #[salsa_test]
+    fn wasm_lowering_leaves_adt_types_only_as_builtin_layouts(db: &salsa::DatabaseImpl) {
+        // The backend identifies a builtin layout by its `layout` attribute
+        // and knows no other `adt` type.
+        let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
+            let data = ctx.get_type(ty);
+            data.dialect != trunk_ir::Symbol::new("adt")
+                || data.attrs.get(trunk_ir::types::LAYOUT_ATTR).is_some()
+        };
+        for (path, text) in [
+            (
+                "native_effects.trb",
+                include_str!("../lang-examples/native_effects.trb"),
+            ),
+            ("lambda.trb", include_str!("../lang-examples/lambda.trb")),
+            ("float.trb", include_str!("../lang-examples/float.trb")),
+            ("tuples.trb", include_str!("../lang-examples/tuples.trb")),
+            (
+                "record-patterns.trb",
+                include_str!("../lang-examples/record-patterns.trb"),
+            ),
+        ] {
+            let mut sites =
+                types_surviving_wasm_lowering(db, path, text, &builtin_layout_or_not_adt);
+            // Source layouts stay declared as aliases and module metadata,
+            // which no operation or value refers to.
+            sites.retain(|site| !site.starts_with("alias !") && site != "core.module");
+            assert!(
+                sites.is_empty(),
+                "{path}: a source adt type survives Wasm lowering at {sites:#?}"
             );
         }
     }

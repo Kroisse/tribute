@@ -19,7 +19,8 @@
 //!
 //! Uses `RewritePattern` + `PatternApplicator` for declarative transformation.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -114,7 +115,7 @@ impl RewritePattern for LowerClosureNewArena {
 
         // %funcref = func.constant @func_ref : <target's exact signature>
         let constant_op = func::Constant::operands()
-            .func_ref(func_ref)
+            .func_ref(func_ref.clone())
             .results(target_ty)
             .build(ctx, loc);
         let funcref = ctx.op_result(constant_op.op_ref(), 0);
@@ -380,14 +381,9 @@ fn exact_physical_call_contract(
     if environment_index > args.len() {
         return None;
     }
+    let environment_attrs = crate::target_abi::physical_parameter_attrs(ctx, convention);
     let signature = callable.rebuild(ctx, |inputs, _| {
-        inputs.insert(
-            environment_index,
-            (
-                environment,
-                crate::target_abi::physical_parameter_attrs(convention),
-            ),
-        );
+        inputs.insert(environment_index, (environment, environment_attrs));
     });
     Some(PhysicalCallContract {
         environment_index,
@@ -518,7 +514,7 @@ fn tagged_closure_transfers_are_legal(ctx: &mut IrContext, func_op: func::Func) 
 /// bounded without relying on function names or target-specific pipeline
 /// ordering.
 pub fn lower_prepared_closures(ctx: &mut IrContext, module: Module) -> PassRunResult {
-    let mut lowered = HashSet::new();
+    let mut lowered = HashSet::default();
 
     loop {
         let mut discovered = Vec::new();
@@ -603,7 +599,7 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
 pub(crate) fn substitute_module_types(
     ctx: &mut IrContext,
     module: Module,
-    substitute: impl Fn(&IrContext, TypeRef) -> Option<TypeRef>,
+    substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
@@ -649,7 +645,7 @@ pub(crate) fn substitute_module_types(
                 for (index, argument) in args.into_iter().enumerate() {
                     let mut attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
-                        attrs.insert(*name, physicalizer.convert_attribute(value.clone()));
+                        attrs.insert(name.clone(), physicalizer.convert_attribute(value.clone()));
                     }
                     if attrs != argument.attrs {
                         block_attribute_updates.push((block, index, attrs));
@@ -704,22 +700,23 @@ struct TypeSubstitution<'a, F> {
     visiting: HashSet<TypeRef>,
 }
 
-impl<'a, F: Fn(&IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> {
+impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> {
     fn new(ctx: &'a mut IrContext, substitute: F) -> Self {
         Self {
             ctx,
             substitute,
-            cache: HashMap::new(),
-            visiting: HashSet::new(),
+            cache: HashMap::default(),
+            visiting: HashSet::default(),
         }
     }
 
     fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
-        if let Some(replacement) = (self.substitute)(self.ctx, ty) {
-            return replacement;
-        }
         if let Some(&converted) = self.cache.get(&ty) {
             return converted;
+        }
+        if let Some(replacement) = (self.substitute)(self.ctx, ty) {
+            self.cache.insert(ty, replacement);
+            return replacement;
         }
         if !self.visiting.insert(ty) {
             return ty;
@@ -733,7 +730,7 @@ impl<'a, F: Fn(&IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> 
         let attributes: Vec<_> = data
             .attrs
             .iter()
-            .map(|(name, value)| (*name, self.convert_attribute(value.clone())))
+            .map(|(name, value)| (name.clone(), self.convert_attribute(value.clone())))
             .collect();
         converted.attrs.clear();
         converted.attrs.extend(attributes);
@@ -836,7 +833,7 @@ mod tests {
     }
 
     fn evidence_type_str() -> &'static str {
-        "core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
+        "core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
     }
 
     fn closure_test_module(ctx: &mut IrContext) -> Module {
@@ -1353,7 +1350,7 @@ mod tests {
                 .iter()
                 .copied()
                 .filter_map(|op| func::Func::from_op(&ctx, op).ok())
-                .find(|function| function.sym_name(&ctx) == name)
+                .find(|function| *name == function.sym_name(&ctx))
                 .expect("referenced function must exist");
             assert_eq!(
                 ctx.op_result_types(reference.op_ref()),
@@ -1395,13 +1392,13 @@ mod tests {
         };
 
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &source(r#"@"left::helper""#));
+        let module = parse_test_module(&mut ctx, &source("@left::@helper"));
         lower_prepared_closures(&mut ctx, module).unwrap();
         let ir = print_module(&ctx, module.op());
         assert!(!ir.contains("closure.new"), "{ir}");
         assert!(
             ir.contains(
-                r#"func.constant {func_ref = @"left::helper"} : func.func_sig<(tribute_rt.anyref, core.i32) -> core.i32>"#
+                r#"func.constant {func_ref = @left::@helper} : func.func_sig<(tribute_rt.anyref, core.i32) -> core.i32>"#
             ),
             "{ir}"
         );

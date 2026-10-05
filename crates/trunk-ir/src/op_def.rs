@@ -6,7 +6,7 @@
 //! name so that verification and other tooling can look them up for any
 //! operation.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::sync::LazyLock;
 
 use crate::op_schema::{OpSchema, SchemaViolation};
@@ -47,7 +47,7 @@ impl OpDef {
     /// Look up the registered definition for an operation.
     pub fn of(ctx: &IrContext, op: OpRef) -> Option<&'static OpDef> {
         let data = ctx.op(op);
-        Self::lookup(data.dialect, data.name)
+        Self::lookup(data.dialect.clone(), data.name.clone())
     }
 }
 
@@ -70,13 +70,10 @@ pub struct OpDefRegistration(pub &'static OpDef);
 inventory::collect!(OpDefRegistration);
 
 static REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpDef>> = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for OpDefRegistration(def) in inventory::iter::<OpDefRegistration> {
         let schema = &def.schema;
-        let key = (
-            Symbol::from_dynamic(schema.dialect),
-            Symbol::from_dynamic(schema.name),
-        );
+        let key = (Symbol::new(schema.dialect), Symbol::new(schema.name));
         if let Some(previous) = registry.insert(key, *def) {
             panic!(
                 "operation {}.{} is registered twice ({previous:p} and {def:p})",

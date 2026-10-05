@@ -194,3 +194,48 @@ fn main() -> Nil {
     // identity returns the lambda, f(5) = 5 + 10 = 15
     assert_native_output("returned_closure_call.trb", code, "15");
 }
+
+/// Test a generic function specialized at function types that differ only in
+/// their effect rows.
+///
+/// `keep` is used at `a = fn() ->{Ask} Nat` and `a = fn() ->{Tell} Nat`. Each
+/// function type selects its own specialization.
+#[test]
+fn test_specializations_distinguish_function_argument_effect_rows() {
+    let code = r#"ability Ask {
+    op ask() -> Nat
+}
+
+ability Tell {
+    op tell() -> Nat
+}
+
+fn keep(value: a) -> a { value }
+
+fn ask() ->{Ask} Nat { Ask::ask() }
+
+fn tell() ->{Tell} Nat { Tell::tell() }
+
+fn asked() -> Nat {
+    let held = keep(ask)
+    handle held() {
+        do result { result }
+        op Ask::ask() { resume 40 }
+    }
+}
+
+fn told() -> Nat {
+    let held = keep(tell)
+    handle held() {
+        do result { result }
+        op Tell::tell() { resume 2 }
+    }
+}
+
+fn main() -> Nil {
+    __tribute_print_nat(asked() + told())
+}
+"#;
+    // ask() → 40, tell() → 2
+    assert_native_output("effect_row_specializations.trb", code, "42");
+}

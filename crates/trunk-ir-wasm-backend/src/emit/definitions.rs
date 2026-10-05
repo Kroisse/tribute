@@ -13,7 +13,7 @@ use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::types::Attribute;
-use trunk_ir::{StringRef, Symbol};
+use trunk_ir::{StringRef, SymbolPath};
 use wasm_encoder::{ExportKind, RefType, ValType};
 
 use crate::{CompilationError, CompilationResult};
@@ -24,7 +24,7 @@ use crate::{CompilationError, CompilationResult};
 
 #[derive(Debug)]
 pub(crate) struct FunctionDef {
-    pub name: Symbol,
+    pub name: SymbolPath,
     /// Validated target-owned `wasm.func_sig` signature.
     pub func_type: TypeRef,
     pub op: OpRef,
@@ -32,7 +32,7 @@ pub(crate) struct FunctionDef {
 
 #[derive(Debug)]
 pub(crate) struct ImportFuncDef {
-    pub sym: Symbol,
+    pub sym: SymbolPath,
     pub module: StringRef,
     pub name: StringRef,
     /// wasm.func_sig TypeRef
@@ -48,7 +48,7 @@ pub(crate) struct ExportDef {
 
 #[derive(Debug)]
 pub(crate) enum ExportTarget {
-    Func(Symbol),
+    Func(SymbolPath),
     Memory(u32),
 }
 
@@ -78,7 +78,7 @@ pub(crate) struct TableDef {
 pub(crate) struct ElementDef {
     pub table: u32,
     pub offset: i32,
-    pub funcs: Vec<Symbol>,
+    pub funcs: Vec<SymbolPath>,
 }
 
 #[derive(Debug)]
@@ -97,7 +97,8 @@ pub(crate) fn extract_function_def(
     func_op: wasm_dialect::Func,
 ) -> CompilationResult<FunctionDef> {
     // References name functions by root-qualified path.
-    let name = qualified_name(ctx, func_op.op_ref()).unwrap_or_else(|| func_op.sym_name(ctx));
+    let name = qualified_name(ctx, func_op.op_ref())
+        .unwrap_or_else(|| SymbolPath::from(func_op.sym_name(ctx)));
     let ty = func_op.r#type(ctx);
 
     let function = wasm_dialect::FuncSig::from_type_ref(ctx, ty).ok_or_else(|| {
@@ -135,7 +136,8 @@ pub(crate) fn extract_import_def(
 ) -> CompilationResult<ImportFuncDef> {
     let module = import_op.module_ref(ctx);
     let name = import_op.name_ref(ctx);
-    let sym = qualified_name(ctx, import_op.op_ref()).unwrap_or_else(|| import_op.sym_name(ctx));
+    let sym = qualified_name(ctx, import_op.op_ref())
+        .unwrap_or_else(|| SymbolPath::from(import_op.sym_name(ctx)));
     let ty = import_op.r#type(ctx);
 
     if wasm_dialect::FuncSig::from_type_ref(ctx, ty).is_none() {
@@ -161,7 +163,7 @@ pub(crate) fn extract_export_func(
     Ok(ExportDef {
         name,
         kind: ExportKind::Func,
-        target: ExportTarget::Func(func),
+        target: ExportTarget::Func(func.clone()),
     })
 }
 
@@ -243,9 +245,9 @@ pub(crate) fn extract_element_def(
         for &inner_op in &ctx.block(block_ref).ops {
             // Look for func.constant or wasm.ref_func operations
             if let Ok(const_op) = func::Constant::from_op(ctx, inner_op) {
-                funcs.push(const_op.func_ref(ctx));
+                funcs.push(const_op.func_ref(ctx).clone());
             } else if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, inner_op) {
-                funcs.push(ref_func_op.func_name(ctx));
+                funcs.push(ref_func_op.func_name(ctx).clone());
             }
         }
     }
@@ -310,7 +312,7 @@ mod tests {
         let import = wasm_dialect::ImportFunc::operands()
             .module("env")
             .name("run")
-            .sym_name(Symbol::new("run"))
+            .sym_name("run")
             .r#type(malformed)
             .build(&mut ctx, location);
 

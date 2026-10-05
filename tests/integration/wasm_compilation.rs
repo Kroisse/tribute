@@ -694,6 +694,149 @@ fn main() ->{std::io::Io} Nil {
     assert_eq!(output.stdout, b"ok\nok\n");
 }
 
+const NESTED_STATE: &str = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+fn check(ok: Bool) ->{std::io::Io} Nil {
+    case ok {
+        True -> std::io::print_line("ok")
+        False -> std::io::print_line("unexpected")
+    }
+}
+"#;
+
+/// An inner handler of the same ability shadows the outer one, and the outer
+/// handler is selected again after the inner handle completes.
+#[salsa_test]
+fn test_execute_nested_same_ability_handlers(db: &salsa::DatabaseImpl) {
+    let code = format!(
+        "{NESTED_STATE}{}",
+        r#"
+fn inner_comp() ->{State(Nat)} Nat {
+    let x = State::get()
+    State::set(x + 1)
+    State::get()
+}
+
+fn main() ->{std::io::Io} Nil {
+    let result = run_state(fn() {
+        let inner_result = run_state(fn() { inner_comp() }, 0)
+        let outer_val = State::get()
+        inner_result * 1000 + outer_val
+    }, 100)
+    check(result == 1100)
+}
+"#
+    );
+    let source = SourceCst::from_source_str(db, "nested_same_ability.trb", &code);
+    let binary =
+        expect_wasm_compilation_success(db, source, "Should compile nested same-ability handlers");
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok\n");
+}
+
+/// Four nested handlers of one ability each answer their own level.
+#[salsa_test]
+fn test_execute_four_nested_same_ability_handlers(db: &salsa::DatabaseImpl) {
+    let code = format!(
+        "{NESTED_STATE}{}",
+        r#"
+fn level1() ->{State(Nat)} Nat {
+    let v = State::get()
+    State::set(v + 1)
+    v * 10 + State::get()
+}
+
+fn main() ->{std::io::Io} Nil {
+    let result = run_state(fn() {
+        let v4 = State::get()
+        v4 * 10000 + run_state(fn() {
+            let v3 = State::get()
+            v3 * 1000 + run_state(fn() {
+                let v2 = State::get()
+                v2 * 100 + run_state(fn() { level1() }, 1)
+            }, 2)
+        }, 3)
+    }, 4)
+    check(result == 43212)
+}
+"#
+    );
+    let source = SourceCst::from_source_str(db, "four_nested_same_ability.trb", &code);
+    let binary = expect_wasm_compilation_success(
+        db,
+        source,
+        "Should compile four nested same-ability handlers",
+    );
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok\n");
+}
+
+/// Handlers of two abilities keep separate evidence slots.
+#[salsa_test]
+fn test_execute_nested_handlers_of_two_abilities(db: &salsa::DatabaseImpl) {
+    let code = format!(
+        "{NESTED_STATE}{}",
+        r#"
+ability Reader(r) {
+    op ask() -> r
+}
+
+fn run_reader(comp: fn() ->{e, Reader(r)} a, value: r) ->{e} a {
+    handle comp() {
+        op Reader::ask() { run_reader(fn() { resume value }, value) }
+    }
+}
+
+fn use_both() ->{State(Nat), Reader(Nat)} Nat {
+    let config = Reader::ask()
+    State::set(config)
+    State::get()
+}
+
+fn main() ->{std::io::Io} Nil {
+    let result = run_reader(fn() { run_state(fn() { use_both() }, 0) }, 42)
+    check(result == 42)
+    let swapped = run_state(fn() { run_reader(fn() { use_both() }, 42) }, 0)
+    check(swapped == 42)
+}
+"#
+    );
+    let source = SourceCst::from_source_str(db, "nested_two_abilities.trb", &code);
+    let binary = expect_wasm_compilation_success(
+        db,
+        source,
+        "Should compile nested handlers of two abilities",
+    );
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"ok\nok\n");
+}
+
 const BYTES_SLICES: &str = r#"
 fn main() ->{std::io::Io} Nil {
     let bytes = b"<hello world>"
@@ -795,6 +938,121 @@ fn main() ->{std::io::Io} Nil {
     assert_eq!(output.stdout, b"ab\ncd\nhe\nello>\n");
 }
 
+#[salsa_test]
+fn test_variants_are_told_apart_by_described_descriptor(db: &salsa::DatabaseImpl) {
+    use trunk_ir_wasm_backend::gc_types::{DESCRIBED_IDX, FIRST_USER_TYPE_IDX};
+    use wasmparser::{CompositeInnerType, Operator, Payload};
+
+    let source = SourceCst::from_source_str(
+        db,
+        "variant_descriptor.trb",
+        r#"
+enum Shape {
+    Circle(Int),
+    Square(Int),
+    Empty,
+}
+
+fn area(shape: Shape) -> Int {
+    case shape {
+        Circle(r) -> r * r * +3
+        Square(s) -> s * s
+        Empty -> +0
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(Int::to_string(area(Circle(+2)) + area(Square(+3)) + area(Empty)))
+}
+"#,
+    );
+    let binary = expect_wasm_compilation_success(db, source, "Should compile enum matching");
+
+    let mut struct_types = Vec::new();
+    let mut ref_tests = 0;
+    for payload in wasmparser::Parser::new(0).parse_all(binary) {
+        match payload.expect("Wasm payload") {
+            Payload::TypeSection(types) => {
+                for group in types {
+                    for sub_type in group.expect("rec group").into_types() {
+                        struct_types.push(match &sub_type.composite_type.inner {
+                            CompositeInnerType::Struct(layout) => Some((
+                                layout.fields.to_vec(),
+                                sub_type.is_final,
+                                sub_type.supertype_idx.map(|index| {
+                                    index.as_module_index().expect("module type index")
+                                }),
+                            )),
+                            _ => None,
+                        });
+                    }
+                }
+            }
+            Payload::CodeSectionEntry(body) => {
+                for operator in body.get_operators_reader().expect("operators") {
+                    if matches!(
+                        operator.expect("operator"),
+                        Operator::RefTestNonNull { .. } | Operator::RefTestNullable { .. }
+                    ) {
+                        ref_tests += 1;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let (described_fields, described_is_final, described_supertype) = struct_types
+        [DESCRIBED_IDX as usize]
+        .clone()
+        .expect("the Described type is a struct");
+    let [descriptor] = described_fields[..] else {
+        panic!("the Described type holds the descriptor field alone")
+    };
+    assert_eq!(
+        descriptor.element_type,
+        wasmparser::StorageType::Val(wasmparser::ValType::I32)
+    );
+    assert!(!described_is_final);
+    assert_eq!(described_supertype, None);
+
+    let user_structs: Vec<_> = struct_types[FIRST_USER_TYPE_IDX as usize..]
+        .iter()
+        .flatten()
+        .collect();
+    // `Circle(Int)` and `Square(Int)` have equal fields, so they share one
+    // structural type and only their descriptors tell them apart.
+    for (index, (fields, ..)) in user_structs.iter().enumerate() {
+        assert!(
+            user_structs[..index]
+                .iter()
+                .all(|(earlier, ..)| earlier != fields),
+            "struct types with equal fields are one type"
+        );
+    }
+    let int_payload = [descriptor, descriptor];
+    assert!(
+        user_structs
+            .iter()
+            .any(|(fields, ..)| fields[..] == int_payload),
+        "the shared Circle and Square type"
+    );
+    for (fields, is_final, supertype) in user_structs {
+        assert_eq!(fields.first(), Some(&descriptor));
+        assert!(is_final);
+        assert_eq!(*supertype, Some(DESCRIBED_IDX));
+    }
+    assert_eq!(ref_tests, 0, "variants are not tested by GC type");
+
+    let output = run_validated_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(output.stdout, b"21\n");
+}
+
 fn run_validated_wasm(binary: &[u8]) -> std::process::Output {
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
         .validate_all(binary)
@@ -814,7 +1072,7 @@ fn test_validate_fixed_wasm_dispatch_abis() {
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
         r#"core.module @test {
-        !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+        !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
         !Closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
         func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
             %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = "Console"}>, op_name = "read"} : tribute_rt.anyref
@@ -823,8 +1081,8 @@ fn test_validate_fixed_wasm_dispatch_abis() {
         func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
             effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = core.i32}
         }
-        func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure, %handler: !Closure) -> !Evidence {
-            %extended = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
+        func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
+            %extended = effect.extend %ev, %prompt, %tr, %ev {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
             func.return %extended
         }
     }"#,
@@ -860,4 +1118,93 @@ fn test_compile_specialized_enum_payloads(db: &salsa::DatabaseImpl) {
         include_str!("../specialized_enum_payloads.trb"),
     );
     expect_wasm_compilation_success(db, source, "Specialized enum payloads must compile");
+}
+
+/// The Wasm evidence helpers keep one marker stack per ability: `extend` and
+/// `dup` push, `mask` pops, and popping the last marker removes the slot.
+#[test]
+fn test_execute_wasm_evidence_marker_stacks() {
+    let mut ctx = trunk_ir::IrContext::new();
+    let module = trunk_ir::parser::parse_test_module(
+        &mut ctx,
+        r#"core.module @test {
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
+  func.func @__tribute_evidence_extend(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref, %outer: !Evidence) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_outer(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_mask(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_dup(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
+  wasm.func @check() -> core.i32 {
+    %zero = wasm.i32_const {value = 0} : core.i32
+    %one = wasm.i32_const {value = 1} : core.i32
+    %two = wasm.i32_const {value = 2} : core.i32
+    %nine = wasm.i32_const {value = 9} : core.i32
+    %ten = wasm.i32_const {value = 10} : core.i32
+    %state = wasm.i32_const {value = 10} : core.i32
+    %console = wasm.i32_const {value = 20} : core.i32
+    %null = wasm.ref_null {heap_type = "any"} : wasm.anyref
+    %empty = wasm.array_new_default %zero {type_idx = 5} : !Evidence
+    %with_console = wasm.call %empty, %console, %nine, %null, %empty {callee = @__tribute_evidence_extend} : !Evidence
+    %outer = wasm.call %with_console, %state, %one, %null, %with_console {callee = @__tribute_evidence_extend} : !Evidence
+    %inner = wasm.call %outer, %state, %two, %null, %outer {callee = @__tribute_evidence_extend} : !Evidence
+    %inner_tag = wasm.call %inner, %state {callee = @__tribute_evidence_lookup} : core.i32
+    %masked = wasm.call %inner, %state {callee = @__tribute_evidence_mask} : !Evidence
+    %masked_tag = wasm.call %masked, %state {callee = @__tribute_evidence_lookup} : core.i32
+    %dup = wasm.call %inner, %state {callee = @__tribute_evidence_dup} : !Evidence
+    %dup_once = wasm.call %dup, %state {callee = @__tribute_evidence_mask} : !Evidence
+    %dup_once_tag = wasm.call %dup_once, %state {callee = @__tribute_evidence_lookup} : core.i32
+    %dup_twice = wasm.call %dup_once, %state {callee = @__tribute_evidence_mask} : !Evidence
+    %dup_twice_tag = wasm.call %dup_twice, %state {callee = @__tribute_evidence_lookup} : core.i32
+    %removed = wasm.call %masked, %state {callee = @__tribute_evidence_mask} : !Evidence
+    %removed_console_tag = wasm.call %removed, %console {callee = @__tribute_evidence_lookup} : core.i32
+    %removed_len = wasm.array_len %removed : core.i32
+    %inner_console_tag = wasm.call %inner, %console {callee = @__tribute_evidence_lookup} : core.i32
+    %inner_len = wasm.array_len %inner : core.i32
+    %d0 = wasm.i32_mul %inner_tag, %ten : core.i32
+    %d1 = wasm.i32_add %d0, %masked_tag : core.i32
+    %d2 = wasm.i32_mul %d1, %ten : core.i32
+    %d3 = wasm.i32_add %d2, %dup_once_tag : core.i32
+    %d4 = wasm.i32_mul %d3, %ten : core.i32
+    %d5 = wasm.i32_add %d4, %dup_twice_tag : core.i32
+    %d6 = wasm.i32_mul %d5, %ten : core.i32
+    %d7 = wasm.i32_add %d6, %removed_console_tag : core.i32
+    %d8 = wasm.i32_mul %d7, %ten : core.i32
+    %d9 = wasm.i32_add %d8, %removed_len : core.i32
+    %d10 = wasm.i32_mul %d9, %ten : core.i32
+    %d11 = wasm.i32_add %d10, %inner_console_tag : core.i32
+    %d12 = wasm.i32_mul %d11, %ten : core.i32
+    %d13 = wasm.i32_add %d12, %inner_len : core.i32
+    %installed_on = wasm.call %dup, %state {callee = @__tribute_evidence_outer} : !Evidence
+    %installed_on_tag = wasm.call %installed_on, %state {callee = @__tribute_evidence_lookup} : core.i32
+    %d14 = wasm.i32_mul %d13, %ten : core.i32
+    %d15 = wasm.i32_add %d14, %installed_on_tag : core.i32
+    wasm.return %d15
+  }
+  wasm.export_func {name = "check", func = @check}
+}"#,
+    );
+    tribute_passes::wasm::evidence_to_wasm::bind_wasm_evidence_runtime(&mut ctx, module);
+    tribute_passes::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
+    let binary = trunk_ir_wasm_backend::emit_module_to_wasm(&mut ctx, module).unwrap();
+    wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
+        .validate_all(&binary.bytes)
+        .expect("evidence helpers must be valid Wasm");
+    let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
+    wasm.write_all(&binary.bytes).expect("write Wasm module");
+    let output = Command::new("wasmtime")
+        .arg("-Wgc=y,function-references=y")
+        .arg("--invoke")
+        .arg("check")
+        .arg(wasm.path())
+        .output()
+        .expect("run Wasm module with wasmtime");
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    // inner top, masked top, dup masked once and twice, then the other
+    // ability's tag and the slot count after and before removing a slot,
+    // then the tag in the evidence the copied inner handler was installed on.
+    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "212191921");
 }

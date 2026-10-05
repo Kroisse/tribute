@@ -1,4 +1,5 @@
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::func;
@@ -39,9 +40,9 @@ impl ValidatedFlatCfg {
             ));
         }
 
-        let mut terminators = HashMap::new();
-        let mut successors = HashMap::new();
-        let mut branches = HashMap::new();
+        let mut terminators = HashMap::default();
+        let mut successors = HashMap::default();
+        let mut branches = HashMap::default();
         for &block in &blocks {
             let ops = &ctx.block(block).ops;
             let Some((&terminator, preceding)) = ops.split_last() else {

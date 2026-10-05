@@ -10,9 +10,8 @@
 //! - `func.unreachable` -> `clif.trap`
 //! - `func.constant` -> `clif.symbol_addr`
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -26,6 +25,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::Attribute;
+use trunk_ir::{Symbol, SymbolPath};
 
 /// Lower func dialect to clif dialect.
 pub fn lower(
@@ -79,7 +79,7 @@ fn convert_nested_callable_type(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -113,7 +113,7 @@ fn convert_type_to_clif(
         let results = shared.results(ctx).to_vec();
         let type_attrs = shared
             .non_reserved_attrs(ctx)
-            .map(|(key, value)| (*key, value.clone()))
+            .map(|(key, value)| (key.clone(), value.clone()))
             .collect::<Vec<_>>();
         let attrs = type_attrs
             .into_iter()
@@ -144,7 +144,7 @@ fn convert_type_to_clif(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -234,7 +234,7 @@ impl RewritePattern for FuncCallPattern {
             return false;
         };
 
-        let callee = call_op.callee(ctx);
+        let callee = call_op.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
             op,
@@ -246,7 +246,7 @@ impl RewritePattern for FuncCallPattern {
         }
         ctx.op_mut(new_op)
             .attributes
-            .insert(Symbol::new("callee"), Attribute::Symbol(callee));
+            .insert(Symbol::new("callee"), Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -351,7 +351,7 @@ impl RewritePattern for FuncTailCallPattern {
             return false;
         };
 
-        let callee = tail_call.callee(ctx);
+        let callee = tail_call.callee(ctx).clone();
         let new_op = crate::passes::cf_to_clif::rebuild_op_as(
             ctx,
             op,
@@ -360,7 +360,7 @@ impl RewritePattern for FuncTailCallPattern {
         );
         ctx.op_mut(new_op)
             .attributes
-            .insert(Symbol::new("callee"), Attribute::Symbol(callee));
+            .insert(Symbol::new("callee"), Attribute::SymbolRef(callee));
         rewriter.replace_op(new_op);
         true
     }
@@ -443,12 +443,12 @@ impl RewritePattern for FuncUnreachablePattern {
 
 /// Each uniquely defined `func.func` by root-qualified name, with its exact
 /// signature captured before lowering converts it.
-fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<Symbol, TypeRef> {
+fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<SymbolPath, TypeRef> {
     let table = SymbolTable::collect(ctx, module);
     table
         .iter()
         .filter_map(|(name, ops)| match ops {
-            &[op] => Some((name, func::Func::from_op(ctx, op).ok()?.r#type(ctx))),
+            &[op] => Some((name.clone(), func::Func::from_op(ctx, op).ok()?.r#type(ctx))),
             _ => None,
         })
         .collect()
@@ -460,7 +460,7 @@ fn function_signatures(ctx: &IrContext, module: Module) -> HashMap<Symbol, TypeR
 /// reference must carry exactly its target's signature, calling convention
 /// included, before it is erased.
 struct FuncConstantPattern {
-    functions: HashMap<Symbol, TypeRef>,
+    functions: HashMap<SymbolPath, TypeRef>,
 }
 
 impl RewritePattern for FuncConstantPattern {
@@ -474,7 +474,7 @@ impl RewritePattern for FuncConstantPattern {
             return false;
         };
 
-        let func_ref = const_op.func_ref(ctx);
+        let func_ref = const_op.func_ref(ctx).clone();
         if let &[result] = ctx.op_result_types(op)
             && func::FuncSig::matches(ctx, result)
             && self.functions.get(&func_ref).copied() != Some(result)
@@ -494,6 +494,7 @@ impl RewritePattern for FuncConstantPattern {
 
 #[cfg(test)]
 mod tests {
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::IrContext;
     use trunk_ir::dialect::{clif, core, func};
     use trunk_ir::ops::DialectType;
@@ -504,14 +505,14 @@ mod tests {
     use trunk_ir::{Attribute, AttributeMap, Symbol};
 
     const TAIL_TRANSFERS: &str = r#"core.module @test {
-  func.func @direct_target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  func.func @direct_target(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     func.return
   }
-  func.func @direct_caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  func.func @direct_caller(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     func.tail_call %value {callee = @direct_target}
   }
-  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
-    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = @tail}>}
+  func.func @indirect_caller(%callee: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
+    func.tail_call_indirect %callee, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
 }"#;
 
@@ -604,7 +605,7 @@ mod tests {
         let mut inner_attrs = AttributeMap::new();
         inner_attrs.insert(
             Symbol::new("tag"),
-            Attribute::Symbol(Symbol::new("preserved")),
+            Attribute::SymbolRef(SymbolPath::from("preserved")),
         );
         inner_attrs.insert(
             Symbol::new("nested"),
@@ -808,8 +809,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !evidence = core.array<core.i32>
-  func.func @caller(%callee: core.ptr, %evidence: !evidence) attributes {type = func.func_sig<(core.ptr, !evidence) -> (), {call_conv = @tail}>} {
-    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> (), {call_conv = @tail}>}
+  func.func @caller(%callee: core.ptr, %evidence: !evidence) attributes {type = func.func_sig<(core.ptr, !evidence) -> (), {call_conv = "tail"}>} {
+    func.tail_call_indirect %callee, %evidence {signature = func.func_sig<(!evidence) -> (), {call_conv = "tail"}>}
   }
 }"#,
         );
@@ -825,7 +826,8 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains("clif.return_call_indirect")
-                && printed.contains("sig = clif.func_sig<(core.ptr) -> (), {call_conv = @tail}>"),
+                && printed
+                    .contains("sig = clif.func_sig<(core.ptr) -> (), {call_conv = \"tail\"}>"),
             "{printed}"
         );
         assert!(
@@ -855,7 +857,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(ty, Symbol::new("core"), Symbol::new("array"))
+                .is_dialect(ty, "core", "array")
                 .then_some(ptr_ty)
         });
 
@@ -975,7 +977,7 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = @tail}}>}} {{
+  func.func @target(%value: core.i32) attributes {{type = func.func_sig<(core.i32) -> (), {{call_conv = "tail"}}>}} {{
     func.return
   }}
   func.func @take() {{
@@ -988,7 +990,7 @@ mod tests {
             super::lower(&mut ctx, module, TypeConverter::new()).map(|_| ())
         };
 
-        lower_reference("func.func_sig<(core.i32) -> (), {call_conv = @tail}>")
+        lower_reference("func.func_sig<(core.i32) -> (), {call_conv = \"tail\"}>")
             .expect("a reference with the target convention lowers");
         let error = lower_reference("func.func_sig<(core.i32) -> ()>")
             .expect_err("a platform reference to a tail function must not be erased");
@@ -1002,11 +1004,11 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   core.module @inner {
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @"inner::helper"} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
+      %reference = func.constant {func_ref = @inner::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
       func.return
     }
   }
@@ -1033,7 +1035,7 @@ mod tests {
         let unknown = lower(
             r#"core.module @test {
   func.func @take() {
-    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
+    %reference = func.constant {func_ref = @missing} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
     func.return
   }
 }"#,
@@ -1043,14 +1045,14 @@ mod tests {
         let duplicated = lower(
             r#"core.module @test {
   core.module @left {
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
       func.return
     }
-    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+    func.func @helper(%value: core.i32) attributes {type = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @"left::helper"} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
+      %reference = func.constant {func_ref = @left::@helper} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
       func.return
     }
   }
@@ -1060,11 +1062,11 @@ mod tests {
 
         let different_inputs = lower(
             r#"core.module @test {
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
     func.return
   }
   func.func @take() {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
     func.return
   }
 }"#,

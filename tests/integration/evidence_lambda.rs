@@ -18,7 +18,7 @@ use trunk_ir::rewrite::Module;
 fn compile_to_ir(db: &dyn salsa::Database, code: &str, name: &str) -> (IrContext, Module) {
     let source_code = Rope::from_str(code);
     let tree = parse_with_thread_local(&source_code, None);
-    let source_file = SourceCst::from_path(db, name, source_code.clone(), tree);
+    let source_file = SourceCst::from_path(db, name, source_code, tree);
     tribute::pipeline::compile_ast(db, source_file)
         .expect("shared production pipeline should succeed")
         .expect("shared production pipeline should produce a module")

@@ -187,10 +187,10 @@ fn splice_callee_body_before(
 // Policy
 // =========================================================================
 
-use super::call_graph::{CallGraph, recursive_functions};
+use super::call_graph::{CallGraph, directly_recursive_functions};
 use crate::rewrite::{Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter};
-use crate::symbol::Symbol;
-use std::collections::HashSet;
+use crate::symbol::SymbolPath;
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::Arc;
 
 /// Knobs for the inlining pass.
@@ -200,10 +200,11 @@ pub struct InlineConfig {
     /// all blocks and nested regions).
     pub size_threshold: usize,
     /// If true, always inline callees with exactly one static call site
-    /// (provided they do not escape via `func.constant`).
+    /// (provided they are referenced only as the callee of direct calls).
     pub always_inline_single_call_site: bool,
-    /// If true, inline even when the callee is referenced by `func.constant`
-    /// somewhere. Defaults to false (conservative).
+    /// If true, allow size-threshold inlining even when the callee is
+    /// referenced other than as the callee of a direct call, for example by
+    /// `func.constant`. Defaults to false (conservative).
     pub inline_across_func_constant: bool,
 }
 
@@ -241,12 +242,12 @@ fn region_op_count(ctx: &IrContext, region: RegionRef) -> usize {
 fn should_inline(
     graph: &CallGraph,
     config: &InlineConfig,
-    recursive: &HashSet<Symbol>,
+    recursive: &HashSet<SymbolPath>,
     ctx: &IrContext,
-    callee: Symbol,
+    callee: &SymbolPath,
 ) -> bool {
     // Must have a body in this module.
-    let Some(&callee_op) = graph.func_ops.get(&callee) else {
+    let Some(&callee_op) = graph.func_ops.get(callee) else {
         return false;
     };
     if !ctx.op_has_regions(callee_op) {
@@ -258,15 +259,15 @@ fn should_inline(
         return false;
     }
     // Skip recursive functions to avoid unbounded instantiation.
-    if recursive.contains(&callee) {
+    if recursive.contains(callee) {
         return false;
     }
-    let escapes = graph.has_constant_ref.contains(&callee);
+    let escapes = graph.address_taken.contains(callee);
 
     // Single-call-site rule (only when the callee doesn't escape).
     if config.always_inline_single_call_site
         && !escapes
-        && graph.call_site_count.get(&callee).copied().unwrap_or(0) == 1
+        && graph.call_site_count.get(callee).copied().unwrap_or(0) == 1
     {
         return true;
     }
@@ -336,7 +337,7 @@ pub fn inline_functions_with_config(
 
     loop {
         let graph = am.require::<CallGraph>(ctx, module.op());
-        let recursive = recursive_functions(&graph);
+        let recursive = directly_recursive_functions(&graph);
 
         let pattern = InlineCallSite::new(Arc::clone(&graph), recursive, config.clone());
 
@@ -380,13 +381,17 @@ pub fn inline_functions_with_config(
 /// single-call-site rule may fire on stale counts.
 pub struct InlineCallSite {
     graph: Arc<CallGraph>,
-    recursive: HashSet<Symbol>,
+    recursive: HashSet<SymbolPath>,
     config: InlineConfig,
 }
 
 impl InlineCallSite {
     /// Build a pattern against `graph` + `recursive` using `config`.
-    pub fn new(graph: Arc<CallGraph>, recursive: HashSet<Symbol>, config: InlineConfig) -> Self {
+    pub fn new(
+        graph: Arc<CallGraph>,
+        recursive: HashSet<SymbolPath>,
+        config: InlineConfig,
+    ) -> Self {
         Self {
             graph,
             recursive,
@@ -408,7 +413,7 @@ impl RewritePattern for InlineCallSite {
             return false;
         }
 
-        let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+        let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
             return false;
         };
 
@@ -416,7 +421,7 @@ impl RewritePattern for InlineCallSite {
             return false;
         }
 
-        let Some(&callee_op) = self.graph.func_ops.get(&callee) else {
+        let Some(&callee_op) = self.graph.func_ops.get(callee) else {
             return false;
         };
 
@@ -503,7 +508,7 @@ mod mechanics {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(Symbol::from_dynamic(name))
+            .sym_name(ctx.intern_str(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -527,7 +532,7 @@ mod mechanics {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         ctx.create_op(module_data)
@@ -573,7 +578,7 @@ mod mechanics {
         });
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let result = call.result(ctx);
@@ -634,7 +639,7 @@ mod mechanics {
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
             let call = func::Call::operands([c.result(ctx)])
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let result = call.result(ctx);
@@ -719,7 +724,7 @@ mod mechanics {
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
             let call = func::Call::operands([c.result(ctx)])
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let result = call.result(ctx);
@@ -754,7 +759,7 @@ mod mechanics {
         });
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
             let tc = func::TailCall::operands(std::iter::empty())
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .build(ctx, loc);
             ctx.push_op(entry, tc.op_ref());
         });
@@ -791,7 +796,7 @@ mod mechanics {
         );
         let caller = build_func(&mut ctx, loc, "caller", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let result = call.result(ctx);
@@ -897,7 +902,7 @@ mod pass {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(Symbol::from_dynamic(name))
+            .sym_name(ctx.intern_str(name))
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -921,22 +926,22 @@ mod pass {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
         Module::new(ctx, module_op).unwrap()
     }
 
-    fn count_calls_to(ctx: &IrContext, func_op: OpRef, callee: &str) -> usize {
+    fn count_calls_to(ctx: &IrContext, func_op: OpRef, callee: impl Into<SymbolPath>) -> usize {
         use crate::walk::{WalkAction, walk_region};
         use std::ops::ControlFlow;
-        let target = Symbol::from_dynamic(callee);
+        let target = callee.into();
         let mut count = 0;
         let body = ctx.op_region(func_op, 0).unwrap();
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if func::Call::matches(ctx, op)
-                && ctx.op(op).attributes.get_symbol("callee") == Some(target)
+                && ctx.op(op).attributes.get_symbol_ref("callee") == Some(&target)
             {
                 count += 1;
             }
@@ -963,7 +968,7 @@ mod pass {
         });
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -986,7 +991,7 @@ mod pass {
             &mut ctx,
             r#"core.module @root {
   func.func @main() -> core.i32 {
-    %0 = func.call {callee = @"inner::helper"} : core.i32
+    %0 = func.call {callee = @inner::@helper} : core.i32
     func.return %0
   }
   core.module @inner {
@@ -1008,7 +1013,10 @@ mod pass {
         let mut am = crate::analysis::AnalysisCache::new();
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
-        assert_eq!(count_calls_to(&ctx, main, "inner::helper"), 0);
+        assert_eq!(
+            count_calls_to(&ctx, main, SymbolPath::new(["inner", "helper"])),
+            0
+        );
         let body = ctx.op_region(main, 0).unwrap();
         let consts: Vec<_> = ctx
             .block(ctx.region(body).blocks[0])
@@ -1027,7 +1035,7 @@ mod pass {
 
         let f = build_func(&mut ctx, loc, "f", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::new("f"))
+                .callee(SymbolPath::from("f"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1068,7 +1076,7 @@ mod pass {
 
         let other = build_func(&mut ctx, loc, "other", &[], i32_ty, |ctx, entry, _args| {
             let c = func::Constant::operands()
-                .func_ref(Symbol::new("helper"))
+                .func_ref(SymbolPath::from("helper"))
                 .results(helper_fn_ty)
                 .build(ctx, loc);
             ctx.push_op(entry, c.op_ref());
@@ -1083,7 +1091,7 @@ mod pass {
 
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1124,7 +1132,7 @@ mod pass {
         // Two call sites so single-call-site rule doesn't trigger.
         let a = build_func(&mut ctx, loc, "a", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1134,7 +1142,7 @@ mod pass {
         });
         let b = build_func(&mut ctx, loc, "b", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1177,7 +1185,7 @@ mod pass {
 
         let fn_ty = crate::dialect::func::func_sig(&mut ctx, [], [i32_ty]).as_type_ref();
         let helper_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("helper")))
+            .attr("sym_name", Attribute::String(ctx.intern_str("helper")))
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)
@@ -1186,7 +1194,7 @@ mod pass {
 
         let main = build_func(&mut ctx, loc, "main", &[], i32_ty, |ctx, entry, _args| {
             let call = func::Call::operands(std::iter::empty())
-                .callee(Symbol::new("helper"))
+                .callee(SymbolPath::from("helper"))
                 .results([i32_ty])
                 .build(ctx, loc);
             let r = call.result(ctx);
@@ -1224,7 +1232,10 @@ mod pass {
         let mut am = AnalysisCache::new();
         // Seed the cache by pulling the graph once.
         let pre = am.require::<CallGraph>(&ctx, module.op());
-        assert_eq!(pre.call_site_count.get(&Symbol::new("helper")), Some(&1));
+        assert_eq!(
+            pre.call_site_count.get(&SymbolPath::from("helper")),
+            Some(&1)
+        );
 
         let result = inline_functions(&mut ctx, module, &mut am);
         assert_eq!(result.inlined_count, 1);
@@ -1236,7 +1247,7 @@ mod pass {
         let post = am
             .get_cached::<CallGraph>(&ctx, module.op())
             .expect("driver must leave a fresh graph cached after the pass");
-        assert_eq!(post.call_site_count.get(&Symbol::new("helper")), None);
+        assert_eq!(post.call_site_count.get(&SymbolPath::from("helper")), None);
         // And a subsequent explicit `get` must coincide with the cached
         // Arc (no recomputation).
         let fetched = am.require::<CallGraph>(&ctx, module.op());
@@ -1324,7 +1335,7 @@ mod pass {
         for name in ["a", "b"] {
             let f = post
                 .func_ops
-                .get(&Symbol::new(name))
+                .get(&SymbolPath::from(name))
                 .copied()
                 .unwrap_or_else(|| panic!("{name} must be in the graph"));
             let body = ctx.op_region(f, 0).unwrap();
@@ -1416,7 +1427,7 @@ mod pass {
 
         let mut am = AnalysisCache::new();
         let graph = am.require::<CallGraph>(&ctx, module.op());
-        let recursive = recursive_functions(&graph);
+        let recursive = directly_recursive_functions(&graph);
 
         let inline_pattern =
             InlineCallSite::new(Arc::clone(&graph), recursive, InlineConfig::default());
@@ -1443,7 +1454,7 @@ mod pass {
         // fold pattern erased it in the same applicator sweep.
         let main_op = graph
             .func_ops
-            .get(&Symbol::new("main"))
+            .get(&SymbolPath::from("main"))
             .copied()
             .expect("main must be in the graph");
         let body = ctx.op_region(main_op, 0).unwrap();

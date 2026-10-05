@@ -111,7 +111,7 @@ pub enum RawAttribute<'a> {
     Int(i128),
     Float(f64),
     String(String),
-    Symbol(String),
+    SymbolRef(Vec<String>),
     Type(RawType<'a>),
     List(Vec<RawAttribute<'a>>),
     Dict(Vec<(Cow<'a, str>, RawAttribute<'a>)>),
@@ -165,6 +165,18 @@ pub fn symbol_ref(input: &mut &str) -> ModalResult<String> {
             .map(|s: &str| s.to_owned())
             .parse_next(input)
     }
+}
+
+/// Parse a symbol path: one or more symbol references joined by `::`, such
+/// as `@outer::@inner::@name`. Each component is one name; a quoted
+/// component may itself contain `::`.
+pub fn symbol_path(input: &mut &str) -> ModalResult<Vec<String>> {
+    let mut components = vec![symbol_ref.parse_next(input)?];
+    while input.starts_with("::@") {
+        *input = &input[2..];
+        components.push(symbol_ref.parse_next(input)?);
+    }
+    Ok(components)
 }
 
 /// Parse a name: a bare identifier or a quoted string.
@@ -331,8 +343,8 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     ws.parse_next(input)?;
 
     if let Some(format) = crate::asm_format::lookup_type_asm_format(
-        crate::Symbol::from_dynamic(dialect),
-        crate::Symbol::from_dynamic(name),
+        crate::Symbol::new(dialect),
+        crate::Symbol::new(name),
     ) {
         let checkpoint = *input;
         match (format.parse_fn)(input, dialect, name) {
@@ -427,7 +439,7 @@ pub fn raw_attr_value<'a>(input: &mut &'a str) -> ModalResult<RawAttribute<'a>> 
         // String literal
         string_lit.map(RawAttribute::String),
         // Symbol reference
-        symbol_ref.map(RawAttribute::Symbol),
+        symbol_path.map(RawAttribute::SymbolRef),
         alt((
             // List
             delimited(
@@ -654,8 +666,8 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
     // Check custom assembly format registry
     if let Some(fmt) = crate::asm_format::lookup_asm_format(
-        crate::Symbol::from_dynamic(dialect),
-        crate::Symbol::from_dynamic(op_name),
+        crate::Symbol::new(dialect),
+        crate::Symbol::new(op_name),
     )
     .filter(|_| !generic_func)
     {
@@ -980,7 +992,7 @@ mod tests {
         let attr = raw_attr_value
             .parse_next(&mut input)
             .expect("should parse symbol");
-        assert!(matches!(attr, RawAttribute::Symbol(ref s) if s == "foo"));
+        assert!(matches!(attr, RawAttribute::SymbolRef(ref s) if s == &["foo"]));
     }
 
     #[test]
@@ -1180,7 +1192,7 @@ mod tests {
 
     #[test]
     fn test_parse_function_type_parameter_attributes() {
-        let mut input = "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = @tail}>";
+        let mut input = "func.func_sig<(core.i32 {a = @x}, core.ptr) -> core.i64 {b = @y}, {call_conv = \"tail\"}>";
         let raw = raw_type.parse_next(&mut input).expect("should parse");
         let RawType::Function {
             inputs,

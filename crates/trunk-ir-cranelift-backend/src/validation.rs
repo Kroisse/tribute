@@ -5,9 +5,9 @@
 //!
 //! Dialect validation errors prevent emission from proceeding.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
@@ -73,7 +73,7 @@ fn validate_clif_contracts(ctx: &IrContext, module: Module) -> Vec<String> {
         return Vec::new();
     };
     let mut errors = Vec::new();
-    let mut functions = HashMap::new();
+    let mut functions = HashMap::default();
     collect_clif_function_signatures(ctx, body, &mut functions, &mut errors);
     validate_clif_region(ctx, body, None, &functions, &mut errors);
     errors
@@ -82,7 +82,7 @@ fn validate_clif_contracts(ctx: &IrContext, module: Module) -> Vec<String> {
 fn collect_clif_function_signatures(
     ctx: &IrContext,
     region: RegionRef,
-    functions: &mut HashMap<Symbol, clif::FuncSig>,
+    functions: &mut HashMap<SymbolPath, clif::FuncSig>,
     errors: &mut Vec<String>,
 ) {
     for &block in &ctx.region(region).blocks {
@@ -91,10 +91,11 @@ fn collect_clif_function_signatures(
             if clif::Func::matches(ctx, op) && clif::Func::DEF.verify(ctx, op).is_empty() {
                 let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
                 // References resolve by root-qualified path.
-                let name = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
+                let name = qualified_name(ctx, op)
+                    .unwrap_or_else(|| SymbolPath::from(function.sym_name(ctx)));
                 let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
                     .expect("schema-verified clif.func_sig");
-                if functions.insert(name, signature).is_some() {
+                if functions.insert(name.clone(), signature).is_some() {
                     errors.push(format!(
                         "clif.func @{name} has a duplicate symbol definition"
                     ));
@@ -223,7 +224,7 @@ fn validate_clif_function(
     errors: &mut Vec<String>,
 ) -> Option<clif::FuncSig> {
     let function = clif::Func::from_op(ctx, op).expect("schema-verified clif.func");
-    let name = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
+    let name = qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from(function.sym_name(ctx)));
     let signature = clif::FuncSig::from_type_ref(ctx, function.r#type(ctx))
         .expect("schema-verified clif.func_sig");
     let has_abi = ctx.op(op).attributes.contains_key("abi");
@@ -231,7 +232,7 @@ fn validate_clif_function(
     // the platform convention.
     if signature.call_conv(ctx) == Some(func::CallConv::Tail) && (has_abi || name == "main") {
         errors.push(format!(
-            "clif.func @{name} is an external boundary and cannot use call_conv = @tail"
+            "clif.func @{name} is an external boundary and cannot use call_conv = \"tail\""
         ));
     }
     match classify_callable_body(ctx, op) {
@@ -266,7 +267,7 @@ fn validate_clif_region(
     ctx: &IrContext,
     region: RegionRef,
     owner: Option<clif::FuncSig>,
-    functions: &HashMap<Symbol, clif::FuncSig>,
+    functions: &HashMap<SymbolPath, clif::FuncSig>,
     errors: &mut Vec<String>,
 ) {
     for &block in &ctx.region(region).blocks {
@@ -294,8 +295,9 @@ fn validate_clif_region(
             }
             if let Ok(data) = clif::Data::from_op(ctx, op) {
                 // Data objects link under their root-qualified path.
-                let name = qualified_name(ctx, op).unwrap_or_else(|| data.sym_name(ctx));
-                if name.with_str(|name| RESERVED_RUNTIME_SYMBOLS.contains(&name)) {
+                let name =
+                    qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from(data.sym_name(ctx)));
+                if name.is_simple() && RESERVED_RUNTIME_SYMBOLS.contains(&name.leaf().as_str()) {
                     errors.push(format!(
                         "clif.data @{name}: symbol is reserved for the native runtime"
                     ));
@@ -327,11 +329,11 @@ fn validate_clif_region(
 
             let operands = ctx.op_operands(op);
             if clif::Call::matches(ctx, op) {
-                let Some(name) = ctx.op(op).attributes.get_symbol("callee") else {
+                let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     errors.push("clif.call requires a symbol callee".into());
                     continue;
                 };
-                if let Some(signature) = functions.get(&name) {
+                if let Some(signature) = functions.get(name) {
                     check_value_types(
                         ctx,
                         op,
@@ -359,11 +361,11 @@ fn validate_clif_region(
                     errors.push("clif.return_call requires a nearest clif.func owner".into());
                     continue;
                 };
-                let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+                let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     errors.push("clif.return_call requires a symbol callee".into());
                     continue;
                 };
-                if let Some(signature) = functions.get(&callee) {
+                if let Some(signature) = functions.get(callee) {
                     check_value_types(
                         ctx,
                         op,
@@ -418,7 +420,7 @@ fn check_tail_call_conv(
     let tail = Some(func::CallConv::Tail);
     if caller.call_conv(ctx) != tail || callee.call_conv(ctx) != tail {
         errors.push(format!(
-            "clif.{} requires caller and callee signatures with call_conv = @tail",
+            "clif.{} requires caller and callee signatures with call_conv = \"tail\"",
             ctx.op(op).name
         ));
     }
@@ -451,12 +453,8 @@ mod tests {
     }
 
     fn make_module(ctx: &mut IrContext, loc: Location, dialect: &str, name: &str) -> Module {
-        let op_data = OperationDataBuilder::new(
-            loc,
-            Symbol::from_dynamic(dialect),
-            Symbol::from_dynamic(name),
-        )
-        .build(ctx);
+        let op_data =
+            OperationDataBuilder::new(loc, Symbol::new(dialect), Symbol::new(name)).build(ctx);
         let op = ctx.create_op(op_data);
 
         let block = ctx.create_block(BlockData {
@@ -473,7 +471,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -492,23 +490,23 @@ mod tests {
     fn tail_transfers_require_tail_call_conv_on_both_signatures() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @tail_target, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "tail_target", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32):
       clif.return
   }
-  clif.func {sym_name = @platform_target, type = clif.func_sig<(core.i32) -> ()>} {
+  clif.func {sym_name = "platform_target", type = clif.func_sig<(core.i32) -> ()>} {
     ^entry(%value: core.i32):
       clif.return
   }
-  clif.func {sym_name = @platform_caller, type = clif.func_sig<(core.i32) -> ()>} {
+  clif.func {sym_name = "platform_caller", type = clif.func_sig<(core.i32) -> ()>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @tail_target}
   }
-  clif.func {sym_name = @to_platform, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "to_platform", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @platform_target}
   }
-  clif.func {sym_name = @indirect_platform, type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "indirect_platform", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%callee: core.ptr, %value: core.i32):
       clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> ()>}
   }
@@ -516,7 +514,7 @@ mod tests {
         );
         assert_eq!(
             error
-                .matches("requires caller and callee signatures with call_conv = @tail")
+                .matches("requires caller and callee signatures with call_conv = \"tail\"")
                 .count(),
             3,
             "{error}"
@@ -526,17 +524,17 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.func {sym_name = @target, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "target", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32):
       clif.return
   }
-  clif.func {sym_name = @direct, type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "direct", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32):
       clif.return_call %value {callee = @target}
   }
-  clif.func {sym_name = @indirect, type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "indirect", type = clif.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
     ^entry(%callee: core.ptr, %value: core.i32):
-      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
+      clif.return_call_indirect %callee, %value {sig = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
 }"#,
         );
@@ -547,8 +545,8 @@ mod tests {
     fn external_boundaries_cannot_use_tail_call_conv() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @foreign, abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = @tail}>}
-  clif.func {sym_name = @main, type = clif.func_sig<() -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "foreign", abi = "C", type = clif.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
+  clif.func {sym_name = "main", type = clif.func_sig<() -> (), {call_conv = "tail"}>} {
     ^entry:
       clif.return
   }
@@ -603,7 +601,7 @@ mod tests {
     fn native_boundary_rejects_malformed_target_signature_storage() {
         let error = validation_error(
             r#"core.module @test {
-  clif.func {sym_name = @bad, type = clif.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
+  clif.func {sym_name = "bad", type = clif.func_sig<core.i32, {num_inputs = 2, num_results = 1}>}
 }"#,
         );
         assert!(

@@ -124,7 +124,7 @@ fn pipeline_contract_summary(ir_text: &str, native: bool) -> String {
             return "Frame".to_owned();
         }
         let mut shape = format!("{}.{}", data.dialect, data.name);
-        if let Some(name) = data.attrs.get_text(ctx, "name") {
+        if let Some(name) = data.attrs.get_str(ctx, "name") {
             shape.push_str(&format!("<{name}>"));
         }
         // A struct layout's parameters are its fields; its name is its shape.

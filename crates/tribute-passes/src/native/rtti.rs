@@ -29,14 +29,15 @@
 //! Runs before `adt_rc_header` (Phase 1.95), which stores the declared
 //! `rtti_idx` values in allocation headers and then erases the declarations.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
 use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout,
 };
 use tribute_ir::dialect::tribute_rtti::FieldKind;
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::TypeDataBuilder;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::clif;
@@ -142,8 +143,8 @@ fn validate_declarations(
     module: Module,
     layouts: &[tribute_rtti::Layout],
 ) -> Result<(), RttiError> {
-    let mut declared = HashSet::new();
-    let mut indices = HashSet::new();
+    let mut declared = HashSet::default();
+    let mut indices = HashSet::default();
     for layout in layouts {
         if !declared.insert((layout.r#type(ctx), layout.tag_ref(ctx))) {
             return Err(RttiError("a descriptor is declared more than once".into()));
@@ -156,7 +157,7 @@ fn validate_declarations(
         }
     }
 
-    let mut allocated = HashSet::new();
+    let mut allocated = HashSet::default();
     if let Some(body) = module.body(ctx) {
         let _ = walk_region::<()>(ctx, body, &mut |op| {
             if let Some(descriptor) = tribute_rtti::allocation_descriptor(ctx, op) {
@@ -191,7 +192,7 @@ pub fn generate_rtti(
     };
 
     let loc = Location::new(ctx.intern_path("<rtti>"), Span::new(0, 0));
-    let mut release_fns = HashMap::new();
+    let mut release_fns = HashMap::default();
 
     // `anyref` and `intref` have no static nominal allocation layout. Their
     // release action carries a dynamic-size signal, resolved by the header
@@ -233,8 +234,8 @@ pub fn generate_rtti(
 }
 
 /// The release function of an RTTI index.
-fn release_fn_symbol(rtti_idx: u32) -> Symbol {
-    Symbol::from_dynamic(&format!("{RELEASE_FN_PREFIX}{rtti_idx}"))
+fn release_fn_symbol(rtti_idx: u32) -> SymbolPath {
+    SymbolPath::from(format!("{RELEASE_FN_PREFIX}{rtti_idx}").as_str())
 }
 
 /// Build `__tribute_deep_release(payload_ptr, alloc_size)`.
@@ -314,7 +315,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
         .build(ctx, loc);
     push(ctx, entry, entry_offset.op_ref());
     let table = clif::SymbolAddr::operands()
-        .sym(Symbol::new(RTTI_TABLE))
+        .sym(SymbolPath::from(RTTI_TABLE))
         .results(tys.ptr)
         .build(ctx, loc);
     push(ctx, entry, table.op_ref());
@@ -361,7 +362,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
     push(ctx, shallow, branch.op_ref());
 
     let call = clif::Call::operands([raw_ptr, alloc_size])
-        .callee(Symbol::new(DEALLOC_FN))
+        .callee(SymbolPath::from(DEALLOC_FN))
         .results([tys.nil])
         .build(ctx, loc);
     push(ctx, dealloc, call.op_ref());
@@ -382,7 +383,7 @@ fn generate_deep_release_function(ctx: &mut IrContext, loc: Location) -> OpRef {
     });
     let func_ty = clif::func_sig(ctx, [tys.ptr, tys.i64], [tys.nil]).as_type_ref();
     clif::Func::operands()
-        .sym_name(Symbol::new(DEEP_RELEASE_FN))
+        .sym_name(DEEP_RELEASE_FN)
         .r#type(func_ty)
         .regions(body)
         .build(ctx, loc)
@@ -466,9 +467,7 @@ fn generate_fixed_release_function(
         parent_op: None,
     });
     clif::Func::operands()
-        .sym_name(Symbol::from_dynamic(&format!(
-            "{RELEASE_FN_PREFIX}{rtti_idx}"
-        )))
+        .sym_name(format!("{RELEASE_FN_PREFIX}{rtti_idx}"))
         .r#type(func_ty)
         .regions(body)
         .build(ctx, loc)
@@ -590,7 +589,7 @@ fn generate_release_function(
         });
 
         let func_op = clif::Func::operands()
-            .sym_name(Symbol::from_dynamic(&func_name))
+            .sym_name(func_name)
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -674,7 +673,7 @@ fn generate_release_function(
     });
 
     let func_op = clif::Func::operands()
-        .sym_name(Symbol::from_dynamic(&func_name))
+        .sym_name(func_name)
         .r#type(func_ty)
         .regions(body)
         .build(ctx, loc);
@@ -711,7 +710,7 @@ fn gen_dealloc_and_return_with_size(
     ctx.push_op(block, size_op.op_ref());
 
     let dealloc_call = clif::Call::operands([raw_ptr.result(ctx), size_op.result(ctx)])
-        .callee(Symbol::new(DEALLOC_FN))
+        .callee(SymbolPath::from(DEALLOC_FN))
         .results([nil_ty])
         .build(ctx, loc);
     ctx.push_op(block, dealloc_call.op_ref());
@@ -732,6 +731,7 @@ pub(crate) fn make_struct_type(ctx: &mut IrContext, fields: &[(&'static str, Typ
 mod tests {
     use super::*;
     use trunk_ir::Span;
+    use trunk_ir::Symbol;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder};
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
@@ -810,7 +810,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("create_struct"))
+            .sym_name("create_struct")
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -832,7 +832,7 @@ mod tests {
 
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(module_region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -851,7 +851,9 @@ mod tests {
 
         assert_eq!(
             tribute_rtti::Layout::declared_indices(&ctx, module),
-            HashMap::from([((point_ty, None), RTTI_USER_START)])
+            [((point_ty, None), RTTI_USER_START)]
+                .into_iter()
+                .collect::<HashMap<_, _>>()
         );
     }
 
@@ -911,13 +913,13 @@ mod tests {
 
         let output = print_module(&ctx, module.op());
         let int_release = output
-            .split("clif.func {sym_name = @__tribute_release_3")
+            .split("clif.func {sym_name = \"__tribute_release_3\"")
             .nth(1)
             .expect("boxed Int must have a reserved RTTI release entry");
         assert!(int_release.contains("value = 12"));
         assert!(int_release.contains("callee = @__tribute_dealloc"));
         let float_release = output
-            .split("clif.func {sym_name = @__tribute_release_4")
+            .split("clif.func {sym_name = \"__tribute_release_4\"")
             .nth(1)
             .expect("boxed Float must have a reserved RTTI release entry");
         assert!(float_release.contains("value = 16"));
@@ -1096,7 +1098,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("create"))
+            .sym_name("create")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1116,7 +1118,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(module_region)
                 .build(&mut ctx);
         let module_op = ctx.create_op(module_data);

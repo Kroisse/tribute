@@ -174,7 +174,7 @@ impl<'db> TypeKind<'db> {
     pub fn string(db: &'db dyn salsa::Database) -> Self {
         let name = Symbol::new("String");
         Self::Named {
-            id: TypeDefId::synthetic(db, name),
+            id: TypeDefId::synthetic(db, name.clone()),
             name,
             args: vec![],
         }
@@ -584,7 +584,7 @@ impl EffectAnnotationOrigins {
         db: &'db dyn salsa::Database,
         row: EffectRow<'db>,
     ) -> Option<DuplicateEffectAnnotations<'db>> {
-        use std::collections::HashMap;
+        use rustc_hash::FxHashMap as HashMap;
 
         let effects = row.effects(db);
         // Solving an open row may append inferred effects after the concrete
@@ -592,7 +592,7 @@ impl EffectAnnotationOrigins {
         // annotation origins and can represent duplicate annotations.
         let annotated_effects = &effects[..effects.len().min(self.concrete.len())];
 
-        let mut first_origins = HashMap::<Effect<'db>, NodeId>::new();
+        let mut first_origins = HashMap::<Effect<'db>, NodeId>::default();
         for (effect, &annotation_id) in annotated_effects.iter().zip(&self.concrete) {
             if let Some(&first_annotation_id) = first_origins.get(effect) {
                 let duplicates = annotated_effects
@@ -657,7 +657,7 @@ pub fn annotation_to_effect<'db>(
 ) -> Option<Effect<'db>> {
     match &annotation.kind {
         TypeAnnotationKind::Named(name) if !is_type_variable(name) => {
-            let qualified = crate::qualified_symbol(&mut prefix.to_owned(), *name);
+            let qualified = crate::qualified_symbol(&mut prefix.to_owned(), name);
             let ability_id = super::AbilityId::source(db, qualified);
             Some(Effect {
                 ability_id,
@@ -674,7 +674,7 @@ pub fn annotation_to_effect<'db>(
         TypeAnnotationKind::App { ctor, args } => {
             let qualified = match &ctor.kind {
                 TypeAnnotationKind::Named(n) if !is_type_variable(n) => {
-                    crate::qualified_symbol(&mut prefix.to_owned(), *n)
+                    crate::qualified_symbol(&mut prefix.to_owned(), n)
                 }
                 TypeAnnotationKind::Path(path) => ability_path(path)?,
                 _ => return None,

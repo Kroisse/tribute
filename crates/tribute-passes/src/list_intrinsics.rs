@@ -1,11 +1,10 @@
 //! Lower the public prelude List construction intrinsic to shared `list.*` IR.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::rc::Rc;
 
 use tribute_ir::dialect::list;
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
-use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
@@ -15,26 +14,26 @@ use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::{Symbol, SymbolPath};
 
 const PREPEND_INTRINSIC: &str = "std::collections::List::__tribute_list_prepend_intrinsic";
 
-fn is_prepend_intrinsic(name: Symbol) -> bool {
-    name.with_str(|name| {
-        name == PREPEND_INTRINSIC
-            || name
-                .strip_prefix(PREPEND_INTRINSIC)
-                .is_some_and(|suffix| suffix.starts_with('$'))
-    })
+/// Whether `name` is the prepend intrinsic or one of its specializations,
+/// which append a `$` suffix.
+fn is_prepend_intrinsic(name: &SymbolPath) -> bool {
+    name.as_simple()
+        .and_then(|name| name.as_str().strip_prefix(PREPEND_INTRINSIC))
+        .is_some_and(|suffix| suffix.is_empty() || suffix.starts_with('$'))
 }
 
-fn intrinsic_declaration(name: Symbol) -> Option<Symbol> {
-    is_prepend_intrinsic(name).then(|| Symbol::new(PREPEND_INTRINSIC))
+fn intrinsic_declaration(name: &SymbolPath) -> Option<SymbolPath> {
+    is_prepend_intrinsic(name).then(|| SymbolPath::from(PREPEND_INTRINSIC))
 }
 
 #[derive(Default)]
 struct IntrinsicDeclarations {
-    all: HashSet<Symbol>,
-    eligible: HashSet<Symbol>,
+    all: HashSet<SymbolPath>,
+    eligible: HashSet<SymbolPath>,
 }
 
 pub struct LowerListIntrinsics;
@@ -58,11 +57,11 @@ impl Pass for LowerListIntrinsics {
             let Ok(function) = func::Func::from_op(ctx, op) else {
                 continue;
             };
-            let name = function.sym_name(ctx);
-            intrinsic_declarations.all.insert(name);
-            if is_prepend_intrinsic(name)
-                && ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
-                    == Some(Symbol::new(PREPEND_INTRINSIC))
+            let name = Symbol::new(function.sym_name(ctx));
+            intrinsic_declarations.all.insert(name.clone().into());
+            if is_prepend_intrinsic(&SymbolPath::from(&name))
+                && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
+                    == Some(PREPEND_INTRINSIC)
                 && {
                     func::FuncSig::from_type_ref(ctx, function.r#type(ctx)).is_some_and(
                         |signature| {
@@ -80,7 +79,7 @@ impl Pass for LowerListIntrinsics {
                         && ctx.op(op).attributes.get_str(ctx, "abi") == Some("intrinsic")
                 }
             {
-                intrinsic_declarations.eligible.insert(name);
+                intrinsic_declarations.eligible.insert(name.into());
             }
         }
         let intrinsic_declarations = Rc::new(intrinsic_declarations);
@@ -118,8 +117,8 @@ impl RewritePattern for PrependCallPattern {
         // The frontend keeps generic extern declarations unmangled while
         // specializing their calls. An exact declaration still takes priority
         // so an ordinary same-spelled function cannot inherit the base ABI.
-        let eligible = if self.intrinsic_declarations.all.contains(&callee) {
-            self.intrinsic_declarations.eligible.contains(&callee)
+        let eligible = if self.intrinsic_declarations.all.contains(callee) {
+            self.intrinsic_declarations.eligible.contains(callee)
         } else {
             self.intrinsic_declarations
                 .eligible
@@ -159,7 +158,7 @@ impl RewritePattern for PrependDeclarationPattern {
         if !self
             .intrinsic_declarations
             .eligible
-            .contains(&function.sym_name(ctx))
+            .contains(&SymbolPath::from(&Symbol::new(function.sym_name(ctx))))
         {
             return false;
         }
@@ -182,7 +181,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -246,7 +245,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.int, %1: tribute_rt.int) -> tribute_rt.int
-                    attributes {tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
+                    attributes {tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.return %0
                 }
@@ -280,7 +279,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::collections::List::__tribute_list_prepend_intrinsic"(%0: tribute_rt.anyref, %1: tribute_rt.anyref) -> tribute_rt.anyref
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::collections::List::__tribute_list_prepend_intrinsic"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::collections::List::__tribute_list_prepend_intrinsic"} {
                 ^bb0:
                     func.unreachable
                 }

@@ -3,7 +3,8 @@
 //! It emits only the documented `tribute_control` boundary and ordinary value
 //! dialects; shared CPS construction belongs to `tribute-passes`.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use salsa::Accumulator;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -20,6 +21,7 @@ use trunk_ir::refs::{BlockRef, OpRef, PathRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::Module as IrModule;
 use trunk_ir::types::{Attribute, Location};
 
+use crate::SortedMap;
 use crate::ast::{
     Arm, CallingConvention, CtorId, Decl, EffectRow, Expr, ExprKind, ExternFuncDecl, FuncDecl,
     HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind,
@@ -37,19 +39,15 @@ struct Declarations<'db> {
     // through its debug representation.  Preserve first source use explicitly.
     values: Vec<OperationDeclaration>,
     compiler_intrinsics: Vec<CompilerIntrinsicDeclaration>,
-    schemas: std::collections::HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
-    handler_operations: std::collections::HashMap<
-        crate::ast::NodeId,
-        crate::typeck::InstantiatedHandlerOperation<'db>,
-    >,
-    perform_operations: std::collections::HashMap<
-        crate::ast::NodeId,
-        crate::typeck::InstantiatedPerformOperation<'db>,
-    >,
-    lambda_signatures:
-        std::collections::HashMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
-    exhaustive_cases: std::collections::HashSet<crate::ast::NodeId>,
-    local_instances: HashMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    schemas: HashMap<crate::ast::AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
+    handler_operations:
+        SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    perform_operations:
+        SortedMap<crate::ast::NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    lambda_signatures: SortedMap<crate::ast::NodeId, crate::typeck::LambdaSignature<'db>>,
+    exhaustive_cases: HashSet<crate::ast::NodeId>,
+    evidence_plans: SortedMap<crate::ast::NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
+    local_instances: SortedMap<crate::ast::NodeId, crate::typeck::LocalCallableInstance<'db>>,
     local_callables: local_callables::Plan<'db>,
 }
 
@@ -102,12 +100,46 @@ fn op(
     let data = build(OperationDataBuilder::new(
         location,
         Symbol::new("tribute_control"),
-        Symbol::from_dynamic(name),
+        Symbol::new(name),
     ))
     .build(ir);
     let op = ir.create_op(data);
     ir.push_op(block, op);
     op
+}
+
+/// Attach the typechecked evidence selection of the source node `node`.
+fn attach_evidence_plan<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    op: OpRef,
+    node: crate::ast::NodeId,
+    declarations: &Declarations<'db>,
+) {
+    let Some(plan) = declarations.evidence_plans.get(&node) else {
+        return;
+    };
+    let steps: Vec<_> = plan
+        .iter()
+        .map(|step| {
+            let instance = step.instance();
+            let ability_ref =
+                ctx.ability_ref_type(ir, instance.ability_id.qualified(ctx.db), &instance.args);
+            match step {
+                crate::typeck::EvidenceStep::Mask(_) => {
+                    tribute_control::EvidenceStep::Mask(ability_ref)
+                }
+                crate::typeck::EvidenceStep::Dup(_) => {
+                    tribute_control::EvidenceStep::Dup(ability_ref)
+                }
+            }
+        })
+        .collect();
+    if let Some(plan) = tribute_control::EvidenceStep::plan_attribute(steps) {
+        ir.op_mut(op)
+            .attributes
+            .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
+    }
 }
 
 fn result(ir: &IrContext, op: OpRef) -> ValueRef {
@@ -143,13 +175,13 @@ fn lower_function_ref<'db>(
     name: Symbol,
     expected_ty: Option<TypeRef>,
 ) -> ValueRef {
-    let mut signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+    let mut signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
         .unwrap_or_else(|| panic!("missing logical signature for function reference {name}"));
     signature.convention = builder
         .ctx
-        .function_calling_convention(name)
+        .function_calling_convention(&name)
         .unwrap_or(signature.convention);
-    ensure_prelude_declaration(builder, location, name, &signature);
+    ensure_prelude_declaration(builder, location, &name, &signature);
     let worker_ty = func_sig_type(
         builder.ir,
         signature.return_type,
@@ -170,11 +202,11 @@ fn lower_function_ref<'db>(
                     >= tribute_control::func_sig_convention(builder.ir, worker_ty)
         })
         .unwrap_or(worker_ty);
-    let symbol = builder.ctx.function_symbol(name);
+    let symbol = builder.ctx.function_symbol(&name);
     let op = op(builder.ir, builder.block, location, "func_ref", |builder| {
         builder
             .result(ty)
-            .attr("func_ref", Attribute::Symbol(symbol))
+            .attr("func_ref", Attribute::SymbolRef(symbol.into()))
     });
     result(builder.ir, op)
 }
@@ -200,7 +232,7 @@ fn lower_expr_for_callable_parameter<'db>(
                         builder.ir.value_def(value)
                     && let Ok(named) = tribute_control::FuncRef::from_op(builder.ir, producer)
                 {
-                    let name = named.func_ref(builder.ir);
+                    let name = named.func_ref(builder.ir).to_symbol();
                     return Some(lower_function_ref(
                         builder,
                         builder.location(expr.id),
@@ -218,7 +250,7 @@ fn lower_expr_for_callable_parameter<'db>(
                     lower_function_ref(
                         builder,
                         builder.location(expr.id),
-                        id.qualified(builder.ctx.db),
+                        id.qualified(builder.ctx.db).clone(),
                         Some(expected_ty),
                     )
                 })
@@ -248,7 +280,7 @@ fn declaration_name(prefix: &mut String, name: Symbol) -> Symbol {
     if name.with_str(|text| text.contains("::")) {
         name
     } else {
-        crate::qualified_symbol(prefix, name)
+        crate::qualified_symbol(prefix, &name)
     }
 }
 
@@ -272,6 +304,7 @@ pub(super) fn lower_module<'db>(
         perform_operations,
         lambda_signatures,
         exhaustive_cases,
+        evidence_plans,
         well_known_types,
         compiler_intrinsics,
     } = typed;
@@ -283,13 +316,19 @@ pub(super) fn lower_module<'db>(
         span_map,
         function_types,
         ability_conventions,
-        smallvec::smallvec![module_name],
+        smallvec::smallvec![module_name.clone()],
         node_types,
     )
     .with_compiler_intrinsics(compiler_intrinsics)
     .with_literal_equalities(crate::ast_to_ir::context::LiteralEqualities {
-        string: well_known_types.string_equality.map(|id| id.qualified(db)),
-        bytes: well_known_types.bytes_equality.map(|id| id.qualified(db)),
+        string: well_known_types
+            .string_equality
+            .map(|id| id.qualified(db))
+            .cloned(),
+        bytes: well_known_types
+            .bytes_equality
+            .map(|id| id.qualified(db))
+            .cloned(),
     });
     let module_block = ir.create_block(BlockData {
         location,
@@ -306,6 +345,7 @@ pub(super) fn lower_module<'db>(
         perform_operations,
         lambda_signatures,
         exhaustive_cases,
+        evidence_plans,
         local_instances,
         local_callables: local_callables::Plan::default(),
     };
@@ -334,7 +374,7 @@ pub(super) fn lower_module<'db>(
         parent_op: None,
     });
     let module = core::Module::operands()
-        .sym_name(module_name)
+        .sym_name(ir.intern_symbol_text(&module_name))
         .regions(region)
         .build(ir, location);
     well_known_types.attach(ir, module.op_ref());
@@ -356,8 +396,8 @@ fn prescan_definition_conventions<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Function(function) => {
-                let name = declaration_name(prefix, function.name);
-                let Some(scheme) = ctx.lookup_function_type(name).copied() else {
+                let name = declaration_name(prefix, function.name.clone());
+                let Some(scheme) = ctx.lookup_function_type(&name).copied() else {
                     continue;
                 };
                 let body = scheme.body(ctx.db);
@@ -365,7 +405,7 @@ fn prescan_definition_conventions<'db>(
                     continue;
                 };
                 if (function.effects.is_none()
-                    || crate::is_root_main(function.name, prefix.is_empty()))
+                    || crate::is_root_main(&function.name, prefix.is_empty()))
                     && let TypeKind::Func { effect, .. } = body.kind(ctx.db)
                 {
                     convention = ctx.calling_convention_for_effect_row(EffectRow::new(
@@ -378,7 +418,7 @@ fn prescan_definition_conventions<'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, module.name);
+                    let saved = crate::push_prefix(prefix, &module.name);
                     prescan_definition_conventions(ctx, body, prefix);
                     prefix.truncate(saved);
                 }
@@ -413,8 +453,8 @@ fn promote_definition_conventions_pass<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Function(function) => {
-                let name = declaration_name(prefix, function.name);
-                if ctx.function_calling_convention(name) != Some(CallingConvention::Cps)
+                let name = declaration_name(prefix, function.name.clone());
+                if ctx.function_calling_convention(&name) != Some(CallingConvention::Cps)
                     && expr::logical_evaluation_control_class(ctx, &function.body)
                         == expr::EvaluationControlClass::Cps
                 {
@@ -424,7 +464,7 @@ fn promote_definition_conventions_pass<'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, module.name);
+                    let saved = crate::push_prefix(prefix, &module.name);
                     promote_definition_conventions_pass(ctx, body, prefix, changed);
                     prefix.truncate(saved);
                 }
@@ -483,12 +523,12 @@ fn prescan_logical_nominal_layouts<'db>(
     prefix: &mut String,
     well_known_types: &mut super::decl::WellKnownTypePrescan,
     constructors: &HashMap<crate::ast::CtorId<'db>, crate::ast::TypeScheme<'db>>,
-    specialized_enum_variants: &HashMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
+    specialized_enum_variants: &SortedMap<crate::ast::NodeId, crate::ast::TypeScheme<'db>>,
 ) {
     for declaration in declarations {
         match declaration {
             Decl::Struct(structure) => {
-                let qualified = crate::qualified_symbol(prefix, structure.name);
+                let qualified = crate::qualified_symbol(prefix, &structure.name);
                 let ctor = CtorId::new(ctx.db, qualified);
                 let field_types =
                     constructor_fields(ctx, constructors, ctor, structure.fields.len());
@@ -498,25 +538,25 @@ fn prescan_logical_nominal_layouts<'db>(
                     .zip(field_types)
                     .map(|(field, ty)| {
                         (
-                            field.name.unwrap_or_else(|| Symbol::new("_")),
+                            field.name.clone().unwrap_or_else(|| Symbol::new("_")),
                             ctx.convert_logical_type(ir, ty),
                         )
                     })
                     .collect::<Vec<_>>();
                 let name = super::qualified_type_name(ctx.db, &ctor);
-                let layout = ctx.adt_struct_type(ir, name, &fields);
-                ctx.register_type(name, layout);
+                let layout = ctx.adt_struct_type(ir, &name, &fields);
+                ctx.register_type(name.clone(), layout);
                 ir.register_type_alias(name, layout);
             }
             Decl::Enum(enumeration) => {
-                let qualified = crate::qualified_symbol(prefix, enumeration.name);
-                let enum_ctor = CtorId::new(ctx.db, qualified);
+                let qualified = crate::qualified_symbol(prefix, &enumeration.name);
+                let enum_ctor = CtorId::new(ctx.db, qualified.clone());
                 let variants = enumeration
                     .variants
                     .iter()
                     .map(|variant| {
                         let variant_ctor =
-                            CtorId::new(ctx.db, crate::qualified_symbol(prefix, variant.name));
+                            CtorId::new(ctx.db, crate::qualified_symbol(prefix, &variant.name));
                         let fields = if enumeration.id.variant().is_some() {
                             let scheme = *specialized_enum_variants.get(&variant.id)
                                 .expect("missing specialized enum variant schema");
@@ -525,7 +565,7 @@ fn prescan_logical_nominal_layouts<'db>(
                                 _ => scheme.body(ctx.db),
                             };
                             assert!(matches!(result.kind(ctx.db), TypeKind::Named { id, args, .. }
-                                if args.is_empty() && id.qualified(ctx.db) == qualified
+                                if args.is_empty() && *id.qualified(ctx.db) == qualified
                                     && id.origin(ctx.db) == crate::ast::TypeOrigin::Source(enumeration.id.origin())),
                                 "specialized enum variant schema has wrong owner");
                             constructor_schema_fields(ctx, scheme, variant.fields.len())
@@ -535,7 +575,7 @@ fn prescan_logical_nominal_layouts<'db>(
                         .into_iter()
                         .map(|ty| ctx.convert_logical_type(ir, ty))
                         .collect();
-                        (variant.name, fields)
+                        (variant.name.clone(), fields)
                     })
                     .collect::<Vec<_>>();
                 let name = super::qualified_type_name(ctx.db, &enum_ctor);
@@ -544,15 +584,20 @@ fn prescan_logical_nominal_layouts<'db>(
                     ctx.location(enumeration.id).span,
                 );
                 let layout = if well_known_types.is_string(definition) {
-                    ctx.adt_enum_type_with_definition(ir, name, &variants, definition)
+                    ctx.adt_enum_type_with_definition(ir, &name, &variants, definition)
                 } else {
-                    ctx.adt_enum_type(ir, name, &variants)
+                    ctx.adt_enum_type(ir, &name, &variants)
                 };
-                ctx.register_type(name, layout);
+                ctx.register_type(name.clone(), layout);
                 ir.register_type_alias(name, layout);
                 for variant in &enumeration.variants {
-                    if let Some(names) = variant.fields.iter().map(|field| field.name).collect() {
-                        ctx.register_variant_field_names(layout, variant.name, names);
+                    if let Some(names) = variant
+                        .fields
+                        .iter()
+                        .map(|field| field.name.clone())
+                        .collect()
+                    {
+                        ctx.register_variant_field_names(layout, variant.name.clone(), names);
                     }
                 }
                 if well_known_types.is_string(definition) {
@@ -561,7 +606,7 @@ fn prescan_logical_nominal_layouts<'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, module.name);
+                    let saved = crate::push_prefix(prefix, &module.name);
                     prescan_logical_nominal_layouts(
                         ctx,
                         ir,
@@ -590,7 +635,7 @@ fn collect_logical_nominal_identities<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Struct(structure) => {
-                let qualified = crate::qualified_symbol(prefix, structure.name);
+                let qualified = crate::qualified_symbol(prefix, &structure.name);
                 let ctor = CtorId::new(ctx.db, qualified);
                 ctx.declare_logical_nominal(super::qualified_type_name(ctx.db, &ctor));
                 ctx.register_struct_fields(
@@ -598,18 +643,18 @@ fn collect_logical_nominal_identities<'db>(
                     structure
                         .fields
                         .iter()
-                        .map(|field| field.name.unwrap_or_else(|| Symbol::new("_")))
+                        .map(|field| field.name.clone().unwrap_or_else(|| Symbol::new("_")))
                         .collect(),
                 );
             }
             Decl::Enum(enumeration) => {
-                let qualified = crate::qualified_symbol(prefix, enumeration.name);
+                let qualified = crate::qualified_symbol(prefix, &enumeration.name);
                 let ctor = CtorId::new(ctx.db, qualified);
                 ctx.declare_logical_nominal(super::qualified_type_name(ctx.db, &ctor));
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let saved = crate::push_prefix(prefix, module.name);
+                    let saved = crate::push_prefix(prefix, &module.name);
                     collect_logical_nominal_identities(ctx, body, prefix);
                     prefix.truncate(saved);
                 }
@@ -660,32 +705,29 @@ fn prescan_struct_accessor_signatures<'db>(
             Decl::Struct(declaration) => {
                 let mut prefix = String::new();
                 for segment in ctx.module_path().iter().skip(1) {
-                    crate::push_prefix(&mut prefix, *segment);
+                    crate::push_prefix(&mut prefix, segment);
                 }
-                let qualified = crate::qualified_symbol(&mut prefix, declaration.name);
+                let qualified = crate::qualified_symbol(&mut prefix, &declaration.name);
                 let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
-                let struct_type = ctx.adt_typeref(ir, type_name);
+                let struct_type = ctx.adt_typeref(ir, &type_name);
                 let layout = ctx
-                    .get_type(type_name)
+                    .get_type(&type_name)
                     .unwrap_or_else(|| panic!("missing logical struct layout for accessor"));
                 let layout_fields = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout)
                     .unwrap_or_else(|| panic!("malformed logical struct layout"));
                 for (index, field) in declaration.fields.iter().enumerate() {
-                    let field_name = field.name.unwrap_or_else(|| Symbol::new("_"));
+                    let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
                     let getter_name = if prefix.is_empty() {
-                        Symbol::from_dynamic(&format!("{}::{}", declaration.name, field_name))
+                        Symbol::new(&format!("{}::{}", declaration.name, field_name))
                     } else {
-                        Symbol::from_dynamic(&format!(
-                            "{}::{}::{}",
-                            prefix, declaration.name, field_name
-                        ))
+                        Symbol::new(&format!("{}::{}::{}", prefix, declaration.name, field_name))
                     };
                     let field_type = layout_fields
                         .get(index)
                         .map(|(_, ty)| *ty)
                         .unwrap_or_else(|| panic!("missing logical struct accessor field type"));
                     ctx.register_logical_generated_signature(
-                        getter_name,
+                        &getter_name,
                         vec![struct_type],
                         field_type,
                         CallingConvention::Direct,
@@ -694,7 +736,7 @@ fn prescan_struct_accessor_signatures<'db>(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    ctx.enter_module(module.name);
+                    ctx.enter_module(module.name.clone());
                     prescan_struct_accessor_signatures(ctx, ir, body);
                     ctx.exit_module();
                 }
@@ -715,18 +757,18 @@ fn prescan_source_functions<'db>(
     for declaration in declarations {
         match declaration {
             Decl::Function(function) => {
-                ctx.register_logical_source_function(ctx.qualify_name(function.name));
+                ctx.register_logical_source_function(ctx.qualify_name(&function.name));
             }
             Decl::ExternFunction(function) => {
-                let qualified = ctx.qualify_name(function.name);
-                ctx.register_logical_source_function(qualified);
+                let qualified = ctx.qualify_name(&function.name);
+                ctx.register_logical_source_function(qualified.clone());
                 if function.abi == "C" {
-                    ctx.register_c_symbol(qualified, function.name);
+                    ctx.register_c_symbol(qualified, function.name.clone());
                 }
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    ctx.enter_module(module.name);
+                    ctx.enter_module(module.name.clone());
                     prescan_source_functions(ctx, body);
                     ctx.exit_module();
                 }
@@ -745,20 +787,20 @@ fn lower_struct_accessors<'db>(
     let location = ctx.location(declaration.id);
     let mut prefix = String::new();
     for segment in ctx.module_path().iter().skip(1) {
-        crate::push_prefix(&mut prefix, *segment);
+        crate::push_prefix(&mut prefix, segment);
     }
-    let qualified = crate::qualified_symbol(&mut prefix, declaration.name);
+    let qualified = crate::qualified_symbol(&mut prefix, &declaration.name);
     let type_name = super::qualified_type_name(ctx.db, &CtorId::new(ctx.db, qualified));
-    let struct_type = ctx.adt_typeref(ir, type_name);
+    let struct_type = ctx.adt_typeref(ir, &type_name);
     let layout_type = ctx
-        .get_type(type_name)
+        .get_type(&type_name)
         .unwrap_or_else(|| panic!("prescan did not register struct layout {type_name}"));
     for (index, field) in declaration.fields.iter().enumerate() {
-        let field_name = field.name.unwrap_or_else(|| Symbol::new("_"));
+        let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
         let getter_name = if prefix.is_empty() {
-            Symbol::from_dynamic(&format!("{}::{}", declaration.name, field_name))
+            Symbol::new(&format!("{}::{}", declaration.name, field_name))
         } else {
-            Symbol::from_dynamic(&format!("{}::{}::{}", prefix, declaration.name, field_name))
+            Symbol::new(&format!("{}::{}::{}", prefix, declaration.name, field_name))
         };
         let field_type = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
             .and_then(|fields| fields.get(index).map(|(_, ty)| *ty))
@@ -788,7 +830,7 @@ fn lower_struct_accessors<'db>(
             parent_op: None,
         });
         let callable = func_sig_type(ir, field_type, [struct_type], CallingConvention::Direct);
-        let getter = tribute_control::func_declaration(ir, location, getter_name, callable);
+        let getter = tribute_control::func_declaration(ir, location, &getter_name, callable);
         ir.push_op_region(getter.op_ref(), body);
         ir.push_op(top, getter.op_ref());
     }
@@ -799,14 +841,14 @@ fn function_signature<'db>(
     ir: &mut IrContext,
     function: &FuncDecl<TypedRef<'db>>,
 ) -> FuncSignature {
-    let qualified = ctx.qualify_name(function.name);
+    let qualified = ctx.qualify_name(&function.name);
     let mut signature = (if qualified == function.name {
-        FuncSignature::lookup_logical(ctx, ir, function.name)
+        FuncSignature::lookup_logical(ctx, ir, &function.name)
     } else {
         // Nested declarations are exported under their qualified identity; a
         // short-name lookup can silently select an unrelated root declaration.
-        FuncSignature::lookup_logical(ctx, ir, qualified)
-            .or_else(|| FuncSignature::lookup_logical(ctx, ir, function.name))
+        FuncSignature::lookup_logical(ctx, ir, &qualified)
+            .or_else(|| FuncSignature::lookup_logical(ctx, ir, &function.name))
     })
     .unwrap_or_else(|| {
         panic!(
@@ -815,7 +857,7 @@ fn function_signature<'db>(
         )
     });
     signature.convention = ctx
-        .function_calling_convention(qualified)
+        .function_calling_convention(&qualified)
         .unwrap_or(signature.convention);
     signature
 }
@@ -829,10 +871,10 @@ fn lower_function<'db>(
 ) {
     let location = ctx.location(function.id);
     let root_convention =
-        crate::is_root_main(function.name, ctx.module_path().len() == 1).then(|| {
-            let name = ctx.qualify_name(function.name);
+        crate::is_root_main(&function.name, ctx.module_path().len() == 1).then(|| {
+            let name = ctx.qualify_name(&function.name);
             let scheme = ctx
-                .lookup_function_type(name)
+                .lookup_function_type(&name)
                 .expect("root main has a typechecked logical signature");
             // Nothing calls the root entry to supply its effect tail, so the
             // entry instantiates an open tail as the empty row.
@@ -858,7 +900,7 @@ fn lower_function<'db>(
                 .expect("root main has a function type")
         });
     let parent_type_parameters = ctx
-        .lookup_function_type(ctx.qualify_name(function.name))
+        .lookup_function_type(&ctx.qualify_name(&function.name))
         .expect("function has a typechecked signature")
         .type_params(ctx.db)
         .len();
@@ -869,18 +911,20 @@ fn lower_function<'db>(
         signature.param_types.iter().copied(),
         signature.convention,
     );
+    let args = function
+        .params
+        .iter()
+        .zip(signature.param_types.iter())
+        .map(|(parameter, ty)| {
+            let mut attrs = trunk_ir::types::AttributeMap::default();
+            let name = parameter.name.with_str(|name| ir.string_attr(name));
+            attrs.insert(Symbol::new("bind_name"), name);
+            BlockArgData { ty: *ty, attrs }
+        })
+        .collect();
     let entry = ir.create_block(BlockData {
         location,
-        args: function
-            .params
-            .iter()
-            .zip(signature.param_types.iter())
-            .map(|(parameter, ty)| {
-                let mut attrs = trunk_ir::types::AttributeMap::default();
-                attrs.insert(Symbol::new("bind_name"), Attribute::Symbol(parameter.name));
-                BlockArgData { ty: *ty, attrs }
-            })
-            .collect(),
+        args,
         ops: Default::default(),
         parent_region: None,
     });
@@ -888,7 +932,11 @@ fn lower_function<'db>(
         let mut scope = ctx.scope();
         for (index, parameter) in function.params.iter().enumerate() {
             if let Some(id) = parameter.local_id {
-                scope.bind(id, parameter.name, ir.block_arg(entry, index as u32));
+                scope.bind(
+                    id,
+                    parameter.name.clone(),
+                    ir.block_arg(entry, index as u32),
+                );
             }
         }
         declarations.local_callables = local_callables::Plan::collect(
@@ -918,8 +966,8 @@ fn lower_function<'db>(
         blocks: trunk_ir::smallvec::smallvec![entry],
         parent_op: None,
     });
-    let name = ctx.qualify_name(function.name);
-    let function = tribute_control::func_declaration(ir, location, name, callable);
+    let name = ctx.qualify_name(&function.name);
+    let function = tribute_control::func_declaration(ir, location, &name, callable);
     ir.push_op_region(function.op_ref(), body);
     // A root `main` promoted to Cps records its source result; that alone
     // marks the root CPS contract for root bridge composition.
@@ -943,12 +991,12 @@ fn lower_extern<'db>(
     declarations: &mut Declarations<'db>,
 ) {
     let location = ctx.location(decl.id);
-    let qualified = ctx.qualify_name(decl.name);
+    let qualified = ctx.qualify_name(&decl.name);
     let signature = if qualified == decl.name {
-        FuncSignature::lookup_logical(ctx, ir, decl.name)
+        FuncSignature::lookup_logical(ctx, ir, &decl.name)
     } else {
-        FuncSignature::lookup_logical(ctx, ir, qualified)
-            .or_else(|| FuncSignature::lookup_logical(ctx, ir, decl.name))
+        FuncSignature::lookup_logical(ctx, ir, &qualified)
+            .or_else(|| FuncSignature::lookup_logical(ctx, ir, &decl.name))
     }
     .unwrap_or_else(|| {
         panic!(
@@ -962,19 +1010,20 @@ fn lower_extern<'db>(
         signature.param_types,
         signature.convention,
     );
-    let name = ctx.function_symbol(ctx.qualify_name(decl.name));
-    let function = tribute_control::func_declaration(ir, location, name, callable);
+    let name = ctx.function_symbol(&ctx.qualify_name(&decl.name));
+    let function = tribute_control::func_declaration(ir, location, &name, callable);
     if let Some(identity) = ctx.compiler_intrinsic(decl.id) {
+        let identity_text = ir.intern_symbol_text(&identity);
         ir.op_mut(function.op_ref()).attributes.insert(
             Symbol::new(tribute_control::COMPILER_INTRINSIC_ATTR),
-            Attribute::Symbol(identity),
+            Attribute::String(identity_text),
         );
         declarations
             .compiler_intrinsics
             .push(CompilerIntrinsicDeclaration::new(name, identity, callable));
         declarations
             .compiler_intrinsics
-            .sort_by_key(|declaration| (declaration.symbol, declaration.identity));
+            .sort_by_key(|declaration| (declaration.symbol.clone(), declaration.identity.clone()));
     }
     let abi = decl.abi.with_str(|abi| ir.string_attr(abi));
     ir.op_mut(function.op_ref())
@@ -986,7 +1035,7 @@ fn lower_extern<'db>(
 fn ensure_prelude_declaration(
     builder: &mut IrBuilder<'_, '_>,
     location: Location,
-    name: Symbol,
+    name: &Symbol,
     signature: &FuncSignature,
 ) {
     if builder.ctx.is_logical_source_function(name)
@@ -994,7 +1043,7 @@ fn ensure_prelude_declaration(
             .ctx
             .lookup_logical_generated_signature(name)
             .is_some()
-        || !builder.ctx.mark_logical_extern_emitted(name)
+        || !builder.ctx.mark_logical_extern_emitted(name.clone())
     {
         return;
     }
@@ -1005,7 +1054,7 @@ fn ensure_prelude_declaration(
         signature.convention,
     );
     let symbol = builder.ctx.function_symbol(name);
-    let declaration = tribute_control::func_declaration(builder.ir, location, symbol, callable);
+    let declaration = tribute_control::func_declaration(builder.ir, location, &symbol, callable);
     let top = builder
         .ctx
         .module_block()
@@ -1088,7 +1137,7 @@ fn call_operation_metadata<'db>(
     let ability_ref =
         builder
             .ctx
-            .ability_ref_type(builder.ir, ability.qualified(builder.db()), &args);
+            .ability_ref_type(builder.ir, &ability.qualified(builder.db()).clone(), &args);
     let parameters = semantic
         .params
         .iter()
@@ -1101,7 +1150,7 @@ fn call_operation_metadata<'db>(
         ability_ref,
         OperationDeclaration::new(
             ability_ref,
-            builder.ir.intern_symbol_text(operation),
+            builder.ir.intern_symbol_text(&operation),
             builder.ir.intern_str(operation_kind_text(kind)),
             parameters,
             result,
@@ -1132,8 +1181,8 @@ fn adapt_operation_arguments_or_recover<'db>(
     location: Location,
     values: Vec<ValueRef>,
     declaration: &OperationDeclaration,
-    ability: Symbol,
-    operation: Symbol,
+    ability: &Symbol,
+    operation: &Symbol,
 ) -> Result<Vec<ValueRef>, ValueRef> {
     let argument_count = values.len();
     match adapt_operation_arguments(builder, location, values, &declaration.parameter_types) {
@@ -1237,7 +1286,7 @@ fn lower_expr<'db>(
             ),
             ResolvedRef::Function { id } => {
                 let name = id.qualified(builder.ctx.db);
-                Some(lower_function_ref(builder, location, name, None))
+                Some(lower_function_ref(builder, location, name.clone(), None))
             }
             ResolvedRef::AbilityOp { .. } => {
                 // Typechecking has already diagnosed this non-call operation
@@ -1351,7 +1400,15 @@ fn lower_expr<'db>(
                 .copied()
                 .map(|ty| builder.ctx.convert_logical_type(builder.ir, ty))
                 .unwrap_or_else(|| panic!("missing typechecked result for handle"));
-            lower_handle(builder, location, result_ty, body, handlers, declarations)
+            lower_handle(
+                builder,
+                location,
+                expr.id,
+                result_ty,
+                body,
+                handlers,
+                declarations,
+            )
         }
         ExprKind::Cons { ctor, args } => {
             lower_constructor(builder, location, expr.id, ctor, args, declarations)
@@ -1404,6 +1461,13 @@ fn lower_expr<'db>(
             let value = builder.cast_if_needed(location, value, input_ty);
             let resume =
                 tribute_control::Resume::operands(token, value).build(builder.ir, location);
+            attach_evidence_plan(
+                builder.ctx,
+                builder.ir,
+                resume.op_ref(),
+                expr.id,
+                declarations,
+            );
             builder.ir.push_op(builder.block, resume.op_ref());
             Some(resume.result(builder.ir))
         }
@@ -1420,7 +1484,7 @@ fn lower_constructor<'db>(
     args: Vec<Expr<TypedRef<'db>>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
-    let ResolvedRef::Constructor { variant, .. } = ctor.resolved else {
+    let ResolvedRef::Constructor { variant, .. } = ctor.resolved.clone() else {
         panic!("non-constructor in source logical constructor expression");
     };
     let values = args
@@ -1434,8 +1498,8 @@ fn lower_constructor<'db>(
         &ctor.resolved,
         ctor.ty,
     );
-    let values = super::expr::cast_variant_args(builder, location, values, type_attr, variant);
-    let tag = builder.ir.intern_symbol_text(variant);
+    let values = super::expr::cast_variant_args(builder, location, values, type_attr, &variant);
+    let tag = builder.ir.intern_symbol_text(&variant);
     let variant = adt::VariantNew::operands(values)
         .r#type(type_attr)
         .tag(tag)
@@ -1520,7 +1584,7 @@ fn lower_record<'db>(
     spread: Option<Expr<TypedRef<'db>>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
-    if let ResolvedRef::Constructor { variant, .. } = type_name.resolved {
+    if let ResolvedRef::Constructor { variant, .. } = type_name.resolved.clone() {
         let layout = super::resolve_enum_type_attr_for_constructor(
             builder.ctx,
             builder.ir,
@@ -1533,7 +1597,7 @@ fn lower_record<'db>(
                 location,
                 id,
                 layout,
-                variant,
+                &variant,
                 fields,
                 declarations,
             );
@@ -1548,7 +1612,7 @@ fn lower_record<'db>(
         .unwrap_or_else(|| panic!("prescan did not register struct field order {struct_name}"));
     let layout = builder
         .ctx
-        .get_type(super::qualified_type_name(builder.db(), &ctor))
+        .get_type(&super::qualified_type_name(builder.db(), &ctor))
         .unwrap_or_else(|| panic!("prescan did not register struct layout {struct_name}"));
     // A record spread is evaluated before every explicit field.  The values
     // are nevertheless assembled in declaration layout order below, so these
@@ -1559,7 +1623,7 @@ fn lower_record<'db>(
     };
     // Lower explicit fields in source order, then place their already-evaluated
     // values in declaration layout order.
-    let mut values = HashMap::new();
+    let mut values = HashMap::default();
     for (name, field) in fields {
         if !field_order.contains(&name) || values.contains_key(&name) {
             panic!("typechecked record has an invalid field layout");
@@ -1605,15 +1669,15 @@ fn lower_variant_record<'db>(
     location: Location,
     id: crate::ast::NodeId,
     layout: TypeRef,
-    variant: Symbol,
+    variant: &Symbol,
     fields: Vec<(Symbol, Expr<TypedRef<'db>>)>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
     let field_order = builder
         .ctx
-        .variant_field_names(layout, variant)
+        .variant_field_names(layout, variant.clone())
         .unwrap_or_else(|| panic!("prescan did not register field names of variant {variant}"));
-    let mut values = HashMap::new();
+    let mut values = HashMap::default();
     for (name, field) in fields {
         if !field_order.contains(&name) || values.contains_key(&name) {
             panic!("typechecked variant record has an invalid field layout");
@@ -1900,7 +1964,7 @@ fn bind_pattern<'db>(
         PatternKind::Bind {
             name,
             local_id: Some(id),
-        } => builder.ctx.bind(*id, *name, value),
+        } => builder.ctx.bind(*id, name.clone(), value),
         PatternKind::Wildcard => {}
         _ => super::case::bind_logical_pattern_fields(
             builder.ctx,
@@ -1921,9 +1985,19 @@ pub(super) fn emit_named_call(
     name: Symbol,
     values: Vec<ValueRef>,
 ) -> ValueRef {
-    let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, name)
+    let call = named_call(builder, location, name, values);
+    result(builder.ir, call)
+}
+
+fn named_call(
+    builder: &mut IrBuilder<'_, '_>,
+    location: Location,
+    name: Symbol,
+    values: Vec<ValueRef>,
+) -> OpRef {
+    let signature = FuncSignature::lookup_logical(builder.ctx, builder.ir, &name)
         .unwrap_or_else(|| panic!("missing logical signature for call {name}"));
-    ensure_prelude_declaration(builder, location, name, &signature);
+    ensure_prelude_declaration(builder, location, &name, &signature);
     if values.len() != signature.param_types.len() {
         panic!("typechecked call arity disagrees with logical signature for {name}");
     }
@@ -1932,14 +2006,13 @@ pub(super) fn emit_named_call(
         .zip(signature.param_types.iter().copied())
         .map(|(value, ty)| builder.cast_if_needed(location, value, ty))
         .collect();
-    let symbol = builder.ctx.function_symbol(name);
-    let call = op(builder.ir, builder.block, location, "call", |builder| {
+    let symbol = builder.ctx.function_symbol(&name);
+    op(builder.ir, builder.block, location, "call", |builder| {
         builder
             .operands(values)
             .result(signature.return_type)
-            .attr("callee", Attribute::Symbol(symbol))
-    });
-    result(builder.ir, call)
+            .attr("callee", Attribute::SymbolRef(symbol.into()))
+    })
 }
 
 fn lower_call<'db>(
@@ -2026,7 +2099,7 @@ fn lower_call<'db>(
                     declarations,
                     PerformMetadata {
                         ability,
-                        operation,
+                        operation: operation.clone(),
                         kind,
                         semantic,
                     },
@@ -2037,7 +2110,7 @@ fn lower_call<'db>(
                     values,
                     &declaration,
                     ability.qualified(builder.db()),
-                    operation,
+                    &operation,
                 ) {
                     Ok(values) => values,
                     Err(nil) => return Some(nil),
@@ -2056,7 +2129,9 @@ fn lower_call<'db>(
             }
             ResolvedRef::Function { id } => {
                 let name = id.qualified(builder.ctx.db);
-                let value = emit_named_call(builder, location, name, values);
+                let call = named_call(builder, location, name.clone(), values);
+                attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
+                let value = result(builder.ir, call);
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
             ResolvedRef::Local { id, .. } => {
@@ -2089,6 +2164,7 @@ fn lower_call<'db>(
                             .result(call_result)
                     },
                 );
+                attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
                 let value = result(builder.ir, call);
                 Some(builder.cast_if_needed(location, value, result_ty))
             }
@@ -2122,6 +2198,7 @@ fn lower_call<'db>(
                     .result(call_result)
             },
         );
+        attach_evidence_plan(builder.ctx, builder.ir, call, call_id, declarations);
         let value = result(builder.ir, call);
         Some(builder.cast_if_needed(location, value, result_ty))
     }
@@ -2185,7 +2262,7 @@ fn lower_lambda<'db>(
             if let Some(id) = parameter.local_id {
                 scope.bind(
                     id,
-                    parameter.name,
+                    parameter.name.clone(),
                     builder.ir.block_arg(entry, index as u32),
                 );
             }
@@ -2220,6 +2297,7 @@ fn lower_lambda<'db>(
 fn lower_handle<'db>(
     builder: &mut IrBuilder<'_, 'db>,
     location: Location,
+    handle_id: crate::ast::NodeId,
     result_ty: TypeRef,
     body: Expr<TypedRef<'db>>,
     handlers: Vec<HandlerArm<TypedRef<'db>>>,
@@ -2321,6 +2399,7 @@ fn lower_handle<'db>(
             .region(completion_region)
             .region(handlers_region)
     });
+    attach_evidence_plan(builder.ctx, builder.ir, handle, handle_id, declarations);
     Some(result(builder.ir, handle))
 }
 
@@ -2349,7 +2428,9 @@ fn lower_handler<'db>(
     };
     let ability_id = match ability.resolved {
         ResolvedRef::Ability { id } => id,
-        ResolvedRef::TypeDef { id } => crate::ast::AbilityId::source(ctx.db, id.qualified(ctx.db)),
+        ResolvedRef::TypeDef { id } => {
+            crate::ast::AbilityId::source(ctx.db, id.qualified(ctx.db).clone())
+        }
         _ => panic!("handler ability did not resolve to an ability definition"),
     };
     let schema = declarations
@@ -2408,7 +2489,7 @@ fn lower_handler<'db>(
         .map(|ty| ctx.convert_logical_type(ir, ty))
         .collect();
     let operation_result = ctx.convert_logical_type(ir, expected_result);
-    let op_name = ir.intern_symbol_text(operation);
+    let op_name = ir.intern_symbol_text(&operation);
     let kind_name = ir.intern_str(operation_kind_text(kind));
     let declaration = OperationDeclaration::new(
         ability_ref,
@@ -2506,10 +2587,10 @@ mod tests {
             db,
             path,
             crate::ast::SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
         let location = Location::new(path, Span::new(0, 0));
         let block = ir.create_block(BlockData {
@@ -2525,7 +2606,7 @@ mod tests {
             .build(&mut ir, location);
         ir.push_op(block, value.op_ref());
         let value = value.result(&ir);
-        let parameter = ctx.adt_typeref(&mut ir, Symbol::new("String"));
+        let parameter = ctx.adt_typeref(&mut ir, &Symbol::new("String"));
         let declaration = OperationDeclaration::new(
             parameter,
             ir.intern_str("throw"),
@@ -2540,8 +2621,8 @@ mod tests {
             location,
             vec![value],
             &declaration,
-            Symbol::new("Test"),
-            Symbol::new("throw"),
+            &Symbol::new("Test"),
+            &Symbol::new("throw"),
         )
         .expect("matching operation arity should adapt arguments");
         assert_eq!(builder.ir.value_ty(adapted[0]), parameter);
@@ -2558,8 +2639,8 @@ mod tests {
             location,
             vec![value],
             &mismatch,
-            Symbol::new("Test"),
-            Symbol::new("throw"),
+            &Symbol::new("Test"),
+            &Symbol::new("throw"),
         )
         .expect_err("mismatched operation arity should recover with nil");
         let nil_type = builder.ctx.nil_type(builder.ir);

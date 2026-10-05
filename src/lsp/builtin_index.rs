@@ -54,7 +54,7 @@ fn collect_module(
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let nested = Module::new(module.id, Some(module.name), body.clone());
+                    let nested = Module::new(module.id, Some(module.name.clone()), body.clone());
                     collect_module(db, &nested, span_map, entries);
                 }
             }
@@ -85,7 +85,7 @@ fn collect_effect(
         entries.push(BuiltinSymbolEntry {
             span: span_map.get_or_default(ability_annotation.id),
             name: ability.name(db),
-            qualified: ability.qualified(db),
+            qualified: ability.qualified(db).clone(),
         });
     }
 }

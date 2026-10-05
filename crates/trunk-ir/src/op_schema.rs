@@ -151,9 +151,12 @@ pub enum AttributeKind {
     F64,
     Type,
     String,
-    Symbol,
-    QualifiedName,
+    SymbolRef,
     Bytes,
+    /// A list whose every element has the given kind.
+    List(&'static AttributeKind),
+    /// A dictionary whose every value has the given kind.
+    Dict(&'static AttributeKind),
 }
 
 impl AttributeKind {
@@ -169,8 +172,14 @@ impl AttributeKind {
             (AttributeKind::F32 | AttributeKind::F64, Attribute::FloatBits(_)) => true,
             (AttributeKind::Type, Attribute::Type(_)) => true,
             (AttributeKind::String, Attribute::String(_)) => true,
-            (AttributeKind::Symbol | AttributeKind::QualifiedName, Attribute::Symbol(_)) => true,
+            (AttributeKind::SymbolRef, Attribute::SymbolRef(_)) => true,
             (AttributeKind::Bytes, Attribute::Bytes(_)) => true,
+            (AttributeKind::List(element), Attribute::List(items)) => {
+                items.iter().all(|item| element.accepts(item))
+            }
+            (AttributeKind::Dict(value), Attribute::Dict(entries)) => {
+                entries.values().all(|entry| value.accepts(entry))
+            }
             _ => false,
         }
     }
@@ -178,7 +187,7 @@ impl AttributeKind {
 
 impl fmt::Display for AttributeKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
+        let name = match self {
             AttributeKind::Any => "any",
             AttributeKind::Bool => "bool",
             AttributeKind::I32 => "i32",
@@ -189,10 +198,12 @@ impl fmt::Display for AttributeKind {
             AttributeKind::F64 => "f64",
             AttributeKind::Type => "Type",
             AttributeKind::String => "String",
-            AttributeKind::Symbol => "Symbol",
-            AttributeKind::QualifiedName => "QualifiedName",
+            AttributeKind::SymbolRef => "SymbolRef",
             AttributeKind::Bytes => "Bytes",
-        })
+            AttributeKind::List(element) => return write!(f, "[{element}]"),
+            AttributeKind::Dict(value) => return write!(f, "Dict<{value}>"),
+        };
+        f.write_str(name)
     }
 }
 
@@ -917,7 +928,7 @@ mod tests {
         assert!(AttributeKind::U32.accepts(&Attribute::Int(7)));
         assert!(!AttributeKind::U32.accepts(&Attribute::Int(-1)));
         let mut ctx = crate::IrContext::new();
-        assert!(!AttributeKind::Symbol.accepts(&ctx.string_attr("x")));
+        assert!(!AttributeKind::SymbolRef.accepts(&ctx.string_attr("x")));
         assert!(AttributeKind::Any.accepts(&Attribute::Unit));
     }
 }

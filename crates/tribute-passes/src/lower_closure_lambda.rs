@@ -22,7 +22,7 @@
 //! %k = closure.new @foo::__clam_0, %env
 //! ```
 
-use std::collections::HashMap;
+use crate::collections::HashMap;
 
 use tribute_core::calling_convention::{
     CLOSURE_ENVIRONMENT_INDEX_ATTR, get_physical_closure_environment_index,
@@ -223,7 +223,7 @@ fn lower_single_lambda(
         .as_type_ref();
 
     let func_op = func::Func::operands()
-        .sym_name(lifted_name)
+        .sym_name(ctx.intern_symbol_text(&lifted_name))
         .r#type(func_ty)
         .regions(func_body_region)
         .build(ctx, location);
@@ -262,7 +262,7 @@ fn lower_single_lambda(
 
     // Create closure.new replacing the lambda.
     let closure_new_op = closure::New::operands(closure_env)
-        .func_ref(lifted_name)
+        .func_ref(lifted_name.into())
         .results(result_ty)
         .build(ctx, location);
     if let Some(convention) = convention {
@@ -325,11 +325,12 @@ fn build_lifted_body(
             attrs: ctx.block(orig_entry).args[index].attrs.clone(),
         })
         .collect();
+    let environment_attrs = make_bind_name_attrs(ctx, "__env");
     new_entry_args.insert(
         environment_index,
         BlockArgData {
             ty: anyref_ty,
-            attrs: make_bind_name_attrs("__env"),
+            attrs: environment_attrs,
         },
     );
     let new_entry = ctx.create_block(BlockData {
@@ -433,7 +434,7 @@ fn find_enclosing_func_name(ctx: &IrContext, op: OpRef) -> String {
             break;
         };
         if let Ok(f) = func::Func::from_op(ctx, parent) {
-            return f.sym_name(ctx).with_str(|s| s.to_string());
+            return f.sym_name(ctx).to_owned();
         }
         current_op = parent;
     }
@@ -448,22 +449,22 @@ struct LambdaNamer {
 impl LambdaNamer {
     fn new() -> Self {
         Self {
-            counters: HashMap::new(),
+            counters: HashMap::default(),
         }
     }
 
     fn next_name(&mut self, parent: &str) -> Symbol {
-        let count = self.counters.entry(parent.to_string()).or_insert(0);
+        let count = self.counters.entry_ref(parent).or_insert(0);
         let name = format!("{parent}::__clam_{count}");
         *count += 1;
-        Symbol::from_dynamic(&name)
+        Symbol::new(&name)
     }
 }
 
 /// Create a `bind_name` attribute map for a block argument.
-fn make_bind_name_attrs(name: &str) -> AttributeMap {
+fn make_bind_name_attrs(ctx: &mut IrContext, name: &str) -> AttributeMap {
     let mut attrs = AttributeMap::new();
-    attrs.insert("bind_name", Symbol::from_dynamic(name));
+    attrs.insert("bind_name", ctx.string_attr(name));
     attrs
 }
 
@@ -471,6 +472,7 @@ fn make_bind_name_attrs(name: &str) -> AttributeMap {
 mod tests {
     use super::*;
     use tribute_core::CallingConvention;
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::RegionData;
     use trunk_ir::dialect::{arith, core};
     use trunk_ir::printer::print_module;
@@ -498,7 +500,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
             .region(module_region)
             .build(ctx);
         let module_ref = ctx.create_op(module_op);
@@ -529,11 +531,12 @@ mod tests {
         //   }
 
         // Lambda body: ^bb0(%x: i32): func.return %x
+        let x_attrs = make_bind_name_attrs(&mut ctx, "x");
         let lambda_entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: make_bind_name_attrs("x"),
+                attrs: x_attrs,
             }],
             ops: Default::default(),
             parent_region: None,
@@ -550,9 +553,12 @@ mod tests {
 
         // closure type: closure.closure<func.func_sig<i32, i32>>, whose input
         // carries a parameter attribute.
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
-            .into_iter()
-            .collect();
+        let marked: AttributeMap = [(
+            Symbol::new("k"),
+            Attribute::SymbolRef(SymbolPath::from("v")),
+        )]
+        .into_iter()
+        .collect();
         let func_ty = func::func_sig_with_param_attrs(
             &mut ctx,
             [(i32_ty, marked.clone())],
@@ -587,7 +593,7 @@ mod tests {
         let outer_func_ty =
             func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]).as_type_ref();
         let outer_func = func::Func::operands()
-            .sym_name(Symbol::new("test_fn"))
+            .sym_name("test_fn")
             .r#type(outer_func_ty)
             .regions(outer_body)
             .build(&mut ctx, loc);
@@ -616,10 +622,7 @@ mod tests {
 
         // The lifted function should exist.
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
-        assert_eq!(
-            lifted.sym_name(&ctx),
-            Symbol::from_dynamic("test_fn::__clam_0")
-        );
+        assert_eq!(lifted.sym_name(&ctx), "test_fn::__clam_0");
 
         // Direct lifted function has only the physical environment and source arg.
         let lifted_ty = lifted.r#type(&ctx);
@@ -647,11 +650,12 @@ mod tests {
 
             // Incomplete or conflicting provenance cannot determine hidden
             // evidence operands or the environment slot.
+            let evidence_attrs = make_bind_name_attrs(&mut ctx, "evidence");
             let outer_entry = ctx.create_block(BlockData {
                 location: loc,
                 args: vec![BlockArgData {
                     ty: evidence_ty,
-                    attrs: make_bind_name_attrs("evidence"),
+                    attrs: evidence_attrs,
                 }],
                 ops: Default::default(),
                 parent_region: None,
@@ -707,7 +711,7 @@ mod tests {
             });
             let outer_ty = func::func_sig(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
             let outer = func::Func::operands()
-                .sym_name(Symbol::new("test_fn"))
+                .sym_name("test_fn")
                 .r#type(outer_ty)
                 .regions(outer_body)
                 .build(&mut ctx, loc);
@@ -736,11 +740,12 @@ mod tests {
         //   }
 
         // Outer function entry block with one param %a
+        let a_attrs = make_bind_name_attrs(&mut ctx, "a");
         let outer_entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: make_bind_name_attrs("a"),
+                attrs: a_attrs,
             }],
             ops: Default::default(),
             parent_region: None,
@@ -748,11 +753,12 @@ mod tests {
         let a_val = ctx.block_arg(outer_entry, 0);
 
         // Lambda body: ^bb0(%x: i32): %r = arith.add %a, %x; func.return %r
+        let x_attrs = make_bind_name_attrs(&mut ctx, "x");
         let lambda_entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![BlockArgData {
                 ty: i32_ty,
-                attrs: make_bind_name_attrs("x"),
+                attrs: x_attrs,
             }],
             ops: Default::default(),
             parent_region: None,
@@ -791,7 +797,7 @@ mod tests {
         });
         let outer_func_ty = func::func_sig(&mut ctx, [i32_ty], [anyref_ty]).as_type_ref();
         let outer_func = func::Func::operands()
-            .sym_name(Symbol::new("test_fn"))
+            .sym_name("test_fn")
             .r#type(outer_func_ty)
             .regions(outer_body)
             .build(&mut ctx, loc);

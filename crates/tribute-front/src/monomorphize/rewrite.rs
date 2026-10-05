@@ -4,7 +4,8 @@
 //! by matching the callee's concrete type against collected instantiations.
 //! Also rewrites Named types with type arguments to their mangled monomorphic versions.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
@@ -72,7 +73,7 @@ fn specialized_callee<'db>(
     let (_, mangled) = entries.iter().find(|(args, _)| args == type_args)?;
     Some(TypedRef::new(
         ResolvedRef::Function {
-            id: FuncDefId::new(db, *mangled),
+            id: FuncDefId::new(db, mangled.clone()),
         },
         typed_ref.ty,
     ))
@@ -87,16 +88,16 @@ pub fn build_type_rewrite_map<'db>(
     db: &'db dyn salsa::Database,
     instantiations: &HashMap<TypeDefId<'db>, HashSet<Vec<Type<'db>>>>,
 ) -> TypeRewriteMap<'db> {
-    let mut map = TypeRewriteMap::new();
+    let mut map = TypeRewriteMap::default();
     for (id, type_arg_sets) in instantiations {
         let mut entries: Vec<(Vec<Type<'db>>, Symbol)> = type_arg_sets
             .iter()
             .map(|type_args| {
-                let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
+                let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
                 (type_args.clone(), mangled)
             })
             .collect();
-        entries.sort_by_key(|e| e.1);
+        entries.sort_by_key(|e| e.1.clone());
         map.insert(*id, entries);
     }
     map
@@ -134,8 +135,8 @@ pub fn rewrite_type<'db>(
                 return Type::new(
                     db,
                     TypeKind::Named {
-                        id: id.with_qualified(db, *mangled),
-                        name: *mangled,
+                        id: id.with_qualified(db, mangled.clone()),
+                        name: mangled.clone(),
                         args: vec![],
                     },
                 );
@@ -149,7 +150,7 @@ pub fn rewrite_type<'db>(
                 db,
                 TypeKind::Named {
                     id: *id,
-                    name: *name,
+                    name: name.clone(),
                     args: rewritten_args,
                 },
             )
@@ -267,7 +268,7 @@ fn rewrite_typed_ref_type<'db>(
             if let Some(mangled) = find_mangled_for_ctor(db, *id, tr.ty, map) {
                 ResolvedRef::Constructor {
                     id: CtorId::new(db, mangled),
-                    variant: *variant,
+                    variant: variant.clone(),
                 }
             } else {
                 tr.resolved.clone()
@@ -304,7 +305,7 @@ fn find_mangled_for_ctor<'db>(
             let entries = map.get(id)?;
             // Match against the original args stored in the map.
             let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(*mangled)
+            Some(mangled.clone())
         }
         _ => None,
     }
@@ -321,7 +322,7 @@ fn find_mangled_for_typedef<'db>(
             let entries = map.get(id)?;
             // Match against the original args stored in the map.
             let (_, mangled) = entries.iter().find(|(ta, _)| ta == args)?;
-            Some(*mangled)
+            Some(mangled.clone())
         }
         _ => None,
     }
@@ -349,7 +350,7 @@ mod tests {
         db: &'db dyn salsa::Database,
         entries: Vec<(Symbol, Vec<Type<'db>>, Symbol)>,
     ) -> TypeRewriteMap<'db> {
-        let mut map = TypeRewriteMap::new();
+        let mut map = TypeRewriteMap::default();
         for (name, args, mangled) in entries {
             let id = TypeDefId::synthetic(db, name);
             map.entry(id).or_default().push((args, mangled));
@@ -391,9 +392,9 @@ mod tests {
         let builtin_id = TypeDefId::builtin_list(&db);
         let source_id =
             TypeDefId::source(&db, Symbol::new("List"), crate::ast::NodeId::from_raw(1));
-        let mut instantiations = HashMap::new();
-        instantiations.insert(builtin_id, HashSet::from([vec![int]]));
-        instantiations.insert(source_id, HashSet::from([vec![int]]));
+        let mut instantiations = HashMap::default();
+        instantiations.insert(builtin_id, [vec![int]].into_iter().collect::<HashSet<_>>());
+        instantiations.insert(source_id, [vec![int]].into_iter().collect::<HashSet<_>>());
 
         let map = build_type_rewrite_map(&db, &instantiations);
 
@@ -416,9 +417,9 @@ mod tests {
             Symbol::new("B::Thing"),
             crate::ast::NodeId::from_raw(2),
         );
-        let mut instantiations = HashMap::new();
-        instantiations.insert(a_id, HashSet::from([vec![int]]));
-        instantiations.insert(b_id, HashSet::from([vec![int]]));
+        let mut instantiations = HashMap::default();
+        instantiations.insert(a_id, [vec![int]].into_iter().collect::<HashSet<_>>());
+        instantiations.insert(b_id, [vec![int]].into_iter().collect::<HashSet<_>>());
 
         let map = build_type_rewrite_map(&db, &instantiations);
 
@@ -431,7 +432,7 @@ mod tests {
     fn test_rewrite_type_leaves_primitives() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let map = TypeRewriteMap::new();
+        let map = TypeRewriteMap::default();
         assert_eq!(rewrite_type(&db, int, &map), int);
     }
 
@@ -446,7 +447,7 @@ mod tests {
                 args: vec![],
             },
         );
-        let map = TypeRewriteMap::new();
+        let map = TypeRewriteMap::default();
         assert_eq!(rewrite_type(&db, text, &map), text);
     }
 
@@ -501,7 +502,7 @@ mod tests {
                 args: vec![int],
             },
         );
-        let map = TypeRewriteMap::new(); // empty
+        let map = TypeRewriteMap::default(); // empty
 
         let result = rewrite_type(&db, unknown, &map);
         // Should be unchanged

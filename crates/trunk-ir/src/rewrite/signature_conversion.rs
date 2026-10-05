@@ -51,7 +51,7 @@ pub fn convert_signature_components<'a>(
         .map(|(key, value)| {
             let converted = convert_attribute_types(ctx, converter, value);
             attrs_changed |= converted != *value;
-            (*key, converted)
+            (key.clone(), converted)
         })
         .collect();
     let changed = inputs != old_inputs || results != old_results;
@@ -136,11 +136,11 @@ fn make_bodyless_function_op(
     ctx: &mut IrContext,
     loc: crate::types::Location,
     dialect: crate::Symbol,
-    sym_name: crate::Symbol,
+    sym_name: crate::types::StringRef,
     func_type: TypeRef,
 ) -> OpRef {
     let data = OperationDataBuilder::new(loc, dialect, crate::Symbol::new("func"))
-        .attr("sym_name", Attribute::Symbol(sym_name))
+        .attr("sym_name", Attribute::String(sym_name))
         .attr("type", Attribute::Type(func_type))
         .build(ctx);
     ctx.create_op(data)
@@ -224,7 +224,7 @@ impl RewritePattern for FuncSignatureConversionPattern {
         )
         .as_type_ref();
         let body = ctx.op_region(op, 0);
-        let sym_name = func_op.sym_name(ctx);
+        let sym_name = func_op.sym_name_ref(ctx);
         let loc = ctx.op(op).location;
 
         rewrite_function_signature(
@@ -299,7 +299,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -332,7 +332,7 @@ mod tests {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new(name))
+            .sym_name(name)
             .r#type(func_type)
             .regions(body)
             .build(ctx, loc);
@@ -343,10 +343,7 @@ mod tests {
     fn i32_to_i64_converter(i32_ty: TypeRef, i64_ty: TypeRef) -> TypeConverter {
         let mut tc = TypeConverter::new();
         tc.add_conversion(move |ctx, ty| {
-            if ctx
-                .types()
-                .is_dialect(ty, Symbol::new("core"), Symbol::new("i32"))
-            {
+            if ctx.types().is_dialect(ty, "core", "i32") {
                 Some(i64_ty)
             } else {
                 None
@@ -454,13 +451,9 @@ mod tests {
             };
             let func_ty = func::func_sig(&mut ctx, [i32_ty], results.clone()).as_type_ref();
 
-            let func_decl = make_bodyless_function_op(
-                &mut ctx,
-                loc,
-                Symbol::new("func"),
-                Symbol::new("external"),
-                func_ty,
-            );
+            let external = ctx.intern_str("external");
+            let func_decl =
+                make_bodyless_function_op(&mut ctx, loc, Symbol::new("func"), external, func_ty);
             let func_def = make_func_op(&mut ctx, loc, "defined", func_ty, &[i32_ty]);
             let module = make_module(&mut ctx, loc, vec![func_decl, func_def]);
 
@@ -559,6 +552,7 @@ mod tests {
 #[cfg(test)]
 mod result_list_tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::dialect::core;
     use crate::{Symbol, ops::DialectOp, parser::parse_test_module};
 
@@ -585,7 +579,10 @@ mod result_list_tests {
                         .collect(),
                     ),
                 );
-                attrs.insert(Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep")));
+                attrs.insert(
+                    Symbol::new("tag"),
+                    Attribute::SymbolRef(SymbolPath::from("keep")),
+                );
                 let signature = func::func_sig_with_attrs(
                     &mut ctx,
                     vec![nil; inputs],
@@ -617,8 +614,8 @@ mod result_list_tests {
                     ))
                 );
                 assert_eq!(
-                    ctx.get_type(converted).attrs.get_symbol("tag"),
-                    Some(Symbol::new("keep"))
+                    ctx.get_type(converted).attrs.get_symbol_ref("tag"),
+                    Some(&SymbolPath::from("keep"))
                 );
             }
         }

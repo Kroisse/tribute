@@ -1,5 +1,6 @@
 //! Close nominal instances over their checked constructor schemas before cloning.
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use crate::ast::{CtorId, NodeId, Type, TypeDefId, TypeKind, TypeScheme};
 use crate::typeck::subst::{SubstResult, substitute_bound_vars};
@@ -100,8 +101,8 @@ fn close_dependencies<'db>(
     max_instances: usize,
 ) -> Result<NominalInstances<'db>, InstanceError> {
     let definitions = &index.declarations;
-    let mut instances = Instances::new();
-    let mut enum_variants = HashMap::new();
+    let mut instances = Instances::default();
+    let mut enum_variants = HashMap::default();
     let mut struct_constructors = Vec::new();
     let mut count = 0;
     let limit = || InstanceError {
@@ -116,7 +117,7 @@ fn close_dependencies<'db>(
                 enum_variants,
             });
         }
-        let mut discovered = Instances::new();
+        let mut discovered = Instances::default();
         for (owner, argument_sets) in pending {
             let declaration = &definitions[&owner];
             for arguments in argument_sets {
@@ -190,9 +191,9 @@ mod tests {
             db,
             ast,
             crate::resolve::build_env(db, ast),
-            parsed.span_map(db).clone(),
+            parsed.span_map(db),
         );
-        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone())
+        crate::typeck::typecheck_module(db, &resolved, parsed.span_map(db))
     }
 
     #[salsa_test]
@@ -225,16 +226,16 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 ("Nested::Choice", true),
                 ("Nested::Plain", false),
             ] {
-                let name = Symbol::from_dynamic(&format!("{prefix}::{suffix}"));
+                let name = Symbol::new(&format!("{prefix}::{suffix}"));
                 let (id, entry) = index
                     .declarations
                     .iter()
-                    .find(|(id, _)| id.qualified(db) == name)
+                    .find(|(id, _)| *id.qualified(db) == name)
                     .unwrap();
                 assert_eq!(index.is_generic(*id), generic);
                 match entry.source {
                     NominalDeclaration::Struct(s) => {
-                        assert_eq!(*id, TypeDefId::source(db, name, s.id));
+                        assert_eq!(*id, TypeDefId::source(db, name.clone(), s.id));
                         assert_eq!(entry.constructors.len(), 1);
                         assert_eq!(entry.constructors[0].id.qualified(db), name);
                         assert_eq!(entry.constructors[0].node, s.id);
@@ -246,10 +247,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                         for (constructor, variant) in entry.constructors.iter().zip(&e.variants) {
                             assert_eq!(
                                 constructor.id.qualified(db),
-                                Symbol::from_dynamic(&format!(
-                                    "{prefix}::Nested::{}",
-                                    variant.name
-                                ))
+                                Symbol::new(&format!("{prefix}::Nested::{}", variant.name))
                             );
                             assert_eq!(constructor.node, variant.id);
                             assert_eq!(constructor.fields, variant.fields.len());
@@ -329,8 +327,12 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
         assert!(
             matches!(result.kind(db), TypeKind::Named { id, args, .. } if id == owner && args == &[int])
         );
-        let name =
-            super::super::mangle::mangle_type_name(db, *owner, owner.qualified(db), arguments);
+        let name = super::super::mangle::mangle_type_name(
+            db,
+            *owner,
+            owner.qualified(db).clone(),
+            arguments,
+        );
         assert_eq!(name, Symbol::new("nested::Holder$Int"));
         let declarations = specialize::generate_struct_specializations_with_index(
             db,
@@ -363,12 +365,12 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 _ => None,
             })
             .unwrap();
-        let hidden_id = TypeDefId::source(db, hidden_decl.name, hidden_decl.id);
+        let hidden_id = TypeDefId::source(db, hidden_decl.name.clone(), hidden_decl.id);
         let hidden = Type::new(
             db,
             TypeKind::Named {
                 id: hidden_id,
-                name: hidden_decl.name,
+                name: hidden_decl.name.clone(),
                 args: vec![Type::new(db, TypeKind::BoundVar { index: 0 })],
             },
         );
@@ -420,7 +422,9 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
             .unwrap();
             assert_eq!(
                 result.instances[&hidden_id],
-                HashSet::from([vec![Type::new(db, TypeKind::Int)]])
+                [vec![Type::new(db, TypeKind::Int)]]
+                    .into_iter()
+                    .collect::<HashSet<_>>()
             );
             let variant = result
                 .enum_variants
@@ -562,7 +566,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .iter()
                 .copied()
                 .collect();
-            let ctor = CtorId::new(db, Symbol::from_dynamic(constructor));
+            let ctor = CtorId::new(db, Symbol::new(constructor));
             for kind in [
                 InstanceErrorKind::MissingInstance,
                 InstanceErrorKind::WrongDeclaration,

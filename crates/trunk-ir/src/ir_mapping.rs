@@ -3,7 +3,7 @@
 //! `IrMapping` tracks correspondences between old and new IR entities
 //! during operations like deep cloning. Inspired by MLIR's `IRMapping`.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::refs::{BlockRef, ValueRef};
 
@@ -31,7 +31,7 @@ impl IrMapping {
     pub fn from_values(iter: impl IntoIterator<Item = (ValueRef, ValueRef)>) -> Self {
         Self {
             values: iter.into_iter().collect(),
-            blocks: HashMap::new(),
+            blocks: HashMap::default(),
         }
     }
 

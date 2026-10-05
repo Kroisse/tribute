@@ -351,7 +351,7 @@ impl fmt::Display for Rendered<'_> {
             Ctor::Nil => f.write_str("Nil"),
             Ctor::Tuple(_) => write!(f, "#({})", fields()),
             Ctor::Variant { family, index } => {
-                let name = self.families[family.0].variants[*index].name;
+                let name = self.families[family.0].variants[*index].name.clone();
                 if !has_fields {
                     write!(f, "{name}")
                 } else {

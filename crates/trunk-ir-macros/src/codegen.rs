@@ -5,7 +5,7 @@ use proc_macro2::TokenStream;
 use quote::{format_ident, quote, quote_spanned};
 
 use crate::parse::{
-    AttrDef, AttrType, BoundPath, DialectItem, DialectModule, ListExpr, Operand, OperationDef,
+    AttrDef, AttrKind, BoundPath, DialectItem, DialectModule, ListExpr, Operand, OperationDef,
     Projection, RegionOrSuccessor, ResultDef, TypeDefData, TypeExpr, ValueExpr,
 };
 
@@ -92,8 +92,8 @@ fn gen_struct_and_trait(crate_path: &TokenStream, dialect: &str, op: &OperationD
                 if !Self::matches(ctx, op) {
                     return Err(#crate_path::ops::ConversionError::WrongOperation {
                         expected: #full_name,
-                        actual_dialect: ctx.op(op).dialect,
-                        actual_name: ctx.op(op).name,
+                        actual_dialect: ctx.op(op).dialect.clone(),
+                        actual_name: ctx.op(op).name.clone(),
                     });
                 }
                 Ok(Self(op))
@@ -143,7 +143,8 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
 
     let attributes = op.attrs.iter().map(|attr| {
         let name = &attr.name;
-        let kind = attr_kind(crate_path, attr.ty);
+        let kind = attr_kind_trait(crate_path, attr);
+        let kind = quote!(#kind::KIND);
         let optional = attr.optional;
         let binds = match attr.binds {
             Some(i) => quote!(Some(#i)),
@@ -412,76 +413,46 @@ fn gen_map_attr_accessor(
 ) -> TokenStream {
     let name = &attr.raw_ident;
     let name_str = &attr.name;
-    let rust_ty = attr_rust_type(crate_path, attr.ty);
+    let kind = attr_kind_trait(crate_path, attr);
+    let accessor = |method: &proc_macro2::Ident, out: TokenStream, read: TokenStream| {
+        if attr.optional {
+            quote! {
+                pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<#out> {
+                    #attrs.get(#name_str).map(|attr| #read)
+                }
+            }
+        } else {
+            quote! {
+                pub fn #method<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> #out {
+                    let attr = #attrs
+                        .get(#name_str)
+                        .expect(concat!("missing attribute: ", #name_str));
+                    #read
+                }
+            }
+        }
+    };
+    let value = accessor(
+        name,
+        quote!(#kind::Out<'ctx>),
+        quote!(#kind::read(ctx, attr)),
+    );
+    if !attr.kind.is_string() {
+        return value;
+    }
 
     // A string attribute's text lives in the context's string pool, so the
     // accessor borrows it from `ctx`, as MLIR's `getName()`. `<name>_ref`
     // returns the pooled handle, for copying the value to another operation
     // without borrowing the context.
-    if matches!(attr.ty, AttrType::String) {
-        let handle = format_ident!("{}_ref", attr.name);
-        return if attr.optional {
-            quote! {
-                pub fn #name<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> Option<&'ctx str> {
-                    #attrs.get_str(ctx, #name_str)
-                }
-
-                pub fn #handle(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
-                    #attrs.get_string_ref(#name_str)
-                }
-            }
-        } else {
-            quote! {
-                pub fn #name<'ctx>(&self, ctx: &'ctx #crate_path::IrContext) -> &'ctx str {
-                    #attrs
-                        .get_str(ctx, #name_str)
-                        .expect(concat!("missing attribute: ", #name_str))
-                }
-
-                pub fn #handle(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
-                    #attrs
-                        .get_string_ref(#name_str)
-                        .expect(concat!("missing attribute: ", #name_str))
-                }
-            }
-        };
-    }
-
-    if let Some(lookup) = typed_attr_lookup(attr.ty, &attrs, name_str) {
-        return if attr.optional {
-            quote! {
-                pub fn #name(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
-                    #lookup
-                }
-            }
-        } else {
-            quote! {
-                pub fn #name(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
-                    #lookup.expect(concat!("missing attribute: ", #name_str))
-                }
-            }
-        };
-    }
-
-    let from_attr = attr_from_attr(crate_path, attr.ty);
-    if attr.optional {
-        quote! {
-            pub fn #name(&self, ctx: &#crate_path::IrContext) -> Option<#rust_ty> {
-                #attrs
-                    .get(#name_str)
-                    .map(|attr| #from_attr)
-            }
-        }
-    } else {
-        quote! {
-            pub fn #name(&self, ctx: &#crate_path::IrContext) -> #rust_ty {
-                let attr = #attrs
-                    .get(#name_str)
-                    .expect(concat!("missing attribute: ", #name_str));
-                #from_attr
-            }
-        }
-    }
+    let kind_ty = attr_kind_type(crate_path, attr);
+    let handle_kind = quote!(<#kind_ty as #crate_path::attr_kind::AttrHandle>);
+    let handle = accessor(
+        &format_ident!("{}_ref", attr.name),
+        quote!(#handle_kind::Handle<'ctx>),
+        quote!(#handle_kind::handle(attr)),
+    );
+    quote!(#value #handle)
 }
 
 // ============================================================================
@@ -617,63 +588,58 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         let name = &attr.raw_ident;
         let name_str = &attr.name;
         let field = format_ident!("attr_{}", attr.name);
-        let rust_ty = attr_rust_type(crate_path, attr.ty);
-        let conv = attr_to_attr(crate_path, attr.ty, quote!(value));
+        let kind = attr_kind_trait(crate_path, attr);
+        let element = attr_element_kind(crate_path, attr);
+        let element = quote!(<#element as #crate_path::attr_kind::AttrKind>);
+        fields.push(quote!(#field: Option<#kind::In>));
         field_inits.push(quote!(#field: None,));
-        if matches!(attr.ty, AttrType::String) {
-            fields.push(quote!(#field: Option<#crate_path::StringArg>));
-            attr_locals.push(quote! {
-                let #field = self.#field.map(|value| {
-                    #crate_path::Attribute::String(ctx.intern_string_arg(value))
-                });
-            });
-            methods.push(quote! {
-                pub fn #name(mut self, value: impl Into<#crate_path::StringArg>) -> Self {
+        attr_locals.push(quote! {
+            let #field = self.#field.map(|value| #kind::write(ctx, value));
+        });
+        // A list is set from its elements. A string takes a handle or text
+        // to intern. An optional attribute is absent unless set.
+        methods.push(match (attr.list, attr.kind.is_string()) {
+            (true, true) => quote! {
+                pub fn #name(
+                    mut self,
+                    values: impl IntoIterator<Item = impl Into<#element::In>>,
+                ) -> Self {
+                    self.#field = Some(values.into_iter().map(Into::into).collect());
+                    self
+                }
+            },
+            (true, false) => quote! {
+                pub fn #name(mut self, values: impl IntoIterator<Item = #element::In>) -> Self {
+                    self.#field = Some(values.into_iter().collect());
+                    self
+                }
+            },
+            (false, true) => quote! {
+                pub fn #name(mut self, value: impl Into<#kind::In>) -> Self {
                     self.#field = Some(value.into());
                     self
                 }
-            });
-        } else {
-            fields.push(quote!(#field: Option<#crate_path::Attribute>));
-            attr_locals.push(quote!(let #field = self.#field;));
-        }
-        if matches!(attr.ty, AttrType::String) {
-            if attr.optional {
-                build_stmts.push(quote! {
-                    if let Some(value) = #field {
-                        __builder = __builder.attr(#crate_path::Symbol::new(#name_str), value);
-                    }
-                });
-            } else {
-                let missing = format!("{full_name}: missing attribute `{name_str}`");
-                build_stmts.push(quote! {
-                    __builder = __builder.attr(
-                        #crate_path::Symbol::new(#name_str),
-                        #field.expect(#missing),
-                    );
-                });
-            }
-            continue;
-        }
-        if attr.optional {
-            methods.push(quote! {
-                pub fn #name(mut self, value: impl Into<Option<#rust_ty>>) -> Self {
-                    self.#field = value.into().map(|value| #conv);
+            },
+            (false, false) if attr.optional => quote! {
+                pub fn #name(mut self, value: impl Into<Option<#kind::In>>) -> Self {
+                    self.#field = value.into();
                     self
                 }
-            });
+            },
+            (false, false) => quote! {
+                pub fn #name(mut self, value: #kind::In) -> Self {
+                    self.#field = Some(value);
+                    self
+                }
+            },
+        });
+        if attr.optional {
             build_stmts.push(quote! {
                 if let Some(value) = #field {
                     __builder = __builder.attr(#crate_path::Symbol::new(#name_str), value);
                 }
             });
         } else {
-            methods.push(quote! {
-                pub fn #name(mut self, value: #rust_ty) -> Self {
-                    self.#field = Some(#conv);
-                    self
-                }
-            });
             let missing = format!("{full_name}: missing attribute `{name_str}`");
             build_stmts.push(quote! {
                 __builder = __builder.attr(
@@ -903,7 +869,8 @@ fn gen_type_constraint(
     // must be present, and every present one must match its kind.
     let attrs_ok = td.attrs.iter().map(|attr| {
         let name = &attr.name;
-        let kind = attr_kind(crate_path, attr.ty);
+        let kind = attr_kind_trait(crate_path, attr);
+        let kind = quote!(#kind::KIND);
         if attr.optional {
             quote!(attrs.get(#name).is_none_or(|attr| #kind.accepts(attr)))
         } else {
@@ -1133,8 +1100,9 @@ fn gen_type_constructor(
     for attr in &td.attrs {
         let name = &attr.raw_ident;
         let name_str = &attr.name;
-        let rust_ty = attr_rust_type(crate_path, attr.ty);
-        let to_attr_expr = |val: TokenStream| attr_to_attr(crate_path, attr.ty, val);
+        let kind = attr_kind_trait(crate_path, attr);
+        let rust_ty = quote!(#kind::In);
+        let to_attr_expr = |val: TokenStream| quote!(#kind::write(ctx, #val));
 
         if attr.optional {
             params.push(quote!(#name: Option<#rust_ty>));
@@ -1186,165 +1154,33 @@ fn gen_type_constructor(
 // Attribute type helpers
 // ============================================================================
 
-fn attr_rust_type(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
-    match ty {
-        AttrType::Any => quote!(#crate_path::Attribute),
-        AttrType::Bool => quote!(bool),
-        AttrType::I32 => quote!(i32),
-        AttrType::I64 => quote!(i64),
-        AttrType::U32 => quote!(u32),
-        AttrType::U64 => quote!(u64),
-        AttrType::F32 => quote!(f32),
-        AttrType::F64 => quote!(f64),
-        AttrType::Type => quote!(#crate_path::TypeRef),
-        AttrType::String => quote!(#crate_path::StringRef),
-        AttrType::Symbol | AttrType::QualifiedName => quote!(#crate_path::Symbol),
-        AttrType::Bytes => quote!(#crate_path::smallvec::SmallVec<[u8; 16]>),
+/// The Rust type naming a declared attribute's kind, or its element kind
+/// for a list.
+fn attr_element_kind(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
+    match &attr.kind {
+        AttrKind::Any => quote!(#crate_path::Attribute),
+        AttrKind::BoundType => quote!(#crate_path::attr_kind::Type),
+        AttrKind::Path(path) => quote!(#path),
     }
 }
 
-fn attr_kind(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
-    let kind = match ty {
-        AttrType::Any => quote!(Any),
-        AttrType::Bool => quote!(Bool),
-        AttrType::I32 => quote!(I32),
-        AttrType::I64 => quote!(I64),
-        AttrType::U32 => quote!(U32),
-        AttrType::U64 => quote!(U64),
-        AttrType::F32 => quote!(F32),
-        AttrType::F64 => quote!(F64),
-        AttrType::Type => quote!(Type),
-        AttrType::String => quote!(String),
-        AttrType::Symbol => quote!(Symbol),
-        AttrType::QualifiedName => quote!(QualifiedName),
-        AttrType::Bytes => quote!(Bytes),
+/// The Rust type naming a declared attribute's kind.
+fn attr_kind_type(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
+    let element = attr_element_kind(crate_path, attr);
+    if attr.list {
+        quote!([#element])
+    } else {
+        element
+    }
+}
+
+/// A declared attribute's kind as its `AttrKind` implementation.
+fn attr_kind_trait(crate_path: &TokenStream, attr: &AttrDef) -> TokenStream {
+    let kind = attr_kind_type(crate_path, attr);
+    // The span points a type that is not a kind at its declaration.
+    let span = match &attr.kind {
+        AttrKind::Path(path) => path.span(),
+        AttrKind::Any | AttrKind::BoundType => proc_macro2::Span::call_site(),
     };
-    quote!(#crate_path::op_schema::AttributeKind::#kind)
-}
-
-fn attr_to_attr(crate_path: &TokenStream, ty: AttrType, val: TokenStream) -> TokenStream {
-    match ty {
-        AttrType::Any => quote!(#val),
-        AttrType::Bool => quote!(#crate_path::Attribute::Bool(#val)),
-        AttrType::I32 | AttrType::I64 | AttrType::U32 => {
-            quote!(#crate_path::Attribute::Int(#val as i128))
-        }
-        AttrType::U64 => quote!(#crate_path::Attribute::Int(#val as i128)),
-        AttrType::F32 => {
-            quote!(#crate_path::Attribute::FloatBits((#val as f64).to_bits()))
-        }
-        AttrType::F64 => quote!(#crate_path::Attribute::FloatBits(#val.to_bits())),
-        AttrType::Type => quote!(#crate_path::Attribute::Type(#val)),
-        AttrType::String => quote!(#crate_path::Attribute::String(#val)),
-        AttrType::Symbol | AttrType::QualifiedName => {
-            quote!(#crate_path::Attribute::Symbol(#val))
-        }
-        AttrType::Bytes => quote!(#crate_path::Attribute::Bytes(#val)),
-    }
-}
-
-fn typed_attr_lookup(ty: AttrType, attrs: &TokenStream, name: &str) -> Option<TokenStream> {
-    match ty {
-        AttrType::Bool => Some(quote!(#attrs.get_bool(#name))),
-        AttrType::I32 => Some(quote!(
-            #attrs
-                .get_i32(#name)
-                .expect(concat!("attribute out of range: ", #name))
-        )),
-        AttrType::I64 => Some(quote!(
-            #attrs
-                .get_i64(#name)
-                .expect(concat!("attribute out of range: ", #name))
-        )),
-        AttrType::U32 => Some(quote!(
-            #attrs
-                .get_u32(#name)
-                .expect(concat!("attribute out of range: ", #name))
-        )),
-        AttrType::U64 => Some(quote!(
-            #attrs
-                .get_u64(#name)
-                .expect(concat!("attribute out of range: ", #name))
-        )),
-        AttrType::Type => Some(quote!(#attrs.get_type(#name))),
-        AttrType::String => Some(quote!(#attrs.get_string_ref(#name))),
-        AttrType::Symbol | AttrType::QualifiedName => Some(quote!(#attrs.get_symbol(#name))),
-        AttrType::Any | AttrType::F32 | AttrType::F64 | AttrType::Bytes => None,
-    }
-}
-
-fn attr_from_attr(crate_path: &TokenStream, ty: AttrType) -> TokenStream {
-    match ty {
-        AttrType::Any => quote!(attr.clone()),
-        AttrType::Bool => quote! {
-            match attr {
-                #crate_path::Attribute::Bool(v) => *v,
-                _ => panic!("expected Bool attribute"),
-            }
-        },
-        AttrType::I32 => quote! {
-            match attr {
-                #crate_path::Attribute::Int(v) => i32::try_from(*v)
-                    .expect("Int attribute is out of range for i32"),
-                _ => panic!("expected Int attribute"),
-            }
-        },
-        AttrType::I64 => quote! {
-            match attr {
-                #crate_path::Attribute::Int(v) => i64::try_from(*v)
-                    .expect("Int attribute is out of range for i64"),
-                _ => panic!("expected Int attribute"),
-            }
-        },
-        AttrType::U32 => quote! {
-            match attr {
-                #crate_path::Attribute::Int(v) => u32::try_from(*v)
-                    .expect("Int attribute is out of range for u32"),
-                _ => panic!("expected Int attribute"),
-            }
-        },
-        AttrType::U64 => quote! {
-            match attr {
-                #crate_path::Attribute::Int(v) => u64::try_from(*v)
-                    .expect("Int attribute is out of range for u64"),
-                _ => panic!("expected Int attribute"),
-            }
-        },
-        AttrType::F32 => quote! {
-            match attr {
-                #crate_path::Attribute::FloatBits(v) => f64::from_bits(*v) as f32,
-                _ => panic!("expected FloatBits attribute"),
-            }
-        },
-        AttrType::F64 => quote! {
-            match attr {
-                #crate_path::Attribute::FloatBits(v) => f64::from_bits(*v),
-                _ => panic!("expected FloatBits attribute"),
-            }
-        },
-        AttrType::Type => quote! {
-            match attr {
-                #crate_path::Attribute::Type(v) => *v,
-                _ => panic!("expected Type attribute"),
-            }
-        },
-        AttrType::String => quote! {
-            match attr {
-                #crate_path::Attribute::String(v) => *v,
-                _ => panic!("expected String attribute"),
-            }
-        },
-        AttrType::Symbol | AttrType::QualifiedName => quote! {
-            match attr {
-                #crate_path::Attribute::Symbol(v) => *v,
-                _ => panic!("expected Symbol attribute"),
-            }
-        },
-        AttrType::Bytes => quote! {
-            match attr {
-                #crate_path::Attribute::Bytes(v) => v.clone(),
-                _ => panic!("expected Bytes attribute"),
-            }
-        },
-    }
+    quote_spanned!(span=> <#kind as #crate_path::attr_kind::AttrKind>)
 }

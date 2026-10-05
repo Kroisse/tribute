@@ -7,7 +7,7 @@
 //! - `scf.continue` -> `wasm.br(target=1)` (branch to loop)
 //! - `scf.break` -> `wasm.br(target=2)` (branch to outer block, past if and loop)
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
@@ -123,8 +123,8 @@ fn validate_structured_control(
                 let data = ctx.op(op);
                 return ControlFlow::Break(ConversionError::new(SCF_TO_WASM_BOUNDARY, vec![IllegalOp {
                     op,
-                    dialect: data.dialect,
-                    name: data.name,
+                    dialect: data.dialect.clone(),
+                    name: data.name.clone(),
                     legality: LegalityCheck::Illegal,
                     reason: Some("Never control requires one unused result, final block position, and terminal region successors".into()),
                 }]));
@@ -154,8 +154,8 @@ pub fn validate_lowerable_switches(ctx: &IrContext, module: Module) -> Result<()
             vec![
                 IllegalOp {
                     op,
-                    dialect: data.dialect,
-                    name: data.name,
+                    dialect: data.dialect.clone(),
+                    name: data.name.clone(),
                     legality: LegalityCheck::Illegal,
                     reason: None,
                 }
@@ -1352,11 +1352,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(
-                    ty,
-                    trunk_ir::Symbol::new("core"),
-                    trunk_ir::Symbol::new("array"),
-                )
+                .is_dialect(ty, "core", "array")
                 .then_some(arrayref_ty)
         });
         type_converter

@@ -7,7 +7,6 @@
 use std::fmt;
 
 use tracing::{error, warn};
-use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
@@ -24,6 +23,7 @@ use trunk_ir::types::Location;
 use trunk_ir_wasm_backend::passes::signature_conversion::WasmFuncSignatureConversionPattern;
 
 use super::type_converter::wasm_type_converter;
+use trunk_ir::SymbolPath;
 
 const WASM_BACKEND_READY_BOUNDARY: &str = "wasm-backend-ready";
 
@@ -131,15 +131,11 @@ fn wasm_lowering_passes() -> PassManager {
         trunk_ir_wasm_backend::passes::scf_to_wasm::lower(ctx, m.into(), tc, analyses)?;
         Ok(())
     }))
-    // Normalize tribute_rt primitive types (int, nat, bool, float) to core
-    // types before target lowering, so later steps see primitive target types.
-    .add_pass(pass_fn(
-        "normalize-primitive-types",
-        |ctx, m: core::Module, _| {
-            super::normalize_primitive_types::lower(ctx, m.into());
-            Ok(())
-        },
-    ))
+    // Convert function and indirect-call signatures before target lowering.
+    .add_pass(pass_fn("convert-signatures", |ctx, m: core::Module, _| {
+        super::convert_signatures::lower(ctx, m.into());
+        Ok(())
+    }))
     .add_pass(pass_fn("func-to-wasm", |ctx, m: core::Module, _| {
         let tc = wasm_type_converter(ctx);
         trunk_ir_wasm_backend::passes::func_to_wasm::lower(ctx, m.into(), tc);
@@ -197,7 +193,16 @@ fn wasm_lowering_passes() -> PassManager {
     .add_pass(pass_fn("wasm-lowerer", |ctx, m: core::Module, _| {
         WasmLowerer::new().lower_module(ctx, m.into());
         Ok(())
-    }));
+    }))
+    // Replace user struct layouts with their structural GC types once no
+    // `adt` operation reads a nominal layout.
+    .add_pass(pass_fn(
+        "convert-struct-layouts",
+        |ctx, m: core::Module, _| {
+            super::struct_layouts::convert(ctx, m.into());
+            Ok(())
+        },
+    ));
     pm.with_debug_verifier()
         .with_instrumentation(|ctx, name, op| {
             if let Some(module) = Module::new(ctx, op) {
@@ -275,11 +280,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                             format!("{}.{}", td.dialect, td.name)
                         })
                         .collect();
-                    let sym_name = data
-                        .attributes
-                        .get_text(ctx, "sym_name")
-                        .map(|text| text.to_string())
-                        .unwrap_or_default();
+                    let sym_name = data.attributes.get_str(ctx, "sym_name").unwrap_or_default();
                     tracing::debug!("[{phase}] func.func {sym_name}: params={params:?}");
                 }
             } else if data.dialect == wasm_dialect::DIALECT_NAME()
@@ -297,11 +298,7 @@ fn debug_func_params(ctx: &IrContext, module: Module, phase: &str) {
                         format!("{}.{}", td.dialect, td.name)
                     })
                     .collect();
-                let sym_name = data
-                    .attributes
-                    .get_text(ctx, "sym_name")
-                    .map(|text| text.to_string())
-                    .unwrap_or_default();
+                let sym_name = data.attributes.get_str(ctx, "sym_name").unwrap_or_default();
                 tracing::debug!("[{phase}] wasm.func {sym_name}: params={params:?}");
             }
         }
@@ -313,7 +310,7 @@ fn check_function_body(ctx: &IrContext, func_op: OpRef) {
     if let Some(body_region) = ctx.op_region(func_op, 0) {
         for &block in ctx.region(body_region).blocks.iter() {
             for &op in ctx.block(block).ops.iter() {
-                let dialect = ctx.op(op).dialect;
+                let dialect = ctx.op(op).dialect.clone();
                 if dialect != Symbol::new("wasm") {
                     error!(
                         "Found non-wasm operation in function body: {}.{}",
@@ -428,12 +425,12 @@ impl WasmLowerer {
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
-        let Some(sym_name) = data.attributes.get_symbol("sym_name") else {
+        let Some(sym_name) = data.attributes.get_str(ctx, "sym_name") else {
             return;
         };
 
         // Only match root-level main, not foo::main
-        if !(sym_name.is_simple() && sym_name.last_segment() == Symbol::new("main")) {
+        if sym_name != "main" {
             return;
         }
 
@@ -464,7 +461,7 @@ impl WasmLowerer {
             let name = ctx.intern_str("_start");
             let export_op = wasm_dialect::ExportFunc::operands()
                 .name(name)
-                .func(Symbol::new("main"))
+                .func(SymbolPath::from("main"))
                 .build(ctx, location);
             ctx.push_op(module_block, export_op.op_ref());
         }
@@ -474,6 +471,7 @@ impl WasmLowerer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::{BlockData, RegionData};
     use trunk_ir::refs::TypeRef;
     use trunk_ir::smallvec::smallvec;
@@ -507,7 +505,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
   !Frame = adt.struct<Frame()>
   !Env = adt.struct<Env(closure: !Closure, evidence: !Evidence, frame: !Frame)>
@@ -587,9 +585,9 @@ mod tests {
             .iter()
             .copied()
             .filter_map(|op| wasm_dialect::ExportFunc::from_op(&ctx, op).ok())
-            .map(|export| (export.name(&ctx), export.func(&ctx)))
+            .map(|export| (export.name(&ctx), export.func(&ctx).clone()))
             .collect();
-        assert_eq!(exports, [("_start", Symbol::new("main"))]);
+        assert_eq!(exports, [("_start", SymbolPath::from("main"))]);
         assert!(
             module
                 .ops(&ctx)
@@ -693,7 +691,7 @@ mod tests {
         });
         let func_ty = intern_func_type(&mut ctx, vec![], nil_ty);
         let memory_func = wasm_dialect::Func::operands()
-            .sym_name(Symbol::new("memory_ops"))
+            .sym_name("memory_ops")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, location);
@@ -747,7 +745,7 @@ mod tests {
         });
         let main_ty = intern_func_type(&mut ctx, vec![i32_ty], nil_ty);
         let main = wasm_dialect::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(main_ty)
             .regions(main_body)
             .build(&mut ctx, location);
@@ -988,7 +986,7 @@ mod tests {
     fn lower_to_wasm_binds_evidence_runtime_declarations() {
         let output = lower_text(
             r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @prompt(%ev: !Evidence) -> core.i32 {
     %id = arith.const {value = 7} : core.i32
@@ -999,11 +997,11 @@ mod tests {
         );
 
         assert!(
-            output.contains("sym_name = @__tribute_evidence_find_marker,"),
+            output.contains("sym_name = \"__tribute_evidence_find_marker\","),
             "{output}"
         );
         assert!(
-            output.contains("sym_name = @__tribute_evidence_lookup,"),
+            output.contains("sym_name = \"__tribute_evidence_lookup\","),
             "{output}"
         );
         assert!(!output.contains("abi = \"C\""), "{output}");

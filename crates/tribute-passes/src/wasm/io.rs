@@ -6,6 +6,7 @@
 
 use tribute_ir::dialect::tribute_io;
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::dialect::{core, func};
@@ -95,7 +96,7 @@ fn declare_host_resources(
     let mut memory = None;
     for &op in &ctx.block(block).ops {
         if let Ok(declared) = wasm_dialect::ImportFunc::from_op(ctx, op) {
-            if declared.sym_name(ctx) == Symbol::new(FD_WRITE) {
+            if declared.sym_name(ctx) == FD_WRITE {
                 import = Some(declared);
             }
         } else if let Ok(declared) = wasm_dialect::Memory::from_op(ctx, op) {
@@ -133,7 +134,7 @@ fn declare_host_resources(
         let import = wasm_dialect::ImportFunc::operands()
             .module(WASI_MODULE)
             .name(FD_WRITE)
-            .sym_name(Symbol::new(FD_WRITE))
+            .sym_name(FD_WRITE)
             .r#type(import_ty)
             .build(ctx, loc);
         preamble.push(import.op_ref());
@@ -176,8 +177,8 @@ fn incompatible(ctx: &IrContext, op: OpRef, reason: String) -> ConversionError {
     let data = ctx.op(op);
     let conflict = IllegalOp {
         op,
-        dialect: data.dialect,
-        name: data.name,
+        dialect: data.dialect.clone(),
+        name: data.name.clone(),
         legality: LegalityCheck::Illegal,
         reason: None,
     }
@@ -198,7 +199,7 @@ impl RewritePattern for WritePattern {
             return false;
         };
         let call = func::Call::operands([write.bytes(ctx), write.newline(ctx)])
-            .callee(Symbol::new(WRITE_HELPER))
+            .callee(SymbolPath::from(WRITE_HELPER))
             .results([ctx.op_result_types(op)[0]])
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(call.op_ref());
@@ -295,7 +296,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     });
     let fn_ty = func::func_sig(ctx, [bytes_ty, i32_ty], [nil_ty]).as_type_ref();
     func::Func::operands()
-        .sym_name(Symbol::new(WRITE_HELPER))
+        .sym_name(WRITE_HELPER)
         .r#type(fn_ty)
         .regions(body)
         .build(ctx, loc)
@@ -472,7 +473,7 @@ fn write_loop(
     let one_iovec = i32_const(ctx, loop_block, loc, i32_ty, 1);
     let nwritten = i32_const(ctx, loop_block, loc, i32_ty, NWRITTEN_OFFSET);
     let call = wasm_dialect::Call::operands([stdout, iovec, one_iovec, nwritten])
-        .callee(Symbol::new(FD_WRITE))
+        .callee(SymbolPath::from(FD_WRITE))
         .results([i32_ty])
         .build(ctx, loc);
     ctx.push_op(loop_block, call.op_ref());
@@ -697,11 +698,11 @@ mod tests {
         let ops = module.ops(&ctx);
         let import = wasm_dialect::ImportFunc::from_op(&ctx, ops[0]).expect("import");
         assert_eq!(import.module(&ctx), Symbol::new(WASI_MODULE));
-        assert_eq!(import.sym_name(&ctx), Symbol::new(FD_WRITE));
+        assert_eq!(import.sym_name(&ctx), FD_WRITE);
         let memory = wasm_dialect::Memory::from_op(&ctx, ops[1]).expect("memory");
         assert_eq!(memory.min(&ctx), 1);
         let helper = func::Func::from_op(&ctx, ops[3]).expect("write helper");
-        assert_eq!(helper.sym_name(&ctx), Symbol::new(WRITE_HELPER));
+        assert_eq!(helper.sym_name(&ctx), WRITE_HELPER);
     }
 
     #[test]
@@ -710,7 +711,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.import_func {module = "wasi_snapshot_preview1", name = "fd_write", sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}
+  wasm.import_func {module = "wasi_snapshot_preview1", name = "fd_write", sym_name = "fd_write", type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}
   wasm.memory {min = 0, max = 0, shared = false, memory64 = false}
   func.func @main(%bytes: core.bytes, %newline: core.i1) -> core.nil {
     %write = tribute_io.write %bytes, %newline : core.nil
@@ -732,9 +733,9 @@ mod tests {
     #[test]
     fn lowering_rejects_a_conflicting_fd_write_import() {
         for import in [
-            "wasm.import_func {module = \"env\", name = \"fd_write\", sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
-            "wasm.import_func {module = \"wasi_snapshot_preview1\", name = \"fd_read\", sym_name = @fd_write, type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
-            "wasm.import_func {module = \"wasi_snapshot_preview1\", name = \"fd_write\", sym_name = @fd_write, type = wasm.func_sig<(core.i32) -> core.i32>}",
+            "wasm.import_func {module = \"env\", name = \"fd_write\", sym_name = \"fd_write\", type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
+            "wasm.import_func {module = \"wasi_snapshot_preview1\", name = \"fd_read\", sym_name = \"fd_write\", type = wasm.func_sig<(core.i32, core.i32, core.i32, core.i32) -> core.i32>}",
+            "wasm.import_func {module = \"wasi_snapshot_preview1\", name = \"fd_write\", sym_name = \"fd_write\", type = wasm.func_sig<(core.i32) -> core.i32>}",
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(

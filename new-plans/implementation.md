@@ -12,7 +12,8 @@
 | 핸들러 디스패치 | Evidence passing | 런타임 스택 탐색 |
 | Continuation | One-shot, scoped | Multi-shot |
 | Polymorphic 함수 | Monomorphization + 필요한 Evidence/CPS convention | Uniform erasure, dictionary passing |
-| Evidence 구조 | 포인터 전달 + 정렬된 slice | bitmap, HashMap, 연결 리스트 |
+| Evidence 구조 | 포인터 전달 + 정렬된 slice, 같은 ability는 marker 연결 | bitmap, HashMap, 연결 리스트 |
+| Tail effect | Row 위치로 정적 선택 | 가장 가까운 handler |
 | 메모리 관리 (Cranelift) | Reference counting | Tracing GC |
 | GC (WasmGC) | 런타임 내장 GC | - |
 
@@ -200,6 +201,14 @@ Specialization mangling uses the declaration's qualified identity when needed
 to distinguish same-spelled declarations. When the qualified identity equals
 the existing display name, the ordinary mangle remains unchanged.
 
+Specialization mangle은 type argument의 identity에 대해 단사(injective)다. 서로
+다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입은 parameter와 result
+외에 effect row와 calling-convention 하한을 함께 인코딩한다. Effect row는 각
+ability의 origin과 qualified identity, ability argument를 row에 저장된 순서대로 쓰고,
+열린 row의 row variable은 한 mangle 안에서 처음 나타난 순서로 번호를 매겨 추론
+번호에 의존하지 않는다. Closed 빈 row와 `Direct` 하한을 가진 함수 타입의 mangle은
+parameter와 result만으로 이루어진다.
+
 ---
 
 ## Opaque Persistent Lists
@@ -357,17 +366,21 @@ resumption을 만들지 않으며 `resume_token` block argument도 받지 않는
 
 ### Evidence와 dispatch의 소유권
 
-Evidence는 ability identity를 key로 하는 불변 Marker 배열이다. Shared effect ABI는
-명시적 evidence operand와 `effect.extend`, `effect.dispatch_tail`,
+Evidence는 ability identity를 key로 하는 불변 Marker 배열이며 같은 ability의
+가려진 marker를 연결로 유지한다. Shared effect ABI는 명시적 evidence operand와
+`effect.extend`, `effect.mask`, `effect.dup`, `effect.dispatch_tail`,
 `effect.dispatch_cps`만 사용하며 concrete marker field나 runtime layout을 선택하지
 않는다. Native는 runtime pointer를, WasmGC는 GC array/struct reference를 사용한다.
 Target별 field layout, runtime 함수와 dispatch signature는
 [cps-effects.md](cps-effects.md#handle-evidence-extension--handler-closures)가 정의한다.
 
 Handler 설치는 새 evidence 값을 만든다. 같은 ability instance의 nested handler는
-기존 marker를 대체하므로 lookup이 가장 가까운 handler를 선택한다. 각 handler
+기존 marker를 가리며, lookup은 가장 위의 marker를 선택한다. 각 handler
 인스턴스의 `prompt_tag`는 runtime에 생성하며, 한 handle의 모든 ability marker가
-같은 prompt를 공유한다. 그 밖의 호출은 같은 evidence 값을 전달한다.
+같은 prompt를 공유한다. 호출은 typechecking이 정한 evidence 선택에 따라 caller
+evidence를 그대로 전달하거나 `mask`/`dup`한 값을 전달한다
+([cps-effects.md](cps-effects.md#row-directed-evidence)). Handler arm은 handle을
+설치한 지점의 evidence로 실행한다.
 
 Source-logical `handle`은 shared legalization에서 explicit evidence 입력과 dispatch
 closure를 가진 `ability.handle_dispatch`가 된다. `resolve_evidence`는
@@ -552,8 +565,9 @@ region을 포함한 arm body의 `tribute_control.resume`을 verifier가 거부�
 ─────────────────────
 ```
 
-`State::get()`은 evidence에서 가장 가까운 State marker를 조회한다. Shared CPS
-conversion이 만든 suffix continuation과 frame의 어휘적 dispatcher는 그 marker의
+`State::get()`은 evidence에서 State의 가장 위 marker를 조회한다. 그 marker는 호출
+지점의 row가 명시한 State에 묶인 handler의 것이다. Shared CPS
+conversion이 만든 suffix continuation과 frame이 담은 handle 층의 dispatcher는 그 marker의
 prompt(P3)를 기준으로 handler boundary와 resume 경로를 연결한다. 이 그림은
 논리적 delimiter 중첩이며 machine stack을 runtime에 탐색한다는 뜻이 아니다.
 
@@ -590,7 +604,7 @@ fn nested_state_example() -> Int {
 **조회 흐름:**
 
 1. `State::get()` 호출
-2. Evidence에서 `ability_id`(STATE_ID)로 marker 조회 → 가장 안쪽 handler의 marker 반환
+2. Evidence에서 `ability_id`(STATE_ID)로 marker 조회 → 그 instance의 가장 위 marker 반환
 3. Marker의 `prompt_tag`(P2)와 ability/operation identity를 frame의 dispatcher에 전달
 4. Dispatcher가 이미 생성된 suffix continuation과 inner handler를 연결
 
@@ -945,8 +959,10 @@ Instance key는 frontend가 typecheck된 source type argument에서 만들어
 서로 다른 nominal 타입도 별도 instance다. `core.ability_ref`의 type parameter는
 이 identity에 참여하지 않으므로, 이후 단계의 타입 변환이 parameter를 바꾸어도
 runtime key는 변하지 않는다. Runtime array는 이 key로 정렬하고 binary
-search로 가장 가까운 설치된 handler를 선택한다. 표준 ability와 사용자 ability에
-별도 연속 번호 대역을 예약하지 않는다.
+search로 그 instance의 marker 칸을 찾는다. 칸의 가장 위 marker가 선택되며, 어느
+handler가 가장 위에 오는지는
+[row 위치에 따른 evidence 선택](cps-effects.md#row-directed-evidence)이 정한다.
+표준 ability와 사용자 ability에 별도 연속 번호 대역을 예약하지 않는다.
 
 `Io`의 canonical builtin identity는 frontend/type system의 ambient semantics를
 판정한다. `Io`는 runtime handler lookup이나 dispatch를 요구하지 않는다.

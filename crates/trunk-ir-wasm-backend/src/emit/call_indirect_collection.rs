@@ -3,12 +3,13 @@
 //! This module handles the collection of function types used in call_indirect
 //! operations and ref_func declarations.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{RegionRef, TypeRef};
-use trunk_ir::{IrContext, Module, Symbol};
+use trunk_ir::{IrContext, Module, SymbolPath};
 
 use crate::errors::CompilationResult;
 
@@ -74,11 +75,11 @@ pub(crate) fn collect_call_indirect_types(
 /// Collect function names referenced via wasm.ref_func.
 ///
 /// These functions need to be declared in a declarative elem segment.
-pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
+pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
     fn collect_from_region(
         ctx: &IrContext,
         region_ref: RegionRef,
-        ref_funcs: &mut HashSet<Symbol>,
+        ref_funcs: &mut HashSet<SymbolPath>,
     ) {
         for &block_ref in &ctx.region(region_ref).blocks {
             for &op in &ctx.block(block_ref).ops {
@@ -89,13 +90,13 @@ pub(crate) fn collect_ref_funcs(ctx: &IrContext, module: Module) -> HashSet<Symb
 
                 // Check if this is a ref_func
                 if let Ok(ref_func_op) = wasm_dialect::RefFunc::from_op(ctx, op) {
-                    ref_funcs.insert(ref_func_op.func_name(ctx));
+                    ref_funcs.insert(ref_func_op.func_name(ctx).clone());
                 }
             }
         }
     }
 
-    let mut ref_funcs = HashSet::new();
+    let mut ref_funcs = HashSet::default();
     let body = module.body(ctx).unwrap();
     collect_from_region(ctx, body, &mut ref_funcs);
     ref_funcs
@@ -135,16 +136,16 @@ mod tests {
     fn resultless_target_functions_do_not_abort_indirect_collection() {
         let mut ctx = IrContext::new();
         let text = "core.module @m {
-                wasm.func {sym_name = @good, type = wasm.func_sig<() -> core.i32>} {
+                wasm.func {sym_name = \"good\", type = wasm.func_sig<() -> core.i32>} {
                     %callee = wasm.i32_const {value = 0} : core.i32
                     %value = wasm.call_indirect %callee {signature = wasm.func_sig<() -> core.i32>} : core.i32
                     wasm.return %value
                 }
-                wasm.func {sym_name = @zero, type = wasm.func_sig<() -> ()>} { wasm.return }
+                wasm.func {sym_name = \"zero\", type = wasm.func_sig<() -> ()>} { wasm.return }
             }";
         let module = trunk_ir::parser::parse_test_module(&mut ctx, text);
         let seed = wasm_dialect::func_sig(&mut ctx, [], []).as_type_ref();
-        let mut indices = HashMap::from([(seed, 7)]);
+        let mut indices = [(seed, 7)].into_iter().collect::<HashMap<_, _>>();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 8, 0).unwrap();
         assert_eq!(added.len(), 1);
         assert_eq!(indices[&seed], 7);
@@ -155,10 +156,10 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
-            "core.module @m { wasm.func {sym_name = @f, type = wasm.func_sig<() -> ()>} { wasm.return } }",
+            "core.module @m { wasm.func {sym_name = \"f\", type = wasm.func_sig<() -> ()>} { wasm.return } }",
         );
         let before = trunk_ir::printer::print_module(&ctx, module.op());
-        let mut indices = HashMap::new();
+        let mut indices = HashMap::default();
         let added = collect_call_indirect_types(&mut ctx, module, &mut indices, 0, 0).unwrap();
         assert!(added.is_empty());
         assert!(indices.is_empty());
@@ -169,20 +170,20 @@ mod tests {
     fn indirect_call_requires_exact_signature_for_every_result_arity() {
         for source in [
             r#"core.module @m {
-  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> core.i32>} {
+  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> core.i32>} {
     ^entry(%table_index: core.i32):
       %value = wasm.call_indirect %table_index : core.i32
       wasm.return %value
   }
 }"#,
             r#"core.module @m {
-  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> ()>} {
+  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> ()>} {
     ^entry(%table_index: core.i32):
       wasm.call_indirect %table_index
   }
 }"#,
             r#"core.module @m {
-  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> ()>} {
+  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> ()>} {
     ^entry(%table_index: core.i32):
       %first, %second = wasm.call_indirect %table_index : core.i32, core.i64
   }
@@ -190,8 +191,9 @@ mod tests {
         ] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(&mut ctx, source);
-            let error = collect_call_indirect_types(&mut ctx, module, &mut HashMap::new(), 0, 1)
-                .expect_err("missing exact signature must fail before type collection");
+            let error =
+                collect_call_indirect_types(&mut ctx, module, &mut HashMap::default(), 0, 1)
+                    .expect_err("missing exact signature must fail before type collection");
             assert!(error.to_string().contains("lacks signature"), "{error}");
         }
     }

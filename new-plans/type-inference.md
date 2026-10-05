@@ -12,7 +12,8 @@
 | 타입 추론 방식 | Bidirectional | 순수 HM, 전면 양방향 |
 | Effect polymorphism | Row variables | Subtyping constraints |
 | Effect 흐름 | Hybrid (inward + outward) | Frank (순수 inward), Koka (순수 outward) |
-| 중복 label | 금지 | 허용 (런타임 모호성) |
+| 중복 label | 금지 | 허용 (scoped label과 `mask`) |
+| Tail effect의 dispatch | Row 위치로 정적 선택 (tunneling) | 가장 가까운 handler |
 | 암묵적 polymorphism | `fn(a) -> b` = `fn(a) ->{e} b` | 항상 명시 |
 
 ### Nominal Type Equality
@@ -193,9 +194,12 @@ fn foo() ->{State(Int), State(String)} Nil
 fn bar() ->{State(Int), State(Int)} Nil
 ```
 
-**이유**: 중복 허용 시 `State::get()`이 어떤 handler를 참조하는지 타입
-수준에서 결정할 수 없다. "가장 안쪽 handler"는 런타임 개념이지 타입 시스템이
-추적할 수 있는 정보가 아니다.
+**이유**: Tribute는 한 ability instance의 여러 occurrence나 handler 인스턴스를
+구별하는 의미론을 정의하지 않는다. Row는 instance의 집합이며, operation은 자기
+instance만 가리킨다. 같은 instance의 handler가 중첩되면 `State::get()`은 자기
+callable row의 명시 label에 묶인 handler로 가고, 같은 위치에서 바깥 handler를 따로
+가리킬 방법은 없다. 중복을 허용하려면
+occurrence의 순서나 이름으로 handler를 고르는 규칙이 함께 필요하다.
 
 **향후 확장**: 동일 ability의 여러 인스턴스가 필요한 경우, effect row에서 이름을 붙일 수 있다:
 
@@ -268,6 +272,82 @@ fn handled(comp: fn() ->{e, Ping} Nil) ->{e} Nil {
     handle comp() { do v { v } op Ping::ping() { resume Nil } }
 }
 ```
+
+"tail에는 제거한 label이 없다"는 본문 검사 안에서의 사실이다. 호출자는 그
+tail을 같은 instance를 담은 row로 채울 수 있다. 대입한 row는
+[중복 처리](#기본-규칙)에 따라 그 instance를 한 번만 담는다.
+
+시그니처가 약속하는 것은 tail의 effect가 호출자에게 속한다는 점이다. Handler는
+handle 지점 row가 명시한 label만 처리하고, tail로 들어온 operation은 함수 안의
+handler를 지나쳐 그 tail에 묶인 호출자의 handler로 간다. 이 선택은 정적이다.
+한 callable 안에서 label은 명시 label이거나 tail의 일부이며 둘 다일 수 없으므로,
+타입 검사는 각 호출이 callee에게 넘길 handler를 정한다:
+
+```rust
+fn twice_counted(f: fn() ->{e} Nil) ->{e} Nat {
+    run_state(fn() {
+        f()
+        State::set(State::get() + 1)
+        f()
+        State::set(State::get() + 1)
+        State::get()
+    }, 0)
+}
+
+fn main() -> Nil {
+    run_state(fn() {
+        let calls = twice_counted(fn() { State::set(State::get() + 10) })
+        // calls == 2, 바깥 state == 20
+    }, 0)
+    Nil
+}
+```
+
+`main`의 lambda가 `e`에 `State(Nat)`를 채워도, `twice_counted` 안의 `f()`는
+`run_state`가 설치한 handler가 아니라 `twice_counted`가 받은 evidence의 tail을
+받는다. `mask`나 `lacks` 제약은 필요 없다. "`e`에 처리한 label이 없다"는 호출자에
+대한 제약이 아니라 dispatch의 성질이다.
+
+#### 호출의 evidence 선택
+
+호출 지점에서 caller row, callee의 선언 row, 그리고 callee row 변수의
+인스턴스화가 정적으로 정해진다. Caller row가 명시한 각 ability instance `L`에 대해,
+callee가 `L`의 handler를 caller의 명시 `L`에서 받는 자리의 수 `k`를 센다. 자리는
+callee 선언 row의 명시 `L`과, callee의 tail 인스턴스가 명시한 `L`이다.
+
+| `k` | 의미 | 예 |
+| ---: | --- | --- |
+| 0 | caller의 명시 `L`은 callee에게 보이지 않는다. Callee의 `L`은 caller의 tail에서 온다 | `{State \| e}` 안에서 `{e}` 콜백 호출 |
+| 1 | 그대로 전달한다 | 대부분의 호출 |
+| 2 | Callee의 명시 `L`과 tail의 `L`이 모두 caller의 명시 `L`이다 | `g: fn(fn() ->{e} Nil) ->{State \| e} Nil`을 `e := {State \| e'}`로 호출 |
+
+`k = 2`는 [중복 처리](#기본-규칙)로 대입한 row에서는 보이지 않으므로, 이 선택은
+병합한 row가 아니라 인스턴스화에서 계산한다. `k = 0`이 가리기가 되는 것은 callee의
+tail 인스턴스가 caller의 tail로 이어질 때뿐이다. Tail이 닫혔거나 풀이 뒤에도 제약이
+없는 row 변수로 남으면(제약 없는 변수는 빈 row로 인스턴스화한 것과 같다) callee가
+caller tail의 handler에 닿는 자리가 없으므로 그대로 전달한다. Caller row가 명시하지 않은 label과
+handler marker가 없는 ambient `Io`는 그대로 전달한다. 이 결과는 typechecking이
+각 호출에 확정하는 metadata이며 이후 단계는 signature나 본문 형상에서 다시
+계산하지 않는다. 표현과 lowering은
+[cps-effects.md](cps-effects.md#row-directed-evidence)를 따른다.
+
+이 규칙은 callee row의 tail이 row 변수 하나일 때를 정의한다. 선언 row가 여러 row
+변수의 합집합인 callee(`fn both(f: fn() ->{e1} a, g: fn() ->{e2} b) ->{e1, e2}`)에서는
+callee가 각 tail에 넘길 handler를 ability별 marker 순서 하나로 구별할 수 없다. 이런
+callee의 tail 인스턴스에 caller의 명시 label이 들어가면 `k`는 그 label이 들어간 tail
+수와 무관하게 1로 두고 그대로 전달한다. 각 tail이 같은 instance의 서로 다른
+handler를 받아야 하는 경우, 즉 한 tail에는 caller의 명시 label이, 다른 tail에는
+caller tail의 같은 instance가 들어가는 경우의 dispatch는 보장하지 않는다.
+
+Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 바깥 그대로
+본다. 바깥 row가 처리하는 label을 명시하면 handle body는 그 바깥 handler를 보지
+않는다. Body row는 그 label을 한 번만 명시하므로 body 안에서 바깥 handler에
+닿는 자리가 없고, 바깥 handler가 남아 있으면 새 handler와 바깥 tail의 handler
+사이에 끼어 tail 자리를 밀어낸다. 그래서 handle 설치도 `k = 0`인 호출처럼 그
+label을 먼저 가린다. 바깥 row가 그 label을 tail로만 가지면 가리지 않는다.
+Handler arm과 `do` arm은 처리한 label이 빠진 row로 검사되므로, arm의
+operation과 호출은 handle 바깥의 handler를 본다. `resume`의 handler 선택은
+[abilities.md](abilities.md#resume과-handler-선택)를 따른다.
 
 Row 단일화는 시그니처 row 변수를 별칭의 대표로 유지한다. 열린 두 row를 맞출 때
 한쪽이 시그니처 row이고 다른 쪽이 label을 더하지 않으면, 새 변수를 만들지 않고

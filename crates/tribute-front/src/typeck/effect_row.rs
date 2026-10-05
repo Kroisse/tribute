@@ -46,11 +46,11 @@ pub fn contains<'db>(
 pub fn contains_by_name<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
-    name: Symbol,
+    name: &Symbol,
 ) -> bool {
     row.effects(db)
         .iter()
-        .any(|e| e.ability_id.name(db) == name)
+        .any(|e| e.ability_id.name(db) == *name)
 }
 
 /// Find all effects matching a given name (ignoring type parameters).
@@ -60,11 +60,11 @@ pub fn contains_by_name<'db>(
 pub fn find_by_name<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
-    name: Symbol,
+    name: &Symbol,
 ) -> Vec<Effect<'db>> {
     row.effects(db)
         .iter()
-        .filter(|e| e.ability_id.name(db) == name)
+        .filter(|e| e.ability_id.name(db) == *name)
         .cloned()
         .collect()
 }
@@ -168,10 +168,10 @@ pub fn find_conflicting_effects<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
 ) -> Option<(AbilityId<'db>, Vec<Effect<'db>>)> {
-    use std::collections::HashSet;
+    use rustc_hash::FxHashSet as HashSet;
 
     let effects = row.effects(db);
-    let mut seen: HashSet<&Effect<'db>> = HashSet::new();
+    let mut seen: HashSet<&Effect<'db>> = HashSet::default();
 
     for effect in effects.iter() {
         if !seen.insert(effect) {
@@ -216,7 +216,7 @@ mod tests {
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::source(db, Symbol::from_dynamic(name))
+        AbilityId::source(db, Symbol::new(name))
     }
 
     #[test]
@@ -303,12 +303,12 @@ mod tests {
             None,
         );
 
-        let state_effects = find_by_name(&db, row, Symbol::new("State"));
+        let state_effects = find_by_name(&db, row, &Symbol::new("State"));
         assert_eq!(state_effects.len(), 2);
         assert!(state_effects.contains(&state_int));
         assert!(state_effects.contains(&state_float));
 
-        let console_effects = find_by_name(&db, row, Symbol::new("Console"));
+        let console_effects = find_by_name(&db, row, &Symbol::new("Console"));
         assert_eq!(console_effects.len(), 1);
     }
 
@@ -496,7 +496,7 @@ mod tests {
             qualified.push_str("::");
         }
         qualified.push_str(name);
-        AbilityId::source(db, Symbol::from_dynamic(&qualified))
+        AbilityId::source(db, Symbol::new(&qualified))
     }
 
     #[test]

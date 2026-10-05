@@ -8,8 +8,9 @@
 //! backend-ready boundary.
 
 use std::fmt;
+use trunk_ir::attr_kind::Type;
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::TypeRef;
 use trunk_ir::context::IrContext;
@@ -28,7 +29,13 @@ mod tribute_rtti {
     /// kind per field. For an `adt.enum` layout, `tag` names the variant and
     /// `fields` lists one kind per field of that variant.
     #[verify]
-    fn layout(r#type: Attr<Type>, tag: Option<Attr<String>>, index: Attr<u32>, fields: Attr<_>) {}
+    fn layout(
+        r#type: Attr<Type>,
+        tag: Option<Attr<String>>,
+        index: Attr<u32>,
+        fields: Attr<[String]>,
+    ) {
+    }
 }
 
 /// How the runtime reads one field of an allocation.
@@ -205,30 +212,6 @@ pub fn descriptor_field_types(
     }
 }
 
-fn decode_fields(
-    ctx: &IrContext,
-    attribute: &Attribute,
-    expected: usize,
-) -> Result<Vec<FieldKind>, String> {
-    let Attribute::List(items) = attribute else {
-        return Err("expected a list of field kinds".into());
-    };
-    if items.len() != expected {
-        return Err(format!(
-            "expected {expected} field kind(s), found {}",
-            items.len()
-        ));
-    }
-    items
-        .iter()
-        .map(|item| match item {
-            Attribute::String(text) => FieldKind::parse(ctx.str(*text))
-                .ok_or_else(|| format!("unknown field kind \"{}\"", ctx.str(*text))),
-            _ => Err("expected a list of field kinds".to_owned()),
-        })
-        .collect()
-}
-
 impl Layout {
     /// Build a layout declaration for the descriptor `(ty, tag)`.
     pub fn declare(
@@ -239,13 +222,10 @@ impl Layout {
         index: u32,
         fields: &[FieldKind],
     ) -> Self {
-        let fields = Attribute::List(
-            fields
-                .iter()
-                .map(|kind| ctx.string_attr(&kind.to_string()))
-                .collect(),
-        );
-        let mut builder = Self::operands().r#type(ty).index(index).fields(fields);
+        let mut builder = Self::operands()
+            .r#type(ty)
+            .index(index)
+            .fields(fields.iter().map(ToString::to_string));
         if let Some(tag) = tag {
             builder = builder.tag(tag);
         }
@@ -258,8 +238,19 @@ impl Layout {
     }
 
     fn decode(self, ctx: &IrContext) -> Result<Vec<FieldKind>, String> {
-        let fields = descriptor_field_types(ctx, self.r#type(ctx), self.tag_ref(ctx))?;
-        decode_fields(ctx, &self.fields(ctx), fields.len())
+        let expected = descriptor_field_types(ctx, self.r#type(ctx), self.tag_ref(ctx))?.len();
+        let fields = self.fields(ctx);
+        if fields.len() != expected {
+            return Err(format!(
+                "expected {expected} field kind(s), found {}",
+                fields.len()
+            ));
+        }
+        fields
+            .map(|text| {
+                FieldKind::parse(text).ok_or_else(|| format!("unknown field kind \"{text}\""))
+            })
+            .collect()
     }
 
     /// The declarations of a module, in module order.

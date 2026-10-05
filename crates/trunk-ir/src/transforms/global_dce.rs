@@ -3,29 +3,29 @@
 //! Removes function definitions that are not reachable from reachability roots.
 //! Functions are keyed by root-qualified name. Reachability roots include:
 //! - The root module's `main` or `_start`
-//! - Functions referenced by `wasm.export_func`
+//! - Functions referenced outside any function definition, such as by
+//!   `wasm.export_func`
 //! - Function definitions with an `abi` attribute (externally callable)
 //!
 //! A bodyless `abi` declaration is an import, not a root: it stays only while
 //! something reachable references it.
 //! - Custom entry points from configuration, by qualified name
 //!
-//! Follows the [`CallGraph`] edges of `func.call`, `func.tail_call`, and
-//! `func.constant` operations, then removes unreachable functions via BFS.
+//! Follows the [`CallGraph`] edges of calls and address references, then
+//! removes unreachable functions via BFS.
 
-use std::collections::{HashSet, VecDeque};
-use std::ops::ControlFlow;
+use rustc_hash::FxHashSet as HashSet;
+use std::collections::VecDeque;
 
 use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
-use crate::dialect::{core, func, wasm};
+use crate::dialect::{core, func};
 use crate::ops::DialectOp;
 use crate::refs::OpRef;
 use crate::rewrite::Module;
-use crate::symbol::Symbol;
+use crate::symbol::SymbolPath;
 use crate::symbol_table::SymbolTable;
 use crate::transforms::call_graph::CallGraph;
-use crate::walk::{WalkAction, walk_region};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -50,7 +50,7 @@ pub struct GlobalDceResult {
     /// Number of functions removed.
     pub removed_count: usize,
     /// Names of removed functions (for debugging).
-    pub removed_functions: Vec<Symbol>,
+    pub removed_functions: Vec<SymbolPath>,
 }
 
 /// Eliminate unreachable functions from a module using default configuration.
@@ -91,27 +91,19 @@ fn run(
             .filter(|&(_, op)| func::Func::matches(ctx, op))
     };
     let is_candidate = |op| config.recursive || !in_nested_module(ctx, module, op);
-    let candidates: Vec<(Symbol, OpRef)> =
+    let candidates: Vec<(&SymbolPath, OpRef)> =
         functions().filter(|&(_, op)| is_candidate(op)).collect();
 
-    let mut roots: HashSet<Symbol> = functions()
-        .filter(|&(name, op)| !is_candidate(op) || is_root(ctx, name, op, config))
-        .map(|(name, _)| name)
+    let mut roots: HashSet<SymbolPath> = functions()
+        .filter(|(name, op)| !is_candidate(*op) || is_root(ctx, name, *op, config))
+        .map(|(name, _)| name.clone())
         .collect();
-    let _ = walk_region::<()>(ctx, module.body(ctx).expect("module body"), &mut |op| {
-        if wasm::ExportFunc::matches(ctx, op)
-            && let Some(func_ref) = ctx.op(op).attributes.get_symbol("func")
-        {
-            roots.insert(func_ref);
-        }
-        ControlFlow::Continue(WalkAction::Advance)
-    });
-
     let graph = analyses.require::<CallGraph>(ctx, module.op());
+    roots.extend(graph.module_references.iter().cloned());
     let reachable = compute_reachable(&graph, roots);
 
     // A function containing a reachable function definition is kept with it.
-    let mut kept = HashSet::new();
+    let mut kept = HashSet::default();
     for (_, op) in functions().filter(|(name, _)| reachable.contains(name)) {
         let mut current = Some(op);
         while let Some(op) = current
@@ -121,9 +113,10 @@ fn run(
             current = parent_op(ctx, op);
         }
     }
-    let dead: Vec<(Symbol, OpRef)> = candidates
+    let dead: Vec<(SymbolPath, OpRef)> = candidates
         .into_iter()
         .filter(|(_, op)| !kept.contains(op))
+        .map(|(name, op)| (name.clone(), op))
         .collect();
     let dead_ops: HashSet<OpRef> = dead.iter().map(|&(_, op)| op).collect();
 
@@ -151,11 +144,14 @@ fn run(
 /// Whether `name` is a reachability root: the root `main` or `_start`, a
 /// function definition with an `abi` attribute (externally callable), or a
 /// configured extra entry point.
-fn is_root(ctx: &IrContext, name: Symbol, op: OpRef, config: &GlobalDceConfig) -> bool {
-    name == Symbol::new("main")
-        || name == Symbol::new("_start")
+fn is_root(ctx: &IrContext, name: &SymbolPath, op: OpRef, config: &GlobalDceConfig) -> bool {
+    *name == "main"
+        || *name == "_start"
         || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
-        || name.with_str(|name| config.extra_entry_points.iter().any(|extra| extra == name))
+        || config
+            .extra_entry_points
+            .iter()
+            .any(|extra| *name == extra.as_str())
 }
 
 /// Whether `op` lies inside a `core.module` nested in `module`.
@@ -191,16 +187,21 @@ fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
 }
 
 /// Functions reachable from `roots` via BFS over call and reference edges.
-fn compute_reachable(graph: &CallGraph, roots: HashSet<Symbol>) -> HashSet<Symbol> {
-    let mut reachable = HashSet::new();
-    let mut worklist: VecDeque<Symbol> = roots.into_iter().collect();
+fn compute_reachable(graph: &CallGraph, roots: HashSet<SymbolPath>) -> HashSet<SymbolPath> {
+    let mut reachable = HashSet::default();
+    let mut worklist: VecDeque<SymbolPath> = roots.into_iter().collect();
 
     while let Some(func) = worklist.pop_front() {
-        if !reachable.insert(func) {
+        if !reachable.insert(func.clone()) {
             continue;
         }
         if let Some(callees) = graph.edges.get(&func) {
-            worklist.extend(callees.iter().filter(|callee| !reachable.contains(*callee)));
+            worklist.extend(
+                callees
+                    .iter()
+                    .filter(|callee| !reachable.contains(*callee))
+                    .cloned(),
+            );
         }
     }
 
@@ -212,7 +213,7 @@ mod tests {
     use super::*;
     use crate::dialect::func;
     use crate::location::Span;
-    use crate::symbol::Symbol;
+    use crate::symbol::SymbolPath;
     use crate::*;
     use smallvec::smallvec;
 
@@ -234,7 +235,7 @@ mod tests {
 
     fn build_simple_func(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
         let fn_ty = fn_type(ctx);
-        let sym_name = Symbol::from_dynamic(name);
+        let sym_name = SymbolPath::from(name);
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -249,7 +250,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(sym_name)
+            .sym_name(sym_name.to_string())
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -259,8 +260,8 @@ mod tests {
     fn build_func_with_call(ctx: &mut IrContext, loc: Location, name: &str, callee: &str) -> OpRef {
         let fn_ty = fn_type(ctx);
         let i32_ty = i32_type(ctx);
-        let sym_name = Symbol::from_dynamic(name);
-        let sym_callee = Symbol::from_dynamic(callee);
+        let sym_name = SymbolPath::from(name);
+        let sym_callee = SymbolPath::from(callee);
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -281,7 +282,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(sym_name)
+            .sym_name(sym_name.to_string())
             .r#type(fn_ty)
             .regions(body)
             .build(ctx, loc)
@@ -305,7 +306,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -378,7 +379,7 @@ mod tests {
             parent_region: None,
         });
         let const_op = func::Constant::operands()
-            .func_ref(Symbol::new("callback"))
+            .func_ref(SymbolPath::from("callback"))
             .results(fn_ty)
             .build(&mut ctx, loc);
         ctx.push_op(entry, const_op.op_ref());
@@ -390,7 +391,7 @@ mod tests {
             parent_op: None,
         });
         let main = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(fn_ty)
             .regions(body)
             .build(&mut ctx, loc)
@@ -440,7 +441,10 @@ mod tests {
         let export_data =
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("export_func"))
                 .attr("name", ctx.string_attr("my_export"))
-                .attr("func", Attribute::Symbol(Symbol::new("exported_func")))
+                .attr(
+                    "func",
+                    Attribute::SymbolRef(SymbolPath::from("exported_func")),
+                )
                 .build(&mut ctx);
         let export_op = ctx.create_op(export_data);
 
@@ -449,6 +453,48 @@ mod tests {
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(result.removed_count, 1); // Only unused_func removed
+    }
+
+    #[test]
+    fn keeps_functions_referenced_by_any_operation() {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @root {
+  test.table {entries = [@exported]}
+  func.func @exported() {
+    test.make_closure {func_ref = @captured}
+    func.return
+  }
+  func.func @captured() {
+    func.return
+  }
+  func.func @unused() {
+    test.make_closure {func_ref = @only_from_unused}
+    func.return
+  }
+  func.func @only_from_unused() {
+    func.return
+  }
+  func.func @named_by_module() {
+    func.return
+  }
+}"#,
+        );
+        ctx.op_mut(module.op()).attributes.insert(
+            "entry",
+            Attribute::SymbolRef(SymbolPath::from("named_by_module")),
+        );
+
+        eliminate_dead_functions(&mut ctx, module, &mut Default::default());
+
+        assert_eq!(
+            surviving_functions(&ctx, module),
+            ["exported", "captured", "named_by_module"]
+                .map(SymbolPath::from)
+                .into_iter()
+                .collect::<HashSet<_>>()
+        );
     }
 
     #[test]
@@ -470,7 +516,7 @@ mod tests {
             parent_op: None,
         });
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("extern_fn")))
+            .attr("sym_name", Attribute::String(ctx.intern_str("extern_fn")))
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)
@@ -502,7 +548,7 @@ mod tests {
 
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
-        assert_eq!(result.removed_functions, [Symbol::new("unused")]);
+        assert_eq!(result.removed_functions, [SymbolPath::from("unused")]);
         assert_eq!(count_funcs(&ctx, module), 2);
     }
 
@@ -525,7 +571,7 @@ mod tests {
         });
         let i32_ty = i32_type(&mut ctx);
         let call = func::Call::operands(std::iter::empty())
-            .callee(Symbol::new("helper"))
+            .callee(SymbolPath::from("helper"))
             .results([i32_ty])
             .build(&mut ctx, loc);
         ctx.push_op(entry, call.op_ref());
@@ -537,7 +583,7 @@ mod tests {
             parent_op: None,
         });
         let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("extern_fn")))
+            .attr("sym_name", Attribute::String(ctx.intern_str("extern_fn")))
             .attr("type", Attribute::Type(fn_ty))
             .attr("abi", ctx.string_attr("C"))
             .region(body)
@@ -579,7 +625,7 @@ mod tests {
         });
         let nested_module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("nested")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("nested")))
                 .region(nested_region)
                 .build(&mut ctx);
         let nested_module_op = ctx.create_op(nested_module_data);
@@ -595,11 +641,13 @@ mod tests {
 
         assert_eq!(result.removed_count, 2);
         assert_eq!(
-            HashSet::<Symbol>::from_iter(result.removed_functions),
-            HashSet::from([
-                Symbol::from_dynamic("nested::main"),
-                Symbol::from_dynamic("nested::unused_in_nested"),
-            ])
+            HashSet::<SymbolPath>::from_iter(result.removed_functions),
+            [
+                SymbolPath::new(["nested", "main"]),
+                SymbolPath::new(["nested", "unused_in_nested"]),
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
         );
     }
 
@@ -625,7 +673,7 @@ mod tests {
         });
         let nested_module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("nested")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("nested")))
                 .region(nested_region)
                 .build(&mut ctx);
         let nested_module_op = ctx.create_op(nested_module_data);
@@ -643,11 +691,11 @@ mod tests {
         assert_eq!(result.removed_count, 0);
     }
 
-    fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<Symbol> {
+    fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
         SymbolTable::collect(ctx, module)
             .all_definitions()
             .filter(|&(_, op)| func::Func::matches(ctx, op))
-            .map(|(name, _)| name)
+            .map(|(name, _)| name.clone())
             .collect()
     }
 
@@ -658,7 +706,7 @@ mod tests {
             &mut ctx,
             r#"core.module @root {
   func.func @main() {
-    func.call {callee = @"a::same"}
+    func.call {callee = @a::@same}
     func.return
   }
   core.module @a {
@@ -676,10 +724,12 @@ mod tests {
 
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
-        assert_eq!(result.removed_functions, [Symbol::from_dynamic("b::same")]);
+        assert_eq!(result.removed_functions, [SymbolPath::new(["b", "same"])]);
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from([Symbol::new("main"), Symbol::from_dynamic("a::same")])
+            [SymbolPath::from("main"), SymbolPath::new(["a", "same"])]
+                .into_iter()
+                .collect::<HashSet<_>>()
         );
     }
 
@@ -714,7 +764,7 @@ mod tests {
         let result =
             eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
 
-        assert_eq!(result.removed_functions, [Symbol::new("unused")]);
+        assert_eq!(result.removed_functions, [SymbolPath::from("unused")]);
     }
 
     #[test]
@@ -745,16 +795,23 @@ mod tests {
         let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
 
         assert_eq!(
-            HashSet::<Symbol>::from_iter(result.removed_functions),
-            HashSet::from([Symbol::new("dead_host"), Symbol::new("dead_inner")])
+            HashSet::<SymbolPath>::from_iter(result.removed_functions),
+            [
+                SymbolPath::from("dead_host"),
+                SymbolPath::from("dead_inner")
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
         );
         assert_eq!(
             surviving_functions(&ctx, module),
-            HashSet::from([
-                Symbol::new("main"),
-                Symbol::new("host"),
-                Symbol::new("inner")
-            ])
+            [
+                SymbolPath::from("main"),
+                SymbolPath::from("host"),
+                SymbolPath::from("inner")
+            ]
+            .into_iter()
+            .collect::<HashSet<_>>()
         );
     }
 }

@@ -12,6 +12,7 @@
 //! - [`tdnr`]: Type-directed name resolution (AST → AST)
 //! - [`ast_to_ir`]: AST to TrunkIR lowering
 //! - [`query`]: Salsa-tracked query functions for incremental compilation
+//! - [`sorted_map`]: Sorted-vector map for deterministic phase results
 //! - [`source_file`]: Source file management and URI handling
 
 pub mod ast;
@@ -21,12 +22,14 @@ pub mod keywords;
 pub mod monomorphize;
 pub mod query;
 pub mod resolve;
+pub mod sorted_map;
 pub mod source_file;
 pub mod tdnr;
 pub mod typeck;
 
 pub use fluent_uri::Uri;
 pub use query::{ParsedCst, parse_cst};
+pub use sorted_map::SortedMap;
 pub use source_file::{SourceCst, derive_module_name_from_path, path_to_uri};
 
 use trunk_ir::Symbol;
@@ -36,14 +39,14 @@ use trunk_ir::Symbol;
 /// If `prefix` is empty, returns `name` directly (no allocation).
 /// Otherwise, temporarily appends `::name` to the buffer, creates the symbol,
 /// then restores the buffer to its original length.
-pub fn qualified_symbol(prefix: &mut String, name: Symbol) -> Symbol {
+pub fn qualified_symbol(prefix: &mut String, name: &Symbol) -> Symbol {
     if prefix.is_empty() {
-        name
+        name.clone()
     } else {
         let len = prefix.len();
         prefix.push_str("::");
         name.with_str(|s| prefix.push_str(s));
-        let sym = Symbol::from_dynamic(prefix);
+        let sym = Symbol::new(prefix);
         prefix.truncate(len);
         sym
     }
@@ -51,16 +54,16 @@ pub fn qualified_symbol(prefix: &mut String, name: Symbol) -> Symbol {
 
 /// Build a qualified symbol from parsed path segments.
 pub fn qualified_path_symbol(path: &[Symbol]) -> Option<Symbol> {
-    let (&name, prefix) = path.split_last()?;
+    let (name, prefix) = path.split_last()?;
     let mut buf = String::new();
-    for &segment in prefix {
+    for segment in prefix {
         push_prefix(&mut buf, segment);
     }
     Some(qualified_symbol(&mut buf, name))
 }
 
 /// Push a segment onto a prefix buffer. Returns the length before push (for truncate).
-pub fn push_prefix(prefix: &mut String, name: Symbol) -> usize {
+pub fn push_prefix(prefix: &mut String, name: &Symbol) -> usize {
     let len = prefix.len();
     if !prefix.is_empty() {
         prefix.push_str("::");
@@ -70,6 +73,6 @@ pub fn push_prefix(prefix: &mut String, name: Symbol) -> usize {
 }
 
 /// Whether a declaration is the exact root program entrypoint.
-pub(crate) fn is_root_main(name: Symbol, is_root_module: bool) -> bool {
-    is_root_module && name == Symbol::new("main")
+pub(crate) fn is_root_main(name: &Symbol, is_root_module: bool) -> bool {
+    is_root_module && *name == Symbol::new("main")
 }

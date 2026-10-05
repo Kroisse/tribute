@@ -3,7 +3,7 @@
 //! Transforms `MethodCall` expressions into `Call` expressions by resolving
 //! the method name using the receiver's type.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::Symbol;
 
@@ -38,7 +38,7 @@ pub struct TdnrResolver<'db> {
 impl<'db> TdnrResolver<'db> {
     /// Create a new TDNR resolver.
     pub fn new(db: &'db dyn salsa::Database) -> Self {
-        let mut type_identities = HashMap::new();
+        let mut type_identities = HashMap::default();
         type_identities.insert(Symbol::new("List"), crate::ast::TypeDefId::builtin_list(db));
         type_identities.insert(
             Symbol::new("std::collections::List"),
@@ -46,7 +46,7 @@ impl<'db> TdnrResolver<'db> {
         );
         Self {
             db,
-            method_index: HashMap::new(),
+            method_index: HashMap::default(),
             type_identities,
             current_prefix: String::new(),
             string_type: None,
@@ -97,21 +97,25 @@ impl<'db> TdnrResolver<'db> {
             if let [Decl::Module(root)] = decls.as_slice()
                 && let Some(body) = &root.body
             {
-                crate::push_prefix(&mut package, root.name);
+                crate::push_prefix(&mut package, &root.name);
                 decls = body;
             }
             self.string_type = decls.iter().find_map(|decl| {
                 let (name, declaration) = match decl {
-                    Decl::Struct(decl) => (decl.name, decl.id),
-                    Decl::Enum(decl) => (decl.name, decl.id),
+                    Decl::Struct(decl) => (decl.name.clone(), decl.id),
+                    Decl::Enum(decl) => (decl.name.clone(), decl.id),
                     _ => return None,
                 };
                 (name == "String").then(|| {
-                    let qualified = crate::qualified_symbol(&mut package.clone(), name);
+                    let qualified = crate::qualified_symbol(&mut package.clone(), &name);
                     Type::new(
                         self.db,
                         TypeKind::Named {
-                            id: crate::ast::TypeDefId::source(self.db, qualified, declaration),
+                            id: crate::ast::TypeDefId::source(
+                                self.db,
+                                qualified.clone(),
+                                declaration,
+                            ),
                             name: qualified,
                             args: vec![],
                         },
@@ -129,18 +133,20 @@ impl<'db> TdnrResolver<'db> {
         for decl in decls {
             match decl {
                 Decl::Struct(struct_decl) => {
-                    let qualified = qualified_symbol(prefix, struct_decl.name);
-                    let id = crate::ast::TypeDefId::source(self.db, qualified, struct_decl.id);
+                    let qualified = qualified_symbol(prefix, &struct_decl.name);
+                    let id =
+                        crate::ast::TypeDefId::source(self.db, qualified.clone(), struct_decl.id);
                     self.type_identities.insert(qualified, id);
                 }
                 Decl::Enum(enum_decl) => {
-                    let qualified = qualified_symbol(prefix, enum_decl.name);
-                    let id = crate::ast::TypeDefId::source(self.db, qualified, enum_decl.id);
+                    let qualified = qualified_symbol(prefix, &enum_decl.name);
+                    let id =
+                        crate::ast::TypeDefId::source(self.db, qualified.clone(), enum_decl.id);
                     self.type_identities.insert(qualified, id);
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = push_prefix(prefix, module.name);
+                        let saved = push_prefix(prefix, &module.name);
                         self.collect_type_identities(body, prefix);
                         prefix.truncate(saved);
                     }
@@ -172,10 +178,10 @@ impl<'db> TdnrResolver<'db> {
                         continue;
                     }
 
-                    let func_name = func.name;
+                    let func_name = func.name.clone();
 
                     // Create FuncDefId with qualified name
-                    let qualified = qualified_symbol(prefix, func_name);
+                    let qualified = qualified_symbol(prefix, &func_name);
                     let func_id = FuncDefId::new(self.db, qualified);
 
                     // Build function type from parameter and return type annotations
@@ -193,18 +199,18 @@ impl<'db> TdnrResolver<'db> {
                     //   - x → fn x(self: Point) -> Int  (receiver type filtering at lookup)
                     //   - y → fn y(self: Point) -> Int
 
-                    let struct_name = s.name;
+                    let struct_name = s.name.clone();
 
                     // Push struct name to build qualified field accessor names
-                    let saved = push_prefix(prefix, struct_name);
+                    let saved = push_prefix(prefix, &struct_name);
 
                     for field in &s.fields {
-                        let Some(field_name) = field.name else {
+                        let Some(field_name) = field.name.clone() else {
                             continue; // Skip unnamed fields
                         };
 
                         // Create synthetic FuncDefId for the accessor
-                        let field_qualified = qualified_symbol(prefix, field_name);
+                        let field_qualified = qualified_symbol(prefix, &field_name);
                         let func_id = FuncDefId::new(self.db, field_qualified);
 
                         // Build accessor function type: fn(self: StructType) -> FieldType
@@ -213,20 +219,20 @@ impl<'db> TdnrResolver<'db> {
                         let self_annotation = if s.type_params.is_empty() {
                             TypeAnnotation {
                                 id: s.id,
-                                kind: TypeAnnotationKind::Named(struct_name),
+                                kind: TypeAnnotationKind::Named(struct_name.clone()),
                             }
                         } else {
                             // Include type parameters: StructName(a, b, ...)
                             let ctor = TypeAnnotation {
                                 id: s.id,
-                                kind: TypeAnnotationKind::Named(struct_name),
+                                kind: TypeAnnotationKind::Named(struct_name.clone()),
                             };
                             let args: Vec<TypeAnnotation> = s
                                 .type_params
                                 .iter()
                                 .map(|tp| TypeAnnotation {
                                     id: tp.id,
-                                    kind: TypeAnnotationKind::Named(tp.name),
+                                    kind: TypeAnnotationKind::Named(tp.name.clone()),
                                 })
                                 .collect();
                             TypeAnnotation {
@@ -264,7 +270,7 @@ impl<'db> TdnrResolver<'db> {
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
                         // Build nested module path by appending current module name
-                        let saved = push_prefix(prefix, m.name);
+                        let saved = push_prefix(prefix, &m.name);
                         self.index_decls(body, prefix);
                         prefix.truncate(saved);
                     }
@@ -361,7 +367,7 @@ impl<'db> TdnrResolver<'db> {
                 if let Some(kind) = name.with_str(TypeKind::from_primitive_name) {
                     Type::new(self.db, kind)
                 } else {
-                    self.nominal_type_in_scope(*name, prefix)
+                    self.nominal_type_in_scope(name.clone(), prefix)
                 }
             }
             // Name resolution spelled the path from the package root.
@@ -388,7 +394,7 @@ impl<'db> TdnrResolver<'db> {
     }
 
     fn nominal_type_in_scope(&self, name: Symbol, prefix: &str) -> Type<'db> {
-        let id = self.lookup_type_identity(name, prefix);
+        let id = self.lookup_type_identity(name.clone(), prefix);
         Type::new(
             self.db,
             TypeKind::Named {
@@ -413,7 +419,7 @@ impl<'db> TdnrResolver<'db> {
         // current module; the package root holds the rest.
         let scope = prefix.trim_end_matches("::");
         if !scope.is_empty() {
-            let candidate = Symbol::from_dynamic(&format!("{scope}::{spelling}"));
+            let candidate = Symbol::new(&format!("{scope}::{spelling}"));
             if let Some(id) = self.type_identities.get(&candidate) {
                 return *id;
             }
@@ -437,7 +443,7 @@ impl<'db> TdnrResolver<'db> {
         use crate::ast::TypeAnnotationKind;
         let ann = annotation.as_ref()?;
         match &ann.kind {
-            TypeAnnotationKind::Named(name) => Some(*name),
+            TypeAnnotationKind::Named(name) => Some(name.clone()),
             TypeAnnotationKind::Path(path) => crate::qualified_path_symbol(path),
             TypeAnnotationKind::App { ctor, .. } => {
                 self.extract_receiver_type_from_annotation(&Some((**ctor).clone()))
@@ -463,7 +469,7 @@ impl<'db> TdnrResolver<'db> {
         else {
             return;
         };
-        let Some(entry) = self.lookup_method(self.get_expr_type(receiver), *method) else {
+        let Some(entry) = self.lookup_method(self.get_expr_type(receiver), method) else {
             return;
         };
         let callee_ref = TypedRef {
@@ -589,10 +595,10 @@ impl<'db> TdnrResolver<'db> {
     fn lookup_method(
         &self,
         receiver_ty: Option<Type<'db>>,
-        method: Symbol,
+        method: &Symbol,
     ) -> Option<&MethodEntry<'db>> {
         let receiver_ty = receiver_ty?;
-        let candidates = self.method_index.get(&method)?;
+        let candidates = self.method_index.get(method)?;
 
         let mut iter = candidates
             .iter()
@@ -607,7 +613,7 @@ impl<'db> TdnrResolver<'db> {
 
 impl<'db> VisitMut<TypedRef<'db>> for TdnrResolver<'db> {
     fn visit_module_decl_mut(&mut self, module: &mut ModuleDecl<TypedRef<'db>>) {
-        let saved = push_prefix(&mut self.current_prefix, module.name);
+        let saved = push_prefix(&mut self.current_prefix, &module.name);
         walk_module_decl_mut(self, module);
         self.current_prefix.truncate(saved);
     }
@@ -682,7 +688,8 @@ mod tests {
         let db = test_db();
         let mut resolver = TdnrResolver::new(&db);
         let name = Symbol::new("String");
-        let user_id = crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(2));
+        let user_id =
+            crate::ast::TypeDefId::source(&db, name.clone(), crate::ast::NodeId::from_raw(2));
         resolver.type_identities.insert(name, user_id);
 
         let expr = Expr::new(fresh_node_id(), ExprKind::StringLit("hello".to_owned()));
@@ -700,13 +707,15 @@ mod tests {
         let db = test_db();
         let mut resolver = TdnrResolver::new(&db);
         let name = Symbol::new("String");
-        let prelude_id = crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1));
-        let user_id = crate::ast::TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(2));
+        let prelude_id =
+            crate::ast::TypeDefId::source(&db, name.clone(), crate::ast::NodeId::from_raw(1));
+        let user_id =
+            crate::ast::TypeDefId::source(&db, name.clone(), crate::ast::NodeId::from_raw(2));
         resolver.string_type = Some(Type::new(
             &db,
             TypeKind::Named {
                 id: prelude_id,
-                name,
+                name: name.clone(),
                 args: vec![],
             },
         ));
@@ -838,8 +847,8 @@ mod tests {
         let option_int = Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, option_name),
-                name: option_name,
+                id: crate::ast::TypeDefId::synthetic(db, option_name.clone()),
+                name: option_name.clone(),
                 args: vec![int_ty],
             },
         );
@@ -855,7 +864,7 @@ mod tests {
         );
 
         let some_name = Symbol::new("Some");
-        let ctor_id = CtorId::new(db, some_name);
+        let ctor_id = CtorId::new(db, some_name.clone());
         let ctor_ref = TypedRef {
             resolved: ResolvedRef::Constructor {
                 id: ctor_id,
@@ -893,13 +902,13 @@ mod tests {
         let point_ty = Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, point_name),
-                name: point_name,
+                id: crate::ast::TypeDefId::synthetic(db, point_name.clone()),
+                name: point_name.clone(),
                 args: vec![],
             },
         );
 
-        let ctor_id = CtorId::new(db, point_name);
+        let ctor_id = CtorId::new(db, point_name.clone());
         let ctor_ref = TypedRef {
             resolved: ResolvedRef::Constructor {
                 id: ctor_id,
@@ -1062,13 +1071,13 @@ mod tests {
 
         let type_name = Symbol::new("Foo");
         let method_name = Symbol::new("bar");
-        let func_id = FuncDefId::new(db, method_name);
+        let func_id = FuncDefId::new(db, method_name.clone());
         // func_ty must be a Func type with Foo as the first param so receiver_ty() works
         let foo_ty = Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, type_name),
-                name: type_name,
+                id: crate::ast::TypeDefId::synthetic(db, type_name.clone()),
+                name: type_name.clone(),
                 args: vec![],
             },
         );
@@ -1085,20 +1094,20 @@ mod tests {
 
         resolver
             .method_index
-            .entry(method_name)
+            .entry(method_name.clone())
             .or_default()
             .push(MethodEntry { func_id, func_ty });
 
         let receiver_ty = Some(Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, type_name),
+                id: crate::ast::TypeDefId::synthetic(db, type_name.clone()),
                 name: type_name,
                 args: vec![],
             },
         ));
 
-        let result = resolver.lookup_method(receiver_ty, method_name);
+        let result = resolver.lookup_method(receiver_ty, &method_name);
         result.is_some()
     }
 
@@ -1121,8 +1130,8 @@ mod tests {
         let foo_ty = Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, type_name),
-                name: type_name,
+                id: crate::ast::TypeDefId::synthetic(db, type_name.clone()),
+                name: type_name.clone(),
                 args: vec![],
             },
         );
@@ -1143,7 +1152,10 @@ mod tests {
         let func_id_2 = FuncDefId::new(db, Symbol::new("bar2"));
         let func_ty_2 = make_func_ty(Type::new(db, TypeKind::Float));
 
-        let candidates = resolver.method_index.entry(method_name).or_default();
+        let candidates = resolver
+            .method_index
+            .entry(method_name.clone())
+            .or_default();
         candidates.push(MethodEntry {
             func_id: func_id_1,
             func_ty: func_ty_1,
@@ -1156,13 +1168,13 @@ mod tests {
         let receiver_ty = Some(Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, type_name),
+                id: crate::ast::TypeDefId::synthetic(db, type_name.clone()),
                 name: type_name,
                 args: vec![],
             },
         ));
 
-        let result = resolver.lookup_method(receiver_ty, method_name);
+        let result = resolver.lookup_method(receiver_ty, &method_name);
         // Should be None due to ambiguity
         result.is_none()
     }
@@ -1188,7 +1200,7 @@ mod tests {
             },
         ));
 
-        let result = resolver.lookup_method(receiver_ty, Symbol::new("nonexistent"));
+        let result = resolver.lookup_method(receiver_ty, &Symbol::new("nonexistent"));
         result.is_none()
     }
 
@@ -1206,7 +1218,7 @@ mod tests {
 
         let type_name = Symbol::new("List");
         let method_name = Symbol::new("map");
-        let func_id = FuncDefId::new(db, method_name);
+        let func_id = FuncDefId::new(db, method_name.clone());
         // func_ty must have Named("List") as the first param for receiver_type_matches
         let list_named = Type::new(
             db,
@@ -1229,7 +1241,7 @@ mod tests {
 
         resolver
             .method_index
-            .entry(method_name)
+            .entry(method_name.clone())
             .or_default()
             .push(MethodEntry { func_id, func_ty });
 
@@ -1243,7 +1255,7 @@ mod tests {
             },
         );
 
-        let result = resolver.lookup_method(Some(app_ty), method_name);
+        let result = resolver.lookup_method(Some(app_ty), &method_name);
         result.is_some()
     }
 

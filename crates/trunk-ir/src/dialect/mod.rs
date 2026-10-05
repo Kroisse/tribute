@@ -16,6 +16,7 @@ pub mod wasm_gc;
 mod tests {
     use crate::Span;
     use crate::Symbol;
+    use crate::SymbolPath;
     use crate::ops::{DialectOp, DialectType};
     use crate::refs::PathRef;
     use crate::types::Location;
@@ -84,7 +85,7 @@ mod tests {
 
         // Create func.call with variadic args
         let call = super::func::Call::operands([v1, v2])
-            .callee(Symbol::new("add"))
+            .callee(SymbolPath::from("add"))
             .results([i32_ty])
             .build(&mut ctx, loc);
 
@@ -156,7 +157,7 @@ mod tests {
 
         // Constructor order: ctx, location, attrs (sym_name, r#type), regions (body)
         let f = super::func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(func_ty)
             .regions(region)
             .build(&mut ctx, loc);
@@ -166,7 +167,7 @@ mod tests {
         assert_eq!(f.op_ref(), f2.op_ref());
 
         // Verify attrs
-        assert_eq!(f.sym_name(&ctx), Symbol::new("main"));
+        assert_eq!(f.sym_name(&ctx), "main");
 
         // Verify region accessor
         assert_eq!(f.body(&ctx), region);
@@ -347,7 +348,7 @@ mod tests {
         let i32_ty = make_i32_type(&mut ctx);
 
         let call = super::wasm::Call::operands([])
-            .callee(Symbol::new("multi_return"))
+            .callee(SymbolPath::from("multi_return"))
             .results([i32_ty, i32_ty])
             .build(&mut ctx, loc);
 

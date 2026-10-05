@@ -10,7 +10,8 @@
 //! 2. **IR build**: `ArenaIrBuilder` converts `Raw*` → arena `OpRef`,
 //!    `BlockRef`, `RegionRef`, etc.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use smallvec::smallvec;
 use winnow::prelude::*;
@@ -18,13 +19,13 @@ use winnow::prelude::*;
 use super::raw::{
     self, ParseError, RawAttrDict, RawAttribute, RawOperation, RawParam, RawRegion, RawType,
 };
-use crate::Symbol;
 use crate::context::{IrContext, OperationDataBuilder};
 use crate::ops::DialectType;
 use crate::refs::*;
 use crate::rewrite::Module;
 use crate::types::*;
 use crate::{BlockArgData, BlockData, RegionData};
+use crate::{Symbol, SymbolPath};
 
 /// The types of `params`, without their attributes.
 fn param_types(params: &[(TypeRef, AttributeMap)]) -> impl ExactSizeIterator<Item = TypeRef> + '_ {
@@ -84,10 +85,10 @@ impl<'a> ArenaIrBuilder<'a> {
                 params,
                 attrs,
             } => {
-                let dialect = Symbol::from_dynamic(dialect);
-                let name = Symbol::from_dynamic(name);
+                let dialect = Symbol::new(dialect);
+                let name = Symbol::new(name);
                 let params = self.build_params(params)?;
-                let attrs = self.build_type_attrs(dialect, name, attrs)?;
+                let attrs = self.build_type_attrs(&dialect, &name, attrs)?;
 
                 let mut builder = TypeDataBuilder::new(dialect, name);
                 for (ty, param_attrs) in params {
@@ -126,7 +127,7 @@ impl<'a> ArenaIrBuilder<'a> {
     fn build_attr_dict(&mut self, attrs: &RawAttrDict<'_>) -> Result<AttributeMap, ParseError> {
         attrs
             .iter()
-            .map(|(key, value)| Ok((Symbol::from_dynamic(key), self.build_attribute(value)?)))
+            .map(|(key, value)| Ok((Symbol::new(key), self.build_attribute(value)?)))
             .collect()
     }
 
@@ -136,8 +137,8 @@ impl<'a> ArenaIrBuilder<'a> {
     /// parameter, so an explicit [`PARAM_ATTRS_ATTR`] key is rejected.
     fn build_type_attrs(
         &mut self,
-        dialect: Symbol,
-        name: Symbol,
+        dialect: &Symbol,
+        name: &Symbol,
         attrs: &RawAttrDict<'_>,
     ) -> Result<AttributeMap, ParseError> {
         if attrs.iter().any(|(key, _)| key == PARAM_ATTRS_ATTR) {
@@ -155,8 +156,8 @@ impl<'a> ArenaIrBuilder<'a> {
     /// its inputs and results in canonical [`PARAM_ATTRS_ATTR`] form.
     fn build_function_type_attrs(
         &mut self,
-        dialect: Symbol,
-        name: Symbol,
+        dialect: &Symbol,
+        name: &Symbol,
         attrs: &RawAttrDict<'_>,
         inputs: &[(TypeRef, AttributeMap)],
         results: &[(TypeRef, AttributeMap)],
@@ -209,8 +210,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            Symbol::new("wasm"),
-            Symbol::new("func_sig"),
+            &Symbol::new("wasm"),
+            &Symbol::new("func_sig"),
             attrs,
             &inputs,
             &results,
@@ -243,8 +244,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            Symbol::new("clif"),
-            Symbol::new("func_sig"),
+            &Symbol::new("clif"),
+            &Symbol::new("func_sig"),
             attrs,
             &inputs,
             &results,
@@ -287,8 +288,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            Symbol::new("func"),
-            Symbol::new("func_sig"),
+            &crate::symbol!("func"),
+            &Symbol::new("func_sig"),
             attrs,
             &inputs,
             &results,
@@ -324,8 +325,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            Symbol::from_dynamic(dialect),
-            Symbol::from_dynamic(name),
+            &Symbol::new(dialect),
+            &Symbol::new(name),
             attrs,
             &inputs,
             &results,
@@ -339,10 +340,9 @@ impl<'a> ArenaIrBuilder<'a> {
             message: format!("{dialect}.{name} result count exceeds u32"),
             offset: 0,
         })?;
-        let mut builder =
-            TypeDataBuilder::new(Symbol::from_dynamic(dialect), Symbol::from_dynamic(name))
-                .params(inputs)
-                .params(results);
+        let mut builder = TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name))
+            .params(inputs)
+            .params(results);
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
@@ -366,7 +366,9 @@ impl<'a> ArenaIrBuilder<'a> {
             RawAttribute::Int(n) => Attribute::Int(*n),
             RawAttribute::Float(f) => Attribute::FloatBits(f.to_bits()),
             RawAttribute::String(s) => self.ctx.string_attr(s),
-            RawAttribute::Symbol(s) => Attribute::Symbol(Symbol::from_dynamic(s.as_str())),
+            RawAttribute::SymbolRef(components) => Attribute::SymbolRef(SymbolPath::new(
+                components.iter().map(|name| Symbol::new(name)),
+            )),
             RawAttribute::Type(t) => Attribute::Type(self.build_type(t)?),
             RawAttribute::List(items) => {
                 let list: Vec<Attribute> = items
@@ -379,7 +381,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 let mut dict = crate::types::AttributeMap::new();
                 for (key, value) in entries {
                     let value = self.build_attribute(value)?;
-                    if dict.insert(Symbol::from_dynamic(key), value).is_some() {
+                    if dict.insert(Symbol::new(key), value).is_some() {
                         return Err(ParseError {
                             message: format!("duplicate dictionary attribute key '{key}'"),
                             offset: 0,
@@ -454,11 +456,11 @@ impl<'a> ArenaIrBuilder<'a> {
         for (name, raw_ty) in &raw.type_aliases {
             let ty = self.build_type(raw_ty)?;
             self.scope.type_alias_map.insert(name.to_string(), ty);
-            self.ctx.register_type_alias(Symbol::from_dynamic(name), ty);
+            self.ctx.register_type_alias(Symbol::new(name), ty);
         }
 
         // --- Pass 1: Pre-create all blocks (with args) to get BlockRefs ---
-        let mut seen_labels = std::collections::HashSet::new();
+        let mut seen_labels = HashSet::default();
         let mut block_refs = Vec::with_capacity(raw.blocks.len());
 
         for (i, raw_block) in raw.blocks.iter().enumerate() {
@@ -474,7 +476,7 @@ impl<'a> ArenaIrBuilder<'a> {
             let all_args = self.resolve_block_args(i, raw_block, extra_entry_args)?;
 
             // Build BlockArgData
-            let mut seen_names = std::collections::HashSet::new();
+            let mut seen_names = HashSet::default();
             let mut block_arg_data = Vec::with_capacity(all_args.len());
             let mut arg_names = Vec::with_capacity(all_args.len());
 
@@ -494,7 +496,7 @@ impl<'a> ArenaIrBuilder<'a> {
 
                 let mut attrs = AttributeMap::new();
                 if !is_default_name {
-                    attrs.insert("bind_name", Symbol::from_dynamic(name));
+                    attrs.insert("bind_name", self.ctx.string_attr(name));
                 }
                 block_arg_data.push(BlockArgData { ty, attrs });
                 arg_names.push(name.to_string());
@@ -582,11 +584,11 @@ impl<'a> ArenaIrBuilder<'a> {
             if bt != pt {
                 let (bd, bn) = {
                     let d = self.ctx.get_type(bt);
-                    (d.dialect, d.name)
+                    (d.dialect.clone(), d.name.clone())
                 };
                 let (pd, pn) = {
                     let d = self.ctx.get_type(pt);
-                    (d.dialect, d.name)
+                    (d.dialect.clone(), d.name.clone())
                 };
                 return Err(ParseError {
                     message: format!(
@@ -606,8 +608,8 @@ impl<'a> ArenaIrBuilder<'a> {
     // ----------------------------------------------------------------
 
     fn build_operation(&mut self, raw: &RawOperation<'_>) -> Result<OpRef, ParseError> {
-        let dialect = Symbol::from_dynamic(raw.dialect);
-        let op_name = Symbol::from_dynamic(raw.op_name);
+        let dialect = Symbol::new(raw.dialect);
+        let op_name = Symbol::new(raw.op_name);
 
         // Resolve operands
         let operands: Vec<ValueRef> = raw
@@ -635,12 +637,12 @@ impl<'a> ArenaIrBuilder<'a> {
         let mut attributes: AttributeMap = raw
             .attributes
             .iter()
-            .map(|(k, v)| Ok((Symbol::from_dynamic(k), self.build_attribute(v)?)))
+            .map(|(k, v)| Ok((Symbol::new(k), self.build_attribute(v)?)))
             .collect::<Result<_, ParseError>>()?;
 
         // Add sym_name if present
         if let Some(ref name) = raw.sym_name {
-            attributes.insert("sym_name", Symbol::from_dynamic(name.as_str()));
+            attributes.insert("sym_name", Attribute::String(self.ctx.intern_str(name)));
         }
 
         // Handle func-style signature → func.func_sig type
@@ -907,7 +909,7 @@ mod tests {
             parent_op: None,
         });
         core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc)
             .op_ref()
@@ -944,7 +946,7 @@ mod tests {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1055,10 +1057,10 @@ core.module @test {
             printed.contains("func.func_sig<(core.i32 {a = core.i32}, core.ptr) -> core.i32>"),
             "{printed}"
         );
-        let aliases: std::collections::HashMap<_, _> = ctx
+        let aliases: HashMap<_, _> = ctx
             .type_aliases()
             .iter()
-            .map(|&(name, ty)| (name.to_string(), ty))
+            .map(|(name, ty)| (name.to_string(), *ty))
             .collect();
         let sig = func::FuncSig::from_type_ref(&ctx, aliases["sig"]).unwrap();
         assert_eq!(
@@ -1142,7 +1144,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("add"))
+            .sym_name("add")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1244,7 +1246,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("choose"))
+            .sym_name("choose")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1280,7 +1282,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("pure"))
+            .sym_name("pure")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1318,7 +1320,7 @@ core.module @test {
                 parent_op: None,
             });
             let f = func::Func::operands()
-                .sym_name(Symbol::new(name))
+                .sym_name(*name)
                 .r#type(func_ty)
                 .regions(body)
                 .build(&mut ctx, loc);
@@ -1357,7 +1359,7 @@ core.module @test {
             parent_op: None,
         });
         let callee = func::Func::operands()
-            .sym_name(Symbol::new("callee"))
+            .sym_name("callee")
             .r#type(callee_ty)
             .regions(body1)
             .build(&mut ctx, loc);
@@ -1371,7 +1373,7 @@ core.module @test {
             parent_region: None,
         });
         let call = func::Call::operands([])
-            .callee(Symbol::new("callee"))
+            .callee(SymbolPath::from("callee"))
             .results([i32_ty])
             .build(&mut ctx, loc);
         ctx.push_op(entry2, call.op_ref());
@@ -1384,7 +1386,7 @@ core.module @test {
             parent_op: None,
         });
         let main_fn = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(main_ty)
             .regions(body2)
             .build(&mut ctx, loc);
@@ -1576,8 +1578,8 @@ core.module @test {
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 1);
         let func_data = ctx.op(ops[0]);
-        assert_eq!(func_data.dialect, Symbol::new("func"));
-        assert_eq!(func_data.name, Symbol::new("func"));
+        assert_eq!(func_data.dialect, crate::symbol!("func"));
+        assert_eq!(func_data.name, crate::symbol!("func"));
     }
 
     // ================================================================
@@ -1684,9 +1686,7 @@ core.module @test {
             ("zero_one", 0, 1),
             ("many_one", 2, 1),
         ] {
-            let ty = ctx
-                .type_alias_by_name(Symbol::from_dynamic(name))
-                .expect("function alias");
+            let ty = ctx.type_alias_by_text(name).expect("function alias");
             let function = func::FuncSig::from_type_ref(&ctx, ty).expect("validated func.func_sig");
             assert_eq!(function.inputs(&ctx).len(), input_count);
             assert_eq!(function.results(&ctx).len(), result_count);
@@ -1698,7 +1698,7 @@ core.module @test {
     fn generic_shared_func_assembly_remains_parseable() {
         let input = r#"core.module @test {
   !signature = func.func_sig<(core.i32) -> core.i32>
-  func.func {sym_name = @generic, type = !signature}
+  func.func {sym_name = "generic", type = !signature}
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("generic func assembly should parse");
@@ -1706,19 +1706,19 @@ core.module @test {
             .block(ctx.region(ctx.op_region(module, 0).unwrap()).blocks[0])
             .ops[0];
         assert_eq!(
-            ctx.op(function).attributes.get_symbol("sym_name"),
-            Some(Symbol::new("generic"))
+            ctx.op(function).attributes.get_str(&ctx, "sym_name"),
+            Some("generic")
         );
         assert_eq!(
             ctx.op(function).attributes.get_type("type"),
-            ctx.type_alias_by_name(Symbol::new("signature"))
+            ctx.type_alias_by_text("signature")
         );
     }
 
     #[test]
     fn wasm_assembly_keeps_an_explicit_shared_signature_shared() {
         let input = r#"core.module @test {
-  wasm.func {sym_name = @unlowered, type = func.func_sig<() -> core.nil>} { wasm.return }
+  wasm.func {sym_name = "unlowered", type = func.func_sig<() -> core.nil>} { wasm.return }
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("explicit assembly should parse");
@@ -1744,7 +1744,7 @@ core.module @test {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("native assembly should parse");
-        let contract = ctx.type_alias_by_name(Symbol::new("contract")).unwrap();
+        let contract = ctx.type_alias_by_text("contract").unwrap();
         assert!(clif::FuncSig::from_type_ref(&ctx, contract).is_some());
         assert!(func::FuncSig::from_type_ref(&ctx, contract).is_none());
         let function = ctx
@@ -1937,7 +1937,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("identity"))
+            .sym_name("identity")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);

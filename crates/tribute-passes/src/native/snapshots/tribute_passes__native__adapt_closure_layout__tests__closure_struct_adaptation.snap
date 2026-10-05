@@ -5,7 +5,7 @@ expression: result
 core.module @test {
   !_closure = adt.struct<_closure(func_ptr: core.i64, env: core.ptr), {layout = "closure"}>
 
-  clif.func {sym_name = @test_fn, type = clif.func_sig<() -> core.i32>} {
+  clif.func {sym_name = "test_fn", type = clif.func_sig<() -> core.i32>} {
       %0 = clif.symbol_addr {sym = @lifted_fn} : core.ptr
       %1 = mem.null : core.ptr
       %2 = adt.struct_new %0, %1 {type = !_closure} : !_closure

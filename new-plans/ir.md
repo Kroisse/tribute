@@ -115,8 +115,16 @@ format과 선언적 rewrite 도구는 operation 정의를 중복하지 않고 �
 - 파라미터 wrapper가 종류를 정한다. `Value<C>`는 operand 하나,
   `Variadic<C>`는 같은 제약을 만족하는 0개 이상의 operand, `Values<L>`는
   타입 목록 `L`과 개수·순서·타입이 정확히 일치하는 operand 목록이다.
-  `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다. 가변
-  operand 구간은 operand 중 마지막 하나만 허용한다.
+  `Attr<K>`는 attribute이고, `Option<Attr<K>>`는 선택 attribute다.
+  가변 operand 구간은 operand 중 마지막 하나만 허용한다.
+- Attribute 종류 `K`는 bound와 마찬가지로 Rust 타입이다. 종류는 schema가
+  검사하는 값 영역, accessor가 돌려주는 값, builder가 받는 값을 스스로
+  정의하며, 정의 문법은 종류의 이름을 해석하지 않는다. 새 종류는 그 타입을
+  정의하는 것으로 추가된다. `[K]`는 모든 원소가 종류 `K`인 목록 종류이고,
+  원소 종류는 이름 있는 종류여야 한다. `Dict<V>`는 모든 값이 종류 `V`인
+  dictionary 종류다. `_`는 모든 attribute 값을 받는다.
+  문자열 종류만 예외로, 정의 문법이 알아보고 pool handle을 돌려주는 accessor를
+  하나 더 만든다.
 - 결과는 `-> Value<C>`(accessor `result`) 또는 `-> Variadic<C>` /
   `-> Values<L>`(accessor `results`)로 선언한다. 결과가 0개 또는 1개인
   operation은 `-> Option<Value<C>>`로 선언한다. 결과가 없는 operation과
@@ -263,6 +271,56 @@ Pass의 보존 선언은 revision 검사가 거부한 결과를 재사용하게 
 소비자는 캐시를 다시 조회한다. 조회 결과나 실패한 분석 계산은 변경 전후에
 부분적으로 캐시되지 않는다.
 
+`AnalysisCache`는 `IrContext`와 별개의 값으로 남으며, pass와 분석 소비자는
+캐시를 명시적인 인자로 받는다. `IrContext`를 캐시와 함께 소유하는 별도
+session이나 editor 계층은 두지 않는다. `IrContext`의 필드는 비공개이고 IR
+변경은 그 메서드로만 일어나므로 `IrContext` 자체가 변경을 관찰하는 editor
+역할을 한다. 캐시를 `IrContext` 안에 두지 않는 이유는 두 가지이다. 분석
+계산은 `&IrContext`를 읽는 동안 캐시에 써야 하고, 공유 읽기만 받는 검증기가
+캐시를 조회하려면 내부 가변성이 필요해져 `IrContext`의 공유 읽기 안전성과
+충돌한다.
+
+컴파일 pipeline의 각 phase는 캐시 하나를 소유하며, 그 phase의 pass manager,
+pass, pass 검증기와 pass 바깥의 분석 소비자가 이를 공유한다. 캐시 인자를 받지
+않는 단독 진입점은 자체 캐시를 새로 만들며, phase 안의 호출은 캐시를 받는
+진입점을 사용한다. Pass manager의 검증기는
+입력을 한 번 검사한 뒤 revision을 바꾼 pass 다음에만 실행한다. IR을 바꾸지
+않은 pass는 불변 조건을 깨뜨릴 수 없기 때문이다. 검증기는 IR을 바꾸지 않으므로
+검증 중 계산된 분석은 이후 pass를 위해 캐시에 남는다.
+
+변경 중에 분석 결과를 다루는 소비자는 다음 세 방식 중 하나를 따른다.
+
+- **보유 후 재구축**: 결과의 `Arc`를 쥔 채 rewrite하고, IR을 바꾼 반복마다
+  분석을 무효화한 뒤 다음 반복에서 다시 조회한다. 보유한 결과가 이전 IR의
+  snapshot이라는 사실은 그 결과를 읽는 rewrite가 감수하며 문서화한다.
+- **결정 추출 후 무효화**: 변경 전에 원래 operation에 대한 결정을 모두
+  추출하고 분석을 무효화한 뒤, rewrite는 추출한 결정만 소비한다.
+- **보존한 계획의 재검증**: 읽기 전용 단계에서 만든 계획을 보존하되, 변경
+  단계는 사용 전에 계획이 가리키는 operation identity와 layout을 현재 IR에
+  대조한다.
+
+분석은 기본적으로 context 전체에 의존한다. `AnalysisContext::ir()`는 임의의
+읽기를 허용하므로, 분석 대상 operation이나 그 operation의
+`IsolatedFromAbove` 성질만으로는 읽기 범위가 그 subtree에 국한된다는 것이
+증명되지 않는다. 다른 함수의 변경 뒤에도 한 함수의 결과를 재사용하는 범위
+재사용은 다음 조건을 모두 만족할 때만 허용한다.
+
+- 분석이 대상 subtree와 선언한 선행 분석만 읽는다고 명시적으로 선언한다.
+  선언하지 않은 분석은 context 전체 의존으로 남는다.
+- `IrContext`가 변경 전에 영향받는 `IsolatedFromAbove` 조상을 기록한다. 이동은
+  이전 부모와 새 부모 모두에, operand 변경과 RAUW는 관련 정의·사용자·use-list
+  모두에 영향을 준다. Detached 사용자를 만드는 것도 값의 use를 바꾼다. 범위를
+  알 수 없는 변경, 직접 mutable reference 경로와 전역 metadata 변경은 context
+  전체 무효화로 되돌아간다.
+- 선행 분석이 무효화되면 그에 의존하는 분석도 무효화된다. Module 집계 분석은
+  포함한 함수 어느 하나가 바뀌어도 무효화되며, 다시 계산한 결과가 이전과
+  같으면 그 의존 분석을 유지할 수 있다(early cutoff). 의존 분석의 캐시 hit은
+  반환 전에 선행 분석의 신선도를 확인한다.
+
+범위 재사용을 쓰는 소비자가 생기기 전까지 위 조건은 계약으로만 존재하며,
+모든 분석은 context 전체 revision 검사를 따른다. Pass의 보존 선언은 범위 검사가
+거부한 결과도 재사용하게 할 수 없다.
+
 Native ownership planning의 policy-neutral 입력은 `scf_to_cf` 이후,
 `func_to_clif` 이전 경계에서 fallible 분석이 소유한다. Module 범위 분석은
 module body, `func.func` 목록, 중복 없는 function 정의, 검증된 managed
@@ -358,15 +416,36 @@ consumer는 nested region을 재귀적으로 순회해야 하며, "사용 없음
   legalization에서 실제 adapter를 생성해야 한다.
 - `core.nil`의 유일한 값은 속성 없는 `core.nil_value`가 만든다. `arith.const`는
   nil을 만들지 않는다.
-- Operation and type names are interned `Symbol`s. Qualified paths are stored as
-  `::`-separated symbols.
+- Operation과 type의 이름은 `Symbol`이다. Symbol table 정의의 qualified path는
+  component마다 `Symbol` 하나인 `SymbolPath`로 저장한다.
+- `Symbol`은 8바이트 atom이며 세 형태 중 하나다. 7바이트 이하의 이름은 값 안에
+  직접 담는다. IR 기반 계층이 선언한 dialect, operation, type, 속성 이름은 빌드
+  때 만든 static 집합의 색인이다. 그 밖의 이름은 프로세스 전역 동적 집합의
+  참조 카운트 항목이며, 마지막 `Symbol`이 사라지면 집합에서 제거된다. Static
+  집합에 없는 이름도 유효한 `Symbol`이다.
+- `Symbol`의 동등성은 값 비교이고 hash는 atom에 미리 계산된 값을 쓴다. 순서는
+  텍스트 순서이므로 `Symbol`을 key로 정렬한 자료구조는 이름 순서로 순회한다.
+  Hash 순회 순서는 출력에 영향을 주어서는 안 된다. `Symbol`은 `Copy`가 아니다.
+  이름을 읽기만 하는 곳은 `&Symbol`을 받는다.
 - 함수 symbol 참조(`callee`, `func_ref`, target dialect의 직접 호출과 주소 참조)는
   항상 root module 기준 qualified path이다. 정의는 자기 module 안의 `sym_name`을
-  가지며, 정의의 qualified name은 root module을 제외한 중첩 `core.module` 이름 경로와
-  `sym_name`을 `::`로 이은 것이다. 이름 없는 `core.module`은 경로에 기여하지 않는다.
-  참조는 참조하는 operation이 속한 module을 기준으로 해석하거나 바깥 module로 찾아
-  올라가지 않는다. Qualified name은 module tree 전체에서 유일해야 하며, 중복 정의는
-  모호한 참조가 아니라 IR 오류다.
+  가지며, 정의의 qualified path는 root module을 제외한 중첩 `core.module` 이름들과
+  `sym_name`을 차례로 component로 둔 것이다. 이름 없는 `core.module`은 경로에
+  기여하지 않는다. 참조는 참조하는 operation이 속한 module을 기준으로 해석하거나
+  바깥 module로 찾아 올라가지 않는다. Qualified path는 module tree 전체에서 유일해야
+  하며, 중복 정의는 모호한 참조가 아니라 IR 오류다.
+- `SymbolPath`의 component는 이름 하나를 쓰인 그대로 담는다. 이름이 `::`를
+  포함해도 component 하나이며, 같은 텍스트를 중첩 module로 풀어 쓴 path와는 다른
+  path다. Textual form은 component마다 `@`를 붙여 `::`로 잇는다
+  (`@left::@helper`). Identifier가 아닌 component는 따옴표로 감싸므로, `::`를 포함한
+  이름 하나는 `@"left::helper"`로 쓴다. Path의 순서는 component를 차례로 비교한
+  순서다.
+- 함수 참조를 모으는 분석(call graph, global DCE)은 참조하는 operation이나 속성의
+  이름을 나열하지 않고 operation 속성의 모든 symbol 참조를 모은다. 직접 호출
+  operation은 `CallLike` interface로 callee를 게시하며, 그 callee 참조만 호출이다.
+  그 밖의 참조는 모두 주소 참조이고, 대상 함수는 값으로 escape한 것으로 본다. 함수
+  정의 밖에 있는 참조는 reachability root다. Symbol 참조는 operation 속성에만 두며,
+  type 속성과 block 인자 속성에는 두지 않는다.
 - Nested regions use normal SSA visibility rules: values defined inside a
   nested region are not visible outside it unless yielded or otherwise modeled
   by the operation.
@@ -453,7 +532,7 @@ attribute를 쓰지 않는다. 추가 operation attribute에
 
 ```text
 tribute_control.func @f(%x: T) -> R convention(cps)
-    attributes {visibility = @private} {
+    attributes {visibility = "private"} {
   ...
 }
 
@@ -492,10 +571,10 @@ Operation attribute는 별개의 generic attribute dictionary에 남는다.
 #### `tribute_control.func`
 
 ```text
-tribute_control.func {sym_name = @id, type = !Callable} (%x: T) { ... }
+tribute_control.func {sym_name = "id", type = !Callable} (%x: T) { ... }
 ```
 
-- **형상:** 피연산자와 결과는 없다. `sym_name: Symbol`과
+- **형상:** 피연산자와 결과는 없다. `sym_name: String`과
   `type: tribute_control.func_sig<(Params...) -> Result>`가 필수다. 선언은 region이
   없고 정의는 source parameter만 block argument로 받는 single-block `body`
   하나이며 `tribute_control.return`으로 끝난다. Foreign ABI 같은 비제어
@@ -583,7 +662,8 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 ```
 
 - **형상:** declaration 순서의 source argument, source-logical result 하나,
-  `callee: Symbol`을 가지며 region이 없는 non-terminator다.
+  `callee: Symbol`, 선택적 [`evidence_plan`](#evidence-선택-속성)을 가지며 region이
+  없는 non-terminator다.
 - **의미:** named source callable을 직접 호출한다.
 - **검증:** local verifier는 attribute와 resolved operand/result를 검사한다.
   Whole-IR verifier는 callee `tribute_control.func`의 arity/type을 맞춘다.
@@ -598,12 +678,41 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 ```
 
 - **형상:** `tribute_control.func_sig` callee, source argument, callee type의
-  source-logical result 하나를 가지며 attribute/region이 없는 non-terminator다.
+  source-logical result 하나와 선택적 [`evidence_plan`](#evidence-선택-속성)을 가지며
+  region이 없는 non-terminator다.
 - **의미:** lambda, `func_ref`, parameter 또는 capture로 얻은 callable을 호출한다.
 - **검증:** local verifier는 callee signature와 argument/result type을 맞춘다.
 - **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
   evidence, `ContinuationFrame<R>`는 없다.
 - **위치:** callee와 argument를 포함한 source indirect-call span이다.
+
+#### Evidence 선택 속성
+
+`evidence_plan`은 호출이 callee에게 넘길 evidence를 caller evidence에서 고르는
+선택이며 [type-inference.md](type-inference.md#호출의-evidence-선택)가 정한 값을
+typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`, `handle`이 가질
+수 있다. `handle`의 선택은 body evidence를 만들기 전에 적용하며 `mask`만 담는다.
+
+```text
+{evidence_plan = [{mask = core.ability_ref<{name = "State", ...}>}, {dup = ...}]}
+```
+
+- 원소는 key 하나짜리 dictionary다. Key `mask` 또는 `dup`이 연산을, 값이 exact
+  ability instance(`core.ability_ref` type)를 나타내며 원소는 순서대로 적용한다.
+  한 instance는 한 번만 나온다.
+- Key `outer`는 그 instance의 가장 위 handler를 설치한 지점의 evidence로 바꾼다.
+  Source-logical operation은 이 key를 쓰지 않는다. CPS legalization이 arm 본문에
+  중첩된 handle body 안의 `resume`에만 붙이며, 중첩 한 겹에 한 원소다. 같은
+  instance가 여러 번 나올 수 있다.
+- 속성이 없으면 그대로 전달한다. 빈 목록은 쓰지 않는다.
+- Verifier는 원소 형상, `handle`의 `mask` 전용 규칙, instance 중복만 검사한다.
+  Row 정보는 IR에 없으므로 선택의 옳고 그름은 typechecking이 책임진다.
+- CPS legalization은 선택을 바꾸지 않고 옮긴다. 호출과 `resume`의 선택은 그것이
+  만든 evidence-taking `func.call`, `func.tail_call`, `func.call_indirect`,
+  `func.tail_call_indirect`에, `handle`의 선택은 `ability.handle_dispatch`에 같은
+  이름의 속성으로 둔다. Evidence를 받지 않는 callee로 가는 호출에는 옮기지 않는다.
+  `resolve_evidence`가 이를 `effect.mask`/`effect.dup`/`effect.outer`로 만든다
+  ([cps-effects.md](cps-effects.md#row-directed-evidence)).
 
 #### `tribute_control.return`
 
@@ -697,8 +806,10 @@ Callable operation의 physical lowering은
 - **피연산자:** 없다. 실행 가능한 region이 capture하는 값은 일반 enclosing SSA
   visibility를 사용한다.
 - **결과:** logical handle result 하나만 만든다.
-- **속성:** 필수 attribute는 없다. Dynamic prompt/owner tag와 physical tail-call
-  표현은 이 operation의 의미 attribute가 아니라 legalization 계약이다.
+- **속성:** 필수 attribute는 없다. 선택적 [`evidence_plan`](#evidence-선택-속성)은
+  body evidence를 만들기 전에 바깥 evidence에서 가릴 handler를 정한다. Dynamic
+  prompt/owner tag와 physical tail-call 표현은 이 operation의 의미 attribute가
+  아니라 legalization 계약이다.
 - **영역:** 고정된 `body`, `completion`, `handlers` 순서로 정확히 세 개다.
 - **Block argument:** `body`는 argument가 없는 block 하나다. `completion`은
   argument가 정확히 하나인 block 하나이며, 그 type은 `body`가 yield한 value의
@@ -788,7 +899,7 @@ tribute_control.handler {
 - **피연산자:** 정확히 두 개다. `%resume`은
   `resume_token<InputType, AnswerType>`이고 `%value`는 `InputType`이다.
 - **결과:** `AnswerType` 하나만 만든다.
-- **속성과 영역:** 없다.
+- **속성과 영역:** 선택적 [`evidence_plan`](#evidence-선택-속성)만 가지며 region은 없다.
 - **종결자:** 아니다. `resume` 뒤의 strict work는 enclosing region에
   명시적으로 남으며 resumed computation이 반환한 뒤에만 실행된다.
 - **의미:** lexical하게 가장 가까운 enclosing general handler의 one-shot
@@ -848,15 +959,17 @@ logical continuation으로 region을 lower한다:
    suffix를 계속 실행한다. Arm이 resume하지 않으면 yield가 일치하는 handle을
    직접 완료하고 중단된 suffix와 completion region을 건너뛴다. Source
    `op -> Never` arm은 token을 받지 않으며 이 non-resuming path만 취할 수 있다.
-6. Nested handle은 자체 delimiter를 설치한다. Perform은 dynamic하게 설치된
-   handler 중 가장 가까운 일치 handler가 처리한다. Resume하면 perform과 해당
+6. Nested handle은 자체 delimiter를 설치한다. Perform은 둘러싼 callable 또는
+   handle body row의 명시 label에 묶인 handler가 처리하며, row tail로 들어온
+   operation은 그 사이에 설치된 handler를 지나친다
+   ([type-inference.md](type-inference.md#모듈-수준-함수의-관계)). Resume하면 perform과 해당
    handler 사이에서 선택된 모든 structured frame에 다시 진입한다. Resume하지
    않고 완료하면 그 frame을 포기한다.
 
 CPS 변환 뒤 Cps callable은 `Evidence, ContinuationFrame<R>, source args`를 받고
 `core.never`로 끝난다. 생성된 completion과 exact resume도 Evidence와
-ContinuationFrame을 명시적으로 받는다. Resume은 동적 ContinuationFrame에서 불변 어휘적 dispatcher를
-재구성한 뒤 suffix와 nested handle을 계속 실행한다. 세 dispatch 계층의 정확한
+ContinuationFrame을 명시적으로 받는다. Resume은 동적 ContinuationFrame에서 handle
+층의 dispatcher를 불변 값으로 다시 만든 뒤 suffix와 nested handle을 계속 실행한다. 세 dispatch 계층의 정확한
 형상은 [cps-effects.md](cps-effects.md#dispatch-layers)를 따른다.
 
 이 단일 region/suffix 규칙은 case arm과 guard, conditional, short-circuit
@@ -1057,8 +1170,10 @@ cast를 명시한다.
 numeric operations, memory operations, and WasmGC constructs.
 
 `wasm_gc.*` is a typed intermediate dialect for WasmGC lowering. Its operations
-carry semantic heap types as mandatory `TypeRef` attributes and must not infer
-nominal identity from an erased operand such as `anyref`. A module-wide type
+carry heap types as mandatory `TypeRef` attributes and must not infer a type
+from an erased operand such as `anyref`. A user struct or variant is the
+structural `wasm_gc.struct<T...>`, whose parameters are its physical field
+types; equal field lists are one GC type. A module-wide type
 layout pass assigns binary type-section indices and fully converts these
 operations to `wasm.*` operations, whose required integer attributes correspond
 to WebAssembly instruction immediates. This pass runs once, after unrealized
@@ -1066,9 +1181,9 @@ conversion casts have been converted and reconciled, because materialization
 may introduce additional typed GC operations.
 
 ```text
-wasm_gc.struct_get { type = !String$Leaf, field_idx = 0 }
+wasm_gc.struct_get { type = wasm_gc.struct<core.i32, !Bytes>, field_idx = 1 }
   -- module GC type layout -->
-wasm.struct_get { type_idx = 9, field_idx = 0 }
+wasm.struct_get { type_idx = 9, field_idx = 1 }
 ```
 
 Builtin layouts follow the same rule. Lowering refers to canonical semantic
@@ -1154,7 +1269,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   environment를 뺀 타입은 경계 안에서만 쓰며, 함수 참조의 타입으로 경계를 넘지 않는다.
 - **기계 호출 규약:** 기계 호출 규약은 physical `func.func_sig`의 `call_conv` type
   속성이 소유한다. 경계는 CPS signature를 물리화할 때 target과 무관하게 그 signature에
-  `call_conv = @tail`을 일괄 부여하며, 속성이 없으면 platform 규약이다. `call_conv`는
+  `call_conv = "tail"`을 일괄 부여하며, 속성이 없으면 platform 규약이다. `call_conv`는
   type identity에 참여하고 함수 정의, 직접 호출의 피호출자, 간접 호출 signature가 모두
   같은 signature에서 읽는다. 기계 규약을 구별하는 target은 이 값을 target signature로
   옮기고, 기계 규약이 없는 target은 이를 무시하고 target signature에서 버린다.
@@ -1167,7 +1282,7 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
   [rc.md](rc.md#proper-tail-ownership-transfer)) 중 callable 계약이 요구하는
   것은 exact physical signature의 일부로 표현한다. 그래서 직접 정의와
   exact indirect signature 모두에서 같은 계약을 읽을 수 있다. 인코딩은 signature의
-  [타입 매개변수 속성](#타입-매개변수-속성) `tribute.ownership = @consumed`이며,
+  [타입 매개변수 속성](#타입-매개변수-속성) `tribute.ownership = "consumed"`이며,
   경계가 물리 CPS callable의 모든 입력에 붙인다. 표시가 없는 managed 매개변수는
   retained 계약을 가진다.
 - **Closure/frame 저장:** Compiler가 소유하는 runtime layout은 명시적
@@ -1220,9 +1335,9 @@ arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의�
 `tribute.*` 속성은 분류되지 않은 metadata로 보고한다. 새 언어 전용 속성은 금지 또는
 보존 중 하나로 분류된 뒤에만 출구를 넘을 수 있다. 입력과 결과 타입이 같은
 unrealized cast, 대상 함수의 signature와 다른 타입의 `func.constant`도 위반으로
-보고한다. 매개변수 ownership 계약도 검사한다. `call_conv = @tail`인 signature의
-입력에 `tribute.ownership = @consumed`가 없거나, `tribute.ownership` 값이
-`@consumed`가 아니면 위반이다. Root `main`이 있으면 그것이 매개변수가 없고 결과가
+보고한다. 매개변수 ownership 계약도 검사한다. `call_conv = "tail"`인 signature의
+입력에 `tribute.ownership = "consumed"`가 없거나, `tribute.ownership` 값이
+`"consumed"`가 아니면 위반이다. Root `main`이 있으면 그것이 매개변수가 없고 결과가
 `Nil`이며 platform 규약을 따르는 정의인지도 검사한다. 위반이 하나라도 있으면
 target dialect lowering에 들어가기 전에 컴파일이 실패한다. 이 검증은 build 구성과 관계없이 항상 수행한다.
 
@@ -1259,10 +1374,10 @@ representation.
 
 ```text
 core.i32
-core.tuple<core.i32, core.ptr {k = @v}>
+core.tuple<core.i32, core.ptr {k = "v"}>
 core.ref<core.i32, {nullable = true}>
 adt.typeref<{name = "Point"}>
-func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv = @tail}>
+func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> core.i64, {call_conv = "tail"}>
 ```
 
 - 매개변수도 속성도 없는 타입은 이름만 쓴다.
@@ -1288,14 +1403,21 @@ func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> core.i64, {call_conv
 ### Attribute 값
 
 Operation, block 인자와 type의 속성 값은 다음 domain을 가진다: `unit`, bool,
-정수, 부동소수점, 문자열, bytes, symbol, type, location, list, dictionary.
+정수, 부동소수점, 문자열, bytes, symbol 참조, type, location, list, dictionary.
 
-Symbol 값은 symbol table의 정의를 가리키는 참조에만 쓴다(`callee = @foo`). 참조가
+Symbol 참조는 symbol table의 정의를 qualified path로 가리킨다(`callee = @foo`). 참조가
 아닌 이름 값은 문자열이다. 비교 조건(`predicate`, `cond`), trap code, wasm value·heap
 type 이름, import의 module·name처럼 정해진 짧은 이름(atom)이 여기에 해당하며
 `predicate = "slt"`로 쓴다. Ability 이름(`core.ability_ref`의 `name`)과 operation
-이름(`op_name`), operation kind(`"fn"`, `"op"`)도 symbol table의 정의가 아니므로
-문자열이다. 그래서 텍스트의 `@`는 언제나 참조를 뜻하고, 속성을 훑어
+이름(`op_name`), operation kind(`"fn"`, `"op"`), compiler intrinsic identity
+(`tribute.compiler_intrinsic`)도 symbol table의 정의가 아니므로 문자열이다. 기계 호출
+규약(`call_conv = "tail"`), 매개변수 ownership 계약(`tribute.ownership = "consumed"`),
+block 인자의 binding 이름(`bind_name`)도 같은 이유로 문자열이다.
+
+정의의 이름(`sym_name`)도 문자열이다. 정의는 symbol table에 자기 이름을 등록할 뿐
+다른 정의를 가리키지 않으므로 참조가 아니다(MLIR의 `sym_name`도 `StringAttr`다).
+`func.func @foo`처럼 정의 operation의 전용 문법은 이름 앞에 `@`를 붙이지만, 저장되는
+값은 문자열이다. 그래서 속성 값으로 쓰인 `@`는 언제나 참조를 뜻하고, 속성을 훑어
 참조를 일반적으로 찾을 수 있다.
 
 문자열 값은 그 속성을 가진 `IrContext`의 문자열 pool에 uniquing되며, 속성은 pool
@@ -1317,6 +1439,10 @@ List와 dictionary는 임의로 중첩된다. 속성 값 안의 type은 type wal
 하며, 일부 variant만 따라가고 나머지를 그대로 통과시키지 않는다. 공용 순회는
 `Attribute::visit_types`, `Attribute::map_types`, `Attribute::try_map_types`가 소유한다.
 
+속성 값 안의 symbol 참조도 같은 방식으로 찾는다. 정의를 가리키는 참조를 모으는 pass는
+속성 이름을 나열하지 않고 `Attribute::visit_symbol_refs`로 list와 dictionary 안까지
+모든 참조에 도달한다.
+
 ### 타입 매개변수 속성
 
 `TypeData.params`는 타입 인스턴스를 결정하는 매개변수 값이다(MLIR의 type
@@ -1329,7 +1455,7 @@ parameter와 같은 용법). 함수 signature에서는 input과 result 타입이
   매개변수 속성이 없는 타입은 하나의 identity를 가진다. 속성이 다른 두 타입은 서로
   다른 identity를 가진다.
 - Textual form에서는 각 매개변수 바로 뒤에 dictionary로 쓴다:
-  `core.tuple<core.i32, core.ptr {k = @v}>`. Printer는 `param_attrs` key를
+  `core.tuple<core.i32, core.ptr {k = "v"}>`. Printer는 `param_attrs` key를
   출력하지 않고 reader는 이 key를 거부하므로, 매개변수 속성의 textual form은 이것
   하나뿐이다. 빈 dictionary(`core.i32 {}`)는 속성이 없는 것으로 읽는다.
 - Type verifier는 모든 interned type에 같은 규칙을 적용한다. List가 아닌 값,
@@ -1357,10 +1483,12 @@ Compiler가 소유하는 runtime 저장 layout은 예약 type 속성 `layout`으
 | `layout` | 붙는 타입 | 뜻 |
 | --- | --- | --- |
 | `"closure"` | canonical closure `adt.struct` | 함수 참조와 environment로 이루어진 closure 저장 |
-| `"evidence_marker"` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure |
-| `"evidence"` | evidence `core.array` | ability id 순으로 정렬된 marker 배열 |
+| `"evidence_marker"` | evidence marker `adt.struct` | 한 handler의 ability id, prompt, dispatch closure, 가린 marker |
+| `"evidence"` | evidence `core.array` | ability id 순으로 정렬된 가장 위 marker 배열 |
 | `"bytes"` | Wasm bytes `adt.struct` | backing 배열, 시작 offset, 길이로 이루어진 `Bytes` 저장 |
 | `"bytes_data"` | Wasm bytes backing `core.array<core.i8>` | `Bytes`가 가리키는 byte 배열 |
+| `"boxed_f64"` | Wasm boxed float `adt.struct` | uniform 참조 자리에 놓이는 `f64` 필드 하나짜리 `Float` 저장 |
+| `"described"` | Wasm `Described` `adt.struct` | descriptor 필드 하나로 이루어진 사용자 struct와 variant의 공통 supertype |
 
 - 속성은 저장 layout만 나타낸다. 의미 분류를 physical 이름으로 복제하지 않으며,
   같은 의미의 값이라도 저장 layout이 다르면 이 속성으로 구별하지 않는다.
@@ -1388,7 +1516,7 @@ Struct 이름과 필드 이름은 타입 이름공간의 이름이며 symbol tab
 
 ```text
 adt.struct<Point(x: core.i32, y: core.i32)>
-adt.struct<Node(value: core.i32 {k = @v}, next: adt.typeref<{name = "Node"}>)>
+adt.struct<Node(value: core.i32 {k = "v"}, next: adt.typeref<{name = "Node"}>)>
 adt.struct<_closure(func_ptr: core.ptr, env: core.ptr), {layout = "closure"}>
 adt.struct<Empty()>
 ```
@@ -1421,16 +1549,22 @@ layout을 마지막으로 해석하는 target 경계가 할당에 descriptor 번
 Layout과 runtime 동작이 같은 두 소스 타입은 같은 저수준 struct를 쓰고
 descriptor로만 구별된다.
 
-- Native는 nominal 해석이 끝난 뒤 `adt.struct`를 이름 없는 `mem.struct<T...>`로
-  내린다. `mem.struct`는 필드 타입만 갖고 자연 정렬 memory layout을 뜻한다. 필드
-  타입은 target 표현이며, 해제 동작이 다른 managed 참조(`tribute_rt.anyref`)와
-  unmanaged 포인터(`core.ptr`)는 크기가 같아도 구분한다. RC header와 field offset
-  계산은 이 타입을 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
-  사라진다. Cranelift에는 aggregate 타입이 없다.
-- Wasm은 타입 변환에서 `adt.struct`를 이름 없는 `wasm_gc.struct<T...>`로 바꾼다.
-  함수 signature와 block 인자도 같은 변환을 거치므로 모든 위치가 같은 타입을
-  가진다. 필드 표현이 같은 struct와 variant는 같은 GC 타입이며, 첫 필드의
-  descriptor가 runtime identity를 맡는다. Compiler 소유 layout은
+- Native는 nominal layout을 마지막으로 해석하는 경계에서 struct field 접근의
+  `adt.struct`를 이름 없는 `mem.struct<T...>`로 내린다. `mem.struct`는 필드 타입만
+  갖고 자연 정렬 memory layout을 뜻한다. 필드 타입은 target 표현이며, 해제 동작이
+  다른 managed 참조(`tribute_rt.anyref`)와 unmanaged 포인터(`core.ptr`)는 크기가
+  같아도 구분한다. 할당이 해제하는 필드가 managed 참조이며, 이 판정은 ownership
+  계획의 것이고 물리 타입에서 다시 유도하지 않는다. `mem.struct`의 field offset과
+  크기는 같은 nominal layout에서 계산한 할당 크기와 일치한다.
+- 할당은 descriptor를 nominal layout 타입으로 찾으므로 RC header를 새기는 단계가
+  nominal `adt.struct`의 마지막 사용처다. Field offset 계산은 타입 변환 없이
+  `mem.struct`만 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
+  `mem.struct`도 사라진다. Cranelift에는 aggregate 타입이 없다.
+- Wasm은 nominal layout을 마지막으로 읽는 `adt_to_wasm` 뒤에 `adt.struct`를 이름
+  없는 `wasm_gc.struct<T...>`로 바꾼다. 이 치환은 함수 signature와 block 인자를
+  포함한 모듈 전체에 적용되므로 모든 위치가 같은 타입을 가진다. Variant는 처음부터
+  자기 필드의 `wasm_gc.struct`로 낮춘다. 필드 표현이 같은 struct와 variant는 같은
+  GC 타입이며, 첫 필드의 descriptor가 runtime identity를 맡는다. Compiler 소유 layout은
   [`layout`](#runtime-layout-식별자)으로 식별한다.
 - 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
   reference로 끊겨 있다.
@@ -1456,7 +1590,7 @@ result may carry its parameter attributes, and the remaining type attributes
 come last inside the brackets:
 
 ```text
-func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>
+func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
 ```
 
 TrunkIR recognizes a parenthesized multi-result list so it can diagnose it, but

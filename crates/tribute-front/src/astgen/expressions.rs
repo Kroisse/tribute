@@ -235,9 +235,21 @@ fn lower_method_call(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
 
     let receiver = lower_expr(ctx, receiver_node);
     let method = ctx.node_symbol(&method_node);
-    let args = args_node
+    let mut args = args_node
         .map(|args| lower_argument_list(ctx, args))
         .unwrap_or_default();
+
+    // A qualified method names its function by path, so it needs no receiver
+    // type: `x.a::b(y)` is the call `a::b(x, y)`.
+    if !method.is_simple() {
+        let callee_id = ctx.fresh_id_with_span(&method_node);
+        let callee = Expr::new(
+            callee_id,
+            ExprKind::Var(UnresolvedName::new(method, callee_id)),
+        );
+        args.insert(0, receiver);
+        return ExprKind::Call { callee, args };
+    }
 
     ExprKind::MethodCall {
         receiver,
@@ -721,11 +733,9 @@ fn lower_handler_operation_path(
 ) -> Option<(UnresolvedName, Symbol)> {
     let op_node = node.child_by_field_name("operation")?;
     let op_text = ctx.node_text(&op_node).to_string();
-    let op_symbol = Symbol::from_dynamic(&op_text);
+    let op_symbol = Symbol::new(&op_text);
     let op_name = op_symbol.last_segment();
-    let ability_sym = op_symbol
-        .parent_path()
-        .unwrap_or_else(|| Symbol::from_dynamic("_"));
+    let ability_sym = op_symbol.parent_path().unwrap_or_else(|| Symbol::new("_"));
     let ability_id = ctx.fresh_id_with_span(&op_node);
     Some((UnresolvedName::new(ability_sym, ability_id), op_name))
 }

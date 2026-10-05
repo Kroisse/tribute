@@ -3,7 +3,7 @@
 //! Translates `clif.*` dialect operations within a single function body
 //! to Cranelift IR instructions using `FunctionBuilder`.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use cranelift_codegen::ir::types as cl_types;
 use cranelift_codegen::ir::{self as cl_ir, InstBuilder, TrapCode};
@@ -11,11 +11,11 @@ use cranelift_codegen::isa::CallConv;
 use cranelift_frontend::FunctionBuilder;
 use cranelift_module::{DataId, FuncId, Module as _};
 use cranelift_object::ObjectModule;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, func};
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{BlockRef, OpRef, TypeRef, ValueRef};
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -166,19 +166,19 @@ pub(crate) struct FunctionTranslator<'a> {
     ctx: &'a IrContext,
     pub(crate) builder: FunctionBuilder<'a>,
     /// Maps TrunkIR arena values to Cranelift IR values.
-    pub(crate) values: FxHashMap<ValueRef, cl_ir::Value>,
+    pub(crate) values: HashMap<ValueRef, cl_ir::Value>,
     /// The object module that owns the function and data declarations.
     module: &'a mut ObjectModule,
     /// Module-level functions a body may reference.
-    func_ids: &'a FxHashMap<Symbol, FuncId>,
+    func_ids: &'a HashMap<SymbolPath, FuncId>,
     /// Module-level data objects a body may reference.
-    data_ids: &'a FxHashMap<Symbol, DataId>,
+    data_ids: &'a HashMap<SymbolPath, DataId>,
     /// Functions this body referenced, declared on first reference.
-    func_refs: FxHashMap<Symbol, cl_ir::FuncRef>,
+    func_refs: HashMap<SymbolPath, cl_ir::FuncRef>,
     /// Data objects this body referenced, declared on first reference.
-    data_refs: FxHashMap<Symbol, cl_ir::GlobalValue>,
+    data_refs: HashMap<SymbolPath, cl_ir::GlobalValue>,
     /// Maps TrunkIR block refs to Cranelift blocks.
-    pub(crate) block_map: FxHashMap<BlockRef, cl_ir::Block>,
+    pub(crate) block_map: HashMap<BlockRef, cl_ir::Block>,
     /// The platform's ordinary calling convention for non-CPS indirect calls.
     default_call_conv: CallConv,
     /// The platform pointer type (e.g. I64 on 64-bit).
@@ -190,21 +190,21 @@ impl<'a> FunctionTranslator<'a> {
         ctx: &'a IrContext,
         builder: FunctionBuilder<'a>,
         module: &'a mut ObjectModule,
-        func_ids: &'a FxHashMap<Symbol, FuncId>,
-        data_ids: &'a FxHashMap<Symbol, DataId>,
+        func_ids: &'a HashMap<SymbolPath, FuncId>,
+        data_ids: &'a HashMap<SymbolPath, DataId>,
         default_call_conv: CallConv,
         ptr_ty: cl_types::Type,
     ) -> Self {
         Self {
             ctx,
             builder,
-            values: FxHashMap::default(),
+            values: HashMap::default(),
             module,
             func_ids,
             data_ids,
-            func_refs: FxHashMap::default(),
-            data_refs: FxHashMap::default(),
-            block_map: FxHashMap::default(),
+            func_refs: HashMap::default(),
+            data_refs: HashMap::default(),
+            block_map: HashMap::default(),
             default_call_conv,
             ptr_ty,
         }
@@ -212,7 +212,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The reference to a module function, declared in this function the
     /// first time the body references it.
-    fn func_ref(&mut self, sym: Symbol) -> Option<cl_ir::FuncRef> {
+    fn func_ref(&mut self, sym: SymbolPath) -> Option<cl_ir::FuncRef> {
         if let Some(&func_ref) = self.func_refs.get(&sym) {
             return Some(func_ref);
         }
@@ -224,7 +224,7 @@ impl<'a> FunctionTranslator<'a> {
 
     /// The reference to a module data object, declared in this function the
     /// first time the body references it.
-    fn data_ref(&mut self, sym: Symbol) -> Option<cl_ir::GlobalValue> {
+    fn data_ref(&mut self, sym: SymbolPath) -> Option<cl_ir::GlobalValue> {
         if let Some(&gv) = self.data_refs.get(&sym) {
             return Some(gv);
         }
@@ -395,7 +395,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(call) = clif::Call::from_op(ctx, op) {
             let callee_sym = call.callee(ctx);
             let func_ref = self
-                .func_ref(callee_sym)
+                .func_ref(callee_sym.clone())
                 .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
 
             let operands = ctx.op_operands(op);
@@ -533,9 +533,9 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(sym_addr) = clif::SymbolAddr::from_op(ctx, op) {
             let sym = sym_addr.sym(ctx);
             // Check function refs first, then data refs
-            let val = if let Some(func_ref) = self.func_ref(sym) {
+            let val = if let Some(func_ref) = self.func_ref(sym.clone()) {
                 self.builder.ins().func_addr(self.ptr_ty, func_ref)
-            } else if let Some(gv) = self.data_ref(sym) {
+            } else if let Some(gv) = self.data_ref(sym.clone()) {
                 self.builder.ins().symbol_value(self.ptr_ty, gv)
             } else {
                 return Err(CompilationError::codegen(format!(
@@ -558,7 +558,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(rc) = clif::ReturnCall::from_op(ctx, op) {
             let callee_sym = rc.callee(ctx);
             let func_ref = self
-                .func_ref(callee_sym)
+                .func_ref(callee_sym.clone())
                 .ok_or_else(|| CompilationError::function_not_found(&callee_sym.to_string()))?;
 
             let operands = ctx.op_operands(op);
@@ -878,13 +878,10 @@ mod tests {
         let i32_ty = make_core_type(&mut ctx, "i32");
         let platform = clif::func_sig(&mut ctx, [i32_ty], []).as_type_ref();
         let mut attrs = trunk_ir::AttributeMap::new();
-        func::CallConv::Tail.set_in(&mut attrs);
+        func::CallConv::Tail.set_in(&mut ctx, &mut attrs);
         let tail = clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], attrs).as_type_ref();
         let mut malformed_attrs = trunk_ir::AttributeMap::new();
-        malformed_attrs.insert(
-            Symbol::new(func::CALL_CONV_ATTR),
-            trunk_ir::Attribute::Symbol(Symbol::new("fast")),
-        );
+        malformed_attrs.insert(Symbol::new(func::CALL_CONV_ATTR), ctx.string_attr("fast"));
         let malformed =
             clif::func_sig_with_attrs(&mut ctx, [i32_ty], [], malformed_attrs).as_type_ref();
 

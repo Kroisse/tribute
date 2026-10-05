@@ -4,7 +4,7 @@
 //! discover ownership from physical types, pointer provenance, aliases, or
 //! liveness after semantic references have been erased.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{
@@ -58,9 +58,9 @@ pub fn materialize(
     // but the complete schedule is still validated before any IR mutation.
     let (type_converter, _) = super::type_converter::native_type_converter(ctx);
     let schedule = build_schedule(ctx, module, plan, &type_converter)?;
-    let mut at_start = HashMap::<BlockRef, Vec<OpRef>>::new();
-    let mut before = HashMap::<OpRef, Vec<OpRef>>::new();
-    let mut after = HashMap::<OpRef, Vec<OpRef>>::new();
+    let mut at_start = HashMap::<BlockRef, Vec<OpRef>>::default();
+    let mut before = HashMap::<OpRef, Vec<OpRef>>::default();
+    let mut after = HashMap::<OpRef, Vec<OpRef>>::default();
 
     for action in schedule {
         let (placement, operations) = build_operations(ctx, action);
@@ -172,7 +172,7 @@ fn allocation_size_for_type(
     // fallback and is not inferred from physical definitions.
     let data = ctx.get_type(ty);
     if data.dialect == Symbol::new("tribute_rt")
-        && matches!(data.name, name if name == Symbol::new("anyref") || name == Symbol::new("intref"))
+        && matches!(data.name.clone(), name if name == Symbol::new("anyref") || name == Symbol::new("intref"))
     {
         return Ok(0);
     }

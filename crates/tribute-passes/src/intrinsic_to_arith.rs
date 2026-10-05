@@ -4,13 +4,12 @@
 //! It runs in the shared pipeline before backend-specific lowering, handling
 //! arithmetic and comparison intrinsics declared in the prelude for Int, Nat, and Float.
 
-use std::collections::HashMap;
-use std::collections::HashSet;
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
-use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::arith;
@@ -25,6 +24,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::symbol_table::SymbolTable;
 use trunk_ir::types::{Attribute, Location};
 use trunk_ir::walk::{WalkAction, walk_op};
+use trunk_ir::{Symbol, SymbolPath};
 
 /// Lower intrinsic arithmetic/comparison calls to arith dialect operations.
 ///
@@ -34,18 +34,21 @@ use trunk_ir::walk::{WalkAction, walk_op};
 /// valid when used as first-class values (closures, `func.constant`, etc.).
 pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
     let pattern = ArithIntrinsicPattern::new();
-    let intrinsic_map: HashMap<Symbol, ArithMapping> = pattern.map.clone();
-    let eligible: Rc<HashSet<Symbol>> = Rc::new(
+    let intrinsic_map: HashMap<SymbolPath, ArithMapping> = pattern.map.clone();
+    let eligible: Rc<HashSet<SymbolPath>> = Rc::new(
         module
             .ops(ctx)
             .iter()
             .copied()
             .filter_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                let symbol = function.sym_name(ctx);
-                (ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR) == Some(symbol)
+                let symbol = SymbolPath::from(function.sym_name(ctx));
+                (ctx.op(op)
+                    .attributes
+                    .get_str(ctx, COMPILER_INTRINSIC_ATTR)
+                    .is_some_and(|identity| symbol == identity)
                     && intrinsic_map.get(&symbol).is_some_and(|mapping| {
-                        exact_signature(ctx, function.r#type(ctx), symbol, mapping)
+                        exact_signature(ctx, function.r#type(ctx), &symbol, mapping)
                     }))
                 .then_some(symbol)
             })
@@ -71,19 +74,20 @@ pub(crate) fn lower_intrinsic_to_arith(ctx: &mut IrContext, module: Module) {
         .iter()
         .copied()
         .filter(|&op| {
-            func::Func::from_op(ctx, op)
-                .is_ok_and(|function| eligible.contains(&function.sym_name(ctx)))
+            func::Func::from_op(ctx, op).is_ok_and(|function| {
+                eligible.contains(&SymbolPath::from(&Symbol::new(function.sym_name(ctx))))
+            })
         })
         .collect();
     if declarations.is_empty() {
         return;
     }
     let symbols = SymbolTable::collect(ctx, module);
-    let mut referenced = HashSet::new();
+    let mut referenced = HashSet::default();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         for value in ctx.op(op).attributes.values() {
-            if let Attribute::Symbol(reference) = value
-                && let Some(target) = symbols.resolve(*reference)
+            if let Attribute::SymbolRef(reference) = value
+                && let Some(target) = symbols.resolve(reference)
                 && target != op
             {
                 referenced.insert(target);
@@ -138,27 +142,27 @@ enum ArithMapping {
 /// Pattern that matches `func.call` to known arithmetic intrinsics and
 /// rewrites them to the corresponding `arith.*` dialect operations.
 struct ArithIntrinsicPattern {
-    map: HashMap<Symbol, ArithMapping>,
-    eligible: Rc<HashSet<Symbol>>,
+    map: HashMap<SymbolPath, ArithMapping>,
+    eligible: Rc<HashSet<SymbolPath>>,
 }
 
 impl ArithIntrinsicPattern {
     fn new() -> Self {
-        let mut map = HashMap::new();
+        let mut map = HashMap::default();
 
         macro_rules! binary {
             ($name:expr, $op_fn:expr) => {
-                map.insert(Symbol::from_dynamic($name), ArithMapping::BinaryOp($op_fn));
+                map.insert(SymbolPath::from($name), ArithMapping::BinaryOp($op_fn));
             };
         }
         macro_rules! cmpi {
             ($name:expr, $pred:expr) => {
-                map.insert(Symbol::from_dynamic($name), ArithMapping::CmpI($pred));
+                map.insert(SymbolPath::from($name), ArithMapping::CmpI($pred));
             };
         }
         macro_rules! cmpf {
             ($name:expr, $pred:expr) => {
-                map.insert(Symbol::from_dynamic($name), ArithMapping::CmpF($pred));
+                map.insert(SymbolPath::from($name), ArithMapping::CmpF($pred));
             };
         }
 
@@ -238,11 +242,11 @@ impl ArithIntrinsicPattern {
 
         Self {
             map,
-            eligible: Rc::new(HashSet::new()),
+            eligible: Rc::new(HashSet::default()),
         }
     }
 
-    fn with_eligible(mut self, eligible: Rc<HashSet<Symbol>>) -> Self {
+    fn with_eligible(mut self, eligible: Rc<HashSet<SymbolPath>>) -> Self {
         self.eligible = eligible;
         self
     }
@@ -260,10 +264,10 @@ impl RewritePattern for ArithIntrinsicPattern {
         };
         let callee = call_op.callee(ctx);
 
-        if !self.eligible.contains(&callee) {
+        if !self.eligible.contains(callee) {
             return false;
         }
-        let Some(mapping) = self.map.get(&callee) else {
+        let Some(mapping) = self.map.get(callee) else {
             return false;
         };
 
@@ -302,8 +306,8 @@ impl RewritePattern for ArithIntrinsicPattern {
 /// `func.constant` references) while also removing the `abi = "intrinsic"`
 /// marker so the backend treats them as normal functions.
 struct ArithIntrinsicFuncDeclPattern {
-    intrinsic_map: HashMap<Symbol, ArithMapping>,
-    eligible: Rc<HashSet<Symbol>>,
+    intrinsic_map: HashMap<SymbolPath, ArithMapping>,
+    eligible: Rc<HashSet<SymbolPath>>,
 }
 
 impl RewritePattern for ArithIntrinsicFuncDeclPattern {
@@ -318,11 +322,11 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         };
 
         // Check if this is one of our known arithmetic intrinsics
-        let sym_name = func_op.sym_name(ctx);
-        if !self.eligible.contains(&sym_name) {
+        let sym_name = Symbol::new(func_op.sym_name(ctx));
+        if !self.eligible.contains(&SymbolPath::from(&sym_name)) {
             return false;
         }
-        let Some(mapping) = self.intrinsic_map.get(&sym_name) else {
+        let Some(mapping) = self.intrinsic_map.get(&SymbolPath::from(&sym_name)) else {
             return false;
         };
 
@@ -388,7 +392,7 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
         ctx.detach_region(old_body);
 
         let new_func = func::Func::operands()
-            .sym_name(sym_name)
+            .sym_name(ctx.intern_symbol_text(&sym_name))
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc)
@@ -399,7 +403,12 @@ impl RewritePattern for ArithIntrinsicFuncDeclPattern {
     }
 }
 
-fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: Symbol, mapping: &ArithMapping) -> bool {
+fn exact_signature(
+    ctx: &IrContext,
+    ty: TypeRef,
+    symbol: &SymbolPath,
+    mapping: &ArithMapping,
+) -> bool {
     let Some(function) = func::FuncSig::from_type_ref(ctx, ty) else {
         return false;
     };
@@ -422,13 +431,14 @@ fn exact_signature(ctx: &IrContext, ty: TypeRef, symbol: Symbol, mapping: &Arith
         ArithMapping::BinaryOp(_) => {
             result.dialect == operand.dialect
                 && result.name == operand.name
-                && symbol.with_str(|symbol| {
-                    if symbol.starts_with("std::Float::") {
-                        operand_is_f64
-                    } else {
-                        operand_is_i32
-                    }
-                })
+                && if symbol
+                    .as_simple()
+                    .is_some_and(|name| name.as_str().starts_with("std::Float::"))
+                {
+                    operand_is_f64
+                } else {
+                    operand_is_i32
+                }
         }
         ArithMapping::CmpI(_) => {
             operand_is_i32
@@ -457,7 +467,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -497,7 +507,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Int::=="(%0: core.i32, %1: core.i32) -> core.i1
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Int::=="} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Int::=="} {
                 ^bb0:
                     func.unreachable
                 }
@@ -526,7 +536,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"}
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @caller(%0: core.i32, %1: core.i32) -> core.i32 {
                 ^bb0:
                     %2 = func.call %0, %1 {callee = @"std::Nat::+"} : core.i32
@@ -551,7 +561,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"}
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"}
                 func.func @user() -> func.func_sig<(core.i32, core.i32) -> core.i32> {
                 ^bb0:
                     %f = func.constant {func_ref = @"std::Nat::+"} : func.func_sig<(core.i32, core.i32) -> core.i32>
@@ -579,7 +589,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.f64, %1: core.f64) -> core.f64
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }
@@ -626,7 +636,7 @@ mod tests {
             r#"
             core.module @test {
                 func.func @"std::Nat::+"(%0: core.i32, %1: core.i32) -> core.i32
-                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::Nat::+"} {
+                    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::Nat::+"} {
                 ^bb0:
                     func.unreachable
                 }

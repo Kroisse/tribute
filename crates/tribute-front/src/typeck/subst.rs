@@ -3,7 +3,7 @@
 //! This module provides shared substitution logic for replacing BoundVar types
 //! with actual types during type scheme instantiation.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::ast::{Effect, EffectRow, EffectVar, Type, TypeKind, TypeScheme};
 
@@ -70,7 +70,7 @@ pub fn substitute_bound_vars<'db>(
                 db,
                 TypeKind::Named {
                     id: *id,
-                    name: *name,
+                    name: name.clone(),
                     args: new_args,
                 },
             ))
@@ -362,7 +362,7 @@ fn freshen_effect_vars_inner<'db>(
             db,
             TypeKind::Named {
                 id: *id,
-                name: *name,
+                name: name.clone(),
                 args: args
                     .iter()
                     .map(|arg| {
@@ -492,7 +492,7 @@ mod tests {
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::source(db, Symbol::from_dynamic(name))
+        AbilityId::source(db, Symbol::new(name))
     }
 
     // =========================================================================

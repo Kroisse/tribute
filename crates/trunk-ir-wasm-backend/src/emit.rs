@@ -32,19 +32,20 @@ use handlers::{
 use helpers::*;
 use value_emission::*;
 
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::borrow::Cow;
-use std::collections::{HashMap, HashSet};
 use std::sync::LazyLock;
 
 use tracing::debug;
 
 use trunk_ir::IrContext;
 use trunk_ir::Module as IrModule;
-use trunk_ir::Symbol;
 use trunk_ir::callable::CallableBody;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
+use trunk_ir::{Symbol, SymbolPath};
 use wasm_encoder::{
     AbstractHeapType, ArrayType, CodeSection, CompositeInnerType, CompositeType, ConstExpr,
     DataCountSection, DataSection, ElementSection, Elements, EntityType, ExportKind, ExportSection,
@@ -53,11 +54,10 @@ use wasm_encoder::{
     TypeSection, ValType,
 };
 
-use crate::gc_types::GcTypeDef;
+use crate::gc_types::{self, GcTypeDef};
 use crate::{CompilationError, CompilationResult};
 
 trunk_ir::symbols! {
-    ATTR_SYM_NAME => "sym_name",
     ATTR_FIELD => "field",
     ATTR_HEAP_TYPE => "heap_type",
     ATTR_TARGET_TYPE => "target_type",
@@ -226,11 +226,11 @@ struct ModuleInfo {
     gc_types: Vec<GcTypeDef>,
     type_idx_by_type: HashMap<TypeRef, u32>,
     /// Function type lookup map (wasm.func_sig TypeRef).
-    func_types: HashMap<Symbol, TypeRef>,
+    func_types: HashMap<SymbolPath, TypeRef>,
     /// Function index lookup map (import index or func index).
-    func_indices: HashMap<Symbol, u32>,
+    func_indices: HashMap<SymbolPath, u32>,
     /// Functions referenced via ref.func that need declarative elem segment.
-    ref_funcs: HashSet<Symbol>,
+    ref_funcs: HashSet<SymbolPath>,
     /// Additional target function types from call_indirect that need to be added to the type section.
     /// Stored as (type_idx, wasm.func_sig TypeRef) pairs.
     call_indirect_types: Vec<(u32, TypeRef)>,
@@ -272,14 +272,19 @@ pub(crate) fn emit_wasm(ctx: &mut IrContext, module: IrModule) -> CompilationRes
     let gc_type_count = module_info.gc_types.len() as u32;
     let mut next_type_index = gc_type_count;
 
-    // All GC types must be in a single rec group for nominal typing.
+    // All GC types must be in a single rec group for nominal typing. A user
+    // struct that starts with the descriptor field is a subtype of the
+    // builtin `Described` type, which is therefore the only non-final type.
     let gc_subtypes: Vec<SubType> = module_info
         .gc_types
         .iter()
-        .map(|gc_type| match gc_type {
+        .enumerate()
+        .map(|(index, gc_type)| match gc_type {
             GcTypeDef::Struct(fields) => SubType {
-                is_final: true,
-                supertype_idx: None,
+                is_final: index as u32 != gc_types::DESCRIBED_IDX,
+                supertype_idx: (index as u32 >= gc_types::FIRST_USER_TYPE_IDX
+                    && gc_types::is_described_subtype(fields))
+                .then_some(gc_types::DESCRIBED_IDX),
                 composite_type: CompositeType {
                     shared: false,
                     inner: CompositeInnerType::Struct(StructType {
@@ -560,8 +565,8 @@ fn collect_wasm_ops_from_region(
     for &block_ref in &ctx.region(region).blocks {
         for &op in &ctx.block(block_ref).ops {
             let op_data = ctx.op(op);
-            let dialect = op_data.dialect;
-            let name = op_data.name;
+            let dialect = op_data.dialect.clone();
+            let name = op_data.name.clone();
 
             if dialect == core_dialect && name == module_name {
                 for nested_region in ctx.op_regions(op) {
@@ -649,20 +654,21 @@ fn collect_module_info(ctx: &mut IrContext, module: IrModule) -> CompilationResu
 
     // Build function type lookup map
     for func in &info.funcs {
-        info.func_types.insert(func.name, func.func_type);
+        info.func_types.insert(func.name.clone(), func.func_type);
     }
     for import in &info.imports {
-        info.func_types.insert(import.sym, import.func_type);
+        info.func_types.insert(import.sym.clone(), import.func_type);
     }
 
     // Build function index map
     for (index, import_def) in info.imports.iter().enumerate() {
-        info.func_indices.insert(import_def.sym, index as u32);
+        info.func_indices
+            .insert(import_def.sym.clone(), index as u32);
     }
     let import_count = info.imports.len() as u32;
     for (index, func_def) in info.funcs.iter().enumerate() {
         info.func_indices
-            .insert(func_def.name, import_count + index as u32);
+            .insert(func_def.name.clone(), import_count + index as u32);
     }
 
     // Collect functions referenced via ref.func
@@ -707,8 +713,8 @@ fn emit_function(
     }
 
     let mut emit_ctx = FunctionEmitContext {
-        value_locals: HashMap::new(),
-        effective_types: HashMap::new(),
+        value_locals: HashMap::default(),
+        effective_types: HashMap::default(),
     };
     let mut locals: Vec<ValType> = Vec::new();
 
@@ -899,7 +905,7 @@ fn emit_op_nested(
         ));
     }
 
-    let name = op_data.name;
+    let name = op_data.name.clone();
     let operands = ctx.op_operands(op);
 
     debug!("emit_op: wasm.{}", name);
@@ -1111,10 +1117,10 @@ fn set_result_local(
     Ok(())
 }
 
-fn resolve_callee(path: Symbol, module_info: &ModuleInfo) -> CompilationResult<u32> {
+fn resolve_callee(path: &SymbolPath, module_info: &ModuleInfo) -> CompilationResult<u32> {
     module_info
         .func_indices
-        .get(&path)
+        .get(path)
         .copied()
         .ok_or_else(|| CompilationError::function_not_found(&path.to_string()))
 }
@@ -1163,25 +1169,6 @@ mod tests {
   }
   wasm.func @caller(%table_index: core.i32, %value: core.i32) -> core.nil {
     wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(core.i32) -> core.nil>, table = 0, type_idx = 0}
-  }
-  wasm.export_func {name = "caller", func = @caller}
-}"#,
-        )
-    }
-
-    fn typeref_return_call_indirect_module(ctx: &mut IrContext) -> IrModule {
-        parse_test_module(
-            ctx,
-            r#"core.module @test {
-  wasm.table {reftype = "funcref", min = 1, max = 1}
-  wasm.elem {table = 0, offset = 0} {
-    wasm.ref_func {func_name = @target} : wasm.funcref
-  }
-  wasm.func @target(%value: wasm.structref) -> core.nil {
-    wasm.return
-  }
-  wasm.func @caller(%table_index: core.i32, %value: adt.typeref) -> core.nil {
-    wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.structref) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.export_func {name = "caller", func = @caller}
 }"#,
@@ -1295,20 +1282,6 @@ mod tests {
     }
 
     #[test]
-    fn encodes_typeref_tail_argument_as_structref() {
-        let mut ctx = IrContext::new();
-        let module = typeref_return_call_indirect_module(&mut ctx);
-        let bytes = crate::emit_module_to_wasm(&mut ctx, module)
-            .expect("typeref tail argument must be emission-ready")
-            .bytes;
-        let mut validator =
-            Validator::new_with_features(WasmFeatures::default() | WasmFeatures::TAIL_CALL);
-        validator
-            .validate_all(&bytes)
-            .expect("encoded typeref tail transfer must validate");
-    }
-
-    #[test]
     fn emits_signature_valued_nop_as_null_funcref() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
@@ -1335,12 +1308,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "pair", type = wasm.func_sig<() -> (core.i32, core.i64)>} {
     %a = wasm.i32_const {value = 7} : core.i32
     %b = wasm.i64_const {value = 9} : core.i64
     wasm.return %a, %b
   }
-  wasm.func {sym_name = @use_pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "use_pair", type = wasm.func_sig<() -> (core.i32, core.i64)>} {
     %a, %b = wasm.call {callee = @pair} : core.i32, core.i64
     wasm.return %a, %b
   }
@@ -1364,12 +1337,12 @@ mod tests {
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @pair} : wasm.funcref
   }
-  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "pair", type = wasm.func_sig<() -> (core.i32, core.i64)>} {
     %a = wasm.i32_const {value = 7} : core.i32
     %b = wasm.i64_const {value = 9} : core.i64
     wasm.return %a, %b
   }
-  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> (core.i32, core.i64)>} {
     ^entry(%table_index: core.i32):
       %a, %b = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> (core.i32, core.i64)>, table = 0, type_idx = 0} : core.i32, core.i64
       wasm.return %a, %b
@@ -1391,7 +1364,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   wasm.table {reftype = "funcref", min = 1, max = 1}
-  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (wasm.funcref, core.i32)>} {
+  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> (wasm.funcref, core.i32)>} {
     ^entry(%index: core.i32):
       %ignored = wasm.call_indirect %index {signature = wasm.func_sig<() -> wasm.anyref>} : wasm.anyref
       %function = wasm.nop : wasm.funcref
@@ -1414,12 +1387,12 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.nil, core.i64)>} {
+  wasm.func {sym_name = "pair", type = wasm.func_sig<() -> (core.i32, core.nil, core.i64)>} {
     %a = wasm.i32_const {value = 7} : core.i32
     %b = wasm.i64_const {value = 9} : core.i64
     wasm.return %a, %b
   }
-  wasm.func {sym_name = @use_pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "use_pair", type = wasm.func_sig<() -> (core.i32, core.i64)>} {
     %a, %unit, %b = wasm.call {callee = @pair} : core.i32, core.nil, core.i64
     wasm.return %a, %b
   }
@@ -1632,19 +1605,19 @@ mod tests {
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @add_two} : wasm.funcref
   }
-  wasm.func {sym_name = @set_one, type = wasm.func_sig<() -> ()>} {
+  wasm.func {sym_name = "set_one", type = wasm.func_sig<() -> ()>} {
     %one = wasm.i32_const {value = 1} : core.i32
     wasm.global_set %one {index = 0}
     wasm.return
   }
-  wasm.func {sym_name = @add_two, type = wasm.func_sig<() -> ()>} {
+  wasm.func {sym_name = "add_two", type = wasm.func_sig<() -> ()>} {
     %current = wasm.global_get {index = 0} : core.i32
     %two = wasm.i32_const {value = 2} : core.i32
     %next = wasm.i32_add %current, %two : core.i32
     wasm.global_set %next {index = 0}
     wasm.return
   }
-  wasm.func {sym_name = @caller, type = wasm.func_sig<() -> core.i32>} {
+  wasm.func {sym_name = "caller", type = wasm.func_sig<() -> core.i32>} {
     wasm.call {callee = @set_one}
     %table_index = wasm.i32_const {value = 0} : core.i32
     wasm.call_indirect %table_index {signature = wasm.func_sig<() -> ()>, table = 0, type_idx = 0}
@@ -1707,12 +1680,12 @@ mod tests {
 
         invoke(
             r#"core.module @test {
-  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "pair", type = wasm.func_sig<() -> (core.i32, core.i64)>} {
     %a = wasm.i32_const {value = 7} : core.i32
     %b = wasm.i64_const {value = 9} : core.i64
     wasm.return %a, %b
   }
-  wasm.func {sym_name = @caller, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "caller", type = wasm.func_sig<() -> (core.i32, core.i64)>} {
     %a, %b = wasm.call {callee = @pair} : core.i32, core.i64
     wasm.return %a, %b
   }
@@ -1727,12 +1700,12 @@ mod tests {
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @pair} : wasm.funcref
   }
-  wasm.func {sym_name = @pair, type = wasm.func_sig<() -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "pair", type = wasm.func_sig<() -> (core.i32, core.i64)>} {
     %a = wasm.i32_const {value = 7} : core.i32
     %b = wasm.i64_const {value = 9} : core.i64
     wasm.return %a, %b
   }
-  wasm.func {sym_name = @caller, type = wasm.func_sig<(core.i32) -> (core.i32, core.i64)>} {
+  wasm.func {sym_name = "caller", type = wasm.func_sig<(core.i32) -> (core.i32, core.i64)>} {
     ^entry(%table_index: core.i32):
       %a, %b = wasm.call_indirect %table_index {signature = wasm.func_sig<() -> (core.i32, core.i64)>, table = 0, type_idx = 0} : core.i32, core.i64
       wasm.return %a, %b

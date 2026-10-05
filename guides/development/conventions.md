@@ -11,6 +11,26 @@ session. They use `PassManager`, typed pass targets, and explicit analysis-cache
 invalidation. They do not wrap each IR mutation in a Salsa query. See
 [the Salsa guide](../salsa.md) and [TrunkIR](ir.md).
 
+## Symbols
+
+Use `Symbol::new(&str)` for any runtime name. string_cache selects the static
+set, inline storage, or the dynamic set automatically; the constructor does not
+require a `'static` string. `Symbol::from(&str)` also accepts borrowed names.
+
+Use `trunk_ir::symbol!("func")` for a literal in trunk-ir's generated symbol set.
+It creates the symbol at compile time, including in `const` declarations,
+without a runtime lookup. In `match`, compare symbols in a guard instead of
+using this macro as a pattern. Short names use inline storage. Unknown
+literals and runtime expressions are rejected; use `Symbol::new` for those.
+The static set is generated from trunk-ir's source, so adding a literal to a
+consumer crate does not register it in that set.
+
+`symbols!` declares named helper functions and continues to support arbitrary
+literal names through the runtime constructor.
+
+See the [string_cache documentation](https://docs.rs/string_cache) for the atom
+representations and generated literal macros.
+
 ## Error Handling
 
 Use `derive_more` for error types:

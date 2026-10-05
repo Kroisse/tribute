@@ -18,7 +18,7 @@ mod unify;
 
 pub use error::{LocatedSolveError, SolveError};
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::smallvec::SmallVec;
 

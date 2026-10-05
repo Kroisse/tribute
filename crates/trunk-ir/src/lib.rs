@@ -24,6 +24,7 @@ pub mod op_interface;
 
 // === Textual assembly format hooks ===
 pub mod asm_format;
+pub mod attr_kind;
 mod registry;
 
 // === Operation and type utilities ===
@@ -79,7 +80,7 @@ pub use smallvec;
 
 pub use location::{Span, Spanned};
 pub use ops::ConversionError;
-pub use symbol::{BlockId, IdVec, Symbol, SymbolVec};
+pub use symbol::{BlockId, IdVec, Symbol, SymbolPath, SymbolVec};
 
 pub use smallvec::smallvec as idvec;
 
@@ -93,7 +94,7 @@ pub use refs::{BlockRef, OpRef, PathRef, RegionRef, TypeRef, ValueDef, ValueRef}
 pub use rewrite::Module;
 pub use types::{
     Attribute, AttributeIntoIter, AttributeIter, AttributeIterMut, AttributeKey, AttributeKeys,
-    AttributeMap, AttributeText, AttributeValues, AttributeValuesMut, IntegerOutOfRange, Location,
-    PathInterner, StringArg, StringPool, StringRef, TypeData, TypeDataBuilder, TypeInterner,
+    AttributeMap, AttributeValues, AttributeValuesMut, IntegerOutOfRange, Location, PathInterner,
+    StringArg, StringPool, StringRef, TypeData, TypeDataBuilder, TypeInterner,
 };
 pub use walk::WalkAction;

@@ -27,7 +27,8 @@
 mod context;
 mod lower;
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::sync::LazyLock;
 
 use tribute_ir::dialect::tribute_control::{CompilerIntrinsicDeclaration, OperationDeclaration};
@@ -35,6 +36,7 @@ use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::rewrite::Module as IrModule;
 
+use crate::SortedMap;
 use crate::ast::{
     AbilityId, CallingConvention, Module as AstModule, NodeId, SpanMap, Type, TypeScheme, TypedRef,
 };
@@ -96,8 +98,8 @@ static SUPPORTED_COMPILER_INTRINSICS: LazyLock<HashSet<Symbol>> = LazyLock::new(
     .collect()
 });
 
-fn is_supported_compiler_intrinsic(identity: Symbol) -> bool {
-    SUPPORTED_COMPILER_INTRINSICS.contains(&identity)
+fn is_supported_compiler_intrinsic(identity: &Symbol) -> bool {
+    SUPPORTED_COMPILER_INTRINSICS.contains(identity)
 }
 
 /// An unsupported directive and its source declaration for diagnostics.
@@ -126,8 +128,8 @@ pub fn registered_compiler_intrinsics<V>(
                 crate::ast::Decl::ExternFunction(function)
                     if function.abi == Symbol::new("intrinsic") =>
                 {
-                    let symbol = crate::qualified_symbol(prefix, function.name);
-                    if is_supported_compiler_intrinsic(symbol) {
+                    let symbol = crate::qualified_symbol(prefix, &function.name);
+                    if is_supported_compiler_intrinsic(&symbol) {
                         result.insert(function.id, symbol);
                     } else {
                         unsupported.push(UnsupportedCompilerIntrinsic {
@@ -138,7 +140,7 @@ pub fn registered_compiler_intrinsics<V>(
                 }
                 crate::ast::Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(prefix, module.name);
+                        let saved = crate::push_prefix(prefix, &module.name);
                         collect(body, prefix, result, unsupported);
                         prefix.truncate(saved);
                     }
@@ -148,7 +150,7 @@ pub fn registered_compiler_intrinsics<V>(
         }
     }
 
-    let mut result = HashMap::new();
+    let mut result = HashMap::default();
     let mut unsupported = Vec::new();
     collect(
         &module.decls,
@@ -172,17 +174,19 @@ pub struct TypedModule<'db> {
     pub span_map: SpanMap,
     pub function_types: HashMap<Symbol, TypeScheme<'db>>,
     pub constructor_types: HashMap<crate::ast::CtorId<'db>, TypeScheme<'db>>,
-    pub specialized_enum_variants: HashMap<NodeId, TypeScheme<'db>>,
-    pub node_types: HashMap<NodeId, Type<'db>>,
-    pub local_instances: HashMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
+    pub specialized_enum_variants: SortedMap<NodeId, TypeScheme<'db>>,
+    pub node_types: SortedMap<NodeId, Type<'db>>,
+    pub local_instances: SortedMap<NodeId, crate::typeck::LocalCallableInstance<'db>>,
     pub ability_conventions: HashMap<AbilityId<'db>, CallingConvention>,
     pub ability_definitions: HashMap<AbilityId<'db>, crate::typeck::AbilityInfo<'db>>,
-    pub handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
-    pub perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
+    pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
+    pub perform_operations: SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     /// Solved source-callable signatures for lambda expressions.
-    pub lambda_signatures: HashMap<NodeId, crate::typeck::LambdaSignature<'db>>,
+    pub lambda_signatures: SortedMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     /// Case expressions whose source coverage is known to be exhaustive.
-    pub exhaustive_cases: std::collections::HashSet<NodeId>,
+    pub exhaustive_cases: HashSet<NodeId>,
+    /// Non-identity evidence selections of calls, resumes, and handles.
+    pub evidence_plans: SortedMap<NodeId, Vec<crate::typeck::EvidenceStep<'db>>>,
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
     /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
@@ -214,13 +218,13 @@ mod tests {
 
     #[test]
     fn compiler_intrinsic_registry_is_explicit() {
-        assert!(is_supported_compiler_intrinsic(Symbol::new(
+        assert!(is_supported_compiler_intrinsic(&Symbol::new(
             "std::Float::=="
         )));
-        assert!(is_supported_compiler_intrinsic(Symbol::new(
+        assert!(is_supported_compiler_intrinsic(&Symbol::new(
             "std::io::__tribute_io_read_line"
         )));
-        assert!(!is_supported_compiler_intrinsic(Symbol::new(
+        assert!(!is_supported_compiler_intrinsic(&Symbol::new(
             "user_intrinsic"
         )));
     }
@@ -235,10 +239,10 @@ mod tests {
             &db,
             path,
             span_map,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         // Verify context provides expected types
@@ -280,10 +284,10 @@ mod tests {
             &db,
             path,
             SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         let local_id = crate::ast::LocalId::new(0);
@@ -312,10 +316,10 @@ mod tests {
             &db,
             path,
             SpanMap::default(),
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         let local_id = crate::ast::LocalId::new(0);
@@ -347,10 +351,10 @@ mod tests {
             &db,
             path,
             span_map,
-            HashMap::new(),
-            HashMap::new(),
+            HashMap::default(),
+            HashMap::default(),
             smallvec::smallvec![Symbol::new("test")],
-            HashMap::new(),
+            SortedMap::default(),
         );
 
         // Verify location creation doesn't panic

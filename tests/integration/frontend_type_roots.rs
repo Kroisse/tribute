@@ -40,8 +40,8 @@ fn prepare_root<'db>(
     let packet = Type::new(
         db,
         TypeKind::Named {
-            id: TypeDefId::source(db, packet_decl.name, packet_decl.id),
-            name: packet_decl.name,
+            id: TypeDefId::source(db, packet_decl.name.clone(), packet_decl.id),
+            name: packet_decl.name.clone(),
             args: vec![Type::new(db, TypeKind::Nat)],
         },
     );
@@ -116,12 +116,12 @@ fn prepare_root<'db>(
         metadata,
         typed.ability_conventions(db).to_vec(),
         typed.ability_definitions(db).to_vec(),
-        typed.handler_operations(db).to_vec(),
-        typed.perform_operations(db).to_vec(),
-        typed.lambda_signatures(db).to_vec(),
+        typed.handler_operations(db).clone(),
+        typed.perform_operations(db).clone(),
+        typed.lambda_signatures(db).clone(),
         typed.exhaustive_cases(db).to_vec(),
         *typed.well_known_types(db),
-        typed.span_map(db).clone(),
+        typed.span_map(db),
     );
     let prepared = prepare_frontend_for_lowering(db, input, source);
     let errors = prepare_frontend_for_lowering::accumulated::<Diagnostic>(db, input, source);
@@ -202,7 +202,7 @@ fn main() -> Nil { marker() }
         .unwrap();
     assert_eq!(
         id.origin(db),
-        TypeDefId::source(db, original.name, original.id).origin(db)
+        TypeDefId::source(db, original.name.clone(), original.id).origin(db)
     );
 }
 

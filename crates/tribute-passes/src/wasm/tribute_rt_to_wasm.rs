@@ -39,10 +39,16 @@ fn f64_type(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeDataBuilder::new("core", "f64").build())
 }
 
-/// Get the BoxedF64 struct type: `adt.struct<_BoxedF64(value: core.f64)>`
+/// Get the BoxedF64 struct type:
+/// `adt.struct<_BoxedF64(value: core.f64), {layout = "boxed_f64"}>`
 fn boxed_f64_type(ctx: &mut IrContext) -> TypeRef {
     let f64_ty = f64_type(ctx);
-    adt::struct_type(ctx, "_BoxedF64", [("value", f64_ty)], AttributeMap::new()).as_type_ref()
+    let mut attrs = AttributeMap::new();
+    attrs.insert(
+        tribute_ir::runtime_layout::LAYOUT_ATTR,
+        ctx.string_attr(tribute_ir::runtime_layout::BOXED_F64),
+    );
+    adt::struct_type(ctx, "_BoxedF64", [("value", f64_ty)], attrs).as_type_ref()
 }
 
 /// Create i31 unbox operations (ref_cast to i31ref + i31_get_s/u).
@@ -366,5 +372,47 @@ impl RewritePattern for UnboxBoolPattern {
 
     fn name(&self) -> &'static str {
         "UnboxBoolPattern"
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::walk::{WalkAction, walk_region};
+
+    #[test]
+    fn boxed_floats_carry_their_layout_identifier() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @f(%0: core.f64) -> core.nil {
+    %1 = tribute_rt.box_float %0 : tribute_rt.anyref
+    %2 = tribute_rt.unbox_float %1 : core.f64
+    func.return
+  }
+}"#,
+        );
+        lower(&mut ctx, module);
+
+        let mut boxed = Vec::new();
+        let body = module.body(&ctx).expect("module body");
+        let _ = walk_region::<()>(&ctx, body, &mut |op| {
+            if let Ok(op) = adt::StructNew::from_op(&ctx, op) {
+                boxed.push(op.r#type(&ctx));
+            } else if let Ok(op) = adt::StructGet::from_op(&ctx, op) {
+                boxed.push(op.r#type(&ctx));
+            }
+            std::ops::ControlFlow::Continue(WalkAction::Advance)
+        });
+
+        assert_eq!(boxed.len(), 2);
+        for ty in boxed {
+            assert!(tribute_ir::runtime_layout::has_runtime_layout(
+                &ctx,
+                ty,
+                tribute_ir::runtime_layout::BOXED_F64,
+            ));
+        }
     }
 }

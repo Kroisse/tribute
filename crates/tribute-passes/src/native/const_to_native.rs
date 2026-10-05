@@ -15,8 +15,9 @@
 //! Runs before `adt_rc_header` (Phase 1.95) so that `adt.variant_new` operations
 //! produced here are handled by the existing variant lowering.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use hashbrown::hash_map::EntryRef;
+
+use crate::collections::{HashMap, HashSet};
 
 use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
@@ -24,7 +25,7 @@ use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
+use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
@@ -32,6 +33,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
+use trunk_ir::SymbolPath;
 
 /// Name of the runtime allocation function.
 const ALLOC_FN: &str = "__tribute_alloc";
@@ -66,16 +68,16 @@ impl ConstCollector {
     fn new() -> Self {
         Self {
             contents: Vec::new(),
-            seen: HashSet::new(),
+            seen: HashSet::default(),
             has_string_consts: false,
         }
     }
 
-    fn intern(&mut self, content: Vec<u8>) {
-        if !self.seen.contains(&content) {
-            self.seen.insert(content.clone());
-            self.contents.push(content);
-        }
+    fn intern(&mut self, content: &[u8]) {
+        self.seen.get_or_insert_with(content, |content| {
+            self.contents.push(content.to_vec());
+            content.to_vec()
+        });
     }
 
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
@@ -84,15 +86,13 @@ impl ConstCollector {
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
                 if let Some(s) = data.attributes.get_str(ctx, "value") {
-                    let bytes = s.as_bytes().to_vec();
-                    self.intern(bytes);
+                    self.intern(s.as_bytes());
                     self.has_string_consts = true;
                 }
             } else if data.name == Symbol::new("bytes_const")
                 && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
             {
-                let bytes: Vec<u8> = b.to_vec();
-                self.intern(bytes);
+                self.intern(b);
             }
         }
     }
@@ -209,40 +209,45 @@ fn declare_rodata(
     module: Module,
     contents: &[Vec<u8>],
 ) -> HashMap<Vec<u8>, Symbol> {
-    let mut content_to_symbol = HashMap::new();
+    let mut content_to_symbol = HashMap::default();
     let Some(module_block) = module.first_block(ctx) else {
         return content_to_symbol;
     };
 
-    let mut taken = HashSet::new();
+    let mut taken = HashSet::default();
     for &op in ctx.block(module_block).ops.iter() {
-        if let Some(name) = ctx.op(op).attributes.get_symbol("sym_name") {
+        if let Some(name) = ctx
+            .op(op)
+            .attributes
+            .get_str(ctx, "sym_name")
+            .map(Symbol::new)
+        {
             taken.insert(name);
         }
         if let Ok(data) = clif::Data::from_op(ctx, op)
             && data.align(ctx) == 1
         {
             content_to_symbol
-                .entry(data.bytes(ctx).to_vec())
-                .or_insert(data.sym_name(ctx));
+                .entry_ref(data.bytes(ctx).as_slice())
+                .or_insert_with(|| Symbol::new(data.sym_name(ctx)));
         }
     }
 
     let location = ctx.op(module.op()).location;
     let mut next_idx = 0u32;
     for content in contents {
-        let Entry::Vacant(entry) = content_to_symbol.entry(content.clone()) else {
+        let EntryRef::Vacant(entry) = content_to_symbol.entry_ref(content.as_slice()) else {
             continue;
         };
         let sym = loop {
-            let candidate = Symbol::from_dynamic(&format!("{RODATA_PREFIX}{next_idx}"));
+            let candidate = Symbol::new(&format!("{RODATA_PREFIX}{next_idx}"));
             next_idx += 1;
             if !taken.contains(&candidate) {
                 break candidate;
             }
         };
         let data = clif::Data::operands()
-            .sym_name(sym)
+            .sym_name(ctx.intern_symbol_text(&sym))
             .bytes(content.as_slice().into())
             .align(1)
             .regions(None)
@@ -255,8 +260,7 @@ fn declare_rodata(
 
 /// Emit clif ops to allocate an RC-managed TributeBytes from a rodata symbol.
 ///
-/// Returns (ops_to_insert, last_op_to_replace_with).
-/// The result value of the last op is the payload pointer.
+/// Returns the ops to insert, in order, and the payload pointer they produce.
 fn emit_bytes_alloc(
     ctx: &mut IrContext,
     loc: trunk_ir::types::Location,
@@ -265,12 +269,12 @@ fn emit_bytes_alloc(
     ptr_ty: TypeRef,
     i64_ty: TypeRef,
     i32_ty: TypeRef,
-) -> (Vec<OpRef>, OpRef) {
+) -> (Vec<OpRef>, ValueRef) {
     let mut ops: Vec<OpRef> = Vec::new();
 
     // 1. Get rodata address
     let data_ptr_op = clif::SymbolAddr::operands()
-        .sym(data_sym)
+        .sym(data_sym.into())
         .results(ptr_ty)
         .build(ctx, loc);
     ops.push(data_ptr_op.op_ref());
@@ -293,7 +297,7 @@ fn emit_bytes_alloc(
     ops.push(size_op.op_ref());
 
     let call_op = clif::Call::operands([size_op.result(ctx)])
-        .callee(Symbol::new(ALLOC_FN))
+        .callee(SymbolPath::from(ALLOC_FN))
         .results([ptr_ty])
         .build(ctx, loc);
     ops.push(call_op.op_ref());
@@ -343,20 +347,7 @@ fn emit_bytes_alloc(
         .build(ctx, loc);
     ops.push(store_len.op_ref());
 
-    // 7. Identity iadd(payload, 0) to produce a fresh SSA value that the
-    //    rewrite pattern can use as the replacement result.
-    let zero_op = clif::Iconst::operands()
-        .value(0)
-        .results(i64_ty)
-        .build(ctx, loc);
-    ops.push(zero_op.op_ref());
-    let identity_op = clif::Iadd::operands(payload, zero_op.result(ctx))
-        .results(ptr_ty)
-        .build(ctx, loc);
-    ops.push(identity_op.op_ref());
-
-    let last = ops.pop().unwrap();
-    (ops, last)
+    (ops, payload)
 }
 
 /// Pattern for `adt.bytes_const` → clif ops (rodata + alloc).
@@ -380,12 +371,12 @@ impl RewritePattern for BytesConstNativePattern {
 
         let content: Vec<u8> = bytes_const.value(ctx).to_vec();
 
-        let Some(data_sym) = self.content_to_symbol.get(&content).copied() else {
+        let Some(data_sym) = self.content_to_symbol.get(&content).cloned() else {
             return false;
         };
 
         let loc = ctx.op(op).location;
-        let (insert_ops, last_op) = emit_bytes_alloc(
+        let (insert_ops, payload) = emit_bytes_alloc(
             ctx,
             loc,
             data_sym,
@@ -395,10 +386,17 @@ impl RewritePattern for BytesConstNativePattern {
             self.i32_ty,
         );
 
+        // The allocation is a `core.ptr`; uses still declare the constant's
+        // type until native type conversion runs.
+        let result_ty = ctx.op_result_types(op)[0];
+        let typed = core::UnrealizedConversionCast::operands(payload)
+            .results(result_ty)
+            .build(ctx, loc);
+
         for o in insert_ops {
             rewriter.insert_op(o);
         }
-        rewriter.replace_op(last_op);
+        rewriter.replace_op(typed.op_ref());
         true
     }
 
@@ -429,7 +427,7 @@ impl RewritePattern for StringConstNativePattern {
 
         let content = string_const.value(ctx).as_bytes();
         let content_len = content.len() as u64;
-        let Some(data_sym) = self.content_to_symbol.get(content).copied() else {
+        let Some(data_sym) = self.content_to_symbol.get(content).cloned() else {
             return false;
         };
 
@@ -441,7 +439,7 @@ impl RewritePattern for StringConstNativePattern {
         let loc = ctx.op(op).location;
 
         // Emit bytes allocation
-        let (insert_ops, bytes_last_op) = emit_bytes_alloc(
+        let (insert_ops, bytes_payload) = emit_bytes_alloc(
             ctx,
             loc,
             data_sym,
@@ -450,9 +448,6 @@ impl RewritePattern for StringConstNativePattern {
             self.i64_ty,
             self.i32_ty,
         );
-        let bytes_payload = clif::Iadd::from_op(ctx, bytes_last_op)
-            .expect("last op is iadd")
-            .result(ctx);
 
         // Get the result type of the original string_const
         let result_ty = ctx.op_result_types(op)[0];
@@ -469,7 +464,6 @@ impl RewritePattern for StringConstNativePattern {
         for o in insert_ops {
             rewriter.insert_op(o);
         }
-        rewriter.insert_op(bytes_last_op);
         rewriter.replace_op(variant_new.op_ref());
         true
     }
@@ -608,8 +602,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data {sym_name = @__tribute_rodata_0, bytes = b"kept", align = 1}
-  clif.data {sym_name = @aligned, bytes = b"wide", align = 8}
+  clif.data {sym_name = "__tribute_rodata_0", bytes = b"kept", align = 1}
+  clif.data {sym_name = "aligned", bytes = b"wide", align = 8}
   func.func @__tribute_rodata_1() -> core.nil {
     func.return
   }
@@ -636,5 +630,39 @@ mod tests {
             symbol_addrs(&ctx, module),
             ["__tribute_rodata_0", "__tribute_rodata_2"]
         );
+    }
+
+    #[test]
+    fn lowered_bytes_constant_keeps_its_declared_type_at_block_arguments() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @pick(%x: core.bytes, %flag: core.i1) -> core.bytes {
+    ^entry:
+      cf.cond_br %flag [^param, ^literal]
+    ^param:
+      cf.br %x [^merge]
+    ^literal:
+      %no = adt.bytes_const {value = b"no"} : core.bytes
+      cf.br %no [^merge]
+    ^merge(%picked: core.bytes):
+      func.return %picked
+  }
+}"#,
+        );
+        let analysis = analyze_consts(&ctx, module);
+
+        lower(&mut ctx, module, &analysis).expect("bytes constants should lower");
+
+        let bytes_ty = core::bytes(&mut ctx).as_type_ref();
+        let mut forwarded = Vec::new();
+        let body = module.body(&ctx).expect("module body");
+        walk_ops_in_region(&ctx, body, &mut |ctx, op| {
+            if trunk_ir::dialect::cf::Br::matches(ctx, op) {
+                forwarded.extend(ctx.op_operands(op).iter().map(|&value| ctx.value_ty(value)));
+            }
+        });
+        assert_eq!(forwarded, [bytes_ty, bytes_ty]);
     }
 }

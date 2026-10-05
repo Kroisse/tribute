@@ -8,7 +8,7 @@ crate::register_pure_op!(NilValue);
 
 #[trunk_ir::dialect]
 mod core {
-    fn module(sym_name: Attr<Symbol>) {
+    fn module(sym_name: Attr<String>) {
         #[region(body)]
         {}
     }
@@ -293,6 +293,7 @@ pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Opt
 #[cfg(test)]
 mod canonicalize_tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::dialect::func::{FuncSig, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR};
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
@@ -311,8 +312,8 @@ mod canonicalize_tests {
     }
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::from_dynamic(dialect);
-        let name_sym = Symbol::from_dynamic(name);
+        let dialect_sym = Symbol::new(dialect);
+        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
@@ -333,7 +334,10 @@ mod canonicalize_tests {
         let mut ctx = IrContext::new();
         let nil = nil(&mut ctx).as_type_ref();
         let metadata = AttributeMap::from_iter([
-            (Symbol::new("tag"), Attribute::Symbol(Symbol::new("kept"))),
+            (
+                Symbol::new("tag"),
+                Attribute::SymbolRef(SymbolPath::from("kept")),
+            ),
             (
                 Symbol::new("nested"),
                 Attribute::List(vec![Attribute::Type(nil)]),

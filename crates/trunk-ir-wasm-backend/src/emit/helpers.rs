@@ -3,7 +3,7 @@
 //! This module contains type conversion and utility functions shared across
 //! the emit module.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use trunk_ir::IrContext;
 use trunk_ir::Symbol;
@@ -32,8 +32,7 @@ pub(crate) fn is_type(
     dialect: &'static str,
     name: &'static str,
 ) -> bool {
-    let data = ctx.get_type(ty);
-    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
+    ctx.types().is_dialect(ty, dialect, name)
 }
 
 // ============================================================================
@@ -74,7 +73,7 @@ pub(crate) fn builtin_layout_type_idx(ctx: &IrContext, ty: TypeRef) -> Option<u3
 /// Check if a type is the builtin closure struct, identified by its runtime
 /// layout attribute.
 pub(crate) fn is_closure_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
-    is_type(ctx, ty, "adt", "struct") && has_layout(ctx, ty, crate::gc_types::CLOSURE_LAYOUT)
+    has_layout(ctx, ty, crate::gc_types::CLOSURE_LAYOUT)
 }
 
 /// The canonical key standing for every type of one builtin runtime layout.
@@ -82,8 +81,8 @@ pub(crate) fn intern_layout_key(ctx: &mut IrContext, layout: &'static str) -> Ty
     let mut attrs = AttributeMap::new();
     attrs.insert(trunk_ir::types::LAYOUT_ATTR, ctx.string_attr(layout));
     ctx.intern_type(trunk_ir::types::TypeData {
-        dialect: Symbol::new("adt"),
-        name: Symbol::new("struct"),
+        dialect: Symbol::new("wasm"),
+        name: Symbol::new("layout"),
         params: Default::default(),
         attrs,
     })
@@ -118,7 +117,7 @@ pub(crate) fn exact_call_indirect_signature_with(
     signature: TypeRef,
 ) -> CompilationResult<TypeRef> {
     let results = ctx.op_result_types(op).to_vec();
-    exact_call_indirect_signature_with_results(ctx, op, signature, &results)
+    exact_call_indirect_signature_with_results(ctx, op, signature, &results, &|ty| ty)
 }
 
 /// Validate an exact ordinary indirect-call signature against an explicit result
@@ -126,12 +125,14 @@ pub(crate) fn exact_call_indirect_signature_with(
 ///
 /// The lowering boundary holds a candidate replacement whose results are already
 /// converted to target types, so the physical check must compare that candidate
-/// list rather than the still-unconverted operation.
+/// list rather than the still-unconverted operation. For the same reason
+/// `argument_type` gives the target type of an argument's current type.
 pub(crate) fn exact_call_indirect_signature_with_results(
     ctx: &IrContext,
     op: OpRef,
     signature: TypeRef,
     results: &[TypeRef],
+    argument_type: &dyn Fn(TypeRef) -> TypeRef,
 ) -> CompilationResult<TypeRef> {
     let (params, signature_results) = func_type_parts(ctx, signature).ok_or_else(|| {
         CompilationError::invalid_module("wasm.call_indirect signature must be wasm.func_sig")
@@ -153,7 +154,7 @@ pub(crate) fn exact_call_indirect_signature_with_results(
             && matches!(signature_results, [result] if is_nil_type(ctx, *result)));
     if params.len() != args.len()
         || params.iter().zip(args).any(|(param, arg)| {
-            !is_wasm_physical_argument_assignable(ctx, value_type(ctx, *arg), *param)
+            !is_wasm_physical_argument_assignable(ctx, argument_type(value_type(ctx, *arg)), *param)
         })
         || !results_match
     {
@@ -174,15 +175,17 @@ pub(crate) fn exact_return_call_indirect_signature(
     let signature = IndirectCallLikeOps::exact_signature(ctx, op).ok_or_else(|| {
         CompilationError::invalid_module("wasm.return_call_indirect lacks signature")
     })?;
-    exact_return_call_indirect_signature_with(ctx, op, signature)
+    exact_return_call_indirect_signature_with(ctx, op, signature, &|ty| ty)
 }
 
 /// Validate an exact callable signature against an indirect proper tail
-/// transfer without reading or mutating its attribute map.
+/// transfer without reading or mutating its attribute map. `argument_type`
+/// gives the target type of an argument's current type.
 pub(crate) fn exact_return_call_indirect_signature_with(
     ctx: &IrContext,
     op: OpRef,
     signature: TypeRef,
+    argument_type: &dyn Fn(TypeRef) -> TypeRef,
 ) -> CompilationResult<TypeRef> {
     // Tail legality is the caller/callee result-list agreement checked by the
     // emission validator; this helper validates only the exact call shape.
@@ -208,7 +211,7 @@ pub(crate) fn exact_return_call_indirect_signature_with(
     }
     if params.len() != args.len()
         || params.iter().zip(args).any(|(param, arg)| {
-            !is_wasm_physical_argument_assignable(ctx, value_type(ctx, *arg), *param)
+            !is_wasm_physical_argument_assignable(ctx, argument_type(value_type(ctx, *arg)), *param)
         })
     {
         return Err(CompilationError::invalid_module(
@@ -264,7 +267,7 @@ pub(crate) fn type_to_valtype(
     } else if is_type(ctx, ty, "wasm", "func_sig") {
         Ok(ValType::Ref(RefType::FUNCREF))
     } else if ctx.get_type(ty).dialect == Symbol::new("wasm") {
-        let name = ctx.get_type(ty).name;
+        let name = ctx.get_type(ty).name.clone();
         if name == Symbol::new("structref") {
             Ok(ValType::Ref(RefType {
                 nullable: true,
@@ -312,16 +315,6 @@ pub(crate) fn type_to_valtype(
             nullable: true,
             heap_type: HeapType::Concrete(CLOSURE_STRUCT_IDX),
         }))
-    } else if is_type(ctx, ty, "adt", "typeref") {
-        Ok(ValType::Ref(RefType {
-            nullable: true,
-            heap_type: HeapType::Abstract {
-                shared: false,
-                ty: AbstractHeapType::Struct,
-            },
-        }))
-    } else if ctx.get_type(ty).dialect == Symbol::new("adt") {
-        Ok(ValType::Ref(RefType::ANYREF))
     } else if is_nil_type(ctx, ty) {
         Ok(ValType::Ref(RefType {
             nullable: true,
@@ -379,7 +372,7 @@ pub(crate) fn attr_heap_type(
         Some(Attribute::Type(ty)) => {
             let data = ctx.get_type(*ty);
             if data.dialect == Symbol::new("wasm") {
-                let name = data.name;
+                let name = data.name.clone();
                 name.with_str(symbol_to_abstract_heap_type)
             } else {
                 Err(CompilationError::from(
@@ -444,7 +437,7 @@ pub(crate) fn symbol_to_abstract_heap_type(name: &str) -> CompilationResult<Heap
 /// - Key absent → `missing_attribute` error
 /// - Key present but wrong variant → `invalid_attribute` error
 /// - Key present and Int → checked u32 conversion
-pub(crate) fn attr_u32(attrs: &AttributeMap, key: Symbol) -> CompilationResult<u32> {
+pub(crate) fn attr_u32(attrs: &AttributeMap, key: &str) -> CompilationResult<u32> {
     match attrs.get(key) {
         Some(Attribute::Int(bits)) => u32::try_from(*bits).map_err(|_| {
             CompilationError::invalid_attribute(format!(
@@ -470,14 +463,14 @@ mod tests {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("_closure");
         let named = ctx.intern_type(
-            TypeDataBuilder::new("adt", "struct")
+            TypeDataBuilder::new("test", "layout")
                 .attr("name", name_attr)
                 .build(),
         );
         let closure_layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
         let name_attr = ctx.string_attr("Other");
         let layout = ctx.intern_type(
-            TypeDataBuilder::new("adt", "struct")
+            TypeDataBuilder::new("test", "layout")
                 .attr("name", name_attr)
                 .attr(trunk_ir::types::LAYOUT_ATTR, closure_layout)
                 .build(),
@@ -494,7 +487,7 @@ mod tests {
         let array_ty = ctx.intern_type(TypeDataBuilder::new("core", "array").param(i32_ty).build());
 
         assert_eq!(
-            type_to_valtype(&ctx, array_ty, &HashMap::new()).expect("core.array is supported"),
+            type_to_valtype(&ctx, array_ty, &HashMap::default()).expect("core.array is supported"),
             ValType::Ref(RefType {
                 nullable: true,
                 heap_type: HeapType::Abstract {
@@ -512,7 +505,7 @@ mod tests {
         let signature = wasm::func_sig(&mut ctx, [i32_ty], [i32_ty]).as_type_ref();
 
         assert_eq!(
-            type_to_valtype(&ctx, signature, &HashMap::new())
+            type_to_valtype(&ctx, signature, &HashMap::default())
                 .expect("func.func_sig is a supported Wasm value type"),
             ValType::Ref(RefType::FUNCREF)
         );

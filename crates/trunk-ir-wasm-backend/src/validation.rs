@@ -7,11 +7,11 @@
 
 use trunk_ir::IrContext;
 use trunk_ir::Module;
-use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueRef};
 use trunk_ir::symbol_table::SymbolTable;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::{CompilationError, CompilationResult};
 
@@ -82,8 +82,8 @@ fn validate_operation(
     errors: &mut Vec<String>,
 ) {
     let op_data = ctx.op(op);
-    let dialect = op_data.dialect;
-    let name = op_data.name;
+    let dialect = op_data.dialect.clone();
+    let name = op_data.name.clone();
 
     // Check dialect - must be wasm (with specific exceptions)
     if !is_allowed_dialect(ctx, op, depth) {
@@ -125,7 +125,7 @@ fn enclosing_wasm_func_signature(ctx: &IrContext, mut op: OpRef) -> Option<wasm_
 fn resolve_wasm_callee(
     ctx: &IrContext,
     symbols: &SymbolTable,
-    name: Symbol,
+    name: &SymbolPath,
 ) -> Option<Option<wasm_dialect::FuncSig>> {
     let found = *symbols.definitions_of(name).first()?;
     if symbols.resolve(name).is_none()
@@ -253,7 +253,7 @@ fn validate_direct_callable_contracts(
     if !is_direct {
         return;
     }
-    let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+    let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
         errors.push(format!(
             "wasm.{} requires a symbol callee attribute",
             ctx.op(op).name
@@ -495,8 +495,8 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Array = core.array<core.i32>
-  !Struct = adt.struct<core.i32 {name = "value"}, {name = "Struct"}>
-  wasm.func @typeref(%table_index: core.i32, %value: adt.typeref) -> core.nil {
+  !Struct = wasm_gc.struct<core.i32>
+  wasm.func @structref(%table_index: core.i32, %value: wasm.structref) -> core.nil {
     wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.anyref) -> core.nil>, table = 0, type_idx = 0}
   }
   wasm.func @struct(%table_index: core.i32, %value: !Struct) -> core.nil {
@@ -532,10 +532,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_unregistered_adt_struct_as_structref_tail_argument() {
+    fn rejects_unregistered_struct_spelling_as_structref_tail_argument() {
         assert_rejects_tail_signature(
             r#"core.module @test {
-  !Struct = adt.struct<core.i32 {name = "value"}, {name = "Struct"}>
+  !Struct = test.opaque<core.i32>
   wasm.func @caller(%table_index: core.i32, %value: !Struct) -> core.nil {
     wasm.return_call_indirect %table_index, %value {signature = wasm.func_sig<(wasm.structref) -> core.nil>, table = 0, type_idx = 0}
   }
@@ -549,15 +549,12 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = adt.struct<{name = "_Marker", layout = "evidence_marker"}>
+  !Marker = test.layout<{layout = "evidence_marker"}>
   !Evidence = core.array<!Marker, {layout = "evidence"}>
   !Plain = core.array<!Marker>
 }"#,
         );
-        let alias = |ctx: &IrContext, name: &str| {
-            ctx.type_alias_by_name(trunk_ir::Symbol::from_dynamic(name))
-                .unwrap()
-        };
+        let alias = |ctx: &IrContext, name: &str| ctx.type_alias_by_text(name).unwrap();
         let evidence = alias(&ctx, "Evidence");
         let plain = alias(&ctx, "Plain");
         let arrayref =
@@ -575,19 +572,17 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = "String"}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
-  !Closure = adt.struct<{name = "_closure", layout = "closure"}>
-  !Marker = adt.struct<{name = "_Marker", layout = "evidence_marker"}>
+  !Leaf = wasm_gc.struct<core.i32>
+  !Closure = test.layout<{layout = "closure"}>
+  !Marker = test.layout<{layout = "evidence_marker"}>
   !Evidence = core.array<!Marker, {layout = "evidence"}>
   !Data = core.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<!Data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
+  !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byRef(%value: wasm.structref) -> core.nil { wasm.return }
   wasm.func @byArray(%value: wasm.arrayref) -> core.nil { wasm.return }
-  wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %typeref: adt.typeref, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
+  wasm.func @caller(%leaf: !Leaf, %bytes: !Bytes, %closure: !Closure, %marker: !Marker, %evidence: !Evidence) -> core.nil {
     wasm.call %leaf {callee = @byRef}
     wasm.call %bytes {callee = @byRef}
-    wasm.call %typeref {callee = @byRef}
     wasm.call %closure {callee = @byRef}
     wasm.call %marker {callee = @byRef}
     wasm.call %evidence {callee = @byArray}
@@ -606,30 +601,35 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Marker = adt.struct<{name = "_Marker", layout = "evidence_marker"}>
+  !Marker = test.layout<{layout = "evidence_marker"}>
   !Evidence = core.array<!Marker, {layout = "evidence"}>
   !Array = core.array<core.i32>
   !Data = core.array<core.i8, {layout = "bytes_data"}>
-  !Bytes = adt.struct<!Data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
+  !Bytes = test.layout<!Data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil { wasm.return }
-  wasm.func @caller(%bytes: !Bytes, %evidence: !Evidence, %array: !Array, %erased: adt.struct) -> core.nil {
+  wasm.func @caller(%bytes: !Bytes, %evidence: !Evidence, %array: !Array, %structural: wasm_gc.struct<core.i32>) -> core.nil {
     wasm.call %bytes {callee = @byAny}
     wasm.call %evidence {callee = @byAny}
     wasm.call %array {callee = @byAny}
-    wasm.call %erased {callee = @byAny}
+    wasm.call %structural {callee = @byAny}
     wasm.return
   }
 }"#,
         );
         validate_wasm_ir(&ctx, module).expect("registered GC references satisfy an anyref slot");
 
-        for value_ty in ["wasm.funcref", "wasm.externref", "core.i64", "!TagOnly"] {
+        for value_ty in [
+            "wasm.funcref",
+            "wasm.externref",
+            "core.i64",
+            "!Unregistered",
+        ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !TagOnly = adt.enum<{{is_variant = true, variant_tag = "Leaf"}}>
+  !Unregistered = test.opaque<core.i32>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
     wasm.call %value {{callee = @byAny}}
@@ -639,7 +639,7 @@ mod tests {
                 ),
             );
             let error = validate_wasm_ir(&ctx, module).expect_err(
-                "non-internal references and unregistered variant spellings cannot satisfy anyref",
+                "non-internal references and unregistered spellings cannot satisfy anyref",
             );
             assert!(
                 error.to_string().contains("call argument #0 type mismatch"),
@@ -652,7 +652,6 @@ mod tests {
     fn rejects_unregistered_and_narrowing_gc_reference_arguments() {
         for (value_ty, parameter_ty) in [
             ("!Unregistered", "wasm.structref"),
-            ("!TagOnly", "wasm.structref"),
             ("wasm.anyref", "wasm.structref"),
             ("wasm.arrayref", "wasm.structref"),
             ("wasm.funcref", "wasm.structref"),
@@ -666,12 +665,10 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !String = adt.enum<{{name = "String"}}>
-  !Leaf = adt.enum<{{base_enum = !String, is_variant = true, variant_tag = "Leaf"}}>
-  !TagOnly = adt.enum<{{is_variant = true, variant_tag = "Leaf"}}>
-  !Unregistered = adt.struct<core.i32 {{name = "value"}}, {{name = "Unregistered"}}>
+  !Leaf = wasm_gc.struct<core.i32>
+  !Unregistered = test.opaque<core.i32>
   !Data = core.array<core.i8, {{layout = "bytes_data"}}>
-  !Bytes = adt.struct<!Data {{name = "data"}}, core.i32 {{name = "offset"}}, core.i32 {{name = "len"}}, {{name = "_Bytes", layout = "bytes"}}>
+  !Bytes = test.layout<!Data, core.i32, core.i32, {{layout = "bytes"}}>
   wasm.func @callee(%value: {parameter_ty}) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
     wasm.call %value {{callee = @callee}}
@@ -696,8 +693,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = "String"}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
+  !Leaf = wasm_gc.struct<core.i32>
   wasm.func @produces(%leaf: !Leaf) -> !Leaf { wasm.return %leaf }
   wasm.func @caller(%leaf: !Leaf) -> core.nil {
     %value = wasm.call %leaf {callee = @produces} : wasm.structref
@@ -712,8 +708,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = "String"}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
+  !Leaf = wasm_gc.struct<core.i32>
   wasm.func @produces(%value: wasm.structref) -> wasm.structref { wasm.return %value }
   wasm.func @caller(%value: wasm.structref) -> core.nil {
     %leaf = wasm.call %value {callee = @produces} : !Leaf
@@ -871,7 +866,7 @@ mod tests {
         validate_wasm_ir(&ctx, module).expect("root target has the caller's result");
 
         let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, &source(r#"@"inner::target""#));
+        let module = parse_test_module(&mut ctx, &source("@inner::@target"));
         let error = validate_wasm_ir(&ctx, module).expect_err("nested target has Unit result");
         assert!(
             error

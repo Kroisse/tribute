@@ -4,7 +4,8 @@
 //! ensuring that type variables (UniVars) are fully resolved within the function
 //! before moving to the next.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -42,10 +43,10 @@ impl<'db> TypeChecker<'db> {
         let mut checked = FunctionCheck::default();
         // 1. Create a fresh FunctionInferenceContext for this function
         // Use function definition ID for globally unique UniVar IDs
-        let func_id = self.func_def_id(func.name);
+        let func_id = self.func_def_id(&func.name);
         let mut ctx = FunctionInferenceContext::new(self.db(), &self.env, func_id);
         // Only the exact root `main` is an entrypoint.
-        let is_root_main = crate::is_root_main(func.name, self.current_prefix().is_empty());
+        let is_root_main = crate::is_root_main(&func.name, self.current_prefix().is_empty());
 
         // 2. Get the function's registered type scheme and instantiate it
 
@@ -56,7 +57,10 @@ impl<'db> TypeChecker<'db> {
             && let Some(names) = self.signature_type_names.get(&func_id)
         {
             for (name, index) in names {
-                ctx.bind_annotation_type_parameter(*name, instance.type_args[*index as usize]);
+                ctx.bind_annotation_type_parameter(
+                    name.clone(),
+                    instance.type_args[*index as usize],
+                );
             }
         }
         if let Some((scheme, instance)) = &signature_instance
@@ -71,11 +75,11 @@ impl<'db> TypeChecker<'db> {
                 let row = instance.row_args[index]
                     .rest(self.db())
                     .expect("fresh signature row must be open");
-                ctx.bind_annotation_row(*name, row);
+                ctx.bind_annotation_row(name.clone(), row);
             }
         }
         let diagnostic_func_id = func.id;
-        let diagnostic_func_name = func.name;
+        let diagnostic_func_name = func.name.clone();
         let diagnostic_effects = func.effects.clone();
 
         // Bind parameters: by LocalId when present, and also by name
@@ -87,7 +91,7 @@ impl<'db> TypeChecker<'db> {
             if let Some(local_id) = param.local_id {
                 ctx.bind_local(local_id, ty);
             }
-            ctx.bind_local_by_name(param.name, ty);
+            ctx.bind_local_by_name(param.name.clone(), ty);
         }
 
         // Set effect row from the function's declared type before checking
@@ -102,6 +106,7 @@ impl<'db> TypeChecker<'db> {
             };
 
         ctx.effect_contract = declared_effect;
+        ctx.evidence.enter_callable(declared_effect);
         // 3. Check body against expected return type
         let body = self.check_expr_with_ctx(&mut ctx, &func.body, Mode::Check(expected_return));
         let mut reported_undeclared = false;
@@ -147,6 +152,7 @@ impl<'db> TypeChecker<'db> {
         let body_effect_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
         let deferred_methods = ctx.take_deferred_methods();
+        let evidence = std::mem::take(&mut ctx.evidence);
         let next_row_var = ctx.next_row_var();
         // Drop ctx now to release the borrow of self.env
         drop(ctx);
@@ -166,7 +172,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name,
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -175,7 +181,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name,
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -194,7 +200,7 @@ impl<'db> TypeChecker<'db> {
             solve_failed = true;
             self.report_solve_error(
                 diagnostic_func_id,
-                diagnostic_func_name,
+                &diagnostic_func_name,
                 diagnostic_effects.as_deref(),
                 error,
             );
@@ -209,7 +215,7 @@ impl<'db> TypeChecker<'db> {
                 solve_failed = true;
                 self.report_solve_error(
                     diagnostic_func_id,
-                    diagnostic_func_name,
+                    &diagnostic_func_name,
                     diagnostic_effects.as_deref(),
                     error,
                 );
@@ -296,7 +302,7 @@ impl<'db> TypeChecker<'db> {
                 }
             })
         });
-        let mut var_to_index: HashMap<UniVarId<'db>, u32> = HashMap::new();
+        let mut var_to_index: HashMap<UniVarId<'db>, u32> = HashMap::default();
         for id in signature_vars.chain(all_univars) {
             let next = var_to_index.len() as u32;
             var_to_index.entry(id).or_insert(next);
@@ -474,6 +480,12 @@ impl<'db> TypeChecker<'db> {
                 .collect();
             checked.function_instances.insert(node, instance);
         }
+        checked.evidence_plans = evidence.plans(self.db(), |row| {
+            let row = row_subst.apply(self.db(), row);
+            crate::typeck::solver::map_effect_row_type_args(self.db(), row, |ty| {
+                substitution.apply(ty)
+            })
+        });
         for (arm_id, operation) in func_handler_operations {
             checked.handler_operations.insert(
                 arm_id,
@@ -538,7 +550,7 @@ impl<'db> TypeChecker<'db> {
         let decl = FuncDecl {
             id: func.id,
             is_pub: func.is_pub,
-            name: func.name,
+            name: func.name.clone(),
             type_params: func.type_params.clone(),
             params: func.params.clone(),
             return_ty: func.return_ty.clone(),
@@ -560,14 +572,14 @@ impl<'db> TypeChecker<'db> {
         func_node_id: crate::ast::NodeId,
         instances: &mut HashMap<crate::ast::NodeId, crate::typeck::FunctionInstance<'db>>,
     ) -> HashMap<crate::ast::NodeId, (FuncDefId<'db>, Type<'db>)> {
-        let mut resolved = HashMap::new();
+        let mut resolved = HashMap::default();
         loop {
             let mut new_constraints = ConstraintSet::new();
             let mut remaining = Vec::new();
 
             for mc in std::mem::take(&mut deferred) {
                 let resolved_receiver = solver.type_subst().apply(self.db(), mc.receiver_ty);
-                if let Some(entry) = self.env.lookup_method(mc.method, resolved_receiver) {
+                if let Some(entry) = self.env.lookup_method(&mc.method, resolved_receiver) {
                     // Method found — instantiate the TypeScheme to get fresh types
                     let func_ty = if let Some(scheme) = self.env.lookup_function(entry.func_id) {
                         let instance = crate::typeck::subst::instantiate_scheme_details_for_solver(
@@ -752,7 +764,7 @@ impl<'db> TypeChecker<'db> {
         };
 
         // Rows the signature itself puts into the function's effects.
-        let mut declared = HashSet::from([own]);
+        let mut declared = [own].into_iter().collect::<HashSet<_>>();
         loop {
             let before = declared.len();
             for union in &instance.row_unions {
@@ -766,7 +778,8 @@ impl<'db> TypeChecker<'db> {
         }
 
         // Rows each row flows into through the body's retained unions.
-        let mut flows: HashMap<crate::ast::EffectVar, Vec<crate::ast::EffectVar>> = HashMap::new();
+        let mut flows: HashMap<crate::ast::EffectVar, Vec<crate::ast::EffectVar>> =
+            HashMap::default();
         for union in retained {
             if let Some(result) = tail(&union.result) {
                 for source in union.sources.iter().filter_map(tail) {
@@ -775,7 +788,7 @@ impl<'db> TypeChecker<'db> {
             }
         }
         let reaches_own = |start: crate::ast::EffectVar| {
-            let mut seen = HashSet::from([start]);
+            let mut seen = [start].into_iter().collect::<HashSet<_>>();
             let mut pending = vec![start];
             while let Some(row) = pending.pop() {
                 if row == own {
@@ -790,7 +803,7 @@ impl<'db> TypeChecker<'db> {
             false
         };
 
-        let mut reported = HashSet::new();
+        let mut reported = HashSet::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let Some(row) = tail(row) else { continue };
             if declared.contains(&row) || !reaches_own(row) || !reported.insert(row) {
@@ -980,14 +993,14 @@ impl<'db> TypeChecker<'db> {
             .get(&func_id)
             .into_iter()
             .flatten()
-            .map(|(name, index)| (*index, *name))
+            .map(|(name, index)| (*index, name.clone()))
             .collect();
         let type_name = |index: usize| {
             type_names
                 .get(&(index as u32))
                 .map_or_else(|| format!("#{index}"), |name| name.to_string())
         };
-        let mut seen_types: HashMap<UniVarId<'db>, usize> = HashMap::new();
+        let mut seen_types: HashMap<UniVarId<'db>, usize> = HashMap::default();
         for (index, ty) in instance.type_args.iter().enumerate() {
             let resolved = type_subst.apply_with_rows(db, *ty, row_subst);
             match resolved.kind(db) {
@@ -1016,7 +1029,7 @@ impl<'db> TypeChecker<'db> {
             .get(&func_id)
             .into_iter()
             .flatten()
-            .map(|(name, var)| (*var, *name))
+            .map(|(name, var)| (*var, name.clone()))
             .collect();
         let effect_params = scheme.effect_params(db);
         let row_name = |index: usize| {
@@ -1032,7 +1045,7 @@ impl<'db> TypeChecker<'db> {
             TypeKind::Func { effect, .. } => effect.rest(db),
             _ => None,
         };
-        let mut seen_rows: HashMap<crate::ast::EffectVar, usize> = HashMap::new();
+        let mut seen_rows: HashMap<crate::ast::EffectVar, usize> = HashMap::default();
         for (index, row) in instance.row_args.iter().enumerate() {
             let resolved = row_subst.apply(db, *row);
             let Some(tail) = resolved.rest(db) else {

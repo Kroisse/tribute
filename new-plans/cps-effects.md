@@ -73,7 +73,7 @@ type과 source parameter/result만 사용하며 evidence, environment, `Continua
 | `Cps` | evidence, `ContinuationFrame<R>`, source parameter 순서 | logical `core.never`, physical empty result |
 
 Parameter 순서는 `CallableAbi`가 정의한다. `ContinuationFrame<R>`는 CPS callable이
-전달하는 continuation/control frame이며 `Done<R>`와 내부의 어휘적 `Dispatch<R>`를
+전달하는 continuation/control frame이며 `Done<R>`와 handle 층의 `Dispatch<R>`를
 함께 보존한다. `Completion<X, R>`와 `ResumeExact<I, R>`는 각각
 `(Evidence, ContinuationFrame<R>, X)`와 `(Evidence, ContinuationFrame<R>, I)`를 받아
 logical `core.never`로 끝난다. Target signature physicalization 뒤 worker와
@@ -196,8 +196,9 @@ branch, guard, 오른쪽 항만 실행한다.
 
 1. 정상 body yield는 completion region에 정확히 한 번 들어가며 completion
    yield는 enclosing `exit_k`를 계속 실행한다.
-2. Dynamic하게 설치된 handler 중 가장 가까운 일치 handler가 operation
-   argument를 받는다. `fn` arm은 operation result를 yield하고 자동으로 resume한다.
+2. Operation을 수행한 지점의 row에서 그 label에 묶인 handler가 operation
+   argument를 받는다([Row 위치에 따른 evidence 선택](#row-directed-evidence)).
+   `fn` arm은 operation result를 yield하고 자동으로 resume한다.
 3. Resumptive general `op` arm은 affine resumption을 받는다.
    `tribute_control.resume`은 수행된 operation result를 공급하고 capture한 body
    continuation을 실행한 뒤, 반환된 handle answer로 arm-local suffix를 실행한다.
@@ -208,9 +209,9 @@ branch, guard, 오른쪽 항만 실행한다.
    performed-computation suffix와 completion region을 건너뛴다.
 5. Nested handle은 같은 delimiter를 재귀적으로 만든다. Resumed path는 perform과
    handler 사이에서 capture된 모든 case/conditional/short-circuit/nested-handle
-   frame에 다시 진입한다. Resume은 동적 `ContinuationFrame<R>`에서 새 불변 어휘적
-   dispatcher를 만들고, 그 ContinuationFrame을 다음 suffix와 resume에 전달한다. Non-resumed
-   path는 해당 frame을 포기한다.
+   frame에 다시 진입한다. Resume은 동적 `ContinuationFrame<R>`에서 handle 층의
+   dispatcher를 새 불변 값으로 만들고, 그 ContinuationFrame을 다음 suffix와 resume에
+   전달한다. Non-resumed path는 해당 frame을 포기한다.
 
 Converter는 region, block suffix, `tribute_control.yield`, 검증된
 `operation_kind`, callable convention metadata에서 모든 continuation을
@@ -342,8 +343,9 @@ convention은 `Cps`, environment 위치는 각각 1과 0이다. 이미 낮춘 cl
 
 여기에는 서로 다른 세 dispatch 계층이 있다.
 
-1. `ContinuationFrame<R>`의 내부 `Dispatch<R>`는 resume에서 어휘적 dispatcher를 재구성하는
-   CPS closure이며 `(evidence, resume, prompt, ability_id, op_id, payload)`를 받는다.
+1. `ContinuationFrame<R>`의 내부 `Dispatch<R>`는 handle 층의 dispatcher다. Resume에서
+   다시 만드는 CPS closure이며 `(evidence, resume, prompt, ability_id, op_id,
+   payload)`를 받는다.
 2. `effect.dispatch_cps(evidence, dispatch, resume, payload)`는 필수
    `answer_type = R`을 보존하는 결과 없는 대상 독립적 operation이다.
 3. 대상 dispatch ABI는 compiler-owned
@@ -430,20 +432,44 @@ Native entrypoint와 Wasm `_start`는 source calling convention을 읽지 않는
 `handle` lowering은 두 종류의 dispatch closure를 만든다. Environment를 포함한
 물리적 입력은 다음과 같다:
 
-- `handler_dispatch`: `(Evidence, Environment, Resume, Prompt, AbilityId,
-  OperationIndex, Payload) -> ()`. General `op` handler용이며 closure environment가
-  handle exit를 소유한다. `resume`과 non-resuming exit는 각각의 continuation으로
-  indirect tail transfer한다.
+- Handle 층의 dispatcher: `(Evidence, Environment, Resume, Prompt, AbilityId,
+  OperationIndex, Payload) -> ()`. General `op` handler용이며 body의
+  `ContinuationFrame`이 [내부 `Dispatch<R>`](#dispatch-layers)로 운반한다. Prompt가
+  자기 handle의 것이면 arm으로, 아니면 바깥 dispatcher로 indirect tail transfer한다.
 - `tr_dispatch_fn`: `(Evidence, Environment, OperationIndex, Payload) -> anyref`.
-  `fn` handler용이며 `anyref`는 erased source result다.
+  `fn` handler용이며 marker에 저장된다. `anyref`는 erased source result다.
+
+General operation은 marker에서 prompt만 읽고 dispatch는 frame이 담은 handle 층의
+dispatcher가 맡는다. 이 dispatcher들은 source에서 handle 식이 중첩된 순서를 따라
+안쪽에서 바깥쪽으로 이어지는 사슬을 이룬다. 어느 handle 식의 dispatcher인지는
+정적으로 정해지지만, dispatcher 값은 층과 함께 다시 만들어진다. 그래서 body 안의
+operation과 suffix는 dispatcher를 capture하지 않고 받은 frame에서 읽는다. Marker는
+general operation의 dispatch closure를 담지 않는다.
+
+Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 것과 재개된 계산이 다시
+만든 것([재개된 frame](#row-directed-evidence))을 각각 그 handle의 **층**이라 한다.
+층마다 handle이 빠져나갈 `ContinuationFrame`과 바깥 evidence가 다르므로, arm은 이
+둘을 capture하지 않고 자신을 부른 층에게서 받는다.
+
+- General arm: `(Evidence, ContinuationFrame<R>, operation argument...,
+  resume token, resume token)`. Evidence와 frame은 층의 바깥 evidence와 handle의
+  exit frame이다. Resumptive arm만 token 둘을 받는다. 첫 token은 source의 resume
+  token 값이고 lambda가 capture할 수 있다. 둘째 token은 arm 본문의 `resume`이 쓴다.
+- `fn` arm: `(Evidence, operation argument...)`. 층의 `tr_dispatch_fn`이 그 층의
+  바깥 evidence를 capture해 넘기며, operation을 수행한 지점의 evidence는 쓰지 않는다.
 
 `resolve_evidence`는 explicit handler delimiter의 prompt와 dispatch closure를
 소비하여 `effect.extend`를 만든다. Fresh prompt placeholder는 해당 delimiter에서
 한 번만 materialize하며, body의 evidence 인자 사용을 확장된 값으로 치환한다.
+호출이 가진 evidence 선택(`evidence_plan`, [ir.md](ir.md#direct-style-control))은
+같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`/`effect.outer`로 만들고
+속성을 지운다. Delimiter의 선택은 extend 전에 바깥 evidence에 적용한다.
+CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 옮기기만 한다. 층을
+다시 만드는 transfer와 delimiter에도 같은 선택을 옮긴다.
 이 pass는 함수 signature나 본문 형상에서 hidden evidence를 추론하지 않는다.
 
 ```text
-%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %handler_dispatch
+%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %outer
   { ability_ref = core.ability_ref<{name = "State"}> }
 ```
 
@@ -455,12 +481,16 @@ struct Marker {
     ability_id: i32,
     prompt_tag: i32,
     tr_dispatch_fn: ptr,
-    handler_dispatch: ptr,
+    shadowed: ptr,
+    outer: ptr,
 }
 ```
 
-Evidence는 ability id 기준으로 정렬된 marker 배열이며, handler 설치 시
-새 evidence 값을 만든다.
+Evidence는 ability id 기준으로 정렬된 marker 배열이다. 각 칸은 그 ability의 가장
+위 marker이며, marker는 자신이 가린 같은 ability의 marker를 `shadowed`로 가리킨다.
+Marker의 `outer`는 그 handler를 설치한 지점의 evidence, 즉 설치의 선택을 적용하기
+전의 바깥 evidence다. Handler 설치, `mask`, `dup`은 모두 새 evidence 값을 만들며
+기존 값을 바꾸지 않는다.
 
 Marker layout과 evidence runtime ABI는 `tribute-ir`의
 `ability::MarkerField`와 `ability::evidence_abi`가 컴파일러 내부의 단일
@@ -472,20 +502,89 @@ Marker layout과 evidence runtime ABI는 `tribute-ir`의
 | `ability_id` | 0 | `i32` | stable ability key for sorted evidence lookup |
 | `prompt_tag` | 1 | `i32` | prompt installed for the active handler |
 | `tr_dispatch_fn` | 2 | `ptr` | tail-resumptive dispatch closure or null |
-| `handler_dispatch` | 3 | `ptr` | full CPS dispatch closure or null |
+| `shadowed` | 3 | `ptr` | marker of the same ability this one shadows, or null |
+| `outer` | 4 | `ptr` | evidence the handler was installed on |
 
 WasmGC uses the same field order and shared field identifiers, but its concrete
 GC marker type stores the dispatch closures as `anyref` closure references
-instead of native `ptr` values. Marker construction and field access stay
-inside the target's helper implementations, so effect lowering never builds or
-reads a marker directly.
+instead of native `ptr` values, `shadowed` as an `anyref` marker reference, and
+`outer` as an `anyref` evidence reference.
+Marker construction and field access stay inside the target's helper
+implementations, so effect lowering never builds or reads a marker directly.
 
 Empty evidence is represented in high-level IR as an empty `core.array<Marker>`
 or null evidence placeholder, and backend lowering turns that into the target
 runtime representation. Native lowering maps it to `__tribute_evidence_empty()`.
-When a handler for the same `ability_id` is nested inside an outer handler,
-evidence extension replaces the existing marker so lookup resolves to the
-nearest handler.
+<!-- markdownlint-disable-next-line MD033 -->
+<a id="evidence-lookup"></a>
+같은 `ability_id`의 handler를 다시 설치하면 새 marker가 기존 marker를 가린다
+(shadow). Lookup은 가장 위의 marker를 고르고, 가려진 marker는 아래에 남는다.
+호출의 evidence 선택이 이 순서를 row 구조에 맞추므로, 가장 위의 marker는 항상
+현재 callable row의 명시 label에 묶인 handler다.
+
+<!-- markdownlint-disable-next-line MD033 -->
+<a id="row-directed-evidence"></a>
+
+#### Row 위치에 따른 evidence 선택
+
+[type-inference.md](type-inference.md#호출의-evidence-선택)가 각 호출에 정하는 선택은
+caller evidence의 ability별 marker 순서에 대한 두 연산으로 표현된다.
+
+| 연산 | 뜻 | 쓰는 경우 (`k`) |
+| --- | --- | --- |
+| `mask L` | `L`의 가장 위 marker를 걷어 내 그 아래 marker를 드러낸다 | 0 |
+| (없음) | 그대로 전달한다 | 1 |
+| `dup L` | `L`의 가장 위 marker를 한 번 더 쌓는다 | 2 |
+
+선택이 모두 그대로 전달인 호출은 evidence를 바꾸지 않는다. 선택은 직접 호출,
+간접 호출, closure 호출, `resume`에 똑같이 적용한다. Perform은 별도의 분류 없이
+가장 위의 marker를 사용한다. Typechecking이 perform의 label을 언제나 둘러싼
+callable 또는 handle body row의 명시 label로 확정하기 때문이다.
+
+Handler와 evidence의 연결은 다음과 같다.
+
+- **Handle body:** 처리하는 label마다 `effect.extend`로 새 marker를 쌓은 evidence를 받는다.
+  바깥 row가 그 label을 명시하면 extend 전에 `mask`로 바깥 marker를 걷어 낸다
+  ([type-inference.md](type-inference.md#호출의-evidence-선택)).
+- **Handler arm, `do` arm:** handle을 설치한 층의 바깥 evidence로 실행한다.
+  General arm은 handle 층의 dispatcher에게서 이 evidence와 exit frame을 받고,
+  `fn` arm은 층의 `tr_dispatch_fn`이 capture한 evidence를 받는다. Perform 지점
+  evidence는 arm에 전달하지 않는다.
+- **Arm 안의 `resume`:** [abilities.md](abilities.md#resume과-handler-선택)에 따라
+  arm 본문의 resume은 자기 handle body의 evidence를, arm 안 lambda의 resume은 그
+  lambda가 받은 evidence를 continuation에 넘긴다. Arm 본문의 resume은 resume하는
+  지점의 arm evidence 위에 자기 handle을 같은 prompt로 다시 설치해 body evidence를
+  만든다. Arm이 수행한 operation이 바깥 handler를 바꾸었으면 재개된 계산도 바뀐
+  handler를 본다. Arm 본문에 중첩된 handle body 안에서는 그 지점의 evidence가 arm
+  evidence가 아니다. 이때 arm evidence는 중첩 handle을 설치한 지점의 evidence이므로,
+  resume은 중첩 handle이 처리하는 instance의 marker에서 `outer`를 읽어 쓴다. 중첩이
+  여러 겹이면 안쪽 handle부터 한 겹에 한 번씩 읽는다. 중첩 handle의 층이 다시
+  만들어지면 marker의 `outer`도 새로 기록되므로 이 값은 언제나 현재의 arm
+  evidence다.
+- **재개된 frame:** 포착된 경로의 각 frame은 resume이 넘긴 handle body evidence에서
+  자기 위치까지의 호출 선택과 그 사이에 설치된 handler(설치의 `mask` 포함)를 다시
+  적용한 evidence를 본다. 포착 시점의 evidence를 그대로 재사용하지 않으며,
+  resume이 넘긴 evidence를 모든 frame에 그대로 흘리지도 않는다.
+
+재개는 포착된 경로의 층을 바깥에서 안쪽으로 다시 만든다. 각 층은 들어온 evidence로
+자기 suffix나 completion의 `Done`을 만들고, 아래 표대로 바꾼 evidence를 안쪽 층에
+넘긴다.
+
+| 층 | 안쪽에 넘기는 evidence |
+| --- | --- |
+| CPS 직접·간접 호출의 suffix | 그 호출의 선택을 적용한 것 |
+| `resume`의 suffix | 그 resume의 선택을 적용한 것 |
+| 구조적 분기의 suffix | 그대로 |
+| 설치된 handle | 설치의 선택(`mask`)을 적용하고 같은 prompt로 다시 extend한 것 |
+| Lambda의 resume으로 재개된 handle | 그대로 |
+
+설치된 handle의 층은 그 handle이 처리하지 않은 operation이 바깥 handler로 나갔다가
+재개될 때와 arm 본문의 resume에서 다시 만들어진다. 새 층의 arm과 `do` arm은 층에
+들어온 evidence와 그 층의 exit frame으로 실행된다. Lambda의 resume으로 재개된
+handle은 marker를 설치하지 않는다. 재개된 계산의 label은 lambda evidence의 marker에
+묶이므로, 그 층에는 handle의 completion만 남고 arm은 닿지 않는다.
+
+`EvidenceDirect` 호출은 frame을 만들지 않으므로 선택을 호출 지점에서만 적용한다.
 
 두 target의 effect lowering은 같은 evidence runtime helper ABI를 호출한다.
 아래는 native 표기이며, Wasm은 `ptr` evidence 대신 GC evidence 배열 참조를,
@@ -499,11 +598,20 @@ __tribute_evidence_extend(
     ability_id: i32,
     prompt_tag: i32,
     tr_dispatch_fn: ptr,
-    handler_dispatch: ptr,
+    outer: ptr,
 ) -> ptr
+__tribute_evidence_mask(ev: ptr, ability_id: i32) -> ptr
+__tribute_evidence_dup(ev: ptr, ability_id: i32) -> ptr
+__tribute_evidence_outer(ev: ptr, ability_id: i32) -> ptr
 __tribute_evidence_lookup_tr(ev: ptr, ability_id: i32) -> ptr
-__tribute_evidence_lookup_handler(ev: ptr, ability_id: i32) -> ptr
 ```
+
+`extend`는 같은 ability의 기존 marker를 새 marker의 `shadowed`로 두고 `outer`
+인자를 marker에 기록한다. `mask`는 그 칸을 `shadowed`로 바꾸고, `shadowed`가
+null이면 칸을 지운다. `dup`은 가장 위 marker의 복사본이 원본을 가리게 하며 복사본은
+원본의 `outer`를 그대로 가진다. `outer`는 가장 위 marker가 기록한 evidence를
+돌려준다. 없는 ability를 `mask`, `dup`, `outer`하는 것은 compiler bug이며 runtime은
+이를 검사하지 않는다.
 
 ### `ability.handle_dispatch`
 
@@ -563,8 +671,11 @@ semantics and concrete runtime layout.
 
 Operations:
 
-- `effect.extend(evidence, prompt_tag, tr_dispatch_fn, handler_dispatch)
+- `effect.extend(evidence, prompt_tag, tr_dispatch_fn, outer)
   { ability_ref } -> evidence`
+- `effect.mask(evidence) { ability_ref } -> evidence`
+- `effect.dup(evidence) { ability_ref } -> evidence`
+- `effect.outer(evidence) { ability_ref } -> evidence`
 - `effect.dispatch_tail(evidence, payload) { ability_ref, op_name } -> result`
 - `effect.dispatch_cps(evidence, dispatch, resume, payload)
   { ability_ref, op_name, answer_type } -> ()`
@@ -599,9 +710,12 @@ decomposition, and indirect calls로 변환한다.
 
 WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
 representation/ABI 경계 안에서 native와 같은 구조로 `effect.*`를 낮춘다.
-`effect.extend`는 `__tribute_evidence_extend` 호출이 되고, `effect.dispatch_tail` /
-`effect.dispatch_cps`는 `__tribute_evidence_lookup_tr` / `__tribute_evidence_lookup`,
-closure field 접근, `func.call_indirect` 또는 proper-tail `func.tail_call_indirect`가
-된다. Wasm dialect lowering이 이를 `wasm.call_indirect` /
+`effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`는 각각
+`__tribute_evidence_extend`, `__tribute_evidence_mask`, `__tribute_evidence_dup`,
+`__tribute_evidence_outer` 호출이 되고,
+`effect.dispatch_tail` / `effect.dispatch_cps`는
+`__tribute_evidence_lookup_tr` / `__tribute_evidence_lookup`, closure field 접근,
+`func.call_indirect` 또는 proper-tail `func.tail_call_indirect`가 된다.
+Wasm dialect lowering이 이를 `wasm.call_indirect` /
 `wasm.return_call_indirect`로 바꾼다. Helper 구현은 target runtime으로서 출구 뒤에
 GC 배열 위의 `wasm.func`로 바인딩된다.

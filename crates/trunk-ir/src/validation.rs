@@ -14,7 +14,8 @@
 //! 3. **Operation verifiers**: Check local operation invariants that do not
 //!    require whole-IR analysis or conversion-boundary state.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 
 use cranelift_entity::EntitySet;
@@ -34,7 +35,7 @@ use super::symbol_table::SymbolTable;
 use super::type_verifier::lookup_type_verifier;
 use super::walk;
 
-use crate::Symbol;
+use crate::{Symbol, SymbolPath};
 
 // ============================================================================
 // Error types
@@ -126,7 +127,7 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
         ValueDef::OpResult(op, idx) => {
             let data = ctx.op(op);
             let full_name = format!("{}.{}", data.dialect, data.name);
-            match data.attributes.get_symbol("sym_name") {
+            match data.attributes.get_str(ctx, "sym_name").map(Symbol::new) {
                 Some(s) => {
                     format!("result #{} of {} (@{})", idx, full_name, s)
                 }
@@ -216,14 +217,21 @@ fn validate_functions_in_region(
                 // This is a func.func or wasm.func
                 let fn_name = data
                     .attributes
-                    .get_symbol("sym_name")
+                    .get_str(ctx, "sym_name")
+                    .map(Symbol::new)
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "<unnamed>".to_string());
 
                 // Check operands with visibility-based scoping.
                 // No values from outside the function body are visible.
                 for func_region in ctx.op_regions(op) {
-                    check_operands_in_region(ctx, func_region, &HashSet::new(), &fn_name, errors);
+                    check_operands_in_region(
+                        ctx,
+                        func_region,
+                        &HashSet::default(),
+                        &fn_name,
+                        errors,
+                    );
                 }
             }
 
@@ -430,7 +438,7 @@ fn validate_type_shapes(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 ),
             });
         }
-        let Some(verifier) = lookup_type_verifier(data.dialect, data.name) else {
+        let Some(verifier) = lookup_type_verifier(data.dialect.clone(), data.name.clone()) else {
             continue;
         };
         if let Err(error) = (verifier.verify_fn)(ctx, ty) {
@@ -596,9 +604,9 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
     // References name their targets by root-qualified path. None is genuinely
     // undeclared. A found but invalid or duplicated declaration is Some(None),
     // so compatibility cannot hide malformed known contracts.
-    let resolve = |name: Symbol| -> Option<Option<func::FuncSig>> {
-        let found = *symbols.definitions_of(name).first()?;
-        if symbols.resolve(name).is_none() || !func::Func::matches(ctx, found) {
+    let resolve = |name: SymbolPath| -> Option<Option<func::FuncSig>> {
+        let found = *symbols.definitions_of(&name).first()?;
+        if symbols.resolve(&name).is_none() || !func::Func::matches(ctx, found) {
             return Some(None);
         }
         Some(
@@ -647,10 +655,10 @@ fn function_contracts(ctx: &IrContext, module: Module, symbols: &SymbolTable) ->
             }
             let operands = ctx.op_operands(op);
             let (signature, args) = if direct {
-                let Some(name) = ctx.op(op).attributes.get_symbol("callee") else {
+                let Some(name) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                     return;
                 };
-                let Some(signature) = resolve(name) else {
+                let Some(signature) = resolve(name.clone()) else {
                     return;
                 };
                 let Some(signature) = signature else {
@@ -758,7 +766,7 @@ fn validate_forwarding_types(
 }
 
 fn forwarding_comes_from_operands(source: &[ValueRef], forwarded: &[ValueRef]) -> bool {
-    let mut available = HashMap::<ValueRef, usize>::new();
+    let mut available = HashMap::<ValueRef, usize>::default();
     for &value in source {
         *available.entry(value).or_default() += 1;
     }
@@ -945,7 +953,7 @@ fn validate_region_branch_interface(ctx: &IrContext, op: OpRef, errors: &mut Vec
             return;
         }
     };
-    let mut unique = HashSet::new();
+    let mut unique = HashSet::default();
     for &successor in successors.as_slice() {
         if !unique.insert(successor) {
             errors.push(operation_verifier_error(
@@ -1032,7 +1040,7 @@ fn validate_region_branch_terminator_interface(
                         ));
                         return;
                     }
-                    let mut unique = HashSet::new();
+                    let mut unique = HashSet::default();
                     for &successor in successors.as_slice() {
                         if !unique.insert(successor) {
                             errors.push(operation_verifier_error(
@@ -1144,7 +1152,10 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
 ///
 /// Builds a map from function symbol to expected parameter count by inspecting
 /// `func.func`, `wasm.func`, and `clif.func` operations.
-fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashMap<Symbol, usize> {
+fn collect_function_signatures(
+    ctx: &IrContext,
+    module_body: RegionRef,
+) -> HashMap<SymbolPath, usize> {
     let func_name_sym = Symbol::new("func");
     let func_dialect = Symbol::new("func");
     let wasm_dialect = Symbol::new("wasm");
@@ -1153,7 +1164,7 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
     let sym_name_key = Symbol::new("sym_name");
     let type_key = Symbol::new("type");
 
-    let mut signatures = HashMap::new();
+    let mut signatures = HashMap::default();
 
     for &block in &ctx.region(module_body).blocks {
         for &op in &ctx.block(block).ops {
@@ -1166,11 +1177,15 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
                 continue;
             }
 
-            let Some(sym_name) = data.attributes.get_symbol(sym_name_key) else {
+            let Some(sym_name) = data
+                .attributes
+                .get_str(ctx, &sym_name_key)
+                .map(SymbolPath::from)
+            else {
                 continue;
             };
 
-            let Some(func_ty) = data.attributes.get_type(type_key) else {
+            let Some(func_ty) = data.attributes.get_type(&type_key) else {
                 continue;
             };
 
@@ -1188,7 +1203,7 @@ fn collect_function_signatures(ctx: &IrContext, module_body: RegionRef) -> HashM
 fn check_call_arity_in_region(
     ctx: &IrContext,
     region: RegionRef,
-    signatures: &HashMap<Symbol, usize>,
+    signatures: &HashMap<SymbolPath, usize>,
     enclosing_fn: &str,
 ) {
     let func_dialect = Symbol::new("func");
@@ -1208,11 +1223,11 @@ fn check_call_arity_in_region(
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         }
 
-        let Some(callee_sym) = data.attributes.get_symbol(callee_key) else {
+        let Some(callee_sym) = data.attributes.get_symbol_ref(callee_key.clone()) else {
             return std::ops::ControlFlow::Continue(walk::WalkAction::Advance);
         };
 
-        if let Some(&expected) = signatures.get(&callee_sym) {
+        if let Some(&expected) = signatures.get(callee_sym) {
             let actual = ctx.op_operands(op).len();
             if actual != expected {
                 ctx.report_warning(
@@ -1260,8 +1275,8 @@ pub fn validate_call_arity(ctx: &IrContext, module: Module) {
 
             let fn_name = data
                 .attributes
-                .get_symbol(sym_name_key)
-                .map(|s| s.to_string())
+                .get_str(ctx, &sym_name_key)
+                .map(str::to_owned)
                 .unwrap_or_else(|| "<unnamed>".to_string());
 
             for func_region in ctx.op_regions(op) {
@@ -1395,7 +1410,10 @@ mod tests {
 
         let loc = test_location(&mut ctx);
         let bodyless = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr(Symbol::new("sym_name"), Attribute::Symbol(Symbol::new("m")))
+            .attr(
+                Symbol::new("sym_name"),
+                Attribute::SymbolRef(SymbolPath::from("m")),
+            )
             .build(&mut ctx);
         let bodyless = ctx.create_op(bodyless);
         let bodyless = Module::new(&ctx, bodyless).unwrap();
@@ -1503,8 +1521,8 @@ mod tests {
 
     fn operations_named(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> Vec<OpRef> {
         let mut operations = Vec::new();
-        let dialect = Symbol::from_dynamic(dialect);
-        let name = Symbol::from_dynamic(name);
+        let dialect = Symbol::new(dialect);
+        let name = Symbol::new(name);
         let body = module.body(ctx).expect("test module must have a body");
         walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
             let data = ctx.op(op);
@@ -1565,7 +1583,7 @@ mod tests {
         });
         let func_ty = make_func_type(ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("bad_if"))
+            .sym_name("bad_if")
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -1583,7 +1601,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc);
         Module::new(ctx, module_op.op_ref()).unwrap()
@@ -1630,7 +1648,7 @@ mod tests {
 
         let func_ty = make_func_type(ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("add"))
+            .sym_name("add")
             .r#type(func_ty)
             .regions(body_region)
             .build(ctx, loc);
@@ -1649,7 +1667,7 @@ mod tests {
             parent_op: None,
         });
         let module = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc);
 
@@ -1693,7 +1711,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_a = func::Func::operands()
-            .sym_name(Symbol::new("func_a"))
+            .sym_name("func_a")
             .r#type(func_ty)
             .regions(body_a)
             .build(&mut ctx, loc);
@@ -1714,7 +1732,7 @@ mod tests {
             parent_op: None,
         });
         let func_b = func::Func::operands()
-            .sym_name(Symbol::new("func_b"))
+            .sym_name("func_b")
             .r#type(func_ty)
             .regions(body_b)
             .build(&mut ctx, loc);
@@ -1734,7 +1752,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -1774,7 +1792,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
         let func_a = func::Func::operands()
-            .sym_name(Symbol::new("func_a"))
+            .sym_name("func_a")
             .r#type(func_ty)
             .regions(body_a)
             .build(&mut ctx, loc);
@@ -1796,7 +1814,7 @@ mod tests {
         });
         let func_ty_b = make_func_type(&mut ctx, &[], i32_ty);
         let func_b = func::Func::operands()
-            .sym_name(Symbol::new("func_b"))
+            .sym_name("func_b")
             .r#type(func_ty_b)
             .regions(body_b)
             .build(&mut ctx, loc);
@@ -1815,7 +1833,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -1921,7 +1939,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[i32_ty], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("nested_fn"))
+            .sym_name("nested_fn")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1939,7 +1957,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -1980,7 +1998,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_a = func::Func::operands()
-            .sym_name(Symbol::new("func_a"))
+            .sym_name("func_a")
             .r#type(func_ty)
             .regions(body_a)
             .build(&mut ctx, loc);
@@ -2008,7 +2026,7 @@ mod tests {
             parent_op: None,
         });
         let func_b = func::Func::operands()
-            .sym_name(Symbol::new("func_b"))
+            .sym_name("func_b")
             .r#type(func_ty)
             .regions(body_b)
             .build(&mut ctx, loc);
@@ -2027,7 +2045,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -2073,7 +2091,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_a = func::Func::operands()
-            .sym_name(Symbol::new("func_a"))
+            .sym_name("func_a")
             .r#type(func_ty)
             .regions(body_a)
             .build(&mut ctx, loc);
@@ -2095,7 +2113,7 @@ mod tests {
         // Build wasm.func manually
         let wasm_func_data =
             OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("func_b")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("func_b")))
                 .attr("type", Attribute::Type(wasm_func_ty))
                 .region(body_b)
                 .build(&mut ctx);
@@ -2116,7 +2134,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -2222,7 +2240,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("bad_scope"))
+            .sym_name("bad_scope")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -2240,7 +2258,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -2388,7 +2406,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("f"))
+            .sym_name("f")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -2406,7 +2424,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -3662,7 +3680,7 @@ mod tests {
         });
         let func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("malformed"))
+            .sym_name("malformed")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -3678,7 +3696,7 @@ mod tests {
             parent_op: None,
         });
         let module_op = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(module_region)
             .build(&mut ctx, loc);
         let module = Module::new(&ctx, module_op.op_ref()).unwrap();
@@ -3762,6 +3780,6 @@ mod tests {
         };
         // The bare name names the root definition, not the sibling in `inner`.
         assert!(errors("@target").is_empty());
-        assert!(!errors(r#"@"inner::target""#).is_empty());
+        assert!(!errors("@inner::@target").is_empty());
     }
 }

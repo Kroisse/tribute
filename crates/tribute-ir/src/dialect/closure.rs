@@ -1,11 +1,13 @@
 //! Closure dialect — closures and captures.
 
+use trunk_ir::attr_kind::SymbolRef;
+
 #[trunk_ir::dialect]
 mod closure {
     // Types
     struct Closure<FuncType>;
 
-    fn new(func_ref: Attr<Symbol>, env: Value<_>) -> Value<_> {}
+    fn new(func_ref: Attr<SymbolRef>, env: Value<_>) -> Value<_> {}
 
     fn func(closure: Value<_>) -> Value<_> {}
 
@@ -97,7 +99,7 @@ fn print_closure_lambda(
         .op(op)
         .attributes
         .iter()
-        .map(|(k, v)| (*k, v.clone()))
+        .map(|(k, v)| (k.clone(), v.clone()))
         .collect();
     if !attrs.is_empty() {
         write!(h, " {{")?;
@@ -270,6 +272,7 @@ inventory::submit! { trunk_ir::op_interface::CallableOwnerOps::register::<Lambda
 mod tests {
     use trunk_ir::Span;
     use trunk_ir::Symbol;
+    use trunk_ir::SymbolPath;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::refs::PathRef;
     use trunk_ir::types::Location;
@@ -303,7 +306,7 @@ mod tests {
 
         // Create closure.new with func_ref attribute
         let op = super::New::operands(env_val)
-            .func_ref(Symbol::new("my_func"))
+            .func_ref(SymbolPath::from("my_func"))
             .results(closure_ty)
             .build(&mut ctx, loc);
 
@@ -337,7 +340,7 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
         let closure_op = super::New::operands(env_val)
-            .func_ref(Symbol::new("f"))
+            .func_ref(SymbolPath::from("f"))
             .results(closure_ty)
             .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
@@ -378,7 +381,7 @@ mod tests {
             .build(&mut ctx, loc);
         let env_val = env_op.result(&ctx);
         let closure_op = super::New::operands(env_val)
-            .func_ref(Symbol::new("f"))
+            .func_ref(SymbolPath::from("f"))
             .results(closure_ty)
             .build(&mut ctx, loc);
         let closure_val = closure_op.result(&ctx);
@@ -509,7 +512,7 @@ mod tests {
         let env_val = env_op.result(&ctx);
 
         let closure_new = super::New::operands(env_val)
-            .func_ref(Symbol::new("f"))
+            .func_ref(SymbolPath::from("f"))
             .results(closure_ty)
             .build(&mut ctx, loc);
 

@@ -3,21 +3,26 @@
 //! Shared CPS legalization has already established callable signatures and
 //! explicit evidence operands. This pass resolves handler prompt identities and
 //! replaces each delimiter body evidence argument with its extended evidence.
+//! It also turns each `evidence_plan` selection into `effect.mask`,
+//! `effect.dup`, or `effect.outer` on the evidence the operation passes.
 
 use itertools::Itertools;
 use std::error::Error;
 use std::fmt;
 
+use tribute_core::get_calling_convention;
 use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
+use tribute_ir::dialect::tribute_control::{EVIDENCE_PLAN_ATTR, EvidenceStep};
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
-use trunk_ir::refs::{OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
+use trunk_ir::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueDef, ValueRef};
 use trunk_ir::rewrite::{Module, erase_op};
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 
@@ -57,7 +62,7 @@ impl Error for ResolveEvidenceError {}
 struct FinalHandleDispatchShape {
     evidence: ValueRef,
     prompt_tag: ValueRef,
-    dispatcher_pairs: Vec<(TypeRef, ValueRef, ValueRef)>,
+    dispatchers: Vec<(TypeRef, ValueRef)>,
     body_evidence: ValueRef,
 }
 
@@ -98,25 +103,20 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    if !dispatchers.len().is_multiple_of(2) {
-        return Err(error(
-            "final ability.handle_dispatch dispatcher operands must form exact pairs".into(),
-        ));
-    }
     let Some(Attribute::List(ability_refs)) = data.attributes.get("ability_refs") else {
         return Err(error(
             "final ability.handle_dispatch requires an ability_refs list".into(),
         ));
     };
-    if ability_refs.len() * 2 != dispatchers.len() {
+    if ability_refs.len() != dispatchers.len() {
         return Err(error(format!(
             "ability_refs cardinality {} does not match {} dispatcher operands",
             ability_refs.len(),
             dispatchers.len()
         )));
     }
-    let mut dispatcher_pairs = Vec::with_capacity(ability_refs.len());
-    for (ability_ref, pair) in ability_refs.iter().zip(dispatchers.as_chunks::<2>().0) {
+    let mut handled = Vec::with_capacity(ability_refs.len());
+    for (ability_ref, &tr_dispatch) in ability_refs.iter().zip(dispatchers) {
         let Attribute::Type(ability_ref) = ability_ref else {
             return Err(error("every ability_refs entry must be a type".into()));
         };
@@ -126,7 +126,7 @@ fn final_handle_dispatch_shape(
                 "every ability_refs entry must be a core.ability_ref type".into(),
             ));
         }
-        dispatcher_pairs.push((*ability_ref, pair[0], pair[1]));
+        handled.push((*ability_ref, tr_dispatch));
     }
     let Ok(body) = ctx.op_regions(op).exactly_one() else {
         return Err(error(
@@ -164,7 +164,7 @@ fn final_handle_dispatch_shape(
     Ok(FinalHandleDispatchShape {
         evidence,
         prompt_tag,
-        dispatcher_pairs,
+        dispatchers: handled,
         body_evidence: *body_evidence,
     })
 }
@@ -197,7 +197,7 @@ pub(crate) fn validate_final_handle_dispatches(
 fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
     let has_next_tag = module.ops(ctx).iter().copied().any(|op| {
         func::Func::from_op(ctx, op)
-            .is_ok_and(|function| function.sym_name(ctx) == Symbol::new("__tribute_next_tag"))
+            .is_ok_and(|function| function.sym_name(ctx) == "__tribute_next_tag")
     });
     let Some(module_block) = module.first_block(ctx) else {
         return;
@@ -214,7 +214,7 @@ fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
             trunk_ir::OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
                 .attr(
                     "sym_name",
-                    Attribute::Symbol(Symbol::new("__tribute_next_tag")),
+                    Attribute::String(ctx.intern_str("__tribute_next_tag")),
                 )
                 .attr("type", Attribute::Type(func_ty))
                 .attr("abi", ctx.string_attr("C"))
@@ -229,7 +229,121 @@ fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
     }
 }
 
-/// Resolve each explicit delimiter without changing callable signatures or calls.
+fn resolve_error(ctx: &IrContext, op: OpRef, message: impl Into<String>) -> ResolveEvidenceError {
+    let location = ctx.op(op).location;
+    ResolveEvidenceError {
+        op,
+        source_location: format!(
+            "{}:{}:{}",
+            ctx.paths().get(location.path),
+            location.span.start,
+            location.span.end
+        ),
+        message: message.into(),
+    }
+}
+
+/// Take the `evidence_plan` of `op`, leaving it without the attribute.
+fn take_evidence_plan(
+    ctx: &mut IrContext,
+    op: OpRef,
+) -> Result<Vec<EvidenceStep>, ResolveEvidenceError> {
+    let Some(plan) = ctx.op_mut(op).attributes.remove(EVIDENCE_PLAN_ATTR) else {
+        return Ok(Vec::new());
+    };
+    let Attribute::List(items) = plan else {
+        return Err(resolve_error(ctx, op, "evidence_plan must be a list"));
+    };
+    items
+        .iter()
+        .map(|item| {
+            EvidenceStep::from_attribute(ctx, item).map_err(|error| resolve_error(ctx, op, error))
+        })
+        .collect()
+}
+
+/// Apply a selection to `evidence` before `op`, returning the selected evidence.
+fn apply_evidence_plan(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    op: OpRef,
+    evidence: ValueRef,
+    plan: &[EvidenceStep],
+) -> ValueRef {
+    let location = ctx.op(op).location;
+    let evidence_ty = ctx.value_ty(evidence);
+    plan.iter().fold(evidence, |evidence, step| {
+        let selected = match *step {
+            EvidenceStep::Mask(instance) => {
+                let mask = effect::Mask::operands(evidence)
+                    .ability_ref(instance)
+                    .results(evidence_ty)
+                    .build(ctx, location);
+                (mask.op_ref(), mask.result(ctx))
+            }
+            EvidenceStep::Dup(instance) => {
+                let dup = effect::Dup::operands(evidence)
+                    .ability_ref(instance)
+                    .results(evidence_ty)
+                    .build(ctx, location);
+                (dup.op_ref(), dup.result(ctx))
+            }
+            EvidenceStep::Outer(instance) => {
+                let outer = effect::Outer::operands(evidence)
+                    .ability_ref(instance)
+                    .results(evidence_ty)
+                    .build(ctx, location);
+                (outer.op_ref(), outer.result(ctx))
+            }
+        };
+        ctx.insert_op_before(block, op, selected.0);
+        selected.1
+    })
+}
+
+/// The operand index of the evidence a call passes to its callee.
+fn call_evidence_operand(ctx: &IrContext, op: OpRef) -> Option<u32> {
+    let index = if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
+        0
+    } else if func::CallIndirect::matches(ctx, op) || func::TailCallIndirect::matches(ctx, op) {
+        1
+    } else {
+        return None;
+    };
+    let passes_evidence = get_calling_convention(ctx, op)
+        .is_some_and(|convention| convention.needs_evidence())
+        && ctx
+            .op_operands(op)
+            .get(index as usize)
+            .is_some_and(|&value| ability::is_evidence_type_ref(ctx, ctx.value_ty(value)));
+    passes_evidence.then_some(index)
+}
+
+/// Select the evidence a call passes according to its `evidence_plan`.
+fn resolve_call_selection(
+    ctx: &mut IrContext,
+    block: BlockRef,
+    op: OpRef,
+) -> Result<(), ResolveEvidenceError> {
+    if !ctx.op(op).attributes.contains_key(EVIDENCE_PLAN_ATTR) {
+        return Ok(());
+    }
+    let Some(index) = call_evidence_operand(ctx, op) else {
+        return Err(resolve_error(
+            ctx,
+            op,
+            "evidence_plan requires a call that passes evidence to its callee",
+        ));
+    };
+    let plan = take_evidence_plan(ctx, op)?;
+    let evidence = ctx.op_operands(op)[index as usize];
+    let selected = apply_evidence_plan(ctx, block, op, evidence, &plan);
+    ctx.set_op_operand(op, index, selected);
+    Ok(())
+}
+
+/// Resolve each explicit delimiter and call selection without changing
+/// callable signatures.
 fn resolve_delimiters(
     ctx: &mut IrContext,
     module: Module,
@@ -242,7 +356,8 @@ fn resolve_delimiters(
             if ability::HandleDispatch::from_op(ctx, op).is_ok() {
                 let location = ctx.op(op).location;
                 let shape = final_handle_dispatch_shape(ctx, op)?;
-                let mut current_ev = shape.evidence;
+                let plan = take_evidence_plan(ctx, op)?;
+                let mut current_ev = apply_evidence_plan(ctx, block, op, shape.evidence, &plan);
                 let mut prompt_tag = shape.prompt_tag;
                 if let ValueDef::OpResult(prompt_op, _) = ctx.value_def(prompt_tag)
                     && effect::FreshPromptTag::from_op(ctx, prompt_op).is_ok()
@@ -250,7 +365,7 @@ fn resolve_delimiters(
                     ensure_prompt_tag_runtime(ctx, module);
                     let i32_ty = i32_type_ref(ctx);
                     let prompt = func::Call::operands(std::iter::empty::<ValueRef>())
-                        .callee(Symbol::new("__tribute_next_tag"))
+                        .callee(SymbolPath::from("__tribute_next_tag"))
                         .results([i32_ty])
                         .build(ctx, location);
                     let resolved = prompt.result(ctx);
@@ -260,12 +375,12 @@ fn resolve_delimiters(
                     prompt_tag = resolved;
                 }
                 let evidence_ty = ability::evidence_adt_type_ref(ctx);
-                for (ability_ref, tr_dispatch, handler_dispatch) in shape.dispatcher_pairs {
+                for (ability_ref, tr_dispatch) in shape.dispatchers {
                     let extend = effect::Extend::operands(
                         current_ev,
                         prompt_tag,
                         tr_dispatch,
-                        handler_dispatch,
+                        shape.evidence,
                     )
                     .ability_ref(ability_ref)
                     .results(evidence_ty)
@@ -275,6 +390,8 @@ fn resolve_delimiters(
                 }
 
                 ctx.replace_all_uses(shape.body_evidence, current_ev);
+            } else {
+                resolve_call_selection(ctx, block, op)?;
             }
             let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
             for region in regions {
@@ -393,9 +510,9 @@ mod tests {
     fn final_dispatch_fixture(operation: &str) -> String {
         format!(
             r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {{layout = "evidence_marker"}}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
   !evidence = core.array<!marker, {{layout = "evidence"}}>
-  func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %handler: core.ptr, %tr2: core.ptr, %handler2: core.ptr) -> core.never {{
+  func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %tr2: core.ptr) -> core.never {{
     {operation}
   }}
 }}"#
@@ -403,9 +520,9 @@ mod tests {
     }
 
     #[test]
-    fn final_handle_dispatch_extends_each_ability_pair_and_lowers_resultlessly() {
+    fn final_handle_dispatch_extends_each_ability_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref<{name = "State"}>, core.ability_ref<{name = "Console"}>]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr, %tr2 {ability_refs = [core.ability_ref<{name = "State"}>, core.ability_ref<{name = "Console"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -418,7 +535,11 @@ mod tests {
         for name in [ability::evidence_abi::LOOKUP, ability::evidence_abi::EXTEND] {
             assert!(
                 module.ops(&ctx).iter().copied().all(|op| {
-                    ctx.op(op).attributes.get_symbol("sym_name") != Some(Symbol::new(name))
+                    ctx.op(op)
+                        .attributes
+                        .get_str(&ctx, "sym_name")
+                        .map(Symbol::new)
+                        != Some(Symbol::new(name))
                 }),
                 "shared resolution must not fabricate target helper {name}"
             );
@@ -449,11 +570,88 @@ mod tests {
         parse_test_module(&mut reparsed, &lowered);
     }
 
+    /// The printed operations of `@test`, one per line. `%0`..`%3` are its
+    /// parameters `%ev`, `%prompt`, `%tr`, `%tr2`.
+    fn test_body(ctx: &IrContext, module: Module) -> Vec<String> {
+        print_module(ctx, module.op())
+            .lines()
+            .map(str::trim)
+            .skip_while(|line| !line.starts_with("func.func @test"))
+            .skip(1)
+            .take_while(|line| *line != "}")
+            .map(str::to_owned)
+            .collect()
+    }
+
+    #[test]
+    fn handle_selection_masks_the_outer_evidence_before_extending() {
+        let input = final_dispatch_fixture(
+            r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>], evidence_plan = [{mask = core.ability_ref<{name = "State"}>}]} {
+      ^body(%inner: !evidence):
+        func.unreachable
+    }"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+
+        resolve_evidence_dispatch(&mut ctx, module).unwrap();
+
+        let body = test_body(&ctx, module);
+        assert_eq!(
+            body[..2],
+            [
+                r#"%4 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%5 = effect.extend %4, %1, %2, %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+            ],
+            "{body:#?}"
+        );
+        assert!(!body.iter().any(|line| line.contains("evidence_plan")));
+    }
+
+    #[test]
+    fn call_selections_apply_in_order_to_the_passed_evidence() {
+        let input = final_dispatch_fixture(
+            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{mask = core.ability_ref<{name = "State"}>}, {dup = core.ability_ref<{name = "Console"}>}]} : core.i32
+    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = core.ability_ref<{name = "State"}>}]}"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+
+        resolve_evidence_dispatch(&mut ctx, module).unwrap();
+
+        let body = test_body(&ctx, module);
+        assert_eq!(
+            body,
+            [
+                r#"%4 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%5 = effect.dup %4 {ability_ref = core.ability_ref<{name = "Console"}>} : !evidence"#,
+                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
+                r#"%7 = effect.dup %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
+            ],
+            "{body:#?}"
+        );
+    }
+
+    #[test]
+    fn selection_on_a_call_that_passes_no_evidence_is_rejected() {
+        let input = final_dispatch_fixture(
+            r#"%direct = func.call %prompt {callee = @callee, tribute.calling_convention = 0, evidence_plan = [{mask = core.ability_ref<{name = "State"}>}]} : core.i32
+    func.unreachable"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+
+        let error = resolve_evidence_dispatch(&mut ctx, module).unwrap_err();
+
+        assert!(error.to_string().contains("passes evidence"), "{error}");
+    }
+
     #[test]
     fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
         let input = final_dispatch_fixture(
             r#"%fresh = effect.fresh_prompt_tag : core.i32
-    ability.handle_dispatch %ev, %fresh, %tr, %handler {ability_refs = [core.ability_ref<{name = "State"}>]} {
+    ability.handle_dispatch %ev, %fresh, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -477,7 +675,10 @@ mod tests {
             .iter()
             .copied()
             .find(|&op| {
-                ctx.op(op).attributes.get_symbol("sym_name")
+                ctx.op(op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::new)
                     == Some(Symbol::new("__tribute_next_tag"))
             })
             .expect("runtime tag declaration");
@@ -507,13 +708,6 @@ mod tests {
                 "requires an evidence operand",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = []} {
-      ^body(%inner: !evidence):
-        func.unreachable
-    }"#,
-                "must form exact pairs",
-            ),
-            (
                 r#"ability.handle_dispatch %ev {
       ^body(%inner: !evidence):
         func.unreachable
@@ -521,7 +715,7 @@ mod tests {
                 "requires a prompt-tag operand",
             ),
             (
-                r#"ability.handle_dispatch %ev, %handler {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %tr {ability_refs = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -535,21 +729,21 @@ mod tests {
                 "requires an ability_refs list",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "cardinality",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = [1]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [1]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "entry must be a type",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = [core.i32]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.i32]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -632,7 +826,7 @@ mod tests {
         let input = final_dispatch_fixture(
             r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^body(%inner: !evidence):
-        effect.dispatch_cps %inner, %tr, %handler, %tr2 {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"}
+        effect.dispatch_cps %inner, %tr, %tr2, %tr2 {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"}
     }"#,
         );
         let mut ctx = IrContext::new();
@@ -643,7 +837,7 @@ mod tests {
     #[test]
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker
@@ -672,7 +866,13 @@ mod tests {
             .ops(&ctx)
             .iter()
             .copied()
-            .find(|&op| ctx.op(op).attributes.get_symbol("sym_name") == Some(Symbol::new("body")))
+            .find(|&op| {
+                ctx.op(op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::new)
+                    == Some(Symbol::new("body"))
+            })
             .unwrap();
         let entry = ctx.region(ctx.op_region(body, 0).unwrap()).blocks[0];
         let outer_evidence = ctx.block_args(entry)[0];

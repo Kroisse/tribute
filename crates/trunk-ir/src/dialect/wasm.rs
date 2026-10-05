@@ -1,7 +1,9 @@
 //! Arena-based wasm dialect.
 
+use crate::attr_kind::SymbolRef;
+use crate::attr_kind::{Bytes, Type};
 use crate::dialect::core::I32;
-use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::{Attribute, AttributeMap, IrContext, Symbol, TypeDataBuilder, TypeRef};
 
@@ -45,7 +47,7 @@ mod wasm {
     fn drop(value: Value<_>) {}
 
     // Functions
-    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
+    fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     fn call_indirect(
         type_idx: Attr<u32>,
@@ -55,7 +57,7 @@ mod wasm {
     ) -> Variadic<_> {
     }
 
-    fn return_call(callee: Attr<Symbol>, args: Variadic<_>) {}
+    fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     fn return_call_indirect(
         type_idx: Attr<u32>,
@@ -69,7 +71,7 @@ mod wasm {
     fn nop() -> Value<_> {}
 
     // Module
-    fn func(sym_name: Attr<Symbol>, r#type: Attr<Type>) {
+    fn func(sym_name: Attr<String>, r#type: Attr<Type>) {
         #[region(body?)]
         {}
     }
@@ -77,12 +79,12 @@ mod wasm {
     fn import_func(
         module: Attr<String>,
         name: Attr<String>,
-        sym_name: Attr<Symbol>,
+        sym_name: Attr<String>,
         r#type: Attr<Type>,
     ) {
     }
 
-    fn export_func(name: Attr<String>, func: Attr<Symbol>) {}
+    fn export_func(name: Attr<String>, func: Attr<SymbolRef>) {}
 
     fn export_memory(name: Attr<String>, index: Attr<u32>) {}
 
@@ -246,7 +248,7 @@ mod wasm {
     // References
     fn ref_null(heap_type: Attr<String>, type_idx: Option<Attr<u32>>) -> Value<_> {}
 
-    fn ref_func(func_name: Attr<Symbol>) -> Value<_> {}
+    fn ref_func(func_name: Attr<SymbolRef>) -> Value<_> {}
 
     fn ref_is_null(r#ref: Value<_>) -> Value<_> {}
 
@@ -712,6 +714,17 @@ impl IndirectCallLikeModel for ReturnCallIndirect {
     }
 }
 
+impl CallLikeModel for Call {}
+impl CallLikeModel for ReturnCall {}
+
+inventory::submit! {
+    CallLikeOps::register::<Call>()
+}
+
+inventory::submit! {
+    CallLikeOps::register::<ReturnCall>()
+}
+
 inventory::submit! {
     IndirectCallLikeOps::register::<CallIndirect>()
 }
@@ -752,6 +765,7 @@ fn set_indirect_call_signature_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::op_interface::IndirectCallLikeOps;
     use crate::ops::DialectType;
     use crate::parser::parse_test_module;
@@ -885,7 +899,7 @@ mod tests {
                 .param(i32)
                 .attr(
                     NUM_INPUTS_ATTR,
-                    crate::Attribute::Symbol(crate::Symbol::new("one")),
+                    crate::Attribute::SymbolRef(SymbolPath::from("one")),
                 )
                 .attr(NUM_RESULTS_ATTR, crate::Attribute::Int(0))
                 .build(),

@@ -3,7 +3,7 @@
 //! This module transforms `Expr<UnresolvedName>` into `Expr<ResolvedRef<'db>>`
 //! by looking up names in the module environment and local scopes.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use itertools::Itertools;
 use salsa::Accumulator as _;
@@ -115,11 +115,11 @@ impl<'db> Resolver<'db> {
         Self {
             db,
             env,
-            local_scopes: vec![HashMap::new()],
+            local_scopes: vec![HashMap::default()],
             local_id_gen: LocalIdGen::new(),
             resume_local_id_stack: Vec::new(),
             span_map,
-            effect_ops: HashMap::new(),
+            effect_ops: HashMap::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
             package_depth: 0,
@@ -135,7 +135,7 @@ impl<'db> Resolver<'db> {
 
     /// Enter a new local scope.
     fn push_scope(&mut self) {
-        self.local_scopes.push(HashMap::new());
+        self.local_scopes.push(HashMap::default());
     }
 
     /// Exit the current local scope.
@@ -153,9 +153,9 @@ impl<'db> Resolver<'db> {
     }
 
     /// Look up a local variable in all scopes.
-    fn lookup_local(&self, name: Symbol) -> Option<LocalId> {
+    fn lookup_local(&self, name: &Symbol) -> Option<LocalId> {
         for scope in self.local_scopes.iter().rev() {
-            if let Some(&id) = scope.get(&name) {
+            if let Some(&id) = scope.get(name) {
                 return Some(id);
             }
         }
@@ -169,12 +169,12 @@ impl<'db> Resolver<'db> {
         // For simple names: check locals, builtins, then module environment
         if name.is_simple() {
             // First check local variables
-            if let Some(local_id) = self.lookup_local(sym) {
+            if let Some(local_id) = self.lookup_local(&sym) {
                 return ResolvedRef::local(local_id, sym);
             }
 
             if !self.module_path.is_empty() {
-                let namespace = Symbol::from_dynamic(
+                let namespace = Symbol::new(
                     &self
                         .module_path
                         .iter()
@@ -182,13 +182,13 @@ impl<'db> Resolver<'db> {
                         .collect::<Vec<_>>()
                         .join("::"),
                 );
-                if let Some(binding) = self.env.lookup_qualified(namespace, sym) {
+                if let Some(binding) = self.env.lookup_qualified(&namespace, &sym) {
                     return self.binding_to_ref(binding, sym);
                 }
             }
 
             // Then the enclosing inline module's imports.
-            if let Some(target) = self.module_import(sym)
+            if let Some(target) = self.module_import(&sym)
                 && let Some(binding) = self.lookup_path(target)
             {
                 return self.binding_to_ref(binding, sym);
@@ -198,9 +198,10 @@ impl<'db> Resolver<'db> {
             // items of the modules around it; the package root sees its own
             // items too.
             let binding = if self.module_path.is_empty() {
-                self.env.lookup(sym)
+                self.env.lookup(&sym)
             } else {
-                self.companion(sym).or_else(|| self.env.lookup_library(sym))
+                self.companion(&sym)
+                    .or_else(|| self.env.lookup_library(&sym))
             };
             if let Some(binding) = binding {
                 return self.binding_to_ref(binding, sym);
@@ -214,20 +215,15 @@ impl<'db> Resolver<'db> {
             // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
             // A path keyword names a package-root path, read from nowhere else.
             if let Some(namespace) = name.namespace() {
-                // Interning inside `with_str` would re-enter the interner.
-                let segments: Vec<Symbol> = namespace
-                    .to_string()
-                    .split("::")
-                    .map(Symbol::from_dynamic)
-                    .collect();
+                let segments: Vec<Symbol> =
+                    namespace.to_string().split("::").map(Symbol::new).collect();
                 match absolute_path(self.package_depth, &self.module_path, &segments) {
                     Ok(Some(path)) => {
                         let binding = if path.is_empty() {
-                            self.env.lookup(sym)
+                            self.env.lookup(&sym)
                         } else {
-                            let namespace =
-                                Symbol::from_dynamic(&path.iter().format("::").to_string());
-                            self.env.lookup_qualified(namespace, sym)
+                            let namespace = Symbol::new(&path.iter().format("::").to_string());
+                            self.env.lookup_qualified(&namespace, &sym)
                         };
                         if let Some(binding) = binding {
                             return self.binding_to_ref(binding, sym);
@@ -246,7 +242,7 @@ impl<'db> Resolver<'db> {
             // imported path; it does not fall back to the package root.
             if let Some(namespace) = name.namespace()
                 && let Some(namespace) = self.namespace_in_scope(namespace)
-                && let Some(binding) = self.env.lookup_qualified(namespace, sym)
+                && let Some(binding) = self.env.lookup_qualified(&namespace, &sym)
             {
                 return self.binding_to_ref(binding, sym);
             }
@@ -258,37 +254,35 @@ impl<'db> Resolver<'db> {
     }
 
     /// Whether the enclosing inline module itself defines `name`.
-    fn defined_in_module(&self, name: Symbol) -> bool {
+    fn defined_in_module(&self, name: &Symbol) -> bool {
         !self.module_path.is_empty() && {
-            let namespace = Symbol::from_dynamic(&self.module_path.iter().format("::").to_string());
-            self.env.lookup_qualified(namespace, name).is_some()
+            let namespace = Symbol::new(&self.module_path.iter().format("::").to_string());
+            self.env.lookup_qualified(&namespace, name).is_some()
         }
     }
 
     /// The package-root path an import of the enclosing inline module gives
     /// `name`.
-    fn module_import(&self, name: Symbol) -> Option<&[Symbol]> {
-        self.module_imports.last()?.get(&name).map(Vec::as_slice)
+    fn module_import(&self, name: &Symbol) -> Option<&[Symbol]> {
+        self.module_imports.last()?.get(name).map(Vec::as_slice)
     }
 
     /// `namespace` with its first segment replaced by the path an import of
     /// the enclosing inline module gives it, e.g. `Abort` after
     /// `use outer::abilities::Abort` becomes `outer::abilities::Abort`.
-    fn imported_namespace(&self, namespace: Symbol) -> Option<Symbol> {
+    fn imported_namespace(&self, namespace: &Symbol) -> Option<Symbol> {
         let imports = self.module_imports.last()?;
-        // Copy the segments out before interning: interning inside
-        // `with_str` would re-enter the interner.
         let (first, rest) = namespace.with_str(|path| {
             let (first, rest) = path.split_once("::").unwrap_or((path, ""));
             (first.to_owned(), rest.to_owned())
         });
-        let target = imports.get(&Symbol::from_dynamic(&first))?;
+        let target = imports.get(&Symbol::new(&first))?;
         let mut path = target.iter().format("::").to_string();
         if !rest.is_empty() {
             path.push_str("::");
             path.push_str(&rest);
         }
-        Some(Symbol::from_dynamic(&path))
+        Some(Symbol::new(&path))
     }
 
     /// The package-root namespace a qualified path's namespace names.
@@ -297,46 +291,46 @@ impl<'db> Resolver<'db> {
     /// the module, or from a namespace the prelude supplies. At the package
     /// root it is already a package-root namespace.
     fn namespace_in_scope(&self, namespace: Symbol) -> Option<Symbol> {
-        if let Some(imported) = self.imported_namespace(namespace) {
+        if let Some(imported) = self.imported_namespace(&namespace) {
             return Some(imported);
         }
         let spelling = namespace.to_string();
         let (first, rest) = spelling.split_once("::").unwrap_or((&spelling, ""));
-        let first = Symbol::from_dynamic(first);
+        let first = Symbol::new(first);
         if self.module_path.is_empty() {
-            if self.env.has_namespace(namespace) || self.env.declares(first) {
+            if self.env.has_namespace(&namespace) || self.env.declares(first.clone()) {
                 return Some(namespace);
             }
         } else {
-            let nested = Symbol::from_dynamic(&format!(
+            let nested = Symbol::new(&format!(
                 "{}::{namespace}",
                 self.module_path.iter().format("::")
             ));
-            if self.env.has_namespace(nested) || self.defined_in_module(first) {
+            if self.env.has_namespace(&nested) || self.defined_in_module(&first) {
                 return Some(nested);
             }
         }
-        if let Some(library) = self.env.library_namespace(first) {
+        if let Some(library) = self.env.library_namespace(&first) {
             let mut path = library.to_string();
             if !rest.is_empty() {
                 path.push_str("::");
                 path.push_str(rest);
             }
-            return Some(Symbol::from_dynamic(&path));
+            return Some(Symbol::new(&path));
         }
-        (self.module_path.is_empty() || self.env.is_library_root(first)).then_some(namespace)
+        (self.module_path.is_empty() || self.env.is_library_root(&first)).then_some(namespace)
     }
 
     /// The package path a path starting with a library namespace alias
     /// continues to, e.g. `Option::Some` → `std::Option::Some`.
     fn library_namespace_path(&self, path: &[Symbol]) -> Option<Vec<Symbol>> {
         let (first, rest) = path.split_first()?;
-        let namespace = self.env.library_namespace(*first)?.to_string();
+        let namespace = self.env.library_namespace(first)?.to_string();
         Some(
             namespace
                 .split("::")
-                .map(Symbol::from_dynamic)
-                .chain(rest.iter().copied())
+                .map(Symbol::new)
+                .chain(rest.iter().cloned())
                 .collect(),
         )
     }
@@ -345,10 +339,10 @@ impl<'db> Resolver<'db> {
     fn lookup_path(&self, path: &[Symbol]) -> Option<&Binding<'db>> {
         let (last, namespace) = path.split_last()?;
         if namespace.is_empty() {
-            return self.env.lookup(*last);
+            return self.env.lookup(last);
         }
-        let namespace = Symbol::from_dynamic(&namespace.iter().format("::").to_string());
-        self.env.lookup_qualified(namespace, *last)
+        let namespace = Symbol::new(&namespace.iter().format("::").to_string());
+        self.env.lookup_qualified(&namespace, last)
     }
 
     /// Report a path whose keywords do not denote a module.
@@ -375,17 +369,17 @@ impl<'db> Resolver<'db> {
                     spelling.starts_with(|c: char| c.is_ascii_lowercase())
                         || TypeKind::from_primitive_name(spelling).is_some()
                 });
-                if local || self.defined_in_module(*name) {
+                if local || self.defined_in_module(name) {
                     return;
                 }
-                if let Some(path) = self.companion_type(*name) {
+                if let Some(path) = self.companion_type(name) {
                     ann.kind = TypeAnnotationKind::Path(path);
-                } else if let Some(target) = self.module_import(*name) {
+                } else if let Some(target) = self.module_import(name) {
                     ann.kind = TypeAnnotationKind::Path(target.to_vec());
-                } else if let Some(path) = self.env.library_path(*name) {
+                } else if let Some(path) = self.env.library_path(name) {
                     ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 } else {
-                    self.report_unresolved_annotation(ann.id, *name);
+                    self.report_unresolved_annotation(ann.id, name);
                     ann.kind = TypeAnnotationKind::Error;
                 }
             }
@@ -397,9 +391,9 @@ impl<'db> Resolver<'db> {
                         || TypeKind::from_primitive_name(spelling).is_some()
                 });
                 if !local
-                    && !self.env.declares(*name)
-                    && self.env.get_use_path(*name).is_none()
-                    && let Some(path) = self.env.library_path(*name)
+                    && !self.env.declares(name.clone())
+                    && self.env.get_use_path(name).is_none()
+                    && let Some(path) = self.env.library_path(name)
                 {
                     ann.kind = TypeAnnotationKind::Path(path.to_vec());
                 }
@@ -421,7 +415,7 @@ impl<'db> Resolver<'db> {
                         ann.kind = TypeAnnotationKind::Error;
                     }
                     Ok(None) if self.module_path.is_empty() => {
-                        let first = segments[0];
+                        let first = segments[0].clone();
                         if !self.env.declares(first)
                             && let Some(path) = self.library_namespace_path(segments)
                         {
@@ -429,18 +423,17 @@ impl<'db> Resolver<'db> {
                         }
                     }
                     Ok(None) => {
-                        let (&first, rest) = segments.split_first().expect("a path has a segment");
+                        let (first, rest) = segments.split_first().expect("a path has a segment");
                         if let Some(target) = self.module_import(first) {
-                            *segments = target.iter().chain(rest).copied().collect();
+                            *segments = target.iter().chain(rest).cloned().collect();
                         } else if self.defined_in_module(first) {
                             *segments =
-                                self.module_path.iter().chain(&*segments).copied().collect();
+                                self.module_path.iter().chain(&*segments).cloned().collect();
                         } else if let Some(path) = self.library_namespace_path(segments) {
                             *segments = path;
                         } else if !self.env.is_library_root(first) {
-                            let path =
-                                Symbol::from_dynamic(&segments.iter().format("::").to_string());
-                            self.report_unresolved_annotation(ann.id, path);
+                            let path = Symbol::new(&segments.iter().format("::").to_string());
+                            self.report_unresolved_annotation(ann.id, &path);
                             ann.kind = TypeAnnotationKind::Error;
                         }
                     }
@@ -476,7 +469,7 @@ impl<'db> Resolver<'db> {
     /// The package-root path of the type or ability a module's own name
     /// names: the declaration beside the module that it accompanies, as
     /// `mod Option` accompanies `enum Option`.
-    fn companion_type(&self, name: Symbol) -> Option<Vec<Symbol>> {
+    fn companion_type(&self, name: &Symbol) -> Option<Vec<Symbol>> {
         let binding = self.companion(name)?;
         // A struct's name binds its constructor.
         matches!(
@@ -487,13 +480,13 @@ impl<'db> Resolver<'db> {
         )
         .then(|| {
             let parent = &self.module_path[..self.module_path.len() - 1];
-            parent.iter().chain([&name]).copied().collect()
+            parent.iter().chain([name]).cloned().collect()
         })
     }
 
     /// The declaration beside the current module that shares its name, which
     /// the module sees under that name.
-    fn companion(&self, name: Symbol) -> Option<&Binding<'db>> {
+    fn companion(&self, name: &Symbol) -> Option<&Binding<'db>> {
         let (own, parent) = self.module_path.split_last()?;
         if *own != name {
             return None;
@@ -501,12 +494,12 @@ impl<'db> Resolver<'db> {
         if parent.is_empty() {
             return self.env.lookup(name);
         }
-        let namespace = Symbol::from_dynamic(&parent.iter().format("::").to_string());
-        self.env.lookup_qualified(namespace, name)
+        let namespace = Symbol::new(&parent.iter().format("::").to_string());
+        self.env.lookup_qualified(&namespace, name)
     }
 
     /// Report a type or ability name an annotation cannot see.
-    fn report_unresolved_annotation(&self, node: NodeId, name: Symbol) {
+    fn report_unresolved_annotation(&self, node: NodeId, name: &Symbol) {
         Diagnostic::new(
             format!("unresolved name `{name}`"),
             self.span_map.get_or_default(node),
@@ -542,7 +535,7 @@ impl<'db> Resolver<'db> {
     /// Report an unresolved name diagnostic, with "did you mean?" suggestions.
     fn report_unresolved_name(&self, name: &UnresolvedName) {
         let span = self.span_map.get_or_default(name.id);
-        let similar = self.find_similar_names(name.name());
+        let similar = self.find_similar_names(&name.name());
 
         let message = if similar.is_empty() {
             format!("unresolved name `{}`", name)
@@ -563,13 +556,13 @@ impl<'db> Resolver<'db> {
     }
 
     /// Find names in scope that are similar to the given name.
-    fn find_similar_names(&self, name: Symbol) -> Vec<Symbol> {
-        use std::collections::HashSet;
+    fn find_similar_names(&self, name: &Symbol) -> Vec<Symbol> {
+        use rustc_hash::FxHashSet as HashSet;
 
         let candidates: HashSet<Symbol> = self
             .local_scopes
             .iter()
-            .flat_map(|scope| scope.keys().copied())
+            .flat_map(|scope| scope.keys().cloned())
             .chain(self.env.iter_all_names())
             .collect();
 
@@ -587,7 +580,7 @@ impl<'db> Resolver<'db> {
         match binding {
             Binding::Function { id } => ResolvedRef::function(*id),
             Binding::Constructor { id, tag, .. } => {
-                ResolvedRef::constructor(*id, tag.unwrap_or(name))
+                ResolvedRef::constructor(*id, tag.clone().unwrap_or(name))
             }
             Binding::TypeDef { id } => ResolvedRef::type_def(*id),
             Binding::Module { path } => {
@@ -595,7 +588,7 @@ impl<'db> Resolver<'db> {
                 ResolvedRef::Module { path: path_ref }
             }
             Binding::AbilityOp { ability, op, kind } => {
-                ResolvedRef::ability_op(*ability, *op, *kind)
+                ResolvedRef::ability_op(*ability, op.clone(), *kind)
             }
             Binding::Ability { id } => ResolvedRef::ability(*id),
         }
@@ -611,7 +604,7 @@ impl<'db> Resolver<'db> {
 
         Module {
             id: module.id,
-            name: module.name,
+            name: module.name.clone(),
             decls,
         }
     }
@@ -661,7 +654,7 @@ impl<'db> Resolver<'db> {
         module: &crate::ast::ModuleDecl<UnresolvedName>,
     ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
         // For inline modules, recursively resolve nested declarations
-        self.module_path.push(module.name);
+        self.module_path.push(module.name.clone());
         // The module's imports are in scope throughout its body, including
         // before the `use` that declares them, and an import's path may start
         // from another import of the module.
@@ -674,12 +667,15 @@ impl<'db> Resolver<'db> {
                 _ => None,
             })
             .collect();
-        self.module_imports.push(HashMap::new());
+        self.module_imports.push(HashMap::default());
         loop {
             let resolved: Vec<(Symbol, Vec<Symbol>)> = uses
                 .iter()
                 .filter_map(|import| {
-                    let name = import.alias.or_else(|| import.path.last().copied())?;
+                    let name = import
+                        .alias
+                        .clone()
+                        .or_else(|| import.path.last().cloned())?;
                     let imports = self.module_imports.last()?;
                     if imports.contains_key(&name) {
                         return None;
@@ -704,7 +700,7 @@ impl<'db> Resolver<'db> {
 
         crate::ast::ModuleDecl {
             id: module.id,
-            name: module.name,
+            name: module.name.clone(),
             is_pub: module.is_pub,
             body,
         }
@@ -721,7 +717,7 @@ impl<'db> Resolver<'db> {
             .iter()
             .map(|p| {
                 let mut p = p.clone();
-                p.local_id = Some(self.bind_local(p.name));
+                p.local_id = Some(self.bind_local(p.name.clone()));
                 p
             })
             .collect();
@@ -763,7 +759,7 @@ impl<'db> Resolver<'db> {
         FuncDecl {
             id: func.id,
             is_pub: func.is_pub,
-            name: func.name,
+            name: func.name.clone(),
             type_params,
             params,
             return_ty,
@@ -787,7 +783,7 @@ impl<'db> Resolver<'db> {
                 continue;
             };
 
-            for (op_name, binding) in self.env.iter_namespace(ability_name) {
+            for (op_name, binding) in self.env.iter_namespace(&ability_name) {
                 if matches!(binding, Binding::AbilityOp { .. }) {
                     // Don't override existing entries (first ability wins;
                     // TODO: detect ambiguity when multiple abilities export same op name)
@@ -808,7 +804,7 @@ impl<'db> Resolver<'db> {
                 // Row tail variables (lowercase, e.g., `e`) are not concrete abilities
                 sym.with_str(|s| {
                     if s.starts_with(|c: char| c.is_ascii_uppercase()) {
-                        Some(*sym)
+                        Some(sym.clone())
                     } else {
                         None
                     }
@@ -818,7 +814,7 @@ impl<'db> Resolver<'db> {
                 if segs.is_empty() {
                     None
                 } else {
-                    Some(Symbol::from_dynamic(
+                    Some(Symbol::new(
                         &segs
                             .iter()
                             .map(|s| s.to_string())
@@ -850,9 +846,9 @@ impl<'db> Resolver<'db> {
         match &mut ann.kind {
             TypeAnnotationKind::Named(sym)
                 if sym.with_str(|s| s.starts_with(|c: char| c.is_ascii_uppercase()))
-                    && !self.env.has_definition(*sym) =>
+                    && !self.env.has_definition(sym) =>
             {
-                if let Some(path) = self.env.get_use_path(*sym)
+                if let Some(path) = self.env.get_use_path(sym)
                     && path.len() >= 2
                 {
                     ann.kind = TypeAnnotationKind::Path(path.clone());
@@ -904,16 +900,16 @@ impl<'db> Resolver<'db> {
             let Some((last, namespace)) = path.split_last() else {
                 return false;
             };
-            let full = Symbol::from_dynamic(&path.iter().format("::").to_string());
+            let full = Symbol::new(&path.iter().format("::").to_string());
             // A single-segment path must name a definition: `env.lookup`
             // would also find the module placeholder this import inserted.
             let found = if namespace.is_empty() {
-                self.env.has_definition(*last)
+                self.env.has_definition(last)
             } else {
-                let namespace = Symbol::from_dynamic(&namespace.iter().format("::").to_string());
-                self.env.lookup_qualified(namespace, *last).is_some()
+                let namespace = Symbol::new(&namespace.iter().format("::").to_string());
+                self.env.lookup_qualified(&namespace, last).is_some()
             };
-            found || self.env.has_namespace(full)
+            found || self.env.has_namespace(&full)
         };
         match absolute_path(self.package_depth, &self.module_path, path) {
             Ok(Some(path)) => return names(&path).then_some(path),
@@ -924,7 +920,7 @@ impl<'db> Resolver<'db> {
             if names(path) {
                 return Some(path.to_vec());
             }
-            if self.env.declares(*path.first()?) {
+            if self.env.declares(path.first()?.clone()) {
                 return None;
             }
             let library = self.library_namespace_path(path)?;
@@ -933,12 +929,12 @@ impl<'db> Resolver<'db> {
         // An inline module's path starts from one of its imports, the module
         // itself, or a namespace the prelude supplies.
         if let Some((first, rest)) = path.split_first()
-            && let Some(target) = self.module_import(*first)
+            && let Some(target) = self.module_import(first)
         {
-            let imported: Vec<Symbol> = target.iter().chain(rest).copied().collect();
+            let imported: Vec<Symbol> = target.iter().chain(rest).cloned().collect();
             return names(&imported).then_some(imported);
         }
-        let nested: Vec<Symbol> = self.module_path.iter().chain(path).copied().collect();
+        let nested: Vec<Symbol> = self.module_path.iter().chain(path).cloned().collect();
         if names(&nested) {
             return Some(nested);
         }
@@ -949,7 +945,7 @@ impl<'db> Resolver<'db> {
         }
         let library = path
             .first()
-            .is_some_and(|first| self.env.is_library_root(*first));
+            .is_some_and(|first| self.env.is_library_root(first));
         (library && names(path)).then(|| path.to_vec())
     }
 
@@ -990,7 +986,7 @@ impl<'db> Resolver<'db> {
                 let resolved_type = self.resolve_name(type_name);
                 let fields = fields
                     .iter()
-                    .map(|(name, expr)| (*name, self.resolve_expr(expr)))
+                    .map(|(name, expr)| (name.clone(), self.resolve_expr(expr)))
                     .collect();
                 let spread = spread.as_ref().map(|e| self.resolve_expr(e));
                 ExprKind::Record {
@@ -1009,7 +1005,7 @@ impl<'db> Resolver<'db> {
                 let args = args.iter().map(|a| self.resolve_expr(a)).collect();
                 ExprKind::MethodCall {
                     receiver,
-                    method: *method,
+                    method: method.clone(),
                     args,
                 }
             }
@@ -1037,7 +1033,7 @@ impl<'db> Resolver<'db> {
                         if let Some(ty) = &mut p.ty {
                             self.resolve_annotation_paths(ty);
                         }
-                        p.local_id = Some(self.bind_local(p.name));
+                        p.local_id = Some(self.bind_local(p.name.clone()));
                         p
                     })
                     .collect();
@@ -1152,7 +1148,7 @@ impl<'db> Resolver<'db> {
                     .collect();
                 HandlerKind::Fn {
                     ability: resolved_ability,
-                    op: *op,
+                    op: op.clone(),
                     params: resolved_params,
                 }
             }
@@ -1173,7 +1169,7 @@ impl<'db> Resolver<'db> {
                 self.resume_local_id_stack.push(resume_id);
                 HandlerKind::Op {
                     ability: resolved_ability,
-                    op: *op,
+                    op: op.clone(),
                     params: resolved_params,
                     resume_local_id: Some(resume_id),
                 }
@@ -1198,7 +1194,7 @@ impl<'db> Resolver<'db> {
     /// Skips "_" placeholder (unqualified ops) without emitting diagnostics.
     fn resolve_handler_ability(&mut self, ability: &UnresolvedName) -> ResolvedRef<'db> {
         if ability.qualified == Symbol::new("_") {
-            ResolvedRef::local(LocalId::UNRESOLVED, ability.qualified)
+            ResolvedRef::local(LocalId::UNRESOLVED, ability.qualified.clone())
         } else {
             self.resolve_name(ability)
         }
@@ -1213,9 +1209,9 @@ impl<'db> Resolver<'db> {
             PatternKind::Wildcard => PatternKind::Wildcard,
 
             PatternKind::Bind { name, .. } => {
-                let local_id = self.bind_local(*name);
+                let local_id = self.bind_local(name.clone());
                 PatternKind::Bind {
-                    name: *name,
+                    name: name.clone(),
                     local_id: Some(local_id),
                 }
             }
@@ -1246,18 +1242,18 @@ impl<'db> Resolver<'db> {
                         let pattern = if let Some(pattern) = &f.pattern {
                             self.resolve_pattern_with_bindings(pattern)
                         } else {
-                            let local_id = self.bind_local(f.name);
+                            let local_id = self.bind_local(f.name.clone());
                             Pattern::new(
                                 f.id,
                                 PatternKind::Bind {
-                                    name: f.name,
+                                    name: f.name.clone(),
                                     local_id: Some(local_id),
                                 },
                             )
                         };
                         FieldPattern {
                             id: f.id,
-                            name: f.name,
+                            name: f.name.clone(),
                             pattern: Some(pattern),
                         }
                     })
@@ -1291,7 +1287,7 @@ impl<'db> Resolver<'db> {
                     .map(|p| self.resolve_pattern_with_bindings(p))
                     .collect();
                 // Bind the rest variable if it's not "_"
-                let rest_local_id = if let Some(rest_name) = *rest
+                let rest_local_id = if let Some(rest_name) = rest.clone()
                     && rest_name != "_"
                 {
                     Some(self.bind_local(rest_name))
@@ -1300,17 +1296,17 @@ impl<'db> Resolver<'db> {
                 };
                 PatternKind::ListRest {
                     head,
-                    rest: *rest,
+                    rest: rest.clone(),
                     rest_local_id,
                 }
             }
 
             PatternKind::As { pattern, name, .. } => {
                 let pattern = self.resolve_pattern_with_bindings(pattern);
-                let local_id = Some(self.bind_local(*name));
+                let local_id = Some(self.bind_local(name.clone()));
                 PatternKind::As {
                     pattern,
-                    name: *name,
+                    name: name.clone(),
                     local_id,
                 }
             }
@@ -1337,10 +1333,10 @@ mod tests {
 
         // Bind the parameter
         resolver.push_scope();
-        resolver.bind_local(param_name);
+        resolver.bind_local(param_name.clone());
 
         // Create unresolved reference to the parameter
-        let body_var = UnresolvedName::new(param_name, NodeId::from_raw(2));
+        let body_var = UnresolvedName::new(param_name.clone(), NodeId::from_raw(2));
 
         // Resolve the variable reference
         let resolved = resolver.resolve_name(&body_var);
@@ -1364,7 +1360,7 @@ mod tests {
 
         // Bind x in outer scope, y in inner scope
         resolver.push_scope();
-        let x_id = resolver.bind_local(x);
+        let x_id = resolver.bind_local(x.clone());
 
         resolver.push_scope();
         let y_id = resolver.bind_local(y);
@@ -1395,11 +1391,11 @@ mod tests {
 
         // Outer scope: bind x
         resolver.push_scope();
-        let x_id = resolver.bind_local(x);
+        let x_id = resolver.bind_local(x.clone());
 
         // Inner scope: bind y
         resolver.push_scope();
-        let y_id = resolver.bind_local(y);
+        let y_id = resolver.bind_local(y.clone());
 
         // Both x and y should be visible from inner scope
         let x_ref = UnresolvedName::new(x, NodeId::from_raw(1));
@@ -1490,7 +1486,7 @@ mod tests {
             NodeId::from_raw(2),
             PatternKind::As {
                 pattern: inner_pattern,
-                name: as_name,
+                name: as_name.clone(),
                 local_id: None,
             },
         );

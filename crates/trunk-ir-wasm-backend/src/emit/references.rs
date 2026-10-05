@@ -13,11 +13,11 @@
 //! the IR, which keeps it distinct from generic DCE reachability and
 //! authenticated intrinsic deletion.
 
-use std::collections::HashSet;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::IrContext;
 use trunk_ir::Module;
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::dialect::wasm as wasm_dialect;
 use trunk_ir::ops::DialectOp;
@@ -60,7 +60,7 @@ impl FunctionReference {
 
 /// A surviving function-symbol reference, for diagnostics.
 pub(crate) struct ResolvedReference {
-    pub symbol: Symbol,
+    pub symbol: SymbolPath,
     pub kind: FunctionReference,
 }
 
@@ -122,14 +122,17 @@ fn collect_op(
 
     match kind {
         Some(kind) => {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol(attribute) else {
+            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref(attribute) else {
                 return Err(CompilationError::invalid_module(format!(
                     "wasm.{} requires a symbol `{}` attribute",
                     ctx.op(op).name,
                     attribute,
                 )));
             };
-            references.push(ResolvedReference { symbol, kind });
+            references.push(ResolvedReference {
+                symbol: symbol.clone(),
+                kind,
+            });
         }
         None => {
             for owned in FUNCTION_SYMBOL_ATTRIBUTES {
@@ -165,18 +168,18 @@ pub(crate) fn dispose_bodyless_declarations(
     imports: &[ImportFuncDef],
     references: &[ResolvedReference],
 ) -> CompilationResult<()> {
-    let mut bound: HashSet<Symbol> = imports.iter().map(|import| import.sym).collect();
-    let mut definitions = HashSet::new();
-    let mut declarations = HashSet::new();
+    let mut bound: HashSet<SymbolPath> = imports.iter().map(|import| import.sym.clone()).collect();
+    let mut definitions = HashSet::default();
+    let mut declarations = HashSet::default();
     // Validate every shape before removing anything from the emission list.
     for func in funcs.iter() {
         match function_body(ctx, func)? {
             CallableBody::Declaration => {
-                declarations.insert(func.name);
+                declarations.insert(func.name.clone());
             }
             CallableBody::Definition { .. } => {
                 definitions.insert(func.op);
-                bound.insert(func.name);
+                bound.insert(func.name.clone());
             }
         }
     }
@@ -186,7 +189,7 @@ pub(crate) fn dispose_bodyless_declarations(
         if bound.contains(&reference.symbol) {
             continue;
         }
-        let symbol = reference.symbol;
+        let symbol = reference.symbol.clone();
         let kind = reference.kind.describe();
         if declarations.contains(&symbol) {
             return Err(CompilationError::invalid_module(format!(
@@ -215,12 +218,13 @@ pub(super) fn function_body(
 mod tests {
     use super::*;
     use trunk_ir::Attribute;
+    use trunk_ir::Symbol;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use wasmparser::{Parser, Payload, Validator, WasmFeatures};
 
     /// A bodyless ordinary C helper declaration with an `(i32) -> i32` contract.
-    const UNUSED_HELPER: &str = r#"  wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<(core.i32) -> core.i32>}"#;
+    const UNUSED_HELPER: &str = r#"  wasm.func {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}"#;
 
     fn section_count(bytes: &[u8], want_imports: bool) -> u32 {
         Parser::new(0)
@@ -249,13 +253,13 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.import_func {module = "env", name = "run", sym_name = @run, type = wasm.func_sig<(core.i32) -> core.i32>}
-  wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<(core.i32) -> core.i32>}
-  wasm.func {abi = "C", sym_name = @c_helper, type = wasm.func_sig<(core.i32) -> core.i32>} {
+  wasm.import_func {module = "env", name = "run", sym_name = "run", type = wasm.func_sig<(core.i32) -> core.i32>}
+  wasm.func {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}
+  wasm.func {abi = "C", sym_name = "c_helper", type = wasm.func_sig<(core.i32) -> core.i32>} {
     ^bb0(%value: core.i32):
       wasm.return %value
   }
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.i32>} {
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.i32>} {
     %one = wasm.i32_const {value = 1} : core.i32
     %imported = wasm.call %one {callee = @run} : core.i32
     %local = wasm.call %imported {callee = @c_helper} : core.i32
@@ -294,8 +298,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<(core.i32) -> core.i32>}
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.nil>} { wasm.return }
+  wasm.func {abi = "C", sym_name = "helper", type = wasm.func_sig<(core.i32) -> core.i32>}
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.nil>} { wasm.return }
 }"#,
         );
         let binary = crate::emit_module_to_wasm(&mut ctx, module).expect("unused extern");
@@ -307,7 +311,7 @@ mod tests {
         let direct_call = format!(
             r#"core.module @test {{
 {UNUSED_HELPER}
-  wasm.func {{sym_name = @main, type = wasm.func_sig<(core.i32) -> core.i32>}} {{
+  wasm.func {{sym_name = "main", type = wasm.func_sig<(core.i32) -> core.i32>}} {{
     %arg = wasm.i32_const {{value = 1}} : core.i32
     %result = wasm.call %arg {{callee = @helper}} : core.i32
     wasm.return %result
@@ -322,8 +326,8 @@ mod tests {
         );
 
         let tail_call = r#"core.module @test {
-  wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<() -> core.i32>}
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.i32>} {
+  wasm.func {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.i32>} {
     wasm.return_call {callee = @helper}
   }
 }"#;
@@ -334,8 +338,8 @@ mod tests {
         );
 
         let value = r#"core.module @test {
-  wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<() -> core.i32>}
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.nil>} {
+  wasm.func {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.nil>} {
     %function = wasm.ref_func {func_name = @helper} : wasm.funcref
     wasm.return
   }
@@ -353,8 +357,8 @@ mod tests {
   wasm.elem {table = 0, offset = 0} {
     wasm.ref_func {func_name = @helper} : wasm.funcref
   }
-  wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<() -> core.i32>}
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.nil>} { wasm.return }
+  wasm.func {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.nil>} { wasm.return }
 }"#;
         assert!(
             disposition_error(element).contains("referenced by element segment entry"),
@@ -363,7 +367,7 @@ mod tests {
         );
 
         let export = r#"core.module @test {
-  wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<() -> core.i32>}
+  wasm.func {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.i32>}
   wasm.export_func {func = @helper, name = "helper"}
 }"#;
         assert!(
@@ -376,7 +380,7 @@ mod tests {
     #[test]
     fn unresolved_reference_is_reported_separately_from_an_unbound_declaration() {
         let source = r#"core.module @test {
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.i32>} {
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.i32>} {
     %result = wasm.call {callee = @missing} : core.i32
     wasm.return %result
   }
@@ -394,8 +398,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func {sym_name = @callee, type = wasm.func_sig<() -> core.nil>} { wasm.return }
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.nil>} {
+  wasm.func {sym_name = "callee", type = wasm.func_sig<() -> core.nil>} { wasm.return }
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.nil>} {
     wasm.call {callee = @callee}
     wasm.return
   }
@@ -425,7 +429,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.nil>} { wasm.return }
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.nil>} { wasm.return }
 }"#,
         );
         let body = module.body(&ctx).unwrap();
@@ -436,7 +440,7 @@ mod tests {
         assert!(wasm_dialect::Return::matches(&ctx, ret));
         ctx.op_mut(ret).attributes.insert(
             Symbol::new("callee"),
-            Attribute::Symbol(Symbol::new("helper")),
+            Attribute::SymbolRef(SymbolPath::from("helper")),
         );
 
         let error = collect_function_references(&ctx, module)
@@ -456,8 +460,8 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func {abi = "C", sym_name = @helper, type = core.i32}
-  wasm.func {sym_name = @main, type = wasm.func_sig<() -> core.nil>} { wasm.return }
+  wasm.func {abi = "C", sym_name = "helper", type = core.i32}
+  wasm.func {sym_name = "main", type = wasm.func_sig<() -> core.nil>} { wasm.return }
 }"#,
         );
         let error = crate::emit_module_to_wasm(&mut ctx, module)
@@ -476,7 +480,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { wasm.func {sym_name = @helper, type = wasm.func_sig<() -> ()>} { wasm.return } }",
+            "core.module @test { wasm.func {sym_name = \"helper\", type = wasm.func_sig<() -> ()>} { wasm.return } }",
         );
         let op = module.ops(&ctx)[0];
         let extra = ctx.create_region(trunk_ir::RegionData {
@@ -504,7 +508,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  wasm.func {abi = "C", sym_name = @helper, type = wasm.func_sig<() -> core.nil>} {}
+  wasm.func {abi = "C", sym_name = "helper", type = wasm.func_sig<() -> core.nil>} {}
 }"#,
         );
         let error = crate::emit_module_to_wasm(&mut ctx, module)

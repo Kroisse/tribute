@@ -3,6 +3,7 @@
 mod common;
 
 use self::common::{ast_pipeline_error_messages, run_ast_pipeline, run_ast_pipeline_with_ir};
+use rustc_hash::FxHashMap as HashMap;
 use salsa_test_macros::salsa_test;
 use tribute_front::SourceCst;
 use trunk_ir::Symbol;
@@ -204,9 +205,9 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             db,
             ast,
             tribute_front::resolve::build_env(db, ast),
-            parsed.span_map(db).clone(),
+            parsed.span_map(db),
         ),
-        parsed.span_map(db).clone(),
+        parsed.span_map(db),
     );
     let mut typed = checked.module(db).clone();
     tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
@@ -233,6 +234,12 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
                 .iter()
                 .cloned()
                 .collect(),
+            evidence_plans: checked
+                .expression_types(db)
+                .evidence_plans
+                .iter()
+                .cloned()
+                .collect(),
             function_instances: checked
                 .expression_types(db)
                 .function_instances
@@ -249,29 +256,34 @@ fn generic_extern_specialization_has_a_logical_signature_inner(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            compiler_intrinsics: std::collections::HashMap::new(),
+            compiler_intrinsics: HashMap::default(),
         },
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
-        span_map: checked.span_map(db).clone(),
+        span_map: checked.span_map(db),
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono.metadata.specialized_enum_variants,
-        node_types: mono.metadata.node_types,
-        local_instances: mono.metadata.local_instances,
+        specialized_enum_variants: mono
+            .metadata
+            .specialized_enum_variants
+            .into_iter()
+            .collect(),
+        node_types: mono.metadata.node_types.into_iter().collect(),
+        local_instances: mono.metadata.local_instances.into_iter().collect(),
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
-        handler_operations: mono.metadata.handler_operations,
-        perform_operations: mono.metadata.perform_operations,
-        lambda_signatures: mono.metadata.lambda_signatures,
+        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
+        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
+        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
         exhaustive_cases: mono.metadata.exhaustive_cases,
+        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: std::collections::HashMap::new(),
+        compiler_intrinsics: HashMap::default(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let ir_text = print_module(&ir, output.module.op());
@@ -294,9 +306,9 @@ fn lower_specialized_source(
             db,
             ast,
             tribute_front::resolve::build_env(db, ast),
-            parsed.span_map(db).clone(),
+            parsed.span_map(db),
         ),
-        parsed.span_map(db).clone(),
+        parsed.span_map(db),
     );
     let mut typed = checked.module(db).clone();
     tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
@@ -323,6 +335,12 @@ fn lower_specialized_source(
                 .iter()
                 .cloned()
                 .collect(),
+            evidence_plans: checked
+                .expression_types(db)
+                .evidence_plans
+                .iter()
+                .cloned()
+                .collect(),
             function_instances: checked
                 .expression_types(db)
                 .function_instances
@@ -339,29 +357,34 @@ fn lower_specialized_source(
             perform_operations: checked.perform_operations(db).iter().cloned().collect(),
             lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
             exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
-            compiler_intrinsics: std::collections::HashMap::new(),
+            compiler_intrinsics: HashMap::default(),
         },
     )
     .expect("checked instances must specialize");
     let mut ir = IrContext::new();
     let output = tribute_front::ast_to_ir::TypedModule {
         ast: mono.module,
-        span_map: checked.span_map(db).clone(),
+        span_map: checked.span_map(db),
         function_types: mono.function_types.into_iter().collect(),
         constructor_types: mono.metadata.constructor_types,
-        specialized_enum_variants: mono.metadata.specialized_enum_variants,
-        node_types: mono.metadata.node_types,
-        local_instances: mono.metadata.local_instances,
+        specialized_enum_variants: mono
+            .metadata
+            .specialized_enum_variants
+            .into_iter()
+            .collect(),
+        node_types: mono.metadata.node_types.into_iter().collect(),
+        local_instances: mono.metadata.local_instances.into_iter().collect(),
         ability_conventions: checked.ability_conventions(db).iter().cloned().collect(),
         ability_definitions: tribute_front::typeck::ability_definitions_from_schemas(
             checked.ability_definitions(db),
         ),
-        handler_operations: mono.metadata.handler_operations,
-        perform_operations: mono.metadata.perform_operations,
-        lambda_signatures: mono.metadata.lambda_signatures,
+        handler_operations: mono.metadata.handler_operations.into_iter().collect(),
+        perform_operations: mono.metadata.perform_operations.into_iter().collect(),
+        lambda_signatures: mono.metadata.lambda_signatures.into_iter().collect(),
         exhaustive_cases: mono.metadata.exhaustive_cases,
+        evidence_plans: mono.metadata.evidence_plans.into_iter().collect(),
         well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: std::collections::HashMap::new(),
+        compiler_intrinsics: HashMap::default(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     (ir, output)
@@ -388,15 +411,14 @@ fn generic_specialization_transports_direct_callee_metadata_inner(
 fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: SourceCst) {
     let parsed = tribute_front::query::parsed_ast(db, source).expect("fixture must parse");
     let ast = parsed.module(db);
-    let span_map = parsed.span_map(db).clone();
+    let span_map = parsed.span_map(db);
     let resolved = tribute_front::resolve::resolve_with_env(
         db,
         ast,
         tribute_front::resolve::build_env(db, ast),
         span_map,
     );
-    let checked =
-        tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db).clone());
+    let checked = tribute_front::typeck::typecheck_module(db, &resolved, parsed.span_map(db));
     let mut typed = checked.module(db).clone();
     tribute_front::tdnr::resolve_tdnr(db, &mut typed, std::iter::empty());
     let mut ir = IrContext::new();
@@ -408,7 +430,7 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
             .iter()
             .cloned()
             .collect(),
-        span_map: checked.span_map(db).clone(),
+        span_map: checked.span_map(db),
         function_types: checked.function_types(db).iter().cloned().collect(),
         constructor_types: checked
             .constructor_types(db)
@@ -436,8 +458,14 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         perform_operations: checked.perform_operations(db).iter().cloned().collect(),
         lambda_signatures: checked.lambda_signatures(db).iter().cloned().collect(),
         exhaustive_cases: checked.exhaustive_cases(db).iter().copied().collect(),
+        evidence_plans: checked
+            .expression_types(db)
+            .evidence_plans
+            .iter()
+            .cloned()
+            .collect(),
         well_known_types: *checked.well_known_types(db),
-        compiler_intrinsics: std::collections::HashMap::new(),
+        compiler_intrinsics: HashMap::default(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let declarations = &output.operation_declarations;
@@ -465,24 +493,24 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
         assert_eq!(
-            (parameter.dialect, parameter.name),
+            (parameter.dialect.clone(), parameter.name.clone()),
             (Symbol::new("core"), Symbol::new("i32"))
         );
         assert_eq!(
-            (result.dialect, result.name),
+            (result.dialect.clone(), result.name.clone()),
             (Symbol::new("core"), Symbol::new("i32"))
         );
     }
     let ability = ir.get_type(declarations[0].ability_ref);
     assert_eq!(
-        (ability.dialect, ability.name),
+        (ability.dialect.clone(), ability.name.clone()),
         (Symbol::new("core"), Symbol::new("ability_ref"))
     );
     assert_eq!(ability.params.len(), 1);
     assert_eq!(
         (
-            ir.get_type(ability.params[0]).dialect,
-            ir.get_type(ability.params[0]).name
+            ir.get_type(ability.params[0]).dialect.clone(),
+            ir.get_type(ability.params[0]).name.clone()
         ),
         (Symbol::new("core"), Symbol::new("i32"))
     );
@@ -490,8 +518,8 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
     assert_eq!(bool_ability.params.len(), 1);
     assert_eq!(
         (
-            ir.get_type(bool_ability.params[0]).dialect,
-            ir.get_type(bool_ability.params[0]).name
+            ir.get_type(bool_ability.params[0]).dialect.clone(),
+            ir.get_type(bool_ability.params[0]).name.clone()
         ),
         (Symbol::new("core"), Symbol::new("i1"))
     );
@@ -500,11 +528,11 @@ fn public_logical_output_declarations_inner(db: &dyn salsa::Database, source: So
         let parameter = ir.get_type(declaration.parameter_types[0]);
         let result = ir.get_type(declaration.result_type);
         assert_eq!(
-            (parameter.dialect, parameter.name),
+            (parameter.dialect.clone(), parameter.name.clone()),
             (Symbol::new("core"), Symbol::new("i1"))
         );
         assert_eq!(
-            (result.dialect, result.name),
+            (result.dialect.clone(), result.name.clone()),
             (Symbol::new("core"), Symbol::new("i1"))
         );
     }
@@ -618,20 +646,20 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         validation.is_ok(),
         "including retained generic bodies: {validation}"
     );
-    let mut functions = std::collections::HashMap::new();
+    let mut functions = HashMap::default();
     let _: ControlFlow<()> =
         walk_typed::<Func, ()>(&ir, output.module.body(&ir).unwrap(), &mut |func| {
             functions.insert(func.sym_name(&ir), func);
             ControlFlow::Continue(WalkAction::Skip)
         });
     for (argument, primitive) in [("Int", "i32"), ("Bool", "i1")] {
-        let parent = functions[&Symbol::from_dynamic(&format!("apply${argument}"))];
-        let consumer = functions[&Symbol::from_dynamic(&format!("pure${argument}"))];
+        let parent = functions[format!("apply${argument}").as_str()];
+        let consumer = functions[format!("pure${argument}").as_str()];
         let parent_signature = FuncSig::from_type_ref(&ir, parent.r#type(&ir)).unwrap();
         let data_type = parent_signature.result(&ir);
         assert_eq!(parent_signature.inputs(&ir), [data_type]);
         assert_eq!(ir.get_type(data_type).dialect, Symbol::new("core"));
-        assert_eq!(ir.get_type(data_type).name, Symbol::from_dynamic(primitive));
+        assert_eq!(ir.get_type(data_type).name, Symbol::new(primitive));
         let mut lambdas = Vec::new();
         let mut calls = Vec::new();
         let _: ControlFlow<()> = trunk_ir::walk::walk_region(&ir, parent.body(&ir), &mut |op| {

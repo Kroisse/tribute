@@ -313,7 +313,7 @@ struct Scopes {
 
 impl<'ast> Visit<'ast, u32> for Scopes {
     fn visit_module_decl(&mut self, module: &'ast ModuleDecl<u32>) {
-        self.path.push(module.name);
+        self.path.push(module.name.clone());
         walk_module_decl(self, module);
         self.path.pop();
     }

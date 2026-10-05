@@ -375,6 +375,32 @@ op SomeOp::cancel() { fallback_value }
 항상 resume하지 않는 operation은 `-> Never`로 선언하는 것이 좋다.
 `-> Never`는 continuation 캡처 자체를 생략하는 최적화를 가능하게 한다.
 
+#### `resume`과 handler 선택
+
+Handler arm은 처리한 label이 빠진 row로 검사된다. 따라서 arm이 직접 수행하는
+operation은 그 handle 바깥의 handler가 처리한다. 재개된 계산의 handler는 `resume`이
+놓인 위치가 정한다:
+
+- **Arm 본문의 `resume`:** 재개된 계산은 같은 handle 아래에서 계속된다. Arm 본문의
+  row는 continuation의 effect를 더하지 않으며, 처리한 label은 계속 이 handler에 묶인다.
+- **Arm 안 lambda의 `resume`:** lambda의 row는 continuation의 effect를 담는다.
+  재개된 계산의 label은 그 lambda를 호출한 곳이 묶은 handler, 예를 들어 arm 안에서
+  새로 설치한 handler로 간다.
+
+```rust
+fn counter(comp: fn() ->{e, State(Nat)} a) ->{e, State(Nat)} a {
+    handle comp() {
+        do result { result }
+        // State::get()은 바깥 State로 간다. resume 뒤의 State는 이 handler가 받는다.
+        op State::get() { resume State::get() + 1 }
+        op State::set(v) { resume Nil }
+    }
+}
+```
+
+아래 `run_state`의 `run_state(fn() resume state, state)`는 두 번째 규칙을 쓴다.
+재개된 계산은 새로 설치한 `run_state`의 handler로 이어진다.
+
 ### 기본 예시: State (op)
 
 ```rust

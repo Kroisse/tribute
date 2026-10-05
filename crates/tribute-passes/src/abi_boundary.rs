@@ -5,11 +5,13 @@
 //! the point where target dialect lowering begins. This module reports every
 //! violation of that contract, and the pipeline rejects a module with any.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use std::rc::Rc;
 
 use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::op_interface::IndirectCallLikeOps;
@@ -62,7 +64,7 @@ impl TargetKind {
     ///
     /// Native links every C name through the runtime library and the linker;
     /// Wasm binds only the helpers it implements.
-    pub fn binds_c_helper(self, name: Symbol) -> bool {
+    pub fn binds_c_helper(self, name: &Symbol) -> bool {
         match self {
             TargetKind::Native => true,
             TargetKind::Wasm => crate::wasm::runtime_bindings::provides(name),
@@ -100,7 +102,7 @@ pub enum ViolationKind {
     /// A proper-tail signature input without the consumed ownership contract.
     #[display("tail signature input without the consumed ownership contract")]
     UnconsumedTailInput,
-    /// A parameter ownership contract other than `@consumed`.
+    /// A parameter ownership contract other than `"consumed"`.
     #[display("unknown ownership contract {_0}")]
     UnknownOwnership(String),
     /// A referenced C declaration that the target does not bind.
@@ -134,7 +136,7 @@ pub fn verify_boundary_exit(
     target: TargetKind,
 ) -> Vec<BoundaryViolation> {
     let mut verifier = Verifier::new(ctx);
-    for &(name, ty) in ctx.type_aliases() {
+    for (name, ty) in ctx.type_aliases().iter().cloned() {
         verifier.check_type(ty, None, &format!("alias !{name}"));
     }
     let mut ops = Vec::new();
@@ -167,8 +169,8 @@ impl<'a> Verifier<'a> {
     fn new(ctx: &'a IrContext) -> Self {
         Self {
             ctx,
-            type_violations: HashMap::new(),
-            computing: HashSet::new(),
+            type_violations: HashMap::default(),
+            computing: HashSet::default(),
             violations: Vec::new(),
         }
     }
@@ -188,11 +190,12 @@ impl<'a> Verifier<'a> {
         let ctx = self.ctx;
         let mut unbound = Vec::new();
         for &op in ops {
-            for value in ctx.op(op).attributes.values() {
-                let Attribute::Symbol(reference) = value else {
-                    continue;
-                };
-                let Some(declaration) = functions.resolve(*reference) else {
+            let mut references = Vec::new();
+            ctx.op(op)
+                .attributes
+                .visit_symbol_refs(&mut |reference| references.push(reference.clone()));
+            for reference in references {
+                let Some(declaration) = functions.resolve(&reference) else {
                     continue;
                 };
                 if declaration == op
@@ -201,16 +204,25 @@ impl<'a> Verifier<'a> {
                 {
                     continue;
                 }
-                let Some(name) = ctx.op(declaration).attributes.get_symbol("sym_name") else {
+                let Some(name) = ctx
+                    .op(declaration)
+                    .attributes
+                    .get_str(ctx, "sym_name")
+                    .map(Symbol::new)
+                else {
                     continue;
                 };
-                if !target.binds_c_helper(name) {
+                if !target.binds_c_helper(&name) {
                     unbound.push(declaration);
                 }
             }
         }
         for declaration in unbound {
-            let name = ctx.op(declaration).attributes.get_symbol("sym_name");
+            let name = ctx
+                .op(declaration)
+                .attributes
+                .get_str(ctx, "sym_name")
+                .map(Symbol::new);
             let name = name.map(|name| name.to_string()).unwrap_or_default();
             self.report(
                 ViolationKind::UnsatisfiableRuntimeBinding(name.clone()),
@@ -224,7 +236,7 @@ impl<'a> Verifier<'a> {
     /// the platform convention.
     fn check_root_entry(&mut self, functions: &SymbolTable) {
         let ctx = self.ctx;
-        let Some(main) = functions.resolve(Symbol::new("main")) else {
+        let Some(main) = functions.resolve(&SymbolPath::from("main")) else {
             return;
         };
         let Ok(function) = func::Func::from_op(ctx, main) else {
@@ -263,7 +275,7 @@ impl<'a> Verifier<'a> {
         }
         for (name, value) in data.attributes.iter() {
             let context = format!("{op_name} attribute {name}");
-            self.check_attribute_name(*name, Some(op), &context);
+            self.check_attribute_name(name, Some(op), &context);
             self.check_attribute(value, Some(op), &context);
         }
         for &ty in ctx.op_result_types(op) {
@@ -276,7 +288,7 @@ impl<'a> Verifier<'a> {
                     self.check_type(argument.ty, Some(op), &context);
                     for (name, value) in argument.attrs.iter() {
                         let context = format!("{context} attribute {name}");
-                        self.check_attribute_name(*name, Some(op), &context);
+                        self.check_attribute_name(name, Some(op), &context);
                         self.check_attribute(value, Some(op), &context);
                     }
                 }
@@ -309,15 +321,11 @@ impl<'a> Verifier<'a> {
             None
         };
         if has_exact_signature == Some(false) {
-            self.report(
-                ViolationKind::MissingExactSignature,
-                Some(op),
-                op_name.clone(),
-            );
+            self.report(ViolationKind::MissingExactSignature, Some(op), op_name);
         }
     }
 
-    fn check_attribute_name(&mut self, name: Symbol, op: Option<OpRef>, context: &str) {
+    fn check_attribute_name(&mut self, name: &Symbol, op: Option<OpRef>, context: &str) {
         if let Some(kind) = classify_attribute_name(name) {
             self.report(kind, op, context.to_owned());
         }
@@ -353,7 +361,7 @@ impl<'a> Verifier<'a> {
             Attribute::Dict(entries) => {
                 for (name, value) in entries.iter() {
                     let location = format!("{location} key {name}");
-                    if let Some(kind) = classify_attribute_name(*name) {
+                    if let Some(kind) = classify_attribute_name(name) {
                         found.push((kind, location.clone()));
                     }
                     self.attribute_violations(value, &location, found);
@@ -403,7 +411,7 @@ impl<'a> Verifier<'a> {
         }
         for (name, value) in data.attrs.iter() {
             let location = format!(" type attribute {name}");
-            if let Some(kind) = classify_attribute_name(*name) {
+            if let Some(kind) = classify_attribute_name(name) {
                 found.push((kind, location.clone()));
             }
             self.attribute_violations(value, &location, &mut found);
@@ -421,16 +429,16 @@ impl<'a> Verifier<'a> {
 /// Violations of the parameter ownership contract `signature` states.
 fn ownership_violations(ctx: &IrContext, signature: func::FuncSig) -> Vec<TypeViolation> {
     let ownership = Symbol::new(crate::target_abi::OWNERSHIP_ATTR);
-    let consumed = Symbol::new(crate::target_abi::CONSUMED);
     let tail = signature.call_conv(ctx) == Some(func::CallConv::Tail);
     let mut found = Vec::new();
     for (index, attrs) in signature.input_attrs(ctx).enumerate() {
         let location = format!(" input {index}");
-        match attrs.get(ownership) {
-            Some(Attribute::Symbol(mode)) if *mode == consumed => {}
-            Some(Attribute::Symbol(mode)) => {
-                found.push((ViolationKind::UnknownOwnership(mode.to_string()), location))
-            }
+        match attrs.get(ownership.clone()) {
+            Some(Attribute::String(mode)) if ctx.str(*mode) == crate::target_abi::CONSUMED => {}
+            Some(Attribute::String(mode)) => found.push((
+                ViolationKind::UnknownOwnership(ctx.str(*mode).to_owned()),
+                location,
+            )),
             Some(other) => found.push((
                 ViolationKind::UnknownOwnership(format!("{other:?}")),
                 location,
@@ -443,7 +451,7 @@ fn ownership_violations(ctx: &IrContext, signature: func::FuncSig) -> Vec<TypeVi
 }
 
 /// The violation a language-specific attribute name represents, if any.
-fn classify_attribute_name(name: Symbol) -> Option<ViolationKind> {
+fn classify_attribute_name(name: &Symbol) -> Option<ViolationKind> {
     let name = name.to_string();
     if FORBIDDEN_ATTRIBUTES.contains(&name.as_str()) {
         Some(ViolationKind::ForbiddenAttribute(name))
@@ -518,12 +526,12 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>, tribute.definition.source = @here} {
+  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>, tribute.definition.source = @here} {
     func.return
   }
-  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>
-    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>}
+  func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
+    func.tail_call_indirect %reference, %value {signature = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>}
   }
 }"#,
         );
@@ -671,12 +679,12 @@ mod tests {
   func.func @never() -> core.never {
     func.unreachable
   }
-  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = @tail}>} {
+  func.func @target(%env: core.ptr, %value: core.i32) attributes {type = func.func_sig<(core.ptr, core.i32) -> (), {call_conv = "tail"}>} {
     func.return
   }
   func.func @caller(%value: core.i32) {
     %same = core.unrealized_conversion_cast %value : core.i32
-    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = @tail}>
+    %reference = func.constant {func_ref = @target} : func.func_sig<(core.i32) -> (), {call_conv = "tail"}>
     func.return
   }
 }"#,
@@ -688,9 +696,8 @@ mod tests {
 
     #[test]
     fn reference_calling_convention_must_match_its_target() {
-        let tail =
-            "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>";
-        let platform = "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> ()>";
+        let tail = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>";
+        let platform = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> ()>";
         assert_eq!(
             kinds(&reference_module(tail, platform)),
             [ViolationKind::ReferenceSignatureMismatch]
@@ -740,7 +747,7 @@ mod tests {
             ),
             entry(
                 "()",
-                " attributes {type = func.func_sig<() -> (), {call_conv = @tail}>}",
+                " attributes {type = func.func_sig<() -> (), {call_conv = \"tail\"}>}",
                 "func.return",
             ),
         ] {
@@ -762,7 +769,7 @@ mod tests {
 
     #[test]
     fn the_ownership_contract_must_be_complete_and_known() {
-        let unmarked_tail = "func.func_sig<(core.i32) -> (), {call_conv = @tail}>";
+        let unmarked_tail = "func.func_sig<(core.i32) -> (), {call_conv = \"tail\"}>";
         assert_eq!(
             kinds(&reference_module(unmarked_tail, unmarked_tail)),
             [
@@ -770,7 +777,7 @@ mod tests {
                 ViolationKind::UnconsumedTailInput,
             ]
         );
-        let borrowed = "func.func_sig<(core.i32 {tribute.ownership = @borrowed}) -> ()>";
+        let borrowed = "func.func_sig<(core.i32 {tribute.ownership = \"borrowed\"}) -> ()>";
         assert_eq!(
             kinds(&reference_module(borrowed, borrowed)),
             [
@@ -778,7 +785,7 @@ mod tests {
                 ViolationKind::UnknownOwnership("borrowed".to_owned()),
             ]
         );
-        let consumed = "func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> ()>";
+        let consumed = "func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> ()>";
         let unmarked = "func.func_sig<(core.i32) -> ()>";
         assert_eq!(
             kinds(&reference_module(consumed, unmarked)),
@@ -878,7 +885,7 @@ mod tests {
       func.return
     }
     func.func @take() {
-      %reference = func.constant {func_ref = @"left::same"} : func.func_sig<(core.i32) -> ()>
+      %reference = func.constant {func_ref = @left::@same} : func.func_sig<(core.i32) -> ()>
       func.return
     }
   }
@@ -947,7 +954,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @run(%value: tribute_rt.anyref) attributes {type = func.func_sig<(tribute_rt.anyref {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#

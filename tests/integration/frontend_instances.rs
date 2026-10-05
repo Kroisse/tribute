@@ -13,18 +13,19 @@ use trunk_ir::Symbol;
 fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> bool {
     let typed = parse_and_lower_ast(db, source).unwrap();
     let mut metadata = typed.expression_types(db).clone();
-    let mut handlers = typed.handler_operations(db).to_vec();
-    let mut performs = typed.perform_operations(db).to_vec();
+    let mut handlers = typed.handler_operations(db).clone();
+    let mut performs = typed.perform_operations(db).clone();
     let target = if damage >= 6 { "hidden" } else { "identity" };
-    let index = metadata
+    let node = metadata
         .function_instances
         .iter()
-        .position(|(_, instance)| instance.function.qualified(db) == Symbol::new(target))
-        .unwrap();
+        .find(|(_, instance)| instance.function.qualified(db) == Symbol::new(target))
+        .unwrap()
+        .0;
     if damage == 0 {
-        metadata.function_instances.remove(index);
+        metadata.function_instances.remove(&node);
     } else {
-        let instance = &mut metadata.function_instances[index].1;
+        let instance = metadata.function_instances.get_mut(&node).unwrap();
         match damage {
             1 => instance.function = FuncDefId::new(db, Symbol::new("wrong")),
             2 => instance.type_arguments.clear(),
@@ -59,10 +60,10 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
         typed.ability_definitions(db).to_vec(),
         handlers,
         performs,
-        typed.lambda_signatures(db).to_vec(),
+        typed.lambda_signatures(db).clone(),
         typed.exhaustive_cases(db).to_vec(),
         *typed.well_known_types(db),
-        typed.span_map(db).clone(),
+        typed.span_map(db),
     );
     prepare_frontend_for_lowering(db, damaged, source).is_some()
 }

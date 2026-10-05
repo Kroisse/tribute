@@ -1,14 +1,17 @@
 //! Arena-based clif dialect.
 
-use crate::op_interface::{IndirectCallLikeModel, IndirectCallLikeOps};
+use crate::attr_kind::Bytes;
+use crate::attr_kind::SymbolRef;
+use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
 use itertools::Itertools;
+use rustc_hash::FxHashSet as HashSet;
 
 #[trunk_ir::dialect]
 mod clif {
     // Module
-    fn func<S: FuncSig>(sym_name: Attr<Symbol>, r#type: Attr<S::Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<S::Type>) {
         #[region(body?)]
         {}
     }
@@ -20,7 +23,7 @@ mod clif {
     /// pointer-width ranges must fit in `bytes` and must not overlap;
     /// emission checks both against the target pointer width.
     #[verify]
-    fn data(sym_name: Attr<Symbol>, bytes: Attr<Bytes>, align: Attr<u32>) {
+    fn data(sym_name: Attr<String>, bytes: Attr<Bytes>, align: Attr<u32>) {
         #[region(relocs?)]
         {}
     }
@@ -28,9 +31,9 @@ mod clif {
     /// Asks the linker to write the address of `func` over the pointer-sized
     /// bytes at `offset` of the enclosing `data`. Only a `data` region holds it.
     #[verify]
-    fn func_reloc(offset: Attr<u32>, func: Attr<Symbol>) {}
+    fn func_reloc(offset: Attr<u32>, func: Attr<SymbolRef>) {}
 
-    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Variadic<_> {}
+    fn call(callee: Attr<SymbolRef>, args: Variadic<_>) -> Variadic<_> {}
 
     #[verify]
     fn call_indirect<S: FuncSig>(
@@ -96,7 +99,7 @@ mod clif {
 
     fn trap(code: Attr<String>) {}
 
-    fn return_call(callee: Attr<Symbol>, args: Variadic<_>) {}
+    fn return_call(callee: Attr<SymbolRef>, args: Variadic<_>) {}
 
     fn return_call_indirect<S: FuncSig>(
         sig: Attr<S::Type>,
@@ -122,7 +125,7 @@ mod clif {
 
     fn stack_addr(slot: Value<_>) -> Value<_> {}
 
-    fn symbol_addr(sym: Attr<Symbol>) -> Value<_> {}
+    fn symbol_addr(sym: Attr<SymbolRef>) -> Value<_> {}
 
     // Type conversions
     fn ireduce(operand: Value<_>) -> Value<_> {}
@@ -244,7 +247,7 @@ impl FuncSig {
 
     /// The machine calling convention, or `None` if `call_conv` is malformed.
     pub fn call_conv(self, ctx: &crate::IrContext) -> Option<crate::dialect::func::CallConv> {
-        crate::dialect::func::CallConv::from_attrs(&ctx.get_type(self.0).attrs)
+        crate::dialect::func::CallConv::from_attrs(ctx, &ctx.get_type(self.0).attrs)
     }
 
     pub fn non_reserved_attrs(
@@ -365,11 +368,11 @@ impl crate::ops::Verify for CallIndirect {
 impl Data {
     /// The `(offset, function)` relocations of a verified data object, in
     /// declaration order.
-    pub fn relocations(self, ctx: &crate::IrContext) -> Vec<(u32, crate::Symbol)> {
+    pub fn relocations(self, ctx: &crate::IrContext) -> Vec<(u32, crate::SymbolPath)> {
         reloc_ops(ctx, self.op_ref())
             .map(|op| {
                 let reloc = FuncReloc::from_op(ctx, op).expect("verified clif.data relocations");
-                (reloc.offset(ctx), reloc.func(ctx))
+                (reloc.offset(ctx), reloc.func(ctx).clone())
             })
             .collect()
     }
@@ -387,7 +390,7 @@ impl crate::ops::Verify for Data {
     /// The relocation region holds only `func_reloc` declarations at distinct
     /// offsets.
     fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
-        let mut offsets = std::collections::HashSet::new();
+        let mut offsets = HashSet::default();
         for op in reloc_ops(ctx, self.op_ref()) {
             let Ok(reloc) = FuncReloc::from_op(ctx, op) else {
                 let data = ctx.op(op);
@@ -449,6 +452,17 @@ impl IndirectCallLikeModel for ReturnCallIndirect {
     }
 }
 
+impl CallLikeModel for Call {}
+impl CallLikeModel for ReturnCall {}
+
+inventory::submit! {
+    CallLikeOps::register::<Call>()
+}
+
+inventory::submit! {
+    CallLikeOps::register::<ReturnCall>()
+}
+
 inventory::submit! {
     IndirectCallLikeOps::register::<CallIndirect>()
 }
@@ -489,6 +503,7 @@ fn set_indirect_call_signature_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::SymbolPath;
     use crate::dialect::func;
     use crate::op_interface::IndirectCallLikeOps;
     use crate::ops::DialectType;
@@ -639,7 +654,7 @@ mod tests {
                 .param(i32)
                 .attr(
                     NUM_INPUTS_ATTR,
-                    Attribute::Symbol(crate::Symbol::new("one")),
+                    Attribute::SymbolRef(SymbolPath::from("one")),
                 )
                 .attr(NUM_RESULTS_ATTR, Attribute::Int(0))
                 .build(),

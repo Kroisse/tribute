@@ -13,14 +13,14 @@
 //! Runs at Phase 1.95, after RTTI assignment (Phase 1.9) and before
 //! `adt_to_clif` (Phase 2).
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_struct_layout, find_variant_layout,
 };
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -140,7 +140,7 @@ impl RewritePattern for StructNewPattern {
 
         // 2. Call __tribute_alloc
         let call_op = clif::Call::operands([size_val])
-            .callee(Symbol::new(ALLOC_FN))
+            .callee(SymbolPath::from(ALLOC_FN))
             .results([self.ptr_ty])
             .build(ctx, loc);
         let raw_ptr = call_op.results(ctx)[0];
@@ -306,7 +306,7 @@ impl RewritePattern for VariantNewPattern {
 
         // 2. Call __tribute_alloc
         let call_op = clif::Call::operands([size_val])
-            .callee(Symbol::new(ALLOC_FN))
+            .callee(SymbolPath::from(ALLOC_FN))
             .results([self.ptr_ty])
             .build(ctx, loc);
         let raw_ptr = call_op.results(ctx)[0];
@@ -414,6 +414,7 @@ impl RewritePattern for VariantNewPattern {
 mod tests {
     use super::*;
     use trunk_ir::Span;
+    use trunk_ir::Symbol;
     use trunk_ir::context::{BlockArgData, BlockData, IrContext, OperationDataBuilder, RegionData};
     use trunk_ir::dialect::func;
     use trunk_ir::printer::print_module;
@@ -483,7 +484,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("create_struct"))
+            .sym_name("create_struct")
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -505,7 +506,7 @@ mod tests {
 
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(module_region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);

@@ -8,7 +8,8 @@ use crate::ast::NodeId;
 use crate::ast::visit::{RefSite, Refs, VisitMut, walk_expr, walk_expr_mut};
 use crate::ast::{Expr, ExprKind, FuncDefId, ResolvedRef, Type, TypedRef, UniVarId};
 use crate::typeck::solver::{RowSubst, TypeSubst};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 impl<'db> TypeChecker<'db> {
     // =========================================================================

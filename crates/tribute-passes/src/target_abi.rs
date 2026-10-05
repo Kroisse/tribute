@@ -4,7 +4,7 @@
 //! only then maps logical CPS `core.never` results to the shared empty-result
 //! list used by target backends.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::error::Error;
 use std::fmt;
 use std::ops::ControlFlow;
@@ -20,7 +20,6 @@ use tribute_core::{
 };
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::{ability, effect, tribute_rt};
-use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::{arith, core, func};
 use trunk_ir::op_interface::IndirectCallLikeOps;
@@ -31,6 +30,7 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::symbol_table::qualified_name;
 use trunk_ir::types::{Attribute, AttributeMap, Location, TypeData, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
+use trunk_ir::{Symbol, SymbolPath};
 
 const ROOT_SOURCE_RESULT_ATTR: &str = "tribute.root_source_result";
 const ROOT_MAIN_SYMBOL: &str = "__tribute_main";
@@ -50,10 +50,13 @@ pub(crate) const CONSUMED: &str = "consumed";
 ///
 /// A physical Cps callable consumes every parameter; the marker is inert on
 /// unmanaged ones. Other conventions carry no ownership contract.
-pub(crate) fn physical_parameter_attrs(convention: CallingConvention) -> AttributeMap {
+pub(crate) fn physical_parameter_attrs(
+    ctx: &mut IrContext,
+    convention: CallingConvention,
+) -> AttributeMap {
     let mut attrs = AttributeMap::new();
     if convention == CallingConvention::Cps {
-        attrs.insert(OWNERSHIP_ATTR, Symbol::new(CONSUMED));
+        attrs.insert(OWNERSHIP_ATTR, ctx.string_attr(CONSUMED));
     }
     attrs
 }
@@ -218,7 +221,7 @@ pub fn lower_cps_signatures_to_physical(
         }
         let op_attributes: Vec<_> = converted_attributes
             .iter()
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for (name, value) in op_attributes {
             if func::Func::matches(converter.ctx, op) && name == Symbol::new("type") {
@@ -228,7 +231,7 @@ pub fn lower_cps_signatures_to_physical(
             converted_attributes.insert(name, converted);
         }
         for (name, value) in converted_attributes {
-            if original_attributes.get(name) != Some(&value) {
+            if original_attributes.get(name.clone()) != Some(&value) {
                 attributes.push((op, name, value));
             }
         }
@@ -251,7 +254,8 @@ pub fn lower_cps_signatures_to_physical(
                 {
                     let mut converted_attrs = argument.attrs.clone();
                     for (name, value) in argument.attrs.iter() {
-                        converted_attrs.insert(*name, converter.convert_attribute(value.clone())?);
+                        converted_attrs
+                            .insert(name.clone(), converter.convert_attribute(value.clone())?);
                     }
                     if converted_attrs != argument.attrs {
                         block_attributes.push((block, index, converted_attrs));
@@ -320,8 +324,7 @@ fn validate_root_entry(
         .iter()
         .copied()
         .filter(|&op| {
-            func::Func::from_op(ctx, op)
-                .is_ok_and(|function| function.sym_name(ctx) == Symbol::new("main"))
+            func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == "main")
         })
         .collect();
     if roots.len() > 1 {
@@ -413,8 +416,8 @@ pub fn compose_root_entry_bridge(
         return Ok(());
     };
     let top_level_ops = ctx.block(module_block).ops.clone();
-    let main = Symbol::new("main");
-    let root_main = Symbol::new(ROOT_MAIN_SYMBOL);
+    let main = SymbolPath::from("main");
+    let root_main = SymbolPath::from(ROOT_MAIN_SYMBOL);
     let mut roots = top_level_ops.iter().copied().filter(|&op| {
         func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == main)
     });
@@ -458,11 +461,12 @@ pub fn compose_root_entry_bridge(
     }
 
     let location = ctx.op(worker_op).location;
+    let root_main_name = ctx.intern_str(ROOT_MAIN_SYMBOL);
     ctx.op_mut(worker_op)
         .attributes
-        .insert("sym_name", root_main);
+        .insert("sym_name", Attribute::String(root_main_name));
     for &op in &top_level_ops {
-        rewrite_symbol_refs(ctx, op, main, root_main);
+        rewrite_symbol_refs(ctx, op, &main, &root_main);
     }
 
     let entry = ctx.create_block(BlockData {
@@ -496,7 +500,7 @@ pub fn compose_root_entry_bridge(
     });
     let wrapper_ty = func::func_sig(ctx, [], [nil_ty]).as_type_ref();
     let wrapper = func::Func::operands()
-        .sym_name(main)
+        .sym_name(main.to_string())
         .r#type(wrapper_ty)
         .regions(body)
         .build(ctx, location);
@@ -516,7 +520,7 @@ fn build_cps_root_call(
     module_block: BlockRef,
     entry: BlockRef,
     contract: RootEntryContract,
-    worker: Symbol,
+    worker: SymbolPath,
 ) -> Result<ValueRef, TargetAbiError> {
     let RootEntryContract {
         worker_op,
@@ -531,7 +535,7 @@ fn build_cps_root_call(
 
     let cell_ty = root_completion_cell_type(ctx, source_result);
     let anyref_ty = tribute_rt::anyref(ctx).as_type_ref();
-    let contract = physical_parameter_attrs(CallingConvention::Cps);
+    let contract = physical_parameter_attrs(ctx, CallingConvention::Cps);
     let done_function_ty = func::func_sig_with_param_attrs(
         ctx,
         [(anyref_ty, contract.clone()), (source_result, contract)],
@@ -540,16 +544,19 @@ fn build_cps_root_call(
     )
     .with_call_conv(ctx, func::CallConv::Tail)
     .as_type_ref();
+    let environment_name = bind_name(ctx, "__env");
+    let argument_name = bind_name(ctx, "__arg");
+    let answer_name = bind_name(ctx, "__answer");
     let done_entry = ctx.create_block(BlockData {
         location,
         args: vec![
             BlockArgData {
                 ty: anyref_ty,
-                attrs: bind_name("__env"),
+                attrs: environment_name.clone(),
             },
             BlockArgData {
                 ty: source_result,
-                attrs: bind_name("__answer"),
+                attrs: answer_name,
             },
         ],
         ops: smallvec![],
@@ -574,7 +581,7 @@ fn build_cps_root_call(
         parent_op: None,
     });
     let done_function = func::Func::operands()
-        .sym_name(root_done_k)
+        .sym_name(ctx.intern_symbol_text(&root_done_k))
         .r#type(done_function_ty)
         .regions(done_region)
         .build(ctx, location);
@@ -591,7 +598,11 @@ fn build_cps_root_call(
             .enumerate()
             .map(|(index, ty)| BlockArgData {
                 ty,
-                attrs: bind_name(if index == 1 { "__env" } else { "__arg" }),
+                attrs: if index == 1 {
+                    environment_name.clone()
+                } else {
+                    argument_name.clone()
+                },
             })
             .collect(),
         ops: smallvec![],
@@ -605,7 +616,7 @@ fn build_cps_root_call(
         parent_op: None,
     });
     let dispatch_function = func::Func::operands()
-        .sym_name(root_dispatch)
+        .sym_name(ctx.intern_symbol_text(&root_dispatch))
         .r#type(dispatch_function_ty)
         .regions(dispatch_region)
         .build(ctx, location);
@@ -624,7 +635,7 @@ fn build_cps_root_call(
         .build(ctx, location);
     ctx.push_op(entry, erased_cell.op_ref());
     let done_constant = func::Constant::operands()
-        .func_ref(root_done_k)
+        .func_ref(root_done_k.into())
         .results(done_function_ty)
         .build(ctx, location);
     ctx.push_op(entry, done_constant.op_ref());
@@ -641,7 +652,7 @@ fn build_cps_root_call(
     ctx.push_op(entry, typed_done.op_ref());
 
     let dispatch_constant = func::Constant::operands()
-        .func_ref(root_dispatch)
+        .func_ref(root_dispatch.into())
         .results(dispatch_function_ty)
         .build(ctx, location);
     ctx.push_op(entry, dispatch_constant.op_ref());
@@ -741,13 +752,7 @@ pub(crate) fn dispatch_answer_type(
         .ok_or_else(|| TargetAbiError::new("CPS resume frame lacks answer type"))?;
     let results = resume_signature.results(ctx);
     if !(results.is_empty()
-        || (results.len() == 1
-            && is_parameterless_dialect_type(
-                ctx,
-                results[0],
-                Symbol::new("core"),
-                Symbol::new("never"),
-            )))
+        || (results.len() == 1 && is_parameterless_dialect_type(ctx, results[0], "core", "never")))
     {
         return Err(TargetAbiError::new(
             "CPS resume must have logical never or physical empty results",
@@ -919,15 +924,10 @@ fn validate_root_dispatch_type(
     };
     if callable.results(ctx) != physical_results
         || *actual_evidence != evidence
-        || !is_parameterless_dialect_type(ctx, *prompt, Symbol::new("core"), Symbol::new("i32"))
-        || !is_parameterless_dialect_type(ctx, *ability, Symbol::new("core"), Symbol::new("i32"))
-        || !is_parameterless_dialect_type(ctx, *operation, Symbol::new("core"), Symbol::new("i32"))
-        || !is_parameterless_dialect_type(
-            ctx,
-            *payload,
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
-        )
+        || !is_parameterless_dialect_type(ctx, *prompt, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *ability, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *operation, "core", "i32")
+        || !is_parameterless_dialect_type(ctx, *payload, "tribute_rt", "anyref")
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch operands differ from the exact terminal ABI",
@@ -952,12 +952,7 @@ fn validate_root_dispatch_type(
         || resume.inputs(ctx).len() != 3
         || resume.inputs(ctx)[0] != evidence
         || resume.inputs(ctx)[1] != frame
-        || !is_parameterless_dialect_type(
-            ctx,
-            resume.inputs(ctx)[2],
-            Symbol::new("tribute_rt"),
-            Symbol::new("anyref"),
-        )
+        || !is_parameterless_dialect_type(ctx, resume.inputs(ctx)[2], "tribute_rt", "anyref")
     {
         return Err(TargetAbiError::new(
             "target root bridge: frame Dispatch resume differs from the exact frame ABI",
@@ -984,22 +979,15 @@ fn dispatch_entry_function_type(
     let callable = func::FuncSig::from_type_ref(ctx, callable_ty).ok_or_else(|| {
         TargetAbiError::new("target root bridge: frame Dispatch callable is not func.func_sig")
     })?;
+    let environment_attrs = physical_parameter_attrs(ctx, CallingConvention::Cps);
     Ok(callable
         .rebuild(ctx, |inputs, _| {
-            inputs.insert(
-                1,
-                (anyref, physical_parameter_attrs(CallingConvention::Cps)),
-            );
+            inputs.insert(1, (anyref, environment_attrs));
         })
         .as_type_ref())
 }
 
-fn is_parameterless_dialect_type(
-    ctx: &IrContext,
-    ty: TypeRef,
-    dialect: Symbol,
-    name: Symbol,
-) -> bool {
+fn is_parameterless_dialect_type(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
     ctx.types().is_dialect(ty, dialect, name)
         && ctx.get_type(ty).params.is_empty()
         && ctx.get_type(ty).attrs.is_empty()
@@ -1023,26 +1011,23 @@ fn set_root_convention(ctx: &mut IrContext, op: OpRef, convention: CallingConven
         .insert(CALLING_CONVENTION_ATTR, Attribute::Int(convention as i128));
 }
 
-fn bind_name(name: &str) -> AttributeMap {
-    [(
-        Symbol::new("bind_name"),
-        Attribute::Symbol(Symbol::from_dynamic(name)),
-    )]
-    .into_iter()
-    .collect()
+fn bind_name(ctx: &mut IrContext, name: &str) -> AttributeMap {
+    [(Symbol::new("bind_name"), ctx.string_attr(name))]
+        .into_iter()
+        .collect()
 }
 
 fn remove_root_contract(ctx: &mut IrContext, op: OpRef) {
     ctx.op_mut(op).attributes.remove(ROOT_SOURCE_RESULT_ATTR);
 }
 
-fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: Symbol, new: Symbol) {
+fn rewrite_symbol_refs(ctx: &mut IrContext, op: OpRef, old: &SymbolPath, new: &SymbolPath) {
     if core::Module::from_op(ctx, op).is_ok() {
         return;
     }
     for key in [Symbol::new("callee"), Symbol::new("func_ref")] {
-        if ctx.op(op).attributes.get_symbol(key) == Some(old) {
-            ctx.op_mut(op).attributes.insert(key, new);
+        if ctx.op(op).attributes.get_symbol_ref(key.clone()) == Some(old) {
+            ctx.op_mut(op).attributes.insert(key, new.clone());
         }
     }
     let regions = ctx.op_regions(op).collect::<trunk_ir::RegionList>();
@@ -1080,8 +1065,8 @@ fn collect_functions(
     ops: &[OpRef],
     never: TypeRef,
     anyref: TypeRef,
-) -> Result<HashMap<Symbol, FunctionIdentity>, TargetAbiError> {
-    let mut functions = HashMap::new();
+) -> Result<HashMap<SymbolPath, FunctionIdentity>, TargetAbiError> {
+    let mut functions = HashMap::default();
     for &op in ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
@@ -1117,15 +1102,19 @@ fn collect_functions(
 fn validate_transfers(
     ctx: &IrContext,
     ops: &[OpRef],
-    functions: &HashMap<Symbol, FunctionIdentity>,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
     never: TypeRef,
 ) -> Result<(), TargetAbiError> {
     for &op in ops {
         if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
             let convention = exact_convention(ctx, op)?;
-            let callee = ctx.op(op).attributes.get_symbol("callee").ok_or_else(|| {
-                TargetAbiError::new("target ABI: direct transfer lacks callee metadata")
-            })?;
+            let callee = ctx
+                .op(op)
+                .attributes
+                .get_symbol_ref("callee")
+                .ok_or_else(|| {
+                    TargetAbiError::new("target ABI: direct transfer lacks callee metadata")
+                })?;
             let Some(convention) = convention else {
                 if function_for_symbol_optional(callee, functions)
                     .is_some_and(|identity| identity.convention == CallingConvention::Cps)
@@ -1282,22 +1271,22 @@ fn is_cps_never_caller(ctx: &IrContext, op: OpRef, never: TypeRef) -> Result<boo
 
 /// The tagged function named by a root-qualified reference.
 fn function_for_symbol(
-    symbol: Symbol,
-    functions: &HashMap<Symbol, FunctionIdentity>,
+    symbol: &SymbolPath,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
 ) -> Result<FunctionIdentity, TargetAbiError> {
     function_for_symbol_optional(symbol, functions)
         .ok_or_else(|| TargetAbiError::new(format!("target ABI: unknown callable `{symbol}`")))
 }
 
 fn function_for_symbol_optional(
-    symbol: Symbol,
-    functions: &HashMap<Symbol, FunctionIdentity>,
+    symbol: &SymbolPath,
+    functions: &HashMap<SymbolPath, FunctionIdentity>,
 ) -> Option<FunctionIdentity> {
-    functions.get(&symbol).copied()
+    functions.get(symbol).copied()
 }
 
 /// The root-qualified name a definition is referenced by.
-fn defined_function_name(ctx: &IrContext, op: OpRef) -> Result<Symbol, TargetAbiError> {
+fn defined_function_name(ctx: &IrContext, op: OpRef) -> Result<SymbolPath, TargetAbiError> {
     qualified_name(ctx, op)
         .ok_or_else(|| TargetAbiError::new("target ABI: function definition has no symbol"))
 }
@@ -1381,7 +1370,7 @@ fn environment_index(
         .iter()
         .enumerate()
         .filter_map(|(index, argument)| {
-            (argument.attrs.get_symbol("bind_name") == Some(Symbol::new("__env"))).then_some(index)
+            (argument.attrs.get_str(ctx, "bind_name") == Some("__env")).then_some(index)
         })
         .collect();
     match indices.as_slice() {
@@ -1442,8 +1431,8 @@ impl<'a> PhysicalTypeConverter<'a> {
         Self {
             ctx,
             never,
-            embedded: HashMap::new(),
-            callable: HashMap::new(),
+            embedded: HashMap::default(),
+            callable: HashMap::default(),
         }
     }
 
@@ -1468,8 +1457,9 @@ impl<'a> PhysicalTypeConverter<'a> {
             .map(|(ty, attrs)| (ty, attrs.clone()))
             .collect();
         let mut inputs = self.convert_params(inputs)?;
+        let contract = physical_parameter_attrs(self.ctx, convention);
         for (_, attrs) in &mut inputs {
-            attrs.extend(physical_parameter_attrs(convention));
+            attrs.extend(contract.clone());
         }
         // A physical Cps callable has no result, so the logical result's
         // parameter attributes are dropped with it.
@@ -1489,7 +1479,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             ));
         }
         if convention == CallingConvention::Cps {
-            func::CallConv::Tail.set_in(&mut attrs);
+            func::CallConv::Tail.set_in(self.ctx, &mut attrs);
         }
         let converted =
             func::func_sig_with_param_attrs(self.ctx, inputs, results, attrs).as_type_ref();
@@ -1543,7 +1533,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             self.embedded.insert(ty, converted);
             return Ok(converted);
         }
-        let mut converted = data.clone();
+        let mut converted = data;
         for parameter in &mut converted.params {
             *parameter = self.convert_embedded(*parameter)?;
         }
@@ -1565,7 +1555,7 @@ impl<'a> PhysicalTypeConverter<'a> {
     ) -> Result<AttributeMap, TargetAbiError> {
         let attributes = callable
             .non_reserved_attrs(self.ctx)
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect::<Vec<_>>();
         attributes
             .into_iter()
@@ -1577,7 +1567,7 @@ impl<'a> PhysicalTypeConverter<'a> {
         let attributes: Vec<_> = data
             .attrs
             .iter()
-            .map(|(name, value)| (*name, value.clone()))
+            .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for (name, value) in attributes {
             data.attrs.insert(name, self.convert_attribute(value)?);
@@ -1636,7 +1626,7 @@ mod tests {
             .copied()
             .find_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                (function.sym_name(ctx) == Symbol::from_dynamic(name)).then_some(function)
+                (function.sym_name(ctx) == name).then_some(function)
             })
             .unwrap()
     }
@@ -1653,7 +1643,7 @@ mod tests {
             &format!(
                 r#"core.module @test {{
             !Answer = core.{answer_name}
-            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {{layout = "evidence_marker"}}>, {{layout = "evidence"}}>
+            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>, {{layout = "evidence"}}>
             !Frame = adt.typeref<{{name = "{frame_name}", tribute.cps_continuation_frame_result = !Answer}}>
             !Done = closure.closure<func.func_sig<(!Answer) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
             !Resume = closure.closure<func.func_sig<(!Evidence, !Frame, tribute_rt.anyref) -> core.never>, {{tribute.calling_convention = 2, tribute.closure_environment_index = 0}}>
@@ -1801,7 +1791,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+            !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
             !direct_closure = closure.closure<func.func_sig<() -> ()>, {tribute.calling_convention = 0}>
             !evidence_closure = closure.closure<func.func_sig<(!Evidence) -> ()>, {tribute.calling_convention = 1}>
             func.func @direct() attributes {tribute.calling_convention = 0} { func.return }
@@ -1823,10 +1813,7 @@ mod tests {
             func.func @cps() -> core.never attributes {tribute.calling_convention = 2} { func.unreachable }
         }"#,
         );
-        assert_eq!(
-            ctx.type_alias_by_name(Symbol::new("Evidence")),
-            Some(evidence)
-        );
+        assert_eq!(ctx.type_alias_by_text("Evidence"), Some(evidence));
         let cps = function(&ctx, module, "cps");
         let unchanged: Vec<_> = collect_ops(&ctx, module.op())
             .into_iter()
@@ -1904,13 +1891,13 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(
             printed.contains(
-                "signature = func.func_sig<(core.i32 {tribute.ownership = @consumed}, tribute_rt.anyref {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>"
+                "signature = func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, tribute_rt.anyref {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
             ),
             "{printed}"
         );
         assert!(
             printed.contains(
-                "closure.closure<func.func_sig<(core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>"
+                "closure.closure<func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
             ),
             "{printed}"
         );
@@ -2039,8 +2026,8 @@ mod tests {
             .expect("wrapper must make exactly one ordinary worker call");
         assert!(func::Call::from_op(&ctx, call).is_ok());
         assert_eq!(
-            ctx.op(call).attributes.get_symbol("callee"),
-            Some(Symbol::new(ROOT_MAIN_SYMBOL))
+            ctx.op(call).attributes.get_symbol_ref("callee"),
+            Some(&SymbolPath::from(ROOT_MAIN_SYMBOL))
         );
         let worker_callable = func::FuncSig::from_type_ref(&ctx, worker.r#type(&ctx)).unwrap();
         let [worker_evidence, worker_frame] = worker_callable.inputs(&ctx) else {
@@ -2179,7 +2166,7 @@ mod tests {
     }
 
     const EVIDENCE_DIRECT_MAIN: &str = r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @main(%evidence: !Evidence) -> core.nil attributes {tribute.calling_convention = 1} {
     %nil = core.nil_value : core.nil
     func.return %nil
@@ -2547,7 +2534,7 @@ mod tests {
         assert!(
             printed.contains("func.func @defined")
                 && printed.matches("func.constant").count() == 2
-                && printed.contains("!t0 = func.func_sig<(core.i32 {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>")
+                && printed.contains("!t0 = func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}, core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>")
                 && printed.matches(": !t0").count() == 2,
             "{printed}"
         );
@@ -2585,12 +2572,12 @@ mod tests {
         }
         let printed = print_module(&ctx, module.op());
         assert!(
-            printed.contains(": func.func_sig<() -> (), {call_conv = @tail}>"),
+            printed.contains(": func.func_sig<() -> (), {call_conv = \"tail\"}>"),
             "{printed}"
         );
         assert!(
             printed.contains(
-                ": func.func_sig<(core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>"
+                ": func.func_sig<(core.i32 {tribute.ownership = \"consumed\"}) -> (), {call_conv = \"tail\"}>"
             ),
             "{printed}"
         );
@@ -2659,9 +2646,10 @@ mod tests {
         );
         let external = function(&ctx, module, "external");
         let entry = ctx.region(external.body(&ctx)).blocks[0];
+        let environment_name = ctx.string_attr("__env");
         ctx.block_mut(entry).args[1]
             .attrs
-            .insert("bind_name", Symbol::new("__env"));
+            .insert("bind_name", environment_name);
         let before = print_module(&ctx, module.op());
 
         let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();

@@ -44,7 +44,7 @@ fn function_op(ctx: &IrContext, module: Module, name: &'static str) -> OpRef {
     let mut found = None;
     walk_module(ctx, module, |op| {
         if let Ok(function) = func::Func::from_op(ctx, op)
-            && function.sym_name(ctx) == Symbol::new(name)
+            && function.sym_name(ctx) == name
         {
             found = Some(op);
         }
@@ -86,11 +86,11 @@ fn both_planner_modes_reuse_one_cached_fact_set() {
 
     // The policy differs, so the plans differ...
     assert_eq!(
-        preserved.function(Symbol::new("load")).unwrap().entries(),
+        preserved.function(&Symbol::new("load")).unwrap().entries(),
         [EntryOwnership::Retained]
     );
     assert_eq!(
-        elided.function(Symbol::new("load")).unwrap().entries(),
+        elided.function(&Symbol::new("load")).unwrap().entries(),
         [EntryOwnership::Borrowed]
     );
     // ...while the policy-neutral facts are computed once and shared.

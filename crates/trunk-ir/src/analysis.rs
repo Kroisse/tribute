@@ -63,8 +63,9 @@
 //! `Arc<dyn Any + Send + Sync>` for future flexibility, but the cache
 //! itself is single-threaded.
 
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::any::{Any, TypeId, type_name};
-use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::fmt;
 use std::sync::Arc;
@@ -348,7 +349,7 @@ impl AnalysisCache {
             let mut computation = AnalysisContext {
                 ir: ctx,
                 cache: self,
-                dependencies: HashSet::new(),
+                dependencies: HashSet::default(),
             };
             let result = A::compute(&mut computation, target);
             (result, computation.dependencies)
@@ -479,7 +480,7 @@ impl AnalysisCache {
     }
 
     fn invalidate_keys(&mut self, roots: impl IntoIterator<Item = AnalysisKey>) {
-        let mut invalidated = HashSet::new();
+        let mut invalidated = HashSet::default();
         let mut pending = roots.into_iter().collect::<Vec<_>>();
         while let Some(key) = pending.pop() {
             if !invalidated.insert(key) {
@@ -689,8 +690,12 @@ mod tests {
             let body = ctx.ir().op_region(target, 0).unwrap();
             let block = ctx.ir().region(body).blocks[0];
             let first_child = ctx.ir().block(block).ops[0];
-            if ctx.ir().op(first_child).attributes.get_symbol("sym_name")
-                == Some(crate::symbol::Symbol::new("first"))
+            if ctx
+                .ir()
+                .op(first_child)
+                .attributes
+                .get_str(ctx.ir(), "sym_name")
+                == Some("first")
             {
                 let _ = ctx.get::<ChoicePrerequisiteFirst>(first_child)?;
             } else {

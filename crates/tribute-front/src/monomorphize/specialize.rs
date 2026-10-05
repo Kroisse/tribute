@@ -1,5 +1,6 @@
 use super::nominal_index::{Declaration, NominalDeclaration, NominalIndex};
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::hash::{Hash, Hasher};
 use std::num::NonZero;
 
@@ -53,12 +54,12 @@ pub(super) fn generate_specializations<'db>(
 
     for (func_id, type_arg_sets) in instantiations {
         let qualified = func_id.qualified(db);
-        let func = func_decls.get(&qualified).copied();
-        let extern_function = extern_functions.get(&qualified).copied();
+        let func = func_decls.get(qualified).copied();
+        let extern_function = extern_functions.get(qualified).copied();
         if func.is_none() && extern_function.is_none() {
             continue;
         }
-        let Some(scheme) = scheme_map.get(&qualified) else {
+        let Some(scheme) = scheme_map.get(qualified) else {
             continue;
         };
         let origins = func.map(semantic_node_ids);
@@ -78,7 +79,7 @@ pub(super) fn generate_specializations<'db>(
                 .type_params(Vec::new())
                 .build(db);
             if let Some(func) = func {
-                let specialized = specialize_func_decl(db, func, type_args, mangled);
+                let specialized = specialize_func_decl(db, func, type_args, mangled.clone());
                 entries.push(SpecializationEntry {
                     name: mangled,
                     declaration: specialized,
@@ -90,9 +91,9 @@ pub(super) fn generate_specializations<'db>(
                 // Extern functions have no AST body to clone, but rewritten
                 // call sites still need their concrete scheme during logical
                 // lowering under the mangled identity.
-                extern_function_types.push((mangled, specialized_scheme));
+                extern_function_types.push((mangled.clone(), specialized_scheme));
                 let extern_function = extern_function.expect("extern specialization declaration");
-                if let Some(identity) = compiler_intrinsics.get(&extern_function.id).copied() {
+                if let Some(identity) = compiler_intrinsics.get(&extern_function.id).cloned() {
                     let declaration = specialize_extern_decl(extern_function, type_args, mangled);
                     compiler_intrinsic_specializations.push((declaration.id, identity));
                     specialized_extern_declarations.push(declaration);
@@ -102,7 +103,7 @@ pub(super) fn generate_specializations<'db>(
     }
 
     // Sort by mangled name for deterministic output (HashMap/HashSet iteration is unordered)
-    entries.sort_by_key(|entry| entry.name);
+    entries.sort_by_key(|entry| entry.name.clone());
 
     let mut new_decls = Vec::with_capacity(entries.len());
     let mut new_function_types = Vec::with_capacity(entries.len() + extern_function_types.len());
@@ -113,9 +114,9 @@ pub(super) fn generate_specializations<'db>(
         metadata_origins.push((entry.type_args, entry.origins));
     }
     new_function_types.extend(extern_function_types);
-    new_function_types.sort_by_key(|(name, _)| *name);
-    specialized_extern_declarations.sort_by_key(|declaration| declaration.name);
-    compiler_intrinsic_specializations.sort_by_key(|(id, identity)| (*identity, *id));
+    new_function_types.sort_by_key(|(name, _)| name.clone());
+    specialized_extern_declarations.sort_by_key(|declaration| declaration.name.clone());
+    compiler_intrinsic_specializations.sort_by_key(|(id, identity)| (identity.clone(), *id));
 
     GeneratedSpecializations {
         specialized_declarations: new_decls,
@@ -133,7 +134,7 @@ fn semantic_node_ids<'db>(func: &FuncDecl<TypedRef<'db>>) -> HashSet<NodeId> {
             self.0.insert(id);
         }
     }
-    let mut ids = Ids(HashSet::new());
+    let mut ids = Ids(HashSet::default());
     ids.visit_func_decl(func);
     ids.0
 }
@@ -172,13 +173,13 @@ pub(super) fn generate_struct_specializations_with_index<'db>(
         }
 
         for type_args in type_arg_sets {
-            let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
-            let specialized = specialize_struct_decl(db, decl, type_args, mangled);
+            let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
+            let specialized = specialize_struct_decl(db, decl, type_args, mangled.clone());
             entries.push((mangled, specialized));
         }
     }
 
-    entries.sort_by_key(|e| e.0);
+    entries.sort_by_key(|e| e.0.clone());
     entries.into_iter().map(|(_, decl)| decl).collect()
 }
 
@@ -212,13 +213,13 @@ pub(super) fn generate_enum_specializations_with_index<'db>(
         }
 
         for type_args in type_arg_sets {
-            let mangled = mangle_type_name(db, *id, id.qualified(db), type_args);
-            let specialized = specialize_enum_decl(db, decl, type_args, mangled);
+            let mangled = mangle_type_name(db, *id, id.qualified(db).clone(), type_args);
+            let specialized = specialize_enum_decl(db, decl, type_args, mangled.clone());
             entries.push((mangled, specialized));
         }
     }
 
-    entries.sort_by_key(|e| e.0);
+    entries.sort_by_key(|e| e.0.clone());
     entries.into_iter().map(|(_, decl)| decl).collect()
 }
 
@@ -229,7 +230,7 @@ fn specialize_struct_decl<'db>(
     mangled_name: Symbol,
 ) -> StructDecl {
     let variant = type_args_variant(type_args);
-    let param_names: Vec<Symbol> = decl.type_params.iter().map(|p| p.name).collect();
+    let param_names: Vec<Symbol> = decl.type_params.iter().map(|p| p.name.clone()).collect();
 
     StructDecl {
         id: decl.id.with_variant(variant),
@@ -242,7 +243,7 @@ fn specialize_struct_decl<'db>(
             .map(|f| FieldDecl {
                 id: f.id.with_variant(variant),
                 is_pub: f.is_pub,
-                name: f.name,
+                name: f.name.clone(),
                 ty: substitute_annotation(db, &f.ty, &param_names, type_args),
             })
             .collect(),
@@ -256,7 +257,7 @@ fn specialize_enum_decl<'db>(
     mangled_name: Symbol,
 ) -> EnumDecl {
     let variant = type_args_variant(type_args);
-    let param_names: Vec<Symbol> = decl.type_params.iter().map(|p| p.name).collect();
+    let param_names: Vec<Symbol> = decl.type_params.iter().map(|p| p.name.clone()).collect();
 
     EnumDecl {
         id: decl.id.with_variant(variant),
@@ -268,14 +269,14 @@ fn specialize_enum_decl<'db>(
             .iter()
             .map(|v| VariantDecl {
                 id: v.id.with_variant(variant),
-                name: v.name,
+                name: v.name.clone(),
                 fields: v
                     .fields
                     .iter()
                     .map(|f| FieldDecl {
                         id: f.id.with_variant(variant),
                         is_pub: f.is_pub,
-                        name: f.name,
+                        name: f.name.clone(),
                         ty: substitute_annotation(db, &f.ty, &param_names, type_args),
                     })
                     .collect(),
@@ -356,10 +357,10 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
             args,
         } => {
             if args.is_empty() {
-                TypeAnnotationKind::Named(*name)
+                TypeAnnotationKind::Named(name.clone())
             } else {
                 // Use mangled name for generic types with args
-                let mangled = mangle_type_name(db, *type_id, *name, args);
+                let mangled = mangle_type_name(db, *type_id, name.clone(), args);
                 TypeAnnotationKind::Named(mangled)
             }
         }
@@ -434,7 +435,7 @@ fn type_to_annotation(db: &dyn salsa::Database, ty: Type<'_>, id: NodeId) -> Typ
 fn collect_func_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<Symbol, &'a FuncDecl<TypedRef<'db>>> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     let mut prefix = String::new();
     collect_func_decls_inner(&module.decls, &mut prefix, &mut map);
     map
@@ -448,12 +449,12 @@ fn collect_func_decls_inner<'a, 'db>(
     for decl in decls {
         match decl {
             Decl::Function(func) => {
-                let qualified = crate::qualified_symbol(prefix, func.name);
+                let qualified = crate::qualified_symbol(prefix, &func.name);
                 map.insert(qualified, func);
             }
             Decl::Module(m) => {
                 if let Some(body) = &m.body {
-                    let len = crate::push_prefix(prefix, m.name);
+                    let len = crate::push_prefix(prefix, &m.name);
                     collect_func_decls_inner(body, prefix, map);
                     prefix.truncate(len);
                 }
@@ -466,7 +467,7 @@ fn collect_func_decls_inner<'a, 'db>(
 fn collect_extern_function_decls<'a, 'db>(
     module: &'a Module<TypedRef<'db>>,
 ) -> HashMap<Symbol, &'a ExternFuncDecl> {
-    let mut declarations = HashMap::new();
+    let mut declarations = HashMap::default();
     let mut prefix = String::new();
     collect_extern_function_decls_inner(&module.decls, &mut prefix, &mut declarations);
     declarations
@@ -480,11 +481,11 @@ fn collect_extern_function_decls_inner<'a, 'db>(
     for decl in decls {
         match decl {
             Decl::ExternFunction(func) => {
-                declarations.insert(crate::qualified_symbol(prefix, func.name), func);
+                declarations.insert(crate::qualified_symbol(prefix, &func.name), func);
             }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
-                    let len = crate::push_prefix(prefix, module.name);
+                    let len = crate::push_prefix(prefix, &module.name);
                     collect_extern_function_decls_inner(body, prefix, declarations);
                     prefix.truncate(len);
                 }
@@ -503,7 +504,7 @@ fn specialize_extern_decl(
         id: declaration.id.with_variant(type_args_variant(type_args)),
         is_pub: false,
         name: mangled_name,
-        abi: declaration.abi,
+        abi: declaration.abi.clone(),
         params: declaration.params.clone(),
         return_ty: declaration.return_ty.clone(),
     }
@@ -813,7 +814,7 @@ mod tests {
             body,
         };
 
-        let mangled = mangle_name(&db, Symbol::new("identity"), &[int]);
+        let mangled = mangle_name(&db, &Symbol::new("identity"), &[int]);
         let specialized = specialize_func_decl(&db, &func, &[int], mangled);
 
         assert_eq!(specialized.name.to_string(), "identity$Int");
@@ -835,7 +836,7 @@ mod tests {
         let float = Type::new(&db, TypeKind::Float);
 
         let func_name = Symbol::new("identity");
-        let func_id = FuncDefId::new(&db, func_name);
+        let func_id = FuncDefId::new(&db, func_name.clone());
 
         // Build function
         let body_ref = TypedRef::new(
@@ -849,7 +850,7 @@ mod tests {
         let func = FuncDecl {
             id: node_id(1),
             is_pub: true,
-            name: func_name,
+            name: func_name.clone(),
             type_params: vec![crate::ast::TypeParamDecl {
                 id: node_id(2),
                 name: Symbol::new("a"),
@@ -895,10 +896,10 @@ mod tests {
             .build(&db);
         let function_types = vec![(func_name, scheme)];
 
-        let mut type_arg_sets = HashSet::new();
+        let mut type_arg_sets = HashSet::default();
         type_arg_sets.insert(vec![int]);
         type_arg_sets.insert(vec![float]);
-        let mut instantiations = HashMap::new();
+        let mut instantiations = HashMap::default();
         instantiations.insert(func_id, type_arg_sets);
 
         let specializations = generate_specializations(
@@ -906,7 +907,7 @@ mod tests {
             &module,
             &instantiations,
             &function_types,
-            &HashMap::new(),
+            &HashMap::default(),
         );
 
         assert_eq!(specializations.specialized_declarations.len(), 2);
@@ -1177,7 +1178,7 @@ mod tests {
             ],
         };
 
-        let mangled = mangle_name(&db, Symbol::new("Pair"), &[int, bool_ty]);
+        let mangled = mangle_name(&db, &Symbol::new("Pair"), &[int, bool_ty]);
         let specialized = specialize_struct_decl(&db, &decl, &[int, bool_ty], mangled);
 
         assert_eq!(specialized.name.to_string(), "Pair$Int$Bool");
@@ -1237,7 +1238,7 @@ mod tests {
             ],
         };
 
-        let mangled = mangle_name(&db, Symbol::new("Option"), &[int]);
+        let mangled = mangle_name(&db, &Symbol::new("Option"), &[int]);
         let specialized = specialize_enum_decl(&db, &decl, &[int], mangled);
 
         assert_eq!(specialized.name.to_string(), "Option$Int");

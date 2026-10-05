@@ -141,10 +141,11 @@ then verifies the boundary exit. Wasm dialect lowering then runs:
 
 ```text
 validate_lowerable_structured_control
+convert_builtin_layouts
 io_to_wasm
 arith_to_wasm
 scf_to_wasm
-normalize_primitive_types
+convert_signatures
 func_to_wasm
 wasm_func_signature_conversion
 tribute_rt_to_wasm
@@ -152,6 +153,7 @@ const_to_wasm
 adt_to_wasm
 intrinsic_to_wasm
 wasm_lowerer
+convert_struct_layouts
 verify_wasm_backend_ready
 cast legalization + reference upcast elision + reconcile_unrealized_casts
 finalize_wasm_gc_types
@@ -203,6 +205,7 @@ finalize_closure_storage_layout + boundary exit verification
 native String/Bytes/I/O/List lowering
 scf_to_cf
 typed ownership/RTTI planning + explicit RC materialization
+struct_to_mem
 func_to_clif
 cf_to_clif
 adt_to_clif

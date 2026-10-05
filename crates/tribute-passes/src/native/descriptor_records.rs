@@ -7,7 +7,9 @@
 //! nominal layouts still carry their names, so lower passes see only the
 //! index.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
+
+use crate::collections;
 
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
@@ -17,7 +19,7 @@ use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
-use trunk_ir::{BlockRef, OpRef, StringRef, Symbol, TypeRef};
+use trunk_ir::{BlockRef, OpRef, StringRef, SymbolPath, TypeRef};
 
 use super::rtti::{RTTI_BOOL, RTTI_FLOAT, RTTI_INT, RTTI_NAT, RTTI_NIL};
 
@@ -144,7 +146,7 @@ pub fn generate(
     ctx: &mut IrContext,
     module_block: BlockRef,
     records: Vec<(u32, DescriptorRecord)>,
-    release_fns: &HashMap<u32, Symbol>,
+    release_fns: &HashMap<u32, SymbolPath>,
     loc: Location,
 ) {
     let records = reserved_records()
@@ -183,7 +185,7 @@ pub fn generate(
     let mut layout = Layout {
         bytes: vec![0; fields_base + field_count * FIELD_SIZE],
         next_fields: fields_base,
-        names: HashMap::new(),
+        names: collections::HashMap::default(),
         name_bytes: Vec::new(),
         names_base: fields_base + field_count * FIELD_SIZE,
     };
@@ -199,7 +201,7 @@ pub fn generate(
     let mut relocs = Vec::new();
     for (index, record) in &records {
         let base = *index as usize * RECORD_SIZE;
-        if let Some(&release) = release_fns.get(index) {
+        if let Some(release) = release_fns.get(index).cloned() {
             relocs.push((base + RELEASE_FN_OFFSET, release));
         }
         layout.write_record(base, record, &enum_offsets);
@@ -211,7 +213,7 @@ pub fn generate(
     // Zero bytes rather than zero-initialized data, so the table lives in a
     // data section: macOS linkers reject relocations in zero-fill sections.
     let table = clif::Data::operands()
-        .sym_name(Symbol::new(RTTI_TABLE))
+        .sym_name(RTTI_TABLE)
         .bytes(bytes.into())
         .align(POINTER_SIZE as u32)
         .regions(relocs)
@@ -225,7 +227,7 @@ struct Layout {
     /// Offset of the next unwritten field array.
     next_fields: usize,
     /// Offset of each distinct name, relative to `names_base`.
-    names: HashMap<String, usize>,
+    names: collections::HashMap<String, usize>,
     name_bytes: Vec<u8>,
     names_base: usize,
 }
@@ -264,22 +266,18 @@ impl Layout {
         if name.is_empty() {
             return;
         }
-        let relative = match self.names.get(name) {
-            Some(&relative) => relative,
-            None => {
-                let relative = self.name_bytes.len();
-                self.name_bytes.extend_from_slice(name.as_bytes());
-                self.names.insert(name.to_owned(), relative);
-                relative
-            }
-        };
+        let relative = *self.names.entry_ref(name).or_insert_with(|| {
+            let relative = self.name_bytes.len();
+            self.name_bytes.extend_from_slice(name.as_bytes());
+            relative
+        });
         put_offset(&mut self.bytes, at, self.names_base + relative);
     }
 }
 
 fn reloc_region(
     ctx: &mut IrContext,
-    relocs: Vec<(usize, Symbol)>,
+    relocs: Vec<(usize, SymbolPath)>,
     loc: Location,
 ) -> Option<trunk_ir::RegionRef> {
     if relocs.is_empty() {
@@ -347,12 +345,14 @@ mod tests {
 
         let block = module.first_block(&ctx).unwrap();
         let loc = ctx.op(module.op()).location;
-        let release = Symbol::new("__tribute_release_5");
+        let release = SymbolPath::from("__tribute_release_5");
         generate(
             &mut ctx,
             block,
             vec![(5, record)],
-            &HashMap::from([(5, release)]),
+            &[(5, release.clone())]
+                .into_iter()
+                .collect::<HashMap<_, _>>(),
             loc,
         );
 

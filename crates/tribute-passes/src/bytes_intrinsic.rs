@@ -9,7 +9,7 @@
 use std::ops::ControlFlow;
 
 use tribute_ir::dialect::tribute_control::COMPILER_INTRINSIC_ATTR;
-use trunk_ir::Symbol;
+use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{core, func};
 use trunk_ir::ops::DialectOp;
@@ -55,8 +55,8 @@ pub(crate) fn lower_get_or_panic(
         .copied()
         .filter(|&op| {
             func::Func::matches(ctx, op)
-                && ctx.op(op).attributes.get_symbol(COMPILER_INTRINSIC_ATTR)
-                    == Some(Symbol::new(BYTES_GET_OR_PANIC))
+                && ctx.op(op).attributes.get_str(ctx, COMPILER_INTRINSIC_ATTR)
+                    == Some(BYTES_GET_OR_PANIC)
         })
         .collect();
     if declarations.is_empty() {
@@ -79,12 +79,14 @@ pub(crate) fn lower_get_or_panic(
     let symbols = SymbolTable::collect(ctx, module);
     let mut calls = Vec::new();
     let mut other_references = Vec::new();
-    let names: Vec<Symbol> = declarations
+    let names: Vec<SymbolPath> = declarations
         .iter()
         .map(|&op| {
-            func::Func::from_op(ctx, op)
-                .expect("func.func")
-                .sym_name(ctx)
+            SymbolPath::from(
+                func::Func::from_op(ctx, op)
+                    .expect("func.func")
+                    .sym_name(ctx),
+            )
         })
         .collect();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
@@ -151,11 +153,10 @@ fn exact_signature(ctx: &mut IrContext) -> TypeRef {
 }
 
 /// Whether any attribute of `op` names one of `names`.
-fn references_any(ctx: &IrContext, op: OpRef, names: &[Symbol]) -> bool {
-    ctx.op(op)
-        .attributes
-        .values()
-        .any(|attribute| matches!(attribute, Attribute::Symbol(symbol) if names.contains(symbol)))
+fn references_any(ctx: &IrContext, op: OpRef, names: &[SymbolPath]) -> bool {
+    ctx.op(op).attributes.values().any(
+        |attribute| matches!(attribute, Attribute::SymbolRef(symbol) if names.contains(symbol)),
+    )
 }
 
 #[cfg(test)]
@@ -177,7 +178,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i64) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::__bytes_get_or_panic"}
+  func.func @read(%bytes: core.bytes, %index: core.i64) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
 }"#,
         );
 
@@ -192,7 +193,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::__bytes_get_or_panic"}
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
     %byte = func.call %bytes, %index {callee = @read} : core.i32
     %f = func.constant {func_ref = @read} : func.func_sig<(core.bytes, core.i32) -> core.i32>
@@ -214,7 +215,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"std::__bytes_get_or_panic"}
+  func.func @read(%bytes: core.bytes, %index: core.i32) -> core.i32 attributes {abi = "intrinsic", tribute.compiler_intrinsic = "std::__bytes_get_or_panic"}
   func.func @user(%bytes: core.bytes, %index: core.i32) -> core.i32 {
     %ok = func.call %bytes, %index {callee = @read} : core.i32
     %bad = func.call %bytes {callee = @read} : core.i32

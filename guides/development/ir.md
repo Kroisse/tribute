@@ -8,8 +8,11 @@ TrunkIR is Tribute's multi-level dialect IR, inspired by MLIR's dialect concept.
   regions, and types
 - **`OpRef`**, **`ValueRef`**, **`BlockRef`**, **`RegionRef`**, **`TypeRef`**
   — Arena references to IR entities
-- **`Symbol`** — Interned identifier (4 bytes, O(1) comparison).
-  Qualified paths via `ModulePathExt` trait in `tribute-ir`.
+- **`Symbol`** — Interned name (8 bytes, O(1) equality, `Clone` but not
+  `Copy`). Take `&Symbol` where the name is only read, and clone it only to
+  store it. Names of at most 7 bytes are inline, trunk-ir's own declared names
+  are static, and other names are reference-counted and released with their
+  last symbol. Qualified paths via `ModulePathExt` trait in `tribute-ir`.
 
 ## Dialect Organization
 
@@ -81,9 +84,24 @@ fn call_indirect<S: FuncSig>(
 ) -> Values<S::Results> {}
 ```
 
-- Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`, and
-  `Option<Attr<K>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
+- Parameters are `Value<C>`, `Variadic<C>`, `Values<L>`, `Attr<K>`,
+  `Attr<[K]>` (a list whose every element has kind `K`), and
+  `Option<Attr<..>>`. Results are `Value<C>` or `Option<Value<C>>` (accessor
   `result`) or `Variadic<C>` / `Values<L>` (accessor `results`).
+- Attribute kinds are Rust types implementing `attr_kind::AttrKind`, resolved
+  in the dialect's scope like bounds: primitives (`bool`, `i32`, `i64`, `u32`,
+  `u64`, `f32`, `f64`), `String`, and the markers
+  `attr_kind::{Type, SymbolRef, Bytes}`. A kind defines its schema domain
+  and the values its accessor returns and its builder setter takes, so a
+  dialect adds a kind by implementing the trait. `_` accepts any attribute.
+- A list attribute's accessor iterates its elements, and its builder setter
+  takes an iterator. For `Attr<[String]>` the accessor yields `&str` and
+  `<name>_ref` yields the `StringRef`s, as for a single string. `String` is
+  the only kind the macro recognizes by name, to generate `<name>_ref`.
+- `Attr<Dict<V>>` (`attr_kind::Dict`) is a dictionary whose every value has
+  kind `V`. Its accessor returns a view with `get(key)`, `len()`, and
+  `iter()` in key order, and its builder setter takes the
+  `(Symbol, value)` entries.
 - Regions and successors are declared in the body: `#[region(name)] {}`,
   `#[region(name?)] {}` for an optional last region such as the body of an
   external function, and `#[successor(name)] {}`.
@@ -181,7 +199,13 @@ let value: &str = string_const.value(ctx); // generated accessor
 A builder setter for a string attribute takes a `StringArg`: a `StringRef`,
 or text as a `Cow<'static, str>` (a `&'static str` or an owned `String`).
 The builder interns text when it creates the operation, so
-`.predicate("slt")` needs no context.
+`.predicate("slt")` and `.sym_name("main")` need no context. Pass text directly
+instead of constructing a `Symbol` solely for a string attribute. For a borrowed
+runtime name, pass `ctx.intern_str(name)`. `Symbol` and `SymbolPath` do not convert
+to a string argument automatically. For an existing symbol, pass
+`ctx.intern_symbol_text(&symbol)` explicitly. `SymbolPath` represents a symbol
+reference; use `path.to_string()` when its textual spelling is needed as a
+string value.
 
 A generated string accessor returns the text, like MLIR's `getValue()`.
 `<name>_ref` returns the `StringRef`; use it to copy the
@@ -202,6 +226,40 @@ individual variants:
 ```rust
 let converted = attribute.map_types(|ty| converter.convert_type_or_identity(ctx, ty));
 attribute.visit_types(&mut |ty| seen.push(ty));
+```
+
+A name that refers to a symbol table definition is an `Attribute::SymbolRef`
+(`callee = @foo`, declared `Attr<SymbolRef>`). It holds a `SymbolPath`: the
+enclosing module names, then the definition's own name, one `Symbol` each.
+Definition names and other fixed names are strings. Collect the references an
+operation makes with the shared traversal rather than by listing attribute
+names:
+
+```rust
+ctx.op(op).attributes.visit_symbol_refs(&mut |path| referenced.push(path.clone()));
+```
+
+`SymbolPath::from("main")` (or a `Symbol`) is a definition in the root
+module, and `SymbolPath::new(["left", "helper"])` is `helper` in the module
+`left`. A name is never split: `SymbolPath::from("left::helper")` is one
+component, a root definition whose name contains `::`. The printer writes
+`@left::@helper` for the nested path and `@"left::helper"` for the single
+name. Read a path with `leaf()`, `modules()`, `components()`, and
+`as_simple()`; `*path == "main"` holds only for the root definition `main`.
+`SymbolTable` and the analyses that name functions (call graph, global DCE,
+backends' function tables) are keyed by `SymbolPath`, so take `&SymbolPath`
+rather than joining it back into one symbol.
+
+A direct call operation registers `CallLike` so analyses can tell its callee
+from an address reference. `CallLikeOps::callee(ctx, op)` returns the callee;
+every other reference an operation holds takes its target's address, which
+the call graph records as an escape:
+
+```rust
+impl CallLikeModel for Call {}
+inventory::submit! {
+    CallLikeOps::register::<Call>()
+}
 ```
 
 Per-parameter attributes (`param_attrs`, see

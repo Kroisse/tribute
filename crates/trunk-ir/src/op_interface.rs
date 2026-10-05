@@ -3,15 +3,16 @@
 //! This module provides an interface system similar to `type_interface.rs` but for operations.
 //! It uses the `inventory` crate to build a registry of operation properties at compile time.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::sync::LazyLock;
 
 use smallvec::SmallVec;
 
-use crate::Symbol;
 use crate::ops::DialectOp;
 use crate::{BlockRef, IrContext, OpRef, RegionRef, TypeRef, ValueRef};
+use crate::{Symbol, SymbolPath};
 
 /// Marker trait for pure operations (no side effects, safe to remove if unused).
 ///
@@ -37,7 +38,7 @@ struct PureOpRegistry {
 impl PureOpRegistry {
     fn new() -> Self {
         Self {
-            pure_ops: HashSet::new(),
+            pure_ops: HashSet::default(),
         }
     }
 
@@ -51,8 +52,8 @@ static REGISTRY: LazyLock<PureOpRegistry> = LazyLock::new(|| {
     let mut registry = PureOpRegistry::new();
 
     for reg in inventory::iter::<PureOpRegistration> {
-        let dialect = Symbol::from_dynamic(reg.dialect);
-        let op_name = Symbol::from_dynamic(reg.op_name);
+        let dialect = Symbol::new(reg.dialect);
+        let op_name = Symbol::new(reg.op_name);
         registry.pure_ops.insert((dialect, op_name));
     }
 
@@ -80,7 +81,7 @@ impl PureOps {
     /// Check if an arena operation is pure (no side effects, safe to remove if unused).
     pub fn is_pure(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
-        REGISTRY.lookup(data.dialect, data.name)
+        REGISTRY.lookup(data.dialect.clone(), data.name.clone())
     }
 
     /// Check if an arena operation is pure and eligible for DCE removal.
@@ -155,7 +156,7 @@ struct IsolatedFromAboveRegistry {
 impl IsolatedFromAboveRegistry {
     fn new() -> Self {
         Self {
-            isolated_ops: HashSet::new(),
+            isolated_ops: HashSet::default(),
         }
     }
 
@@ -169,8 +170,8 @@ static ISOLATED_REGISTRY: LazyLock<IsolatedFromAboveRegistry> = LazyLock::new(||
     let mut registry = IsolatedFromAboveRegistry::new();
 
     for reg in inventory::iter::<IsolatedFromAboveRegistration> {
-        let dialect = Symbol::from_dynamic(reg.dialect);
-        let op_name = Symbol::from_dynamic(reg.op_name);
+        let dialect = Symbol::new(reg.dialect);
+        let op_name = Symbol::new(reg.op_name);
         registry.isolated_ops.insert((dialect, op_name));
     }
 
@@ -198,7 +199,7 @@ impl IsolatedFromAboveOps {
     /// Check if an arena operation's regions are isolated from above.
     pub fn is_isolated(ctx: &IrContext, op: OpRef) -> bool {
         let data = ctx.op(op);
-        ISOLATED_REGISTRY.lookup(data.dialect, data.name)
+        ISOLATED_REGISTRY.lookup(data.dialect.clone(), data.name.clone())
     }
 }
 
@@ -413,11 +414,11 @@ inventory::collect!(CallableOwnerRegistration);
 static CALLABLE_OWNER_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static CallableOwnerRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<CallableOwnerRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -441,7 +442,7 @@ impl CallableOwnerOps {
     pub fn signature(ctx: &IrContext, op: OpRef) -> Option<Option<crate::dialect::func::FuncSig>> {
         let data = ctx.op(op);
         CALLABLE_OWNER_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| (registration.signature)(ctx, op))
     }
 }
@@ -525,11 +526,11 @@ inventory::collect!(CallableExitRegistration);
 static CALLABLE_EXIT_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static CallableExitRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<CallableExitRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -557,7 +558,7 @@ impl CallableExitOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn CallableExit> {
         let data = ctx.op(op);
         CALLABLE_EXIT_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn CallableExit)
     }
 
@@ -571,6 +572,77 @@ impl CallableExitOps {
                 ControlFlowInterfaceError::new("operation has no CallableExit registration")
             })?
             .exits_callable(ctx, op)
+    }
+}
+
+/// Direct-call semantics supplied by a generated operation wrapper.
+///
+/// The callee is the one symbol reference of the operation that transfers
+/// control to its target. Any other reference takes the target's address.
+pub trait CallLikeModel: DialectOp {
+    /// `None` for a malformed call; read fallibly since unverified IR may be
+    /// queried.
+    fn direct_callee(self, ctx: &IrContext) -> Option<SymbolPath> {
+        ctx.op(self.op_ref())
+            .attributes
+            .get_symbol_ref("callee")
+            .cloned()
+    }
+}
+
+/// Registry entry for [`CallLikeModel`].
+pub struct CallLikeRegistration {
+    dialect: &'static str,
+    op_name: &'static str,
+    callee: fn(&IrContext, OpRef) -> Option<SymbolPath>,
+}
+
+fn call_like_model_callee<T: CallLikeModel>(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
+    T::from_op(ctx, op)
+        .ok()
+        .and_then(|model| model.direct_callee(ctx))
+}
+
+inventory::collect!(CallLikeRegistration);
+
+static CALL_LIKE_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static CallLikeRegistration>> =
+    LazyLock::new(|| {
+        let mut registry = HashMap::default();
+        for registration in inventory::iter::<CallLikeRegistration> {
+            let key = (
+                Symbol::new(registration.dialect),
+                Symbol::new(registration.op_name),
+            );
+            assert!(
+                registry.insert(key, registration).is_none(),
+                "duplicate CallLike registration for '{}.{}'",
+                registration.dialect,
+                registration.op_name,
+            );
+        }
+        registry
+    });
+
+/// Dynamic query and registration entry point for direct calls.
+pub struct CallLikeOps;
+
+impl CallLikeOps {
+    #[doc(hidden)]
+    pub const fn register<T: CallLikeModel>() -> CallLikeRegistration {
+        CallLikeRegistration {
+            dialect: T::DIALECT_NAME,
+            op_name: T::OP_NAME,
+            callee: call_like_model_callee::<T>,
+        }
+    }
+
+    /// The callee of a direct call, or `None` if `op` is not one or is
+    /// malformed.
+    pub fn callee(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
+        let data = ctx.op(op);
+        CALL_LIKE_REGISTRY
+            .get(&(data.dialect.clone(), data.name.clone()))
+            .and_then(|registration| (registration.callee)(ctx, op))
     }
 }
 
@@ -675,11 +747,11 @@ inventory::collect!(IndirectCallLikeRegistration);
 static INDIRECT_CALL_LIKE_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static IndirectCallLikeRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<IndirectCallLikeRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -710,7 +782,7 @@ impl IndirectCallLikeOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn IndirectCallLike> {
         let data = ctx.op(op);
         INDIRECT_CALL_LIKE_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn IndirectCallLike)
     }
 
@@ -788,11 +860,11 @@ inventory::collect!(BranchRegistration);
 
 static BRANCH_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static BranchRegistration>> =
     LazyLock::new(|| {
-        let mut registry = HashMap::new();
+        let mut registry = HashMap::default();
         for registration in inventory::iter::<BranchRegistration> {
             let key = (
-                Symbol::from_dynamic(registration.dialect),
-                Symbol::from_dynamic(registration.op_name),
+                Symbol::new(registration.dialect),
+                Symbol::new(registration.op_name),
             );
             assert!(
                 registry.insert(key, registration).is_none(),
@@ -820,7 +892,7 @@ impl BranchOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn Branch> {
         let data = ctx.op(op);
         BRANCH_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn Branch)
     }
 }
@@ -925,11 +997,11 @@ inventory::collect!(RegionBranchRegistration);
 static REGION_BRANCH_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static RegionBranchRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -958,7 +1030,7 @@ impl RegionBranchOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranch> {
         let data = ctx.op(op);
         REGION_BRANCH_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn RegionBranch)
     }
 
@@ -1063,11 +1135,11 @@ inventory::collect!(RegionBranchTerminatorRegistration);
 static REGION_BRANCH_TERMINATOR_REGISTRY: LazyLock<
     HashMap<(Symbol, Symbol), &'static RegionBranchTerminatorRegistration>,
 > = LazyLock::new(|| {
-    let mut registry = HashMap::new();
+    let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchTerminatorRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -1095,7 +1167,7 @@ impl RegionBranchTerminatorOps {
     pub fn get(ctx: &IrContext, op: OpRef) -> Option<&'static dyn RegionBranchTerminator> {
         let data = ctx.op(op);
         REGION_BRANCH_TERMINATOR_REGISTRY
-            .get(&(data.dialect, data.name))
+            .get(&(data.dialect.clone(), data.name.clone()))
             .map(|registration| *registration as &dyn RegionBranchTerminator)
     }
 }

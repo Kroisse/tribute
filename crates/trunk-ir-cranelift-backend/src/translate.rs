@@ -3,7 +3,7 @@
 //! This module provides functions for validating and emitting native object files
 //! from TrunkIR modules that have already been lowered to the clif dialect.
 
-use rustc_hash::FxHashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use cranelift_codegen::ir::{self as cl_ir, UserFuncName};
 use cranelift_codegen::settings::{self, Configurable};
@@ -14,7 +14,6 @@ use cranelift_module::{
 };
 use cranelift_object::{ObjectBuilder, ObjectModule};
 use target_lexicon::{OperatingSystem, Triple};
-use trunk_ir::Symbol;
 use trunk_ir::callable::{CallableBody, classify_callable_body};
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
@@ -22,6 +21,7 @@ use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::{BlockRef, OpRef, RegionRef};
 use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::qualified_name;
+use trunk_ir::{Symbol, SymbolPath};
 
 use crate::function::{FunctionTranslator, is_nil_type, translate_signature, translate_type};
 use crate::{CompilationError, CompilationResult, validate_clif_ir};
@@ -79,7 +79,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     let ptr_ty = obj_module.target_config().pointer_type();
 
     // 3. First pass — declare all functions
-    let mut func_ids: FxHashMap<Symbol, cranelift_module::FuncId> = FxHashMap::default();
+    let mut func_ids: HashMap<SymbolPath, cranelift_module::FuncId> = HashMap::default();
     let all_func_ops = collect_clif_funcs(ctx, module);
 
     for &func_op in &all_func_ops {
@@ -88,7 +88,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         // References name functions by root-qualified path; a foreign
         // declaration still links under its own external symbol.
         let local_name = func_wrapped.sym_name(ctx);
-        let name_sym = qualified_name(ctx, func_op).unwrap_or(local_name);
+        let name_sym = qualified_name(ctx, func_op).unwrap_or_else(|| SymbolPath::from(local_name));
         let func_type_ref = func_wrapped.r#type(ctx);
 
         let shape = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -105,7 +105,7 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
         })?;
 
         let linker_name = match linkage {
-            Linkage::Local => name_sym.with_str(mangle_native_name),
+            Linkage::Local => mangle_native_name(&name_sym.to_string()),
             Linkage::Import => local_name.to_string(),
             _ => name_sym.to_string(),
         };
@@ -120,10 +120,11 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     declare_runtime_functions(&mut obj_module, &mut func_ids, call_conv)?;
 
     // 3d. Declare and define the module's read-only data objects
-    let mut data_ids: FxHashMap<Symbol, cranelift_module::DataId> = FxHashMap::default();
+    let mut data_ids: HashMap<SymbolPath, cranelift_module::DataId> = HashMap::default();
     for data in collect_clif_data(ctx, module) {
         // References name data objects by root-qualified path, like functions.
-        let symbol = qualified_name(ctx, data.op_ref()).unwrap_or_else(|| data.sym_name(ctx));
+        let symbol = qualified_name(ctx, data.op_ref())
+            .unwrap_or_else(|| SymbolPath::from(data.sym_name(ctx)));
         let data_id = obj_module
             .declare_data(
                 &symbol.to_string(),
@@ -175,7 +176,8 @@ fn emit_module_impl(ctx: &IrContext, module: Module) -> CompilationResult<Vec<u8
     for &func_op in &all_func_ops {
         let func_wrapped = clif::Func::from_op(ctx, func_op)
             .map_err(|_| CompilationError::codegen("expected clif.func op"))?;
-        let name_sym = qualified_name(ctx, func_op).unwrap_or_else(|| func_wrapped.sym_name(ctx));
+        let name_sym = qualified_name(ctx, func_op)
+            .unwrap_or_else(|| SymbolPath::from(func_wrapped.sym_name(ctx)));
         let CallableBody::Definition {
             region: func_body, ..
         } = classify_callable_body(ctx, func_op).map_err(|error| {
@@ -399,7 +401,7 @@ fn collect_clif_funcs_from_region(ctx: &IrContext, region: RegionRef, funcs: &mu
 /// with custom allocator implementations.
 fn declare_runtime_functions(
     obj_module: &mut ObjectModule,
-    func_ids: &mut FxHashMap<Symbol, cranelift_module::FuncId>,
+    func_ids: &mut HashMap<SymbolPath, cranelift_module::FuncId>,
     call_conv: isa::CallConv,
 ) -> CompilationResult<()> {
     let ptr_ty = obj_module.target_config().pointer_type();
@@ -411,7 +413,7 @@ fn declare_runtime_functions(
     alloc_sig.returns.push(cl_ir::AbiParam::new(ptr_ty));
 
     let alloc_sym = Symbol::new("__tribute_alloc");
-    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym) {
+    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(alloc_sym.into()) {
         let func_id = obj_module
             .declare_function("__tribute_alloc", Linkage::Import, &alloc_sig)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
@@ -424,7 +426,7 @@ fn declare_runtime_functions(
     dealloc_sig.params.push(cl_ir::AbiParam::new(i64_ty));
 
     let dealloc_sym = Symbol::new("__tribute_dealloc");
-    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(dealloc_sym) {
+    if let std::collections::hash_map::Entry::Vacant(e) = func_ids.entry(dealloc_sym.into()) {
         let func_id = obj_module
             .declare_function("__tribute_dealloc", Linkage::Import, &dealloc_sig)
             .map_err(|e| CompilationError::codegen(format!("{e}")))?;
@@ -441,29 +443,29 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
 
     const NIL_ZERO_WIDTH_NATIVE: &str = r#"core.module @test {
-  clif.func {sym_name = @call_target, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
+  clif.func {sym_name = "call_target", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.return %value
   }
-  clif.func {sym_name = @direct_call, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
+  clif.func {sym_name = "direct_call", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       %result = clif.call %value, %unit, %last {callee = @call_target} : core.i32
       clif.return %result
   }
-  clif.func {sym_name = @indirect_call, type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>} {
+  clif.func {sym_name = "indirect_call", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> core.i32>} {
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
       %result = clif.call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> core.i32>} : core.i32
       clif.return %result
   }
-  clif.func {sym_name = @direct_tail, type = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "direct_tail", type = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.return_call %value, %unit, %last {callee = @direct_tail}
   }
-  clif.func {sym_name = @indirect_tail, type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> (), {call_conv = @tail}>} {
+  clif.func {sym_name = "indirect_tail", type = clif.func_sig<(core.ptr, core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>} {
     ^entry(%callee: core.ptr, %value: core.i32, %unit: core.nil, %last: core.i64):
-      clif.return_call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = @tail}>}
+      clif.return_call_indirect %callee, %value, %unit, %last {sig = clif.func_sig<(core.i32, core.nil, core.i64) -> (), {call_conv = "tail"}>}
   }
-  clif.func {sym_name = @jump, type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
+  clif.func {sym_name = "jump", type = clif.func_sig<(core.i32, core.nil, core.i64) -> core.nil>} {
     ^entry(%value: core.i32, %unit: core.nil, %last: core.i64):
       clif.jump %value, %unit, %last [^merge]
     ^merge(%next_value: core.i32, %next_unit: core.nil, %next_last: core.i64):
@@ -472,15 +474,15 @@ mod tests {
 }"#;
 
     const ORDERED_RESULT_LISTS_NATIVE: &str = r#"core.module @test {
-  clif.func {sym_name = @sink, type = clif.func_sig<() -> ()>} {
+  clif.func {sym_name = "sink", type = clif.func_sig<() -> ()>} {
     clif.return
   }
-  clif.func {sym_name = @pair, type = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} {
+  clif.func {sym_name = "pair", type = clif.func_sig<() -> (core.i32, core.nil, core.i32)>} {
     %first = clif.iconst {value = 3} : core.i32
     %second = clif.iconst {value = 17} : core.i32
     clif.return %first, %second
   }
-  clif.func {sym_name = @main, type = clif.func_sig<() -> core.i32>} {
+  clif.func {sym_name = "main", type = clif.func_sig<() -> core.i32>} {
     %first, %second = clif.call {callee = @pair} : core.i32, core.i32
     clif.call {callee = @sink}
     %sink = clif.symbol_addr {sym = @sink} : core.ptr
@@ -518,7 +520,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ clif.func {{sym_name = @helper, type = clif.func_sig<() -> ()>{attributes}}} {body} }}"
+                    "core.module @test {{ clif.func {{sym_name = \"helper\", type = clif.func_sig<() -> ()>{attributes}}} {body} }}"
                 ),
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());
@@ -534,7 +536,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
-            "core.module @test { clif.func {sym_name = @helper, type = clif.func_sig<() -> ()>} { clif.return } }",
+            "core.module @test { clif.func {sym_name = \"helper\", type = clif.func_sig<() -> ()>} { clif.return } }",
         );
         let op = module.ops(&ctx)[0];
         let extra = ctx.create_region(trunk_ir::RegionData {
@@ -559,7 +561,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ clif.func {{sym_name = @helper, type = clif.func_sig<{signature}>, abi = \"C\"}} }}"
+                    "core.module @test {{ clif.func {{sym_name = \"helper\", type = clif.func_sig<{signature}>, abi = \"C\"}} }}"
                 ),
             );
             let before = trunk_ir::printer::print_module(&ctx, module.op());
@@ -584,24 +586,24 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
             core.module @left {
-                clif.func {sym_name = @helper, type = clif.func_sig<() -> core.i32>} {
+                clif.func {sym_name = "helper", type = clif.func_sig<() -> core.i32>} {
                     %value = clif.iconst {value = 1} : core.i32
                     clif.return %value
                 }
-                clif.func {sym_name = @main, type = clif.func_sig<() -> ()>} {
+                clif.func {sym_name = "main", type = clif.func_sig<() -> ()>} {
                     clif.return
                 }
             }
             core.module @right {
-                clif.func {sym_name = @helper, type = clif.func_sig<() -> core.i32>} {
+                clif.func {sym_name = "helper", type = clif.func_sig<() -> core.i32>} {
                     %value = clif.iconst {value = 2} : core.i32
                     clif.return %value
                 }
             }
-            clif.func {sym_name = @main, type = clif.func_sig<() -> ()>} {
-                %left = clif.call {callee = @"left::helper"} : core.i32
-                %right = clif.call {callee = @"right::helper"} : core.i32
-                clif.call {callee = @"left::main"}
+            clif.func {sym_name = "main", type = clif.func_sig<() -> ()>} {
+                %left = clif.call {callee = @left::@helper} : core.i32
+                %right = clif.call {callee = @right::@helper} : core.i32
+                clif.call {callee = @left::@main}
                 clif.return
             }
         }"#,
@@ -626,9 +628,9 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-            clif.func {sym_name = @used, type = clif.func_sig<() -> ()>, abi = "C"}
-            clif.func {sym_name = @unused, type = clif.func_sig<() -> ()>, abi = "C"}
-            clif.func {sym_name = @main, type = clif.func_sig<() -> ()>} {
+            clif.func {sym_name = "used", type = clif.func_sig<() -> ()>, abi = "C"}
+            clif.func {sym_name = "unused", type = clif.func_sig<() -> ()>, abi = "C"}
+            clif.func {sym_name = "main", type = clif.func_sig<() -> ()>} {
                 clif.call {callee = @used}
                 clif.return
             }
@@ -710,7 +712,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  clif.data {sym_name = @greeting, bytes = b"hi there", align = 1}
+  clif.data {sym_name = "greeting", bytes = b"hi there", align = 1}
   clif.func @main() -> core.i32 {
     %greeting = clif.symbol_addr {sym = @greeting} : core.ptr
     %result = clif.iconst {value = 0} : core.i32
@@ -743,14 +745,14 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   core.module @left {
-    clif.data {sym_name = @text, bytes = b"left", align = 1}
+    clif.data {sym_name = "text", bytes = b"left", align = 1}
   }
   core.module @right {
-    clif.data {sym_name = @text, bytes = b"right", align = 1}
+    clif.data {sym_name = "text", bytes = b"right", align = 1}
   }
   clif.func @main() -> core.i32 {
-    %left = clif.symbol_addr {sym = @"left::text"} : core.ptr
-    %right = clif.symbol_addr {sym = @"right::text"} : core.ptr
+    %left = clif.symbol_addr {sym = @left::@text} : core.ptr
+    %right = clif.symbol_addr {sym = @right::@text} : core.ptr
     %result = clif.iconst {value = 0} : core.i32
     clif.return %result
   }
@@ -788,7 +790,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ clif.data {{sym_name = @{name}, bytes = b\"x\", align = 1}} }}"
+                    "core.module @test {{ clif.data {{sym_name = \"{name}\", bytes = b\"x\", align = 1}} }}"
                 ),
             );
             let error = emit_module_to_native(&ctx, module).expect_err("reserved data name");
@@ -815,7 +817,7 @@ mod tests {
   clif.func @second() -> core.nil {
     clif.return
   }
-  clif.data {sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
+  clif.data {sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
     clif.func_reloc {offset = 16, func = @first}
     clif.func_reloc {offset = 0, func = @second}
   }
@@ -883,7 +885,7 @@ mod tests {
   clif.func @helper() -> core.nil {{
     clif.return
   }}
-  clif.data {{sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}} {{
+  clif.data {{sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00", align = 8}} {{
 {relocs}
   }}
 }}"#
@@ -899,7 +901,7 @@ mod tests {
         for (module_text, expected) in [
             (
                 r#"core.module @test {
-  clif.data {sym_name = @table, bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
+  clif.data {sym_name = "table", bytes = b"\x00\x00\x00\x00\x00\x00\x00\x00", align = 8} {
     %zero = clif.iconst {value = 0} : core.i64
   }
 }"#,
@@ -929,7 +931,7 @@ mod tests {
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
-                    "core.module @test {{ clif.data {{sym_name = @bad, bytes = b\"x\", align = {align}}} }}"
+                    "core.module @test {{ clif.data {{sym_name = \"bad\", bytes = b\"x\", align = {align}}} }}"
                 ),
             );
             let error = emit_module_to_native(&ctx, module).expect_err("invalid alignment");

@@ -8,6 +8,7 @@
 //! - `entrypoint`: Generate C ABI `main` wrapper for native binaries
 //! - `type_converter`: Native type converter for IR-level type transformations
 //! - `adt_rc_header`: Lower `adt.struct_new` to clif alloc + RC header init + field stores
+//! - `struct_to_mem`: Lower the `adt.struct` layout of field accesses to `mem.struct`
 //! - `tribute_rt_to_clif`: Lower `tribute_rt.box_*`/`unbox_*` to clif alloc + load/store
 //! - `rc_optimization`: Eliminate redundant local retain/release pairs
 //! - `rc_lowering`: Lower `tribute_rt.retain`/`release` to inline `clif.*` ops
@@ -27,6 +28,7 @@ pub mod rc_lowering;
 pub mod rc_materialization;
 pub mod rc_optimization;
 pub mod rtti;
+pub mod struct_to_mem;
 pub mod tribute_rt_to_clif;
 pub mod type_converter;
 
@@ -51,7 +53,7 @@ pub(crate) fn build_extern_func(
     let func_ty = func::func_sig(ctx, params.iter().copied(), [result]).as_type_ref();
 
     let data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-        .attr("sym_name", Attribute::Symbol(Symbol::from_dynamic(name)))
+        .attr("sym_name", Attribute::String(ctx.intern_str(name)))
         .attr("type", Attribute::Type(func_ty))
         .attr("abi", ctx.string_attr("C"))
         .build(ctx);

@@ -44,7 +44,7 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
         )
         .as_type_ref();
         let body = ctx.op_region(op, 0);
-        let sym_name = wasm_func.sym_name(ctx);
+        let sym_name = wasm_func.sym_name_ref(ctx);
         let loc = ctx.op(op).location;
 
         rewrite_function_signature(
@@ -74,7 +74,7 @@ impl RewritePattern for WasmFuncSignatureConversionPattern {
 fn make_bodyless_wasm_func(
     ctx: &mut IrContext,
     loc: trunk_ir::types::Location,
-    sym_name: trunk_ir::Symbol,
+    sym_name: trunk_ir::types::StringRef,
     func_type: TypeRef,
 ) -> OpRef {
     let data = OperationDataBuilder::new(
@@ -82,7 +82,7 @@ fn make_bodyless_wasm_func(
         trunk_ir::Symbol::new("wasm"),
         trunk_ir::Symbol::new("func"),
     )
-    .attr("sym_name", Attribute::Symbol(sym_name))
+    .attr("sym_name", Attribute::String(sym_name))
     .attr("type", Attribute::Type(func_type))
     .build(ctx);
     ctx.create_op(data)
@@ -92,6 +92,7 @@ fn make_bodyless_wasm_func(
 mod tests {
     use super::*;
     use trunk_ir::Symbol;
+    use trunk_ir::SymbolPath;
     use trunk_ir::context::{BlockArgData, BlockData, RegionData};
     use trunk_ir::location::Span;
     use trunk_ir::rewrite::{ConversionTarget, Module, PatternApplicator, TypeConverter};
@@ -125,7 +126,7 @@ mod tests {
             parent_op: None,
         });
         let module = OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-            .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+            .attr("sym_name", Attribute::String(ctx.intern_str("test")))
             .region(region)
             .build(ctx);
         let module = ctx.create_op(module);
@@ -157,7 +158,7 @@ mod tests {
             parent_op: None,
         });
         wasm::Func::operands()
-            .sym_name(Symbol::new(name))
+            .sym_name(name)
             .r#type(signature)
             .regions(body)
             .build(ctx, loc)
@@ -185,7 +186,10 @@ mod tests {
                     Attribute::List(vec![Attribute::Type(i32)]),
                 ]),
             );
-            attrs.insert(Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep")));
+            attrs.insert(
+                Symbol::new("tag"),
+                Attribute::SymbolRef(SymbolPath::from("keep")),
+            );
             let signature = wasm::func_sig_with_attrs(
                 &mut ctx,
                 [i32, ptr],
@@ -224,7 +228,7 @@ mod tests {
             );
             let attrs = signature
                 .non_reserved_attrs(&ctx)
-                .map(|(key, value)| (*key, value.clone()))
+                .map(|(key, value)| (key.clone(), value.clone()))
                 .collect::<trunk_ir::AttributeMap>();
             assert_eq!(
                 attrs.get("nested"),
@@ -233,7 +237,7 @@ mod tests {
                     Attribute::List(vec![Attribute::Type(i64)]),
                 ])),
             );
-            assert_eq!(attrs.get_symbol("tag"), Some(Symbol::new("keep")),);
+            assert_eq!(attrs.get_symbol_ref("tag"), Some(&SymbolPath::from("keep")));
             assert_eq!(ctx.get_type(function.r#type(&ctx)).attrs.len(), 4);
             assert_eq!(
                 ctx.op(module.ops(&ctx)[0]).attributes.get("custom"),
@@ -262,7 +266,8 @@ mod tests {
                     2 => "extern_many",
                     _ => unreachable!(),
                 };
-                make_bodyless_wasm_func(&mut ctx, loc, Symbol::new(name), signature)
+                let name = ctx.intern_str(name);
+                make_bodyless_wasm_func(&mut ctx, loc, name, signature)
             })
             .collect();
         let unchanged_func = make_wasm_func(&mut ctx, loc, "unchanged", unchanged, &[i64]);
@@ -325,7 +330,8 @@ mod tests {
         let i32 = type_ref(&mut ctx, "i32");
         let i64 = type_ref(&mut ctx, "i64");
         let malformed = ctx.intern_type(TypeDataBuilder::new("wasm", "func_sig").build());
-        let func = make_bodyless_wasm_func(&mut ctx, loc, Symbol::new("bad"), malformed);
+        let bad = ctx.intern_str("bad");
+        let func = make_bodyless_wasm_func(&mut ctx, loc, bad, malformed);
         let module = make_module(&mut ctx, loc, vec![func]);
         let before = trunk_ir::printer::print_module(&ctx, module.op());
 

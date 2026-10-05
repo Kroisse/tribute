@@ -153,9 +153,7 @@ fn main() ->{Io} Nil {
 }
 "#,
         stdin: b"",
-        wasm: WasmSupport::Unsupported(
-            "handlers that reinstall themselves lose state updates on Wasm (#1220)",
-        ),
+        wasm: WasmSupport::Supported,
     },
     Program {
         name: "counter_loop",

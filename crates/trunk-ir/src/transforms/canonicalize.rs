@@ -31,7 +31,7 @@
 //! Float and div/rem folds are deferred until each one's edge cases
 //! (NaN/-0.0, division-by-zero) are pinned down.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use crate::context::IrContext;
 use crate::dialect::{arith, func};
@@ -111,10 +111,12 @@ impl FoldDispatchPattern {
     /// triples. Panics on duplicate keys (in release builds too — see
     /// type-level docs).
     pub fn from_folds(folds: impl IntoIterator<Item = (Symbol, Symbol, FoldFn)>) -> Self {
-        let mut table = HashMap::new();
+        let mut table = HashMap::default();
         for (dialect, op_name, fold) in folds {
             assert!(
-                table.insert((dialect, op_name), fold).is_none(),
+                table
+                    .insert((dialect.clone(), op_name.clone()), fold)
+                    .is_none(),
                 "duplicate canonicalize fold for {dialect}.{op_name}",
             );
         }
@@ -145,7 +147,7 @@ impl RewritePattern for FoldDispatchPattern {
     ) -> bool {
         let key = {
             let data = ctx.op(op);
-            (data.dialect, data.name)
+            (data.dialect.clone(), data.name.clone())
         };
         let Some(fold) = self.table.get(&key).copied() else {
             return false;
@@ -256,13 +258,9 @@ impl CanonicalizeFold {
 /// Iterate every fold registered via inventory, keyed by interned
 /// `(dialect, op_name)` symbols ready for [`FoldDispatchPattern::from_folds`].
 fn folds_from_inventory() -> impl Iterator<Item = (Symbol, Symbol, FoldFn)> {
-    inventory::iter::<CanonicalizeFold>.into_iter().map(|reg| {
-        (
-            Symbol::from_dynamic(reg.dialect),
-            Symbol::from_dynamic(reg.op_name),
-            reg.fold,
-        )
-    })
+    inventory::iter::<CanonicalizeFold>
+        .into_iter()
+        .map(|reg| (Symbol::new(reg.dialect), Symbol::new(reg.op_name), reg.fold))
 }
 
 /// Iterate inventory folds whose dialect matches `dialect`. Used by
@@ -277,13 +275,7 @@ pub(crate) fn folds_for_dialect(
     inventory::iter::<CanonicalizeFold>
         .into_iter()
         .filter(move |reg| reg.dialect == dialect)
-        .map(|reg| {
-            (
-                Symbol::from_dynamic(reg.dialect),
-                Symbol::from_dynamic(reg.op_name),
-                reg.fold,
-            )
-        })
+        .map(|reg| (Symbol::new(reg.dialect), Symbol::new(reg.op_name), reg.fold))
 }
 
 // Registration is done via the `#[trunk_ir::canonicalize_fold(...)]`
@@ -361,8 +353,8 @@ mod tests {
     use std::ops::ControlFlow;
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::from_dynamic(dialect);
-        let name_sym = Symbol::from_dynamic(name);
+        let dialect_sym = Symbol::new(dialect);
+        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
@@ -375,8 +367,8 @@ mod tests {
     }
 
     fn count_ops_under(ctx: &IrContext, root: OpRef, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::from_dynamic(dialect);
-        let name_sym = Symbol::from_dynamic(name);
+        let dialect_sym = Symbol::new(dialect);
+        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, root, &mut |op| {
             let data = ctx.op(op);

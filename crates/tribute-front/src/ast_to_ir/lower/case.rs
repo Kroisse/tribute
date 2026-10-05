@@ -173,7 +173,7 @@ fn logical_constructor_pattern<'p, 'db>(
         } => ctor,
         _ => panic!("unsupported logical constructor pattern at source-logical boundary"),
     };
-    let ResolvedRef::Constructor { variant, .. } = ctor.resolved else {
+    let ResolvedRef::Constructor { variant, .. } = ctor.resolved.clone() else {
         panic!("non-constructor in logical constructor pattern");
     };
     let ty = super::resolve_enum_type_attr_for_constructor(ctx, ir, &ctor.resolved, ctor.ty);
@@ -181,7 +181,7 @@ fn logical_constructor_pattern<'p, 'db>(
         Some(fields) => {
             let (names, fields) = fields
                 .into_iter()
-                .map(|(name, ty)| (Symbol::from_dynamic(ir.str(name)), ty))
+                .map(|(name, ty)| (Symbol::new(ir.str(name)), ty))
                 .unzip();
             (ConstructorLayout::Struct { ty, fields }, names)
         }
@@ -193,14 +193,14 @@ fn logical_constructor_pattern<'p, 'db>(
                 .expect("resolved logical enum variant must exist");
             let names = match &*pattern.kind {
                 PatternKind::Record { .. } => ctx
-                    .variant_field_names(ty, variant)
+                    .variant_field_names(ty, variant.clone())
                     .expect("named-field variant must have registered field names"),
                 _ => Vec::new(),
             };
             (
                 ConstructorLayout::Variant(VariantLayout {
                     ty,
-                    tag: ir.intern_symbol_text(variant),
+                    tag: ir.intern_symbol_text(&variant),
                     fields,
                 }),
                 names,
@@ -659,7 +659,7 @@ pub(super) fn bind_logical_pattern_fields<'db>(
         PatternKind::Bind {
             name,
             local_id: Some(id),
-        } => ctx.bind(*id, *name, scrutinee),
+        } => ctx.bind(*id, name.clone(), scrutinee),
         PatternKind::Wildcard | PatternKind::Literal(_) | PatternKind::Error => {}
         PatternKind::Bind { local_id: None, .. } => {}
         PatternKind::Tuple(elements) => {
@@ -689,7 +689,7 @@ pub(super) fn bind_logical_pattern_fields<'db>(
             scrutinee,
             pattern,
             head,
-            rest.zip(*rest_local_id),
+            rest.clone().zip(*rest_local_id),
         ),
         PatternKind::As {
             pattern,
@@ -697,7 +697,7 @@ pub(super) fn bind_logical_pattern_fields<'db>(
             local_id,
         } => {
             if let Some(id) = local_id {
-                ctx.bind(*id, *name, scrutinee);
+                ctx.bind(*id, name.clone(), scrutinee);
             }
             bind_logical_pattern_fields(ctx, ir, block, location, scrutinee, pattern);
         }

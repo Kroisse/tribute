@@ -8,7 +8,7 @@
 //! - Span changes don't invalidate Salsa caches
 //! - Additional metadata can be added using the same pattern
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
@@ -115,7 +115,7 @@ impl SpanMap {
 
 impl Default for SpanMap {
     fn default() -> Self {
-        Self(Arc::new(HashMap::new()))
+        Self(Arc::new(HashMap::default()))
     }
 }
 

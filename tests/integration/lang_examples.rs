@@ -27,8 +27,6 @@ const EXPECTED_FAILURES: &[(&str, &str)] = &[
         "strings/string_interpolation.trb",
         "interpolation is not implemented yet",
     ),
-    // Qualified UFCS (`x.a::b()`) is designed but not implemented (#1210).
-    ("ufcs-qualified.trb", "unresolved method 'math::double'"),
 ];
 
 fn examples(dir: &Path, root: &Path, out: &mut Vec<PathBuf>) {

@@ -11,7 +11,8 @@
 //! }
 //! ```
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::fmt::Write;
 use std::ops::ControlFlow;
@@ -47,11 +48,11 @@ impl<'a> PrintState<'a> {
     fn without_aliases(ctx: &'a IrContext) -> Self {
         Self {
             ctx,
-            value_names: HashMap::new(),
-            block_labels: HashMap::new(),
+            value_names: HashMap::default(),
+            block_labels: HashMap::default(),
             next_value_num: 0,
             next_block_num: 0,
-            type_alias_names: HashMap::new(),
+            type_alias_names: HashMap::default(),
         }
     }
 
@@ -111,7 +112,8 @@ impl<'a> PrintState<'a> {
             return self.write_func_sig_type(f, ty, inputs, results);
         }
         let data = self.ctx.get_type(ty);
-        if let Some(format) = crate::asm_format::lookup_type_asm_format(data.dialect, data.name)
+        if let Some(format) =
+            crate::asm_format::lookup_type_asm_format(data.dialect.clone(), data.name.clone())
             && let Some(result) = (format.print_fn)(&mut TypePrintHelper { state: self, f }, ty)
         {
             return result;
@@ -214,7 +216,7 @@ impl<'a> PrintState<'a> {
             if index > 0 {
                 f.write_str(", ")?;
             }
-            write_attribute_key(f, *key)?;
+            write_attribute_key(f, key)?;
             f.write_str(" = ")?;
             self.write_attribute(f, value)?;
         }
@@ -245,7 +247,7 @@ impl<'a> PrintState<'a> {
                 write_escaped_bytes(f, bytes)?;
                 f.write_char('"')
             }
-            Attribute::Symbol(sym) => write_symbol(f, *sym),
+            Attribute::SymbolRef(path) => write_symbol_path(f, path),
             Attribute::Type(ty) => self.write_type(f, *ty),
             Attribute::List(list) => {
                 f.write_char('[')?;
@@ -361,7 +363,7 @@ impl<'a, 'ctx> TypePrintHelper<'a, 'ctx> {
 
     /// Write `@name`, quoting it when needed.
     pub fn write_symbol(&mut self, symbol: crate::Symbol) -> fmt::Result {
-        write_symbol(&mut *self.f, symbol)
+        write_symbol(&mut *self.f, &symbol)
     }
 
     /// Write a name as a bare identifier, or as a quoted string when it is not
@@ -411,6 +413,11 @@ impl<'a, 'ctx> OpPrintHelper<'a, 'ctx> {
     /// Write a type using the current alias map.
     pub fn write_type(&mut self, ty: TypeRef) -> fmt::Result {
         self.state.write_type(&mut *self.f, ty)
+    }
+
+    /// Write `@name` for a definition name held as text, quoting it when needed.
+    pub fn write_symbol_text(&mut self, name: &str) -> fmt::Result {
+        write_symbol_text(&mut *self.f, name)
     }
 
     /// Write an attribute value.
@@ -575,7 +582,7 @@ fn write_type_alias_name(f: &mut dyn Write, name: &str) -> fmt::Result {
 }
 
 /// Write a dictionary key bare when the reader accepts it, otherwise quoted.
-fn write_attribute_key(f: &mut dyn Write, key: crate::symbol::Symbol) -> fmt::Result {
+fn write_attribute_key(f: &mut dyn Write, key: &crate::symbol::Symbol) -> fmt::Result {
     key.with_str(|s| {
         if crate::parser::raw::is_bare_attribute_key(s) {
             f.write_str(s)
@@ -604,18 +611,32 @@ fn write_name(f: &mut dyn Write, name: &str) -> fmt::Result {
     }
 }
 
-fn write_symbol(f: &mut dyn Write, sym: crate::symbol::Symbol) -> fmt::Result {
-    sym.with_str(|s| {
-        let needs_quoting =
-            s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
-        if needs_quoting {
-            f.write_str("@\"")?;
-            write_escaped_string(f, s)?;
-            f.write_char('"')
-        } else {
-            write!(f, "@{s}")
+fn write_symbol(f: &mut dyn Write, sym: &crate::symbol::Symbol) -> fmt::Result {
+    sym.with_str(|s| write_symbol_text(f, s))
+}
+
+/// Write a symbol path as `@outer::@name`, each component quoted when
+/// needed.
+fn write_symbol_path(f: &mut dyn Write, path: &crate::symbol::SymbolPath) -> fmt::Result {
+    for (index, component) in path.components().iter().enumerate() {
+        if index != 0 {
+            f.write_str(crate::symbol::SymbolPath::SEPARATOR)?;
         }
-    })
+        write_symbol_text(f, component.as_str())?;
+    }
+    Ok(())
+}
+
+/// Write `@name` for symbol text, quoting it when needed.
+fn write_symbol_text(f: &mut dyn Write, s: &str) -> fmt::Result {
+    let needs_quoting = s.is_empty() || !s.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+    if needs_quoting {
+        f.write_str("@\"")?;
+        write_escaped_string(f, s)?;
+        f.write_char('"')
+    } else {
+        write!(f, "@{s}")
+    }
 }
 
 // ============================================================================
@@ -634,7 +655,7 @@ const MIN_ALIAS_USES: usize = 2;
 /// Does not recurse into type params — nested types become aliased naturally
 /// when their parent is aliased.
 fn collect_module_types(ctx: &IrContext, region: RegionRef) -> HashMap<TypeRef, usize> {
-    let mut counts: HashMap<TypeRef, usize> = HashMap::new();
+    let mut counts: HashMap<TypeRef, usize> = HashMap::default();
 
     let _ = walk_region::<()>(ctx, region, &mut |op| {
         let data = ctx.op(op);
@@ -774,7 +795,7 @@ fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)
     let deps: Vec<HashSet<TypeRef>> = aliases
         .iter()
         .map(|(_, ty)| {
-            let mut deps = HashSet::new();
+            let mut deps = HashSet::default();
             collect_type_deps(ctx, *ty, &alias_set, &mut deps);
             deps
         })
@@ -783,7 +804,7 @@ fn topological_sort_aliases(ctx: &IrContext, aliases: &mut Vec<(String, TypeRef)
     // Simple stable topological sort via repeated extraction of dependency-free items
     let n = aliases.len();
     let mut sorted: Vec<(String, TypeRef)> = Vec::with_capacity(n);
-    let mut placed: HashSet<TypeRef> = HashSet::new();
+    let mut placed: HashSet<TypeRef> = HashSet::default();
     let mut remaining: Vec<bool> = vec![true; n];
 
     for _ in 0..n {
@@ -852,8 +873,8 @@ fn print_operation(
     indent: usize,
 ) -> fmt::Result {
     let data = state.ctx.op(op);
-    let dialect = data.dialect;
-    let name = data.name;
+    let dialect = data.dialect.clone();
+    let name = data.name.clone();
 
     // Check for special ops
     let is_module = dialect == crate::Symbol::new("core") && name == crate::Symbol::new("module");
@@ -1031,9 +1052,9 @@ fn print_module_op(
     write!(f, "{indent_str}core.module")?;
 
     // Module name
-    if let Some(name) = data.attributes.get_symbol("sym_name") {
+    if let Some(name) = data.attributes.get_str(state.ctx, "sym_name") {
         f.write_char(' ')?;
-        write_symbol(f, name)?;
+        write_symbol_text(f, name)?;
     }
 
     // Type aliases are declared inside the body, so these attributes spell
@@ -1050,7 +1071,7 @@ fn print_module_op(
             if i > 0 {
                 f.write_str(", ")?;
             }
-            write_attribute_key(f, *key)?;
+            write_attribute_key(f, key)?;
             f.write_str(" = ")?;
             expanded.write_attribute(f, val)?;
         }
@@ -1136,6 +1157,7 @@ fn print_module_op(
 mod tests {
     use super::*;
     use crate::Symbol;
+    use crate::SymbolPath;
     use crate::dialect::{arith, core, func};
     use crate::{BlockArgData, BlockData, RegionData, TypeDataBuilder};
     use smallvec::smallvec;
@@ -1181,7 +1203,7 @@ mod tests {
             }}"
             );
             let module = crate::parser::parse_module(&mut ctx, &input).unwrap();
-            let callable = ctx.type_alias_by_name(Symbol::new("callable")).unwrap();
+            let callable = ctx.type_alias_by_text("callable").unwrap();
             let expanded_result = if result == "()" { "()" } else { "core.i32" };
             assert_eq!(
                 print_type(&ctx, callable),
@@ -1336,7 +1358,7 @@ mod tests {
 
         // Function
         let f = func::Func::operands()
-            .sym_name(Symbol::new("add"))
+            .sym_name("add")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1380,7 +1402,7 @@ mod tests {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1400,7 +1422,7 @@ mod tests {
             parent_op: None,
         });
         let module = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
 
@@ -1438,7 +1460,7 @@ mod tests {
             parent_op: None,
         });
         let inner_func = func::Func::operands()
-            .sym_name(Symbol::new("get_x"))
+            .sym_name("get_x")
             .r#type(func_ty)
             .regions(inner_body)
             .build(&mut ctx, loc);
@@ -1458,7 +1480,7 @@ mod tests {
             parent_op: None,
         });
         let inner_module = core::Module::operands()
-            .sym_name(Symbol::new("Point"))
+            .sym_name("Point")
             .regions(inner_mod_region)
             .build(&mut ctx, loc);
 
@@ -1485,7 +1507,7 @@ mod tests {
         });
         let make_func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let outer_func = func::Func::operands()
-            .sym_name(Symbol::new("make"))
+            .sym_name("make")
             .r#type(make_func_ty)
             .regions(outer_body)
             .build(&mut ctx, loc);
@@ -1506,7 +1528,7 @@ mod tests {
             parent_op: None,
         });
         let outer_module = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(outer_mod_region)
             .build(&mut ctx, loc);
 
@@ -1541,7 +1563,12 @@ mod tests {
 
         // Symbol
         out.clear();
-        write_attribute(&ctx, &mut out, &Attribute::Symbol(Symbol::new("foo"))).unwrap();
+        write_attribute(
+            &ctx,
+            &mut out,
+            &Attribute::SymbolRef(SymbolPath::from("foo")),
+        )
+        .unwrap();
         assert_eq!(out, "@foo");
 
         // Symbol with path (needs quoting)
@@ -1549,14 +1576,29 @@ mod tests {
         write_attribute(
             &ctx,
             &mut out,
-            &Attribute::Symbol(Symbol::from_dynamic("std::List::map")),
+            &Attribute::SymbolRef(SymbolPath::from("std::List::map")),
         )
         .unwrap();
         assert_eq!(out, r#"@"std::List::map""#);
 
+        // Nested modules: one `@name` per component
+        out.clear();
+        let nested = SymbolPath::new(["outer", "odd::name", "leaf"]);
+        write_attribute(&ctx, &mut out, &Attribute::SymbolRef(nested.clone())).unwrap();
+        assert_eq!(out, r#"@outer::@"odd::name"::@leaf"#);
+        let mut input = out.as_str();
+        let parsed = crate::parser::raw::symbol_path(&mut input).expect("a symbol path");
+        assert!(input.is_empty());
+        assert!(
+            parsed
+                .iter()
+                .map(String::as_str)
+                .eq(nested.components().iter().map(Symbol::as_str))
+        );
+
         // Empty symbol (should quote)
         out.clear();
-        write_symbol(&mut out, Symbol::from_dynamic("")).unwrap();
+        write_symbol(&mut out, &Symbol::new("")).unwrap();
         assert_eq!(out, r#"@"""#);
 
         // Float infinity (should not append .0)
@@ -1624,7 +1666,7 @@ mod tests {
             parent_op: None,
         });
         core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc)
             .op_ref()
@@ -1657,7 +1699,7 @@ mod tests {
         });
         let func_ty = make_func_type(ctx, &[param_ty], ret_ty);
         func::Func::operands()
-            .sym_name(Symbol::from_dynamic(name))
+            .sym_name(ctx.intern_str(name))
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc)
@@ -1724,7 +1766,7 @@ mod tests {
         let struct_ty = make_named_type(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
 
         // Manually register this type as an alias
-        ctx.register_type_alias(Symbol::from_dynamic("my_point"), struct_ty);
+        ctx.register_type_alias(Symbol::new("my_point"), struct_ty);
 
         let f1 = make_identity_func(&mut ctx, loc, "f1", struct_ty, struct_ty);
         let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);
@@ -1761,7 +1803,7 @@ mod tests {
             ];
 
             if reverse_registration {
-                for &(name, ty) in aliases.iter().rev() {
+                for (name, ty) in aliases.iter().cloned().rev() {
                     ctx.register_type_alias(name, ty);
                 }
             } else {

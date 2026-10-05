@@ -30,10 +30,12 @@ mod expr;
 mod finalize;
 mod func_check;
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::{Span, Symbol};
 
+use crate::SortedMap;
 use crate::ast::{
     Decl, FuncDefId, Module, NodeId, ResolvedRef, SpanMap, Type, TypeScheme, TypedRef, UniVarId,
 };
@@ -54,18 +56,20 @@ pub struct ModuleCheckResult<'db> {
     /// layout construction.
     pub constructor_types: Vec<(crate::ast::CtorId<'db>, TypeScheme<'db>)>,
     /// Node types for IR lowering (NodeId → monomorphic type).
-    pub node_types: Vec<(NodeId, Type<'db>)>,
+    pub node_types: SortedMap<NodeId, Type<'db>>,
     /// Exact instantiated types selected for direct call callees.
-    pub function_instances: Vec<(NodeId, super::FunctionInstance<'db>)>,
-    pub local_instances: Vec<(NodeId, super::LocalCallableInstance<'db>)>,
+    pub function_instances: SortedMap<NodeId, super::FunctionInstance<'db>>,
+    pub local_instances: SortedMap<NodeId, super::LocalCallableInstance<'db>>,
+    /// Non-identity evidence selections of calls and resumes.
+    pub evidence_plans: SortedMap<NodeId, Vec<super::EvidenceStep<'db>>>,
     /// Ability-level calling-convention requirements.
     pub ability_conventions: Vec<(crate::ast::AbilityId<'db>, CallingConvention)>,
     /// Exact semantic operation instances for handler arms.
-    pub handler_operations: Vec<(NodeId, crate::typeck::InstantiatedHandlerOperation<'db>)>,
+    pub handler_operations: SortedMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     /// Exact semantic operation instances for ability-operation calls.
-    pub perform_operations: Vec<(NodeId, crate::typeck::InstantiatedPerformOperation<'db>)>,
+    pub perform_operations: SortedMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
     /// Fully solved source-callable signatures for lambda expressions.
-    pub lambda_signatures: Vec<(NodeId, crate::typeck::LambdaSignature<'db>)>,
+    pub lambda_signatures: SortedMap<NodeId, crate::typeck::LambdaSignature<'db>>,
     /// Case expression nodes whose coverage was proved exhaustive.
     pub exhaustive_cases: Vec<NodeId>,
     /// Resolved ability operation schemas retained for source-logical IR
@@ -87,6 +91,7 @@ pub(crate) struct FunctionCheck<'db> {
     pub(super) node_types: HashMap<NodeId, Type<'db>>,
     pub(super) function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
     pub(super) local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
+    pub(super) evidence_plans: HashMap<NodeId, Vec<super::EvidenceStep<'db>>>,
     pub(super) handler_operations:
         HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     pub(super) perform_operations:
@@ -126,6 +131,7 @@ pub struct TypeChecker<'db> {
     node_types: HashMap<NodeId, Type<'db>>,
     function_instances: HashMap<NodeId, super::FunctionInstance<'db>>,
     local_instances: HashMap<NodeId, super::LocalCallableInstance<'db>>,
+    evidence_plans: HashMap<NodeId, Vec<super::EvidenceStep<'db>>>,
     /// Exact handler operation instances collected from each checked function.
     handler_operations: HashMap<NodeId, crate::typeck::InstantiatedHandlerOperation<'db>>,
     perform_operations: HashMap<NodeId, crate::typeck::InstantiatedPerformOperation<'db>>,
@@ -150,7 +156,7 @@ impl<'db> TypeChecker<'db> {
         if let [Decl::Module(package)] = decls.as_slice()
             && let Some(body) = &package.body
         {
-            crate::push_prefix(&mut prefix, package.name);
+            crate::push_prefix(&mut prefix, &package.name);
             decls = body;
         }
         let declaration = decls.iter().find_map(|decl| match decl {
@@ -158,8 +164,8 @@ impl<'db> TypeChecker<'db> {
             Decl::Enum(decl) if decl.name == name => Some(decl.id),
             _ => None,
         })?;
-        let qualified = crate::qualified_symbol(&mut prefix, name);
-        let ty = self.env.lookup_type_def(qualified)?.body(self.db());
+        let qualified = crate::qualified_symbol(&mut prefix, &name);
+        let ty = self.env.lookup_type_def(&qualified)?.body(self.db());
         Some(WellKnownType {
             ty,
             definition: DefinitionIdentity::new(
@@ -176,7 +182,7 @@ impl<'db> TypeChecker<'db> {
         let string = self.prelude_well_known_type(module, StringType);
         let equality = |ty: Type<'db>| {
             self.env
-                .lookup_method(Symbol::new("=="), ty)
+                .lookup_method(&Symbol::new("=="), ty)
                 .map(|entry| entry.func_id)
         };
         WellKnownTypes {
@@ -192,16 +198,17 @@ impl<'db> TypeChecker<'db> {
             env: ModuleTypeEnv::new(db),
             prefix: String::new(),
             span_map,
-            node_types: HashMap::new(),
-            function_instances: HashMap::new(),
-            local_instances: HashMap::new(),
-            handler_operations: HashMap::new(),
-            perform_operations: HashMap::new(),
-            lambda_signatures: HashMap::new(),
+            node_types: HashMap::default(),
+            function_instances: HashMap::default(),
+            local_instances: HashMap::default(),
+            evidence_plans: HashMap::default(),
+            handler_operations: HashMap::default(),
+            perform_operations: HashMap::default(),
+            lambda_signatures: HashMap::default(),
             exhaustive_cases: Vec::new(),
-            effect_annotation_origins: HashMap::new(),
-            signature_row_names: HashMap::new(),
-            signature_type_names: HashMap::new(),
+            effect_annotation_origins: HashMap::default(),
+            signature_row_names: HashMap::default(),
+            signature_type_names: HashMap::default(),
         }
     }
 
@@ -216,7 +223,7 @@ impl<'db> TypeChecker<'db> {
     }
 
     /// Create a FuncDefId from the current prefix and function name.
-    pub(crate) fn func_def_id(&self, name: Symbol) -> FuncDefId<'db> {
+    pub(crate) fn func_def_id(&self, name: &Symbol) -> FuncDefId<'db> {
         FuncDefId::new(
             self.db(),
             crate::qualified_symbol(&mut self.prefix.clone(), name),
@@ -306,37 +313,24 @@ impl<'db> TypeChecker<'db> {
         let ability_definitions = self.env.export_ability_defs();
         let well_known_types = self.env.well_known_types();
 
-        // Convert node_types HashMap to Vec for Salsa compatibility
-        // Sort by NodeId to ensure deterministic ordering for Salsa cache stability
-        let mut node_types: Vec<(NodeId, Type<'db>)> = self.node_types.into_iter().collect();
-        node_types.sort_by_key(|(id, _)| *id);
-        let mut function_instances: Vec<_> = self.function_instances.into_iter().collect();
-        function_instances.sort_by_key(|(id, _)| *id);
-        let mut local_instances: Vec<_> = self.local_instances.into_iter().collect();
-        local_instances.sort_by_key(|(id, _)| *id);
-        let mut handler_operations: Vec<_> = self.handler_operations.into_iter().collect();
-        handler_operations.sort_by_key(|(id, _)| *id);
-        let mut perform_operations: Vec<_> = self.perform_operations.into_iter().collect();
-        perform_operations.sort_by_key(|(id, _)| *id);
-        let mut lambda_signatures: Vec<_> = self.lambda_signatures.into_iter().collect();
-        lambda_signatures.sort_by_key(|(id, _)| *id);
         self.exhaustive_cases.sort();
 
         ModuleCheckResult {
             module: Module {
                 id: module.id,
-                name: module.name,
+                name: module.name.clone(),
                 decls,
             },
             function_types,
             constructor_types,
-            node_types,
-            function_instances,
-            local_instances,
+            node_types: self.node_types.into_iter().collect(),
+            function_instances: self.function_instances.into_iter().collect(),
+            local_instances: self.local_instances.into_iter().collect(),
+            evidence_plans: self.evidence_plans.into_iter().collect(),
             ability_conventions,
-            handler_operations,
-            perform_operations,
-            lambda_signatures,
+            handler_operations: self.handler_operations.into_iter().collect(),
+            perform_operations: self.perform_operations.into_iter().collect(),
+            lambda_signatures: self.lambda_signatures.into_iter().collect(),
             exhaustive_cases: self.exhaustive_cases,
             ability_definitions,
             well_known_types,
@@ -387,6 +381,7 @@ impl<'db> TypeChecker<'db> {
         self.node_types.extend(checked.node_types);
         self.function_instances.extend(checked.function_instances);
         self.local_instances.extend(checked.local_instances);
+        self.evidence_plans.extend(checked.evidence_plans);
         self.handler_operations.extend(checked.handler_operations);
         self.perform_operations.extend(checked.perform_operations);
         self.lambda_signatures.extend(checked.lambda_signatures);
@@ -399,7 +394,7 @@ impl<'db> TypeChecker<'db> {
         module: &crate::ast::ModuleDecl<ResolvedRef<'db>>,
     ) -> crate::ast::ModuleDecl<TypedRef<'db>> {
         // Push module name to prefix
-        let prev_len = crate::push_prefix(&mut self.prefix, module.name);
+        let prev_len = crate::push_prefix(&mut self.prefix, &module.name);
 
         let body = module
             .body
@@ -411,7 +406,7 @@ impl<'db> TypeChecker<'db> {
 
         crate::ast::ModuleDecl {
             id: module.id,
-            name: module.name,
+            name: module.name.clone(),
             is_pub: module.is_pub,
             body,
         }

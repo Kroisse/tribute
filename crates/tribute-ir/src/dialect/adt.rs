@@ -70,6 +70,7 @@ mod adt {
 // === Nominal struct layout type ===
 
 use trunk_ir::Symbol;
+use trunk_ir::attr_kind::{Bytes, Type};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
@@ -236,7 +237,7 @@ impl Struct {
                     .expect("field index is in range");
                 let attrs = self
                     .field_attrs(ctx, index)
-                    .map(|(key, value)| (*key, value.clone()))
+                    .map(|(key, value)| (key.clone(), value.clone()))
                     .collect();
                 (name, ty, attrs)
             })
@@ -473,6 +474,7 @@ fn parse_struct_type<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rustc_hash::FxHashMap as HashMap;
     use trunk_ir::parser::{parse_module, parse_test_module};
     use trunk_ir::printer::print_module;
     use trunk_ir::rewrite::Module;
@@ -521,10 +523,10 @@ mod tests {
 }"#;
         let mut ctx = IrContext::new();
         let module = parse_module(&mut ctx, input).expect("adt.struct syntax should parse");
-        let aliases: std::collections::HashMap<_, _> = ctx
+        let aliases: HashMap<_, _> = ctx
             .type_aliases()
             .iter()
-            .map(|&(name, ty)| (name.to_string(), ty))
+            .map(|(name, ty)| (name.to_string(), *ty))
             .collect();
         let point = Struct::from_type_ref(&ctx, aliases["point"]).unwrap();
         assert_eq!(point.name(&ctx), Symbol::new("Point"));
@@ -639,7 +641,7 @@ mod tests {
             (
                 "`fields` is not an `adt.struct` attribute",
                 TypeDataBuilder::new("adt", "struct")
-                    .attr("name", p.clone())
+                    .attr("name", p)
                     .attr("fields", Attribute::List(vec![]))
                     .build(),
             ),

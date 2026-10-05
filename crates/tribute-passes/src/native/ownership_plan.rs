@@ -4,7 +4,8 @@
 //! before `func_to_clif` erases semantic reference types.  Building and
 //! validating it never mutates the input IR.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
 
@@ -21,7 +22,10 @@ use trunk_ir::transforms::call_graph::{CallGraph, recursive_functions};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use crate::target_abi::{CONSUMED, OWNERSHIP_ATTR};
-use trunk_ir::{BlockRef, OpRef, RegionRef, StringRef, Symbol, TypeRef, ValueDef, ValueRef};
+use trunk_ir::{
+    Attribute, BlockRef, OpRef, RegionRef, StringRef, Symbol, SymbolPath, TypeRef, ValueDef,
+    ValueRef,
+};
 
 mod actions;
 mod cfg;
@@ -112,15 +116,15 @@ pub struct OwnershipAction {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FunctionOwnershipPlan {
-    symbol: Symbol,
+    symbol: SymbolPath,
     operation: OpRef,
     entries: Vec<EntryOwnership>,
     actions: Vec<OwnershipAction>,
 }
 
 impl FunctionOwnershipPlan {
-    pub fn symbol(&self) -> Symbol {
-        self.symbol
+    pub fn symbol(&self) -> &SymbolPath {
+        &self.symbol
     }
 
     pub fn operation(&self) -> OpRef {
@@ -175,10 +179,10 @@ impl NativeOwnershipPlan {
         &self.rtti_types
     }
 
-    pub fn function(&self, symbol: Symbol) -> Option<&FunctionOwnershipPlan> {
+    pub fn function(&self, symbol: &Symbol) -> Option<&FunctionOwnershipPlan> {
         self.functions
             .iter()
-            .find(|function| function.symbol == symbol)
+            .find(|function| function.symbol == *symbol)
     }
 
     pub fn is_managed_type(&self, ctx: &IrContext, ty: TypeRef) -> bool {
@@ -239,7 +243,7 @@ impl NativeOwnershipPlan {
             ));
         }
 
-        let mut current = HashSet::new();
+        let mut current = HashSet::default();
         walk_module(ctx, module, |op| {
             if let Some(descriptor) = allocation_descriptor(ctx, op) {
                 current.insert(descriptor);
@@ -269,7 +273,7 @@ impl NativeOwnershipPlan {
                 function_ops.push(op);
             }
         });
-        let mut current_functions = HashSet::new();
+        let mut current_functions = HashSet::default();
         for op in function_ops {
             if matches!(
                 ownership_callable_body(ctx, op)?,
@@ -359,7 +363,8 @@ pub fn build_native_ownership_plan(
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
-        let symbol = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
+        let symbol =
+            qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from(function.sym_name(ctx)));
         if let CallableBody::Declaration = ownership_callable_body(ctx, op)? {
             validate_bodyless_signature(ctx, op, &managed_layouts)?;
             continue;
@@ -410,7 +415,8 @@ fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, O
         let symbol = ctx
             .op(op)
             .attributes
-            .get_symbol("sym_name")
+            .get_str(ctx, "sym_name")
+            .map(Symbol::new)
             .map(|name| format!("@{name}"))
             .unwrap_or_else(|| "<unnamed>".into());
         OwnershipPlanError::new(format!("func.func {symbol}: {error}"))
@@ -456,15 +462,16 @@ fn collect_closure_layout(
 fn collect_function_definitions(
     ctx: &IrContext,
     module_ops: &[OpRef],
-) -> Result<HashMap<Symbol, OpRef>, OwnershipPlanError> {
-    let mut definitions = HashMap::new();
+) -> Result<HashMap<SymbolPath, OpRef>, OwnershipPlanError> {
+    let mut definitions = HashMap::default();
     for &op in module_ops {
         let Ok(function) = func::Func::from_op(ctx, op) else {
             continue;
         };
         // Direct callees name their targets by root-qualified path.
-        let symbol = qualified_name(ctx, op).unwrap_or_else(|| function.sym_name(ctx));
-        if definitions.insert(symbol, op).is_some() {
+        let symbol =
+            qualified_name(ctx, op).unwrap_or_else(|| SymbolPath::from(function.sym_name(ctx)));
+        if definitions.insert(symbol.clone(), op).is_some() {
             return Err(OwnershipPlanError::new(format!(
                 "duplicate function identity @{symbol}"
             )));
@@ -477,14 +484,14 @@ fn collect_and_validate_managed_layouts(
     ctx: &IrContext,
     module: Module,
 ) -> Result<HashSet<TypeRef>, OwnershipPlanError> {
-    let mut layouts = HashSet::new();
-    let mut nominal_layouts: HashMap<StringRef, Vec<TypeRef>> = HashMap::new();
-    let mut typerefs = HashSet::new();
+    let mut layouts = HashSet::default();
+    let mut nominal_layouts: HashMap<StringRef, Vec<TypeRef>> = HashMap::default();
+    let mut typerefs = HashSet::default();
     let mut pending_typerefs = Vec::new();
     for &(_, ty) in ctx.type_aliases() {
         index_nominal_layout(ctx, ty, &mut nominal_layouts);
     }
-    let mut visited_types = HashSet::new();
+    let mut visited_types = HashSet::default();
     walk_module(ctx, module, |op| {
         for &ty in ctx.op_result_types(op) {
             collect_reachable_type_contract(
@@ -699,7 +706,7 @@ fn build_rtti_plan(
     managed_layouts: &HashSet<TypeRef>,
 ) -> Result<Vec<RttiTypePlan>, OwnershipPlanError> {
     let mut order = Vec::new();
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     walk_module(ctx, module, |op| {
         if let Some(descriptor) = allocation_descriptor(ctx, op)
             && managed_layouts.contains(&descriptor.0)
@@ -753,13 +760,14 @@ fn field_kind(ctx: &IrContext, ty: TypeRef, managed_layouts: &HashSet<TypeRef>) 
 fn compute_entry_contracts(
     ctx: &IrContext,
     call_graph: &CallGraph,
-    definitions: &HashMap<Symbol, OpRef>,
+    definitions: &HashMap<SymbolPath, OpRef>,
     managed_layouts: &HashSet<TypeRef>,
     elide_proven_borrowed_parameters: bool,
-) -> Result<HashMap<Symbol, Vec<EntryOwnership>>, OwnershipPlanError> {
+) -> Result<HashMap<SymbolPath, Vec<EntryOwnership>>, OwnershipPlanError> {
     let recursive = recursive_functions(call_graph);
-    let mut summaries = HashMap::new();
-    for (&symbol, &op) in definitions {
+    let mut summaries = HashMap::default();
+    for (symbol, &op) in definitions {
+        let symbol = symbol.clone();
         let entry = match ownership_callable_body(ctx, op)? {
             CallableBody::Declaration => {
                 let signature = validate_bodyless_signature(ctx, op, managed_layouts)?;
@@ -805,7 +813,8 @@ fn compute_entry_contracts(
 
     loop {
         let mut changed = false;
-        for (&symbol, &op) in definitions {
+        for (symbol, &op) in definitions {
+            let symbol = symbol.clone();
             let CallableBody::Definition {
                 region: body,
                 entry,
@@ -815,7 +824,7 @@ fn compute_entry_contracts(
             };
             for (index, &parameter) in ctx.block_args(entry).iter().enumerate() {
                 if summaries[&symbol][index] == EntryOwnership::Borrowed
-                    && !value_is_borrowed(ctx, body, parameter, &summaries, &mut HashSet::new())
+                    && !value_is_borrowed(ctx, body, parameter, &summaries, &mut HashSet::default())
                 {
                     summaries.get_mut(&symbol).unwrap()[index] = EntryOwnership::Retained;
                     changed = true;
@@ -874,7 +883,7 @@ fn consumed_inputs(
         .input_attrs(ctx)
         .map(|attrs| match attrs.get(OWNERSHIP_ATTR) {
             None => Ok(false),
-            Some(value) if value.as_symbol() == Some(Symbol::new(CONSUMED)) => Ok(true),
+            Some(Attribute::String(mode)) if ctx.str(*mode) == CONSUMED => Ok(true),
             Some(_) => Err(OwnershipPlanError::new(format!(
                 "unknown {OWNERSHIP_ATTR} parameter contract"
             ))),
@@ -886,7 +895,7 @@ fn value_is_borrowed(
     ctx: &IrContext,
     body: RegionRef,
     value: ValueRef,
-    summaries: &HashMap<Symbol, Vec<EntryOwnership>>,
+    summaries: &HashMap<SymbolPath, Vec<EntryOwnership>>,
     visiting: &mut HashSet<ValueRef>,
 ) -> bool {
     if !visiting.insert(value) {
@@ -918,7 +927,7 @@ fn value_is_borrowed(
         }
         if let Ok(call) = func::Call::from_op(ctx, op) {
             return summaries
-                .get(&call.callee(ctx))
+                .get(call.callee(ctx))
                 .and_then(|entries| entries.get(index))
                 == Some(&EntryOwnership::Borrowed);
         }
@@ -997,9 +1006,9 @@ fn validate_function_contract(
 }
 
 fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), OwnershipPlanError> {
-    let mut function_symbols = HashSet::new();
+    let mut function_symbols = HashSet::default();
     for function in &plan.functions {
-        if !function_symbols.insert(function.symbol) {
+        if !function_symbols.insert(function.symbol.clone()) {
             return Err(OwnershipPlanError::new(
                 "plan has duplicate function identity",
             ));
@@ -1028,8 +1037,8 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
         {
             return Err(OwnershipPlanError::new("planned entry contract is stale"));
         }
-        let mut action_keys = HashSet::new();
-        let mut action_targets = HashMap::new();
+        let mut action_keys = HashSet::default();
+        let mut action_targets = HashMap::default();
         for action in &function.actions {
             if !action_keys.insert((action.anchor, action.kind, action.value, action.destination)) {
                 return Err(OwnershipPlanError::new(
@@ -1086,7 +1095,7 @@ fn validate_plan(ctx: &IrContext, plan: &NativeOwnershipPlan) -> Result<(), Owne
         }
         validate_into_raw_transfer_groups(ctx, function, body, plan)?;
     }
-    let mut rtti_types = HashSet::new();
+    let mut rtti_types = HashSet::default();
     for entry in &plan.rtti_types {
         if !rtti_types.insert(entry.key()) || !plan.managed_layouts.contains(&entry.ty) {
             return Err(OwnershipPlanError::new(
@@ -1133,7 +1142,7 @@ fn validate_into_raw_transfer_groups(
     body: RegionRef,
     plan: &NativeOwnershipPlan,
 ) -> Result<(), OwnershipPlanError> {
-    let mut sources = HashSet::new();
+    let mut sources = HashSet::default();
     for &block in &ctx.region(body).blocks {
         for &op in &ctx.block(block).ops {
             if !tribute_ir::dialect::tribute_rt::IntoRaw::matches(ctx, op) {

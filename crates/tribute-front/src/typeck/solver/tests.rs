@@ -8,7 +8,7 @@ fn test_db() -> salsa::DatabaseImpl {
 
 /// Create an AbilityId for testing (with empty module path).
 fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-    AbilityId::source(db, Symbol::from_dynamic(name))
+    AbilityId::source(db, Symbol::new(name))
 }
 
 /// Create a fresh type variable for testing.
@@ -445,14 +445,14 @@ fn test_unify_named_types_rejects_builtin_and_source_with_same_spelling() {
         &db,
         TypeKind::Named {
             id: TypeDefId::builtin_list(&db),
-            name,
+            name: name.clone(),
             args: vec![int_ty],
         },
     );
     let source = Type::new(
         &db,
         TypeKind::Named {
-            id: TypeDefId::source(&db, name, crate::ast::NodeId::from_raw(1)),
+            id: TypeDefId::source(&db, name.clone(), crate::ast::NodeId::from_raw(1)),
             name,
             args: vec![int_ty],
         },
@@ -478,7 +478,7 @@ fn test_unify_named_types_rejects_same_spelled_source_declarations() {
                 Symbol::new("A::Thing"),
                 crate::ast::NodeId::from_raw(1),
             ),
-            name,
+            name: name.clone(),
             args: vec![int_ty],
         },
     );
@@ -1213,10 +1213,10 @@ fn test_different_effect_arity_returns_arity_mismatch() {
         matches!(
             result,
             Err(SolveError::EffectArgArityMismatch {
-                effect_name,
+                ref effect_name,
                 expected: 1,
                 found: 0,
-            }) if effect_name == trunk_ir::Symbol::new("State")
+            }) if *effect_name == trunk_ir::Symbol::new("State")
         ),
         "Expected EffectArgArityMismatch error, got {:?}",
         result

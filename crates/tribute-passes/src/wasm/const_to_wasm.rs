@@ -8,8 +8,9 @@
 //! A data index is the position of its segment among the module's `wasm.data`
 //! operations, so later steps read the segments from the IR itself.
 
-use std::collections::hash_map::Entry;
-use std::collections::{HashMap, HashSet};
+use hashbrown::hash_map::EntryRef;
+
+use crate::collections::{HashMap, HashSet};
 use std::fmt;
 use std::rc::Rc;
 
@@ -65,16 +66,16 @@ impl ConstCollector {
     fn new() -> Self {
         Self {
             contents: Vec::new(),
-            seen: HashSet::new(),
+            seen: HashSet::default(),
             has_string_consts: false,
         }
     }
 
-    fn collect_content(&mut self, bytes: Vec<u8>) {
-        if !self.seen.contains(&bytes) {
-            self.seen.insert(bytes.clone());
-            self.contents.push(bytes);
-        }
+    fn collect_content(&mut self, bytes: &[u8]) {
+        self.seen.get_or_insert_with(bytes, |bytes| {
+            self.contents.push(bytes.to_vec());
+            bytes.to_vec()
+        });
     }
 
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
@@ -84,12 +85,12 @@ impl ConstCollector {
             if data.name == Symbol::new("string_const") {
                 if let Some(s) = data.attributes.get_str(ctx, "value") {
                     self.has_string_consts = true;
-                    self.collect_content(s.as_bytes().to_vec());
+                    self.collect_content(s.as_bytes());
                 }
             } else if data.name == Symbol::new("bytes_const")
                 && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
             {
-                self.collect_content(b.to_vec());
+                self.collect_content(b);
             }
         }
     }
@@ -200,7 +201,7 @@ fn declare_data_segments(
     module: Module,
     contents: &[Vec<u8>],
 ) -> DataSegments {
-    let mut segments = DataSegments::new();
+    let mut segments = DataSegments::default();
     let Some(module_block) = module.first_block(ctx) else {
         return segments;
     };
@@ -211,14 +212,16 @@ fn declare_data_segments(
             continue;
         };
         if data.passive(ctx) {
-            segments.entry(data.bytes(ctx).to_vec()).or_insert(next_idx);
+            segments
+                .entry_ref(data.bytes(ctx).as_slice())
+                .or_insert(next_idx);
         }
         next_idx += 1;
     }
 
     let location = ctx.op(module.op()).location;
     for content in contents {
-        let Entry::Vacant(entry) = segments.entry(content.clone()) else {
+        let EntryRef::Vacant(entry) = segments.entry_ref(content.as_slice()) else {
             continue;
         };
         let op = wasm_dialect::Data::operands()
@@ -402,11 +405,14 @@ mod tests {
     #[test]
     fn analysis_deduplicates_and_looks_up_passive_data() {
         let mut ctx = IrContext::new();
-        let module = string_module(&mut ctx, &["hello", "hello"]);
+        let module = string_module(&mut ctx, &["first", "second", "first", "", ""]);
 
         let analysis = analyze_consts(&ctx, module);
 
-        assert_eq!(analysis.contents, vec![b"hello".to_vec()]);
+        assert_eq!(
+            analysis.contents,
+            vec![b"first".to_vec(), b"second".to_vec(), Vec::new()]
+        );
     }
 
     #[test]

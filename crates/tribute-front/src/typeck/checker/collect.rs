@@ -3,7 +3,7 @@
 //! Populates `ModuleTypeEnv` with function signatures, constructor types,
 //! and type definitions before type checking function bodies.
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
 
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
@@ -21,7 +21,7 @@ use super::TypeChecker;
 /// Declared field names in order, if every field is named. A constructor
 /// without fields has an empty list.
 fn field_names(fields: &[crate::ast::FieldDecl]) -> Option<Vec<Symbol>> {
-    fields.iter().map(|field| field.name).collect()
+    fields.iter().map(|field| field.name.clone()).collect()
 }
 
 #[derive(Default)]
@@ -69,10 +69,13 @@ impl<'db> TypeChecker<'db> {
                     else {
                         continue;
                     };
-                    let Some(scheme) = self.env.lookup_type_def(target) else {
+                    let Some(scheme) = self.env.lookup_type_def(&target) else {
                         continue;
                     };
-                    let name = import.alias.unwrap_or(*import.path.last().unwrap());
+                    let name = import
+                        .alias
+                        .clone()
+                        .unwrap_or(import.path.last().unwrap().clone());
                     if declarations.iter().any(|decl| match decl {
                         Decl::Struct(decl) => decl.name == name,
                         Decl::Enum(decl) => decl.name == name,
@@ -80,12 +83,12 @@ impl<'db> TypeChecker<'db> {
                     }) {
                         continue;
                     }
-                    let qualified = crate::qualified_symbol(&mut self.prefix, name);
+                    let qualified = crate::qualified_symbol(&mut self.prefix, &name);
                     self.env.register_type_def(qualified, scheme);
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(&mut self.prefix, module.name);
+                        let saved = crate::push_prefix(&mut self.prefix, &module.name);
                         self.collect_type_imports(body);
                         self.prefix.truncate(saved);
                     }
@@ -120,11 +123,11 @@ impl<'db> TypeChecker<'db> {
                     // For inline modules, recursively collect from nested declarations
                     if let Some(body) = &m.body {
                         // Push module name to prefix
-                        let prev_len = crate::push_prefix(&mut self.prefix, m.name);
+                        let prev_len = crate::push_prefix(&mut self.prefix, &m.name);
                         // Create a temporary module to reuse collect_declarations
                         let inner_module = Module {
                             id: m.id,
-                            name: Some(m.name),
+                            name: Some(m.name.clone()),
                             decls: body.clone(),
                         };
                         self.collect_declarations_in_order(&inner_module);
@@ -141,14 +144,14 @@ impl<'db> TypeChecker<'db> {
         for decl in decls {
             match decl {
                 Decl::Struct(s) => {
-                    self.predeclare_nominal_type(s.name, s.id, &s.type_params);
+                    self.predeclare_nominal_type(&s.name, s.id, &s.type_params);
                 }
                 Decl::Enum(e) => {
-                    self.predeclare_nominal_type(e.name, e.id, &e.type_params);
+                    self.predeclare_nominal_type(&e.name, e.id, &e.type_params);
                 }
                 Decl::Module(module) => {
                     if let Some(body) = &module.body {
-                        let saved = crate::push_prefix(&mut self.prefix, module.name);
+                        let saved = crate::push_prefix(&mut self.prefix, &module.name);
                         self.predeclare_nominal_types(body);
                         self.prefix.truncate(saved);
                     }
@@ -160,21 +163,21 @@ impl<'db> TypeChecker<'db> {
 
     fn predeclare_nominal_type(
         &mut self,
-        name: Symbol,
+        name: &Symbol,
         declaration: crate::ast::NodeId,
         params: &[crate::ast::TypeParamDecl],
     ) {
         let qualified = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
         let type_params: Vec<TypeParam> = params
             .iter()
-            .map(|param| TypeParam::named(param.name))
+            .map(|param| TypeParam::named(param.name.clone()))
             .collect();
         let args = (0..type_params.len() as u32)
             .map(|index| Type::new(self.db(), TypeKind::BoundVar { index }))
             .collect();
         let ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified, declaration),
-            qualified,
+            crate::ast::TypeDefId::source(self.db(), qualified.clone(), declaration),
+            qualified.clone(),
             args,
         );
         self.env.register_type_def(
@@ -251,7 +254,7 @@ impl<'db> TypeChecker<'db> {
             .build(self.db());
 
         // Register the function with its FuncDefId
-        let func_id = self.func_def_id(func.name);
+        let func_id = self.func_def_id(&func.name);
         if let Some(origins) = effect_origins {
             self.effect_annotation_origins.insert(func_id, origins);
         }
@@ -262,7 +265,7 @@ impl<'db> TypeChecker<'db> {
         // Register as UFCS method candidate if function has parameters
         if !func.params.is_empty() {
             self.env
-                .register_method(func.name, MethodEntry { func_id, func_ty });
+                .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
         }
     }
 
@@ -322,24 +325,24 @@ impl<'db> TypeChecker<'db> {
             .build(self.db());
 
         // Register the extern function with its FuncDefId
-        let func_id = self.func_def_id(func.name);
+        let func_id = self.func_def_id(&func.name);
         self.env.register_function(func_id, scheme);
 
         // Register as UFCS method candidate if function has parameters
         if !func.params.is_empty() {
             self.env
-                .register_method(func.name, MethodEntry { func_id, func_ty });
+                .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
         }
     }
 
     /// Collect a struct definition.
     fn collect_struct_def(&mut self, s: &StructDecl) {
-        let name = s.name;
-        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
+        let name = s.name.clone();
+        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), &name);
         let type_params: Vec<TypeParam> = s
             .type_params
             .iter()
-            .map(|tp| TypeParam::named(tp.name))
+            .map(|tp| TypeParam::named(tp.name.clone()))
             .collect();
 
         // Build name → BoundVar index lookup for field type resolution
@@ -347,7 +350,7 @@ impl<'db> TypeChecker<'db> {
             .type_params
             .iter()
             .enumerate()
-            .map(|(i, tp)| (tp.name, i as u32))
+            .map(|(i, tp)| (tp.name.clone(), i as u32))
             .collect();
 
         // The struct type itself
@@ -355,13 +358,13 @@ impl<'db> TypeChecker<'db> {
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
         let struct_ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified_name, s.id),
-            qualified_name,
+            crate::ast::TypeDefId::source(self.db(), qualified_name.clone(), s.id),
+            qualified_name.clone(),
             args,
         );
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), struct_ty);
-        self.env.register_type_def(qualified_name, scheme);
+        self.env.register_type_def(qualified_name.clone(), scheme);
 
         // Register struct constructor
         // Constructor type is: fn(field_types...) -> StructType
@@ -382,7 +385,7 @@ impl<'db> TypeChecker<'db> {
 
         let effect_params = collect_effect_vars(self.db(), ctor_ty);
         let ctor_scheme = TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
-        let ctor_id = CtorId::new(self.db(), qualified_name);
+        let ctor_id = CtorId::new(self.db(), qualified_name.clone());
         self.env.register_constructor(ctor_id, ctor_scheme);
         if let Some(names) = field_names(&s.fields) {
             self.env.register_constructor_field_names(ctor_id, names);
@@ -393,7 +396,7 @@ impl<'db> TypeChecker<'db> {
             .fields
             .iter()
             .filter_map(|f| {
-                let field_name = f.name?;
+                let field_name = f.name.clone()?;
                 let field_ty = self.annotation_to_type_for_ctor(&f.ty, &type_param_indices);
                 Some((field_name, field_ty))
             })
@@ -407,12 +410,12 @@ impl<'db> TypeChecker<'db> {
 
     /// Collect an enum definition.
     fn collect_enum_def(&mut self, e: &EnumDecl) {
-        let name = e.name;
-        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), name);
+        let name = e.name.clone();
+        let qualified_name = crate::qualified_symbol(&mut self.current_prefix().to_owned(), &name);
         let type_params: Vec<TypeParam> = e
             .type_params
             .iter()
-            .map(|tp| TypeParam::named(tp.name))
+            .map(|tp| TypeParam::named(tp.name.clone()))
             .collect();
 
         // The enum type itself
@@ -420,16 +423,16 @@ impl<'db> TypeChecker<'db> {
             .map(|i| Type::new(self.db(), TypeKind::BoundVar { index: i }))
             .collect();
         let enum_ty = self.env.named_type_with_id(
-            crate::ast::TypeDefId::source(self.db(), qualified_name, e.id),
-            qualified_name,
+            crate::ast::TypeDefId::source(self.db(), qualified_name.clone(), e.id),
+            qualified_name.clone(),
             args,
         );
 
         let scheme = TypeScheme::new(self.db(), type_params.clone(), Vec::new(), enum_ty);
-        self.env.register_type_def(qualified_name, scheme);
+        self.env.register_type_def(qualified_name.clone(), scheme);
 
         // Register enum variant names for exhaustiveness checking
-        let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name).collect();
+        let variant_names: Vec<Symbol> = e.variants.iter().map(|v| v.name.clone()).collect();
         self.env
             .register_enum_variants(qualified_name, variant_names);
 
@@ -439,7 +442,7 @@ impl<'db> TypeChecker<'db> {
             .type_params
             .iter()
             .enumerate()
-            .map(|(i, tp)| (tp.name, i as u32))
+            .map(|(i, tp)| (tp.name.clone(), i as u32))
             .collect();
 
         for variant in &e.variants {
@@ -462,7 +465,7 @@ impl<'db> TypeChecker<'db> {
                 TypeScheme::new(self.db(), type_params.clone(), effect_params, ctor_ty);
             let ctor_id = CtorId::new(
                 self.db(),
-                crate::qualified_symbol(&mut self.current_prefix().to_owned(), variant.name),
+                crate::qualified_symbol(&mut self.current_prefix().to_owned(), &variant.name),
             );
             self.env.register_constructor(ctor_id, ctor_scheme);
             if let Some(names) = field_names(&variant.fields) {
@@ -479,14 +482,14 @@ impl<'db> TypeChecker<'db> {
         // Create AbilityId for this ability
         let ability_id = AbilityId::source(
             self.db(),
-            crate::qualified_symbol(&mut self.current_prefix().to_owned(), a.name),
+            crate::qualified_symbol(&mut self.current_prefix().to_owned(), &a.name),
         );
 
         // Build type parameter info
         let type_params: Vec<TypeParam> = a
             .type_params
             .iter()
-            .map(|tp| TypeParam::named(tp.name))
+            .map(|tp| TypeParam::named(tp.name.clone()))
             .collect();
 
         // Build name → BoundVar index lookup for operation type resolution
@@ -494,11 +497,11 @@ impl<'db> TypeChecker<'db> {
             .type_params
             .iter()
             .enumerate()
-            .map(|(i, tp)| (tp.name, i as u32))
+            .map(|(i, tp)| (tp.name.clone(), i as u32))
             .collect();
 
         // Collect operation signatures
-        let mut operations = HashMap::new();
+        let mut operations = HashMap::default();
         for op in &a.operations {
             let param_types: Vec<Type<'db>> = op
                 .params
@@ -513,9 +516,9 @@ impl<'db> TypeChecker<'db> {
             let return_type = self.annotation_to_type_for_ctor(&op.return_ty, &type_param_indices);
 
             operations.insert(
-                op.name,
+                op.name.clone(),
                 AbilityOpInfo {
-                    name: op.name,
+                    name: op.name.clone(),
                     kind: op.kind,
                     param_types,
                     return_type,
@@ -555,11 +558,11 @@ impl<'db> TypeChecker<'db> {
                 } else {
                     let index = vars.next_type;
                     vars.next_type += 1;
-                    vars.types.insert(*name, index);
+                    vars.types.insert(name.clone(), index);
                     Type::new(self.db(), TypeKind::BoundVar { index })
                 }
             }
-            TypeAnnotationKind::Named(name) => self.primitive_or_named_type(*name),
+            TypeAnnotationKind::Named(name) => self.primitive_or_named_type(name.clone()),
             TypeAnnotationKind::Path(parts) => self.env.path_type(parts),
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_for_sig(ctor, vars);
@@ -568,7 +571,7 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .map(|a| self.annotation_to_type_for_sig(a, vars))
                         .collect();
-                    self.env.named_type_with_id(*id, *name, arg_types)
+                    self.env.named_type_with_id(*id, name.clone(), arg_types)
                 } else {
                     self.env.error_type()
                 }
@@ -624,7 +627,7 @@ impl<'db> TypeChecker<'db> {
                         *var
                     } else {
                         let var = vars.fresh_row();
-                        vars.rows.insert(*name, var);
+                        vars.rows.insert(name.clone(), var);
                         var
                     }
                 }
@@ -670,7 +673,7 @@ impl<'db> TypeChecker<'db> {
                 if let Some(&(_, index)) = type_param_indices.iter().find(|(n, _)| n == name) {
                     return Type::new(self.db(), TypeKind::BoundVar { index });
                 }
-                self.primitive_or_named_type(*name)
+                self.primitive_or_named_type(name.clone())
             }
             TypeAnnotationKind::App { ctor, args } => {
                 let ctor_ty = self.annotation_to_type_for_ctor(ctor, type_param_indices);
@@ -679,7 +682,7 @@ impl<'db> TypeChecker<'db> {
                         .iter()
                         .map(|a| self.annotation_to_type_for_ctor(a, type_param_indices))
                         .collect();
-                    self.env.named_type_with_id(*id, *name, arg_types)
+                    self.env.named_type_with_id(*id, name.clone(), arg_types)
                 } else {
                     self.env.error_type()
                 }

@@ -7,7 +7,8 @@
 
 mod matrix;
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use itertools::Itertools;
 use salsa::Accumulator;
@@ -212,7 +213,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
             checker,
             families: Vec::new(),
             family_types: Vec::new(),
-            family_ids: HashMap::new(),
+            family_ids: HashMap::default(),
             saw_error: false,
             unanalyzable: false,
         }
@@ -240,11 +241,11 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 rest: true,
             },
             PatternKind::Variant { ctor, fields } => {
-                let ResolvedRef::Constructor { id, variant } = ctor.resolved else {
+                let ResolvedRef::Constructor { id, variant } = ctor.resolved.clone() else {
                     self.saw_error = true;
                     return Pat::Wild;
                 };
-                let Some((ctor, arity)) = self.constructor(id, variant) else {
+                let Some((ctor, arity)) = self.constructor(id, &variant) else {
                     self.unanalyzable = true;
                     return Pat::Wild;
                 };
@@ -257,11 +258,11 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
             PatternKind::Record {
                 type_name, fields, ..
             } => {
-                let ResolvedRef::Constructor { id, variant } = type_name.resolved else {
+                let ResolvedRef::Constructor { id, variant } = type_name.resolved.clone() else {
                     self.saw_error = true;
                     return Pat::Wild;
                 };
-                let Some((ctor, arity)) = self.constructor(id, variant) else {
+                let Some((ctor, arity)) = self.constructor(id, &variant) else {
                     self.unanalyzable = true;
                     return Pat::Wild;
                 };
@@ -289,7 +290,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
     }
 
     /// The matrix constructor for a source constructor, with its arity.
-    fn constructor(&mut self, id: CtorId<'db>, variant: Symbol) -> Option<(Ctor, usize)> {
+    fn constructor(&mut self, id: CtorId<'db>, variant: &Symbol) -> Option<(Ctor, usize)> {
         let db = self.checker.db();
         let (arity, result) = self.constructor_shape(id)?;
         let TypeKind::Named {
@@ -298,11 +299,11 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         else {
             return None;
         };
-        let (type_id, name) = (*type_id, *name);
+        let (type_id, name) = (*type_id, name.clone());
         let family = match self.family_ids.get(&name) {
             Some(family) => *family,
             None => {
-                let family = self.family(name, id)?;
+                let family = self.family(name.clone(), id)?;
                 let family_id = FamilyId(self.families.len());
                 self.families.push(family);
                 self.family_types.push(type_id);
@@ -313,7 +314,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
         let index = self.families[family.0]
             .variants
             .iter()
-            .position(|info| info.name == variant)?;
+            .position(|info| info.name == *variant)?;
         Some((Ctor::Variant { family, index }, arity))
     }
 
@@ -321,14 +322,15 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
     fn family(&self, name: Symbol, id: CtorId<'db>) -> Option<Family> {
         let db = self.checker.db();
         // Test for an enum first: a variant may share its enum's name.
-        if let Some(variants) = self.checker.env.lookup_enum_variants(name) {
+        if let Some(variants) = self.checker.env.lookup_enum_variants(&name) {
             // Variants are registered in the enum's module, not under the enum.
             let variants = variants
                 .iter()
-                .map(|&variant| {
+                .map(|variant| {
+                    let variant = variant.clone();
                     let qualified = name
                         .parent_path()
-                        .map_or(variant, |module| module.join_path(variant));
+                        .map_or(variant.clone(), |module| module.join_path(&variant));
                     let (arity, _) = self.constructor_shape(CtorId::new(db, qualified))?;
                     Some(VariantInfo {
                         name: variant,
@@ -338,7 +340,7 @@ impl<'a, 'db> PatternLowering<'a, 'db> {
                 .collect::<Option<_>>()?;
             return Some(Family { variants });
         }
-        if id.qualified(db) != name {
+        if *id.qualified(db) != name {
             return None;
         }
         let (arity, _) = self.constructor_shape(id)?;

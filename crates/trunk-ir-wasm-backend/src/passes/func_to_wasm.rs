@@ -15,10 +15,10 @@
 //! - Creates a function table with those functions
 //! - Generates `wasm.table` and `wasm.elem` operations
 
-use std::collections::HashMap;
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
-use trunk_ir::Symbol;
 use trunk_ir::context::{IrContext, OperationDataBuilder};
 use trunk_ir::dialect::func::{self, CallLike, TailCallLike};
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -31,6 +31,7 @@ use trunk_ir::rewrite::{
 use trunk_ir::types::{Attribute, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 use trunk_ir::{BlockData, RegionData};
+use trunk_ir::{Symbol, SymbolPath};
 
 use trunk_ir::smallvec::smallvec;
 
@@ -55,7 +56,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
             .add_pattern(FuncTailCallIndirectPattern)
             .add_pattern(FuncUnreachablePattern)
             .add_pattern(FuncConstantPattern {
-                table_indices: HashMap::new(),
+                table_indices: HashMap::default(),
             });
         applicator.apply_partial(ctx, module);
         return;
@@ -63,12 +64,12 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
 
     // 2. Assign table indices (sorted for deterministic ordering)
     let mut sorted_funcs: Vec<_> = func_refs.into_iter().collect();
-    sorted_funcs.sort_by(|a, b| a.with_str(|a_str| b.with_str(|b_str| a_str.cmp(b_str))));
+    sorted_funcs.sort();
 
-    let table_indices: HashMap<Symbol, u32> = sorted_funcs
+    let table_indices: HashMap<SymbolPath, u32> = sorted_funcs
         .iter()
         .enumerate()
-        .map(|(idx, sym)| (*sym, idx as u32))
+        .map(|(idx, sym)| (sym.clone(), idx as u32))
         .collect();
 
     let table_size = sorted_funcs.len() as u32;
@@ -82,9 +83,7 @@ pub fn lower(ctx: &mut IrContext, module: Module, type_converter: TypeConverter)
         .add_pattern(FuncTailCallPattern)
         .add_pattern(FuncTailCallIndirectPattern)
         .add_pattern(FuncUnreachablePattern)
-        .add_pattern(FuncConstantPattern {
-            table_indices: table_indices.clone(),
-        });
+        .add_pattern(FuncConstantPattern { table_indices });
     applicator.apply_partial(ctx, module);
 
     // 4. Add wasm.table and wasm.elem to the module
@@ -160,25 +159,25 @@ fn materialize_nested_callable_value_types(
 }
 
 /// Collect all function symbols referenced by func.constant operations.
-fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<Symbol> {
+fn collect_func_constant_refs(ctx: &IrContext, module: Module) -> Vec<SymbolPath> {
     let mut funcs = Vec::new();
     if let Some(body) = module.body(ctx) {
         collect_refs_in_region(ctx, body, &mut funcs);
     }
 
     // Deduplicate while preserving order
-    let mut seen = std::collections::HashSet::new();
-    funcs.retain(|sym| seen.insert(*sym));
+    let mut seen = HashSet::default();
+    funcs.retain(|sym| seen.insert(sym.clone()));
 
     funcs
 }
 
-fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Symbol>) {
+fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<SymbolPath>) {
     for &block in ctx.region(region).blocks.iter() {
         for &op in ctx.block(block).ops.iter() {
             // Check for func.constant
             if let Ok(const_op) = func::Constant::from_op(ctx, op) {
-                refs.push(const_op.func_ref(ctx));
+                refs.push(const_op.func_ref(ctx).clone());
             }
 
             // Recurse into nested regions
@@ -190,7 +189,7 @@ fn collect_refs_in_region(ctx: &IrContext, region: RegionRef, refs: &mut Vec<Sym
 }
 
 /// Add wasm.table and wasm.elem operations to the module for the function table.
-fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], table_size: u32) {
+fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[SymbolPath], table_size: u32) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
@@ -211,7 +210,7 @@ fn add_function_table(ctx: &mut IrContext, module: Module, funcs: &[Symbol], tab
         .iter()
         .map(|func_sym| {
             wasm_dialect::RefFunc::operands()
-                .func_name(*func_sym)
+                .func_name(func_sym.clone())
                 .results(funcref_ty)
                 .build(ctx, location)
                 .op_ref()
@@ -278,7 +277,7 @@ fn convert_nested_callable_type(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -306,14 +305,14 @@ fn convert_nested_callable_attributes(
     ctx: &mut IrContext,
     attributes: &trunk_ir::AttributeMap,
     converter: &TypeConverter,
-    skip: impl Fn(Symbol) -> bool,
+    skip: impl Fn(SymbolPath) -> bool,
 ) -> Option<trunk_ir::AttributeMap> {
     attributes
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
-                if skip(*key) {
+                key.clone(),
+                if skip(key.clone().into()) {
                     value.clone()
                 } else {
                     convert_nested_callable_attribute(ctx, value, converter)?
@@ -350,7 +349,7 @@ fn convert_type_to_wasm(
         .iter()
         .map(|(key, value)| {
             Some((
-                *key,
+                key.clone(),
                 convert_nested_callable_attribute(ctx, value, converter)?,
             ))
         })
@@ -398,7 +397,7 @@ impl RewritePattern for FuncFuncPattern {
         };
 
         let loc = ctx.op(op).location;
-        let sym_name = func_op.sym_name(ctx);
+        let sym_name = func_op.sym_name_ref(ctx);
         let Some(func_type) =
             convert_to_wasm_func_type(ctx, func_op.r#type(ctx), rewriter.type_converter())
         else {
@@ -428,7 +427,7 @@ impl RewritePattern for FuncFuncPattern {
                 .op_ref(),
             None => {
                 let data = OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("func"))
-                    .attr("sym_name", Attribute::Symbol(sym_name))
+                    .attr("sym_name", Attribute::String(sym_name))
                     .attr("type", Attribute::Type(func_type))
                     .build(ctx);
                 ctx.create_op(data)
@@ -457,12 +456,12 @@ impl RewritePattern for FuncCallPattern {
         let loc = ctx.op(op).location;
         let callee = call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
-        // The `wasm.call` declares target result types, so a shared IR spelling
-        // such as `adt.typeref` must not survive into the backend.
+        // The `wasm.call` declares target result types, so a source-level
+        // spelling must not survive into the backend.
         let result_types: Vec<TypeRef> = rewriter.result_types(ctx, op);
 
         let new_op = wasm_dialect::Call::operands(args)
-            .callee(callee)
+            .callee(callee.clone())
             .results(result_types)
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
@@ -502,11 +501,15 @@ impl RewritePattern for FuncCallIndirectPattern {
         };
         // Validate the replacement's converted results against the retained
         // physical contract before mutating the operation.
+        // Arguments other patterns have not converted yet are compared by
+        // their target types.
+        let type_converter = rewriter.type_converter();
         if crate::emit::helpers::exact_call_indirect_signature_with_results(
             ctx,
             op,
             signature,
             &result_types,
+            &|ty| type_converter.convert_type_or_identity(ctx, ty),
         )
         .is_err()
         {
@@ -565,7 +568,7 @@ impl RewritePattern for FuncTailCallPattern {
         let args: Vec<_> = ctx.op_operands(op).to_vec();
 
         let new_op = wasm_dialect::ReturnCall::operands(args)
-            .callee(callee)
+            .callee(callee.clone())
             .build(ctx, loc);
         rewriter.replace_op(new_op.op_ref());
         true
@@ -612,8 +615,16 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         // Missing or malformed metadata remains a residual `func.*` op and is
         // rejected by the Wasm readiness boundary rather than guessed from
         // table-index and argument values.
-        if crate::emit::helpers::exact_return_call_indirect_signature_with(ctx, op, signature)
-            .is_err()
+        // Arguments other patterns have not converted yet are compared by
+        // their target types.
+        let type_converter = rewriter.type_converter();
+        if crate::emit::helpers::exact_return_call_indirect_signature_with(
+            ctx,
+            op,
+            signature,
+            &|ty| type_converter.convert_type_or_identity(ctx, ty),
+        )
+        .is_err()
         {
             return false;
         }
@@ -666,7 +677,7 @@ impl RewritePattern for FuncUnreachablePattern {
 /// Transforms function constant references to i32 table indices.
 /// Used for closures where lifted functions are stored via function table.
 struct FuncConstantPattern {
-    table_indices: HashMap<Symbol, u32>,
+    table_indices: HashMap<SymbolPath, u32>,
 }
 
 impl RewritePattern for FuncConstantPattern {
@@ -686,7 +697,7 @@ impl RewritePattern for FuncConstantPattern {
         // They are collected by collect_func_constant_refs before pattern application.
         let table_idx = self
             .table_indices
-            .get(&func_ref)
+            .get(func_ref)
             .copied()
             .expect("All func.constant must be registered in table");
 
@@ -852,8 +863,8 @@ mod tests {
             .expect("bodyless declaration should lower to wasm.func");
         let definition = wasm_dialect::Func::from_op(&ctx, lowered_ops[1])
             .expect("definition should lower to wasm.func");
-        assert_eq!(declaration.sym_name(&ctx), Symbol::new("external"));
-        assert_eq!(definition.sym_name(&ctx), Symbol::new("defined"));
+        assert_eq!(declaration.sym_name(&ctx), "external");
+        assert_eq!(definition.sym_name(&ctx), "defined");
         assert_eq!(ctx.op(lowered_ops[0]).location, declaration_location);
         assert_eq!(ctx.op(lowered_ops[1]).location, definition_location);
         assert!(!ctx.op_has_regions(lowered_ops[0]));
@@ -866,11 +877,11 @@ mod tests {
         let output = print_module(&ctx, module.op());
         assert!(
             output.contains("!t0 = wasm.func_sig<(core.i32) -> core.i32>")
-                && output.contains("wasm.func {custom = 7, sym_name = @external, type = !t0}"),
+                && output.contains("wasm.func {custom = 7, sym_name = \"external\", type = !t0}"),
             "{output}"
         );
         assert!(
-            output.contains("wasm.func {sym_name = @defined"),
+            output.contains("wasm.func {sym_name = \"defined\""),
             "{output}"
         );
         assert!(output.contains("wasm.return %0"), "{output}");
@@ -1038,14 +1049,10 @@ mod tests {
         let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
-            .then_some(anyref_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
-            .then_some(f64_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "float")).then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
 
@@ -1095,14 +1102,10 @@ mod tests {
         let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("anyref")))
-            .then_some(anyref_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "anyref")).then_some(anyref_ty)
         });
         type_converter.add_conversion(move |ctx, ty| {
-            (ctx.types()
-                .is_dialect(ty, Symbol::new("tribute_rt"), Symbol::new("float")))
-            .then_some(f64_ty)
+            (ctx.types().is_dialect(ty, "tribute_rt", "float")).then_some(f64_ty)
         });
         lower(&mut ctx, module, type_converter);
 
@@ -1135,10 +1138,10 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @transfer(%table_index: core.i32, %value: core.i32) attributes {type = func.func_sig<(core.i32, core.i32) -> (), {call_conv = @tail}>} {
-    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = @tail}>}
+  func.func @transfer(%table_index: core.i32, %value: core.i32) attributes {type = func.func_sig<(core.i32, core.i32) -> (), {call_conv = "tail"}>} {
+    func.tail_call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> (), {call_conv = "tail"}>}
   }
-  func.func @nested(%callee: func.func_sig<(core.i32) -> (), {call_conv = @tail}>) {
+  func.func @nested(%callee: func.func_sig<(core.i32) -> (), {call_conv = "tail"}>) {
     func.return
   }
 }"#,
@@ -1183,15 +1186,15 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @target(%value: core.i32) -> adt.typeref {
+  func.func @target(%value: core.i32) -> test.ref {
     func.return
   }
-  func.func @direct(%value: core.i32) -> adt.typeref {
-    %result = func.call %value {callee = @target} : adt.typeref
+  func.func @direct(%value: core.i32) -> test.ref {
+    %result = func.call %value {callee = @target} : test.ref
     func.return %result
   }
-  func.func @indirect(%table_index: core.i32, %value: core.i32) -> adt.typeref {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> adt.typeref>} : adt.typeref
+  func.func @indirect(%table_index: core.i32, %value: core.i32) -> test.ref {
+    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> test.ref>} : test.ref
     func.return %result
   }
 }"#,
@@ -1201,7 +1204,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(ty, Symbol::new("adt"), Symbol::new("typeref"))
+                .is_dialect(ty, "test", "ref")
                 .then_some(structref_ty)
         });
         lower(&mut ctx, module, type_converter);

@@ -11,7 +11,7 @@ use smallvec::SmallVec;
 use super::refs::{PathRef, TypeRef};
 use crate::IrContext;
 use crate::location::Span;
-use crate::symbol::Symbol;
+use crate::symbol::{Symbol, SymbolPath};
 
 // ============================================================================
 // Location
@@ -48,8 +48,8 @@ pub enum Attribute {
     String(StringRef),
     Bytes(SmallVec<[u8; 16]>),
     Type(TypeRef),
-    /// Single interned symbol.
-    Symbol(Symbol),
+    /// Reference to a symbol table definition, by its qualified name.
+    SymbolRef(SymbolPath),
     /// List of attributes.
     List(Vec<Attribute>),
     /// Dictionary of attributes keyed by symbol, ordered by key.
@@ -77,53 +77,11 @@ impl fmt::Display for IntegerOutOfRange {
 
 impl std::error::Error for IntegerOutOfRange {}
 
-/// Text of a string attribute or of an interned symbol attribute.
-#[derive(Clone, Copy, Debug)]
-pub enum AttributeText<'a> {
-    String(&'a str),
-    Symbol(Symbol),
-}
-
-impl AttributeText<'_> {
-    pub fn with_str<R>(&self, f: impl FnOnce(&str) -> R) -> R {
-        match self {
-            AttributeText::String(text) => f(text),
-            AttributeText::Symbol(symbol) => symbol.with_str(f),
-        }
-    }
-}
-
-impl PartialEq for AttributeText<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        self.with_str(|text| other.with_str(|other| text == other))
-    }
-}
-
-impl Eq for AttributeText<'_> {}
-
-impl PartialEq<str> for AttributeText<'_> {
-    fn eq(&self, other: &str) -> bool {
-        self.with_str(|text| text == other)
-    }
-}
-
-impl PartialEq<&str> for AttributeText<'_> {
-    fn eq(&self, other: &&str) -> bool {
-        self == *other
-    }
-}
-
-impl fmt::Display for AttributeText<'_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        self.with_str(|text| f.write_str(text))
-    }
-}
-
 impl Attribute {
-    /// Extract the inner `Symbol` if this is `Attribute::Symbol`.
-    pub fn as_symbol(&self) -> Option<Symbol> {
+    /// Extract the referenced path if this is `Attribute::SymbolRef`.
+    pub fn as_symbol_ref(&self) -> Option<&SymbolPath> {
         match self {
-            Attribute::Symbol(s) => Some(*s),
+            Attribute::SymbolRef(s) => Some(s),
             _ => None,
         }
     }
@@ -205,7 +163,29 @@ impl Attribute {
             | Attribute::FloatBits(_)
             | Attribute::String(_)
             | Attribute::Bytes(_)
-            | Attribute::Symbol(_)
+            | Attribute::SymbolRef(_)
+            | Attribute::Location(_) => {}
+        }
+    }
+
+    /// Visit every symbol reference nested in this attribute, including those
+    /// inside lists and dictionaries, in printing order.
+    pub fn visit_symbol_refs(&self, f: &mut impl FnMut(&SymbolPath)) {
+        match self {
+            Attribute::SymbolRef(path) => f(path),
+            Attribute::List(items) => {
+                for item in items {
+                    item.visit_symbol_refs(f);
+                }
+            }
+            Attribute::Dict(dict) => dict.visit_symbol_refs(f),
+            Attribute::Unit
+            | Attribute::Bool(_)
+            | Attribute::Int(_)
+            | Attribute::FloatBits(_)
+            | Attribute::String(_)
+            | Attribute::Bytes(_)
+            | Attribute::Type(_)
             | Attribute::Location(_) => {}
         }
     }
@@ -226,7 +206,7 @@ impl Attribute {
             ),
             Attribute::Dict(dict) => Attribute::Dict(
                 dict.iter()
-                    .map(|(key, value)| Ok((*key, value.try_map_types(f)?)))
+                    .map(|(key, value)| Ok((key.clone(), value.try_map_types(f)?)))
                     .collect::<Result<_, _>>()?,
             ),
             Attribute::Unit
@@ -235,7 +215,7 @@ impl Attribute {
             | Attribute::FloatBits(_)
             | Attribute::String(_)
             | Attribute::Bytes(_)
-            | Attribute::Symbol(_)
+            | Attribute::SymbolRef(_)
             | Attribute::Location(_) => self.clone(),
         })
     }
@@ -262,7 +242,11 @@ impl Attribute {
             Attribute::FloatBits(_) => 8,
             Attribute::String(s) => strings.get(*s).len() + 2,
             Attribute::Bytes(b) => b.len() * 4 + 7,
-            Attribute::Symbol(sym) => sym.with_str(|s| s.len()) + 1,
+            Attribute::SymbolRef(path) => path
+                .components()
+                .iter()
+                .map(|name| name.as_str().len() + 3)
+                .sum(),
             Attribute::Type(_) => 10, // rough estimate; actual depends on type
             Attribute::List(list) => {
                 list.iter()
@@ -320,7 +304,13 @@ impl From<Vec<Attribute>> for Attribute {
 
 impl From<Symbol> for Attribute {
     fn from(value: Symbol) -> Self {
-        Attribute::Symbol(value)
+        Attribute::SymbolRef(value.into())
+    }
+}
+
+impl From<SymbolPath> for Attribute {
+    fn from(value: SymbolPath) -> Self {
+        Attribute::SymbolRef(value)
     }
 }
 
@@ -354,24 +344,24 @@ pub struct AttributeMap(Vec<(Symbol, Attribute)>);
 
 /// A key accepted by [`AttributeMap::get`].
 pub trait AttributeKey {
-    fn lookup_symbol(self) -> Option<Symbol>;
+    fn matches(&self, key: &Symbol) -> bool;
 }
 
 impl AttributeKey for Symbol {
-    fn lookup_symbol(self) -> Option<Symbol> {
-        Some(self)
+    fn matches(&self, key: &Symbol) -> bool {
+        self == key
     }
 }
 
 impl AttributeKey for &Symbol {
-    fn lookup_symbol(self) -> Option<Symbol> {
-        Some(*self)
+    fn matches(&self, key: &Symbol) -> bool {
+        *self == key
     }
 }
 
 impl AttributeKey for &str {
-    fn lookup_symbol(self) -> Option<Symbol> {
-        Symbol::lookup(self)
+    fn matches(&self, key: &Symbol) -> bool {
+        key.as_str() == *self
     }
 }
 
@@ -381,13 +371,12 @@ impl AttributeMap {
     }
 
     fn position(&self, key: impl AttributeKey) -> Option<usize> {
-        let symbol = key.lookup_symbol()?;
-        self.0.iter().position(|(key, _)| *key == symbol)
+        self.0
+            .iter()
+            .position(|(existing, _)| key.matches(existing))
     }
 
-    /// Return the attribute associated with a symbol or already-interned string.
-    ///
-    /// A missing string key is not added to the global symbol interner.
+    /// Return the attribute associated with a symbol or its text.
     pub fn get(&self, key: impl AttributeKey) -> Option<&Attribute> {
         let index = self.position(key)?;
         Some(&self.0[index].1)
@@ -435,24 +424,12 @@ impl AttributeMap {
         self.get_string_ref(key).map(|s| ctx.str(s))
     }
 
-    pub fn get_symbol(&self, key: impl AttributeKey) -> Option<Symbol> {
-        self.get(key).and_then(Attribute::as_symbol)
+    pub fn get_symbol_ref(&self, key: impl AttributeKey) -> Option<&SymbolPath> {
+        self.get(key).and_then(Attribute::as_symbol_ref)
     }
 
     pub fn get_type(&self, key: impl AttributeKey) -> Option<TypeRef> {
         self.get(key).and_then(Attribute::as_type)
-    }
-
-    pub fn get_text<'a>(
-        &self,
-        ctx: &'a IrContext,
-        key: impl AttributeKey,
-    ) -> Option<AttributeText<'a>> {
-        match self.get(key)? {
-            Attribute::String(text) => Some(AttributeText::String(ctx.str(*text))),
-            Attribute::Symbol(symbol) => Some(AttributeText::Symbol(*symbol)),
-            _ => None,
-        }
     }
 
     fn get_integer<T>(
@@ -481,7 +458,7 @@ impl AttributeMap {
     ) -> Option<Attribute> {
         let key = key.into();
         let value = value.into();
-        if let Some(index) = self.position(key) {
+        if let Some(index) = self.position(&key) {
             return Some(std::mem::replace(&mut self.0[index].1, value));
         }
         // Most maps hold one or two entries. A `Vec`'s first push reserves
@@ -509,6 +486,14 @@ impl AttributeMap {
 
     pub fn keys(&self) -> AttributeKeys<'_> {
         AttributeKeys(self.0.iter())
+    }
+
+    /// Visit every symbol reference in these attributes; see
+    /// [`Attribute::visit_symbol_refs`].
+    pub fn visit_symbol_refs(&self, f: &mut impl FnMut(&SymbolPath)) {
+        for value in self.values() {
+            value.visit_symbol_refs(f);
+        }
     }
 
     pub fn values(&self) -> AttributeValues<'_> {
@@ -973,7 +958,13 @@ impl TypeInterner {
     }
 
     /// Check if this type matches the given dialect and name.
-    pub fn is_dialect(&self, r: TypeRef, dialect: Symbol, name: Symbol) -> bool {
+    ///
+    /// `dialect` and `name` are anything a `Symbol` compares with, such as a
+    /// `&str` or a `&Symbol`.
+    pub fn is_dialect<D, N>(&self, r: TypeRef, dialect: D, name: N) -> bool
+    where
+        Symbol: PartialEq<D> + PartialEq<N>,
+    {
         let data = self.get(r);
         data.dialect == dialect && data.name == name
     }
@@ -1145,9 +1136,12 @@ mod tests {
     fn parameter_attributes_are_canonical_and_part_of_identity() {
         let mut ctx = IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let marked: AttributeMap = [(Symbol::new("k"), Attribute::Symbol(Symbol::new("v")))]
-            .into_iter()
-            .collect();
+        let marked: AttributeMap = [(
+            Symbol::new("k"),
+            Attribute::SymbolRef(SymbolPath::from("v")),
+        )]
+        .into_iter()
+        .collect();
 
         let plain = ctx.intern_type(
             TypeDataBuilder::new("core", "tuple")
@@ -1199,7 +1193,7 @@ mod tests {
             Attribute::Dict(
                 entries
                     .into_iter()
-                    .map(|(key, value)| (Symbol::from_dynamic(key), value))
+                    .map(|(key, value)| (Symbol::new(key), value))
                     .collect(),
             )
         };
@@ -1253,6 +1247,33 @@ mod tests {
     }
 
     #[test]
+    fn symbol_refs_are_visited_through_lists_and_dicts() {
+        let mut ctx = IrContext::new();
+        let reference = |name| Attribute::SymbolRef(SymbolPath::from(name));
+        let mut attrs = AttributeMap::new();
+        attrs.insert("callee", reference("direct"));
+        attrs.insert("name", ctx.string_attr("not_a_reference"));
+        attrs.insert(
+            "table",
+            Attribute::List(vec![
+                reference("first"),
+                Attribute::Dict(
+                    [(Symbol::new("target"), reference("nested"))]
+                        .into_iter()
+                        .collect(),
+                ),
+            ]),
+        );
+
+        let mut visited = Vec::new();
+        attrs.visit_symbol_refs(&mut |symbol| visited.push(symbol.clone()));
+        assert_eq!(
+            visited,
+            ["direct", "first", "nested"].map(Symbol::new).to_vec()
+        );
+    }
+
+    #[test]
     fn nested_types_are_visited_and_mapped_through_lists_and_dicts() {
         let mut ctx = IrContext::new();
         let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
@@ -1261,7 +1282,10 @@ mod tests {
             Attribute::Dict(
                 [
                     (Symbol::new("ty"), Attribute::Type(ty)),
-                    (Symbol::new("tag"), Attribute::Symbol(Symbol::new("keep"))),
+                    (
+                        Symbol::new("tag"),
+                        Attribute::SymbolRef(SymbolPath::from("keep")),
+                    ),
                 ]
                 .into_iter()
                 .collect(),
@@ -1292,19 +1316,20 @@ mod tests {
 
         let mut attrs = AttributeMap::new();
         let answer = Symbol::new("answer");
-        attrs.insert(answer, Attribute::Int(42));
+        attrs.insert(answer.clone(), Attribute::Int(42));
 
         assert_eq!(attrs.get("answer"), Some(&Attribute::Int(42)));
-        assert_eq!(attrs.get(answer), Some(&Attribute::Int(42)));
+        assert_eq!(attrs.get(&answer), Some(&Attribute::Int(42)));
         assert_eq!(get_by_symbol(&attrs, &answer), Some(&Attribute::Int(42)));
         assert!(attrs.contains_key("answer"));
-        assert_eq!(attrs.keys().copied().collect::<Vec<_>>(), vec![answer]);
+        assert_eq!(
+            attrs.keys().cloned().collect::<Vec<_>>(),
+            vec![answer.clone()]
+        );
 
         let missing = "__trunk_ir_attribute_map_missing_key__";
-        assert_eq!(Symbol::lookup(missing), None);
         assert_eq!(attrs.get(missing), None);
         assert!(!attrs.contains_key(missing));
-        assert_eq!(Symbol::lookup(missing), None);
 
         assert_eq!(attrs.remove(answer), Some(Attribute::Int(42)));
         assert!(attrs.is_empty());
@@ -1360,26 +1385,26 @@ mod tests {
     fn attribute_map_later_entries_replace_earlier_ones() {
         let key = Symbol::new("key");
         let mut attrs = AttributeMap::new();
-        assert_eq!(attrs.insert(key, Attribute::Int(1)), None);
+        assert_eq!(attrs.insert(key.clone(), Attribute::Int(1)), None);
         assert_eq!(
-            attrs.insert(key, Attribute::Int(2)),
+            attrs.insert(key.clone(), Attribute::Int(2)),
             Some(Attribute::Int(1))
         );
         assert_eq!(attrs.len(), 1);
-        assert_eq!(attrs.get(key), Some(&Attribute::Int(2)));
+        assert_eq!(attrs.get(&key), Some(&Attribute::Int(2)));
 
         let collected: AttributeMap = [
-            (key, Attribute::Int(1)),
+            (key.clone(), Attribute::Int(1)),
             (Symbol::new("other"), Attribute::Unit),
-            (key, Attribute::Int(3)),
+            (key.clone(), Attribute::Int(3)),
         ]
         .into_iter()
         .collect();
         assert_eq!(collected.len(), 2);
-        assert_eq!(collected.get(key), Some(&Attribute::Int(3)));
+        assert_eq!(collected.get(&key), Some(&Attribute::Int(3)));
 
-        let mut extended = collected.clone();
-        extended.extend([(key, Attribute::Int(4))]);
+        let mut extended = collected;
+        extended.extend([(key.clone(), Attribute::Int(4))]);
         assert_eq!(extended.get(key), Some(&Attribute::Int(4)));
         assert_eq!(extended.len(), 2);
     }
@@ -1416,12 +1441,8 @@ mod tests {
         );
         assert_eq!(attrs.get_u32("enabled"), Ok(None));
 
-        let string_text = attrs.get_text(&ctx, "name").expect("string text");
-        let symbol_text = attrs.get_text(&ctx, "symbol_name").expect("symbol text");
-        assert_eq!(string_text, "tribute");
-        assert_eq!(symbol_text, "tribute");
-        assert_eq!(string_text, symbol_text);
-        assert_eq!(attrs.get_text(&ctx, "enabled"), None);
+        assert_eq!(attrs.get_str(&ctx, "name"), Some("tribute"));
+        assert_eq!(attrs.get_str(&ctx, "symbol_name"), None);
     }
 
     #[test]

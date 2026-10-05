@@ -4,9 +4,12 @@
 //! lowering and shared CPS legalization. It deliberately contains no physical
 //! evidence, closure-environment, continuation, or backend carrier layout.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 use std::fmt;
 use std::ops::ControlFlow;
+use trunk_ir::attr_kind::SymbolRef;
+use trunk_ir::attr_kind::Type;
 
 use crate::dialect::adt;
 use itertools::Itertools;
@@ -21,7 +24,7 @@ use trunk_ir::rewrite::Module;
 use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
-use trunk_ir::{IrContext, Symbol};
+use trunk_ir::{IrContext, Symbol, SymbolPath};
 
 use super::list;
 
@@ -78,7 +81,7 @@ mod tribute_control {
     struct ResumeToken<Input, Answer>;
 
     // FuncSig operations
-    fn func<S: FuncSig>(sym_name: Attr<Symbol>, r#type: Attr<S::Type>) {
+    fn func<S: FuncSig>(sym_name: Attr<String>, r#type: Attr<S::Type>) {
         #[region(body?)]
         {}
     }
@@ -88,11 +91,23 @@ mod tribute_control {
         {}
     }
 
-    fn func_ref(func_ref: Attr<Symbol>) -> Value<impl FuncSig> {}
+    fn func_ref(func_ref: Attr<SymbolRef>) -> Value<impl FuncSig> {}
 
-    fn call(callee: Attr<Symbol>, args: Variadic<_>) -> Value<_> {}
+    #[verify]
+    fn call(
+        callee: Attr<SymbolRef>,
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        args: Variadic<_>,
+    ) -> Value<_> {
+    }
 
-    fn call_indirect<S: FuncSig>(callee: Value<S>, args: Values<S::Inputs>) -> Value<S::Result> {}
+    #[verify]
+    fn call_indirect<S: FuncSig>(
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        callee: Value<S>,
+        args: Values<S::Inputs>,
+    ) -> Value<S::Result> {
+    }
 
     fn r#return(value: Value<_>) {}
 
@@ -105,7 +120,8 @@ mod tribute_control {
     ) -> Value<_> {
     }
 
-    fn handle() -> Value<_> {
+    #[verify]
+    fn handle(evidence_plan: Option<Attr<[EvidenceStep]>>) -> Value<_> {
         #[region(body)]
         {}
         #[region(completion)]
@@ -124,9 +140,171 @@ mod tribute_control {
         {}
     }
 
-    fn resume<T: ResumeToken>(resume_token: Value<T>, value: Value<T::Input>) -> Value<T::Answer> {}
+    #[verify]
+    fn resume<T: ResumeToken>(
+        evidence_plan: Option<Attr<[EvidenceStep]>>,
+        resume_token: Value<T>,
+        value: Value<T::Input>,
+    ) -> Value<T::Answer> {
+    }
 
     fn r#yield(value: Value<_>) {}
+}
+
+/// Attribute that selects the evidence a call, `resume`, or handle body
+/// receives from the evidence of the code around it.
+pub const EVIDENCE_PLAN_ATTR: &str = "evidence_plan";
+
+/// One element of an `evidence_plan`: `{mask = instance}`, `{dup = instance}`,
+/// or `{outer = instance}`, where the instance is an exact `core.ability_ref`
+/// type.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum EvidenceStep {
+    /// Hide the top handler of the instance, uncovering the one beneath.
+    Mask(TypeRef),
+    /// Stack one more copy of the top handler of the instance.
+    Dup(TypeRef),
+    /// Take the evidence the top handler of the instance was installed on.
+    /// CPS legalization adds this step; source operations never carry it.
+    Outer(TypeRef),
+}
+
+impl EvidenceStep {
+    /// The `core.ability_ref` instance this step changes.
+    pub fn instance(self) -> TypeRef {
+        match self {
+            Self::Mask(instance) | Self::Dup(instance) | Self::Outer(instance) => instance,
+        }
+    }
+
+    fn keyword(self) -> &'static str {
+        match self {
+            Self::Mask(_) => "mask",
+            Self::Dup(_) => "dup",
+            Self::Outer(_) => "outer",
+        }
+    }
+
+    /// Decode one plan element, or say why it is malformed.
+    pub fn from_attribute(ctx: &IrContext, attr: &Attribute) -> Result<Self, String> {
+        let Attribute::Dict(entries) = attr else {
+            return Err("evidence_plan element must be a dictionary".into());
+        };
+        let Ok((key, value)) = entries.iter().exactly_one() else {
+            return Err(format!(
+                "evidence_plan element must have exactly one entry, found {}",
+                entries.len()
+            ));
+        };
+        let instance = match value {
+            Attribute::Type(instance) if is_ability_ref(ctx, *instance) => *instance,
+            _ => {
+                return Err(format!(
+                    "evidence_plan {key} must name a core.ability_ref type"
+                ));
+            }
+        };
+        key.with_str(|key| match key {
+            "mask" => Ok(Self::Mask(instance)),
+            "dup" => Ok(Self::Dup(instance)),
+            "outer" => Ok(Self::Outer(instance)),
+            other => Err(format!(
+                "evidence_plan element must be mask, dup, or outer, found {other}"
+            )),
+        })
+    }
+
+    pub fn to_attribute(self) -> Attribute {
+        let mut entries = AttributeMap::new();
+        entries.insert(
+            Symbol::new(self.keyword()),
+            Attribute::Type(self.instance()),
+        );
+        Attribute::Dict(entries)
+    }
+
+    /// The `evidence_plan` value for these steps, or `None` for an empty
+    /// plan, which is written by omitting the attribute.
+    pub fn plan_attribute(steps: impl IntoIterator<Item = Self>) -> Option<Attribute> {
+        let steps: Vec<_> = steps.into_iter().map(Self::to_attribute).collect();
+        (!steps.is_empty()).then_some(Attribute::List(steps))
+    }
+}
+
+impl trunk_ir::attr_kind::AttrKind for EvidenceStep {
+    const KIND: trunk_ir::op_schema::AttributeKind =
+        trunk_ir::op_schema::AttributeKind::Dict(&trunk_ir::op_schema::AttributeKind::Type);
+    type Out<'ctx> = EvidenceStep;
+    type In = EvidenceStep;
+
+    fn read<'ctx>(ctx: &'ctx IrContext, attr: &'ctx Attribute) -> EvidenceStep {
+        Self::from_attribute(ctx, attr)
+            .unwrap_or_else(|error| panic!("unverified evidence_plan element: {error}"))
+    }
+
+    fn write(_: &mut IrContext, value: EvidenceStep) -> Attribute {
+        value.to_attribute()
+    }
+}
+
+fn is_ability_ref(ctx: &IrContext, ty: TypeRef) -> bool {
+    let data = ctx.get_type(ty);
+    data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref")
+}
+
+/// Check the shape of an operation's `evidence_plan`. Whether the selection
+/// matches the effect rows is typechecking's responsibility.
+fn verify_evidence_plan(ctx: &IrContext, op: OpRef, mask_only: bool) -> Result<(), String> {
+    let Some(plan) = ctx.op(op).attributes.get(EVIDENCE_PLAN_ATTR) else {
+        return Ok(());
+    };
+    let Attribute::List(items) = plan else {
+        return Err("evidence_plan must be a list".into());
+    };
+    if items.is_empty() {
+        return Err("evidence_plan must not be empty; omit it to keep the evidence".into());
+    }
+    let mut seen = HashSet::default();
+    for item in items.iter() {
+        let step = EvidenceStep::from_attribute(ctx, item)?;
+        if matches!(step, EvidenceStep::Outer(_)) {
+            return Err("a source operation's evidence_plan may not use outer".into());
+        }
+        if mask_only && matches!(step, EvidenceStep::Dup(_)) {
+            return Err("a handle's evidence_plan may only mask".into());
+        }
+        if !seen.insert(step.instance()) {
+            return Err(format!(
+                "evidence_plan names ability instance {} more than once",
+                step.instance()
+            ));
+        }
+    }
+    Ok(())
+}
+
+impl trunk_ir::ops::Verify for Call {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), false)
+    }
+}
+
+impl trunk_ir::ops::Verify for CallIndirect {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), false)
+    }
+}
+
+impl trunk_ir::ops::Verify for Resume {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), false)
+    }
+}
+
+impl trunk_ir::ops::Verify for Handle {
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        verify_evidence_plan(ctx, self.op_ref(), true)
+    }
 }
 
 /// Why a name-matching source signature does not satisfy its storage contract.
@@ -365,7 +543,7 @@ pub fn resume_token_parts(ctx: &IrContext, ty: TypeRef) -> Option<(TypeRef, Type
 pub fn func_declaration(
     ctx: &mut IrContext,
     location: Location,
-    sym_name: Symbol,
+    sym_name: &Symbol,
     func_sig_type: TypeRef,
 ) -> Func {
     let data = trunk_ir::OperationDataBuilder::new(
@@ -373,7 +551,10 @@ pub fn func_declaration(
         Symbol::new("tribute_control"),
         Symbol::new("func"),
     )
-    .attr("sym_name", Attribute::Symbol(sym_name))
+    .attr(
+        "sym_name",
+        Attribute::String(ctx.intern_symbol_text(sym_name)),
+    )
     .attr("type", Attribute::Type(func_sig_type))
     .build(ctx);
     let op = ctx.create_op(data);
@@ -382,10 +563,10 @@ pub fn func_declaration(
 
 impl Func {
     /// Return the optional semantic identity attached by the trusted frontend registry.
-    pub fn compiler_intrinsic_identity(&self, ctx: &IrContext) -> Option<Symbol> {
+    pub fn compiler_intrinsic_identity<'a>(&self, ctx: &'a IrContext) -> Option<&'a str> {
         ctx.op(self.op_ref())
             .attributes
-            .get_symbol(COMPILER_INTRINSIC_ATTR)
+            .get_str(ctx, COMPILER_INTRINSIC_ATTR)
     }
 }
 
@@ -393,6 +574,11 @@ impl Func {
 // non-isolated so its exact external-reference/capture set can be validated.
 inventory::submit! {
     trunk_ir::op_interface::IsolatedFromAboveOps::register::<Func>()
+}
+
+impl trunk_ir::op_interface::CallLikeModel for Call {}
+inventory::submit! {
+    trunk_ir::op_interface::CallLikeOps::register::<Call>()
 }
 
 // These operations only create/refer to values and are safe for DCE.
@@ -404,10 +590,6 @@ inventory::submit! {
 }
 
 // === Custom assembly: tribute_control.func ===
-
-fn print_symbol(h: &mut trunk_ir::printer::OpPrintHelper<'_, '_>, symbol: Symbol) -> fmt::Result {
-    h.write_attribute(&Attribute::Symbol(symbol))
-}
 
 fn func_sig_parts(
     ctx: &IrContext,
@@ -436,17 +618,14 @@ fn print_extra_attributes(
     excluded: &[&str],
 ) -> fmt::Result {
     use fmt::Write;
-    let excluded: HashSet<Symbol> = excluded
-        .iter()
-        .map(|key| Symbol::from_dynamic(key))
-        .collect();
+    let excluded: HashSet<Symbol> = excluded.iter().map(|key| Symbol::new(key)).collect();
     let attrs: Vec<_> = h
         .ctx()
         .op(op)
         .attributes
         .iter()
         .filter(|(key, _)| !excluded.contains(key))
-        .map(|(key, value)| (*key, value.clone()))
+        .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     if attrs.is_empty() {
         return Ok(());
@@ -505,7 +684,10 @@ fn print_func(
     use fmt::Write;
 
     let data = h.ctx().op(op);
-    let symbol = data.attributes.get_symbol("sym_name");
+    let symbol = data
+        .attributes
+        .get_str(h.ctx(), "sym_name")
+        .map(str::to_owned);
     let callable_ty = data.attributes.get_type("type");
     let region = h.ctx().op_region(op, 0);
     if !has_concise_func_sig(h.ctx(), callable_ty) {
@@ -515,7 +697,7 @@ fn print_func(
 
     write!(h, "{}tribute_control.func ", " ".repeat(indent))?;
     if let Some(symbol) = symbol {
-        print_symbol(h, symbol)?;
+        h.write_symbol_text(&symbol)?;
     } else {
         write!(h, "@<missing>")?;
     }
@@ -814,15 +996,15 @@ pub struct OperationDeclaration {
 /// registered identity and complete logical callable type.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CompilerIntrinsicDeclaration {
-    pub symbol: Symbol,
+    pub symbol: SymbolPath,
     pub identity: Symbol,
     pub callable_type: TypeRef,
 }
 
 impl CompilerIntrinsicDeclaration {
-    pub fn new(symbol: Symbol, identity: Symbol, callable_type: TypeRef) -> Self {
+    pub fn new(symbol: impl Into<SymbolPath>, identity: Symbol, callable_type: TypeRef) -> Self {
         Self {
-            symbol,
+            symbol: symbol.into(),
             identity,
             callable_type,
         }
@@ -916,7 +1098,7 @@ fn push_type_error(errors: &mut Vec<ValidationError>, message: impl Into<String>
 
 fn is_control_op(ctx: &IrContext, op: OpRef, name: &str) -> bool {
     let data = ctx.op(op);
-    data.dialect == Symbol::new("tribute_control") && data.name == Symbol::from_dynamic(name)
+    data.dialect == Symbol::new("tribute_control") && data.name == Symbol::new(name)
 }
 
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
@@ -995,7 +1177,7 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 continue;
             }
             for component in data.params.iter().copied() {
-                if contains_forbidden_logical_component(ctx, component, &mut HashSet::new()) {
+                if contains_forbidden_logical_component(ctx, component, &mut HashSet::default()) {
                     push_type_error(
                         errors,
                         format!(
@@ -1014,7 +1196,8 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                 );
             } else {
                 for component in data.params.iter().copied() {
-                    if contains_forbidden_logical_component(ctx, component, &mut HashSet::new()) {
+                    if contains_forbidden_logical_component(ctx, component, &mut HashSet::default())
+                    {
                         push_type_error(
                             errors,
                             format!(
@@ -1109,7 +1292,7 @@ fn terminator(
         return None;
     };
     let data = ctx.op(op);
-    if data.dialect != Symbol::from_dynamic(dialect) || data.name != Symbol::from_dynamic(name) {
+    if data.dialect != Symbol::new(dialect) || data.name != Symbol::new(name) {
         push_op_error(
             ctx,
             owner,
@@ -1213,7 +1396,7 @@ fn validate_func_isolation(
     body: RegionRef,
     errors: &mut Vec<ValidationError>,
 ) {
-    let mut defined = HashSet::new();
+    let mut defined = HashSet::default();
     collect_region_values(ctx, body, &mut defined);
     let mut invalid = Vec::new();
     walk_region_ops(ctx, body, &mut |nested| {
@@ -1260,7 +1443,7 @@ fn validate_call(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) 
     let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
         .into_iter()
         .chain(ctx.op_result_types(op).iter().copied())
-        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::new()));
+        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
     if has_unresolved_type {
         push_op_error(ctx, op, errors, "operands and result must be resolved");
     }
@@ -1319,7 +1502,7 @@ fn validate_perform(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError
     let has_unresolved_type = value_types(ctx, ctx.op_operands(op))
         .into_iter()
         .chain(ctx.op_result_types(op).iter().copied())
-        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::new()));
+        .any(|ty| contains_unresolved_type(ctx, ty, &mut HashSet::default()));
     if has_unresolved_type {
         push_op_error(ctx, op, errors, "operands and result must be resolved");
     }
@@ -1393,7 +1576,7 @@ fn validate_handle(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>
             "completion yield type must match handle result type",
         );
     }
-    let mut clauses = HashSet::new();
+    let mut clauses = HashSet::default();
     for child in ctx.block(handlers_block).ops.iter().copied() {
         if !is_control_op(ctx, child, "handler") {
             push_op_error(
@@ -1674,7 +1857,7 @@ fn validate_symbol_use(
 ) {
     {
         if is_control_op(ctx, op, "func_ref") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol("func_ref") else {
+            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref("func_ref") else {
                 return;
             };
             let Some(target) = funcs
@@ -1717,7 +1900,7 @@ fn validate_symbol_use(
                 );
             }
         } else if is_control_op(ctx, op, "call") {
-            let Some(symbol) = ctx.op(op).attributes.get_symbol("callee") else {
+            let Some(symbol) = ctx.op(op).attributes.get_symbol_ref("callee") else {
                 return;
             };
             let Some(target) = funcs
@@ -1811,9 +1994,9 @@ fn validate_lambda_captures(ctx: &IrContext, body: RegionRef, errors: &mut Vec<V
         if capture_set.len() != captures.len() {
             push_op_error(ctx, op, errors, "capture list contains duplicate values");
         }
-        let mut defined = HashSet::new();
+        let mut defined = HashSet::default();
         collect_region_values(ctx, region, &mut defined);
-        let mut external = HashSet::new();
+        let mut external = HashSet::default();
         collect_external_references(ctx, region, &defined, &mut external);
         for missing in external.difference(&capture_set) {
             push_op_error(
@@ -1839,7 +2022,7 @@ fn declaration_map<'a>(
     declarations: &'a [OperationDeclaration],
     errors: &mut Vec<ValidationError>,
 ) -> HashMap<(TypeRef, StringRef), &'a OperationDeclaration> {
-    let mut map = HashMap::new();
+    let mut map = HashMap::default();
     for declaration in declarations {
         let key = (declaration.ability_ref, declaration.op_name);
         if map.insert(key, declaration).is_some() {
@@ -1901,8 +2084,8 @@ fn canonical_nominal_layouts(
     reachable_types: &HashSet<TypeRef>,
     errors: &mut Vec<ValidationError>,
 ) -> HashMap<StringRef, TypeRef> {
-    let mut layouts = HashMap::new();
-    let mut referenced_names = HashSet::new();
+    let mut layouts = HashMap::default();
+    let mut referenced_names = HashSet::default();
     let mut sorted_reachable_types = reachable_types.iter().copied().collect::<Vec<_>>();
     sorted_reachable_types.sort_unstable();
     for ty in sorted_reachable_types {
@@ -2010,7 +2193,7 @@ fn collect_reachable_ir_types(ctx: &IrContext, module: OpRef) -> HashSet<TypeRef
         }
     }
 
-    let mut types = HashSet::new();
+    let mut types = HashSet::default();
     collect_op_types(ctx, module, &mut types);
     for region in ctx.op_regions(module) {
         walk_region_ops(ctx, region, &mut |op| collect_op_types(ctx, op, &mut types));
@@ -2131,7 +2314,7 @@ fn validate_managed_reference_boundaries(
         }
         for result in ctx.op_results(op) {
             if is_adt_typeref(ctx, ctx.value_ty(*result))
-                && raw_pointer_cast_origin(ctx, *result, &mut HashSet::new())
+                && raw_pointer_cast_origin(ctx, *result, &mut HashSet::default())
             {
                 push_op_error(
                     ctx,
@@ -2148,11 +2331,11 @@ fn compiler_intrinsic_map<'a>(
     ctx: &IrContext,
     declarations: &'a [CompilerIntrinsicDeclaration],
     errors: &mut Vec<ValidationError>,
-) -> HashMap<Symbol, &'a CompilerIntrinsicDeclaration> {
-    let mut map = HashMap::new();
+) -> HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration> {
+    let mut map = HashMap::default();
     let mut previous = None;
     for declaration in declarations {
-        let key = (declaration.symbol, declaration.identity);
+        let key = (declaration.symbol.clone(), declaration.identity.clone());
         if previous.is_some_and(|previous| previous > key) {
             push_type_error(
                 errors,
@@ -2169,7 +2352,10 @@ fn compiler_intrinsic_map<'a>(
                 ),
             );
         }
-        if map.insert(declaration.symbol, declaration).is_some() {
+        if map
+            .insert(declaration.symbol.clone(), declaration)
+            .is_some()
+        {
             push_type_error(
                 errors,
                 format!(
@@ -2250,7 +2436,7 @@ fn variant_field_type(
 
 struct CallableProvenance<'a> {
     functions: &'a SymbolTable,
-    registered: &'a HashMap<Symbol, &'a CompilerIntrinsicDeclaration>,
+    registered: &'a HashMap<SymbolPath, &'a CompilerIntrinsicDeclaration>,
     declarations: &'a HashMap<(TypeRef, StringRef), &'a OperationDeclaration>,
     nominal_layouts: &'a HashMap<StringRef, TypeRef>,
 }
@@ -2345,7 +2531,7 @@ fn callable_has_semantic_provenance(
                     && ctx
                         .op(producer)
                         .attributes
-                        .get_symbol(if is_control_op(ctx, producer, "func_ref") {
+                        .get_symbol_ref(if is_control_op(ctx, producer, "func_ref") {
                             "func_ref"
                         } else {
                             "callee"
@@ -2376,7 +2562,7 @@ fn callable_has_semantic_provenance(
 fn verified_callable_declaration(
     ctx: &IrContext,
     function: OpRef,
-    registered: &HashMap<Symbol, &CompilerIntrinsicDeclaration>,
+    registered: &HashMap<SymbolPath, &CompilerIntrinsicDeclaration>,
 ) -> bool {
     if ctx.op_has_regions(function) {
         return true;
@@ -2411,7 +2597,7 @@ fn validate_callable_origins(
         declarations: operation_declarations,
         nominal_layouts,
     };
-    let mut seen = HashSet::new();
+    let mut seen = HashSet::default();
     walk_region_ops(ctx, body, &mut |op| {
         if is_control_op(ctx, op, "func") {
             let data = ctx.op(op);
@@ -2464,7 +2650,7 @@ fn validate_callable_origins(
                 let trusted_c_ffi = data.attributes.get_str(ctx, "abi") == Some("C");
                 if !exact_intrinsic
                     && !trusted_c_ffi
-                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::new())
+                    && contains_adt_typeref(ctx, func_sig_type, &mut HashSet::default())
                 {
                     push_op_error(
                         ctx,
@@ -2476,7 +2662,7 @@ fn validate_callable_origins(
             }
         } else if is_control_op(ctx, op, "call_indirect")
             && let Some(callee) = ctx.op_operands(op).first().copied()
-            && !callable_has_semantic_provenance(ctx, callee, &provenance, &mut HashSet::new())
+            && !callable_has_semantic_provenance(ctx, callee, &provenance, &mut HashSet::default())
         {
             push_op_error(
                 ctx,
@@ -2684,13 +2870,13 @@ fn direct_call_reenters_enclosing_func(ctx: &IrContext, op: OpRef) -> bool {
     if !is_control_op(ctx, op, "call") {
         return false;
     }
-    let Some(callee) = ctx.op(op).attributes.get_symbol("callee") else {
+    let Some(callee) = ctx.op(op).attributes.get_symbol_ref("callee") else {
         return false;
     };
     let mut owner = parent_op(ctx, op);
     while let Some(current) = owner {
         if is_control_op(ctx, current, "func") {
-            return qualified_name(ctx, current) == Some(callee);
+            return qualified_name(ctx, current) == Some(callee.clone());
         }
         owner = parent_op(ctx, current);
     }
@@ -2875,7 +3061,7 @@ fn validate_token_path(
             );
         }
     }
-    let mut visited = HashSet::new();
+    let mut visited = HashSet::default();
     for capture in captures {
         if let Some(&closure_value) = ctx.op_results(capture).first() {
             validate_affine_lambda_carrier(ctx, handler, closure_value, &mut visited, errors);
@@ -3068,9 +3254,7 @@ mod tests {
     }
 
     fn simple_type(ctx: &mut IrContext, dialect: &str, name: &str) -> TypeRef {
-        ctx.intern_type(
-            TypeDataBuilder::new(Symbol::from_dynamic(dialect), Symbol::from_dynamic(name)).build(),
-        )
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
     }
 
     fn ability_type(ctx: &mut IrContext, name: &str) -> TypeRef {
@@ -3113,7 +3297,7 @@ mod tests {
         }
         let body = region(ctx, loc, body_block);
         let module = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(body)
             .build(ctx, loc);
         Module::new(ctx, module.op_ref()).expect("core.module")
@@ -3132,7 +3316,7 @@ mod tests {
         ctx.push_op(entry, ret.op_ref());
         let body = region(ctx, loc, entry);
         Func::operands()
-            .sym_name(Symbol::from_dynamic(symbol))
+            .sym_name(ctx.intern_str(symbol))
             .r#type(ty)
             .regions(body)
             .build(ctx, loc)
@@ -3159,13 +3343,13 @@ mod tests {
         let x = ctx.block_arg(entry, 0);
 
         let function_ref = FuncRef::operands()
-            .func_ref(Symbol::new("id"))
+            .func_ref(SymbolPath::from("id"))
             .results(direct)
             .build(&mut ctx, loc);
         ctx.push_op(entry, function_ref.op_ref());
         let function_ref_value = function_ref.result(&ctx);
         let direct_call = Call::operands([x])
-            .callee(Symbol::new("id"))
+            .callee(SymbolPath::from("id"))
             .results(i32_ty)
             .build(&mut ctx, loc);
         ctx.push_op(entry, direct_call.op_ref());
@@ -3233,7 +3417,7 @@ mod tests {
         ctx.push_op(entry, ret.op_ref());
         let control_body = region(&mut ctx, loc, entry);
         let control = Func::operands()
-            .sym_name(Symbol::new("control"))
+            .sym_name("control")
             .r#type(direct)
             .regions(control_body)
             .build(&mut ctx, loc);
@@ -3510,12 +3694,12 @@ mod tests {
         // constructor/accessor and preservation of caller-provided locations.
         let fixture = builder_fixture();
         let ctx = &fixture.ctx;
-        let mut names = HashSet::new();
+        let mut names = HashSet::default();
         let body = fixture.module.body(ctx).expect("module body");
         walk_region_ops(ctx, body, &mut |op| {
             let data = ctx.op(op);
             if data.dialect == Symbol::new("tribute_control") {
-                names.insert(data.name);
+                names.insert(data.name.clone());
                 assert_eq!(data.location.span, Span::new(7, 19));
             }
         });
@@ -3532,10 +3716,7 @@ mod tests {
             "resume",
             "yield",
         ] {
-            assert!(
-                names.contains(&Symbol::from_dynamic(expected)),
-                "{expected}"
-            );
+            assert!(names.contains(&Symbol::new(expected)), "{expected}");
         }
 
         let handler = Handler::from_op(ctx, fixture.handler).expect("typed handler accessor");
@@ -3551,12 +3732,12 @@ mod tests {
   !shared = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @signature]], tribute.calling_convention = 0}>
   !lambda = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @lambda]], tribute.calling_convention = 0}>
   !distinct = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {metadata = [[!inner, @distinct]], tribute.calling_convention = 0}>
-  tribute_control.func {metadata = @declaration, sym_name = @decl, type = !shared, visibility = @private}
-  tribute_control.func {metadata = @definition, sym_name = @definition, type = !shared, visibility = @private} {
+  tribute_control.func {metadata = @declaration, sym_name = "decl", type = !shared, visibility = @private}
+  tribute_control.func {metadata = @definition, sym_name = "definition", type = !shared, visibility = @private} {
     ^bb0(%left: core.i32, %right: core.i32):
       tribute_control.return %left
   }
-  tribute_control.func {sym_name = @different, type = !distinct}
+  tribute_control.func {sym_name = "different", type = !distinct}
   tribute_control.func @identity(%value: core.i32) -> core.i32 convention(evidence_direct) {
     tribute_control.return %value
   }
@@ -3583,8 +3764,8 @@ mod tests {
             "{printed}"
         );
         assert!(printed.contains("type = !shared"), "{printed}");
-        assert!(printed.contains("sym_name = @decl"), "{printed}");
-        assert!(printed.contains("sym_name = @definition"), "{printed}");
+        assert!(printed.contains("sym_name = \"decl\""), "{printed}");
+        assert!(printed.contains("sym_name = \"definition\""), "{printed}");
         assert!(printed.contains("metadata = @declaration"), "{printed}");
         assert!(printed.contains("metadata = @definition"), "{printed}");
         assert!(printed.contains(" : !lambda"), "{printed}");
@@ -3611,13 +3792,23 @@ mod tests {
         let declaration = funcs
             .iter()
             .copied()
-            .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("decl")))
+            .find(|op| {
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::new)
+                    == Some(Symbol::new("decl"))
+            })
             .unwrap();
         let definition = funcs
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("definition"))
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::new)
+                    == Some(Symbol::new("definition"))
             })
             .unwrap();
         let shared = ctx.op(declaration).attributes.get_type("type").unwrap();
@@ -3629,7 +3820,11 @@ mod tests {
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("different"))
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::new)
+                    == Some(Symbol::new("different"))
             })
             .and_then(|op| ctx.op(op).attributes.get_type("type"))
             .unwrap();
@@ -3639,12 +3834,12 @@ mod tests {
             Some(Attribute::List(_))
         ));
         assert_eq!(
-            ctx.op(declaration).attributes.get_symbol("metadata"),
-            Some(Symbol::new("declaration"))
+            ctx.op(declaration).attributes.get_symbol_ref("metadata"),
+            Some(&SymbolPath::from("declaration"))
         );
 
         let inline = r#"core.module @test {
-  tribute_control.func {sym_name = @inline, type = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = @inline, tribute.calling_convention = 0}>}
+  tribute_control.func {sym_name = "inline", type = tribute_control.func_sig<(core.i32) -> core.i32, {metadata = @inline, tribute.calling_convention = 0}>}
 }"#;
         let (inline_ctx, inline_module) = parse_fixture(inline);
         let inline_printed = assert_round_trip(&inline_ctx, inline_module);
@@ -3659,15 +3854,15 @@ mod tests {
     #[test]
     fn malformed_func_sig_storage_uses_generic_assembly_without_loss() {
         let input = r#"core.module @test {
-  tribute_control.func {sym_name = @missing}
-  tribute_control.func {sym_name = @broken, type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>}
+  tribute_control.func {sym_name = "missing"}
+  tribute_control.func {sym_name = "broken", type = tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>}
   %lambda = tribute_control.lambda : tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>
 }"#;
         let (ctx, module) = parse_fixture(input);
         let printed = assert_round_trip(&ctx, module);
 
         assert!(
-            printed.contains("tribute_control.func {sym_name = @missing}"),
+            printed.contains("tribute_control.func {sym_name = \"missing\"}"),
             "missing source signatures must use generic assembly: {printed}"
         );
         assert!(
@@ -3677,7 +3872,7 @@ mod tests {
             "malformed signature type/count storage must remain intact: {printed}"
         );
         assert!(
-            printed.contains("tribute_control.func {sym_name = @broken, type = !t0}"),
+            printed.contains("tribute_control.func {sym_name = \"broken\", type = !t0}"),
             "malformed function signature must remain attached to the function: {printed}"
         );
         assert!(
@@ -3812,19 +4007,19 @@ mod tests {
             &result,
             malformed_func,
             &[
-                "attribute `sym_name` must be a Symbol attribute",
+                "attribute `sym_name` must be a String attribute",
                 "attribute `type` must be a Type attribute",
             ],
         );
         assert_op_diagnostics(
             &result,
             control_op(&ctx, module, "func_ref"),
-            &["attribute `func_ref` must be a Symbol attribute"],
+            &["attribute `func_ref` must be a SymbolRef attribute"],
         );
         assert_op_diagnostics(
             &result,
             control_op(&ctx, module, "call"),
-            &["attribute `callee` must be a Symbol attribute"],
+            &["attribute `callee` must be a SymbolRef attribute"],
         );
         assert_op_diagnostics(
             &result,
@@ -3866,7 +4061,11 @@ mod tests {
                     .then_some(ty)
             })
             .expect("core.never");
-        assert!(!contains_unresolved_type(&ctx, never, &mut HashSet::new()));
+        assert!(!contains_unresolved_type(
+            &ctx,
+            never,
+            &mut HashSet::default()
+        ));
 
         let result = validate_local(&ctx, module);
         for op in [
@@ -3999,7 +4198,11 @@ mod tests {
         let bad_func = control_ops(&ctx, module, "func")
             .into_iter()
             .find(|op| {
-                ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("bad_func"))
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::new)
+                    == Some(Symbol::new("bad_func"))
             })
             .unwrap();
         // Custom assembly always derives a callable type and permits at most one
@@ -4284,8 +4487,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i32) -> core.i32 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @"integers::id"} : !callable
-      %direct = tribute_control.call %value {callee = @"integers::id"} : core.i32
+      %reference = tribute_control.func_ref {func_ref = @integers::@id} : !callable
+      %direct = tribute_control.call %value {callee = @integers::@id} : core.i32
       %indirect = tribute_control.call_indirect %reference, %direct : core.i32
       tribute_control.return %indirect
     }
@@ -4296,8 +4499,8 @@ mod tests {
       tribute_control.return %value
     }
     tribute_control.func @use(%value: core.i1) -> core.i1 convention(direct) {
-      %reference = tribute_control.func_ref {func_ref = @"booleans::id"} : !callable
-      %direct = tribute_control.call %value {callee = @"booleans::id"} : core.i1
+      %reference = tribute_control.func_ref {func_ref = @booleans::@id} : !callable
+      %direct = tribute_control.call %value {callee = @booleans::@id} : core.i1
       %indirect = tribute_control.call_indirect %reference, %direct : core.i1
       tribute_control.return %indirect
     }
@@ -4905,7 +5108,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
-    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"}
 }"#,
         );
         let function = control_op(&ctx, module, "func");
@@ -4952,7 +5155,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   tribute_control.func @read(%value: core.i32) -> core.i32 convention(evidence_direct)
-    attributes {tribute.compiler_intrinsic = @read}
+    attributes {tribute.compiler_intrinsic = "read"}
 }"#,
         );
         let function = control_op(&ctx, module, "func");
@@ -4976,7 +5179,7 @@ mod tests {
             r#"core.module @test {
   !F = tribute_control.func_sig<(core.i32, core.i32) -> core.i32, {tribute.calling_convention = 0}>
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
-    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"}
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"}
   tribute_control.func @caller(%left: core.i32, %right: core.i32) -> core.i32 convention(direct) {
     %callee = tribute_control.func_ref {func_ref = @"Nat::+"} : !F
     %result = tribute_control.call_indirect %callee, %left, %right : core.i32
@@ -4986,7 +5189,13 @@ mod tests {
         );
         let intrinsic = control_ops(&ctx, module, "func")
             .into_iter()
-            .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(Symbol::new("Nat::+")))
+            .find(|op| {
+                ctx.op(*op)
+                    .attributes
+                    .get_str(&ctx, "sym_name")
+                    .map(Symbol::new)
+                    == Some(Symbol::new("Nat::+"))
+            })
             .unwrap();
         let func_sig_type = ctx.op(intrinsic).attributes.get_type("type").unwrap();
         let declaration = CompilerIntrinsicDeclaration::new(
@@ -5004,9 +5213,9 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   tribute_control.func @"Int::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
-    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Int::+"}
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Int::+"}
   tribute_control.func @"Nat::+"(%left: core.i32, %right: core.i32) -> core.i32 convention(direct)
-    attributes {abi = "intrinsic", tribute.compiler_intrinsic = @"Nat::+"} {
+    attributes {abi = "intrinsic", tribute.compiler_intrinsic = "Nat::+"} {
     tribute_control.return %left
   }
 }"#,
@@ -5016,10 +5225,16 @@ mod tests {
             let function = functions
                 .iter()
                 .copied()
-                .find(|op| ctx.op(*op).attributes.get_symbol("sym_name") == Some(symbol))
+                .find(|op| {
+                    ctx.op(*op)
+                        .attributes
+                        .get_str(&ctx, "sym_name")
+                        .map(Symbol::new)
+                        == Some(symbol.clone())
+                })
                 .unwrap();
             CompilerIntrinsicDeclaration::new(
-                symbol,
+                symbol.clone(),
                 symbol,
                 ctx.op(function).attributes.get_type("type").unwrap(),
             )
@@ -5452,7 +5667,7 @@ mod tests {
             r#"core.module @outer {
   core.module @inner {
     tribute_control.func @loop(%value: core.i32) -> core.i32 convention(direct) {
-      %again = tribute_control.call %value {callee = @"inner::loop"} : core.i32
+      %again = tribute_control.call %value {callee = @inner::@loop} : core.i32
       tribute_control.return %again
     }
   }
@@ -5467,5 +5682,115 @@ mod tests {
         });
         assert_eq!(calls.len(), 1);
         assert!(direct_call_reenters_enclosing_func(&ctx, calls[0]));
+    }
+
+    /// `VALID_CONTROL_MODULE` with evidence selections on its call, indirect
+    /// call, handle, and resume.
+    fn evidence_plan_module(call: &str, handle: &str) -> String {
+        VALID_CONTROL_MODULE
+            .replacen(
+                "\n\n",
+                "\n  !state = core.ability_ref<{name = \"State\"}>\n  !log = core.ability_ref<{name = \"Log\"}>\n\n",
+                1,
+            )
+            .replace(
+                "{callee = @id}",
+                &format!("{{callee = @id, evidence_plan = {call}}}"),
+            )
+            .replace(
+                "%function, %value : core.i32",
+                "%function, %value {evidence_plan = [{dup = !state}]} : core.i32",
+            )
+            .replace(
+                "tribute_control.handle : core.i32",
+                &format!("tribute_control.handle {{evidence_plan = {handle}}} : core.i32"),
+            )
+            .replace(
+                "%token, %argument : core.i32",
+                "%token, %argument {evidence_plan = [{mask = !log}]} : core.i32",
+            )
+    }
+
+    #[test]
+    fn evidence_plans_validate_and_round_trip() {
+        let (ctx, module) = parse_fixture(&evidence_plan_module(
+            "[{mask = !state}, {dup = !log}]",
+            "[{mask = !state}]",
+        ));
+        let result = validate_local(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+
+        let call = Call::from_op(&ctx, control_op(&ctx, module, "call")).unwrap();
+        let state = ctx.get_type(match call.evidence_plan(&ctx).unwrap().next() {
+            Some(EvidenceStep::Mask(state)) => state,
+            other => panic!("expected a leading mask, found {other:?}"),
+        });
+        assert_eq!(state.attrs.get_str(&ctx, "name"), Some("State"));
+        let steps: Vec<_> = call.evidence_plan(&ctx).unwrap().collect();
+        assert!(matches!(
+            steps[..],
+            [EvidenceStep::Mask(_), EvidenceStep::Dup(_)]
+        ));
+
+        let printed = assert_round_trip(&ctx, module);
+        assert!(
+            printed.contains("evidence_plan = [{mask = !state}, {dup = !log}]"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn evidence_plan_verifier_rejects_malformed_selections() {
+        for (call, handle, expected) in [
+            ("[]", "[{mask = !state}]", "evidence_plan must not be empty"),
+            (
+                "[{mask = !state}, {dup = !state}]",
+                "[{mask = !state}]",
+                "names ability instance",
+            ),
+            (
+                "[{keep = !state}]",
+                "[{mask = !state}]",
+                "must be mask, dup, or outer, found keep",
+            ),
+            (
+                "[{outer = !state}]",
+                "[{mask = !state}]",
+                "may not use outer",
+            ),
+            (
+                "[{mask = core.i32}]",
+                "[{mask = !state}]",
+                "evidence_plan mask must name a core.ability_ref type",
+            ),
+            (
+                "[{mask = !state, dup = !log}]",
+                "[{mask = !state}]",
+                "must have exactly one entry, found 2",
+            ),
+            (
+                "[{mask = !state}]",
+                "[{dup = !state}]",
+                "a handle's evidence_plan may only mask",
+            ),
+        ] {
+            let (ctx, module) = parse_fixture(&evidence_plan_module(call, handle));
+            let result = validate_local(&ctx, module);
+            let op = if handle.contains("dup") {
+                control_op(&ctx, module, "handle")
+            } else {
+                control_op(&ctx, module, "call")
+            };
+            assert_op_diagnostics(&result, op, &[expected]);
+            assert_eq!(result.errors.len(), 1, "{call} {handle}: {result}");
+        }
+    }
+
+    #[test]
+    fn evidence_plan_elements_must_be_type_dictionaries() {
+        let (ctx, module) = parse_fixture(&evidence_plan_module("[1]", "[{mask = !state}]"));
+        let result = validate_local(&ctx, module);
+        assert_eq!(result.errors.len(), 1, "{result}");
+        assert_eq!(result.errors[0].op, Some(control_op(&ctx, module, "call")));
     }
 }

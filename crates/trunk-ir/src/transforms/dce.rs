@@ -207,7 +207,7 @@ mod tests {
         });
         let module_data =
             OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::Symbol(Symbol::new("test")))
+                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
                 .region(region)
                 .build(ctx);
         let module_op = ctx.create_op(module_data);
@@ -222,7 +222,7 @@ mod tests {
         build_body: impl FnOnce(&mut IrContext, Location, BlockRef),
     ) -> OpRef {
         let fn_ty = fn_type(ctx);
-        let sym_name = Symbol::from_dynamic(name);
+        let sym_name = ctx.intern_str(name);
         let entry = ctx.create_block(BlockData {
             location: loc,
             args: vec![],
@@ -283,7 +283,7 @@ mod tests {
             let call_data =
                 OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("call"))
                     .result(i32_ty)
-                    .attr("callee", Attribute::Symbol(Symbol::new("foo")))
+                    .attr("callee", Attribute::SymbolRef(SymbolPath::from("foo")))
                     .build(ctx);
             let call_op = ctx.create_op(call_data);
             ctx.push_op(entry, call_op);
@@ -436,7 +436,7 @@ mod tests {
             let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
             let nested_func = func::Func::operands()
-                .sym_name(Symbol::new("nested"))
+                .sym_name("nested")
                 .r#type(fn_ty)
                 .regions(inner_region)
                 .build(ctx, loc);
@@ -510,7 +510,7 @@ mod tests {
             let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
             let fn_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
             let nested_func = func::Func::operands()
-                .sym_name(Symbol::new("nested"))
+                .sym_name("nested")
                 .r#type(fn_ty)
                 .regions(inner_region)
                 .build(ctx, loc);

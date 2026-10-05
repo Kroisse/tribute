@@ -4,8 +4,8 @@
 //! `PrimaryMap`s owned by `IrContext`. Entity lists (operands, results)
 //! use `EntityList + ListPool` for compact 4-byte per-field storage.
 
+use rustc_hash::FxHashMap as HashMap;
 use std::cell::RefCell;
-use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use cranelift_entity::{EntityList, EntityRef, ListPool, PrimaryMap, SecondaryMap};
@@ -293,8 +293,8 @@ impl IrContext {
             result_values: SecondaryMap::new(),
             block_arg_values: SecondaryMap::new(),
             type_aliases: Vec::new(),
-            type_alias_by_name: HashMap::new(),
-            type_alias_by_type: HashMap::new(),
+            type_alias_by_name: HashMap::default(),
+            type_alias_by_type: HashMap::default(),
             diagnostics: RefCell::new(Vec::new()),
         }
     }
@@ -398,7 +398,7 @@ impl IrContext {
     ///
     /// For names that reach the IR as symbols, such as frontend declaration
     /// names, but are stored as string attributes.
-    pub fn intern_symbol_text(&mut self, symbol: Symbol) -> StringRef {
+    pub fn intern_symbol_text(&mut self, symbol: &Symbol) -> StringRef {
         symbol.with_str(|text| self.intern_str(text))
     }
 
@@ -483,7 +483,7 @@ impl IrContext {
             return;
         }
         self.bump_revision();
-        if let Some(old_ty) = self.type_alias_by_name.insert(name, ty) {
+        if let Some(old_ty) = self.type_alias_by_name.insert(name.clone(), ty) {
             // Remove old reverse mapping
             self.type_alias_by_type.remove(&old_ty);
             // Update ordered list in-place
@@ -491,25 +491,25 @@ impl IrContext {
                 entry.1 = ty;
             }
         } else {
-            self.type_aliases.push((name, ty));
+            self.type_aliases.push((name.clone(), ty));
         }
         self.type_alias_by_type.insert(ty, name);
     }
 
     /// Look up a type alias by name.
-    pub fn type_alias_by_name(&self, name: Symbol) -> Option<TypeRef> {
-        self.type_alias_by_name.get(&name).copied()
+    pub fn type_alias_by_name(&self, name: &Symbol) -> Option<TypeRef> {
+        self.type_alias_by_name.get(name).copied()
     }
 
     /// Look up a type alias by the text of its name, such as a nominal
-    /// type's string name, without interning it.
+    /// type's string name.
     pub fn type_alias_by_text(&self, name: &str) -> Option<TypeRef> {
-        self.type_alias_by_name(Symbol::lookup(name)?)
+        self.type_alias_by_name(&Symbol::new(name))
     }
 
     /// Look up an alias name for a given type (reverse lookup for printer).
     pub fn type_alias_by_type(&self, ty: TypeRef) -> Option<Symbol> {
-        self.type_alias_by_type.get(&ty).copied()
+        self.type_alias_by_type.get(&ty).cloned()
     }
 
     /// Get the ordered list of type aliases.
@@ -1137,8 +1137,8 @@ impl IrContext {
         // Copy all data from src_op into locals to avoid borrow conflicts.
         let data = &self.ops[src_op];
         let loc = data.location;
-        let dialect = data.dialect;
-        let name = data.name;
+        let dialect = data.dialect.clone();
+        let name = data.name.clone();
         let attrs = data.attributes.clone();
         let operands: SmallVec<[ValueRef; 8]> = data.operands.as_slice(&self.value_pool).into();
         let result_types: SmallVec<[TypeRef; 4]> = data.results.as_slice(&self.type_pool).into();
@@ -2400,7 +2400,7 @@ mod tests {
             Symbol::new("func"),
             Symbol::new("func"),
         )
-        .attr("sym_name", Attribute::Symbol(Symbol::new(new_name)))
+        .attr("sym_name", Attribute::String(ctx.intern_str(new_name)))
         .attr("type", func_ty)
         .region(cloned_region)
         .build(&mut ctx);

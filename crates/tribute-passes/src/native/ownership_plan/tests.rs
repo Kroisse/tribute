@@ -129,9 +129,9 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         }
     }"#,
     );
-    assert!(plan.function(Symbol::new("external")).is_none());
+    assert!(plan.function(&Symbol::new("external")).is_none());
     assert!(
-        plan.function(Symbol::new("caller"))
+        plan.function(&Symbol::new("caller"))
             .unwrap()
             .actions()
             .is_empty()
@@ -148,7 +148,7 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
         "call arguments differ from the exact callable signature",
     );
     assert_plan_error_unchanged(
-        "core.module @test { func.func {sym_name = @bad, type = core.i32} }",
+        "core.module @test { func.func {sym_name = \"bad\", type = core.i32} }",
         "bodyless function lacks exact signature",
     );
     assert_plan_error_unchanged(
@@ -160,13 +160,13 @@ fn bodyless_scalar_declarations_need_no_target_binding_or_ownership_actions() {
 #[test]
 fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
     assert_plan_error_unchanged(
-        "core.module @test { func.func {sym_name = @empty, type = func.func_sig<() -> ()>} {} }",
+        "core.module @test { func.func {sym_name = \"empty\", type = func.func_sig<() -> ()>} {} }",
         "func.func @empty: body has no entry block",
     );
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
-        "core.module @test { func.func {sym_name = @extra, type = func.func_sig<() -> ()>} { func.return } }",
+        "core.module @test { func.func {sym_name = \"extra\", type = func.func_sig<() -> ()>} { func.return } }",
     );
     let op = module.ops(&ctx)[0];
     let extra = ctx.create_region(trunk_ir::RegionData {
@@ -189,7 +189,7 @@ fn malformed_callable_bodies_fail_before_ownership_analysis_without_mutation() {
 #[test]
 fn revalidation_rejects_a_declaration_changed_to_an_empty_body() {
     let (mut ctx, module, plan) = build(
-        "core.module @test { func.func {sym_name = @external, type = func.func_sig<() -> ()>} }",
+        "core.module @test { func.func {sym_name = \"external\", type = func.func_sig<() -> ()>} }",
     );
     let op = module.ops(&ctx)[0];
     let body = ctx.create_region(trunk_ir::RegionData {
@@ -223,7 +223,7 @@ fn ordinary_result_contract_requires_one_value_and_preserves_zero_width_results(
     let function = func::Func::from_op(&ctx, module.ops(&ctx)[0]).unwrap();
     let entry = ctx.region(function.body(&ctx)).blocks[0];
     let values = ctx.block_args(entry);
-    let managed = HashSet::new();
+    let managed = HashSet::default();
     let check = |values: &[ValueRef], expected: &[TypeRef]| {
         actions::validate_result_contract(&ctx, values, expected, &managed, "test result")
     };
@@ -276,20 +276,23 @@ fn typed_plan_options_preserve_or_elide_only_proven_parameter_and_field_borrows(
     .expect("preserved typed plan");
     let elided = production_plan(&ctx, module).expect("elided typed plan");
 
-    let preserved_forward = preserved.function(Symbol::new("forward")).unwrap();
-    let elided_forward = elided.function(Symbol::new("forward")).unwrap();
+    let preserved_forward = preserved.function(&Symbol::new("forward")).unwrap();
+    let elided_forward = elided.function(&Symbol::new("forward")).unwrap();
     assert_eq!(preserved_forward.entries(), [EntryOwnership::Retained]);
     assert_eq!(elided_forward.entries(), [EntryOwnership::Borrowed]);
     assert_eq!(count(preserved_forward, ActionKind::EntryAcquire), 1);
     assert_eq!(count(elided_forward, ActionKind::EntryAcquire), 0);
 
     let load_op = ctx
-        .op_region(elided.function(Symbol::new("load")).unwrap().operation(), 0)
+        .op_region(
+            elided.function(&Symbol::new("load")).unwrap().operation(),
+            0,
+        )
         .unwrap();
     let load = ctx.op_result(ctx.block(ctx.region(load_op).blocks[0]).ops[0], 0);
     let projection = ctx.block(ctx.region(load_op).blocks[0]).ops[0];
-    let preserved_load = preserved.function(Symbol::new("load")).unwrap();
-    let elided_load = elided.function(Symbol::new("load")).unwrap();
+    let preserved_load = preserved.function(&Symbol::new("load")).unwrap();
+    let elided_load = elided.function(&Symbol::new("load")).unwrap();
     assert!(preserved_load.actions().iter().any(|action| {
         action.kind == ActionKind::CopyAcquire
             && action.value == load
@@ -327,7 +330,7 @@ fn continuation_frame_capture_has_entry_store_and_deep_release_plan() {
   }
 }"#,
     );
-    let function = plan.function(Symbol::new("capture")).unwrap();
+    let function = plan.function(&Symbol::new("capture")).unwrap();
     assert_eq!(
         function.entries(),
         [EntryOwnership::Retained, EntryOwnership::Plain]
@@ -355,7 +358,7 @@ fn continuation_frame_capture_materializes_the_typed_entry_and_store_actions() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
-    let capture = plan.function(Symbol::new("capture")).unwrap();
+    let capture = plan.function(&Symbol::new("capture")).unwrap();
     assert_eq!(
         count(capture, ActionKind::EntryAcquire) + count(capture, ActionKind::StoreAcquire),
         2
@@ -413,15 +416,14 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %closure = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %tr = mem.null : core.ptr
-    %extended = effect.extend %evidence, %prompt, %tr, %closure {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %closure, %evidence {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
     func.return
   }
 }"#,
     );
     lower_evidence_to_native(&mut ctx, module);
     let mut plan = production_plan(&ctx, module).expect("typed ownership plan");
-    let install = plan.function(Symbol::new("install")).unwrap();
+    let install = plan.function(&Symbol::new("install")).unwrap();
     let transfer = install
         .actions()
         .iter()
@@ -437,11 +439,6 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
         lowered.matches("tribute_rt.into_raw").count(),
         1,
         "{lowered}"
-    );
-    assert_eq!(
-        lowered.matches("core.unrealized_conversion_cast").count(),
-        1,
-        "the existing raw dispatcher remains unmanaged: {lowered}"
     );
     assert!(
         !install.actions().iter().any(|action| {
@@ -467,7 +464,7 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
 }
 
 #[test]
-fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
+fn native_evidence_lowers_a_managed_dispatcher_to_into_raw() {
     let mut ctx = IrContext::new();
     let module = parse_test_module(
         &mut ctx,
@@ -477,20 +474,19 @@ fn native_evidence_lowers_both_managed_dispatchers_to_into_raw() {
     %code = arith.const {value = 0} : core.i32
     %env = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
     %tr = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %handler = adt.struct_new %code, %env {type = !_closure} : !_closure
-    %extended = effect.extend %evidence, %prompt, %tr, %handler {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
+    %extended = effect.extend %evidence, %prompt, %tr, %evidence {ability_ref = core.ability_ref<{name = "State"}>} : core.ptr
     func.return
   }
 }"#,
     );
     lower_evidence_to_native(&mut ctx, module);
     let plan = production_plan(&ctx, module).expect("typed ownership plan");
-    let install = plan.function(Symbol::new("install")).unwrap();
-    assert_eq!(count(install, ActionKind::IntoRawTransfer), 2);
+    let install = plan.function(&Symbol::new("install")).unwrap();
+    assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
     let lowered = print_module(&ctx, module.op());
     assert_eq!(
         lowered.matches("tribute_rt.into_raw").count(),
-        2,
+        1,
         "{lowered}"
     );
 }
@@ -530,7 +526,7 @@ fn into_raw_transfers_one_exact_closure_unit_without_materializing_rc() {
   }
 }"#,
     );
-    let install = plan.function(Symbol::new("install")).unwrap();
+    let install = plan.function(&Symbol::new("install")).unwrap();
     assert_eq!(count(install, ActionKind::IntoRawTransfer), 1);
     let transferred = install
         .actions()
@@ -595,10 +591,10 @@ fn nested_field_borrow_keeps_the_outer_owner_alive_through_the_last_use() {
   }
 }"#,
     );
-    let function = plan.function(Symbol::new("load")).unwrap();
+    let function = plan.function(&Symbol::new("load")).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let block = ctx.region(body).blocks[0];
-    let box_layout = ctx.type_alias_by_name(Symbol::new("Box")).unwrap();
+    let box_layout = ctx.type_alias_by_text("Box").unwrap();
     let mut owner = None;
     let mut call = None;
     for &op in &ctx.block(block).ops {
@@ -631,7 +627,7 @@ fn into_raw_grouped_transfers_acquire_exact_extra_units_before_the_first_transfe
         ),
     ] {
         let (mut ctx, module, plan) = build(&into_raw_fixture(transfers));
-        let function = plan.function(Symbol::new("transfers")).unwrap();
+        let function = plan.function(&Symbol::new("transfers")).unwrap();
         let transfer_actions = function
             .actions()
             .iter()
@@ -698,7 +694,7 @@ fn into_raw_group_validation_ignores_preserved_field_borrow_acquire() {
         &mut Default::default(),
     )
     .expect("typed ownership plan with preserved field borrows");
-    let function = plan.function(Symbol::new("transfers")).unwrap();
+    let function = plan.function(&Symbol::new("transfers")).unwrap();
     let transfers = function
         .actions()
         .iter()
@@ -848,14 +844,14 @@ fn duplicate_owning_destinations_and_null_are_explicit() {
   }
 }"#,
     );
-    let duplicate = plan.function(Symbol::new("duplicate")).unwrap();
+    let duplicate = plan.function(&Symbol::new("duplicate")).unwrap();
     assert_eq!(count(duplicate, ActionKind::StoreAcquire), 2);
     assert_eq!(count(duplicate, ActionKind::ReturnTransfer), 1);
-    let null = plan.function(Symbol::new("null")).unwrap();
+    let null = plan.function(&Symbol::new("null")).unwrap();
     assert_eq!(count(null, ActionKind::ReturnTransfer), 1);
     assert_eq!(count(null, ActionKind::EntryAcquire), 0);
     assert_eq!(count(null, ActionKind::FinalRelease), 0);
-    let replace = plan.function(Symbol::new("replace")).unwrap();
+    let replace = plan.function(&Symbol::new("replace")).unwrap();
     assert_eq!(count(replace, ActionKind::StoreAcquire), 1);
     assert_eq!(count(replace, ActionKind::ReleaseReplacedField), 1);
 }
@@ -874,7 +870,7 @@ fn borrowed_load_return_acquires_a_transfer_unit() {
   }
 }"#,
     );
-    let function = plan.function(Symbol::new("load")).unwrap();
+    let function = plan.function(&Symbol::new("load")).unwrap();
     assert_eq!(function.entries(), [EntryOwnership::Borrowed]);
     assert_eq!(count(function, ActionKind::BorrowLoad), 1);
     assert_eq!(count(function, ActionKind::CopyAcquire), 1);
@@ -898,7 +894,7 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
   }
 }"#,
     );
-    let function = plan.function(Symbol::new("load")).unwrap();
+    let function = plan.function(&Symbol::new("load")).unwrap();
     assert_eq!(function.entries(), [EntryOwnership::Borrowed]);
     assert_eq!(count(function, ActionKind::BorrowLoad), 1);
     assert_eq!(count(function, ActionKind::CopyAcquire), 1);
@@ -920,10 +916,12 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
         let original = ctx
             .op(projection)
             .attributes
-            .get(key)
+            .get(key.clone())
             .expect("projection attribute")
             .clone();
-        ctx.op_mut(projection).attributes.insert(key, invalid);
+        ctx.op_mut(projection)
+            .attributes
+            .insert(key.clone(), invalid);
         let before = print_module(&ctx, module.op());
         assert!(production_plan(&ctx, module).is_err());
         assert_eq!(print_module(&ctx, module.op()), before);
@@ -1105,7 +1103,7 @@ fn cross_block_borrowed_load_keeps_owner_alive_without_releasing_the_load() {
   }
 }"#,
     );
-    let function = plan.function(Symbol::new("load")).unwrap();
+    let function = plan.function(&Symbol::new("load")).unwrap();
     let body = ctx.op_region(function.operation(), 0).unwrap();
     let [entry, next] = ctx.region(body).blocks.as_slice() else {
         panic!("two-block fixture")
@@ -1138,24 +1136,24 @@ fn cfg_copy_and_tail_dying_value_actions_are_complete() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @branch(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @branch(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     ^entry:
       cf.br %value, %value [^merge]
     ^merge(%left: !R, %right: !R):
       func.unreachable
   }
-  func.func @tail(%sent: !R, %dying: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @tail(%sent: !R, %dying: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call %sent {callee = @sink}
   }
-  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#,
     );
-    let branch = plan.function(Symbol::new("branch")).unwrap();
+    let branch = plan.function(&Symbol::new("branch")).unwrap();
     assert_eq!(count(branch, ActionKind::CopyAcquire), 1);
     assert_eq!(count(branch, ActionKind::FinalRelease), 2);
-    let tail = plan.function(Symbol::new("tail")).unwrap();
+    let tail = plan.function(&Symbol::new("tail")).unwrap();
     assert_eq!(count(tail, ActionKind::TailTransfer), 1);
     assert_eq!(count(tail, ActionKind::FinalRelease), 1);
     assert!(
@@ -1195,7 +1193,7 @@ fn cfg_accepts_conditional_branch_with_duplicate_successors() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @duplicate_successor(%condition: core.i1, %value: !R) attributes {type = func.func_sig<(core.i1 {tribute.ownership = @consumed}, !R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @duplicate_successor(%condition: core.i1, %value: !R) attributes {type = func.func_sig<(core.i1 {tribute.ownership = "consumed"}, !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     ^entry:
       cf.cond_br %condition [^exit, ^exit]
     ^exit:
@@ -1203,7 +1201,7 @@ fn cfg_accepts_conditional_branch_with_duplicate_successors() {
   }
 }"#,
     );
-    let function = plan.function(Symbol::new("duplicate_successor")).unwrap();
+    let function = plan.function(&Symbol::new("duplicate_successor")).unwrap();
     assert_eq!(count(function, ActionKind::EntryAcquire), 0);
     assert_eq!(count(function, ActionKind::FinalRelease), 1);
 
@@ -1248,7 +1246,7 @@ fn unmanaged_physical_and_buffer_types_never_receive_actions() {
   }
 }"#,
     );
-    let function = plan.function(Symbol::new("raw")).unwrap();
+    let function = plan.function(&Symbol::new("raw")).unwrap();
     assert_eq!(function.entries(), [EntryOwnership::Plain; 5]);
     assert!(function.actions().is_empty());
     for ty in ctx
@@ -1315,19 +1313,19 @@ fn direct_indirect_return_and_tail_contracts_are_typed() {
     %indirect = func.call_indirect %callee, %direct {signature = func.func_sig<(!R) -> !R>} : !R
     func.return %indirect
   }
-  func.func @tail(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @tail(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call %value {callee = @sink}
   }
-  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#,
     );
-    let caller = plan.function(Symbol::new("caller")).unwrap();
+    let caller = plan.function(&Symbol::new("caller")).unwrap();
     assert_eq!(count(caller, ActionKind::CallBorrow), 1);
     assert_eq!(count(caller, ActionKind::CallRetain), 2);
     assert_eq!(count(caller, ActionKind::ReturnTransfer), 1);
-    let tail = plan.function(Symbol::new("tail")).unwrap();
+    let tail = plan.function(&Symbol::new("tail")).unwrap();
     assert_eq!(count(tail, ActionKind::TailTransfer), 1);
     assert!(
         !tail
@@ -1361,13 +1359,13 @@ fn retained_parameter_calls_balance_retains_and_releases() {
 }"#,
     );
     assert_eq!(
-        plan.function(Symbol::new("keep")).unwrap().entries(),
+        plan.function(&Symbol::new("keep")).unwrap().entries(),
         [EntryOwnership::Retained]
     );
     for caller in ["direct", "indirect"] {
         assert_eq!(
             count(
-                plan.function(Symbol::new(caller)).unwrap(),
+                plan.function(&Symbol::new(caller)).unwrap(),
                 ActionKind::CallRetain
             ),
             1
@@ -1395,7 +1393,7 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  !Consuming = func.func_sig<(!R {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>
+  !Consuming = func.func_sig<(!R {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>
   func.func @sink(%value: !R, %count: core.i32) attributes {type = !Consuming} {
     func.unreachable
   }
@@ -1404,7 +1402,7 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
-  func.func @pair(%left: !R, %right: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !R {tribute.ownership = @consumed}) -> ()>} {
+  func.func @pair(%left: !R, %right: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !R {tribute.ownership = "consumed"}) -> ()>} {
     func.return
   }
   func.func @indirect(%value: !R, %callee: !Consuming, %count: core.i32) -> core.i32 {
@@ -1412,13 +1410,13 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     %seen = adt.struct_get %value {field = 0, type = !Layout} : core.i32
     func.return %seen
   }
-  func.func @tail(%value: !R, %callee: !Consuming, %count: core.i32) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !Consuming {tribute.ownership = @consumed}, core.i32 {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @tail(%value: !R, %callee: !Consuming, %count: core.i32) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !Consuming {tribute.ownership = "consumed"}, core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call_indirect %callee, %value, %count {signature = !Consuming}
   }
-  func.func @duplicate(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @duplicate(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call %value, %value {callee = @pair_tail}
   }
-  func.func @pair_tail(%left: !R, %right: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @pair_tail(%left: !R, %right: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#,
@@ -1426,21 +1424,21 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     // A consumed managed input is Consumed; the marker on an unmanaged input
     // is inert.
     assert_eq!(
-        plan.function(Symbol::new("sink")).unwrap().entries(),
+        plan.function(&Symbol::new("sink")).unwrap().entries(),
         [EntryOwnership::Consumed, EntryOwnership::Plain]
     );
     // An ordinary call acquires one unit per consumed destination, direct or
     // indirect, and leaves the caller's own unit live.
     assert_eq!(
         count(
-            plan.function(Symbol::new("direct")).unwrap(),
+            plan.function(&Symbol::new("direct")).unwrap(),
             ActionKind::CallAcquire
         ),
         2
     );
     assert_eq!(
         count(
-            plan.function(Symbol::new("indirect")).unwrap(),
+            plan.function(&Symbol::new("indirect")).unwrap(),
             ActionKind::CallAcquire
         ),
         1
@@ -1449,12 +1447,12 @@ fn signature_consumed_contracts_drive_entries_and_call_sites() {
     // parameters transfers one unit and acquires the other.
     assert_eq!(
         count(
-            plan.function(Symbol::new("tail")).unwrap(),
+            plan.function(&Symbol::new("tail")).unwrap(),
             ActionKind::TailTransfer
         ),
         1
     );
-    let duplicate = plan.function(Symbol::new("duplicate")).unwrap();
+    let duplicate = plan.function(&Symbol::new("duplicate")).unwrap();
     assert_eq!(count(duplicate, ActionKind::TailTransfer), 2);
     assert_eq!(count(duplicate, ActionKind::CopyAcquire), 1);
     materialize(&mut ctx, module, &plan).expect("typed RC materialization");
@@ -1466,10 +1464,10 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @tail(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  func.func @tail(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call %value {callee = @sink}
   }
-  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R) -> (), {call_conv = @tail}>} {
+  func.func @sink(%value: !R) attributes {type = func.func_sig<(!R) -> (), {call_conv = "tail"}>} {
     func.unreachable
   }
 }"#,
@@ -1479,8 +1477,8 @@ fn proper_tail_edges_without_a_consumed_contract_are_rejected() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  !Unmarked = func.func_sig<(!R) -> (), {call_conv = @tail}>
-  func.func @tail(%value: !R, %callee: !Unmarked) attributes {type = func.func_sig<(!R {tribute.ownership = @consumed}, !Unmarked {tribute.ownership = @consumed}) -> (), {call_conv = @tail}>} {
+  !Unmarked = func.func_sig<(!R) -> (), {call_conv = "tail"}>
+  func.func @tail(%value: !R, %callee: !Unmarked) attributes {type = func.func_sig<(!R {tribute.ownership = "consumed"}, !Unmarked {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
     func.tail_call_indirect %callee, %value {signature = !Unmarked}
   }
 }"#,
@@ -1494,7 +1492,7 @@ fn unknown_parameter_ownership_contracts_are_rejected() {
         r#"core.module @test {
   !R = adt.typeref<{name = "R"}>
   !Layout = adt.struct<R(x: core.i32)>
-  func.func @run(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = @borrowed}) -> ()>} {
+  func.func @run(%value: !R) attributes {type = func.func_sig<(!R {tribute.ownership = "borrowed"}) -> ()>} {
     func.return
   }
 }"#,
@@ -1515,7 +1513,7 @@ fn bodyless_c_ffi_borrows_managed_arguments_and_transfers_managed_results() {
   }
 }"#,
     );
-    let caller = plan.function(Symbol::new("caller")).unwrap();
+    let caller = plan.function(&Symbol::new("caller")).unwrap();
     assert_eq!(count(caller, ActionKind::CallBorrow), 1);
     assert_eq!(count(caller, ActionKind::CallRetain), 0);
     assert_eq!(count(caller, ActionKind::ReturnTransfer), 1);
@@ -1641,7 +1639,7 @@ fn unused_frame_alias_with_missing_nominal_result_is_not_a_live_ownership_root()
     let plan = production_plan(&ctx, module)
         .expect("unused continuation-frame aliases must not affect ownership planning");
     let dead_frame = ctx
-        .type_alias_by_name(Symbol::new("DeadFrame"))
+        .type_alias_by_text("DeadFrame")
         .expect("parsed dead frame alias");
     assert!(!plan.is_managed_type(&ctx, dead_frame));
     assert!(plan.rtti_types().is_empty());
@@ -1694,7 +1692,7 @@ fn direct_layout_in_live_null_metadata_is_managed() {
     );
 
     let node = ctx
-        .type_alias_by_name(Symbol::new("Node"))
+        .type_alias_by_text("Node")
         .expect("parsed native node alias");
     assert!(plan.is_managed_type(&ctx, node));
     assert!(plan.rtti_types().is_empty());
@@ -1825,7 +1823,7 @@ fn stale_plan_and_ambiguous_rtti_rewrites_fail_without_mutation() {
     stale_anchor.functions[0].actions[0].anchor = ActionAnchor::Before(module.op());
     assert!(stale_anchor.validate_against(&ctx, module).is_err());
 
-    let other = plan.function(Symbol::new("other")).unwrap();
+    let other = plan.function(&Symbol::new("other")).unwrap();
     let other_body = ctx.op_region(other.operation, 0).unwrap();
     let other_entry = ctx.region(other_body).blocks[0];
     let mut stale_value = plan.clone();

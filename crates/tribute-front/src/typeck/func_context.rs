@@ -9,7 +9,8 @@
 //! UniVar IDs include the function name, making them globally unique across all
 //! functions without needing a global counter.
 
-use std::collections::{HashMap, HashSet};
+use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
@@ -38,6 +39,8 @@ pub(crate) struct HandleContext<'db> {
     pub body_ty: Type<'db>,
     pub body_effect: EffectRow<'db>,
     pub handled_effects: EffectRow<'db>,
+    /// The evidence scope of the handle body, once conversion has entered it.
+    pub evidence_body: Option<usize>,
 }
 
 /// Function-level type inference context.
@@ -181,6 +184,9 @@ pub struct FunctionInferenceContext<'a, 'db> {
     /// Deferred UFCS method calls whose receiver type is still a UniVar.
     /// Resolved after constraint solving when UniVars have been substituted.
     deferred_methods: Vec<DeferredMethodCall<'db>>,
+
+    /// Evidence scopes and the calls and resumes made in them.
+    pub(crate) evidence: super::evidence_plan::EvidenceTracker<'db>,
 }
 
 /// A UFCS method call deferred until after constraint solving.
@@ -216,40 +222,41 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             env,
             func_id,
             // Start with one scope (the function's top-level scope)
-            local_scopes: vec![HashMap::new()],
-            name_scopes: vec![HashMap::new()],
-            node_types: HashMap::new(),
-            checked_lambdas: HashMap::new(),
-            checked_record_shapes: HashSet::new(),
-            constructor_reference_types: HashMap::new(),
-            local_generalizations: HashMap::new(),
-            let_schemes: HashMap::new(),
-            function_instances: HashMap::new(),
-            quantified_local_reference_types: HashMap::new(),
-            local_binding_owners: HashMap::new(),
-            local_instances: HashMap::new(),
-            handler_operations: HashMap::new(),
-            reported_handler_errors: HashSet::new(),
-            non_resumptive_resume_locals: HashMap::new(),
-            reported_module_values: HashSet::new(),
-            perform_operations: HashMap::new(),
-            ability_op_callee_types: HashMap::new(),
-            lambda_signatures: HashMap::new(),
+            local_scopes: vec![HashMap::default()],
+            name_scopes: vec![HashMap::default()],
+            node_types: HashMap::default(),
+            checked_lambdas: HashMap::default(),
+            checked_record_shapes: HashSet::default(),
+            constructor_reference_types: HashMap::default(),
+            local_generalizations: HashMap::default(),
+            let_schemes: HashMap::default(),
+            function_instances: HashMap::default(),
+            quantified_local_reference_types: HashMap::default(),
+            local_binding_owners: HashMap::default(),
+            local_instances: HashMap::default(),
+            handler_operations: HashMap::default(),
+            reported_handler_errors: HashSet::default(),
+            non_resumptive_resume_locals: HashMap::default(),
+            reported_module_values: HashSet::default(),
+            perform_operations: HashMap::default(),
+            ability_op_callee_types: HashMap::default(),
+            lambda_signatures: HashMap::default(),
             constraints: ConstraintSet::new(),
-            result_joins: HashMap::new(),
+            result_joins: HashMap::default(),
             next_type_var: 0,
             // Start from 1 to avoid collision with EffectVar { id: 0 } placeholder
             // used in collect.rs for function signature effect rows
             next_row_var: 1,
-            annotation_rows: HashMap::new(),
-            annotation_type_parameters: HashMap::new(),
-            annotation_types: HashMap::new(),
+            annotation_rows: HashMap::default(),
+            annotation_type_parameters: HashMap::default(),
+            annotation_types: HashMap::default(),
             current_effect: EffectRow::pure(db),
             effect_contract: None,
             lambda_resume_effects: Vec::new(),
             handle_ctx_stack: Vec::new(),
-            resolved_methods: HashMap::new(),
+            resolved_methods: HashMap::default(),
             deferred_methods: Vec::new(),
+            evidence: Default::default(),
         }
     }
 
@@ -295,7 +302,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     pub(crate) fn non_resumptive_resume_op(&self, local: LocalId) -> Option<(Symbol, Symbol)> {
-        self.non_resumptive_resume_locals.get(&local).copied()
+        self.non_resumptive_resume_locals.get(&local).cloned()
     }
 
     pub(crate) fn mark_module_value_reported(&mut self, node: NodeId) -> bool {
@@ -357,8 +364,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
 
     /// Push a new scope. Call this when entering a lambda body or case arm.
     pub fn push_scope(&mut self) {
-        self.local_scopes.push(HashMap::new());
-        self.name_scopes.push(HashMap::new());
+        self.local_scopes.push(HashMap::default());
+        self.name_scopes.push(HashMap::default());
     }
 
     /// Pop the current scope. Call this when exiting a lambda body or case arm.
@@ -429,16 +436,16 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     /// Look up a local variable by name.
     ///
     /// Searches from innermost to outermost scope.
-    pub fn lookup_local_by_name(&mut self, name: Symbol) -> Option<Type<'db>> {
+    pub fn lookup_local_by_name(&mut self, name: &Symbol) -> Option<Type<'db>> {
         self.local_scheme_by_name(name)
             .map(|scheme| self.instantiate_scheme(scheme))
     }
 
-    fn local_scheme_by_name(&self, name: Symbol) -> Option<TypeScheme<'db>> {
+    fn local_scheme_by_name(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
         self.name_scopes
             .iter()
             .rev()
-            .find_map(|scope| scope.get(&name).copied())
+            .find_map(|scope| scope.get(name).copied())
     }
 
     // =========================================================================
@@ -562,7 +569,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         &mut self,
         node: NodeId,
         local: LocalId,
-        name: Symbol,
+        name: &Symbol,
     ) -> Option<Type<'db>> {
         let scheme = if local.is_unresolved() {
             None
@@ -694,7 +701,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
     }
 
     /// Look up a type definition.
-    pub fn lookup_type_def(&self, name: Symbol) -> Option<TypeScheme<'db>> {
+    pub fn lookup_type_def(&self, name: &Symbol) -> Option<TypeScheme<'db>> {
         self.env.lookup_type_def(name)
     }
 
@@ -909,8 +916,8 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         self.annotation_type_parameters.insert(name, ty);
     }
 
-    pub(crate) fn annotation_type_parameter(&self, name: Symbol) -> Option<Type<'db>> {
-        self.annotation_type_parameters.get(&name).copied()
+    pub(crate) fn annotation_type_parameter(&self, name: &Symbol) -> Option<Type<'db>> {
+        self.annotation_type_parameters.get(name).copied()
     }
 
     pub(crate) fn annotation_type_parameters(&self) -> impl Iterator<Item = Type<'db>> + '_ {
@@ -1537,9 +1544,9 @@ mod tests {
         // Bind by name
         let name = Symbol::new("x");
         let ty2 = ctx.bool_type();
-        ctx.bind_local_by_name(name, ty2);
+        ctx.bind_local_by_name(name.clone(), ty2);
 
-        assert_eq!(ctx.lookup_local_by_name(name), Some(ty2));
+        assert_eq!(ctx.lookup_local_by_name(&name), Some(ty2));
     }
 
     #[salsa_test]
@@ -1567,14 +1574,14 @@ mod tests {
 
         // Create a polymorphic constructor: forall a. a -> Option(a)
         let type_name = Symbol::new("Option");
-        let ctor_id = CtorId::new(db, type_name);
+        let ctor_id = CtorId::new(db, type_name.clone());
 
         let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
         let result_ty = Type::new(
             db,
             TypeKind::Named {
-                id: TypeDefId::synthetic(db, type_name),
-                name: type_name,
+                id: TypeDefId::synthetic(db, type_name.clone()),
+                name: type_name.clone(),
                 args: vec![bound_var],
             },
         );
@@ -1663,7 +1670,7 @@ mod merge_effect_tests {
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::source(db, Symbol::from_dynamic(name))
+        AbilityId::source(db, Symbol::new(name))
     }
 
     #[salsa_test]
@@ -1822,7 +1829,7 @@ mod merge_effect_tests {
             super::super::context::AbilityInfo {
                 id: ability_id,
                 type_params: vec![crate::ast::TypeParam::anonymous()],
-                operations: std::collections::HashMap::new(),
+                operations: HashMap::default(),
             },
         );
         let func_id = FuncDefId::new(db, Symbol::new("test"));

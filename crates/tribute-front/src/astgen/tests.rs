@@ -149,14 +149,14 @@ fn test_struct_declaration() {
     assert!(
         struct_decl.fields[0]
             .name
-            .map(|s| s == "x")
-            .unwrap_or(false)
+            .as_ref()
+            .is_some_and(|s| *s == "x")
     );
     assert!(
         struct_decl.fields[1]
             .name
-            .map(|s| s == "y")
-            .unwrap_or(false)
+            .as_ref()
+            .is_some_and(|s| *s == "y")
     );
 }
 
@@ -585,31 +585,35 @@ fn test_method_call_with_args() {
 }
 
 #[test]
-fn test_qualified_method_path_for_field_update() {
-    let source = "fn main() -> Nil { user.name::set(\"Jane\") }";
-    let module = parse_and_lower(source);
+fn test_qualified_method_path_is_a_call() {
+    let cases = [
+        ("fn main() -> Nil { user.name::set(\"Jane\") }", 2),
+        ("fn main() -> Nil { user.name::get }", 1),
+    ];
+    for (source, arg_count) in cases {
+        let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
-        panic!("Expected function");
-    };
-    let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
-        panic!("Expected block");
-    };
-    let ExprKind::MethodCall {
-        receiver,
-        method,
-        args,
-    } = value.kind.as_ref()
-    else {
-        panic!("Expected method call, got {:?}", value.kind);
-    };
-    let ExprKind::Var(name) = receiver.kind.as_ref() else {
-        panic!("Expected var receiver");
-    };
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Call { callee, args } = value.kind.as_ref() else {
+            panic!("Expected call, got {:?}", value.kind);
+        };
+        let ExprKind::Var(path) = callee.kind.as_ref() else {
+            panic!("Expected path callee");
+        };
+        let ExprKind::Var(receiver) = args[0].kind.as_ref() else {
+            panic!("Expected var receiver");
+        };
 
-    assert_eq!(name.name().to_string(), "user");
-    assert_eq!(method.to_string(), "name::set");
-    assert_eq!(args.len(), 1);
+        assert!(path.qualified.to_string().starts_with("name::"));
+        assert_eq!(receiver.name().to_string(), "user");
+        assert_eq!(args.len(), arg_count);
+        assert_ne!(callee.id, value.id);
+    }
 }
 
 #[test]
@@ -1355,7 +1359,10 @@ fn test_use_path_keyword_prefixes() {
                 .iter()
                 .map(|s| s.to_string())
                 .collect::<Vec<_>>();
-            (path.join("::"), use_decl.alias.map(|a| a.to_string()))
+            (
+                path.join("::"),
+                use_decl.alias.clone().map(|a| a.to_string()),
+            )
         })
         .collect();
 
@@ -2300,7 +2307,7 @@ fn test_extern_function_with_abi() {
     assert_eq!(func.abi.to_string(), "intrinsic");
     assert_eq!(func.params.len(), 1);
     assert_eq!(func.params[0].name.to_string(), "bytes");
-    assert!(matches!(func.return_ty.kind, TypeAnnotationKind::Named(n) if n == "Int"));
+    assert!(matches!(func.return_ty.kind.clone(), TypeAnnotationKind::Named(n) if n == "Int"));
 }
 
 #[test]
@@ -2333,7 +2340,7 @@ fn test_extern_function_no_return_type() {
     };
     assert_eq!(func.name.to_string(), "__print_line");
     // Omitted return type defaults to Nil
-    assert!(matches!(func.return_ty.kind, TypeAnnotationKind::Named(n) if n == "Nil"));
+    assert!(matches!(func.return_ty.kind.clone(), TypeAnnotationKind::Named(n) if n == "Nil"));
 }
 
 #[test]
