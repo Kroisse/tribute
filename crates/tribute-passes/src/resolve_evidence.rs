@@ -601,7 +601,7 @@ mod tests {
             body[..2],
             [
                 r#"%4 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
-                r#"%5 = effect.extend %4, %1, %2 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%5 = effect.extend %4, %1, %2, %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
             ],
             "{body:#?}"
         );
