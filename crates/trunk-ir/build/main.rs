@@ -5,7 +5,6 @@
 //! literals passed to `Symbol::new`. A name missing from the set is still a
 //! valid symbol; it is interned in the dynamic set instead.
 
-#[path = "build/string_literal.rs"]
 mod string_literal;
 
 use std::collections::BTreeSet;

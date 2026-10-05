@@ -5,6 +5,11 @@ edition.workspace = true
 authors.workspace = true
 license.workspace = true
 description = "TrunkIR: A multi-level dialect IR system"
+build = "build/main.rs"
+
+[[test]]
+name = "string_literal"
+path = "build/string_literal.rs"
 
 [features]
 default = []
@@ -31,11 +36,11 @@ trunk-ir-macros.workspace = true
 winnow.workspace = true
 
 [build-dependencies]
-litrs = { version = "1", default-features = false }
+litrs.workspace = true
 string_cache_codegen.workspace = true
 
 [dev-dependencies]
-litrs = { version = "1", default-features = false }
+litrs.workspace = true
 insta.workspace = true
 proptest.workspace = true
 salsa.workspace = true
