@@ -28,7 +28,7 @@
 //!
 //! ```text
 //! Evidence = Array(Marker)
-//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, handler_dispatch: anyref, shadowed: anyref }
+//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref }
 //! ```
 //!
 //! Marker construction and field access stay inside the helper
@@ -95,7 +95,7 @@ pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (
             needs.extend,
             evidence_abi::EXTEND,
-            vec![evidence_ty, i32_ty, i32_ty, closure_ty, closure_ty],
+            vec![evidence_ty, i32_ty, i32_ty, closure_ty],
             evidence_ty,
         ),
         (
@@ -265,15 +265,12 @@ impl RewritePattern for LowerEffectExtendToWasm {
         let ability_id =
             effect_dispatch::insert_ability_id(ctx, loc, extend_op.ability_ref(ctx), rewriter);
         let tr_dispatch = as_canonical_closure(ctx, loc, extend_op.tr_dispatch_fn(ctx), rewriter);
-        let handler_dispatch =
-            as_canonical_closure(ctx, loc, extend_op.handler_dispatch(ctx), rewriter);
         let result_ty = ctx.op_result_types(op)[0];
         let call = func::Call::operands([
             extend_op.evidence(ctx),
             ability_id,
             extend_op.prompt_tag(ctx),
             tr_dispatch,
-            handler_dispatch,
         ])
         .callee(SymbolPath::from(evidence_abi::EXTEND))
         .results([result_ty])
@@ -421,9 +418,6 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         } else if name == Symbol::new(evidence_abi::LOOKUP_TR) {
             needs_find = true;
             Helper::MarkerField(MarkerField::TrDispatchFn)
-        } else if name == Symbol::new(evidence_abi::LOOKUP_HANDLER) {
-            needs_find = true;
-            Helper::MarkerField(MarkerField::HandlerDispatch)
         } else if name == Symbol::new(evidence_abi::EXTEND) {
             needs_find = true;
             needs_set = true;
@@ -573,7 +567,7 @@ fn build_helper(
         }
         Helper::Extend => {
             let shadowed = find_marker(ctx);
-            set_marker(ctx, [args[1], args[2], args[3], args[4], shadowed])
+            set_marker(ctx, [args[1], args[2], args[3], shadowed])
         }
         Helper::Dup => {
             let i32_ty = intern_i32(ctx);
@@ -583,7 +577,6 @@ fn build_helper(
                 marker_field(ctx, top, MarkerField::AbilityId, i32_ty),
                 marker_field(ctx, top, MarkerField::PromptTag, i32_ty),
                 marker_field(ctx, top, MarkerField::TrDispatchFn, anyref_ty),
-                marker_field(ctx, top, MarkerField::HandlerDispatch, anyref_ty),
                 top,
             ];
             set_marker(ctx, fields)
@@ -1172,7 +1165,7 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
-    const TYPES: &str = r#"  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+    const TYPES: &str = r#"  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !Closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>"#;
 
     fn module_text(body: &str) -> String {
@@ -1211,8 +1204,8 @@ mod tests {
     effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = core.i32}
   }"#;
 
-    const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure, %handler: !Closure) -> !Evidence {
-    %extended = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
+    const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
+    %extended = effect.extend %ev, %prompt, %tr {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
     func.return %extended
   }"#;
 
@@ -1300,7 +1293,7 @@ mod tests {
         });
         assert_eq!(
             calls,
-            [(SymbolPath::from(evidence_abi::EXTEND), 5)],
+            [(SymbolPath::from(evidence_abi::EXTEND), 4)],
             "{printed}"
         );
     }
@@ -1355,7 +1348,7 @@ mod tests {
             r#"core.module @test {
   func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @__tribute_evidence_lookup_tr(%ev: wasm.arrayref, %id: core.i32) -> wasm.anyref attributes {abi = "C"}
-  func.func @__tribute_evidence_extend(%ev: wasm.arrayref, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref, %handler: wasm.anyref) -> wasm.arrayref attributes {abi = "C"}
+  func.func @__tribute_evidence_extend(%ev: wasm.arrayref, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref) -> wasm.arrayref attributes {abi = "C"}
 }"#,
         );
 

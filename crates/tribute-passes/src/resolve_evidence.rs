@@ -62,7 +62,7 @@ impl Error for ResolveEvidenceError {}
 struct FinalHandleDispatchShape {
     evidence: ValueRef,
     prompt_tag: ValueRef,
-    dispatcher_pairs: Vec<(TypeRef, ValueRef, ValueRef)>,
+    dispatchers: Vec<(TypeRef, ValueRef)>,
     body_evidence: ValueRef,
 }
 
@@ -103,25 +103,20 @@ fn final_handle_dispatch_shape(
             "final ability.handle_dispatch prompt-tag operand must have type core.i32".into(),
         ));
     }
-    if !dispatchers.len().is_multiple_of(2) {
-        return Err(error(
-            "final ability.handle_dispatch dispatcher operands must form exact pairs".into(),
-        ));
-    }
     let Some(Attribute::List(ability_refs)) = data.attributes.get("ability_refs") else {
         return Err(error(
             "final ability.handle_dispatch requires an ability_refs list".into(),
         ));
     };
-    if ability_refs.len() * 2 != dispatchers.len() {
+    if ability_refs.len() != dispatchers.len() {
         return Err(error(format!(
             "ability_refs cardinality {} does not match {} dispatcher operands",
             ability_refs.len(),
             dispatchers.len()
         )));
     }
-    let mut dispatcher_pairs = Vec::with_capacity(ability_refs.len());
-    for (ability_ref, pair) in ability_refs.iter().zip(dispatchers.as_chunks::<2>().0) {
+    let mut handled = Vec::with_capacity(ability_refs.len());
+    for (ability_ref, &tr_dispatch) in ability_refs.iter().zip(dispatchers) {
         let Attribute::Type(ability_ref) = ability_ref else {
             return Err(error("every ability_refs entry must be a type".into()));
         };
@@ -131,7 +126,7 @@ fn final_handle_dispatch_shape(
                 "every ability_refs entry must be a core.ability_ref type".into(),
             ));
         }
-        dispatcher_pairs.push((*ability_ref, pair[0], pair[1]));
+        handled.push((*ability_ref, tr_dispatch));
     }
     let Ok(body) = ctx.op_regions(op).exactly_one() else {
         return Err(error(
@@ -169,7 +164,7 @@ fn final_handle_dispatch_shape(
     Ok(FinalHandleDispatchShape {
         evidence,
         prompt_tag,
-        dispatcher_pairs,
+        dispatchers: handled,
         body_evidence: *body_evidence,
     })
 }
@@ -373,16 +368,11 @@ fn resolve_delimiters(
                     prompt_tag = resolved;
                 }
                 let evidence_ty = ability::evidence_adt_type_ref(ctx);
-                for (ability_ref, tr_dispatch, handler_dispatch) in shape.dispatcher_pairs {
-                    let extend = effect::Extend::operands(
-                        current_ev,
-                        prompt_tag,
-                        tr_dispatch,
-                        handler_dispatch,
-                    )
-                    .ability_ref(ability_ref)
-                    .results(evidence_ty)
-                    .build(ctx, location);
+                for (ability_ref, tr_dispatch) in shape.dispatchers {
+                    let extend = effect::Extend::operands(current_ev, prompt_tag, tr_dispatch)
+                        .ability_ref(ability_ref)
+                        .results(evidence_ty)
+                        .build(ctx, location);
                     current_ev = extend.result(ctx);
                     ctx.insert_op_before(block, op, extend.op_ref());
                 }
@@ -508,9 +498,9 @@ mod tests {
     fn final_dispatch_fixture(operation: &str) -> String {
         format!(
             r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {{layout = "evidence_marker"}}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {{layout = "evidence_marker"}}>
   !evidence = core.array<!marker, {{layout = "evidence"}}>
-  func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %handler: core.ptr, %tr2: core.ptr, %handler2: core.ptr) -> core.never {{
+  func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %tr2: core.ptr) -> core.never {{
     {operation}
   }}
 }}"#
@@ -518,9 +508,9 @@ mod tests {
     }
 
     #[test]
-    fn final_handle_dispatch_extends_each_ability_pair_and_lowers_resultlessly() {
+    fn final_handle_dispatch_extends_each_ability_and_lowers_resultlessly() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr, %handler, %tr2, %handler2 {ability_refs = [core.ability_ref<{name = "State"}>, core.ability_ref<{name = "Console"}>]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr, %tr2 {ability_refs = [core.ability_ref<{name = "State"}>, core.ability_ref<{name = "Console"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -568,8 +558,8 @@ mod tests {
         parse_test_module(&mut reparsed, &lowered);
     }
 
-    /// The printed operations of `@test`, one per line. `%0`..`%5` are its
-    /// parameters `%ev`, `%prompt`, `%tr`, `%handler`, `%tr2`, `%handler2`.
+    /// The printed operations of `@test`, one per line. `%0`..`%3` are its
+    /// parameters `%ev`, `%prompt`, `%tr`, `%tr2`.
     fn test_body(ctx: &IrContext, module: Module) -> Vec<String> {
         print_module(ctx, module.op())
             .lines()
@@ -584,7 +574,7 @@ mod tests {
     #[test]
     fn handle_selection_masks_the_outer_evidence_before_extending() {
         let input = final_dispatch_fixture(
-            r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = [core.ability_ref<{name = "State"}>], evidence_plan = [{mask = core.ability_ref<{name = "State"}>}]} {
+            r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>], evidence_plan = [{mask = core.ability_ref<{name = "State"}>}]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -598,8 +588,8 @@ mod tests {
         assert_eq!(
             body[..2],
             [
-                r#"%6 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
-                r#"%7 = effect.extend %6, %1, %2, %3 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%4 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%5 = effect.extend %4, %1, %2 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
             ],
             "{body:#?}"
         );
@@ -621,11 +611,11 @@ mod tests {
         assert_eq!(
             body,
             [
-                r#"%6 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
-                r#"%7 = effect.dup %6 {ability_ref = core.ability_ref<{name = "Console"}>} : !evidence"#,
-                r#"%8 = func.call %7, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
-                r#"%9 = effect.dup %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
-                r#"func.tail_call_indirect %2, %9, %8 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
+                r#"%4 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%5 = effect.dup %4 {ability_ref = core.ability_ref<{name = "Console"}>} : !evidence"#,
+                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
+                r#"%7 = effect.dup %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
             ],
             "{body:#?}"
         );
@@ -649,7 +639,7 @@ mod tests {
     fn final_handle_dispatch_materializes_a_fresh_prompt_tag_once() {
         let input = final_dispatch_fixture(
             r#"%fresh = effect.fresh_prompt_tag : core.i32
-    ability.handle_dispatch %ev, %fresh, %tr, %handler {ability_refs = [core.ability_ref<{name = "State"}>]} {
+    ability.handle_dispatch %ev, %fresh, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -706,13 +696,6 @@ mod tests {
                 "requires an evidence operand",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = []} {
-      ^body(%inner: !evidence):
-        func.unreachable
-    }"#,
-                "must form exact pairs",
-            ),
-            (
                 r#"ability.handle_dispatch %ev {
       ^body(%inner: !evidence):
         func.unreachable
@@ -720,7 +703,7 @@ mod tests {
                 "requires a prompt-tag operand",
             ),
             (
-                r#"ability.handle_dispatch %ev, %handler {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %tr {ability_refs = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -734,21 +717,21 @@ mod tests {
                 "requires an ability_refs list",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = []} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = []} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "cardinality",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = [1]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [1]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
                 "entry must be a type",
             ),
             (
-                r#"ability.handle_dispatch %ev, %prompt, %tr, %handler {ability_refs = [core.i32]} {
+                r#"ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.i32]} {
       ^body(%inner: !evidence):
         func.unreachable
     }"#,
@@ -831,7 +814,7 @@ mod tests {
         let input = final_dispatch_fixture(
             r#"ability.handle_dispatch %ev, %prompt {ability_refs = []} {
       ^body(%inner: !evidence):
-        effect.dispatch_cps %inner, %tr, %handler, %tr2 {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"}
+        effect.dispatch_cps %inner, %tr, %tr2, %tr2 {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get"}
     }"#,
         );
         let mut ctx = IrContext::new();
@@ -842,7 +825,7 @@ mod tests {
     #[test]
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker

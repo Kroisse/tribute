@@ -96,13 +96,12 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (evidence_abi::LOOKUP, &[ptr_ty, i32_ty][..], i32_ty),
         (
             evidence_abi::EXTEND,
-            &[ptr_ty, i32_ty, i32_ty, ptr_ty, ptr_ty][..],
+            &[ptr_ty, i32_ty, i32_ty, ptr_ty][..],
             ptr_ty,
         ),
         (evidence_abi::MASK, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::DUP, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
-        (evidence_abi::LOOKUP_HANDLER, &[ptr_ty, i32_ty][..], ptr_ty),
     ] {
         if module.ops(ctx).iter().copied().any(|op| {
             func::Func::from_op(ctx, op)
@@ -265,18 +264,12 @@ impl RewritePattern for LowerEffectExtendToNative {
         let tr_dispatch = ctx.op_result(tr_dispatch_ptr, 0);
         rewriter.insert_op(tr_dispatch_ptr);
 
-        let handler_dispatch_ptr =
-            lower_evidence_dispatch_operand(ctx, loc, extend_op.handler_dispatch(ctx), ptr_ty);
-        let handler_dispatch = ctx.op_result(handler_dispatch_ptr, 0);
-        rewriter.insert_op(handler_dispatch_ptr);
-
         let mut operands = vec![
             extend_op.evidence(ctx),
             ability_id_val,
             extend_op.prompt_tag(ctx),
         ];
         operands.push(tr_dispatch);
-        operands.push(handler_dispatch);
 
         let extend_call = func::Call::operands(operands)
             .callee(SymbolPath::from(evidence_abi::EXTEND))
@@ -572,7 +565,7 @@ mod tests {
             "core.module @test { func.func @user() -> core.i32 }",
         );
         prepare_native_evidence_runtime(&mut ctx, module);
-        assert_eq!(module.ops(&ctx).len(), 8);
+        assert_eq!(module.ops(&ctx).len(), 7);
         for (name, params, result) in [
             (evidence_abi::EMPTY, &[][..], "core.ptr"),
             (
@@ -582,7 +575,7 @@ mod tests {
             ),
             (
                 evidence_abi::EXTEND,
-                &["core.ptr", "core.i32", "core.i32", "core.ptr", "core.ptr"][..],
+                &["core.ptr", "core.i32", "core.i32", "core.ptr"][..],
                 "core.ptr",
             ),
             (
@@ -593,11 +586,6 @@ mod tests {
             (evidence_abi::DUP, &["core.ptr", "core.i32"][..], "core.ptr"),
             (
                 evidence_abi::LOOKUP_TR,
-                &["core.ptr", "core.i32"][..],
-                "core.ptr",
-            ),
-            (
-                evidence_abi::LOOKUP_HANDLER,
                 &["core.ptr", "core.i32"][..],
                 "core.ptr",
             ),
@@ -655,7 +643,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @external(%ev: !evidence) -> !marker
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
@@ -692,7 +680,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @select(%ev: !evidence) -> !evidence {
     %masked = effect.mask %ev {ability_ref = core.ability_ref<{name = "State"}>} : !evidence
@@ -753,7 +741,6 @@ mod tests {
         assert!(!ir_text.contains("effect.dispatch_tail"));
         assert!(ir_text.contains("__tribute_evidence_empty"));
         assert!(ir_text.contains("__tribute_evidence_lookup_tr"));
-        assert!(ir_text.contains("__tribute_evidence_lookup_handler"));
     }
 
     #[test]

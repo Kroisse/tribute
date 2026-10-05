@@ -1056,7 +1056,7 @@ fn test_validate_fixed_wasm_dispatch_abis() {
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
         r#"core.module @test {
-        !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+        !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
         !Closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
         func.func @tail(%ev: !Evidence, %payload: tribute_rt.anyref) -> tribute_rt.anyref {
             %result = effect.dispatch_tail %ev, %payload {ability_ref = core.ability_ref<{name = "Console"}>, op_name = "read"} : tribute_rt.anyref
@@ -1065,8 +1065,8 @@ fn test_validate_fixed_wasm_dispatch_abis() {
         func.func @cps(%ev: !Evidence, %dispatch: !Closure, %resume: !Closure, %payload: tribute_rt.anyref) {
             effect.dispatch_cps %ev, %dispatch, %resume, %payload {ability_ref = core.ability_ref<{name = "State"}>, op_name = "get", answer_type = core.i32}
         }
-        func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure, %handler: !Closure) -> !Evidence {
-            %extended = effect.extend %ev, %prompt, %tr, %handler {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
+        func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
+            %extended = effect.extend %ev, %prompt, %tr {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
             func.return %extended
         }
     }"#,
@@ -1112,9 +1112,9 @@ fn test_execute_wasm_evidence_marker_stacks() {
     let module = trunk_ir::parser::parse_test_module(
         &mut ctx,
         r#"core.module @test {
-  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @__tribute_evidence_lookup(%ev: !Evidence, %id: core.i32) -> core.i32 attributes {abi = "C"}
-  func.func @__tribute_evidence_extend(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref, %handler: wasm.anyref) -> !Evidence attributes {abi = "C"}
+  func.func @__tribute_evidence_extend(%ev: !Evidence, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref) -> !Evidence attributes {abi = "C"}
   func.func @__tribute_evidence_mask(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
   func.func @__tribute_evidence_dup(%ev: !Evidence, %id: core.i32) -> !Evidence attributes {abi = "C"}
   wasm.func @check() -> core.i32 {
@@ -1127,9 +1127,9 @@ fn test_execute_wasm_evidence_marker_stacks() {
     %console = wasm.i32_const {value = 20} : core.i32
     %null = wasm.ref_null {heap_type = "any"} : wasm.anyref
     %empty = wasm.array_new_default %zero {type_idx = 5} : !Evidence
-    %with_console = wasm.call %empty, %console, %nine, %null, %null {callee = @__tribute_evidence_extend} : !Evidence
-    %outer = wasm.call %with_console, %state, %one, %null, %null {callee = @__tribute_evidence_extend} : !Evidence
-    %inner = wasm.call %outer, %state, %two, %null, %null {callee = @__tribute_evidence_extend} : !Evidence
+    %with_console = wasm.call %empty, %console, %nine, %null {callee = @__tribute_evidence_extend} : !Evidence
+    %outer = wasm.call %with_console, %state, %one, %null {callee = @__tribute_evidence_extend} : !Evidence
+    %inner = wasm.call %outer, %state, %two, %null {callee = @__tribute_evidence_extend} : !Evidence
     %inner_tag = wasm.call %inner, %state {callee = @__tribute_evidence_lookup} : core.i32
     %masked = wasm.call %inner, %state {callee = @__tribute_evidence_mask} : !Evidence
     %masked_tag = wasm.call %masked, %state {callee = @__tribute_evidence_lookup} : core.i32

@@ -906,7 +906,7 @@ fn named_boundaries_report_local_and_core_validation_errors() {
     );
 
     let malformed_delimiter = r#"core.module @test {
-  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @broken() -> core.never attributes {tribute.calling_convention = 2} {
     ability.handle_dispatch {ability_refs = []} {
       ^body(%inner: !evidence):
@@ -1056,11 +1056,10 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
 #[test]
 fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     let dispatcher_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
-  !general = closure.closure<func.func_sig<(!evidence, tribute_rt.anyref, core.i32, tribute_rt.anyref) -> core.never>>
-  func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr, %general: !general) -> core.never attributes {tribute.calling_convention = 2} {
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = "State"}>]} {
+  func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr) -> core.never attributes {tribute.calling_convention = 2} {
+    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1076,15 +1075,12 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     );
 
     let wrong_abi_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = 1} {
       func.unreachable
     }
-    %general = closure.lambda(%inner: !evidence) -> core.never {tribute.calling_convention = 2} {
-      func.unreachable
-    }
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = "State"}>]} {
+    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1097,18 +1093,14 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
         text.contains("tail-resumptive dispatcher has the wrong"),
         "{text}"
     );
-    assert!(text.contains("general dispatcher has the wrong"), "{text}");
 
     let wrong_metadata_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, handler_dispatch: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 0} {
       func.unreachable
     }
-    %general = closure.lambda(%inner: !evidence, %continuation: tribute_rt.anyref, %op_idx: core.i32, %payload: tribute_rt.anyref) -> core.never {tribute.calling_convention = 1} {
-      func.unreachable
-    }
-    ability.handle_dispatch %ev, %prompt, %tr, %general {ability_refs = [core.ability_ref<{name = "State"}>]} {
+    ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
       ^body(%inner: !evidence):
         func.unreachable
     }
@@ -1118,7 +1110,6 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     let error = verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap_err();
     let text = error.to_string();
     assert!(text.contains("calling convention metadata 1"), "{text}");
-    assert!(text.contains("calling convention metadata 2"), "{text}");
 
     let residual_input = r#"core.module @test {
   tribute_control.func @residual(%value: core.i32) -> core.i32 convention(direct) {
@@ -1287,7 +1278,7 @@ fn textual_resumptive_handle_emits_one_resultless_delimiter() {
 }
 
 #[test]
-fn multiple_arms_for_one_ability_emit_one_dispatcher_pair() {
+fn multiple_arms_for_one_ability_emit_one_dispatcher() {
     let input = r#"core.module @test {
   tribute_control.func @run(%input: core.i32) -> core.i32 convention(cps) {
     %handled = tribute_control.handle : core.i32 {
@@ -1370,7 +1361,7 @@ fn multiple_arms_for_one_ability_emit_one_dispatcher_pair() {
     // the layer again: the count does not grow with the resumptive arms.
     assert_eq!(delimiters.len(), 2, "expected the handle's two delimiters");
     for delimiter in delimiters {
-        assert_eq!(ctx.op_operands(delimiter).len(), 4);
+        assert_eq!(ctx.op_operands(delimiter).len(), 3);
         let Some(Attribute::List(ability_refs)) = ctx.op(delimiter).attributes.get("ability_refs")
         else {
             panic!("final delimiter must have ability_refs");
