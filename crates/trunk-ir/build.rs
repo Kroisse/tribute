@@ -8,19 +8,15 @@
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
-/// Shorter names are stored inline in the atom and never reach the set.
-const MAX_INLINE_LEN: usize = 7;
-
 fn main() {
     let src = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap()).join("src");
     println!("cargo::rerun-if-changed={}", src.display());
 
     let mut atoms = BTreeSet::new();
     scan_dir(&src, &mut atoms);
-    atoms.retain(|name| name.len() > MAX_INLINE_LEN);
 
     let out = PathBuf::from(std::env::var_os("OUT_DIR").unwrap()).join("symbol_atom.rs");
-    string_cache_codegen::AtomType::new("symbol::SymbolAtom", "symbol_atom!")
+    string_cache_codegen::AtomType::new("symbol::atom::SymbolAtom", "symbol_atom!")
         .atoms(atoms)
         .write_to_file(&out)
         .unwrap();
@@ -39,11 +35,12 @@ fn scan_dir(dir: &Path, atoms: &mut BTreeSet<String>) {
     }
 }
 
-/// Collect `Symbol::new("..")` arguments, `symbols!` entries, and `&str`
+/// Collect literal `Symbol::new` and `symbol!` arguments, `symbols!` entries, and `&str`
 /// constants, which name attributes passed to `Symbol::new`.
 fn scan_symbol_literals(text: &str, atoms: &mut BTreeSet<String>) {
     for marker in [
         "Symbol::new(\"",
+        "symbol!(\"",
         "=> \"",
         ": &str = \"",
         ": &'static str = \"",

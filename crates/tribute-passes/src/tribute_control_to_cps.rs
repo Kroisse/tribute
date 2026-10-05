@@ -241,7 +241,7 @@ impl<'a> Converter<'a> {
     fn fresh_helper(&mut self, prefix: &str) -> Symbol {
         let index = self.helper_index;
         self.helper_index += 1;
-        Symbol::from_dynamic(&format!("__tribute_{prefix}_{index}"))
+        Symbol::new(&format!("__tribute_{prefix}_{index}"))
     }
 
     fn make_block(&mut self, location: Location, types: &[TypeRef]) -> BlockRef {

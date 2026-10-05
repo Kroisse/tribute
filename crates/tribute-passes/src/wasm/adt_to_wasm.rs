@@ -335,7 +335,7 @@ fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: StringRef) ->
         Some(base_name) => format!("{base_name}${}", ctx.str(tag)),
         None => format!("{}${}", base_data.name, ctx.str(tag)),
     };
-    let variant_name = Symbol::from_dynamic(&variant_name);
+    let variant_name = Symbol::new(&variant_name);
 
     // Copy params from base type
     let params: Vec<TypeRef> = base_data.params.to_vec();

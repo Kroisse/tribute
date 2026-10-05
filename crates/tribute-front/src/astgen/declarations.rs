@@ -126,7 +126,7 @@ fn lower_function(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<Decl<Unres
             .map(|n| {
                 let text = ctx.node_text(&n);
                 // Strip surrounding quotes: "intrinsic" -> intrinsic
-                Symbol::from_dynamic(text.trim_matches('"'))
+                Symbol::new(text.trim_matches('"'))
             })
             .unwrap_or_else(|| Symbol::new("C"));
 
@@ -163,7 +163,7 @@ fn extract_function_name(ctx: &AstLoweringCtx<'_>, name_node: Node) -> Symbol {
             .strip_prefix('(')
             .and_then(|s| s.strip_suffix(')'))
             .unwrap_or(&text);
-        Symbol::from_dynamic(stripped)
+        Symbol::new(stripped)
     } else {
         ctx.node_symbol(&name_node)
     }

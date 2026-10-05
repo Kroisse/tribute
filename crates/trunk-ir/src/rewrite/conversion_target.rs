@@ -175,7 +175,7 @@ impl ConversionTarget {
 
     /// Mark an entire dialect as legal.
     pub fn add_legal_dialect(&mut self, dialect: &str) {
-        let dialect = Symbol::from_dynamic(dialect);
+        let dialect = Symbol::new(dialect);
         assert!(
             !self.illegal_dialects.contains(&dialect),
             "dialect `{dialect}` is already registered as illegal"
@@ -188,7 +188,7 @@ impl ConversionTarget {
 
     /// Mark an entire dialect as illegal.
     pub fn add_illegal_dialect(&mut self, dialect: &str) {
-        let dialect = Symbol::from_dynamic(dialect);
+        let dialect = Symbol::new(dialect);
         assert!(
             !self.legal_dialects.contains(&dialect),
             "dialect `{dialect}` is already registered as legal"
@@ -201,7 +201,7 @@ impl ConversionTarget {
 
     /// Mark a specific operation as legal.
     pub fn add_legal_op(&mut self, dialect: &str, op_name: &str) {
-        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        let key = (Symbol::new(dialect), Symbol::new(op_name));
         assert!(
             !self.illegal_ops.contains(&key),
             "operation `{}.{}` is already registered as illegal",
@@ -218,7 +218,7 @@ impl ConversionTarget {
 
     /// Mark a specific operation as illegal.
     pub fn add_illegal_op(&mut self, dialect: &str, op_name: &str) {
-        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        let key = (Symbol::new(dialect), Symbol::new(op_name));
         assert!(
             !self.legal_ops.contains(&key),
             "operation `{}.{}` is already registered as legal",
@@ -239,7 +239,7 @@ impl ConversionTarget {
     /// legality still takes precedence: if a dynamic rule marks the operation
     /// illegal, the recursive marker does not apply.
     pub fn add_recursive_legal_op(&mut self, dialect: &str, op_name: &str) {
-        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        let key = (Symbol::new(dialect), Symbol::new(op_name));
         assert!(
             self.legal_ops.contains(&key),
             "operation `{}.{}` must be registered as legal before recursive legality",
@@ -264,7 +264,7 @@ impl ConversionTarget {
         op_name: &str,
         f: impl Fn(&IrContext, OpRef) -> LegalityDecision + 'static,
     ) {
-        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        let key = (Symbol::new(dialect), Symbol::new(op_name));
         match self.dynamic_ops.entry(key) {
             Entry::Vacant(entry) => {
                 entry.insert(Box::new(f));
@@ -284,7 +284,7 @@ impl ConversionTarget {
     /// The operation must already have a dynamic operation rule. The recursive
     /// marker applies only when that rule returns `Legal`.
     pub fn add_recursive_dynamic_op(&mut self, dialect: &str, op_name: &str) {
-        let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(op_name));
+        let key = (Symbol::new(dialect), Symbol::new(op_name));
         assert!(
             self.dynamic_ops.contains_key(&key),
             "operation `{}.{}` must have a dynamic legality rule before dynamic recursive legality",
@@ -308,7 +308,7 @@ impl ConversionTarget {
         dialect: &str,
         f: impl Fn(&IrContext, OpRef) -> LegalityDecision + 'static,
     ) {
-        let dialect = Symbol::from_dynamic(dialect);
+        let dialect = Symbol::new(dialect);
         match self.dynamic_dialects.entry(dialect) {
             Entry::Vacant(entry) => {
                 entry.insert(Box::new(f));

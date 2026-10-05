@@ -1215,7 +1215,7 @@ mod tests {
             Attribute::Dict(
                 entries
                     .into_iter()
-                    .map(|(key, value)| (Symbol::from_dynamic(key), value))
+                    .map(|(key, value)| (Symbol::new(key), value))
                     .collect(),
             )
         };

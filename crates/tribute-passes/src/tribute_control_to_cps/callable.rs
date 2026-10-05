@@ -237,7 +237,7 @@ impl Converter<'_> {
             .op(source)
             .attributes
             .get_str(self.ctx, "sym_name")
-            .map(Symbol::from_dynamic)
+            .map(Symbol::new)
             .expect("pre-CPS validation checked function symbol");
         let logical_type = self
             .ctx

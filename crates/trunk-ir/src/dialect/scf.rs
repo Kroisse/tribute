@@ -582,8 +582,8 @@ mod canonicalize_tests {
     }
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::from_dynamic(dialect);
-        let name_sym = Symbol::from_dynamic(name);
+        let dialect_sym = Symbol::new(dialect);
+        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);

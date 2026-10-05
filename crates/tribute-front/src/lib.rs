@@ -46,7 +46,7 @@ pub fn qualified_symbol(prefix: &mut String, name: &Symbol) -> Symbol {
         let len = prefix.len();
         prefix.push_str("::");
         name.with_str(|s| prefix.push_str(s));
-        let sym = Symbol::from_dynamic(prefix);
+        let sym = Symbol::new(prefix);
         prefix.truncate(len);
         sym
     }

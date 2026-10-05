@@ -212,7 +212,7 @@ fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
         ctx.op(op)
             .attributes
             .get_str(ctx, "sym_name")
-            .map(Symbol::from_dynamic)
+            .map(Symbol::new)
             == Some(Symbol::new(name))
             && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
     })
@@ -401,11 +401,7 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         if !is_function || ctx.op_has_regions(op) {
             continue;
         }
-        let Some(name) = data
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(Symbol::from_dynamic)
-        else {
+        let Some(name) = data.attributes.get_str(ctx, "sym_name").map(Symbol::new) else {
             continue;
         };
         let Some(signature) = data.attributes.get_type("type") else {

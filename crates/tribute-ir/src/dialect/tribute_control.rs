@@ -609,10 +609,7 @@ fn print_extra_attributes(
     excluded: &[&str],
 ) -> fmt::Result {
     use fmt::Write;
-    let excluded: HashSet<Symbol> = excluded
-        .iter()
-        .map(|key| Symbol::from_dynamic(key))
-        .collect();
+    let excluded: HashSet<Symbol> = excluded.iter().map(|key| Symbol::new(key)).collect();
     let attrs: Vec<_> = h
         .ctx()
         .op(op)
@@ -1092,7 +1089,7 @@ fn push_type_error(errors: &mut Vec<ValidationError>, message: impl Into<String>
 
 fn is_control_op(ctx: &IrContext, op: OpRef, name: &str) -> bool {
     let data = ctx.op(op);
-    data.dialect == Symbol::new("tribute_control") && data.name == Symbol::from_dynamic(name)
+    data.dialect == Symbol::new("tribute_control") && data.name == Symbol::new(name)
 }
 
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
@@ -1286,7 +1283,7 @@ fn terminator(
         return None;
     };
     let data = ctx.op(op);
-    if data.dialect != Symbol::from_dynamic(dialect) || data.name != Symbol::from_dynamic(name) {
+    if data.dialect != Symbol::new(dialect) || data.name != Symbol::new(name) {
         push_op_error(
             ctx,
             owner,
@@ -3248,9 +3245,7 @@ mod tests {
     }
 
     fn simple_type(ctx: &mut IrContext, dialect: &str, name: &str) -> TypeRef {
-        ctx.intern_type(
-            TypeDataBuilder::new(Symbol::from_dynamic(dialect), Symbol::from_dynamic(name)).build(),
-        )
+        ctx.intern_type(TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name)).build())
     }
 
     fn ability_type(ctx: &mut IrContext, name: &str) -> TypeRef {
@@ -3312,7 +3307,7 @@ mod tests {
         ctx.push_op(entry, ret.op_ref());
         let body = region(ctx, loc, entry);
         Func::operands()
-            .sym_name(Symbol::from_dynamic(symbol))
+            .sym_name(Symbol::new(symbol))
             .r#type(ty)
             .regions(body)
             .build(ctx, loc)
@@ -3712,10 +3707,7 @@ mod tests {
             "resume",
             "yield",
         ] {
-            assert!(
-                names.contains(&Symbol::from_dynamic(expected)),
-                "{expected}"
-            );
+            assert!(names.contains(&Symbol::new(expected)), "{expected}");
         }
 
         let handler = Handler::from_op(ctx, fixture.handler).expect("typed handler accessor");
@@ -3795,7 +3787,7 @@ mod tests {
                 ctx.op(*op)
                     .attributes
                     .get_str(&ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     == Some(Symbol::new("decl"))
             })
             .unwrap();
@@ -3806,7 +3798,7 @@ mod tests {
                 ctx.op(*op)
                     .attributes
                     .get_str(&ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     == Some(Symbol::new("definition"))
             })
             .unwrap();
@@ -3822,7 +3814,7 @@ mod tests {
                 ctx.op(*op)
                     .attributes
                     .get_str(&ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     == Some(Symbol::new("different"))
             })
             .and_then(|op| ctx.op(op).attributes.get_type("type"))
@@ -4200,7 +4192,7 @@ mod tests {
                 ctx.op(*op)
                     .attributes
                     .get_str(&ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     == Some(Symbol::new("bad_func"))
             })
             .unwrap();
@@ -5192,7 +5184,7 @@ mod tests {
                 ctx.op(*op)
                     .attributes
                     .get_str(&ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     == Some(Symbol::new("Nat::+"))
             })
             .unwrap();
@@ -5228,7 +5220,7 @@ mod tests {
                     ctx.op(*op)
                         .attributes
                         .get_str(&ctx, "sym_name")
-                        .map(Symbol::from_dynamic)
+                        .map(Symbol::new)
                         == Some(symbol.clone())
                 })
                 .unwrap();

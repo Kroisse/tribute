@@ -115,6 +115,6 @@ impl<'db> AstLoweringCtx<'db> {
 
     /// Get a Symbol from a node's text, without the `r#` of raw identifiers.
     pub fn node_symbol(&self, node: &Node) -> Symbol {
-        Symbol::from_dynamic(&crate::keywords::unraw(&self.node_text(node)))
+        Symbol::new(&crate::keywords::unraw(&self.node_text(node)))
     }
 }

@@ -457,7 +457,7 @@ impl LambdaNamer {
         let count = self.counters.entry_ref(parent).or_insert(0);
         let name = format!("{parent}::__clam_{count}");
         *count += 1;
-        Symbol::from_dynamic(&name)
+        Symbol::new(&name)
     }
 }
 
@@ -622,10 +622,7 @@ mod tests {
 
         // The lifted function should exist.
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
-        assert_eq!(
-            lifted.sym_name(&ctx),
-            Symbol::from_dynamic("test_fn::__clam_0")
-        );
+        assert_eq!(lifted.sym_name(&ctx), Symbol::new("test_fn::__clam_0"));
 
         // Direct lifted function has only the physical environment and source arg.
         let lifted_ty = lifted.r#type(&ctx);

@@ -23,7 +23,7 @@ pub fn mangle_name(db: &dyn salsa::Database, base: &Symbol, type_args: &[Type<'_
         buf.push('$');
         write_type_mangled(db, *ty, &mut buf).unwrap();
     }
-    Symbol::from_dynamic(&buf)
+    Symbol::new(&buf)
 }
 
 pub fn mangle_type_name(

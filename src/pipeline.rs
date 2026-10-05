@@ -1783,7 +1783,7 @@ mod tests {
                 .copied()
                 .find_map(|op| {
                     let function = func_dialect::Func::from_op(&ctx, op).ok()?;
-                    (function.sym_name(&ctx) == Symbol::from_dynamic(name)).then_some(function)
+                    (function.sym_name(&ctx) == Symbol::new(name)).then_some(function)
                 })
                 .expect("root bridge function remains present");
             // The convention is consumed inside the boundary; the empty
@@ -3287,7 +3287,7 @@ fn main() -> Nil {
         use trunk_ir::{Symbol, TypeRef};
 
         fn alias(ir: &IrContext, name: &str) -> TypeRef {
-            let name = Symbol::from_dynamic(name);
+            let name = Symbol::new(name);
             let ty = ir
                 .type_alias_by_name(&name)
                 .expect("dependency layout is published");
@@ -3390,7 +3390,7 @@ fn main() -> Nil {}
             for (suffix, primitive) in [("Int", "i32"), ("Bool", "i1")] {
                 let inner = alias(&ir, &format!("Inner${suffix}"));
                 let value = get_struct_fields(&ir, inner).unwrap()[0].1;
-                assert_eq!(ir.get_type(value).name, Symbol::from_dynamic(primitive));
+                assert_eq!(ir.get_type(value).name, Symbol::new(primitive));
                 let outer = get_enum_variants(&ir, alias(&ir, &format!("Outer${suffix}"))).unwrap();
                 assert_eq!(ir.str(outer[0].0), "Wrap");
                 assert_eq!(target(&ir, outer[0].1[0]), inner);
@@ -3423,10 +3423,7 @@ fn main() -> Nil {}
             for (name, primitive) in [("A::Token$Int", "i32"), ("B::Token$Bool", "i1")] {
                 let variants = get_enum_variants(&ir, alias(&ir, name)).unwrap();
                 assert_eq!(ir.str(variants[0].0), "Item");
-                assert_eq!(
-                    ir.get_type(variants[0].1[0]).name,
-                    Symbol::from_dynamic(primitive)
-                );
+                assert_eq!(ir.get_type(variants[0].1[0]).name, Symbol::new(primitive));
             }
             let output = trunk_ir::printer::print_module(&ir, logical.module.op());
             for (name, primitive) in [("Boxed$Int", "core.i32"), ("Boxed$Bool", "core.i1")] {
@@ -3452,7 +3449,7 @@ fn main() -> Nil {}
                 .expect("published nominal layout");
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
-            assert_eq!(data.name, Symbol::from_dynamic(kind));
+            assert_eq!(data.name, Symbol::new(kind));
             assert!(
                 data.attrs
                     .get_str(ir, "name")
@@ -3478,7 +3475,7 @@ fn main() -> Nil {}
             let data = ir.get_type(ty);
             assert_eq!(data.dialect, Symbol::new("adt"));
             assert_eq!(data.name, Symbol::new("typeref"));
-            Symbol::from_dynamic(data.attrs.get_str(ir, "name").expect("nominal identity"))
+            Symbol::new(data.attrs.get_str(ir, "name").expect("nominal identity"))
         }
 
         // These specializations occur only in signatures, never in allocations.
@@ -3534,14 +3531,14 @@ fn main() -> Nil {}
                     .find_map(|op| {
                         if after_cps {
                             let f = func_dialect::Func::from_op(&ir, op).ok()?;
-                            (f.sym_name(&ir) == Symbol::from_dynamic(function)).then(|| {
+                            (f.sym_name(&ir) == Symbol::new(function)).then(|| {
                                 func_dialect::FuncSig::from_type_ref(&ir, f.r#type(&ir))
                                     .unwrap()
                                     .inputs(&ir)[0]
                             })
                         } else {
                             let f = tribute_control::Func::from_op(&ir, op).ok()?;
-                            (f.sym_name(&ir) == Symbol::from_dynamic(function)).then(|| {
+                            (f.sym_name(&ir) == Symbol::new(function)).then(|| {
                                 tribute_control::FuncSig::from_type_ref(&ir, f.r#type(&ir))
                                     .unwrap()
                                     .inputs(&ir)[0]
@@ -3550,7 +3547,7 @@ fn main() -> Nil {}
                     })
                     .expect("signature-only specialization");
                 let name = reference_name(&ir, parameter);
-                assert_eq!(name, Symbol::from_dynamic(nominal));
+                assert_eq!(name, Symbol::new(nominal));
                 layout(&ir, &name, kind);
             }
             assert_ne!(
@@ -3558,10 +3555,10 @@ fn main() -> Nil {}
                 layout(&ir, &Symbol::new("B::Token$Nat"), "struct")
             );
             for (owner, target) in [("Node", "Node"), ("First", "Second"), ("Second", "First")] {
-                let owner = layout(&ir, &Symbol::from_dynamic(owner), "struct");
+                let owner = layout(&ir, &Symbol::new(owner), "struct");
                 let field = get_struct_fields(&ir, owner).unwrap()[0].1;
                 let name = reference_name(&ir, field);
-                assert_eq!(name, Symbol::from_dynamic(target));
+                assert_eq!(name, Symbol::new(target));
                 layout(&ir, &name, "struct");
             }
             let holder = layout(&ir, &Symbol::new("Holder"), "struct");

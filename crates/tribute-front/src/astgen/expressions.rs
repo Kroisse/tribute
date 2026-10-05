@@ -721,11 +721,9 @@ fn lower_handler_operation_path(
 ) -> Option<(UnresolvedName, Symbol)> {
     let op_node = node.child_by_field_name("operation")?;
     let op_text = ctx.node_text(&op_node).to_string();
-    let op_symbol = Symbol::from_dynamic(&op_text);
+    let op_symbol = Symbol::new(&op_text);
     let op_name = op_symbol.last_segment();
-    let ability_sym = op_symbol
-        .parent_path()
-        .unwrap_or_else(|| Symbol::from_dynamic("_"));
+    let ability_sym = op_symbol.parent_path().unwrap_or_else(|| Symbol::new("_"));
     let ability_id = ctx.fresh_id_with_span(&op_node);
     Some((UnresolvedName::new(ability_sym, ability_id), op_name))
 }

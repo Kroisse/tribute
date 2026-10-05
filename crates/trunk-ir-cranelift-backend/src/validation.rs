@@ -453,12 +453,8 @@ mod tests {
     }
 
     fn make_module(ctx: &mut IrContext, loc: Location, dialect: &str, name: &str) -> Module {
-        let op_data = OperationDataBuilder::new(
-            loc,
-            Symbol::from_dynamic(dialect),
-            Symbol::from_dynamic(name),
-        )
-        .build(ctx);
+        let op_data =
+            OperationDataBuilder::new(loc, Symbol::new(dialect), Symbol::new(name)).build(ctx);
         let op = ctx.create_op(op_data);
 
         let block = ctx.create_block(BlockData {

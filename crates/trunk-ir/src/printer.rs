@@ -1598,7 +1598,7 @@ mod tests {
 
         // Empty symbol (should quote)
         out.clear();
-        write_symbol(&mut out, &Symbol::from_dynamic("")).unwrap();
+        write_symbol(&mut out, &Symbol::new("")).unwrap();
         assert_eq!(out, r#"@"""#);
 
         // Float infinity (should not append .0)
@@ -1699,7 +1699,7 @@ mod tests {
         });
         let func_ty = make_func_type(ctx, &[param_ty], ret_ty);
         func::Func::operands()
-            .sym_name(Symbol::from_dynamic(name))
+            .sym_name(Symbol::new(name))
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc)
@@ -1766,7 +1766,7 @@ mod tests {
         let struct_ty = make_named_type(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
 
         // Manually register this type as an alias
-        ctx.register_type_alias(Symbol::from_dynamic("my_point"), struct_ty);
+        ctx.register_type_alias(Symbol::new("my_point"), struct_ty);
 
         let f1 = make_identity_func(&mut ctx, loc, "f1", struct_ty, struct_ty);
         let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);

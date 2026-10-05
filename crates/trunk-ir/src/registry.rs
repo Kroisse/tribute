@@ -20,7 +20,7 @@ impl<F: Registered> Registry<F> {
         let mut map = HashMap::default();
         for hook in inventory::iter::<F> {
             let (dialect, name) = hook.key();
-            let key = (Symbol::from_dynamic(dialect), Symbol::from_dynamic(name));
+            let key = (Symbol::new(dialect), Symbol::new(name));
             if map.insert(key, hook).is_some() {
                 panic!("duplicate {} registration for '{dialect}.{name}'", F::KIND);
             }

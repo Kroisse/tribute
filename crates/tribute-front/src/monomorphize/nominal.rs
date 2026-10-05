@@ -226,7 +226,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 ("Nested::Choice", true),
                 ("Nested::Plain", false),
             ] {
-                let name = Symbol::from_dynamic(&format!("{prefix}::{suffix}"));
+                let name = Symbol::new(&format!("{prefix}::{suffix}"));
                 let (id, entry) = index
                     .declarations
                     .iter()
@@ -247,10 +247,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                         for (constructor, variant) in entry.constructors.iter().zip(&e.variants) {
                             assert_eq!(
                                 constructor.id.qualified(db),
-                                Symbol::from_dynamic(&format!(
-                                    "{prefix}::Nested::{}",
-                                    variant.name
-                                ))
+                                Symbol::new(&format!("{prefix}::Nested::{}", variant.name))
                             );
                             assert_eq!(constructor.node, variant.id);
                             assert_eq!(constructor.fields, variant.fields.len());
@@ -569,7 +566,7 @@ extern "C" fn b(value: B::Token(Bool)) -> B::Nested::Choice(Bool)
                 .iter()
                 .copied()
                 .collect();
-            let ctor = CtorId::new(db, Symbol::from_dynamic(constructor));
+            let ctor = CtorId::new(db, Symbol::new(constructor));
             for kind in [
                 InstanceErrorKind::MissingInstance,
                 InstanceErrorKind::WrongDeclaration,

@@ -127,11 +127,7 @@ fn describe_value(ctx: &IrContext, v: ValueRef) -> String {
         ValueDef::OpResult(op, idx) => {
             let data = ctx.op(op);
             let full_name = format!("{}.{}", data.dialect, data.name);
-            match data
-                .attributes
-                .get_str(ctx, "sym_name")
-                .map(Symbol::from_dynamic)
-            {
+            match data.attributes.get_str(ctx, "sym_name").map(Symbol::new) {
                 Some(s) => {
                     format!("result #{} of {} (@{})", idx, full_name, s)
                 }
@@ -222,7 +218,7 @@ fn validate_functions_in_region(
                 let fn_name = data
                     .attributes
                     .get_str(ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     .map(|s| s.to_string())
                     .unwrap_or_else(|| "<unnamed>".to_string());
 
@@ -1525,8 +1521,8 @@ mod tests {
 
     fn operations_named(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> Vec<OpRef> {
         let mut operations = Vec::new();
-        let dialect = Symbol::from_dynamic(dialect);
-        let name = Symbol::from_dynamic(name);
+        let dialect = Symbol::new(dialect);
+        let name = Symbol::new(name);
         let body = module.body(ctx).expect("test module must have a body");
         walk::walk_region::<std::convert::Infallible>(ctx, body, &mut |op| {
             let data = ctx.op(op);

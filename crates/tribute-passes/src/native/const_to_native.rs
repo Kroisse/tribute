@@ -220,7 +220,7 @@ fn declare_rodata(
             .op(op)
             .attributes
             .get_str(ctx, "sym_name")
-            .map(Symbol::from_dynamic)
+            .map(Symbol::new)
         {
             taken.insert(name);
         }
@@ -229,7 +229,7 @@ fn declare_rodata(
         {
             content_to_symbol
                 .entry_ref(data.bytes(ctx).as_slice())
-                .or_insert_with(|| Symbol::from_dynamic(data.sym_name(ctx)));
+                .or_insert_with(|| Symbol::new(data.sym_name(ctx)));
         }
     }
 
@@ -240,7 +240,7 @@ fn declare_rodata(
             continue;
         };
         let sym = loop {
-            let candidate = Symbol::from_dynamic(&format!("{RODATA_PREFIX}{next_idx}"));
+            let candidate = Symbol::new(&format!("{RODATA_PREFIX}{next_idx}"));
             next_idx += 1;
             if !taken.contains(&candidate) {
                 break candidate;

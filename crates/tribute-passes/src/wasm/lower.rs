@@ -417,11 +417,7 @@ impl WasmLowerer {
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
-        let Some(sym_name) = data
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(Symbol::from_dynamic)
-        else {
+        let Some(sym_name) = data.attributes.get_str(ctx, "sym_name").map(Symbol::new) else {
             return;
         };
 

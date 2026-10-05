@@ -129,7 +129,7 @@ fn derive_module_name_from_uri(uri: &fluent_uri::Uri<String>) -> Option<trunk_ir
     std::path::Path::new(path_str)
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .map(trunk_ir::Symbol::from_dynamic)
+        .map(trunk_ir::Symbol::new)
 }
 
 // =============================================================================

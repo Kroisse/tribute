@@ -394,7 +394,7 @@ pub fn find_callee_signature<'a>(
     signatures: &'a [FunctionSignature],
     callee: &str,
 ) -> Option<&'a FunctionSignature> {
-    let name = Symbol::from_dynamic(&tribute_front::keywords::unraw(callee));
+    let name = Symbol::new(&tribute_front::keywords::unraw(callee));
     find_signature(signatures, &name)
 }
 

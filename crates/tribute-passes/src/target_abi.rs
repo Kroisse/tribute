@@ -1627,7 +1627,7 @@ mod tests {
             .copied()
             .find_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                (function.sym_name(ctx) == Symbol::from_dynamic(name)).then_some(function)
+                (function.sym_name(ctx) == Symbol::new(name)).then_some(function)
             })
             .unwrap()
     }

@@ -526,7 +526,7 @@ mod tests {
                     ctx.op(op)
                         .attributes
                         .get_str(&ctx, "sym_name")
-                        .map(Symbol::from_dynamic)
+                        .map(Symbol::new)
                         != Some(Symbol::new(name))
                 }),
                 "shared resolution must not fabricate target helper {name}"
@@ -666,7 +666,7 @@ mod tests {
                 ctx.op(op)
                     .attributes
                     .get_str(&ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     == Some(Symbol::new("__tribute_next_tag"))
             })
             .expect("runtime tag declaration");
@@ -858,7 +858,7 @@ mod tests {
                 ctx.op(op)
                     .attributes
                     .get_str(&ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     == Some(Symbol::new("body"))
             })
             .unwrap();

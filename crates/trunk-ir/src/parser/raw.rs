@@ -343,8 +343,8 @@ pub fn raw_type<'a>(input: &mut &'a str) -> ModalResult<RawType<'a>> {
     ws.parse_next(input)?;
 
     if let Some(format) = crate::asm_format::lookup_type_asm_format(
-        crate::Symbol::from_dynamic(dialect),
-        crate::Symbol::from_dynamic(name),
+        crate::Symbol::new(dialect),
+        crate::Symbol::new(name),
     ) {
         let checkpoint = *input;
         match (format.parse_fn)(input, dialect, name) {
@@ -666,8 +666,8 @@ pub fn raw_operation<'a>(input: &mut &'a str) -> ModalResult<RawOperation<'a>> {
         input.starts_with('{') || input.starts_with('%') || input.starts_with(':');
     // Check custom assembly format registry
     if let Some(fmt) = crate::asm_format::lookup_asm_format(
-        crate::Symbol::from_dynamic(dialect),
-        crate::Symbol::from_dynamic(op_name),
+        crate::Symbol::new(dialect),
+        crate::Symbol::new(op_name),
     )
     .filter(|_| !generic_func)
     {

@@ -76,7 +76,7 @@ impl Module {
         ctx.op(self.0)
             .attributes
             .get_str(ctx, "sym_name")
-            .map(crate::symbol::Symbol::from_dynamic)
+            .map(crate::symbol::Symbol::new)
     }
 
     /// Get the first block of the module body.

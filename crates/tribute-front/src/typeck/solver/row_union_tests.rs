@@ -111,7 +111,7 @@ fn label<'db>(db: &'db dyn salsa::Database, name: &str) -> EffectRow<'db> {
     EffectRow::single(
         db,
         Effect {
-            ability_id: crate::ast::AbilityId::source(db, trunk_ir::Symbol::from_dynamic(name)),
+            ability_id: crate::ast::AbilityId::source(db, trunk_ir::Symbol::new(name)),
             args: vec![],
         },
     )

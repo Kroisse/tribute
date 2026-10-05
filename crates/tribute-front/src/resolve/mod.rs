@@ -97,14 +97,14 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
                 library
                     .to_string()
                     .split("::")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     .chain(rest.iter().cloned())
                     .collect()
             }
             _ => path,
         };
         let target_name = path.last().unwrap().clone();
-        let ns = Symbol::from_dynamic(
+        let ns = Symbol::new(
             &path[..path.len() - 1]
                 .iter()
                 .map(|s| s.to_string())
@@ -119,7 +119,7 @@ pub fn resolve_use_imports(env: &mut ModuleEnv<'_>) {
 
         // Transfer the imported name's sub-namespace entries.
         // e.g., `use abilities::Abort` makes `Abort::abort` available.
-        let qualified_ns = Symbol::from_dynamic(
+        let qualified_ns = Symbol::new(
             &path
                 .iter()
                 .map(|s| s.to_string())
@@ -336,7 +336,7 @@ fn collect_definition<'db>(
                 let module: Vec<Symbol> = prefix
                     .split("::")
                     .filter(|segment| !segment.is_empty())
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                     .collect();
                 let path = path::absolute_path(0, &module, &u.path)
                     .ok()
@@ -371,7 +371,7 @@ fn collect_definition<'db>(
                 // e.g., `mod Foo { enum Bar { Baz } }` makes `Foo::Bar::Baz` available
                 for (inner_ns, inner_bindings) in inner_env.iter_namespaces() {
                     // Create qualified namespace path: Foo::Bar
-                    let qualified_ns = Symbol::from_dynamic(&format!("{}::{}", m.name, inner_ns));
+                    let qualified_ns = Symbol::new(&format!("{}::{}", m.name, inner_ns));
                     for (name, binding) in inner_bindings {
                         env.add_to_namespace(qualified_ns.clone(), name, binding.clone());
                     }
@@ -553,7 +553,7 @@ mod tests {
         );
 
         // Outer::Inner::Variant should exist
-        let qualified_ns = Symbol::from_dynamic("Outer::Inner");
+        let qualified_ns = Symbol::new("Outer::Inner");
         assert!(
             env.lookup_qualified(&qualified_ns, &Symbol::new("Variant"))
                 .is_some(),
@@ -590,7 +590,7 @@ mod tests {
         FuncDecl {
             id: fresh_node_id(),
             is_pub: false,
-            name: Symbol::from_dynamic(name),
+            name: Symbol::new(name),
             type_params: vec![],
             params: vec![],
             return_ty: Some(TypeAnnotation {
@@ -607,7 +607,7 @@ mod tests {
         StructDecl {
             id: fresh_node_id(),
             is_pub: false,
-            name: Symbol::from_dynamic(name),
+            name: Symbol::new(name),
             type_params: vec![],
             fields: vec![FieldDecl {
                 id: fresh_node_id(),
@@ -626,13 +626,13 @@ mod tests {
         EnumDecl {
             id: fresh_node_id(),
             is_pub: false,
-            name: Symbol::from_dynamic(name),
+            name: Symbol::new(name),
             type_params: vec![],
             variants: variants
                 .iter()
                 .map(|v| VariantDecl {
                     id: fresh_node_id(),
-                    name: Symbol::from_dynamic(v),
+                    name: Symbol::new(v),
                     fields: vec![],
                 })
                 .collect(),
@@ -643,7 +643,7 @@ mod tests {
     fn inline_module(name: &str, decls: Vec<Decl<UnresolvedName>>) -> ModuleDecl<UnresolvedName> {
         ModuleDecl {
             id: fresh_node_id(),
-            name: Symbol::from_dynamic(name),
+            name: Symbol::new(name),
             is_pub: false,
             body: Some(decls),
         }

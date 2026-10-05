@@ -332,7 +332,7 @@ impl<'db> ModuleTypeEnv<'db> {
         // current module; the package root holds the rest.
         let scope = prefix.trim_end_matches("::");
         if !scope.is_empty() {
-            let candidate = Symbol::from_dynamic(&format!("{scope}::{spelling}"));
+            let candidate = Symbol::new(&format!("{scope}::{spelling}"));
             if let Some(scheme) = self.lookup_type_def(&candidate) {
                 return Some(scheme);
             }
@@ -1088,7 +1088,7 @@ mod tests {
 
         // Add items in random order
         for name in ["d", "b", "e", "a", "c"] {
-            let func_id = FuncDefId::new(db, Symbol::from_dynamic(name));
+            let func_id = FuncDefId::new(db, Symbol::new(name));
             env.register_function(func_id, scheme);
         }
 
@@ -1180,8 +1180,8 @@ mod tests {
         Type::new(
             db,
             TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(db, Symbol::from_dynamic(name)),
-                name: Symbol::from_dynamic(name),
+                id: crate::ast::TypeDefId::synthetic(db, Symbol::new(name)),
+                name: Symbol::new(name),
                 args: vec![],
             },
         )
@@ -1211,7 +1211,7 @@ mod tests {
         func_ty: Type<'db>,
     ) -> MethodEntry<'db> {
         MethodEntry {
-            func_id: FuncDefId::new(db, Symbol::from_dynamic(name)),
+            func_id: FuncDefId::new(db, Symbol::new(name)),
             func_ty,
         }
     }

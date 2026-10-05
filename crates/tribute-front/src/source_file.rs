@@ -79,7 +79,7 @@ pub fn derive_module_name_from_path(uri_str: &str) -> Symbol {
     Path::new(&file_path)
         .file_stem()
         .and_then(|stem| stem.to_str())
-        .map(Symbol::from_dynamic)
+        .map(Symbol::new)
         .unwrap_or_else(|| Symbol::new("main"))
 }
 

@@ -33,16 +33,16 @@ pub trait ModulePathExt {
 impl ModulePathExt for Symbol {
     fn last_segment(&self) -> Symbol {
         let text = self.as_str();
-        Symbol::from_dynamic(text.rsplit("::").next().unwrap_or(text))
+        Symbol::new(text.rsplit("::").next().unwrap_or(text))
     }
 
     fn parent_path(&self) -> Option<Symbol> {
         let (parent, _) = self.as_str().rsplit_once("::")?;
-        Some(Symbol::from_dynamic(parent))
+        Some(Symbol::new(parent))
     }
 
     fn join_path(&self, name: &Symbol) -> Symbol {
-        Symbol::from_dynamic(&format!("{self}::{name}"))
+        Symbol::new(&format!("{self}::{name}"))
     }
 
     fn is_simple(&self) -> bool {

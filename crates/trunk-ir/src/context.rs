@@ -505,7 +505,7 @@ impl IrContext {
     /// Look up a type alias by the text of its name, such as a nominal
     /// type's string name.
     pub fn type_alias_by_text(&self, name: &str) -> Option<TypeRef> {
-        self.type_alias_by_name(&Symbol::from_dynamic(name))
+        self.type_alias_by_name(&Symbol::new(name))
     }
 
     /// Look up an alias name for a given type (reverse lookup for printer).

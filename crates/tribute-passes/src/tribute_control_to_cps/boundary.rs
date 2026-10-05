@@ -98,7 +98,7 @@ enum TypeBoundary {
 
 pub(super) fn type_is(ctx: &IrContext, ty: TypeRef, dialect: &str, name: &str) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::from_dynamic(dialect) && data.name == Symbol::from_dynamic(name)
+    data.dialect == Symbol::new(dialect) && data.name == Symbol::new(name)
 }
 
 fn walk_attribute_types(

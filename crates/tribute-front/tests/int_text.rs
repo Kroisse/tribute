@@ -659,7 +659,7 @@ fn assert_outer_local_signatures(db: &dyn salsa::Database, source: SourceCst) {
         let data_type = parent_signature.result(&ir);
         assert_eq!(parent_signature.inputs(&ir), [data_type]);
         assert_eq!(ir.get_type(data_type).dialect, Symbol::new("core"));
-        assert_eq!(ir.get_type(data_type).name, Symbol::from_dynamic(primitive));
+        assert_eq!(ir.get_type(data_type).name, Symbol::new(primitive));
         let mut lambdas = Vec::new();
         let mut calls = Vec::new();
         let _: ControlFlow<()> = trunk_ir::walk::walk_region(&ir, parent.body(&ir), &mut |op| {

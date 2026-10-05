@@ -467,9 +467,7 @@ fn generate_fixed_release_function(
         parent_op: None,
     });
     clif::Func::operands()
-        .sym_name(Symbol::from_dynamic(&format!(
-            "{RELEASE_FN_PREFIX}{rtti_idx}"
-        )))
+        .sym_name(Symbol::new(&format!("{RELEASE_FN_PREFIX}{rtti_idx}")))
         .r#type(func_ty)
         .regions(body)
         .build(ctx, loc)
@@ -591,7 +589,7 @@ fn generate_release_function(
         });
 
         let func_op = clif::Func::operands()
-            .sym_name(Symbol::from_dynamic(&func_name))
+            .sym_name(Symbol::new(&func_name))
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc);
@@ -675,7 +673,7 @@ fn generate_release_function(
     });
 
     let func_op = clif::Func::operands()
-        .sym_name(Symbol::from_dynamic(&func_name))
+        .sym_name(Symbol::new(&func_name))
         .r#type(func_ty)
         .regions(body)
         .build(ctx, loc);
