@@ -8,7 +8,8 @@
 mod common;
 
 use self::common::{
-    TdnrCall, TdnrSummary, run_ast_pipeline, run_ast_pipeline_with_ir, tdnr_function_summary,
+    TdnrCall, TdnrSummary, ast_pipeline_error_messages, run_ast_pipeline, run_ast_pipeline_with_ir,
+    tdnr_function_summary,
 };
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
@@ -154,6 +155,74 @@ fn test() -> Nat {
                 },
             ],
         }
+    );
+}
+
+/// `x.a::b(y)` is the qualified call `a::b(x, y)`, with or without
+/// parentheses, whatever the receiver's type.
+#[salsa_test]
+fn test_qualified_ufcs_calls_the_path(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "qualified.trb",
+        r#"
+mod math {
+    pub fn double(x: Int) -> Int { x + x }
+    pub fn add(x: Int, y: Int) -> Int { x + y }
+
+    pub mod inner {
+        pub fn twice(x: Int) -> Int { x.super::double.super::double() }
+    }
+}
+
+fn test(n: Int) -> Int {
+    n.math::double().math::add(n).math::double.math::inner::twice
+}
+"#,
+    );
+
+    let call = |target: &str, arg_count| TdnrCall {
+        target: target.to_owned(),
+        arg_count,
+    };
+    let summary = tdnr_function_summary(db, source, "test");
+    assert_eq!(summary.method_calls, Vec::<String>::new());
+    let mut calls = summary.calls;
+    calls.sort_by(|a, b| (&a.target, a.arg_count).cmp(&(&b.target, b.arg_count)));
+    assert_eq!(
+        calls,
+        vec![
+            call("math::add", 2),
+            call("math::double", 1),
+            call("math::double", 1),
+            call("math::inner::twice", 1),
+        ]
+    );
+    run_ast_pipeline(db, source);
+}
+
+/// A qualified UFCS path that names nothing is an unresolved name, as in the
+/// qualified call it stands for.
+#[salsa_test]
+fn test_qualified_ufcs_reports_unresolved_path(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "unresolved_path.trb",
+        r#"
+mod math {
+    pub fn double(x: Int) -> Int { x + x }
+}
+
+fn test(n: Int) -> Int {
+    n.math::triple()
+}
+"#,
+    );
+
+    let errors = ast_pipeline_error_messages(db, source);
+    assert!(
+        errors.iter().any(|error| error.contains("math::triple")),
+        "{errors:?}"
     );
 }
 
