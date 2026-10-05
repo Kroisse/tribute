@@ -400,8 +400,8 @@ user.age::modify(fn(n) n + 1)    // User::age::modify(user, fn(n) n + 1)
   아니다.
 - 세 함수에는 source 선언이 없다. Name resolution은 struct의 필드에서 이름을
   등록하고, type checking은 필드 타입에서 각 함수의 type scheme을 만든다. AST에서
-  IR로 내리는 단계가 struct마다 세 함수의 본문을 일반 함수 정의로 내보내며, 모든
-  사용은 일반 호출이나 함수 참조이다. 쓰이지 않는 정의는
+  IR로 내리는 단계가 이름 있는 필드마다 getter·setter·modifier의 본문을 일반 함수
+  정의로 내보내며, 모든 사용은 일반 호출이나 함수 참조이다. 쓰이지 않는 정의는
   [source-logical global DCE](optimizations.md#적용-위치)가 지운다.
 
 ### Spread vs Setter

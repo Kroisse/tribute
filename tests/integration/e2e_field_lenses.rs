@@ -400,6 +400,39 @@ fn main() -> Nil {
 }
 
 #[salsa_test]
+fn diag_ambiguous_getter_path(db: &salsa::DatabaseImpl) {
+    // `x.User::name` reads the field only when the getter is the one function
+    // its path names for the receiver.
+    let diagnostics = messages(
+        db,
+        r#"
+struct User { name: String }
+
+mod audit {
+    pub mod User {
+        pub fn name(user: pkg::User) -> String { "audit" }
+    }
+}
+use audit
+
+fn main() -> Nil {
+    let user = User { name: "John" }
+    let _ = user.User::name
+}
+"#,
+    );
+    assert_eq!(
+        diagnostics,
+        [(
+            "ambiguous path `User::name` for a receiver of type `User`: it names \
+             `User::name`, `audit::User::name`"
+                .to_owned(),
+            "User::name".to_owned()
+        )]
+    );
+}
+
+#[salsa_test]
 fn diag_companion_redefines_field_lens(db: &salsa::DatabaseImpl) {
     let diagnostics = messages(
         db,

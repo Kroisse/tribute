@@ -273,7 +273,8 @@ impl<'db> TypeChecker<'db> {
                 // Infer receiver type first
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
                 let path = path.as_ref().map(method_path_functions);
-                let field = self.method_field(receiver_ty, method, path.as_ref());
+                let selection = self.select_method(method, path.as_ref(), receiver_ty);
+                let field = self.method_field(receiver_ty, method, path.is_some(), &selection);
 
                 // Try to look up the method as a struct field accessor
                 if let Some(field) = &field
@@ -281,9 +282,7 @@ impl<'db> TypeChecker<'db> {
                 {
                     self.record_field_instance(ctx, expr.id, receiver_ty, field.clone(), result_ty);
                     result_ty
-                } else if let MethodSelection::One(entry) =
-                    self.select_method(method, path.as_ref(), receiver_ty)
-                {
+                } else if let MethodSelection::One(entry) = selection {
                     // UFCS method found — record for conversion phase and extract return type
                     let func_id = entry.func_id;
                     let callee_ty = ctx
@@ -928,15 +927,14 @@ impl<'db> TypeChecker<'db> {
             } => {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
                 let path = path.as_ref().map(method_path_functions);
-                let field = self.method_field(receiver_ty, method, path.as_ref());
+                let selection = self.select_method(method, path.as_ref(), receiver_ty);
+                let field = self.method_field(receiver_ty, method, path.is_some(), &selection);
                 if let Some(field) = &field
                     && let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, field)
                 {
                     self.record_field_instance(ctx, expr.id, receiver_ty, field.clone(), result_ty);
                     result_ty
-                } else if let MethodSelection::One(entry) =
-                    self.select_method(method, path.as_ref(), receiver_ty)
-                {
+                } else if let MethodSelection::One(entry) = selection {
                     let callee_ty = ctx
                         .instantiate_function_reference(expr.id, entry.func_id)
                         .unwrap_or_else(|| ctx.fresh_type_var());
@@ -1731,15 +1729,20 @@ impl<'db> TypeChecker<'db> {
 
     /// The field a method call reads from its receiver, if it names one: an
     /// unqualified method is the field's name, and a path names the field's
-    /// getter `T::f` in the receiver's struct `T`.
+    /// getter `T::f` in the receiver's struct `T` when the path selects that
+    /// getter alone.
     fn method_field(
         &self,
         receiver_ty: Type<'db>,
         method: &Symbol,
-        path: Option<&(NodeId, Vec<crate::ast::FuncDefId<'db>>)>,
+        qualified: bool,
+        selection: &MethodSelection<'db>,
     ) -> Option<Symbol> {
-        let Some((_, candidates)) = path else {
+        if !qualified {
             return Some(method.clone());
+        }
+        let MethodSelection::One(selected) = selection else {
+            return None;
         };
         let owner = match receiver_ty.kind(self.db()) {
             TypeKind::Named { id, .. } => *id,
@@ -1752,10 +1755,7 @@ impl<'db> TypeChecker<'db> {
         let field = method.last_segment();
         let mut prefix = owner.qualified(self.db()).to_string();
         let getter = crate::qualified_symbol(&mut prefix, &field);
-        candidates
-            .iter()
-            .any(|candidate| *candidate.qualified(self.db()) == getter)
-            .then_some(field)
+        (*selected.func_id.qualified(self.db()) == getter).then_some(field)
     }
 
     /// Select the function a method call names for a receiver of type
