@@ -11,12 +11,14 @@ use trunk_ir::IrContext;
 use trunk_ir::Module;
 use trunk_ir::Symbol;
 use trunk_ir::dialect::wasm as wasm_dialect;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::dialect::wasm_gc;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::refs::{OpRef, RegionRef, TypeRef};
-use trunk_ir::types::TypeData;
+use trunk_ir::types::{Attribute, TypeData};
 use wasm_encoder::{FieldType, StorageType, ValType};
 
 use crate::gc_types::{self, EVIDENCE_IDX, FIRST_USER_TYPE_IDX, GcTypeDef, MARKER_IDX};
+use crate::passes::wasm_gc_to_wasm::GC_TYPES_ATTR;
 use crate::{CompilationError, CompilationResult};
 
 use super::helpers;
@@ -38,6 +40,9 @@ struct GcTypeBuilder {
     fields: Vec<Option<TypeRef>>,
     array_elem: Option<TypeRef>,
     field_count: Option<usize>,
+    /// Whether `fields` come from a structural struct type rather than from
+    /// the operations that access the type.
+    declared: bool,
 }
 
 impl GcTypeBuilder {
@@ -47,6 +52,18 @@ impl GcTypeBuilder {
             fields: Vec::new(),
             array_elem: None,
             field_count: None,
+            declared: false,
+        }
+    }
+
+    /// A struct whose fields are the parameters of its structural type.
+    fn declared(fields: &[TypeRef]) -> Self {
+        Self {
+            kind: GcKind::Struct,
+            fields: fields.iter().copied().map(Some).collect(),
+            array_elem: None,
+            field_count: Some(fields.len()),
+            declared: true,
         }
     }
 }
@@ -258,6 +275,10 @@ fn record_struct_field(
             "struct type index {type_idx} field index {field_idx} out of bounds (fields: {count})",
         )));
     }
+    // A structural type declares its fields; accesses do not refine them.
+    if builder.declared {
+        return Ok(());
+    }
     let idx = field_idx as usize;
     if builder.fields.len() <= idx {
         builder.fields.resize_with(idx + 1, || None);
@@ -356,6 +377,36 @@ pub(crate) fn collect_gc_types(
     let body = module
         .body(ctx)
         .ok_or_else(|| CompilationError::invalid_module("module has no body region"))?;
+
+    // The GC types that received user indices, in index order. A structural
+    // struct type declares its fields, so its builder starts complete.
+    let declared_types: Vec<TypeRef> = match ctx.op(module.op()).attributes.get(GC_TYPES_ATTR) {
+        Some(Attribute::List(types)) => types
+            .iter()
+            .map(|attr| match attr {
+                Attribute::Type(ty) => Ok(*ty),
+                _ => Err(CompilationError::invalid_module(
+                    "GC type table entries must be types",
+                )),
+            })
+            .collect::<CompilationResult<_>>()?,
+        Some(_) => {
+            return Err(CompilationError::invalid_module(
+                "GC type table must be a list",
+            ));
+        }
+        None => Vec::new(),
+    };
+    for (offset, &ty) in declared_types.iter().enumerate() {
+        let idx = FIRST_USER_TYPE_IDX + offset as u32;
+        register_type(ctx, &mut type_idx_by_type, idx, ty);
+        if let Some(fields) = wasm_gc::Struct::from_type_ref(ctx, ty) {
+            if builders.len() <= offset {
+                builders.resize_with(offset + 1, GcTypeBuilder::new);
+            }
+            builders[offset] = GcTypeBuilder::declared(fields.fields(ctx));
+        }
+    }
 
     // Builtin closure, marker, and evidence layouts are selected by their
     // runtime layout identifier (`helpers::builtin_layout_type_idx`), never
@@ -987,5 +1038,50 @@ wasm.return
         );
 
         assert!(!types_equivalent_for_gc(&mut ctx, canonical, unrelated));
+    }
+
+    #[test]
+    fn structural_structs_take_their_fields_from_their_type() {
+        let mut ctx = IrContext::new();
+        let module = trunk_ir::parser::parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Inner = wasm_gc.struct<core.i32, core.f64>
+  !Outer = wasm_gc.struct<core.i32, !Inner, wasm.structref>
+  wasm.func @main() -> core.nil {
+    %outer = wasm_gc.ref_null {target_type = !Outer} : !Outer
+    wasm.return
+  }
+}"#,
+        );
+        crate::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
+
+        let (types, _) = collect_gc_types(&mut ctx, module).unwrap();
+
+        // No operation reads a field, and the inner struct is named only by
+        // the outer one's field; both declare every field.
+        let field = |ty| FieldType {
+            element_type: StorageType::Val(ty),
+            mutable: true,
+        };
+        let inner = FIRST_USER_TYPE_IDX + 1;
+        let inner_ref = ValType::Ref(wasm_encoder::RefType {
+            nullable: true,
+            heap_type: wasm_encoder::HeapType::Concrete(inner),
+        });
+        let structref = ValType::Ref(wasm_encoder::RefType {
+            nullable: true,
+            heap_type: wasm_encoder::HeapType::Abstract {
+                shared: false,
+                ty: wasm_encoder::AbstractHeapType::Struct,
+            },
+        });
+        let user = &types[FIRST_USER_TYPE_IDX as usize..];
+        assert!(matches!(
+            user,
+            [GcTypeDef::Struct(outer), GcTypeDef::Struct(inner)]
+                if *outer == [field(ValType::I32), field(inner_ref), field(structref)]
+                    && *inner == [field(ValType::I32), field(ValType::F64)]
+        ));
     }
 }

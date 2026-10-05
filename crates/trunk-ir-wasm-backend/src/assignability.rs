@@ -16,7 +16,8 @@ use crate::emit::helpers::is_type;
 ///
 /// Registration follows the same structure the rest of the backend uses: builtin
 /// layouts at their reserved indices (`@bytes`, `_closure`,
-/// `_Marker`, ...) and the ADT types that
+/// `_Marker`, ...), the structural `wasm_gc.struct` types, each of which
+/// receives an index, and the ADT types that
 /// `emit::gc_types_collection::normalize_type_for_gc` physicalizes as the
 /// abstract struct supertype (`adt.typeref` and concrete variant instances
 /// carrying `base_enum`). An ADT spelling without that registration evidence
@@ -24,6 +25,9 @@ use crate::emit::helpers::is_type;
 fn is_registered_gc_struct_reference(ctx: &IrContext, ty: TypeRef) -> bool {
     if let Some(index) = crate::passes::wasm_gc_to_wasm::builtin_type_idx(ctx, ty) {
         return crate::gc_types::is_builtin_struct_index(index);
+    }
+    if is_type(ctx, ty, "wasm_gc", "struct") {
+        return true;
     }
     let data = ctx.get_type(ty);
     data.dialect == Symbol::new("adt")

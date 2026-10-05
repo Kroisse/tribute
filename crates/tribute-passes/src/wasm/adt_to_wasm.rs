@@ -17,13 +17,14 @@
 //!
 //! ## Variant Operations
 //!
-//! Each variant gets its own struct type (e.g., `Expr$Add`, `Expr$Num`) with
-//! only the variant's fields after the descriptor field. A variant is told
-//! apart by its descriptor number, not by its type: every user struct and variant type
-//! is a subtype of the `Described` type, which holds the descriptor field alone.
+//! A variant's type is the structural `wasm_gc.struct` of the descriptor
+//! field followed by the variant's own fields
+//! ([`super::struct_layouts::variant_type`]), so variants of equal fields share
+//! one type. A variant is told apart by its descriptor number, not by its
+//! type: every user struct and variant type is a subtype of the `Described`
+//! type, which holds the descriptor field alone.
 //!
-//! - `adt.variant_new` -> `wasm.struct_new` with variant-specific type
-//!   - Result type is marked with `is_variant=true` and `variant_tag` attributes
+//! - `adt.variant_new` -> `wasm.struct_new` of the variant's struct type
 //! - `adt.variant_is` -> `wasm.ref_cast` to the `Described` type, a read of
 //!   its descriptor field, and a comparison with the variant's number
 //! - `adt.variant_cast` -> `wasm.ref_cast` (casts to specific variant type)
@@ -43,9 +44,11 @@
 //! Note: `adt.string_const` and `adt.bytes_const` are handled by WasmLowerer
 //! because they require data segment allocation.
 //!
-//! GC operations first lower to `wasm_gc`, which preserves semantic `TypeRef`
-//! identity. A module-wide pass assigns the explicit indices required by
-//! indexed `wasm` operations before emission.
+//! GC operations first lower to `wasm_gc`, which identifies GC types by
+//! `TypeRef`. Struct operations keep their user `adt.struct` layout until
+//! [`super::struct_layouts::convert`] replaces it with its structural type. A
+//! module-wide pass assigns the explicit indices required by indexed `wasm`
+//! operations before emission.
 
 use tracing::warn;
 use tribute_ir::dialect::adt;
@@ -59,7 +62,7 @@ use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
-use trunk_ir::types::{Attribute, TypeDataBuilder};
+use trunk_ir::types::TypeDataBuilder;
 use trunk_ir::{StringRef, Symbol};
 
 use rustc_hash::FxHashMap as HashMap;
@@ -68,6 +71,7 @@ use tribute_ir::dialect::tribute_rtti;
 use tribute_ir::runtime_layout::{self, has_runtime_layout};
 
 use super::descriptors::has_descriptor_field;
+use super::struct_layouts::variant_type;
 
 /// The logical variant operation's `type` attribute is its exact enum-layout
 /// identity. Operand types may be an equivalent `adt.typeref` or already have
@@ -299,10 +303,10 @@ impl RewritePattern for VariantNewPattern {
         };
         fields.insert(0, descriptor);
 
-        // Create variant-specific type: Expr + Add -> Expr$Add
-        let variant_type = make_variant_type(ctx, base_type, tag_sym);
+        let Some(variant_type) = variant_type(ctx, base_type, tag_sym) else {
+            return false;
+        };
 
-        // Create wasm_gc.struct_new with variant-specific type (no tag field).
         let new_op = wasm_gc_dialect::StructNew::operands(fields)
             .r#type(variant_type)
             .results(variant_type)
@@ -310,44 +314,6 @@ impl RewritePattern for VariantNewPattern {
         rewriter.replace_op(new_op.op_ref());
         true
     }
-}
-
-/// Create a variant-specific type by combining base type name with variant tag.
-/// e.g., base type `adt.Expr` + tag `Add` -> `adt.Expr$Add`
-///
-/// The resulting type carries attributes for variant detection:
-/// - `is_variant = true` - marks this as a variant instance type
-/// - `variant_tag = Symbol` - the variant tag (e.g., `Add`, `Num`)
-/// - `base_enum = Type` - the base enum type
-fn make_variant_type(ctx: &mut IrContext, base_type: TypeRef, tag: StringRef) -> TypeRef {
-    let base_data = ctx.get_type(base_type);
-    let dialect = base_data.dialect.clone();
-
-    // For adt.typeref types, extract the actual type name from the name attribute
-    // Use full path to avoid collisions (e.g., mod_a::Expr$Add vs mod_b::Expr$Add)
-    let is_typeref =
-        base_data.dialect == Symbol::new("adt") && base_data.name == Symbol::new("typeref");
-
-    let typeref_name = is_typeref
-        .then(|| base_data.attrs.get_str(ctx, "name"))
-        .flatten();
-    let variant_name = match typeref_name {
-        Some(base_name) => format!("{base_name}${}", ctx.str(tag)),
-        None => format!("{}${}", base_data.name, ctx.str(tag)),
-    };
-    let variant_name = Symbol::new(&variant_name);
-
-    // Copy params from base type
-    let params: Vec<TypeRef> = base_data.params.to_vec();
-
-    // Add variant type attributes for proper detection (instead of name-based heuristics)
-    let builder = TypeDataBuilder::new(dialect, variant_name)
-        .params(params)
-        .attr(Symbol::new("is_variant"), Attribute::Bool(true))
-        .attr(Symbol::new("base_enum"), Attribute::Type(base_type))
-        .attr(Symbol::new("variant_tag"), Attribute::String(tag));
-
-    ctx.intern_type(builder.build())
 }
 
 /// Pattern for `adt.variant_is` -> a comparison of the value's descriptor.
@@ -438,10 +404,10 @@ impl RewritePattern for VariantCastPattern {
             return false;
         };
 
-        // Create variant-specific type for the ref.cast
-        let variant_type = make_variant_type(ctx, enum_type, tag);
+        let Some(variant_type) = variant_type(ctx, enum_type, tag) else {
+            return false;
+        };
 
-        // Create wasm_gc.ref_cast with variant-specific type.
         let new_op = wasm_gc_dialect::RefCast::operands(ref_val)
             .target_type(variant_type)
             .results(variant_type)
@@ -498,28 +464,24 @@ impl RewritePattern for VariantGetPattern {
             return false;
         }
         let result_ty = declared_field_ty;
-        let operand_ty = ctx.value_ty(ref_val);
-        let variant_type = if ctx.get_type(operand_ty).attrs.get_bool("is_variant") == Some(true) {
-            let operand_attrs = &ctx.get_type(operand_ty).attrs;
-            if operand_attrs.get_type("base_enum") != Some(enum_type)
-                || operand_attrs.get_string_ref("variant_tag") != Some(tag)
-            {
-                return false;
-            }
-            operand_ty
-        } else {
-            let operand_data = ctx.get_type(operand_ty);
-            if operand_data.dialect == Symbol::new("adt")
-                && operand_data.name == Symbol::new("typeref")
-                && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)
-            {
-                return false;
-            }
-            make_variant_type(ctx, enum_type, tag)
+        let Some(variant_type) = variant_type(ctx, enum_type, tag) else {
+            return false;
         };
+        // An operand that already has a struct type is a cast to this
+        // variant's layout; a logical reference must name this enum.
+        let operand_ty = ctx.value_ty(ref_val);
+        if wasm_gc_dialect::Struct::matches(ctx, operand_ty) && operand_ty != variant_type {
+            return false;
+        }
+        let operand_data = ctx.get_type(operand_ty);
+        if operand_data.dialect == Symbol::new("adt")
+            && operand_data.name == Symbol::new("typeref")
+            && canonical_typeref_enum_type(ctx, operand_ty) != Some(enum_type)
+        {
+            return false;
+        }
 
-        // Infer type from the operand (the cast result has the variant-specific
-        // type). The variant's fields follow its descriptor field.
+        // The variant's fields follow its descriptor field.
         let new_op = wasm_gc_dialect::StructGet::operands(ref_val)
             .r#type(variant_type)
             .field_idx(field_idx + 1)
@@ -867,7 +829,7 @@ mod tests {
                 };
                 data.dialect == wasm_gc_dialect::DIALECT_NAME()
                     && data.name == "struct_get"
-                    && ctx.get_type(ty).attrs.get_bool("is_variant") == Some(true)
+                    && wasm_gc_dialect::Struct::matches(&ctx, ty)
             })
             .expect("lowered variant_get");
         let variant_ty = ctx
@@ -1027,8 +989,8 @@ mod tests {
         let list = ctx.type_alias_by_text("List").expect("list layout");
         let cons_tag = ctx.intern_str("Cons");
         let empty_tag = ctx.intern_str("Empty");
-        let cons = make_variant_type(&mut ctx, list, cons_tag);
-        let empty = make_variant_type(&mut ctx, list, empty_tag);
+        let cons = variant_type(&mut ctx, list, cons_tag).expect("Cons layout");
+        let empty = variant_type(&mut ctx, list, empty_tag).expect("Empty layout");
         let described = crate::wasm::type_converter::described_adt_type(&mut ctx);
 
         // `variant_is` reads the descriptor through the `Described` type
@@ -1038,7 +1000,15 @@ mod tests {
             [empty, cons, described, described, cons, cons]
         );
         assert_ne!(empty, cons);
-        assert_eq!(ctx.get_type(cons).attrs.get_type("base_enum"), Some(list));
+        // The recursive tail is the abstract struct supertype.
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let structref = ctx.intern_type(TypeDataBuilder::new("wasm", "structref").build());
+        assert_eq!(
+            wasm_gc_dialect::Struct::from_type_ref(&ctx, cons)
+                .expect("structural variant")
+                .fields(&ctx),
+            [i32_ty, i32_ty, structref]
+        );
 
         trunk_ir_wasm_backend::passes::wasm_gc_to_wasm::lower(&mut ctx, module);
         let indexed_variant_ops: Vec<_> = ctx
@@ -1155,16 +1125,15 @@ mod tests {
             r#"core.module @test {
   !ARef = adt.typeref<{name = "A"}>
   !BRef = adt.typeref<{name = "B"}>
-  !A = adt.enum<{name = "A", variants = [["Some", [core.i32]], ["Other", [core.i32]]]}>
-  !B = adt.enum<{name = "B", variants = [["Some", [core.i32]]]}>
+  !A = adt.enum<{name = "A", variants = [["Some", [core.i32]], ["Other", [core.f64]]]}>
+  !B = adt.enum<{name = "B", variants = [["Some", [core.f64]]]}>
 
-  wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef) -> core.nil {
-    %zero = wasm.i32_const {value = 0} : core.i32
+  wasm.func @main(%from_a_ref: !ARef, %from_b_ref: !BRef, %x: core.f64) -> core.nil {
     %from_matching_typeref = adt.variant_get %from_a_ref {type = !A, tag = "Some", field = 0} : core.i32
     %from_mismatched_typeref = adt.variant_get %from_b_ref {type = !A, tag = "Some", field = 0} : core.i32
-    %from_b = adt.variant_new %zero {type = !B, tag = "Some"} : !BRef
+    %from_b = adt.variant_new %x {type = !B, tag = "Some"} : !BRef
     %wrong_enum = adt.variant_get %from_b {type = !A, tag = "Some", field = 0} : core.i32
-    %from_a_other = adt.variant_new %zero {type = !A, tag = "Other"} : !ARef
+    %from_a_other = adt.variant_new %x {type = !A, tag = "Other"} : !ARef
     %wrong_tag = adt.variant_get %from_a_other {type = !A, tag = "Some", field = 0} : core.i32
     wasm.return
   }
