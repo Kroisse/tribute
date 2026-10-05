@@ -951,8 +951,9 @@ lookup은 GC Evidence reference와 concrete Marker reference를 사용한다.
 ### Runtime identity와 ordering
 
 `ability::compute_ability_id`는 canonical ability name과 ability instance key의
-hash로 `u32` runtime key를 만든다. Marker의 `i32` slot에 같은 bit pattern을
-저장하며, call-site와 handler 설치가 같은 함수를 사용한다. Type parameter가 다른
+hash로 31-bit runtime key를 만든다. Marker의 `i32` slot에 음수가 아닌 값으로
+저장하고, 음수 key는 [row tail 칸](cps-effects.md#row-directed-evidence)이 쓴다.
+Call-site와 handler 설치가 같은 함수를 사용한다. Type parameter가 다른
 ability instance는 별도 key를 가진다.
 
 Instance key는 frontend가 typecheck된 source type argument에서 만들어

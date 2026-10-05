@@ -334,13 +334,38 @@ handler marker가 없는 ambient `Io`는 그대로 전달한다. 이 결과는 t
 계산하지 않는다. 표현과 lowering은
 [cps-effects.md](cps-effects.md#row-directed-evidence)를 따른다.
 
-이 규칙은 callee row의 tail이 row 변수 하나일 때를 정의한다. 선언 row가 여러 row
-변수의 합집합인 callee(`fn both(f: fn() ->{e1} a, g: fn() ->{e2} b) ->{e1, e2}`)에서는
-callee가 각 tail에 넘길 handler를 ability별 marker 순서 하나로 구별할 수 없다. 이런
-callee의 tail 인스턴스에 caller의 명시 label이 들어가면 `k`는 그 label이 들어간 tail
-수와 무관하게 1로 두고 그대로 전달한다. 각 tail이 같은 instance의 서로 다른
-handler를 받아야 하는 경우, 즉 한 tail에는 caller의 명시 label이, 다른 tail에는
-caller tail의 같은 instance가 들어가는 경우의 dispatch는 보장하지 않는다.
+##### 여러 tail의 합집합인 row
+
+선언 row가 여러 row 변수의 합집합인 callable
+(`fn both(f: fn() ->{e1} a, g: fn() ->{e2} b) ->{e1, e2} (a, b)`)은 자기 evidence와
+함께 tail마다 evidence를 하나씩 받는다. Tail의 순서는 선언된 합집합이 열어 둔
+source의 순서이며, caller와 callee가 같은 순서로 센다. Ability별 marker 순서
+하나로는 각 tail에 넘길 handler를 구별할 수 없기 때문이다.
+
+- **이런 callee의 호출:** callee 자신의 evidence는 위 표의 규칙으로 고른다. 여기에
+  tail마다 그 tail의 인스턴스 row를 callee row로 보고 같은 규칙으로 고른 evidence를
+  붙인다. Tail의 선택은 서로 독립이고 모두 caller의 evidence에서 출발한다.
+- **이런 callable 안의 호출:** callee row의 tail이 자기 tail 가운데 하나이면 그
+  tail의 evidence를 고른다. 그 evidence에는 이 callable이 명시한 label의 handler가
+  없으므로, callee가 그 label을 받는 자리마다 handler를 얹는다(첫 자리는 `push`,
+  나머지는 `dup`). Callee row의 tail이 합집합 전체이면 자기 evidence를 tail의
+  evidence와 함께 그대로 넘기고 위 표의 규칙만 적용한다.
+
+```rust
+fn count_calls(h: fn() ->{t} Nil) ->{t} Nat {
+    run_state(fn() {
+        // e1 := {State(Nat) | t}: 그대로.  e2 := {t}: State(Nat)을 가린다.
+        both(fn() { State::set(State::get() + 1) }, h)
+        State::get()
+    }, 0)
+}
+// both 안에서 f()는 첫 tail의 evidence를, g()는 둘째 tail의 evidence를 받는다.
+// h의 State는 run_state가 설치한 handler를 지나 count_calls 호출자의 handler로 간다.
+```
+
+Tail의 evidence를 받지 않은 evidence에서는 모든 tail이 그 evidence 자신이다. 합집합의
+tail들이 한 row로 같아지는 타입으로 callable을 값으로 넘기면 호출자는 tail을 따로
+붙이지 않는다.
 
 Handle body는 처리하는 label을 새 handler에 묶고 나머지 label은 바깥 그대로
 본다. 바깥 row가 처리하는 label을 명시하면 handle body는 그 바깥 handler를 보지

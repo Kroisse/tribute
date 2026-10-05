@@ -40,6 +40,18 @@ mod effect {
     /// The evidence the top handler of one ability was installed on.
     fn outer(ability_ref: Attr<Type>, evidence: Value<_>) -> Value<_> {}
 
+    /// The evidence of the row tail `index` of the callable that received
+    /// `evidence`, or `evidence` itself when it holds no such row tail.
+    fn tail(index: Attr<u32>, evidence: Value<_>) -> Value<_> {}
+
+    /// Set the evidence of the row tail `index` that a callee receives with
+    /// `evidence`.
+    fn with_tail(index: Attr<u32>, evidence: Value<_>, tail: Value<_>) -> Value<_> {}
+
+    /// Push the top handler that `source` holds for one ability onto
+    /// `evidence`.
+    fn push(ability_ref: Attr<Type>, evidence: Value<_>, source: Value<_>) -> Value<_> {}
+
     /// Dispatch a tail-resumptive `fn` ability operation.
     ///
     /// The operation carries ability identity and operation name as attributes,
@@ -74,6 +86,9 @@ inventory::submit! { trunk_ir::op_interface::PureOps::register::<Extend>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Mask>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Dup>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Outer>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Tail>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<WithTail>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Push>() }
 
 impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
     fn verify_callable_exit(

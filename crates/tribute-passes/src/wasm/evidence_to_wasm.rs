@@ -1,8 +1,8 @@
 //! Wasm evidence lowering and evidence runtime helpers (arena-based).
 //!
 //! Evidence lowering runs inside the representation/ABI boundary. It lowers
-//! `effect.extend`, `effect.mask`, `effect.dup`, `effect.dispatch_tail`, and
-//! `effect.dispatch_cps` to shared value/control operations that call the
+//! `effect.extend`, the evidence selection operations, `effect.dispatch_tail`,
+//! and `effect.dispatch_cps` to shared value/control operations that call the
 //! evidence runtime helper ABI shared with native
 //! (`tribute_ir::dialect::ability::evidence_abi`), through bodyless helper
 //! declarations.
@@ -117,6 +117,24 @@ pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
             vec![evidence_ty, i32_ty],
             evidence_ty,
         ),
+        (
+            needs.tail,
+            evidence_abi::TAIL,
+            vec![evidence_ty, i32_ty],
+            evidence_ty,
+        ),
+        (
+            needs.with_tail,
+            evidence_abi::WITH_TAIL,
+            vec![evidence_ty, i32_ty, evidence_ty],
+            evidence_ty,
+        ),
+        (
+            needs.push,
+            evidence_abi::PUSH,
+            vec![evidence_ty, evidence_ty, i32_ty],
+            evidence_ty,
+        ),
     ];
     for (needed, name, params, result) in declarations {
         if !needed || has_function(ctx, module, name) {
@@ -140,6 +158,7 @@ pub fn lower_evidence_to_wasm_func(
         .with_target(wasm_effect_abi_target())
         .add_pattern(LowerEffectExtendToWasm)
         .add_pattern(LowerEffectStackOpToWasm)
+        .add_pattern(LowerEffectTailOpToWasm)
         .add_pattern(LowerEffectDispatchTailToWasm)
         .add_pattern(LowerEffectDispatchCpsToWasm)
         .apply_partial_conversion(ctx, func_op, "wasm-evidence-effect-abi")?;
@@ -178,6 +197,9 @@ fn wasm_effect_abi_target() -> ConversionTarget {
         .illegal_op("effect", "mask")
         .illegal_op("effect", "dup")
         .illegal_op("effect", "outer")
+        .illegal_op("effect", "tail")
+        .illegal_op("effect", "with_tail")
+        .illegal_op("effect", "push")
         .illegal_op("effect", "dispatch_tail")
         .illegal_op("effect", "dispatch_cps")
 }
@@ -191,6 +213,9 @@ struct HelperRequirements {
     mask: bool,
     dup: bool,
     outer: bool,
+    tail: bool,
+    with_tail: bool,
+    push: bool,
 }
 
 fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequirements {
@@ -203,6 +228,9 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequir
                 needs.mask |= effect::Mask::matches(ctx, op);
                 needs.dup |= effect::Dup::matches(ctx, op);
                 needs.outer |= effect::Outer::matches(ctx, op);
+                needs.tail |= effect::Tail::matches(ctx, op);
+                needs.with_tail |= effect::WithTail::matches(ctx, op);
+                needs.push |= effect::Push::matches(ctx, op);
                 for nested in ctx.op_regions(op) {
                     visit(ctx, nested, needs);
                 }
@@ -333,6 +361,57 @@ impl RewritePattern for LowerEffectStackOpToWasm {
     }
 }
 
+/// `effect.tail` / `effect.with_tail` / `effect.push` → the runtime call of
+/// the same name.
+struct LowerEffectTailOpToWasm;
+
+impl RewritePattern for LowerEffectTailOpToWasm {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let loc = ctx.op(op).location;
+        let i32_ty = effect_dispatch::i32_type(ctx);
+        let mut slot = |ctx: &mut IrContext, index: u32| {
+            let slot = trunk_ir::dialect::arith::Const::operands()
+                .value(Attribute::Int(i128::from(ability::tail_slot_id(index))))
+                .results(i32_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(slot.op_ref());
+            slot.result(ctx)
+        };
+        let (helper, operands) = if let Ok(tail) = effect::Tail::from_op(ctx, op) {
+            let slot = slot(ctx, tail.index(ctx));
+            (evidence_abi::TAIL, vec![tail.evidence(ctx), slot])
+        } else if let Ok(with_tail) = effect::WithTail::from_op(ctx, op) {
+            let slot = slot(ctx, with_tail.index(ctx));
+            (
+                evidence_abi::WITH_TAIL,
+                vec![with_tail.evidence(ctx), slot, with_tail.tail(ctx)],
+            )
+        } else if let Ok(push) = effect::Push::from_op(ctx, op) {
+            let ability_id =
+                effect_dispatch::insert_ability_id(ctx, loc, push.ability_ref(ctx), rewriter);
+            (
+                evidence_abi::PUSH,
+                vec![push.evidence(ctx), push.source(ctx), ability_id],
+            )
+        } else {
+            return false;
+        };
+        let result_ty = ctx.op_result_types(op)[0];
+        let call = func::Call::operands(operands)
+            .callee(SymbolPath::from(helper))
+            .results([result_ty])
+            .build(ctx, loc);
+        rewriter.insert_op(call.op_ref());
+        rewriter.erase_op(vec![call.result(ctx)]);
+        true
+    }
+}
+
 /// `effect.dispatch_tail` → `__tribute_evidence_lookup_tr` + indirect call.
 struct LowerEffectDispatchTailToWasm;
 
@@ -449,6 +528,17 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
             needs_find = true;
             needs_set = true;
             Helper::Dup
+        } else if name == evidence_abi::TAIL {
+            needs_find = true;
+            Helper::Tail
+        } else if name == evidence_abi::WITH_TAIL {
+            needs_find = true;
+            needs_set = true;
+            Helper::WithTail
+        } else if name == evidence_abi::PUSH {
+            needs_find = true;
+            needs_set = true;
+            Helper::Push
         } else if name == NEXT_TAG {
             Helper::NextTag(add_tag_counter(ctx, module, location))
         } else {
@@ -491,6 +581,12 @@ enum Helper {
     Dup,
     /// Return the evidence the top marker of an ability was installed on.
     Outer,
+    /// Return the evidence of a row tail, or the evidence itself.
+    Tail,
+    /// Put a marker that holds the evidence of a row tail in its slot.
+    WithTail,
+    /// Push the top marker another evidence holds for an ability.
+    Push,
     /// Return the tag counter global at this index and increment it.
     NextTag(u32),
 }
@@ -613,6 +709,86 @@ fn build_helper(
                 .build(ctx, location);
             ctx.push_op(block, evidence.op_ref());
             evidence.result(ctx)
+        }
+        Helper::Tail => {
+            let i32_ty = intern_i32(ctx);
+            let anyref_ty = intern_anyref(ctx);
+            let nil_ty = core::nil(ctx).as_type_ref();
+            let slot = find_marker(ctx);
+            let absent = wasm_dialect::RefIsNull::operands(slot)
+                .results(i32_ty)
+                .build(ctx, location);
+            ctx.push_op(block, absent.op_ref());
+            let own = {
+                let inner = empty_block(ctx, location);
+                let ret = wasm_dialect::Return::operands(vec![args[0]]).build(ctx, location);
+                ctx.push_op(inner, ret.op_ref());
+                single_block_region(ctx, location, inner)
+            };
+            let held = {
+                let inner = empty_block(ctx, location);
+                let get = wasm_dialect::StructGet::operands(slot)
+                    .type_idx(MARKER_IDX)
+                    .field_idx(MarkerField::Outer.index())
+                    .results(anyref_ty)
+                    .build(ctx, location);
+                ctx.push_op(inner, get.op_ref());
+                let evidence = wasm_dialect::RefCast::operands(get.result(ctx))
+                    .target_type(result_ty)
+                    .type_idx(EVIDENCE_IDX)
+                    .results(result_ty)
+                    .build(ctx, location);
+                ctx.push_op(inner, evidence.op_ref());
+                let ret =
+                    wasm_dialect::Return::operands(vec![evidence.result(ctx)]).build(ctx, location);
+                ctx.push_op(inner, ret.op_ref());
+                single_block_region(ctx, location, inner)
+            };
+            let branch = wasm_dialect::If::operands(absent.result(ctx))
+                .results([nil_ty])
+                .regions(own, held)
+                .build(ctx, location);
+            ctx.push_op(block, branch.op_ref());
+            let unreachable = wasm_dialect::Unreachable::operands().build(ctx, location);
+            ctx.push_op(block, unreachable.op_ref());
+            return finish_helper(ctx, location, name, inputs, result_ty, block);
+        }
+        Helper::WithTail => {
+            let anyref_ty = intern_anyref(ctx);
+            let shadowed = find_marker(ctx);
+            let no_dispatch = wasm_dialect::RefNull::operands()
+                .heap_type("anyref")
+                .type_idx(None)
+                .results(anyref_ty)
+                .build(ctx, location);
+            ctx.push_op(block, no_dispatch.op_ref());
+            // A row tail slot has no prompt; the field repeats the slot.
+            set_marker(
+                ctx,
+                [args[1], args[1], no_dispatch.result(ctx), shadowed, args[2]],
+            )
+        }
+        Helper::Push => {
+            let i32_ty = intern_i32(ctx);
+            let anyref_ty = intern_anyref(ctx);
+            let top_of = |ctx: &mut IrContext, evidence: ValueRef| {
+                let marker = wasm_dialect::Call::operands([evidence, args[2]])
+                    .callee(SymbolPath::from(FIND_MARKER))
+                    .results([marker_ty])
+                    .build(ctx, location);
+                ctx.push_op(block, marker.op_ref());
+                marker.results(ctx)[0]
+            };
+            let pushed = top_of(ctx, args[1]);
+            let shadowed = top_of(ctx, args[0]);
+            let fields = [
+                args[2],
+                marker_field(ctx, pushed, MarkerField::PromptTag, i32_ty),
+                marker_field(ctx, pushed, MarkerField::TrDispatchFn, anyref_ty),
+                shadowed,
+                marker_field(ctx, pushed, MarkerField::Outer, anyref_ty),
+            ];
+            set_marker(ctx, fields)
         }
         Helper::Mask => {
             let i32_ty = intern_i32(ctx);
@@ -1450,6 +1626,41 @@ mod tests {
                 "__tribute_evidence_mask",
                 "__tribute_evidence_remove_marker",
                 "__tribute_evidence_set_marker",
+            ]
+        );
+    }
+
+    #[test]
+    fn binding_row_tail_helpers_adds_the_internal_helpers_they_use() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @__tribute_evidence_tail(%ev: wasm.arrayref, %slot: core.i32) -> wasm.arrayref attributes {abi = "C"}
+  func.func @__tribute_evidence_with_tail(%ev: wasm.arrayref, %slot: core.i32, %tail: wasm.arrayref) -> wasm.arrayref attributes {abi = "C"}
+  func.func @__tribute_evidence_push(%ev: wasm.arrayref, %source: wasm.arrayref, %id: core.i32) -> wasm.arrayref attributes {abi = "C"}
+}"#,
+        );
+        bind_wasm_evidence_runtime(&mut ctx, module);
+        let mut functions: Vec<_> = module
+            .ops(&ctx)
+            .iter()
+            .map(|&op| {
+                assert!(ctx.op_has_regions(op), "helpers must have bodies");
+                let function = wasm_dialect::Func::from_op(&ctx, op).expect("bound wasm.func");
+                function.sym_name(&ctx).to_string()
+            })
+            .collect();
+        functions.sort();
+        assert_eq!(
+            functions,
+            [
+                "__tribute_evidence_find_marker",
+                "__tribute_evidence_find_slot",
+                "__tribute_evidence_push",
+                "__tribute_evidence_set_marker",
+                "__tribute_evidence_tail",
+                "__tribute_evidence_with_tail",
             ]
         );
     }

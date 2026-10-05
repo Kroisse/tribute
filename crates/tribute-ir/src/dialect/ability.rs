@@ -129,7 +129,17 @@ pub fn compute_ability_id(ctx: &IrContext, ability_ref: TypeRef) -> u32 {
         }
     }
 
-    hasher.finish() as u32
+    // Negative identifiers are the row tail slots (`tail_slot_id`).
+    (hasher.finish() as u32) >> 1
+}
+
+/// The marker slot that holds the evidence of a callable's row tail `index`.
+///
+/// A row tail slot is a marker whose `outer` field is the tail's evidence.
+/// Its identifier is negative, so it never equals an ability's.
+pub fn tail_slot_id(index: u32) -> i32 {
+    let index = i32::try_from(index).expect("row tail index fits in i32");
+    -1 - index
 }
 
 /// Return the source-level instance key attached to an ability reference type.
@@ -351,9 +361,12 @@ pub mod evidence_abi {
     pub const DUP: &str = "__tribute_evidence_dup";
     pub const OUTER: &str = "__tribute_evidence_outer";
     pub const LOOKUP_TR: &str = "__tribute_evidence_lookup_tr";
+    pub const TAIL: &str = "__tribute_evidence_tail";
+    pub const WITH_TAIL: &str = "__tribute_evidence_with_tail";
+    pub const PUSH: &str = "__tribute_evidence_push";
 }
 
-pub fn evidence_runtime_symbols() -> [Symbol; 7] {
+pub fn evidence_runtime_symbols() -> [Symbol; 10] {
     [
         Symbol::new(evidence_abi::EMPTY),
         Symbol::new(evidence_abi::LOOKUP),
@@ -362,6 +375,9 @@ pub fn evidence_runtime_symbols() -> [Symbol; 7] {
         Symbol::new(evidence_abi::DUP),
         Symbol::new(evidence_abi::OUTER),
         Symbol::new(evidence_abi::LOOKUP_TR),
+        Symbol::new(evidence_abi::TAIL),
+        Symbol::new(evidence_abi::WITH_TAIL),
+        Symbol::new(evidence_abi::PUSH),
     ]
 }
 
@@ -528,6 +544,9 @@ mod tests {
                 Symbol::new(evidence_abi::DUP),
                 Symbol::new(evidence_abi::OUTER),
                 Symbol::new(evidence_abi::LOOKUP_TR),
+                Symbol::new(evidence_abi::TAIL),
+                Symbol::new(evidence_abi::WITH_TAIL),
+                Symbol::new(evidence_abi::PUSH),
             ]
         );
     }

@@ -4,7 +4,8 @@
 //! explicit evidence operands. This pass resolves handler prompt identities and
 //! replaces each delimiter body evidence argument with its extended evidence.
 //! It also turns each `evidence_plan` selection into `effect.mask`,
-//! `effect.dup`, or `effect.outer` on the evidence the operation passes.
+//! `effect.dup`, `effect.outer`, `effect.tail`, `effect.push`, or
+//! `effect.with_tail` on the evidence the operation passes.
 
 use itertools::Itertools;
 use std::error::Error;
@@ -263,6 +264,9 @@ fn take_evidence_plan(
 }
 
 /// Apply a selection to `evidence` before `op`, returning the selected evidence.
+///
+/// `push` and the plans of `tails` read the evidence the selection starts
+/// from, after its leading `outer` steps.
 fn apply_evidence_plan(
     ctx: &mut IrContext,
     block: BlockRef,
@@ -272,33 +276,66 @@ fn apply_evidence_plan(
 ) -> ValueRef {
     let location = ctx.op(op).location;
     let evidence_ty = ctx.value_ty(evidence);
-    plan.iter().fold(evidence, |evidence, step| {
-        let selected = match *step {
+    let mut source = evidence;
+    let mut selected = evidence;
+    for step in plan {
+        let stack_op = |ctx: &mut IrContext, built: (OpRef, ValueRef)| {
+            ctx.insert_op_before(block, op, built.0);
+            built.1
+        };
+        selected = match step {
             EvidenceStep::Mask(instance) => {
-                let mask = effect::Mask::operands(evidence)
-                    .ability_ref(instance)
+                let mask = effect::Mask::operands(selected)
+                    .ability_ref(*instance)
                     .results(evidence_ty)
                     .build(ctx, location);
-                (mask.op_ref(), mask.result(ctx))
+                stack_op(ctx, (mask.op_ref(), mask.result(ctx)))
             }
             EvidenceStep::Dup(instance) => {
-                let dup = effect::Dup::operands(evidence)
-                    .ability_ref(instance)
+                let dup = effect::Dup::operands(selected)
+                    .ability_ref(*instance)
                     .results(evidence_ty)
                     .build(ctx, location);
-                (dup.op_ref(), dup.result(ctx))
+                stack_op(ctx, (dup.op_ref(), dup.result(ctx)))
             }
             EvidenceStep::Outer(instance) => {
-                let outer = effect::Outer::operands(evidence)
-                    .ability_ref(instance)
+                let outer = effect::Outer::operands(selected)
+                    .ability_ref(*instance)
                     .results(evidence_ty)
                     .build(ctx, location);
-                (outer.op_ref(), outer.result(ctx))
+                source = stack_op(ctx, (outer.op_ref(), outer.result(ctx)));
+                source
+            }
+            EvidenceStep::Select(index) => {
+                let tail = effect::Tail::operands(selected)
+                    .index(*index)
+                    .results(evidence_ty)
+                    .build(ctx, location);
+                stack_op(ctx, (tail.op_ref(), tail.result(ctx)))
+            }
+            EvidenceStep::Push(instance) => {
+                let push = effect::Push::operands(selected, source)
+                    .ability_ref(*instance)
+                    .results(evidence_ty)
+                    .build(ctx, location);
+                stack_op(ctx, (push.op_ref(), push.result(ctx)))
+            }
+            EvidenceStep::Tails(plans) => {
+                let mut attached = selected;
+                for (index, plan) in plans.iter().enumerate() {
+                    let tail = apply_evidence_plan(ctx, block, op, source, plan);
+                    let with_tail = effect::WithTail::operands(attached, tail)
+                        .index(index as u32)
+                        .results(evidence_ty)
+                        .build(ctx, location);
+                    ctx.insert_op_before(block, op, with_tail.op_ref());
+                    attached = with_tail.result(ctx);
+                }
+                attached
             }
         };
-        ctx.insert_op_before(block, op, selected.0);
-        selected.1
-    })
+    }
+    selected
 }
 
 /// The operand index of the evidence a call passes to its callee.
@@ -628,6 +665,34 @@ mod tests {
                 r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
                 r#"%7 = effect.dup %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
                 r#"func.tail_call_indirect %2, %7, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
+            ],
+            "{body:#?}"
+        );
+    }
+
+    #[test]
+    fn row_tail_selections_read_the_evidence_the_call_starts_from() {
+        let input = final_dispatch_fixture(
+            r#"%direct = func.call %ev, %prompt {callee = @callee, tribute.calling_convention = 1, evidence_plan = [{select = 1}, {push = core.ability_ref<{name = "State"}>}]} : core.i32
+    func.tail_call_indirect %tr, %ev, %direct {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2, evidence_plan = [{dup = core.ability_ref<{name = "State"}>}, {tails = [[], [{mask = core.ability_ref<{name = "State"}>}]]}]}"#,
+        );
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, &input);
+
+        resolve_evidence_dispatch(&mut ctx, module).unwrap();
+
+        let body = test_body(&ctx, module);
+        assert_eq!(
+            body,
+            [
+                r#"%4 = effect.tail %0 {index = 1} : !evidence"#,
+                r#"%5 = effect.push %4, %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%6 = func.call %5, %1 {callee = @callee, tribute.calling_convention = 1} : core.i32"#,
+                r#"%7 = effect.dup %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%8 = effect.with_tail %7, %0 {index = 0} : !evidence"#,
+                r#"%9 = effect.mask %0 {ability_ref = core.ability_ref<{name = "State"}>} : !evidence"#,
+                r#"%10 = effect.with_tail %8, %9 {index = 1} : !evidence"#,
+                r#"func.tail_call_indirect %2, %10, %6 {signature = func.func_sig<(!evidence, core.i32) -> core.never>, tribute.calling_convention = 2}"#,
             ],
             "{body:#?}"
         );

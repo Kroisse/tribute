@@ -449,3 +449,202 @@ fn main() ->{Io} Nil {
     // computation then reads the cell (5) and the outer state (1).
     assert_program("nested_resume_restores_hidden_handler.trb", code, "111");
 }
+
+/// A callee whose row is a union of tails gives each tail its own handlers.
+/// The handler a caller installs for one tail does not handle the operations
+/// of a callback that takes the instance through another tail.
+#[test]
+fn test_each_tail_of_a_callee_takes_its_own_handler() {
+    let code = r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    g()
+}
+
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        both(fn() { State::set(State::get() + +1) }, h)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +100 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    // The internal handler counts the 1 call of the first callback; the
+    // second callback adds 10 to the caller's state.
+    assert_program("each_tail_takes_its_own_handler.trb", code, "110");
+}
+
+/// The same selection when the multi-tail call is made by a function that
+/// names the instance in its own row beside its tail.
+#[test]
+fn test_each_tail_takes_its_own_handler_under_an_explicit_row() {
+    let code = r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    g()
+}
+
+fn inc() ->{State(Int)} Nil {
+    State::set(State::get() + +1)
+}
+
+fn counted(h: fn() ->{t} Nil) ->{t, State(Int)} Int {
+    both(inc, h)
+    State::get()
+}
+
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() { counted(h) }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +100 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    assert_program("each_tail_under_explicit_row.trb", code, "110");
+}
+
+/// Tails that are filled with different instances share one evidence: each
+/// callback reaches the handler of its own instance.
+#[test]
+fn test_tails_with_different_instances_keep_their_handlers() {
+    let code = r#"
+ability Reader {
+    op ask() -> Int
+}
+
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Int) ->{e1, e2} Int {
+    f()
+    g()
+}
+
+fn inc() ->{State(Int)} Nil {
+    State::set(State::get() + +1)
+}
+
+fn with_reader(comp: fn() ->{e, Reader} a) ->{e} a {
+    handle comp() {
+        do result { result }
+        op Reader::ask() { resume +7 }
+    }
+}
+
+fn counted(h: fn() ->{t} Int) ->{t, State(Int)} Int {
+    let asked = both(inc, h)
+    asked * +10 + State::get()
+}
+
+fn count_calls(h: fn() ->{t} Int) ->{t} Int {
+    run_state(fn() { counted(h) }, +0)
+}
+
+fn main() ->{Io} Nil {
+    show(with_reader(fn() { count_calls(fn() { Reader::ask() }) }))
+}
+"#;
+    assert_program("tails_with_different_instances.trb", code, "71");
+}
+
+/// Each call a multi-tail callee makes selects its tail again, also after the
+/// handlers of both tails resumed the callee.
+#[test]
+fn test_tails_keep_their_handlers_across_resumes() {
+    let code = r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    g()
+    f()
+    g()
+}
+
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        both(fn() { State::set(State::get() + +1) }, h)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +100 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    assert_program("tails_across_resumes.trb", code, "220");
+}
+
+/// A multi-tail callee that calls another one passes each of its tails on in
+/// the position the inner callee declares.
+#[test]
+fn test_tails_are_forwarded_to_another_multi_tail_callee() {
+    let code = r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    g()
+}
+
+fn swapped(f: fn() ->{a} Nil, g: fn() ->{b} Nil) ->{a, b} Nil {
+    both(g, f)
+}
+
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        swapped(h, fn() { State::set(State::get() + +1) })
+        State::get()
+    }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +100 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    assert_program("tails_forwarded.trb", code, "110");
+}
+
+/// A callback whose row names an instance beside a tail takes the callee's
+/// own handler of that instance on top of the tail's handlers.
+#[test]
+fn test_selected_tail_takes_the_callees_explicit_handler() {
+    let code = r#"
+fn stateful(
+    f: fn() ->{e1, State(Int)} Nil,
+    g: fn() ->{e2} Nil
+) ->{e1, e2, State(Int)} Nil {
+    f()
+    g()
+}
+
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        stateful(fn() { State::set(State::get() + +1) }, h)
+        State::get()
+    }, +0)
+}
+
+fn main() ->{Io} Nil {
+    let outer = run_state(fn() {
+        let calls = count_calls(fn() { State::set(State::get() + +10) })
+        calls * +100 + State::get()
+    }, +0)
+    show(outer)
+}
+"#;
+    assert_program("selected_tail_explicit_handler.trb", code, "110");
+}

@@ -1,4 +1,5 @@
 //! Typechecking selects each call's evidence by the callee's row position.
+use itertools::Itertools;
 use salsa_test_macros::salsa_test;
 use tribute_core::diagnostic::Diagnostic;
 use tribute_front::{
@@ -14,6 +15,22 @@ fn checked(db: &dyn salsa::Database, source: SourceCst) -> TypeCheckOutput<'_> {
     tribute_front::typeck::typecheck_module(db, &resolved, spans)
 }
 
+fn describe(db: &dyn salsa::Database, step: &EvidenceStep<'_>) -> String {
+    match step {
+        EvidenceStep::Mask(instance) => format!("mask {}", instance.ability_id.name(db)),
+        EvidenceStep::Dup(instance) => format!("dup {}", instance.ability_id.name(db)),
+        EvidenceStep::Push(instance) => format!("push {}", instance.ability_id.name(db)),
+        EvidenceStep::Select(index) => format!("select {index}"),
+        EvidenceStep::Tails(plans) => format!(
+            "tails {}",
+            plans.iter().format_with(" ", |plan, f| f(&format_args!(
+                "[{}]",
+                plan.iter().map(|step| describe(db, step)).format(", ")
+            )))
+        ),
+    }
+}
+
 /// Each non-identity selection as `source text: steps`, in source order.
 fn plans(db: &dyn salsa::Database, text: &str) -> Vec<String> {
     let source = SourceCst::from_source_str(db, "plans.trb", text);
@@ -27,18 +44,10 @@ fn plans(db: &dyn salsa::Database, text: &str) -> Vec<String> {
         .iter()
         .map(|(node, plan)| {
             let span = spans.get_or_default(*node);
-            let steps: Vec<_> = plan
-                .iter()
-                .map(|step| match step {
-                    EvidenceStep::Mask(instance) => {
-                        format!("mask {}", instance.ability_id.name(db))
-                    }
-                    EvidenceStep::Dup(instance) => format!("dup {}", instance.ability_id.name(db)),
-                })
-                .collect();
+            let steps = plan.iter().map(|step| describe(db, step)).join(", ");
             (
                 span.start,
-                format!("{}: {}", &text[span.start..span.end], steps.join(", ")),
+                format!("{}: {}", &text[span.start..span.end], steps),
             )
         })
         .collect();
@@ -191,4 +200,48 @@ fn bump() ->{State(Nat)} Nat {
 "#
     );
     assert!(plans(db, &source).is_empty());
+}
+
+#[salsa_test]
+fn each_tail_of_a_union_takes_its_own_selection(db: &salsa::DatabaseImpl) {
+    let source = format!(
+        "{STATE}{}",
+        r#"
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    g()
+}
+
+fn count_calls(h: fn() ->{t} Nil) ->{t} Nat {
+    run_state(fn() {
+        both(fn() { State::set(State::get() + 1) }, h)
+        State::get()
+    }, 0)
+}
+"#
+    );
+    let plans = plans(db, &source);
+    assert!(plans.contains(&"f(): select 0".to_owned()), "{plans:#?}");
+    assert!(plans.contains(&"g(): select 1".to_owned()), "{plans:#?}");
+    assert!(
+        plans
+            .iter()
+            .any(|plan| plan.starts_with("both(") && plan.ends_with(": tails [] [mask State]")),
+        "{plans:#?}"
+    );
+}
+
+#[salsa_test]
+fn selected_tail_takes_the_explicit_handlers_a_callee_names(db: &salsa::DatabaseImpl) {
+    let source = format!(
+        "{STATE}{}",
+        r#"
+fn stateful(f: fn() ->{e1, State(Nat)} Nil, g: fn() ->{e2} Nil) ->{e1, e2, State(Nat)} Nil {
+    f()
+    g()
+}
+"#
+    );
+    let plans = plans(db, &source);
+    assert_eq!(plans, ["f(): select 0, push State", "g(): select 1"]);
 }
