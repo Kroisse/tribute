@@ -2497,6 +2497,35 @@ fn main() -> Nil {
 }
 
 #[test]
+fn test_native_fieldless_enum_objects_hold_only_their_header() {
+    assert_native_output(
+        "fieldless_enum.trb",
+        r#"
+enum Color {
+    Red,
+    Green,
+    Blue,
+}
+
+fn code(color: Color) -> Nat {
+    case color {
+        Red -> 1
+        Green -> 2
+        Blue -> 3
+    }
+}
+
+fn main() -> Nil {
+    __tribute_print_nat(code(Red))
+    __tribute_print_nat(code(Green))
+    __tribute_print_nat(code(Blue))
+}
+"#,
+        "1\n2\n3",
+    );
+}
+
+#[test]
 fn test_native_bytes_case_mixes_literal_and_parameter() {
     assert_native_output(
         "bytes_case_literal_and_parameter.trb",

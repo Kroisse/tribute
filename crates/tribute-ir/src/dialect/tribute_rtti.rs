@@ -21,6 +21,8 @@ use trunk_ir::types::{Attribute, Location, StringRef};
 use crate::dialect::adt;
 use crate::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 
+trunk_ir::register_pure_op!(DescriptorIs);
+
 #[trunk_ir::dialect]
 mod tribute_rtti {
     /// The RTTI index and field kinds of one runtime type descriptor.
