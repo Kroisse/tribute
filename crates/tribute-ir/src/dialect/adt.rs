@@ -484,6 +484,8 @@ pub enum EnumTypeError {
     DuplicateVariantName(#[error(not(source))] String),
     #[display("`variants` is not an `adt.enum` attribute; variants are type parameters")]
     VariantsAttribute,
+    #[display("an `adt.enum` variant parameter carries no parameter attributes")]
+    VariantAttributes,
 }
 
 /// Validated wrapper for a nominal `adt.enum` layout type.
@@ -502,6 +504,10 @@ impl Enum {
         debug_assert!(Self::matches(ctx, ty));
         if data.attrs.contains_key("variants") {
             return Err(EnumTypeError::VariantsAttribute);
+        }
+        // The syntax has no place for them, so printing would drop them.
+        if data.attrs.contains_key(PARAM_ATTRS_ATTR) {
+            return Err(EnumTypeError::VariantAttributes);
         }
         if data.attrs.get_string_ref(STRUCT_NAME_ATTR).is_none() {
             return Err(EnumTypeError::MissingName);
@@ -559,9 +565,10 @@ impl Enum {
 
     /// The type attributes other than the name.
     pub fn extra_attrs(self, ctx: &IrContext) -> impl Iterator<Item = (&Symbol, &Attribute)> + '_ {
-        ctx.get_type(self.0).attrs.iter().filter(|(key, _)| {
-            **key != Symbol::new(STRUCT_NAME_ATTR) && **key != Symbol::new(PARAM_ATTRS_ATTR)
-        })
+        ctx.get_type(self.0)
+            .attrs
+            .iter()
+            .filter(|(key, _)| **key != Symbol::new(STRUCT_NAME_ATTR))
     }
 }
 
@@ -608,7 +615,8 @@ impl From<Enum> for TypeRef {
 ///
 /// # Panics
 ///
-/// If two variants have the same name or `attrs` has a `variants` entry.
+/// If two variants have the same name, or `attrs` has a `variants` or
+/// parameter attribute entry.
 pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
     ctx: &mut IrContext,
     name: impl Into<StringArg>,
@@ -627,7 +635,6 @@ pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
         builder = builder.param(variant);
     }
     let name = ctx.intern_string_arg(name.into());
-    attrs.remove(PARAM_ATTRS_ATTR);
     attrs.insert(STRUCT_NAME_ATTR, name);
     for (key, value) in attrs {
         builder = builder.attr(key, value);
@@ -962,9 +969,12 @@ mod tests {
         for spelling in [
             "adt.enum<E { A(), A(core.i32) }>",
             "adt.enum<{name = \"E\", variants = [[\"A\", []]]}>",
-            "adt.enum<core.i32, {name = @E}>",
-            "adt.enum<adt.variant<core.i32>, {name = @E}>",
+            "adt.enum<core.i32, {name = \"E\"}>",
+            "adt.enum<adt.variant<core.i32>, {name = \"E\"}>",
             "adt.enum<adt.variant<{name = \"A\"}>>",
+            "adt.enum<adt.variant<{name = \"A\"}>, {name = @E}>",
+            // The syntax cannot print a variant parameter's attributes.
+            "adt.enum<adt.variant<{name = \"A\"}> {k = 1}, {name = \"E\"}>",
         ] {
             let mut ctx = IrContext::new();
             let input = format!("core.module @test {{ !bad = {spelling} }}");

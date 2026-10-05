@@ -1601,6 +1601,9 @@ adt.enum<Never {}>
 - Variant와 필드의 `name`, enum type 속성의 `name`은 전용 문법이 소유한다. Textual
   form의 속성 dictionary에는 쓰지 않는다. 나머지 type 속성은 `<…>` 안 마지막
   원소로 둔다.
+- Variant 매개변수는 [매개변수 속성](#타입-매개변수-속성)을 갖지 않는다. 전용 문법에
+  그것을 쓸 자리가 없으므로 `adt.enum`의 `param_attrs`는 type verifier가 거부한다.
+  필드의 속성은 그 variant(`adt.variant`)의 매개변수 속성이다.
 - `adt.variant`는 `adt.enum`의 매개변수로만 쓴다. 값의 타입이나 연산의 타입 속성이
   되지 않으며, 연산은 enum 타입과 variant 이름(`tag`)으로 variant를 가리킨다.
 - Variant 필드 타입이 매개변수의 매개변수이므로 일반 타입 순회와 변환은 variant
