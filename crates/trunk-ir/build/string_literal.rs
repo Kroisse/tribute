@@ -12,9 +12,9 @@ pub(crate) fn value(text: &str) -> Option<String> {
             '\\' => escaped = true,
             '"' => {
                 let literal = &text[..index + 2];
-                return syn::parse_str::<syn::LitStr>(literal)
+                return litrs::StringLit::parse(literal)
                     .ok()
-                    .map(|literal| literal.value());
+                    .map(|literal| literal.into_value().into_owned());
             }
             _ => {}
         }
