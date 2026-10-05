@@ -118,6 +118,15 @@ pub fn receiver_type_matches<'db>(
     same_constructor(db, declared, actual)
 }
 
+/// A function a struct has for one of its named fields.
+#[derive(Clone, Debug)]
+pub struct FieldFunction<'db> {
+    pub owner: TypeDefId<'db>,
+    pub field: Symbol,
+    pub kind: super::FieldFunctionKind,
+    pub scheme: TypeScheme<'db>,
+}
+
 /// Module-level type environment.
 ///
 /// This struct holds type information that is shared across all functions in a module:
@@ -365,6 +374,97 @@ impl<'db> ModuleTypeEnv<'db> {
             }
         }
         None
+    }
+
+    /// The function `id` names if a struct has it for one of its named
+    /// fields: the getter `T::f`, the setter `T::f::set`, or the modifier
+    /// `T::f::modify`. Its scheme is derived from the field's type and takes
+    /// the struct's own type parameters.
+    pub fn field_function(&self, id: FuncDefId<'db>) -> Option<FieldFunction<'db>> {
+        use super::FieldFunctionKind;
+        use tribute_ir::ModulePathExt as _;
+
+        let qualified = id.qualified(self.db);
+        let leaf = qualified.last_segment();
+        let parent = qualified.parent_path()?;
+        let (kind, owner_name, field) = [FieldFunctionKind::Set, FieldFunctionKind::Modify]
+            .into_iter()
+            .find(|kind| kind.name().is_some_and(|name| leaf == name))
+            .and_then(|kind| Some((kind, parent.parent_path()?, parent.last_segment())))
+            .filter(|(_, owner, field)| self.struct_field(owner, field).is_some())
+            .unwrap_or((FieldFunctionKind::Get, parent, leaf));
+        let (owner, parameters, field_ty) = self.struct_field(&owner_name, &field)?;
+
+        let receiver = self.named_type_with_id(
+            owner,
+            owner.qualified(self.db).clone(),
+            (0..parameters.len() as u32)
+                .map(|index| Type::new(self.db, TypeKind::BoundVar { index }))
+                .collect(),
+        );
+        let pure = EffectRow::pure(self.db);
+        let body = match kind {
+            FieldFunctionKind::Get => self.func_type(vec![receiver], field_ty, pure),
+            FieldFunctionKind::Set => self.func_type(vec![receiver, field_ty], receiver, pure),
+            FieldFunctionKind::Modify => {
+                // A row variable the field's own type does not use.
+                let id = crate::ast::collect_effect_vars(self.db, field_ty)
+                    .iter()
+                    .map(|var| var.id + 1)
+                    .max()
+                    .unwrap_or(0);
+                let row = EffectRow::open(self.db, crate::ast::EffectVar { id });
+                let callback = self.func_type(vec![field_ty], field_ty, row);
+                self.func_type(vec![receiver, callback], receiver, row)
+            }
+        };
+        let scheme = TypeScheme::new(
+            self.db,
+            parameters,
+            crate::ast::collect_effect_vars(self.db, body),
+            body,
+        );
+        Some(FieldFunction {
+            owner,
+            field,
+            kind,
+            scheme,
+        })
+    }
+
+    /// The named field `field` of the struct named `owner`: the struct's
+    /// identity and type parameters, and the field's type.
+    fn struct_field(
+        &self,
+        owner: &Symbol,
+        field: &Symbol,
+    ) -> Option<(TypeDefId<'db>, Vec<TypeParam>, Type<'db>)> {
+        let TypeKind::Named { id, .. } = self.lookup_type_def(owner)?.body(self.db).kind(self.db)
+        else {
+            return None;
+        };
+        let (parameters, ty) = self.lookup_struct_field(*id, field)?;
+        Some((*id, parameters.to_vec(), ty))
+    }
+
+    /// The scheme of the function `id` and where it comes from: a
+    /// declaration, or a struct's named field.
+    pub fn function_scheme(
+        &self,
+        id: FuncDefId<'db>,
+    ) -> Option<(TypeScheme<'db>, super::FunctionInstanceOrigin<'db>)> {
+        if let Some(scheme) = self.lookup_function(id) {
+            return Some((scheme, super::FunctionInstanceOrigin::Declaration));
+        }
+        let function = self.field_function(id)?;
+        Some((
+            function.scheme,
+            super::FunctionInstanceOrigin::FieldAccessor {
+                owner: function.owner,
+                field: function.field,
+                kind: function.kind,
+            },
+        ))
     }
 
     /// Return the number of registered constructors.

@@ -158,10 +158,9 @@ pub(super) fn validate<'db>(
                 crate::typeck::FunctionInstanceOrigin::Declaration => {
                     schemes.get(target.qualified(db)) == Some(&instance.scheme)
                 }
-                crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field } => {
-                    let mut prefix = owner.qualified(db).to_string();
+                crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field, kind } => {
                     fields.contains(&(owner, field.clone()))
-                        && *target.qualified(db) == crate::qualified_symbol(&mut prefix, &field)
+                        && *target.qualified(db) == kind.qualified(owner.qualified(db), &field)
                 }
             };
             if instance.function != *target || !known_declaration {

@@ -731,13 +731,13 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             );
             return Some(instance.callable);
         }
-        let scheme = self.env.lookup_function(function)?;
+        let (scheme, origin) = self.env.function_scheme(function)?;
         let instance = self.instantiate_scheme_details(scheme);
         let callable = instance.ty;
         self.function_instances.insert(
             node,
             super::FunctionInstance {
-                origin: super::FunctionInstanceOrigin::Declaration,
+                origin,
                 function,
                 scheme,
                 callable,

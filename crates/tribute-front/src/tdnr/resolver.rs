@@ -267,9 +267,6 @@ impl<'db> TdnrResolver<'db> {
 
                     prefix.truncate(saved);
                 }
-                // Generated functions are reached by path, never as
-                // unqualified UFCS methods.
-                Decl::Module(m) if m.generated => {}
                 Decl::Module(m) => {
                     if let Some(body) = &m.body {
                         // Build nested module path by appending current module name

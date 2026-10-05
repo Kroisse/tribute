@@ -140,8 +140,7 @@ fn test_struct_declaration() {
         "#;
     let module = parse_and_lower(source);
 
-    // The struct is followed by the module of its generated field functions.
-    assert_eq!(module.decls.len(), 2);
+    assert_eq!(module.decls.len(), 1);
     let Decl::Struct(struct_decl) = &module.decls[0] else {
         panic!("Expected struct declaration");
     };
@@ -625,59 +624,6 @@ fn test_qualified_method_keeps_its_path() {
         assert_ne!(path.id, value.id);
         assert!(path.candidates.is_empty());
     }
-}
-
-#[test]
-fn test_field_functions_name_rows_omitted_inside_ability_arguments() {
-    // The omitted row is in an argument of the callback's ability.
-    let module =
-        parse_and_lower("struct Task { run: fn() ->{State(fn(Int) -> Int)} Nil, id: Int }");
-
-    let [Decl::Struct(_), Decl::Module(fields)] = module.decls.as_slice() else {
-        panic!("Expected a struct and its field module");
-    };
-    assert_eq!(fields.body.as_ref().map(Vec::len), Some(2));
-}
-
-#[test]
-fn test_struct_generates_field_setters_and_modifiers() {
-    let module = parse_and_lower("struct Pair(a) { left: a, right: Int }\nstruct Unit {}");
-
-    let [Decl::Struct(_), Decl::Module(lenses), Decl::Struct(_)] = module.decls.as_slice() else {
-        panic!("Expected a struct, its field module, and a struct without fields");
-    };
-    assert!(lenses.generated);
-    assert_eq!(lenses.name.to_string(), "Pair");
-    let fields: Vec<_> = lenses
-        .body
-        .iter()
-        .flatten()
-        .map(|decl| {
-            let Decl::Module(field) = decl else {
-                panic!("Expected a field module");
-            };
-            let functions: Vec<_> = field
-                .body
-                .iter()
-                .flatten()
-                .map(|decl| {
-                    let Decl::Function(function) = decl else {
-                        panic!("Expected a function");
-                    };
-                    function.name.to_string()
-                })
-                .collect();
-            (field.name.to_string(), functions)
-        })
-        .collect();
-    let functions = vec!["set".to_owned(), "modify".to_owned()];
-    assert_eq!(
-        fields,
-        [
-            ("left".to_owned(), functions.clone()),
-            ("right".to_owned(), functions)
-        ]
-    );
 }
 
 #[test]
@@ -2568,7 +2514,7 @@ fn test_record_with_spread() {
         "#;
     let module = parse_and_lower(source);
 
-    let Some(Decl::Function(func)) = module.decls.last() else {
+    let Decl::Function(func) = &module.decls[1] else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {

@@ -596,13 +596,6 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
 }
 
 impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db> {
-    // A generated module has no source text of its own to index.
-    fn visit_module_decl(&mut self, module: &'ast tribute_front::ast::ModuleDecl<TypedRef<'db>>) {
-        if !module.generated {
-            tribute_front::ast::visit::walk_module_decl(self, module);
-        }
-    }
-
     fn visit_decl(&mut self, decl: &'ast Decl<TypedRef<'db>>) {
         match decl {
             Decl::ExternFunction(func) => self.collect_extern_func(func),

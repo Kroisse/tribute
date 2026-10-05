@@ -39,6 +39,8 @@
 //!     ▼ ast_to_ir
 //! Module (source-logical callable/control IR)
 //!     │
+//!     ▼ global DCE (artifact compiles only: unreachable source-logical
+//!     │             functions skip CPS legalization)
 //!     ▼ tribute_control_to_cps → lower_closure_lambda → intrinsic/list/io lowering
 //! Module (CPS callable contracts and explicit evidence)
 //!     │
@@ -817,6 +819,21 @@ pub fn run_through_cps_lowering(
 // Full Pipeline (Orchestration)
 // =============================================================================
 
+/// Drop the source-logical functions nothing reachable from the roots
+/// references, before CPS legalization.
+///
+/// The prelude and every struct's field functions are lowered whole; most
+/// programs use little of either. Removing the rest here keeps every later
+/// pass from converting functions the target pipeline would discard anyway.
+///
+/// Bodyless declarations stay: CPS legalization checks the registered
+/// compiler intrinsics against them, and they cost no lowering.
+fn eliminate_unreferenced_source_functions(ctx: &mut IrContext, m: Module) {
+    trunk_ir::transforms::eliminate_dead_definitions(ctx, m, |ctx, op| {
+        tribute_ir::dialect::tribute_control::Func::matches(ctx, op) && ctx.op_has_regions(op)
+    });
+}
+
 /// Build the shared structural pass pipeline that legalizes source-logical
 /// callable/control IR into CPS with explicit evidence.
 fn structural_pass_pipeline(
@@ -853,10 +870,37 @@ fn run_shared_pipeline(
     run_shared_middle_end(frontend).map(Some)
 }
 
+/// Run the shared pipeline on every function of the program, reachable or
+/// not, so that a compilation for diagnostics checks all of them.
+fn check_shared_pipeline(
+    db: &dyn salsa::Database,
+    source: SourceCst,
+) -> PassResult<Option<(IrContext, Module)>> {
+    let Some(frontend) = compile_frontend_for_shared_route(db, source) else {
+        return Ok(None);
+    };
+    shared_middle_end(frontend, SourceFunctions::All).map(Some)
+}
+
+/// Which source-logical functions the shared middle-end legalizes.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceFunctions {
+    /// Those reachable from the program's roots; an artifact has no others.
+    Reachable,
+    All,
+}
+
 /// Run the shared middle-end on a frontend result.
 ///
 /// The result is ready for [`run_target_to_boundary_exit`].
 pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrContext, Module)> {
+    shared_middle_end(frontend, SourceFunctions::Reachable)
+}
+
+fn shared_middle_end(
+    frontend: FrontendCompilation,
+    functions: SourceFunctions,
+) -> PassResult<(IrContext, Module)> {
     let FrontendCompilation {
         context,
         module: m,
@@ -871,6 +915,9 @@ pub fn run_shared_middle_end(frontend: FrontendCompilation) -> PassResult<(IrCon
         core_dialect::Module::from_op(&ctx, m.op()).expect("frontend output must be a core.module");
     // One cache for the phase: every pass and boundary check reuses analyses
     // of unchanged IR, and any IR change discards them.
+    if functions == SourceFunctions::Reachable {
+        eliminate_unreferenced_source_functions(&mut ctx, m);
+    }
     let mut analyses = AnalysisCache::new();
     let mut structural_pm = structural_pass_pipeline(operation_declarations, compiler_intrinsics);
     structural_pm.run(&mut ctx, core_module, &mut analyses)?;
@@ -1654,7 +1701,7 @@ fn report_unresolved_methods<'db>(
 #[salsa::tracked(returns(copy))]
 fn compile_ast_tracked(db: &dyn salsa::Database, source: SourceCst) -> bool {
     // Run the shared pipeline; diagnostics are accumulated as side effects
-    match run_shared_pipeline(db, source) {
+    match check_shared_pipeline(db, source) {
         Ok(Some((ctx, m))) => {
             validate_and_report_arity(db, &ctx, m);
             true
@@ -1677,7 +1724,7 @@ pub fn compile_ast(
     db: &dyn salsa::Database,
     source: SourceCst,
 ) -> PassResult<Option<(IrContext, Module)>> {
-    run_shared_pipeline(db, source)
+    check_shared_pipeline(db, source)
 }
 
 /// Run compilation and return detailed results including diagnostics.

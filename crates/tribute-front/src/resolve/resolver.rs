@@ -115,8 +115,8 @@ pub struct Resolver<'db> {
     /// package-root path it names. An import is visible only in the body of
     /// the module that declares it.
     module_imports: Vec<HashMap<Symbol, Vec<Symbol>>>,
-    /// Source functions that redefine a generated one. They are reported
-    /// and dropped, so the generated function is the definition.
+    /// Source functions that redefine a struct field's function. They are
+    /// reported and dropped, so the field's function is the definition.
     redefinitions: Vec<NodeId>,
     /// How many leading segments of `module_path` are the package root:
     /// zero for a user package, one for the prelude inside its `std` module.
@@ -745,9 +745,6 @@ impl<'db> Resolver<'db> {
         &mut self,
         module: &crate::ast::ModuleDecl<UnresolvedName>,
     ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
-        if module.generated {
-            return self.resolve_generated_module(module);
-        }
         self.report_field_lens_redefinitions(module.body.as_deref().unwrap_or_default());
         // For inline modules, recursively resolve nested declarations
         self.module_path.push(module.name.clone());
@@ -795,100 +792,16 @@ impl<'db> Resolver<'db> {
             id: module.id,
             name: module.name.clone(),
             is_pub: module.is_pub,
-            generated: false,
             body,
-        }
-    }
-
-    /// Resolve a module the compiler generated beside a declaration.
-    ///
-    /// Its body is read in the scope of the module that contains it, so its
-    /// annotations name types as the declaration's own do. Later phases read
-    /// them from inside the generated module, so each becomes the
-    /// package-root path it names.
-    fn resolve_generated_module(
-        &mut self,
-        module: &crate::ast::ModuleDecl<UnresolvedName>,
-    ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
-        let body = module.body.as_ref().map(|decls| {
-            decls
-                .iter()
-                .map(|decl| {
-                    let mut decl = self.resolve_decl(decl);
-                    if let Decl::Function(function) = &mut decl {
-                        for ann in function
-                            .params
-                            .iter_mut()
-                            .filter_map(|param| param.ty.as_mut())
-                            .chain(&mut function.return_ty)
-                        {
-                            self.absolute_annotation(ann);
-                        }
-                    }
-                    decl
-                })
-                .collect()
-        });
-        crate::ast::ModuleDecl {
-            id: module.id,
-            name: module.name.clone(),
-            is_pub: module.is_pub,
-            generated: true,
-            body,
-        }
-    }
-
-    /// Rewrite the names a resolved annotation leaves relative to the current
-    /// module into package-root paths.
-    fn absolute_annotation(&self, ann: &mut TypeAnnotation) {
-        match &mut ann.kind {
-            TypeAnnotationKind::Named(name) => {
-                let local = name.with_str(|spelling| {
-                    spelling.starts_with(|c: char| c.is_ascii_lowercase())
-                        || TypeKind::from_primitive_name(spelling).is_some()
-                });
-                if local {
-                    return;
-                }
-                let path = if !self.module_path.is_empty() {
-                    self.module_path.iter().chain([&*name]).cloned().collect()
-                } else if let Some(path) = self.env.get_use_path(name) {
-                    path.clone()
-                } else {
-                    vec![name.clone()]
-                };
-                ann.kind = TypeAnnotationKind::Path(path);
-            }
-            TypeAnnotationKind::App { ctor, args } => {
-                self.absolute_annotation(ctor);
-                args.iter_mut()
-                    .for_each(|arg| self.absolute_annotation(arg));
-            }
-            TypeAnnotationKind::Func {
-                params,
-                result,
-                abilities,
-            } => {
-                params
-                    .iter_mut()
-                    .chain(abilities)
-                    .for_each(|ann| self.absolute_annotation(ann));
-                self.absolute_annotation(result);
-            }
-            TypeAnnotationKind::Tuple(elements) => elements
-                .iter_mut()
-                .for_each(|element| self.absolute_annotation(element)),
-            TypeAnnotationKind::Path(_) | TypeAnnotationKind::Infer | TypeAnnotationKind::Error => {
-            }
         }
     }
 
     /// Report a companion module that declares a function the struct beside
-    /// it generates, `T::f::set` or `T::f::modify` for a named field `f`,
+    /// it already has, `T::f::set` or `T::f::modify` for a named field `f`,
     /// and record the function as a redefinition.
     fn report_field_lens_redefinitions(&mut self, decls: &[Decl<UnresolvedName>]) {
         let companions = decls.iter().filter_map(|decl| match decl {
-            Decl::Module(module) if !module.generated => Some(module),
+            Decl::Module(module) => Some(module),
             _ => None,
         });
         for companion in companions {
@@ -923,7 +836,7 @@ impl<'db> Resolver<'db> {
                     }
                     Diagnostic::new(
                         format!(
-                            "duplicate definition of `{}::{}::{name}`: struct `{}` generates it for its field `{}`",
+                            "duplicate definition of `{}::{}::{name}`: struct `{}` defines it for its field `{}`",
                             companion.name, field.name, companion.name, field.name
                         ),
                         self.span_map.get_or_default(id),

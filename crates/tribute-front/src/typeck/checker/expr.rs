@@ -1774,7 +1774,7 @@ impl<'db> TypeChecker<'db> {
             };
         };
         let mut matching = candidates.iter().filter_map(|candidate| {
-            let scheme = self.env.lookup_function(*candidate)?;
+            let (scheme, _) = self.env.function_scheme(*candidate)?;
             let entry = crate::typeck::MethodEntry {
                 func_id: *candidate,
                 func_ty: scheme.body(self.db()),
@@ -1853,6 +1853,7 @@ impl<'db> TypeChecker<'db> {
                 origin: crate::typeck::FunctionInstanceOrigin::FieldAccessor {
                     owner: *owner,
                     field,
+                    kind: crate::typeck::FieldFunctionKind::Get,
                 },
                 function,
                 scheme,

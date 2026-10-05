@@ -224,7 +224,6 @@ fn sample() -> Module<u32> {
             id: id(98),
             name: Symbol::new("inner"),
             is_pub: false,
-            generated: false,
             body: Some(vec![Decl::Function(func)]),
         })],
     )

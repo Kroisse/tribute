@@ -11,7 +11,6 @@ use crate::ast::{
 
 use super::context::AstLoweringCtx;
 use super::expressions::lower_expr;
-use super::field_lenses::field_lens_module;
 use super::helpers::is_comment;
 
 /// Lower a CST source file to an AST Module.
@@ -50,13 +49,9 @@ fn lower_decl(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<Decl<UnresolvedNa
     match node.kind() {
         "function_definition" => lower_function(ctx, node).into_iter().collect(),
         "struct_declaration" => lower_struct(ctx, node)
-            .map(|declaration| {
-                let lenses = field_lens_module(ctx, &declaration).map(Decl::Module);
-                std::iter::once(Decl::Struct(declaration))
-                    .chain(lenses)
-                    .collect()
-            })
-            .unwrap_or_default(),
+            .map(Decl::Struct)
+            .into_iter()
+            .collect(),
         "enum_declaration" => lower_enum(ctx, node).map(Decl::Enum).into_iter().collect(),
         "ability_declaration" => lower_ability(ctx, node)
             .map(Decl::Ability)
@@ -860,7 +855,6 @@ fn lower_mod(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<ModuleDecl<Unre
         id,
         name,
         is_pub,
-        generated: false,
         body,
     })
 }

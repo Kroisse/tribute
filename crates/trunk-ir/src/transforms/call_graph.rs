@@ -59,13 +59,30 @@ pub struct CallGraph {
 /// name has no entry in `func_ops`, but calls in each of its bodies are still
 /// recorded.
 pub fn build_call_graph(ctx: &IrContext, module: Module) -> CallGraph {
-    call_graph_over(ctx, module.op(), &SymbolTable::collect(ctx, module))
+    call_graph_over(
+        ctx,
+        module.op(),
+        &SymbolTable::collect(ctx, module),
+        func::Func::matches,
+    )
 }
 
-fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> CallGraph {
+/// Whether an operation is a function definition of the dialect a call graph
+/// is built over.
+pub type FunctionDefinition = fn(&IrContext, OpRef) -> bool;
+
+/// Build the call graph of the functions `is_function` identifies, which
+/// need not be `func.func`: a dialect with its own function definition
+/// operation names its functions and references the same way.
+pub fn call_graph_over(
+    ctx: &IrContext,
+    module: OpRef,
+    symbols: &SymbolTable,
+    is_function: FunctionDefinition,
+) -> CallGraph {
     let mut graph = CallGraph::default();
     let _ = walk_op::<()>(ctx, module, &mut |op| {
-        if func::Func::matches(ctx, op) {
+        if is_function(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
         ctx.op(op).attributes.visit_symbol_refs(&mut |reference| {
@@ -76,13 +93,13 @@ fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> Cal
     });
     for (name, ops) in symbols.iter() {
         if let &[op] = ops
-            && func::Func::matches(ctx, op)
+            && is_function(ctx, op)
         {
             graph.func_ops.insert(name.clone(), op);
         }
-        for &op in ops.iter().filter(|&&op| func::Func::matches(ctx, op)) {
+        for &op in ops.iter().filter(|&&op| is_function(ctx, op)) {
             for region in ctx.op_regions(op) {
-                collect_calls(ctx, region, name, &mut graph);
+                collect_calls(ctx, region, name, &mut graph, is_function);
             }
         }
     }
@@ -91,9 +108,15 @@ fn call_graph_over(ctx: &IrContext, module: OpRef, symbols: &SymbolTable) -> Cal
 
 /// Record the calls and references in `region` as edges from `caller`.
 /// Nested function definitions record their own edges.
-fn collect_calls(ctx: &IrContext, region: RegionRef, caller: &SymbolPath, graph: &mut CallGraph) {
+fn collect_calls(
+    ctx: &IrContext,
+    region: RegionRef,
+    caller: &SymbolPath,
+    graph: &mut CallGraph,
+    is_function: FunctionDefinition,
+) {
     let _ = walk_region::<()>(ctx, region, &mut |op| {
-        if func::Func::matches(ctx, op) {
+        if is_function(ctx, op) {
             return ControlFlow::Continue(WalkAction::Skip);
         }
         let mut callee = CallLikeOps::callee(ctx, op);
@@ -133,7 +156,12 @@ fn record_call(graph: &mut CallGraph, caller: SymbolPath, callee: SymbolPath) {
 impl Analysis for CallGraph {
     fn compute(ctx: &mut AnalysisContext<'_>, target: OpRef) -> Result<Self, AnalysisError> {
         let symbols = ctx.get::<SymbolTable>(target)?;
-        Ok(call_graph_over(ctx.ir(), target, &symbols))
+        Ok(call_graph_over(
+            ctx.ir(),
+            target,
+            &symbols,
+            func::Func::matches,
+        ))
     }
 }
 

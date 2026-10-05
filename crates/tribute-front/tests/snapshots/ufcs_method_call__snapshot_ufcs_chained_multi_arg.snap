@@ -6,29 +6,100 @@ core.module @test {
   !Pair = adt.struct<Pair(x: core.i32, y: core.i32)>
   !Triple = adt.struct<Triple(x: core.i32, y: core.i32, z: core.i32)>
   !Triple_1 = adt.typeref<{name = "Triple"}>
-  !t0 = tribute_control.func_sig<(!Triple_1) -> core.i32, {tribute.calling_convention = 0}>
   !Pair_1 = adt.typeref<{name = "Pair"}>
-  !t1 = tribute_control.func_sig<(!Pair_1) -> core.i32, {tribute.calling_convention = 0}>
+  !t0 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 2}>
+  !t1 = tribute_control.func_sig<(!Triple_1) -> core.i32, {tribute.calling_convention = 0}>
+  !t2 = tribute_control.func_sig<(!Triple_1, !t0) -> !Triple_1, {tribute.calling_convention = 2}>
+  !t3 = tribute_control.func_sig<(!Triple_1, core.i32) -> !Triple_1, {tribute.calling_convention = 0}>
+  !t4 = tribute_control.func_sig<(!Pair_1) -> core.i32, {tribute.calling_convention = 0}>
+  !t5 = tribute_control.func_sig<(!Pair_1, !t0) -> !Pair_1, {tribute.calling_convention = 2}>
+  !t6 = tribute_control.func_sig<(!Pair_1, core.i32) -> !Pair_1, {tribute.calling_convention = 0}>
 
   tribute_control.func @"Pair::x"(%0: !Pair_1) -> core.i32 convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !Pair} : core.i32
       tribute_control.return %1
   }
+  tribute_control.func @"Pair::x::set"(%0: !Pair_1, %1: core.i32) -> !Pair_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 1, type = !Pair} : core.i32
+      %3 = adt.struct_new %1, %2 {type = !Pair} : !Pair_1
+      tribute_control.return %3
+  }
+  tribute_control.func @"Pair::x::modify"(%0: !Pair_1, %1: !t0) -> !Pair_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 0, type = !Pair} : core.i32
+      %3 = tribute_control.call_indirect %1, %2 : core.i32
+      %4 = adt.struct_get %0 {field = 1, type = !Pair} : core.i32
+      %5 = adt.struct_new %3, %4 {type = !Pair} : !Pair_1
+      tribute_control.return %5
+  }
   tribute_control.func @"Pair::y"(%0: !Pair_1) -> core.i32 convention(direct) {
       %1 = adt.struct_get %0 {field = 1, type = !Pair} : core.i32
       tribute_control.return %1
+  }
+  tribute_control.func @"Pair::y::set"(%0: !Pair_1, %1: core.i32) -> !Pair_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 0, type = !Pair} : core.i32
+      %3 = adt.struct_new %2, %1 {type = !Pair} : !Pair_1
+      tribute_control.return %3
+  }
+  tribute_control.func @"Pair::y::modify"(%0: !Pair_1, %1: !t0) -> !Pair_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 1, type = !Pair} : core.i32
+      %3 = tribute_control.call_indirect %1, %2 : core.i32
+      %4 = adt.struct_get %0 {field = 0, type = !Pair} : core.i32
+      %5 = adt.struct_new %4, %3 {type = !Pair} : !Pair_1
+      tribute_control.return %5
   }
   tribute_control.func @"Triple::x"(%0: !Triple_1) -> core.i32 convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !Triple} : core.i32
       tribute_control.return %1
   }
+  tribute_control.func @"Triple::x::set"(%0: !Triple_1, %1: core.i32) -> !Triple_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 1, type = !Triple} : core.i32
+      %3 = adt.struct_get %0 {field = 2, type = !Triple} : core.i32
+      %4 = adt.struct_new %1, %2, %3 {type = !Triple} : !Triple_1
+      tribute_control.return %4
+  }
+  tribute_control.func @"Triple::x::modify"(%0: !Triple_1, %1: !t0) -> !Triple_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 0, type = !Triple} : core.i32
+      %3 = tribute_control.call_indirect %1, %2 : core.i32
+      %4 = adt.struct_get %0 {field = 1, type = !Triple} : core.i32
+      %5 = adt.struct_get %0 {field = 2, type = !Triple} : core.i32
+      %6 = adt.struct_new %3, %4, %5 {type = !Triple} : !Triple_1
+      tribute_control.return %6
+  }
   tribute_control.func @"Triple::y"(%0: !Triple_1) -> core.i32 convention(direct) {
       %1 = adt.struct_get %0 {field = 1, type = !Triple} : core.i32
       tribute_control.return %1
   }
+  tribute_control.func @"Triple::y::set"(%0: !Triple_1, %1: core.i32) -> !Triple_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 0, type = !Triple} : core.i32
+      %3 = adt.struct_get %0 {field = 2, type = !Triple} : core.i32
+      %4 = adt.struct_new %2, %1, %3 {type = !Triple} : !Triple_1
+      tribute_control.return %4
+  }
+  tribute_control.func @"Triple::y::modify"(%0: !Triple_1, %1: !t0) -> !Triple_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 1, type = !Triple} : core.i32
+      %3 = tribute_control.call_indirect %1, %2 : core.i32
+      %4 = adt.struct_get %0 {field = 0, type = !Triple} : core.i32
+      %5 = adt.struct_get %0 {field = 2, type = !Triple} : core.i32
+      %6 = adt.struct_new %4, %3, %5 {type = !Triple} : !Triple_1
+      tribute_control.return %6
+  }
   tribute_control.func @"Triple::z"(%0: !Triple_1) -> core.i32 convention(direct) {
       %1 = adt.struct_get %0 {field = 2, type = !Triple} : core.i32
       tribute_control.return %1
+  }
+  tribute_control.func @"Triple::z::set"(%0: !Triple_1, %1: core.i32) -> !Triple_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 0, type = !Triple} : core.i32
+      %3 = adt.struct_get %0 {field = 1, type = !Triple} : core.i32
+      %4 = adt.struct_new %2, %3, %1 {type = !Triple} : !Triple_1
+      tribute_control.return %4
+  }
+  tribute_control.func @"Triple::z::modify"(%0: !Triple_1, %1: !t0) -> !Triple_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 2, type = !Triple} : core.i32
+      %3 = tribute_control.call_indirect %1, %2 : core.i32
+      %4 = adt.struct_get %0 {field = 0, type = !Triple} : core.i32
+      %5 = adt.struct_get %0 {field = 1, type = !Triple} : core.i32
+      %6 = adt.struct_new %4, %5, %3 {type = !Triple} : !Triple_1
+      tribute_control.return %6
   }
   tribute_control.func @"Pair::extend"(%0: !Pair_1, %1: core.i32) -> !Triple_1 convention(direct) {
       %2 = tribute_control.call %0 {callee = @"Pair::x"} : core.i32

@@ -114,7 +114,7 @@ fn main() ->{Io} Nil {
 #[test]
 fn test_native_field_lenses_through_modules() {
     // A field whose type is a sibling of the struct, a call inside the
-    // struct's module, a companion module beside the generated one, and a
+    // struct's module, a companion module beside the struct, and a
     // call from a module that imports the struct.
     assert_native_output(
         "field_lens_modules.trb",
@@ -161,9 +161,95 @@ fn main() ->{Io} Nil {
 }
 
 #[test]
+fn test_native_field_functions_as_paths_and_values() {
+    // A getter called by its path, and a setter and a modifier used as
+    // function values.
+    assert_native_output(
+        "field_function_values.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct User { name: String, age: Int }
+
+fn show(user: User) ->{Io} Nil {
+    print_line(user.name)
+    print_line(Int::to_string(User::age(user)))
+}
+
+fn rename(update: fn(User, String) ->{} User, user: User) -> User { update(user, "Passed") }
+
+fn main() ->{Io} Nil {
+    let user = User { name: "John", age: +30 }
+    let set = User::name::set
+    show(set(user, "Bound"))
+    show(rename(User::name::set, user))
+    let modify = User::age::modify
+    show(modify(user, fn(n) n + +1))
+}
+"#,
+        "Bound\n30\nPassed\n30\nJohn\n31",
+    );
+}
+
+/// The names of the functions with bodies after the shared middle-end.
+fn shared_function_names(db: &salsa::DatabaseImpl, code: &str) -> Vec<String> {
+    use trunk_ir::dialect::func;
+    use trunk_ir::ops::DialectOp;
+
+    let source = SourceCst::from_source_str(db, "test.trb", code);
+    let frontend =
+        tribute::pipeline::compile_frontend_for_shared_route(db, source).expect("frontend output");
+    let (ctx, module) =
+        tribute::pipeline::run_shared_middle_end(frontend).expect("shared middle-end");
+    module
+        .ops(&ctx)
+        .iter()
+        .filter_map(|&op| func::Func::from_op(&ctx, op).ok())
+        .filter(|function| ctx.op_has_regions(function.op_ref()))
+        .map(|function| function.sym_name(&ctx).to_owned())
+        .collect()
+}
+
+#[salsa_test]
+fn unreferenced_field_functions_do_not_reach_cps(db: &salsa::DatabaseImpl) {
+    let names = shared_function_names(
+        db,
+        r#"
+struct User { name: String, age: Int }
+
+fn unused(user: User) -> User { user.age::set(+1) }
+
+fn main() -> Nil {
+    let _ = User { name: "John", age: +30 }.name::set("Jane")
+}
+"#,
+    );
+    assert!(
+        names.iter().any(|name| name == "User::name::set"),
+        "{names:?}"
+    );
+    for dropped in [
+        "User::name::modify",
+        "User::age::set",
+        "User::age::modify",
+        "unused",
+    ] {
+        assert!(
+            !names.iter().any(|name| name == dropped),
+            "{dropped}: {names:?}"
+        );
+    }
+    assert!(
+        !names
+            .iter()
+            .any(|name| name.starts_with("std::io::SystemError::")),
+        "{names:?}"
+    );
+}
+
+#[test]
 fn test_native_prelude_struct_field_lenses() {
-    // Unreferenced generated functions are not lowered; a reference from user
-    // code keeps the one a prelude struct generates.
+    // A prelude struct's field functions are reachable from user code.
     assert_native_output(
         "field_lens_prelude.trb",
         r#"
@@ -343,8 +429,8 @@ fn main() -> Nil {
     assert_eq!(
         messages,
         [
-            "duplicate definition of `User::name::set`: struct `User` generates it for its field `name`",
-            "duplicate definition of `User::age::modify`: struct `User` generates it for its field `age`",
+            "duplicate definition of `User::name::set`: struct `User` defines it for its field `name`",
+            "duplicate definition of `User::age::modify`: struct `User` defines it for its field `age`",
         ]
     );
 }

@@ -583,7 +583,9 @@ impl<'db> TypeChecker<'db> {
                     self.select_method(&mc.method, mc.path.as_ref(), resolved_receiver)
                 {
                     // Method found — instantiate the TypeScheme to get fresh types
-                    let func_ty = if let Some(scheme) = self.env.lookup_function(entry.func_id) {
+                    let func_ty = if let Some((scheme, origin)) =
+                        self.env.function_scheme(entry.func_id)
+                    {
                         let instance = crate::typeck::subst::instantiate_scheme_details_for_solver(
                             self.db(),
                             scheme,
@@ -593,7 +595,7 @@ impl<'db> TypeChecker<'db> {
                         instances.insert(
                             mc.node_id,
                             crate::typeck::FunctionInstance {
-                                origin: crate::typeck::FunctionInstanceOrigin::Declaration,
+                                origin,
                                 function: entry.func_id,
                                 scheme,
                                 callable,

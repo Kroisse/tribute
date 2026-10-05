@@ -177,7 +177,6 @@ pub fn library_package_module(module: &Module<UnresolvedName>) -> Module<Unresol
             id: module.id,
             name: Symbol::new(LIBRARY_PACKAGE),
             is_pub: true,
-            generated: false,
             body: Some(module.decls.clone()),
         })],
     }
@@ -279,7 +278,7 @@ fn collect_definition<'db>(
                     // Add to namespace (e.g., Point::x)
                     env.add_to_namespace(s.name.clone(), field_name.clone(), binding);
 
-                    // The generated setter and modifier, e.g. Point::x::set
+                    // The field's setter and modifier, e.g. Point::x::set
                     let namespace = Symbol::new(&format!("{}::{}", s.name, field_name));
                     let field_saved = push_prefix(prefix, &field_name);
                     for name in FIELD_LENS_FUNCTIONS {
@@ -357,9 +356,6 @@ fn collect_definition<'db>(
                 env.add_import(import_name, Binding::Module { path });
             }
         }
-
-        // The struct beside a generated module declares its functions.
-        Decl::Module(m) if m.generated => {}
 
         Decl::Module(m) => {
             // For inline modules, collect bindings into a temporary environment
@@ -660,7 +656,6 @@ mod tests {
             id: fresh_node_id(),
             name: Symbol::new(name),
             is_pub: false,
-            generated: false,
             body: Some(decls),
         }
     }
