@@ -608,6 +608,10 @@ mod tests {
             tribute_ir::runtime_layout::DESCRIBED,
             trunk_ir_wasm_backend::gc_types::DESCRIBED_LAYOUT
         );
+        assert_eq!(
+            tribute_ir::runtime_layout::BOXED_F64,
+            trunk_ir_wasm_backend::gc_types::BOXED_F64_LAYOUT
+        );
         let mut ctx = IrContext::new();
         let closure = closure_adt_type(&mut ctx);
         assert!(tribute_ir::runtime_layout::has_runtime_layout(

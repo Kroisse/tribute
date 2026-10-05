@@ -412,7 +412,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !data = core.array<core.i8, {layout = "bytes_data"}>
-  !bytes = adt.struct<!data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
+  !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
   wasm.func @main() -> core.nil {
     %zero = wasm.i32_const {value = 0} : core.i32
     %bytes = wasm_gc.struct_new %zero {type = !bytes} : !bytes
@@ -444,8 +444,8 @@ mod tests {
   !data = core.array<core.i8, {layout = "bytes_data"}>
   !plain = core.array<core.i8>
   !plain_ref = core.ref<core.array<core.i8>>
-  !bytes = adt.struct<!data {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes", layout = "bytes"}>
-  !lookalike = adt.struct<!plain {name = "data"}, core.i32 {name = "offset"}, core.i32 {name = "len"}, {name = "_Bytes"}>
+  !bytes = test.layout<!data, core.i32, core.i32, {layout = "bytes"}>
+  !lookalike = test.layout<!plain, core.i32, core.i32>
 }"#,
         );
         fn alias(ctx: &IrContext, name: &'static str) -> TypeRef {
@@ -475,8 +475,8 @@ mod tests {
         parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !boxed = adt.struct<core.f64 {name = "value"}, {name = "_BoxedF64", layout = "boxed_f64"}>
-  !lookalike = adt.struct<core.f64 {name = "value"}, {name = "_BoxedF64"}>
+  !boxed = test.layout<core.f64, {name = "_BoxedF64", layout = "boxed_f64"}>
+  !lookalike = test.layout<core.f64, {name = "_BoxedF64"}>
 }"#,
         );
         let alias = |name| ctx.type_alias_by_text(name).expect("fixture alias");
@@ -494,7 +494,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !A = adt.struct<{name = "A"}>
+  !A = test.nominal<{name = "A"}>
 
   wasm.func @main() -> core.nil {
     %null = wasm.ref_null {heap_type = "anyref"} : wasm.anyref
@@ -526,7 +526,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !S = adt.struct<core.i32 {name = "value"}, {name = "S"}>
+  !S = test.nominal<core.i32, {name = "S"}>
   !A = core.array<core.i32>
   !B = core.array<core.i32>
 

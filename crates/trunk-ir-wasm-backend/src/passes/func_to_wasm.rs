@@ -456,8 +456,8 @@ impl RewritePattern for FuncCallPattern {
         let loc = ctx.op(op).location;
         let callee = call_op.callee(ctx);
         let args: Vec<_> = ctx.op_operands(op).to_vec();
-        // The `wasm.call` declares target result types, so a shared IR spelling
-        // such as `adt.typeref` must not survive into the backend.
+        // The `wasm.call` declares target result types, so a source-level
+        // spelling must not survive into the backend.
         let result_types: Vec<TypeRef> = rewriter.result_types(ctx, op);
 
         let new_op = wasm_dialect::Call::operands(args)
@@ -501,11 +501,15 @@ impl RewritePattern for FuncCallIndirectPattern {
         };
         // Validate the replacement's converted results against the retained
         // physical contract before mutating the operation.
+        // Arguments other patterns have not converted yet are compared by
+        // their target types.
+        let type_converter = rewriter.type_converter();
         if crate::emit::helpers::exact_call_indirect_signature_with_results(
             ctx,
             op,
             signature,
             &result_types,
+            &|ty| type_converter.convert_type_or_identity(ctx, ty),
         )
         .is_err()
         {
@@ -611,8 +615,16 @@ impl RewritePattern for FuncTailCallIndirectPattern {
         // Missing or malformed metadata remains a residual `func.*` op and is
         // rejected by the Wasm readiness boundary rather than guessed from
         // table-index and argument values.
-        if crate::emit::helpers::exact_return_call_indirect_signature_with(ctx, op, signature)
-            .is_err()
+        // Arguments other patterns have not converted yet are compared by
+        // their target types.
+        let type_converter = rewriter.type_converter();
+        if crate::emit::helpers::exact_return_call_indirect_signature_with(
+            ctx,
+            op,
+            signature,
+            &|ty| type_converter.convert_type_or_identity(ctx, ty),
+        )
+        .is_err()
         {
             return false;
         }
@@ -1174,15 +1186,15 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @target(%value: core.i32) -> adt.typeref {
+  func.func @target(%value: core.i32) -> test.ref {
     func.return
   }
-  func.func @direct(%value: core.i32) -> adt.typeref {
-    %result = func.call %value {callee = @target} : adt.typeref
+  func.func @direct(%value: core.i32) -> test.ref {
+    %result = func.call %value {callee = @target} : test.ref
     func.return %result
   }
-  func.func @indirect(%table_index: core.i32, %value: core.i32) -> adt.typeref {
-    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> adt.typeref>} : adt.typeref
+  func.func @indirect(%table_index: core.i32, %value: core.i32) -> test.ref {
+    %result = func.call_indirect %table_index, %value {signature = func.func_sig<(core.i32) -> test.ref>} : test.ref
     func.return %result
   }
 }"#,
@@ -1192,7 +1204,7 @@ mod tests {
         let mut type_converter = TypeConverter::new();
         type_converter.add_conversion(move |ctx, ty| {
             ctx.types()
-                .is_dialect(ty, "adt", "typeref")
+                .is_dialect(ty, "test", "ref")
                 .then_some(structref_ty)
         });
         lower(&mut ctx, module, type_converter);
