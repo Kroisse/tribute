@@ -4011,6 +4011,40 @@ fn main() ->{std::io::Io} Nil {
     }
 
     #[salsa_test]
+    fn wasm_lowering_leaves_adt_types_only_as_builtin_layouts(db: &salsa::DatabaseImpl) {
+        // The backend identifies a builtin layout by its `layout` attribute
+        // and knows no other `adt` type.
+        let builtin_layout_or_not_adt = |ctx: &IrContext, ty| {
+            let data = ctx.get_type(ty);
+            data.dialect != trunk_ir::Symbol::new("adt")
+                || data.attrs.get(trunk_ir::types::LAYOUT_ATTR).is_some()
+        };
+        for (path, text) in [
+            (
+                "native_effects.trb",
+                include_str!("../lang-examples/native_effects.trb"),
+            ),
+            ("lambda.trb", include_str!("../lang-examples/lambda.trb")),
+            ("float.trb", include_str!("../lang-examples/float.trb")),
+            ("tuples.trb", include_str!("../lang-examples/tuples.trb")),
+            (
+                "record-patterns.trb",
+                include_str!("../lang-examples/record-patterns.trb"),
+            ),
+        ] {
+            let mut sites =
+                types_surviving_wasm_lowering(db, path, text, &builtin_layout_or_not_adt);
+            // Source layouts stay declared as aliases and module metadata,
+            // which no operation or value refers to.
+            sites.retain(|site| !site.starts_with("alias !") && site != "core.module");
+            assert!(
+                sites.is_empty(),
+                "{path}: a source adt type survives Wasm lowering at {sites:#?}"
+            );
+        }
+    }
+
+    #[salsa_test]
     fn wasm_lowering_carries_only_preserved_language_metadata(db: &salsa::DatabaseImpl) {
         use tribute_passes::abi_boundary::is_preserved_attribute;
 

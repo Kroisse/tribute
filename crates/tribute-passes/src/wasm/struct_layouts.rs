@@ -8,7 +8,9 @@
 //!
 //! `adt_to_wasm` builds variant types here. After every `adt` operation is
 //! lowered, [`convert`] replaces each user `adt.struct` with its
-//! `wasm_gc.struct` wherever it occurs.
+//! `wasm_gc.struct` wherever it occurs. An `adt.typeref` becomes the
+//! structural type of the struct it names, or the abstract struct reference
+//! when it names an enum, whose variants have different types.
 
 use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::StringRef;
@@ -42,9 +44,29 @@ pub fn variant_type(ctx: &mut IrContext, enum_ty: TypeRef, tag: StringRef) -> Op
     Some(described_struct(ctx, fields))
 }
 
-/// Replace each user `adt.struct` in `module` with its `wasm_gc.struct`.
+/// Replace each user `adt.struct` in `module` with its `wasm_gc.struct`, and
+/// each `adt.typeref` with the type of the layout it names.
 pub fn convert(ctx: &mut IrContext, module: Module) {
-    crate::closure_lower::substitute_module_types(ctx, module, struct_type);
+    crate::closure_lower::substitute_module_types(ctx, module, |ctx, ty| {
+        if ctx.types().is_dialect(ty, "adt", "typeref") {
+            return Some(reference_type(ctx, ty));
+        }
+        struct_type(ctx, ty)
+    });
+}
+
+/// The Wasm type of a value of the `adt.typeref` `ty`: the structural type of
+/// the user struct its exact alias names, or `wasm.structref` for an enum or
+/// an unresolved name.
+fn reference_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
+    let named = ctx
+        .get_type(ty)
+        .attrs
+        .get_str(ctx, "name")
+        .and_then(|name| ctx.type_alias_by_text(name));
+    named
+        .and_then(|layout| struct_type(ctx, layout))
+        .unwrap_or_else(|| intern(ctx, "wasm", "structref"))
 }
 
 /// A struct of the descriptor field followed by `fields` in their Wasm
@@ -125,6 +147,37 @@ mod tests {
             intern(&mut ctx, "core", "f64"),
         ];
         assert_eq!(fields(&ctx, point), [i32_ty, f64_ty, f64_ty]);
+    }
+
+    #[test]
+    fn convert_resolves_references_to_the_layout_they_name() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !Pair = adt.struct<Pair(left: core.i64, right: core.i64)>
+  !Shape = adt.enum<{name = "Shape", variants = [["Dot", []]]}>
+  wasm.func @f(%pair: adt.typeref<{name = "Pair"}>, %shape: adt.typeref<{name = "Shape"}>, %unknown: adt.typeref<{name = "Missing"}>) -> core.nil {
+    wasm.return
+  }
+}"#,
+        );
+
+        convert(&mut ctx, module);
+
+        let function = module.ops(&ctx)[0];
+        let entry = ctx.region(ctx.op_region(function, 0).unwrap()).blocks[0];
+        let [pair, shape, unknown] = ctx.block_args(entry)[..] else {
+            panic!("three parameters")
+        };
+        let [i32_ty, i64_ty, structref] = [
+            intern(&mut ctx, "core", "i32"),
+            intern(&mut ctx, "core", "i64"),
+            intern(&mut ctx, "wasm", "structref"),
+        ];
+        assert_eq!(fields(&ctx, ctx.value_ty(pair)), [i32_ty, i64_ty, i64_ty]);
+        assert_eq!(ctx.value_ty(shape), structref);
+        assert_eq!(ctx.value_ty(unknown), structref);
     }
 
     #[test]

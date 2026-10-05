@@ -126,9 +126,6 @@ fn register_type(
 /// The runtime layout identifier selects the layout; it does not validate fields.
 fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()> {
     let invalid = || CompilationError::type_error("Marker declaration differs from builtin layout");
-    if !helpers::is_type(ctx, ty, "adt", "struct") {
-        return Err(invalid());
-    }
     let marker = ctx.get_type(ty);
     let GcTypeDef::Struct(expected) = &gc_types::builtin_types()[MARKER_IDX as usize] else {
         unreachable!("Marker is a builtin struct")
@@ -199,16 +196,12 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     if helpers::is_type(ctx, ty, "core", "i1") {
         return ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
     }
+
     // The closure layout is the target-private builtin closure struct.
     // Logical closure references and its materialized struct declaration
     // must share this one physical field representation.
     if helpers::is_closure_struct_type(ctx, ty) {
         return helpers::intern_layout_key(ctx, crate::gc_types::CLOSURE_LAYOUT);
-    }
-
-    // A recursive ADT reference is the physical WasmGC struct supertype.
-    if helpers::is_type(ctx, ty, "adt", "typeref") {
-        return intern_wasm_structref(ctx);
     }
 
     ty
@@ -231,26 +224,24 @@ fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> b
         return true;
     }
     // Normalize both types. A structural struct is compared as the struct
-    // supertype, as a recursive ADT reference or variant is.
+    // supertype.
     let ty1_norm = normalize_type_for_comparison(ctx, ty1);
     let ty2_norm = normalize_type_for_comparison(ctx, ty2);
     if ty1_norm == ty2_norm {
         return true;
     }
-    // anyref is a supertype of all concrete GC reference types (adt.struct,
-    // wasm.structref, wasm.arrayref, etc.). When one code path records a field
+    // anyref is a supertype of all concrete GC reference types (builtin
+    // layouts, wasm.structref, wasm.arrayref, etc.). When one code path records a field
     // as anyref and another records the concrete type, they are compatible —
     // the field should remain anyref (the wider type).
     let is_anyref_1 = helpers::is_type(ctx, ty1_norm, "wasm", "anyref");
     let is_anyref_2 = helpers::is_type(ctx, ty2_norm, "wasm", "anyref");
     if is_anyref_1 || is_anyref_2 {
         let other = if is_anyref_1 { ty2_norm } else { ty1_norm };
-        // Accept if the other type is an ADT reference (adt.struct, adt.enum)
-        // or a wasm heap type that is a subtype of anyref.
+        // Accept if the other type is a builtin layout or a wasm heap type
+        // that is a subtype of anyref.
         // Note: funcref and externref are NOT subtypes of anyref.
-        let other_data = ctx.get_type(other);
-        let adt_dialect = Symbol::new("adt");
-        if other_data.dialect == adt_dialect {
+        if helpers::builtin_layout_type_idx(ctx, other).is_some() {
             return true;
         }
         if helpers::is_type(ctx, other, "wasm", "structref")
@@ -773,8 +764,8 @@ mod tests {
                         &mut ctx,
                         &format!(
                             r#"core.module @test {{
-                        !A = adt.typeref<{{name = "A"}}>
-                        !B = adt.typeref<{{name = "B"}}>
+                        !A = wasm_gc.struct<core.i32>
+                        !B = wasm_gc.struct<core.i64>
                         wasm.func @make_a() {{
                             %x = wasm.i32_const {{value = 0}} : core.i32
                             %a = wasm.struct_new %x {{type_idx = {a}}} : !A
@@ -828,7 +819,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = adt.struct<{field_type} {{name = \"ability_id\"}}, core.i32 {{name = \"prompt_tag\"}}, core.ptr {{name = \"tr_dispatch_fn\"}}, core.ptr {{name = \"shadowed\"}}, {{name = \"_Marker\", layout = \"evidence_marker\"}}>
+                        !Marker = test.layout<{field_type} {{name = \"ability_id\"}}, core.i32 {{name = \"prompt_tag\"}}, core.ptr {{name = \"tr_dispatch_fn\"}}, core.ptr {{name = \"shadowed\"}}, {{name = \"_Marker\", layout = \"evidence_marker\"}}>
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable
@@ -852,7 +843,7 @@ mod tests {
             "wasm.anyref",
             "wasm.structref",
             "wasm.arrayref",
-            r#"adt.struct<{name = "Other"}>"#,
+            r#"test.layout<{name = "Other"}>"#,
         ] {
             let mut ctx = IrContext::new();
             let module = trunk_ir::parser::parse_test_module(
@@ -884,7 +875,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-            !Marker = adt.struct<core.i32 {{name = "ability_id"}}, core.i32 {{name = "prompt_tag"}}, core.ptr {{name = "tr_dispatch_fn"}}, core.ptr {{name = "shadowed"}}, {{name = "_Marker"}}>
+            !Marker = test.layout<core.i32 {{name = "ability_id"}}, core.i32 {{name = "prompt_tag"}}, core.ptr {{name = "tr_dispatch_fn"}}, core.ptr {{name = "shadowed"}}, {{name = "_Marker"}}>
             wasm.func @test(%marker: !Marker) -> core.i32 {{
                 %value = wasm.struct_get %marker {{type_idx = {CLOSURE_STRUCT_IDX}, field_idx = 0}} : core.i32
                 wasm.return %value
@@ -927,7 +918,7 @@ wasm.return
                         &mut ctx,
                         &format!(
                             "core.module @test {{
-!Cell = adt.typeref<{{name = \"Cell\"}}>
+!Cell = test.ref<{{name = \"Cell\"}}>
 {functions}
 }}"
                         ),
@@ -968,39 +959,29 @@ wasm.return
     }
 
     #[test]
-    fn record_struct_field_canonicalizes_typeref_to_structref() {
+    fn structural_struct_fields_compare_as_the_struct_supertype() {
         let mut ctx = IrContext::new();
-        let name_attr = ctx.string_attr("List");
-        let typeref_ty = ctx.intern_type(
-            TypeDataBuilder::new("adt", "typeref")
-                .attr("name", name_attr)
-                .build(),
-        );
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let structural = wasm_gc::r#struct(&mut ctx, [i32_ty]).as_type_ref();
         let structref = intern_wasm_structref(&mut ctx);
 
-        for (first, second) in [(typeref_ty, structref), (structref, typeref_ty)] {
-            let mut builder = GcTypeBuilder::new();
-            record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, first)
-                .expect("first equivalent field records");
-            record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, second)
-                .expect("second equivalent field records");
-            assert_eq!(builder.fields, vec![Some(structref)]);
-        }
+        assert!(types_equivalent_for_gc(&mut ctx, structural, structref));
+        assert_eq!(normalize_type_for_gc(&mut ctx, structural), structural);
     }
 
     #[test]
-    fn same_named_adt_layouts_are_not_gc_equivalent() {
+    fn same_named_types_with_different_attributes_are_not_gc_equivalent() {
         let mut ctx = IrContext::new();
         let name_attr = ctx.string_attr("String");
         let canonical = ctx.intern_type(
-            TypeDataBuilder::new("adt", "enum")
+            TypeDataBuilder::new("test", "named")
                 .attr("name", name_attr)
                 .attr("layout", Attribute::Bool(true))
                 .build(),
         );
         let name_attr = ctx.string_attr("String");
         let unrelated = ctx.intern_type(
-            TypeDataBuilder::new("adt", "enum")
+            TypeDataBuilder::new("test", "named")
                 .attr("name", name_attr)
                 .attr("layout", Attribute::Bool(false))
                 .build(),
