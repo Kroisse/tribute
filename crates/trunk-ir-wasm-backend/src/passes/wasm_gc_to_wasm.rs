@@ -54,6 +54,8 @@ pub const GC_TYPES_ATTR: &str = "wasm_gc.types";
 #[derive(Default)]
 struct TypeCollector {
     types: Vec<TypeRef>,
+    /// Types already considered for `types`.
+    considered: HashSet<TypeRef>,
     /// Types already searched for structural structs.
     searched: HashSet<TypeRef>,
 }
@@ -61,7 +63,7 @@ struct TypeCollector {
 impl TypeCollector {
     /// Add `ty`, then every structural struct among its fields.
     fn push_type(&mut self, ctx: &IrContext, ty: TypeRef) {
-        if self.types.contains(&ty) || is_abstract_heap_type(ctx, ty) {
+        if !self.considered.insert(ty) || is_abstract_heap_type(ctx, ty) {
             return;
         }
         self.types.push(ty);

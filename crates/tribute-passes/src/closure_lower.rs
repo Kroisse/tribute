@@ -711,11 +711,12 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
     }
 
     fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
-        if let Some(replacement) = (self.substitute)(self.ctx, ty) {
-            return replacement;
-        }
         if let Some(&converted) = self.cache.get(&ty) {
             return converted;
+        }
+        if let Some(replacement) = (self.substitute)(self.ctx, ty) {
+            self.cache.insert(ty, replacement);
+            return replacement;
         }
         if !self.visiting.insert(ty) {
             return ty;
