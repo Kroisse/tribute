@@ -2,13 +2,16 @@ use std::fmt;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{Type, TypeDefId, TypeKind};
+use crate::ast::{CallingConvention, EffectRow, EffectVar, Type, TypeDefId, TypeKind};
 
 /// Generate a mangled symbol for a specialized generic function or type.
 ///
 /// Mangling rules use `$` as the only structural character, with `$0`/`$1`
 /// as open/close markers for nested type arguments (unambiguous because
-/// Tribute identifiers cannot start with a digit):
+/// Tribute identifiers cannot start with a digit). A function type appends
+/// its effect row between `$2` and `$1`, or `$3$n` for the `n`th row variable
+/// of an open row, and a calling-convention floor above `Direct` after `$4`.
+/// Distinct type argument lists get distinct names:
 ///
 /// - `identity + [Int]`              → `identity$Int`
 /// - `first + [Int, Text]`           → `first$Int$Text`
@@ -16,12 +19,16 @@ use crate::ast::{Type, TypeDefId, TypeKind};
 /// - `f + [List(Option(Int))]`       → `f$List$0$Option$0$Int$1$1`
 /// - `apply + [fn(Int) -> Bool]`     → `apply$Fn$0$Int$1$Bool`
 /// - `swap + [(Int, Bool)]`          → `swap$Tup$0$Int$Bool$1`
+/// - `apply + [fn() ->{Ask} Nat]`    → `apply$Fn$0$$1$Nat$2$Ask$1`
+/// - `apply + [fn() ->{State(Int), e} Nat]`
+///   → `apply$Fn$0$$1$Nat$2$State$0$Int$1$3$0`
 pub fn mangle_name(db: &dyn salsa::Database, base: &Symbol, type_args: &[Type<'_>]) -> Symbol {
     let mut buf = String::new();
+    let mut row_vars = Vec::new();
     base.with_str(|s| buf.push_str(s));
     for ty in type_args {
         buf.push('$');
-        write_type_mangled(db, *ty, &mut buf).unwrap();
+        write_type_mangled(db, *ty, &mut row_vars, &mut buf).unwrap();
     }
     Symbol::new(&buf)
 }
@@ -51,6 +58,7 @@ fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol
 fn write_type_mangled(
     db: &dyn salsa::Database,
     ty: Type<'_>,
+    row_vars: &mut Vec<EffectVar>,
     f: &mut impl fmt::Write,
 ) -> fmt::Result {
     match ty.kind(db) {
@@ -66,20 +74,33 @@ fn write_type_mangled(
             nominal_mangle_base(db, *id, name.clone()).with_str(|s| f.write_str(s))?;
             if !args.is_empty() {
                 f.write_str("$0$")?;
-                write_type_mangled_list(db, args, f)?;
+                write_type_mangled_list(db, args, row_vars, f)?;
                 f.write_str("$1")?;
             }
             Ok(())
         }
-        TypeKind::Func { params, result, .. } => {
+        TypeKind::Func {
+            params,
+            result,
+            effect,
+            minimum_convention,
+        } => {
             f.write_str("Fn$0$")?;
-            write_type_mangled_list(db, params, f)?;
+            write_type_mangled_list(db, params, row_vars, f)?;
             f.write_str("$1$")?;
-            write_type_mangled(db, *result, f)
+            write_type_mangled(db, *result, row_vars, f)?;
+            if !effect.is_pure(db) {
+                write_effect_row_mangled(db, *effect, row_vars, f)?;
+            }
+            match minimum_convention {
+                CallingConvention::Direct => Ok(()),
+                CallingConvention::EvidenceDirect => f.write_str("$4$evidence_direct"),
+                CallingConvention::Cps => f.write_str("$4$cps"),
+            }
         }
         TypeKind::Tuple(elems) => {
             f.write_str("Tup$0$")?;
-            write_type_mangled_list(db, elems, f)?;
+            write_type_mangled_list(db, elems, row_vars, f)?;
             f.write_str("$1")
         }
         TypeKind::BoundVar { index } => write!(f, "T{index}"),
@@ -97,15 +118,54 @@ fn write_type_mangled(
 fn write_type_mangled_list(
     db: &dyn salsa::Database,
     types: &[Type<'_>],
+    row_vars: &mut Vec<EffectVar>,
     f: &mut impl fmt::Write,
 ) -> fmt::Result {
     for (index, ty) in types.iter().enumerate() {
         if index > 0 {
             f.write_char('$')?;
         }
-        write_type_mangled(db, *ty, f)?;
+        write_type_mangled(db, *ty, row_vars, f)?;
     }
     Ok(())
+}
+
+/// Effects keep their stored order: specializations are keyed by interned
+/// type identity, which distinguishes rows listing the same effects in
+/// another order. Row variables are numbered by first appearance within the
+/// mangled name, so the name does not depend on inference numbering.
+fn write_effect_row_mangled(
+    db: &dyn salsa::Database,
+    row: EffectRow<'_>,
+    row_vars: &mut Vec<EffectVar>,
+    f: &mut impl fmt::Write,
+) -> fmt::Result {
+    f.write_str("$2")?;
+    for effect in row.effects(db) {
+        f.write_char('$')?;
+        effect
+            .ability_id
+            .qualified(db)
+            .with_str(|s| f.write_str(s))?;
+        if !effect.args.is_empty() {
+            f.write_str("$0$")?;
+            write_type_mangled_list(db, &effect.args, row_vars, f)?;
+            f.write_str("$1")?;
+        }
+    }
+    match row.rest(db) {
+        Some(var) => {
+            let index = row_vars
+                .iter()
+                .position(|seen| *seen == var)
+                .unwrap_or_else(|| {
+                    row_vars.push(var);
+                    row_vars.len() - 1
+                });
+            write!(f, "$3${index}")
+        }
+        None => f.write_str("$1"),
+    }
 }
 
 #[cfg(test)]
@@ -318,6 +378,167 @@ mod tests {
         );
         let result = mangle_name(&db, &base, &[func_ty]);
         assert_eq!(result.to_string(), "apply$Fn$0$Int$1$Bool");
+    }
+
+    fn ability<'db>(db: &'db TestDb, name: &str, args: Vec<Type<'db>>) -> crate::ast::Effect<'db> {
+        crate::ast::Effect {
+            ability_id: crate::ast::AbilityId::source(db, Symbol::new(name)),
+            args,
+        }
+    }
+
+    fn thunk<'db>(db: &'db TestDb, effect: EffectRow<'db>) -> Type<'db> {
+        Type::new(
+            db,
+            TypeKind::Func {
+                params: vec![],
+                result: Type::new(db, TypeKind::Nat),
+                effect,
+                minimum_convention: CallingConvention::Direct,
+            },
+        )
+    }
+
+    #[test]
+    fn test_function_types_mangle_effect_rows_distinctly() {
+        let db = TestDb::default();
+        let base = Symbol::new("run_state");
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let mangle = |effects| {
+            mangle_name(
+                &db,
+                &base,
+                &[thunk(&db, EffectRow::new(&db, effects, None))],
+            )
+            .to_string()
+        };
+
+        assert_eq!(mangle(vec![]), "run_state$Fn$0$$1$Nat");
+        assert_eq!(
+            mangle(vec![ability(&db, "Ask", vec![])]),
+            "run_state$Fn$0$$1$Nat$2$Ask$1"
+        );
+        assert_eq!(
+            mangle(vec![ability(&db, "Tell", vec![])]),
+            "run_state$Fn$0$$1$Nat$2$Tell$1"
+        );
+        assert_eq!(
+            mangle(vec![
+                ability(&db, "std::State", vec![int_ty]),
+                ability(&db, "Ask", vec![])
+            ]),
+            "run_state$Fn$0$$1$Nat$2$std::State$0$Int$1$Ask$1"
+        );
+        // Rows are distinct interned types in either order.
+        assert_ne!(
+            mangle(vec![
+                ability(&db, "Ask", vec![]),
+                ability(&db, "Tell", vec![])
+            ]),
+            mangle(vec![
+                ability(&db, "Tell", vec![]),
+                ability(&db, "Ask", vec![])
+            ])
+        );
+    }
+
+    #[test]
+    fn test_effect_row_is_not_a_result_type_argument() {
+        let db = TestDb::default();
+        let base = Symbol::new("f");
+        let nat = Type::new(&db, TypeKind::Nat);
+        let named = |name: &str, args| {
+            Type::new(
+                &db,
+                TypeKind::Named {
+                    id: TypeDefId::synthetic(&db, Symbol::new(name)),
+                    name: Symbol::new(name),
+                    args,
+                },
+            )
+        };
+        let func = |result, effects| {
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params: vec![],
+                    result,
+                    effect: EffectRow::new(&db, effects, None),
+                    minimum_convention: CallingConvention::Direct,
+                },
+            )
+        };
+        let effectful = func(named("Box", vec![]), vec![ability(&db, "Nat", vec![])]);
+        let applied = func(named("Box", vec![nat]), vec![]);
+
+        assert_ne!(
+            mangle_name(&db, &base, &[effectful]),
+            mangle_name(&db, &base, &[applied])
+        );
+    }
+
+    #[test]
+    fn test_open_effect_rows_number_variables_by_first_appearance() {
+        let db = TestDb::default();
+        let base = Symbol::new("f");
+        let open = |id| thunk(&db, EffectRow::open(&db, EffectVar { id }));
+
+        assert_eq!(
+            mangle_name(&db, &base, &[open(7)]).to_string(),
+            "f$Fn$0$$1$Nat$2$3$0"
+        );
+        assert_eq!(
+            mangle_name(&db, &base, &[open(7)]),
+            mangle_name(&db, &base, &[open(42)])
+        );
+        assert_eq!(
+            mangle_name(&db, &base, &[open(7), open(7)]).to_string(),
+            "f$Fn$0$$1$Nat$2$3$0$Fn$0$$1$Nat$2$3$0"
+        );
+        assert_eq!(
+            mangle_name(&db, &base, &[open(7), open(42)]).to_string(),
+            "f$Fn$0$$1$Nat$2$3$0$Fn$0$$1$Nat$2$3$1"
+        );
+    }
+
+    #[test]
+    fn test_function_types_mangle_convention_floors_distinctly() {
+        let db = TestDb::default();
+        let base = Symbol::new("f");
+        let func = |minimum_convention| {
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params: vec![],
+                    result: Type::new(&db, TypeKind::Nat),
+                    effect: EffectRow::pure(&db),
+                    minimum_convention,
+                },
+            )
+        };
+
+        assert_eq!(
+            mangle_name(&db, &base, &[func(CallingConvention::EvidenceDirect)]).to_string(),
+            "f$Fn$0$$1$Nat$4$evidence_direct"
+        );
+        assert_eq!(
+            mangle_name(&db, &base, &[func(CallingConvention::Cps)]).to_string(),
+            "f$Fn$0$$1$Nat$4$cps"
+        );
+    }
+
+    #[test]
+    fn test_type_names_mangle_effect_rows_distinctly() {
+        let db = TestDb::default();
+        let name = Symbol::new("Holder");
+        let id = TypeDefId::synthetic(&db, name.clone());
+        let mangle = |effect: &str| {
+            let row = EffectRow::single(&db, ability(&db, effect, vec![]));
+            mangle_type_name(&db, id, name.clone(), &[thunk(&db, row)]).to_string()
+        };
+
+        assert_eq!(mangle("Ask"), "Holder$Fn$0$$1$Nat$2$Ask$1");
+        assert_eq!(mangle("Tell"), "Holder$Fn$0$$1$Nat$2$Tell$1");
     }
 
     #[test]
