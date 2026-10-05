@@ -7,7 +7,6 @@
 use std::fmt;
 
 use tracing::{error, warn};
-use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
@@ -417,12 +416,12 @@ impl WasmLowerer {
     /// Check if a wasm.func op is the main function and record its metadata.
     fn scan_wasm_func(&mut self, ctx: &IrContext, op: OpRef) {
         let data = ctx.op(op);
-        let Some(sym_name) = data.attributes.get_str(ctx, "sym_name").map(Symbol::new) else {
+        let Some(sym_name) = data.attributes.get_str(ctx, "sym_name") else {
             return;
         };
 
         // Only match root-level main, not foo::main
-        if !(sym_name.is_simple() && sym_name.last_segment() == Symbol::new("main")) {
+        if sym_name != "main" {
             return;
         }
 

@@ -1765,7 +1765,6 @@ mod tests {
 
     #[test]
     fn empty_result_cps_root_executes_native_done_continuation() {
-        use trunk_ir::Symbol;
         let (mut ctx, module) = source_logical_cps_root_module(
             r#"
             %done = adt.struct_get %frame {field = 0, type = !__tribute_continuation_frame_root_nil} : !Done
@@ -1783,7 +1782,7 @@ mod tests {
                 .copied()
                 .find_map(|op| {
                     let function = func_dialect::Func::from_op(&ctx, op).ok()?;
-                    (function.sym_name(&ctx) == Symbol::new(name)).then_some(function)
+                    (function.sym_name(&ctx) == name).then_some(function)
                 })
                 .expect("root bridge function remains present");
             // The convention is consumed inside the boundary; the empty
@@ -1839,7 +1838,6 @@ mod tests {
 
     #[test]
     fn root_dispatch_definition_matches_fixed_wasm_tail_signature_and_validates_binary() {
-        use trunk_ir::Symbol;
         use trunk_ir::dialect::wasm;
         let (mut ctx, module) = source_logical_cps_root_module(
             r#"
@@ -1863,8 +1861,7 @@ mod tests {
             .copied()
             .find_map(|op| {
                 let function = wasm::Func::from_op(&ctx, op).ok()?;
-                (function.sym_name(&ctx) == Symbol::new("__tribute_unhandled"))
-                    .then_some(function.r#type(&ctx))
+                (function.sym_name(&ctx) == "__tribute_unhandled").then_some(function.r#type(&ctx))
             })
             .unwrap();
         let mut signatures = Vec::new();
@@ -3531,14 +3528,14 @@ fn main() -> Nil {}
                     .find_map(|op| {
                         if after_cps {
                             let f = func_dialect::Func::from_op(&ir, op).ok()?;
-                            (f.sym_name(&ir) == Symbol::new(function)).then(|| {
+                            (f.sym_name(&ir) == function).then(|| {
                                 func_dialect::FuncSig::from_type_ref(&ir, f.r#type(&ir))
                                     .unwrap()
                                     .inputs(&ir)[0]
                             })
                         } else {
                             let f = tribute_control::Func::from_op(&ir, op).ok()?;
-                            (f.sym_name(&ir) == Symbol::new(function)).then(|| {
+                            (f.sym_name(&ir) == function).then(|| {
                                 tribute_control::FuncSig::from_type_ref(&ir, f.r#type(&ir))
                                     .unwrap()
                                     .inputs(&ir)[0]
@@ -3596,7 +3593,7 @@ fn main() -> Nil {}
             let Ok(function) = tribute_control::Func::from_op(&ir, operation) else {
                 continue;
             };
-            if function.sym_name(&ir) == Symbol::new("std::collections::List::prepend") {
+            if function.sym_name(&ir) == "std::collections::List::prepend" {
                 let signature = tribute_control::FuncSig::from_type_ref(&ir, function.r#type(&ir))
                     .expect("logical signature");
                 let result = ir.get_type(signature.result(&ir));
@@ -3787,7 +3784,7 @@ mod Nested {
         let identity = |name: &'static str| {
             module.ops(&ctx).iter().copied().find_map(|op| {
                 let function = func::Func::from_op(&ctx, op).ok()?;
-                (function.sym_name(&ctx) == trunk_ir::Symbol::new(name)).then(|| {
+                (function.sym_name(&ctx) == name).then(|| {
                     assert_eq!(
                         ctx.op(op).attributes.get_str(&ctx, "abi"),
                         Some("intrinsic")
@@ -3837,9 +3834,8 @@ mod Nested {
                     ctx.op(op).attributes.get(COMPILER_INTRINSIC_ATTR).is_none(),
                     "{target:?}: the identity is consumed at the boundary exit"
                 );
-                let declares_intrinsic = func::Func::from_op(&ctx, op).is_ok_and(|function| {
-                    function.sym_name(&ctx) == trunk_ir::Symbol::new("__bytes_get_or_panic")
-                });
+                let declares_intrinsic = func::Func::from_op(&ctx, op)
+                    .is_ok_and(|function| function.sym_name(&ctx) == "__bytes_get_or_panic");
                 assert!(
                     !declares_intrinsic,
                     "{target:?}: the intrinsic declaration is removed"

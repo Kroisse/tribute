@@ -197,7 +197,7 @@ pub(crate) fn validate_final_handle_dispatches(
 fn ensure_prompt_tag_runtime(ctx: &mut IrContext, module: Module) {
     let has_next_tag = module.ops(ctx).iter().copied().any(|op| {
         func::Func::from_op(ctx, op)
-            .is_ok_and(|function| function.sym_name(ctx) == Symbol::new("__tribute_next_tag"))
+            .is_ok_and(|function| function.sym_name(ctx) == "__tribute_next_tag")
     });
     let Some(module_block) = module.first_block(ctx) else {
         return;

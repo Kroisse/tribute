@@ -104,8 +104,7 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
     ] {
         if module.ops(ctx).iter().copied().any(|op| {
-            func::Func::from_op(ctx, op)
-                .is_ok_and(|function| function.sym_name(ctx) == Symbol::new(name))
+            func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == name)
         }) {
             continue;
         }

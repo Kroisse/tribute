@@ -44,7 +44,7 @@ fn function_op(ctx: &IrContext, module: Module, name: &'static str) -> OpRef {
     let mut found = None;
     walk_module(ctx, module, |op| {
         if let Ok(function) = func::Func::from_op(ctx, op)
-            && function.sym_name(ctx) == Symbol::new(name)
+            && function.sym_name(ctx) == name
         {
             found = Some(op);
         }

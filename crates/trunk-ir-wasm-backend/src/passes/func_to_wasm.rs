@@ -851,8 +851,8 @@ mod tests {
             .expect("bodyless declaration should lower to wasm.func");
         let definition = wasm_dialect::Func::from_op(&ctx, lowered_ops[1])
             .expect("definition should lower to wasm.func");
-        assert_eq!(declaration.sym_name(&ctx), Symbol::new("external"));
-        assert_eq!(definition.sym_name(&ctx), Symbol::new("defined"));
+        assert_eq!(declaration.sym_name(&ctx), "external");
+        assert_eq!(definition.sym_name(&ctx), "defined");
         assert_eq!(ctx.op(lowered_ops[0]).location, declaration_location);
         assert_eq!(ctx.op(lowered_ops[1]).location, definition_location);
         assert!(!ctx.op_has_regions(lowered_ops[0]));

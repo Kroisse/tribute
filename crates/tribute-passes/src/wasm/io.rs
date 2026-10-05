@@ -96,7 +96,7 @@ fn declare_host_resources(
     let mut memory = None;
     for &op in &ctx.block(block).ops {
         if let Ok(declared) = wasm_dialect::ImportFunc::from_op(ctx, op) {
-            if declared.sym_name(ctx) == Symbol::new(FD_WRITE) {
+            if declared.sym_name(ctx) == FD_WRITE {
                 import = Some(declared);
             }
         } else if let Ok(declared) = wasm_dialect::Memory::from_op(ctx, op) {
@@ -698,11 +698,11 @@ mod tests {
         let ops = module.ops(&ctx);
         let import = wasm_dialect::ImportFunc::from_op(&ctx, ops[0]).expect("import");
         assert_eq!(import.module(&ctx), Symbol::new(WASI_MODULE));
-        assert_eq!(import.sym_name(&ctx), Symbol::new(FD_WRITE));
+        assert_eq!(import.sym_name(&ctx), FD_WRITE);
         let memory = wasm_dialect::Memory::from_op(&ctx, ops[1]).expect("memory");
         assert_eq!(memory.min(&ctx), 1);
         let helper = func::Func::from_op(&ctx, ops[3]).expect("write helper");
-        assert_eq!(helper.sym_name(&ctx), Symbol::new(WRITE_HELPER));
+        assert_eq!(helper.sym_name(&ctx), WRITE_HELPER);
     }
 
     #[test]
