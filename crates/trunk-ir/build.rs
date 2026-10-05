@@ -38,9 +38,18 @@ fn scan_dir(dir: &Path, atoms: &mut BTreeSet<String>) {
 /// Collect literal `Symbol::new` and `symbol!` arguments, `symbols!` entries, and `&str`
 /// constants, which name attributes passed to `Symbol::new`.
 fn scan_symbol_literals(text: &str, atoms: &mut BTreeSet<String>) {
+    let marker = "symbol!(";
+    for (start, _) in text.match_indices(marker) {
+        let rest = text[start + marker.len()..].trim_start();
+        if let Some(rest) = rest.strip_prefix('"')
+            && let Some(end) = rest.find('"')
+        {
+            insert_name(&rest[..end], atoms);
+        }
+    }
+
     for marker in [
         "Symbol::new(\"",
-        "symbol!(\"",
         "=> \"",
         ": &str = \"",
         ": &'static str = \"",
