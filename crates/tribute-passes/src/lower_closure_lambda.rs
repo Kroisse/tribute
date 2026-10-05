@@ -22,7 +22,7 @@
 //! %k = closure.new @foo::__clam_0, %env
 //! ```
 
-use rustc_hash::FxHashMap as HashMap;
+use crate::collections::HashMap;
 
 use tribute_core::calling_convention::{
     CLOSURE_ENVIRONMENT_INDEX_ATTR, get_physical_closure_environment_index,
@@ -454,7 +454,7 @@ impl LambdaNamer {
     }
 
     fn next_name(&mut self, parent: &str) -> Symbol {
-        let count = self.counters.entry(parent.to_string()).or_insert(0);
+        let count = self.counters.entry_ref(parent).or_insert(0);
         let name = format!("{parent}::__clam_{count}");
         *count += 1;
         Symbol::from_dynamic(&name)

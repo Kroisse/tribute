@@ -32,6 +32,12 @@ For sets, use `HashSet::default()`,
 constructor restrictions apply. Keep hashbrown for the existing `HashTable`
 interner.
 
+Passes that need borrowed entry APIs can use the crate-private
+`tribute-passes::collections` aliases. They use hashbrown with `FxBuildHasher`
+so the hashing policy stays the same. Use `entry_ref()` for borrowed map keys
+and `get_or_insert_with()` for borrowed set values to construct owned keys only
+on a miss. Keep public collection types compatible with their callers.
+
 Clippy's `disallowed_types` lint rejects paths resolving to
 `std::collections::HashMap` and `std::collections::HashSet`, including renamed
 imports and explicit custom hasher parameters. It checks named definitions rather

@@ -15,9 +15,9 @@
 //! Runs before `adt_rc_header` (Phase 1.95) so that `adt.variant_new` operations
 //! produced here are handled by the existing variant lowering.
 
-use rustc_hash::FxHashMap as HashMap;
-use rustc_hash::FxHashSet as HashSet;
-use std::collections::hash_map::Entry;
+use hashbrown::hash_map::EntryRef;
+
+use crate::collections::{HashMap, HashSet};
 
 use tribute_ir::dialect::adt;
 use trunk_ir::Symbol;
@@ -73,11 +73,11 @@ impl ConstCollector {
         }
     }
 
-    fn intern(&mut self, content: Vec<u8>) {
-        if !self.seen.contains(&content) {
-            self.seen.insert(content.clone());
-            self.contents.push(content);
-        }
+    fn intern(&mut self, content: &[u8]) {
+        self.seen.get_or_insert_with(content, |content| {
+            self.contents.push(content.to_vec());
+            content.to_vec()
+        });
     }
 
     fn visit_op(&mut self, ctx: &IrContext, op: OpRef) {
@@ -86,15 +86,13 @@ impl ConstCollector {
         if data.dialect == adt::DIALECT_NAME() {
             if data.name == Symbol::new("string_const") {
                 if let Some(s) = data.attributes.get_str(ctx, "value") {
-                    let bytes = s.as_bytes().to_vec();
-                    self.intern(bytes);
+                    self.intern(s.as_bytes());
                     self.has_string_consts = true;
                 }
             } else if data.name == Symbol::new("bytes_const")
                 && let Some(Attribute::Bytes(b)) = data.attributes.get("value")
             {
-                let bytes: Vec<u8> = b.to_vec();
-                self.intern(bytes);
+                self.intern(b);
             }
         }
     }
@@ -230,15 +228,15 @@ fn declare_rodata(
             && data.align(ctx) == 1
         {
             content_to_symbol
-                .entry(data.bytes(ctx).to_vec())
-                .or_insert(Symbol::from_dynamic(data.sym_name(ctx)));
+                .entry_ref(data.bytes(ctx).as_slice())
+                .or_insert_with(|| Symbol::from_dynamic(data.sym_name(ctx)));
         }
     }
 
     let location = ctx.op(module.op()).location;
     let mut next_idx = 0u32;
     for content in contents {
-        let Entry::Vacant(entry) = content_to_symbol.entry(content.clone()) else {
+        let EntryRef::Vacant(entry) = content_to_symbol.entry_ref(content.as_slice()) else {
             continue;
         };
         let sym = loop {

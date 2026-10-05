@@ -9,6 +9,8 @@
 
 use rustc_hash::FxHashMap as HashMap;
 
+use crate::collections;
+
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_enum_variants;
 use tribute_ir::dialect::tribute_rtti::FieldKind;
@@ -183,7 +185,7 @@ pub fn generate(
     let mut layout = Layout {
         bytes: vec![0; fields_base + field_count * FIELD_SIZE],
         next_fields: fields_base,
-        names: HashMap::default(),
+        names: collections::HashMap::default(),
         name_bytes: Vec::new(),
         names_base: fields_base + field_count * FIELD_SIZE,
     };
@@ -225,7 +227,7 @@ struct Layout {
     /// Offset of the next unwritten field array.
     next_fields: usize,
     /// Offset of each distinct name, relative to `names_base`.
-    names: HashMap<String, usize>,
+    names: collections::HashMap<String, usize>,
     name_bytes: Vec<u8>,
     names_base: usize,
 }
@@ -264,15 +266,11 @@ impl Layout {
         if name.is_empty() {
             return;
         }
-        let relative = match self.names.get(name) {
-            Some(&relative) => relative,
-            None => {
-                let relative = self.name_bytes.len();
-                self.name_bytes.extend_from_slice(name.as_bytes());
-                self.names.insert(name.to_owned(), relative);
-                relative
-            }
-        };
+        let relative = *self.names.entry_ref(name).or_insert_with(|| {
+            let relative = self.name_bytes.len();
+            self.name_bytes.extend_from_slice(name.as_bytes());
+            relative
+        });
         put_offset(&mut self.bytes, at, self.names_base + relative);
     }
 }
