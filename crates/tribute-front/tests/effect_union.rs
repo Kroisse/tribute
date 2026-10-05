@@ -304,3 +304,103 @@ fn main() -> Nil { print(run_writer(fn() { relay(use_writer) })) }
         "{references:?}"
     );
 }
+
+/// A handler removes a label that one tail of a multi-tail callee supplies,
+/// whatever the other tails are and wherever the call is made.
+#[salsa_test]
+fn handler_removes_a_label_supplied_through_one_tail(db: &salsa::DatabaseImpl) {
+    const PRELUDE: &str = r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    g()
+}
+fn inc() ->{State(Int)} Nil { State::set(State::get() + +1) }
+"#;
+    for (name, body) in [
+        (
+            "label_then_tail",
+            r#"
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        both(fn() { State::set(State::get() + +1) }, h)
+        State::get()
+    }, +0)
+}
+"#,
+        ),
+        (
+            "tail_then_label",
+            r#"
+fn count_calls(h: fn() ->{t} Nil) ->{t} Int {
+    run_state(fn() {
+        both(h, fn() { State::set(State::get() + +1) })
+        State::get()
+    }, +0)
+}
+"#,
+        ),
+        (
+            "label_in_both_tails",
+            r#"
+fn count() ->{} Int {
+    run_state(fn() {
+        both(fn() { State::set(State::get() + +1) }, fn() { State::set(State::get() + +10) })
+        State::get()
+    }, +0)
+}
+"#,
+        ),
+        (
+            "closed_row",
+            r#"
+fn twice() ->{State(Int)} Nil { both(inc, inc) }
+fn once() ->{State(Int)} Nil { both(inc, fn() { Nil }) }
+"#,
+        ),
+    ] {
+        let source = SourceCst::from_source_str(db, name, &format!("{PRELUDE}{body}"));
+        let _ = checked(db, source);
+        let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+            .into_iter()
+            .map(|diagnostic| diagnostic.inner.message.clone())
+            .collect();
+        assert!(errors.is_empty(), "{name}: {errors:?}");
+    }
+}
+
+/// A label supplied through one tail of a multi-tail callee still reaches the
+/// caller's row when nothing handles it.
+#[salsa_test]
+fn unhandled_label_of_one_tail_stays_in_the_caller_row(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "unhandled_tail_label.trb",
+        r#"
+ability Ping { op ping() -> Nil }
+fn both(f: fn() ->{e1} Nil, g: fn() ->{e2} Nil) ->{e1, e2} Nil {
+    f()
+    g()
+}
+fn leak(h: fn() ->{t} Nil) ->{t} Nil {
+    both(fn() { Ping::ping() }, h)
+}
+"#,
+    );
+    let _ = checked(db, source);
+    let errors: Vec<_> = checked::accumulated::<Diagnostic>(db, source)
+        .into_iter()
+        .map(|diagnostic| diagnostic.inner.message.clone())
+        .collect();
+    assert_eq!(errors, ["function 'leak' uses undeclared effects: Ping"]);
+}

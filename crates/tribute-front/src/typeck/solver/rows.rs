@@ -272,6 +272,13 @@ impl<'db> TypeSolver<'db> {
     }
 
     pub(super) fn settle_row_unions(&mut self) -> Result<(), LocatedSolveError<'db>> {
+        let nested = std::mem::replace(&mut self.solving_row_relation, true);
+        let result = self.settle_row_unions_inner();
+        self.solving_row_relation = nested;
+        result
+    }
+
+    fn settle_row_unions_inner(&mut self) -> Result<(), LocatedSolveError<'db>> {
         let mut first_error = None;
         for (union, origin) in std::mem::take(&mut self.pending_row_unions) {
             match self.solve_row_union(&union) {
@@ -310,6 +317,16 @@ impl<'db> TypeSolver<'db> {
         &mut self,
         declared_unions: &[crate::ast::RowUnion<'db>],
     ) -> Result<(), LocatedSolveError<'db>> {
+        let nested = std::mem::replace(&mut self.solving_row_relation, true);
+        let result = self.settle_signature_relations_inner(declared_unions);
+        self.solving_row_relation = nested;
+        result
+    }
+
+    fn settle_signature_relations_inner(
+        &mut self,
+        declared_unions: &[crate::ast::RowUnion<'db>],
+    ) -> Result<(), LocatedSolveError<'db>> {
         let declared: Vec<_> = declared_unions
             .iter()
             .filter_map(|union| {
@@ -324,6 +341,7 @@ impl<'db> TypeSolver<'db> {
             .collect();
         loop {
             let before = self.pending_row_unions.len() + self.pending_row_removals.len();
+            let mut bound = 0;
             for (removal, origin) in std::mem::take(&mut self.pending_row_removals) {
                 let mut normalized = removal.clone();
                 normalized.for_each_row_mut(|row| *row = self.normalize_row(*row));
@@ -379,14 +397,49 @@ impl<'db> TypeSolver<'db> {
                         self.unify_rows(normalized.result, row)
                             .map_err(|error| LocatedSolveError { error, origin })?;
                     }
-                    _ => self.pending_row_unions.push((union, origin)),
+                    _ => {
+                        // A body-local tail that nothing else constrains
+                        // and that is joined with one signature row adds no
+                        // labels of its own: it is that row.
+                        let (free, fixed): (Vec<_>, Vec<_>) = tails
+                            .into_iter()
+                            .partition(|tail| self.is_unconstrained_tail(*tail, &normalized));
+                        if let [tail] = fixed[..]
+                            && self.rigid_rows.contains(&tail)
+                        {
+                            for free in free {
+                                self.row_subst
+                                    .insert(free.id, EffectRow::open(self.db, tail));
+                                bound += 1;
+                            }
+                        }
+                        self.pending_row_unions.push((union, origin));
+                    }
                 }
             }
             self.settle_row_unions()?;
-            if self.pending_row_unions.len() + self.pending_row_removals.len() == before {
+            if bound == 0
+                && self.pending_row_unions.len() + self.pending_row_removals.len() == before
+            {
                 return Ok(());
             }
         }
+    }
+
+    /// Whether `tail`, a source tail of `union`, is a body-local row that no
+    /// signature row or other relation determines.
+    fn is_unconstrained_tail(&self, tail: EffectVar, union: &crate::ast::RowUnion<'db>) -> bool {
+        let is_tail = |row: EffectRow<'db>| self.normalize_row(row).rest(self.db) == Some(tail);
+        !self.rigid_rows.contains(&tail)
+            && union.result.rest(self.db) != Some(tail)
+            && !self
+                .pending_row_unions
+                .iter()
+                .any(|(other, _)| is_tail(other.result))
+            && !self
+                .pending_row_removals
+                .iter()
+                .any(|(removal, _)| is_tail(removal.result))
     }
 
     pub fn add_row_removals(&mut self, removals: Vec<crate::ast::RowRemoval<'db>>) {
@@ -643,7 +696,20 @@ impl<'db> TypeSolver<'db> {
     /// are resolved before row comparison. Without this, two rows with the same ability
     /// but different (unresolved vs resolved) args would fail to unify.
     pub(super) fn apply_type_subst_to_row(&self, row: EffectRow<'db>) -> EffectRow<'db> {
-        map_effect_row_type_args(self.db, row, |a| self.type_subst.apply(self.db, a))
+        let row = map_effect_row_type_args(self.db, row, |a| self.type_subst.apply(self.db, a));
+        // Instances that the substitution made equal are one instance.
+        let effects = row.effects(self.db);
+        let mut unique: Vec<crate::ast::Effect<'db>> = Vec::with_capacity(effects.len());
+        for effect in effects {
+            if !unique.contains(effect) {
+                unique.push(effect.clone());
+            }
+        }
+        if unique.len() == effects.len() {
+            row
+        } else {
+            EffectRow::new(self.db, unique, row.rest(self.db))
+        }
     }
 
     /// Check if a row variable occurs in an effect row (for row occurs check).
@@ -719,6 +785,11 @@ impl<'db> TypeSolver<'db> {
         left: EffectRow<'db>,
         right: EffectRow<'db>,
     ) -> Result<(), SolveError<'db>> {
+        if !self.solving_row_relation && self.waits_for_union(left, right) {
+            self.pending_row_eqs
+                .push((left, right, self.current_origin));
+            return Ok(());
+        }
         match self.unify_rows_inner(left, right) {
             Err(SolveError::AmbiguousEffect { .. }) => {
                 let union = crate::ast::RowUnion {
@@ -732,6 +803,53 @@ impl<'db> TypeSolver<'db> {
             }
             result => result,
         }
+    }
+
+    /// Whether equating the rows must wait for a pending union.
+    ///
+    /// Equating `{A | u}` with a row that names labels binds `u` to what is
+    /// left once the common labels are matched, as if `u` held none of them.
+    /// While `u` is the result of a pending union, the union may still add
+    /// `A` to it; the substituted row then holds `A` once, and the labels left
+    /// for the other side differ.
+    fn waits_for_union(&self, left: EffectRow<'db>, right: EffectRow<'db>) -> bool {
+        if self.pending_row_unions.is_empty() {
+            return false;
+        }
+        let left = self.normalize_row(left);
+        let right = self.normalize_row(right);
+        [(left, right), (right, left)]
+            .into_iter()
+            .any(|(row, other)| {
+                let Some(tail) = row.rest(self.db) else {
+                    return false;
+                };
+                let names_labels = |row: EffectRow<'db>| !row.effects(self.db).is_empty();
+                names_labels(row)
+                    && (names_labels(other) || other.rest(self.db).is_none())
+                    && self.pending_row_unions.iter().any(|(union, _)| {
+                        self.normalize_row(union.result).rest(self.db) == Some(tail)
+                    })
+            })
+    }
+
+    /// Unify the row equalities that no longer wait for a union, or all of
+    /// them when `force` is set.
+    pub(super) fn settle_row_eqs(&mut self, force: bool) -> Result<(), LocatedSolveError<'db>> {
+        let mut first_error = None;
+        for (left, right, origin) in std::mem::take(&mut self.pending_row_eqs) {
+            if !force && self.waits_for_union(left, right) {
+                self.pending_row_eqs.push((left, right, origin));
+                continue;
+            }
+            let nested = std::mem::replace(&mut self.solving_row_relation, true);
+            let result = self.unify_rows(left, right);
+            self.solving_row_relation = nested;
+            if let Err(error) = result {
+                first_error.get_or_insert(LocatedSolveError { error, origin });
+            }
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     pub(super) fn unify_rows_inner(

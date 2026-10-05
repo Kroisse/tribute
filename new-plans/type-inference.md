@@ -256,6 +256,9 @@ instance 집합이며, source의 열린 tail에서 나중에 드러나는 label�
 - 선언된 합집합이 덮는 tail들의 합집합은 그 합집합의 결과이다. 덮는다는 것은
   모든 tail이 선언된 결과 또는 원천이고, 결과가 포함되거나 원천이 모두
   포함된다는 뜻이다.
+- 시그니처 row 하나와 합쳐지는 본문 지역 tail이 다른 관계나 equality로 정해지지
+  않으면 그 tail은 그 시그니처 row이다. 지역 tail은 자기 label을 더하지 않으므로
+  합집합은 시그니처 row 그대로이다.
 
 이렇게 해소된 관계는 본문 지역 row만 정한다. 해소되지 않은 채 시그니처 row를
 제약하는 관계는 모든 호출자를 제약하므로 오류이다. 시그니처가 그 제약을 직접
@@ -403,6 +406,20 @@ unify({State(Int)}, {State(Int), State(Int)})
 
 source annotation: {State(Int), State(Int)}
 // Error: 동일한 ability State(Int) 중복 표기
+```
+
+**합집합 결과인 tail**: `{A | u}`를 label을 명시한 row와 unify하면 공통 label을
+맞춘 뒤 `u`를 나머지에 묶는다. 이 단계는 `u`에 `A`가 없다고 본다. `u`가 아직 풀리지
+않은 `RowUnion`의 결과이면 그 합집합이 `u`에 `A`를 더할 수 있고, 대입한 row는 `A`를
+한 번만 담으므로 상대 row에 남는 label이 달라진다. 그래서 이런 equality는 합집합이
+`u`의 label을 정한 뒤에 푼다. 더 정할 수 있는 합집합이 없으면 `u`에 남은 label이
+없는 것으로 보고 푼다:
+
+```text
+RowUnion([{State(Int)}, {t}], u)
+unify({State(Int) | u}, {State(s) | e})
+// 합집합이 먼저 u = {State(Int) | t} 를 정한다
+// {State(Int) | t} ~ {State(s) | e}  =>  s = Int, e = t
 ```
 
 ### 예시
