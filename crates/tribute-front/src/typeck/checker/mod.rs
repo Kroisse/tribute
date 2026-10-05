@@ -124,6 +124,10 @@ pub struct TypeChecker<'db> {
     pub(crate) env: ModuleTypeEnv<'db>,
     /// Current module prefix for qualified function names (e.g., "foo::bar").
     pub(crate) prefix: String,
+    /// Whether the declarations being collected are in a module the
+    /// compiler generated. Its functions are reached by path, never as
+    /// unqualified UFCS methods.
+    pub(crate) in_generated_module: bool,
     /// Span map for converting NodeId to Span in diagnostics.
     pub(crate) span_map: SpanMap,
     /// Accumulated node types from all functions.
@@ -197,6 +201,7 @@ impl<'db> TypeChecker<'db> {
         Self {
             env: ModuleTypeEnv::new(db),
             prefix: String::new(),
+            in_generated_module: false,
             span_map,
             node_types: HashMap::default(),
             function_instances: HashMap::default(),
@@ -408,6 +413,7 @@ impl<'db> TypeChecker<'db> {
             id: module.id,
             name: module.name.clone(),
             is_pub: module.is_pub,
+            generated: module.generated,
             body,
         }
     }

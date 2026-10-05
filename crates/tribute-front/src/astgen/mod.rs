@@ -14,6 +14,7 @@ mod context;
 mod declarations;
 mod diagnostics;
 mod expressions;
+mod field_lenses;
 mod helpers;
 mod numeric;
 mod patterns;

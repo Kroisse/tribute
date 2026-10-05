@@ -894,6 +894,10 @@ Qualified UFCS `x.a::b(y)`도 비한정 UFCS처럼 receiver 타입으로 후보�
 밖의 모듈은 receiver 타입을 정의한 모듈이라도 찾지 않으므로, 다른 모듈의 타입에
 쓰려면 그 동명 모듈을 `use`한다(`use m::User`).
 
+후보는 함수이다. 스코프에서 그대로 해소되는 `a::b`가 생성자나 ability operation이면
+고를 것이 없으므로 receiver를 첫 인자로 넘기는 호출 `a::b(x, y)`가 된다. 필드
+getter `T::f`도 후보이며, receiver가 `T`일 때 필드 접근 `x.f`와 같다.
+
 **예시:**
 
 ```rust

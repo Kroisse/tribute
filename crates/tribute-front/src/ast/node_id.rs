@@ -46,6 +46,20 @@ impl NodeId {
         }
     }
 
+    /// Create a NodeId for a node the compiler generates from the source,
+    /// numbered by `index` within that source.
+    ///
+    /// Tree-sitter node ids are addresses, so the generated ids take the
+    /// range above them.
+    #[inline]
+    pub const fn synthetic(source: u64, index: usize) -> Self {
+        Self {
+            source,
+            raw: (1 << (usize::BITS - 1)) | index,
+            variant: None,
+        }
+    }
+
     /// Create a specialized copy of this NodeId for monomorphization.
     ///
     /// The `variant` hash distinguishes different specializations of the

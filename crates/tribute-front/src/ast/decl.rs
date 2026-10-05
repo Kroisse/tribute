@@ -132,6 +132,10 @@ pub struct StructDecl {
     pub fields: Vec<FieldDecl>,
 }
 
+/// The functions generated for each named struct field `f` in the module
+/// `T::f`: the setter and the modifier.
+pub const FIELD_LENS_FUNCTIONS: [&str; 2] = ["set", "modify"];
+
 /// Field declaration in a struct or enum variant.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FieldDecl {
@@ -240,6 +244,10 @@ pub struct ModuleDecl<V> {
     pub name: Symbol,
     /// Whether this module is public.
     pub is_pub: bool,
+    /// Whether the compiler generated this module beside a declaration, as
+    /// it does for a struct's field setters and modifiers. Its body is read
+    /// in the scope of the module that contains it.
+    pub generated: bool,
     /// Module body (declarations). None for external modules (file-based).
     // Inline modules own their nested declarations; V is the only phase-dependent value.
     #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]

@@ -140,7 +140,8 @@ fn test_struct_declaration() {
         "#;
     let module = parse_and_lower(source);
 
-    assert_eq!(module.decls.len(), 1);
+    // The struct is followed by the module of its generated field functions.
+    assert_eq!(module.decls.len(), 2);
     let Decl::Struct(struct_decl) = &module.decls[0] else {
         panic!("Expected struct declaration");
     };
@@ -554,6 +555,7 @@ fn test_method_call() {
         receiver,
         method,
         args,
+        ..
     } = value.kind.as_ref()
     else {
         panic!("Expected method call, got {:?}", value.kind);
@@ -585,12 +587,16 @@ fn test_method_call_with_args() {
 }
 
 #[test]
-fn test_qualified_method_path_is_a_call() {
+fn test_qualified_method_keeps_its_path() {
     let cases = [
-        ("fn main() -> Nil { user.name::set(\"Jane\") }", 2),
-        ("fn main() -> Nil { user.name::get }", 1),
+        (
+            "fn main() -> Nil { user.name::set(\"Jane\") }",
+            "name::set",
+            1,
+        ),
+        ("fn main() -> Nil { user.name::get }", "name::get", 0),
     ];
-    for (source, arg_count) in cases {
+    for (source, expected, arg_count) in cases {
         let module = parse_and_lower(source);
 
         let Decl::Function(func) = &module.decls[0] else {
@@ -599,21 +605,67 @@ fn test_qualified_method_path_is_a_call() {
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let ExprKind::Call { callee, args } = value.kind.as_ref() else {
-            panic!("Expected call, got {:?}", value.kind);
+        let ExprKind::MethodCall {
+            receiver,
+            method,
+            path,
+            args,
+        } = value.kind.as_ref()
+        else {
+            panic!("Expected method call, got {:?}", value.kind);
         };
-        let ExprKind::Var(path) = callee.kind.as_ref() else {
-            panic!("Expected path callee");
-        };
-        let ExprKind::Var(receiver) = args[0].kind.as_ref() else {
+        let ExprKind::Var(receiver) = receiver.kind.as_ref() else {
             panic!("Expected var receiver");
         };
+        let path = path.as_ref().expect("a qualified method has a path");
 
-        assert!(path.qualified.to_string().starts_with("name::"));
+        assert_eq!(method.to_string(), expected);
         assert_eq!(receiver.name().to_string(), "user");
         assert_eq!(args.len(), arg_count);
-        assert_ne!(callee.id, value.id);
+        assert_ne!(path.id, value.id);
+        assert!(path.candidates.is_empty());
     }
+}
+
+#[test]
+fn test_struct_generates_field_setters_and_modifiers() {
+    let module = parse_and_lower("struct Pair(a) { left: a, right: Int }\nstruct Unit {}");
+
+    let [Decl::Struct(_), Decl::Module(lenses), Decl::Struct(_)] = module.decls.as_slice() else {
+        panic!("Expected a struct, its field module, and a struct without fields");
+    };
+    assert!(lenses.generated);
+    assert_eq!(lenses.name.to_string(), "Pair");
+    let fields: Vec<_> = lenses
+        .body
+        .iter()
+        .flatten()
+        .map(|decl| {
+            let Decl::Module(field) = decl else {
+                panic!("Expected a field module");
+            };
+            let functions: Vec<_> = field
+                .body
+                .iter()
+                .flatten()
+                .map(|decl| {
+                    let Decl::Function(function) = decl else {
+                        panic!("Expected a function");
+                    };
+                    function.name.to_string()
+                })
+                .collect();
+            (field.name.to_string(), functions)
+        })
+        .collect();
+    let functions = vec!["set".to_owned(), "modify".to_owned()];
+    assert_eq!(
+        fields,
+        [
+            ("left".to_owned(), functions.clone()),
+            ("right".to_owned(), functions)
+        ]
+    );
 }
 
 #[test]
@@ -631,6 +683,7 @@ fn test_method_call_with_multiple_args() {
         receiver,
         method,
         args,
+        ..
     } = value.kind.as_ref()
     else {
         panic!("Expected method call, got {:?}", value.kind);
@@ -664,6 +717,7 @@ fn test_chained_method_call_with_args() {
         receiver: baz_recv,
         method: baz_method,
         args: baz_args,
+        ..
     } = value.kind.as_ref()
     else {
         panic!("Expected method call, got {:?}", value.kind);
@@ -676,6 +730,7 @@ fn test_chained_method_call_with_args() {
         receiver: bar_recv,
         method: bar_method,
         args: bar_args,
+        ..
     } = baz_recv.kind.as_ref()
     else {
         panic!("Expected method call, got {:?}", baz_recv.kind);
@@ -2501,7 +2556,7 @@ fn test_record_with_spread() {
         "#;
     let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[1] else {
+    let Some(Decl::Function(func)) = module.decls.last() else {
         panic!("Expected function");
     };
     let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {

@@ -36,6 +36,11 @@ impl SpanMapBuilder {
         self.spans.insert(id, span);
     }
 
+    /// The span recorded for a node.
+    pub fn get(&self, id: NodeId) -> Option<Span> {
+        self.spans.get(&id).copied()
+    }
+
     /// Create a SpanMap from this builder.
     pub fn finish(self) -> SpanMap {
         SpanMap(Arc::new(self.spans))

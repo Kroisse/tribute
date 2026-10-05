@@ -17,6 +17,8 @@ pub struct AstLoweringCtx<'db> {
     source_hash: u64,
     /// Builder for span map.
     span_builder: SpanMapBuilder,
+    /// Number of generated nodes, which have no CST node to take an id from.
+    synthetic_nodes: usize,
     /// Salsa database for accumulating diagnostics directly.
     /// `None` in test-only paths where diagnostics are discarded.
     db: Option<&'db dyn salsa::Database>,
@@ -33,6 +35,7 @@ impl<'db> AstLoweringCtx<'db> {
             source,
             source_hash,
             span_builder: SpanMapBuilder::new(),
+            synthetic_nodes: 0,
             db: None,
         }
     }
@@ -45,6 +48,7 @@ impl<'db> AstLoweringCtx<'db> {
             source,
             source_hash,
             span_builder: SpanMapBuilder::new(),
+            synthetic_nodes: 0,
             db: Some(db),
         }
     }
@@ -57,6 +61,16 @@ impl<'db> AstLoweringCtx<'db> {
     pub fn fresh_id_with_span(&mut self, node: &Node) -> NodeId {
         let id = NodeId::from_cst(node, self.source_hash);
         let span = Span::new(node.start_byte(), node.end_byte());
+        self.span_builder.insert(id, span);
+        id
+    }
+
+    /// Generate a NodeId for a node the compiler generates from the node
+    /// `origin`, which reports its diagnostics there.
+    pub fn synthetic_id(&mut self, origin: NodeId) -> NodeId {
+        let span = self.span_builder.get(origin).unwrap_or(Span::new(0, 0));
+        let id = NodeId::synthetic(self.source_hash, self.synthetic_nodes);
+        self.synthetic_nodes += 1;
         self.span_builder.insert(id, span);
         id
     }

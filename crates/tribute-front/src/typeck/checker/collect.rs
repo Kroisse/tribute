@@ -130,7 +130,10 @@ impl<'db> TypeChecker<'db> {
                             name: Some(m.name.clone()),
                             decls: body.clone(),
                         };
+                        let outer = self.in_generated_module;
+                        self.in_generated_module |= m.generated;
                         self.collect_declarations_in_order(&inner_module);
+                        self.in_generated_module = outer;
                         // Restore prefix
                         self.prefix.truncate(prev_len);
                     }
@@ -263,7 +266,7 @@ impl<'db> TypeChecker<'db> {
         self.env.register_function(func_id, scheme);
 
         // Register as UFCS method candidate if function has parameters
-        if !func.params.is_empty() {
+        if !func.params.is_empty() && !self.in_generated_module {
             self.env
                 .register_method(func.name.clone(), MethodEntry { func_id, func_ty });
         }

@@ -201,6 +201,8 @@ pub struct DeferredMethodCall<'db> {
     pub receiver_ty: Type<'db>,
     /// The method name being called.
     pub method: Symbol,
+    /// For a qualified call, the path's node and the functions it may name.
+    pub path: Option<(NodeId, Vec<FuncDefId<'db>>)>,
     /// Fresh UniVar for the method's return type — will be constrained after resolution.
     pub result_ty: Type<'db>,
     /// Argument types including receiver as first element.

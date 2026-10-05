@@ -177,6 +177,11 @@ impl<'db> ModuleEnv<'db> {
         self.library.get(name)
     }
 
+    /// The names the prelude and the compiler supply to every module.
+    pub fn iter_library_names(&self) -> impl Iterator<Item = Symbol> + '_ {
+        self.library.keys().cloned()
+    }
+
     /// Whether namespaces under `root` are supplied to every module.
     pub fn is_library_root(&self, root: &Symbol) -> bool {
         self.library_roots.contains(root)

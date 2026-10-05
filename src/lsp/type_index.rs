@@ -227,6 +227,13 @@ impl<'a, 'db> TypeCollector<'a, 'db> {
 }
 
 impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for TypeCollector<'_, 'db> {
+    // A generated module has no source text of its own to index.
+    fn visit_module_decl(&mut self, module: &'ast tribute_front::ast::ModuleDecl<TypedRef<'db>>) {
+        if !module.generated {
+            tribute_front::ast::visit::walk_module_decl(self, module);
+        }
+    }
+
     fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
         // Literals carry their type in their kind. A call's type would need
         // the callee's result type, so hover covers the callee and arguments.

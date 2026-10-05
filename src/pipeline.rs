@@ -1627,7 +1627,11 @@ fn report_unresolved_methods<'db>(
     }
     impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for Report<'_, 'db> {
         fn visit_expr(&mut self, expr: &'ast Expr<TypedRef<'db>>) {
-            if let ExprKind::MethodCall { method, .. } = &*expr.kind {
+            // Type checking reports a path call it cannot resolve.
+            if let ExprKind::MethodCall {
+                method, path: None, ..
+            } = &*expr.kind
+            {
                 Diagnostic::new(
                     format!("unresolved method '{}' for this receiver type", method),
                     self.span_map.get_or_default(expr.id),
