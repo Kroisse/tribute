@@ -383,6 +383,20 @@ user.name::set("Jane")           // User::name::set(user, "Jane")
 user.age::modify(fn(n) n + 1)    // User::age::modify(user, fn(n) n + 1)
 ```
 
+생성 규칙:
+
+- 이름 있는 struct 필드마다 getter `T::f`, setter `T::f::set`, modifier
+  `T::f::modify`를 struct 선언의 namespace에 만든다. 위치 필드와 enum variant의
+  필드에는 만들지 않는다.
+- Generic struct에서는 세 함수 모두 struct의 타입 매개변수를 그대로 받는다.
+  Setter와 modifier는 타입 인자를 바꾸지 않는다(spread와 같은 규칙).
+  `struct Box(a) { value: a }`이면 `Box::value::set : fn(Box(a), a) -> Box(a)`이다.
+- Modifier는 콜백의 effect row에 대해 다형적이다:
+  `T::f::modify : fn(T, fn(F) ->{e} F) ->{e} T`. Getter와 setter는 순수하다.
+- `T::f`는 값 namespace의 getter이면서 `set`·`modify`를 담는 namespace이기도 하다.
+  같은 struct 이름의 `mod T`가 `f::set`이나 `f::modify`를 직접 선언하면 생성된
+  함수와 충돌하는 중복 정의 오류이다.
+
 ### Spread vs Setter
 
 ```rust
