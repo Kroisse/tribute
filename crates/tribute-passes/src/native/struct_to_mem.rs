@@ -359,7 +359,7 @@ mod tests {
         let (ctx, module, _layouts) = lower_module(
             r#"core.module @test {
   !ChoiceRef = adt.typeref<{name = "Choice"}>
-  !Choice = adt.enum<{name = "Choice", variants = [["None", []], ["Some", [core.i32]], ["Other", []]]}>
+  !Choice = adt.enum<Choice { None(), Some(core.i32), Other() }>
   tribute_rtti.layout {fields = [], index = 5, type = !Choice, tag = "None"}
   tribute_rtti.layout {fields = ["u32"], index = 6, type = !Choice, tag = "Some"}
   func.func @test(%choice: !ChoiceRef) -> core.i1 {
