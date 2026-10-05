@@ -160,6 +160,26 @@ fn main() ->{Io} Nil {
     );
 }
 
+#[test]
+fn test_native_prelude_struct_field_lenses() {
+    // Unreferenced generated functions are not lowered; a reference from user
+    // code keeps the one a prelude struct generates.
+    assert_native_output(
+        "field_lens_prelude.trb",
+        r#"
+use std::io::{Io, SystemError, print_line}
+
+fn main() ->{Io} Nil {
+    let error = SystemError { code: +2, message: "missing" }
+    let updated = error.message::modify(fn(message) message <> "!").code::set(+3)
+    print_line(updated.message)
+    print_line(Int::to_string(updated.code))
+}
+"#,
+        "missing!\n3",
+    );
+}
+
 fn messages(db: &salsa::DatabaseImpl, code: &str) -> Vec<(String, String)> {
     let source = SourceCst::from_source_str(db, "test.trb", code);
     compile_with_diagnostics(db, source)

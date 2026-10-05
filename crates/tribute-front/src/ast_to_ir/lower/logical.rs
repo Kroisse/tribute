@@ -308,6 +308,8 @@ pub(super) fn lower_module<'db>(
         well_known_types,
         compiler_intrinsics,
     } = typed;
+    let mut ast = ast;
+    drop_unreferenced_generated_functions(db, &mut ast.decls);
     let location = Location::new(path, span_map.get_or_default(ast.id));
     let module_name = ast.name.unwrap_or_else(|| Symbol::new("main"));
     let mut ctx = IrLoweringCtx::new(
@@ -472,6 +474,65 @@ fn promote_definition_conventions_pass<'db>(
             _ => {}
         }
     }
+}
+
+/// Remove the functions of generated modules that no expression references.
+///
+/// Every struct generates a setter and a modifier per field; lowering the
+/// unused ones would grow the IR of every program by the prelude's structs.
+/// A generated function references no other generated function, so the
+/// references are collected once.
+fn drop_unreferenced_generated_functions<'db>(
+    db: &'db dyn salsa::Database,
+    declarations: &mut Vec<Decl<TypedRef<'db>>>,
+) {
+    fn has_generated<V>(declarations: &[Decl<V>]) -> bool {
+        declarations.iter().any(|declaration| match declaration {
+            Decl::Module(module) => {
+                module.generated || module.body.as_deref().is_some_and(has_generated)
+            }
+            _ => false,
+        })
+    }
+    fn retain<'db>(
+        declarations: &mut Vec<Decl<TypedRef<'db>>>,
+        prefix: &mut String,
+        generated: bool,
+        referenced: &HashSet<Symbol>,
+    ) {
+        declarations.retain_mut(|declaration| match declaration {
+            Decl::Function(function) if generated => {
+                referenced.contains(&crate::qualified_symbol(prefix, &function.name))
+            }
+            Decl::Module(module) => {
+                let generated = generated || module.generated;
+                let Some(body) = &mut module.body else {
+                    return true;
+                };
+                let saved = crate::push_prefix(prefix, &module.name);
+                retain(body, prefix, generated, referenced);
+                prefix.truncate(saved);
+                !(generated && body.is_empty())
+            }
+            _ => true,
+        });
+    }
+
+    if !has_generated(declarations) {
+        return;
+    }
+    let mut referenced: HashSet<Symbol> = HashSet::default();
+    let mut references = crate::ast::visit::Refs(
+        |_: crate::ast::visit::RefSite, _: crate::ast::NodeId, value: &TypedRef<'db>| {
+            if let ResolvedRef::Function { id } = &value.resolved {
+                referenced.insert(id.qualified(db).clone());
+            }
+        },
+    );
+    for declaration in declarations.iter() {
+        crate::ast::visit::Visit::visit_decl(&mut references, declaration);
+    }
+    retain(declarations, &mut String::new(), false, &referenced);
 }
 
 impl<'db> TypedModule<'db> {

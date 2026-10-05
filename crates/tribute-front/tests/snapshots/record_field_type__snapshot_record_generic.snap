@@ -5,10 +5,7 @@ expression: ir_text
 core.module @test {
   !Pair = adt.struct<Pair(first: tribute_rt.anyref, second: tribute_rt.anyref)>
   !Pair_1 = adt.typeref<{name = "Pair"}>
-  !t1 = tribute_control.func_sig<(!Pair_1, tribute_rt.anyref) -> !Pair_1, {tribute.calling_convention = 0}>
-  !t2 = tribute_control.func_sig<(!Pair_1) -> tribute_rt.anyref, {tribute.calling_convention = 0}>
-  !t3 = tribute_control.func_sig<(tribute_rt.anyref) -> tribute_rt.anyref, {tribute.calling_convention = 2}>
-  !t0 = tribute_control.func_sig<(!Pair_1, !t3) -> !Pair_1, {tribute.calling_convention = 2}>
+  !t0 = tribute_control.func_sig<(!Pair_1) -> tribute_rt.anyref, {tribute.calling_convention = 0}>
 
   tribute_control.func @"Pair::first"(%0: !Pair_1) -> tribute_rt.anyref convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !Pair} : tribute_rt.anyref
@@ -17,30 +14,6 @@ core.module @test {
   tribute_control.func @"Pair::second"(%0: !Pair_1) -> tribute_rt.anyref convention(direct) {
       %1 = adt.struct_get %0 {field = 1, type = !Pair} : tribute_rt.anyref
       tribute_control.return %1
-  }
-  tribute_control.func @"Pair::first::set"(%0: !Pair_1, %1: tribute_rt.anyref) -> !Pair_1 convention(direct) {
-      %2 = adt.struct_get %0 {field = 1, type = !Pair} : tribute_rt.anyref
-      %3 = adt.struct_new %1, %2 {type = !Pair} : !Pair_1
-      tribute_control.return %3
-  }
-  tribute_control.func @"Pair::first::modify"(%0: !Pair_1, %1: !t3) -> !Pair_1 convention(cps) {
-      %2 = tribute_control.call %0 {callee = @"Pair::first"} : tribute_rt.anyref
-      %3 = tribute_control.call_indirect %1, %2 : tribute_rt.anyref
-      %4 = adt.struct_get %0 {field = 1, type = !Pair} : tribute_rt.anyref
-      %5 = adt.struct_new %3, %4 {type = !Pair} : !Pair_1
-      tribute_control.return %5
-  }
-  tribute_control.func @"Pair::second::set"(%0: !Pair_1, %1: tribute_rt.anyref) -> !Pair_1 convention(direct) {
-      %2 = adt.struct_get %0 {field = 0, type = !Pair} : tribute_rt.anyref
-      %3 = adt.struct_new %2, %1 {type = !Pair} : !Pair_1
-      tribute_control.return %3
-  }
-  tribute_control.func @"Pair::second::modify"(%0: !Pair_1, %1: !t3) -> !Pair_1 convention(cps) {
-      %2 = tribute_control.call %0 {callee = @"Pair::second"} : tribute_rt.anyref
-      %3 = tribute_control.call_indirect %1, %2 : tribute_rt.anyref
-      %4 = adt.struct_get %0 {field = 0, type = !Pair} : tribute_rt.anyref
-      %5 = adt.struct_new %4, %3 {type = !Pair} : !Pair_1
-      tribute_control.return %5
   }
   tribute_control.func @make_pair() -> !Pair_1 convention(direct) {
       %0 = arith.const {value = 42} : core.i32
