@@ -201,6 +201,14 @@ Specialization mangling uses the declaration's qualified identity when needed
 to distinguish same-spelled declarations. When the qualified identity equals
 the existing display name, the ordinary mangle remains unchanged.
 
+Specialization mangle은 type argument의 identity에 대해 단사(injective)다. 서로
+다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입은 parameter와 result
+외에 effect row와 calling-convention 하한을 함께 인코딩한다. Effect row는 각
+ability의 origin과 qualified identity, ability argument를 row에 저장된 순서대로 쓰고,
+열린 row의 row variable은 한 mangle 안에서 처음 나타난 순서로 번호를 매겨 추론
+번호에 의존하지 않는다. Closed 빈 row와 `Direct` 하한을 가진 함수 타입의 mangle은
+parameter와 result만으로 이루어진다.
+
 ---
 
 ## Opaque Persistent Lists
