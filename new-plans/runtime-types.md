@@ -133,6 +133,9 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
   비교한다. Payload에는 tag 필드를 두지 않고, variant 객체는 자기 필드만 가진다.
 - 프로그램이 할당하지 않는 variant는 descriptor 번호가 없으며, 그 variant에 대한
   판별은 두 target 모두에서 항상 거짓이다.
+- Variant 판별의 대상은 enum 값이며 null이 아니다. Null 참조에 대한 판별의 동작은
+  정의하지 않는다. Target은 참조를 읽다가 fault할 수도, 읽지 않고 거짓을 낼 수도
+  있다.
 
 ## 불변 조건
 

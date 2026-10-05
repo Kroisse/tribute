@@ -20,7 +20,8 @@
 //! declarations number the descriptors, so this pass replaces each
 //! `adt.variant_is` with a `tribute_rtti.descriptor_is` of the variant's
 //! number. A variant the module never allocates has no number, and its test
-//! is constant false.
+//! is constant false without reading the reference. A variant test of a null
+//! reference is undefined, so that path need not fault as a header read does.
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
