@@ -572,8 +572,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = "String"}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
+  !Leaf = wasm_gc.struct<core.i32>
   !Closure = adt.struct<{name = "_closure", layout = "closure"}>
   !Marker = adt.struct<{name = "_Marker", layout = "evidence_marker"}>
   !Evidence = core.array<!Marker, {layout = "evidence"}>
@@ -620,13 +619,13 @@ mod tests {
         );
         validate_wasm_ir(&ctx, module).expect("registered GC references satisfy an anyref slot");
 
-        for value_ty in ["wasm.funcref", "wasm.externref", "core.i64", "!TagOnly"] {
+        for value_ty in ["wasm.funcref", "wasm.externref", "core.i64", "!Enum"] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !TagOnly = adt.enum<{{is_variant = true, variant_tag = "Leaf"}}>
+  !Enum = adt.enum<{{name = "Enum"}}>
   wasm.func @byAny(%value: wasm.anyref) -> core.nil {{ wasm.return }}
   wasm.func @caller(%value: {value_ty}) -> core.nil {{
     wasm.call %value {{callee = @byAny}}
@@ -635,9 +634,8 @@ mod tests {
 }}"#
                 ),
             );
-            let error = validate_wasm_ir(&ctx, module).expect_err(
-                "non-internal references and unregistered variant spellings cannot satisfy anyref",
-            );
+            let error = validate_wasm_ir(&ctx, module)
+                .expect_err("non-internal references and enum spellings cannot satisfy anyref");
             assert!(
                 error.to_string().contains("call argument #0 type mismatch"),
                 "{value_ty}: {error}"
@@ -649,7 +647,7 @@ mod tests {
     fn rejects_unregistered_and_narrowing_gc_reference_arguments() {
         for (value_ty, parameter_ty) in [
             ("!Unregistered", "wasm.structref"),
-            ("!TagOnly", "wasm.structref"),
+            ("!Enum", "wasm.structref"),
             ("wasm.anyref", "wasm.structref"),
             ("wasm.arrayref", "wasm.structref"),
             ("wasm.funcref", "wasm.structref"),
@@ -663,9 +661,8 @@ mod tests {
                 &mut ctx,
                 &format!(
                     r#"core.module @test {{
-  !String = adt.enum<{{name = "String"}}>
-  !Leaf = adt.enum<{{base_enum = !String, is_variant = true, variant_tag = "Leaf"}}>
-  !TagOnly = adt.enum<{{is_variant = true, variant_tag = "Leaf"}}>
+  !Leaf = wasm_gc.struct<core.i32>
+  !Enum = adt.enum<{{name = "Enum"}}>
   !Unregistered = adt.struct<core.i32 {{name = "value"}}, {{name = "Unregistered"}}>
   !Data = core.array<core.i8, {{layout = "bytes_data"}}>
   !Bytes = adt.struct<!Data {{name = "data"}}, core.i32 {{name = "offset"}}, core.i32 {{name = "len"}}, {{name = "_Bytes", layout = "bytes"}}>
@@ -693,8 +690,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = "String"}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
+  !Leaf = wasm_gc.struct<core.i32>
   wasm.func @produces(%leaf: !Leaf) -> !Leaf { wasm.return %leaf }
   wasm.func @caller(%leaf: !Leaf) -> core.nil {
     %value = wasm.call %leaf {callee = @produces} : wasm.structref
@@ -709,8 +705,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = "String"}>
-  !Leaf = adt.enum<{base_enum = !String, is_variant = true, variant_tag = "Leaf"}>
+  !Leaf = wasm_gc.struct<core.i32>
   wasm.func @produces(%value: wasm.structref) -> wasm.structref { wasm.return %value }
   wasm.func @caller(%value: wasm.structref) -> core.nil {
     %leaf = wasm.call %value {callee = @produces} : !Leaf

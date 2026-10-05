@@ -191,15 +191,14 @@ fn register_builtin_evidence_type(
 
 /// Normalize a type for GC struct field comparison.
 ///
-/// Normalizes ADT references and variant instances to their canonical form.
+/// Normalizes recursive ADT references and the closure layout to their
+/// canonical form.
 fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // Wasm has no i1 storage type. Match type_to_valtype before comparing
     // constructor, getter, and setter observations of the same field.
     if helpers::is_type(ctx, ty, "core", "i1") {
         return ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
     }
-    let data = ctx.get_type(ty);
-
     // The closure layout is the target-private builtin closure struct.
     // Logical closure references and its materialized struct declaration
     // must share this one physical field representation.
@@ -207,12 +206,8 @@ fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
         return helpers::intern_layout_key(ctx, crate::gc_types::CLOSURE_LAYOUT);
     }
 
-    // Recursive ADT references and concrete variants share the physical WasmGC
-    // struct supertype. Keeping either logical representation here would make
-    // equivalent field descriptions depend on visitation order.
-    if data.dialect == Symbol::new("adt")
-        && (data.name == Symbol::new("typeref") || data.attrs.get_type("base_enum").is_some())
-    {
+    // A recursive ADT reference is the physical WasmGC struct supertype.
+    if helpers::is_type(ctx, ty, "adt", "typeref") {
         return intern_wasm_structref(ctx);
     }
 
@@ -973,54 +968,17 @@ wasm.return
     }
 
     #[test]
-    fn variant_types_normalize_to_wasm_structref() {
+    fn record_struct_field_canonicalizes_typeref_to_structref() {
         let mut ctx = IrContext::new();
-        let name_attr = ctx.string_attr("List");
-        let enum_ty = ctx.intern_type(
-            TypeDataBuilder::new("adt", "enum")
-                .attr("name", name_attr)
-                .build(),
-        );
-        let variant_tag_attr = ctx.string_attr("Cons");
-        let variant_ty = ctx.intern_type(
-            TypeDataBuilder::new("adt", "List$Cons")
-                .attr("is_variant", Attribute::Bool(true))
-                .attr("base_enum", Attribute::Type(enum_ty))
-                .attr("variant_tag", variant_tag_attr)
-                .build(),
-        );
-        let structref = intern_wasm_structref(&mut ctx);
-
-        assert_eq!(normalize_type_for_gc(&mut ctx, variant_ty), structref);
-        assert!(types_equivalent_for_gc(&mut ctx, variant_ty, structref));
-    }
-
-    #[test]
-    fn record_struct_field_canonicalizes_typeref_and_variant_to_structref() {
-        let mut ctx = IrContext::new();
-        let name_attr = ctx.string_attr("List");
-        let enum_ty = ctx.intern_type(
-            TypeDataBuilder::new("adt", "enum")
-                .attr("name", name_attr)
-                .build(),
-        );
         let name_attr = ctx.string_attr("List");
         let typeref_ty = ctx.intern_type(
             TypeDataBuilder::new("adt", "typeref")
                 .attr("name", name_attr)
                 .build(),
         );
-        let variant_tag_attr = ctx.string_attr("Cons");
-        let variant_ty = ctx.intern_type(
-            TypeDataBuilder::new("adt", "List$Cons")
-                .attr("is_variant", Attribute::Bool(true))
-                .attr("base_enum", Attribute::Type(enum_ty))
-                .attr("variant_tag", variant_tag_attr)
-                .build(),
-        );
         let structref = intern_wasm_structref(&mut ctx);
 
-        for (first, second) in [(typeref_ty, variant_ty), (variant_ty, typeref_ty)] {
+        for (first, second) in [(typeref_ty, structref), (structref, typeref_ty)] {
             let mut builder = GcTypeBuilder::new();
             record_struct_field(&mut ctx, FIRST_USER_TYPE_IDX, &mut builder, 0, first)
                 .expect("first equivalent field records");

@@ -361,8 +361,8 @@ user-defined type은 그 뒤에 배치된다:
 이 표는 backend-ready builtin layout의 규범적 최종 계약이다. Emitter와 layout
 verifier는 closure 3, marker 4, evidence 5, described 6, user-defined type 7+를 정확히
 사용하며 CPS control carrier나 trampoline placeholder index를 예약하지 않는다.
-Index 1은 `"bytes_data"`, index 2는 `"bytes"`, index 3-6은 `"closure"`,
-`"evidence_marker"`, `"evidence"`, `"described"`
+Index 0은 `"boxed_f64"`, index 1은 `"bytes_data"`, index 2는 `"bytes"`,
+index 3-6은 `"closure"`, `"evidence_marker"`, `"evidence"`, `"described"`
 [runtime layout 식별자](ir.md#runtime-layout-식별자)로만 정해진다. 경계 출구의
 명목 타입 `core.bytes`는 Wasm lowering의 첫 단계에서 `"bytes"` layout struct로
 바뀐다. 이 변환은 alias, 연산 속성, 결과와 block 인자뿐 아니라 ADT field, variant
