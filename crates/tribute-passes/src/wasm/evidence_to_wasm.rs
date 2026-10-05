@@ -24,11 +24,12 @@
 //!
 //! Evidence is represented as a WasmGC array of Marker structs, sorted by
 //! ability_id. Each element is the top marker of its ability, and `shadowed`
-//! refers to the marker of the same ability it shadows:
+//! refers to the marker of the same ability it shadows, and `outer` to the
+//! evidence its handler was installed on:
 //!
 //! ```text
 //! Evidence = Array(Marker)
-//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref }
+//! Marker = struct { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }
 //! ```
 //!
 //! Marker construction and field access stay inside the helper
@@ -95,7 +96,7 @@ pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (
             needs.extend,
             evidence_abi::EXTEND,
-            vec![evidence_ty, i32_ty, i32_ty, closure_ty],
+            vec![evidence_ty, i32_ty, i32_ty, closure_ty, evidence_ty],
             evidence_ty,
         ),
         (
@@ -107,6 +108,12 @@ pub fn prepare_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (
             needs.dup,
             evidence_abi::DUP,
+            vec![evidence_ty, i32_ty],
+            evidence_ty,
+        ),
+        (
+            needs.outer,
+            evidence_abi::OUTER,
             vec![evidence_ty, i32_ty],
             evidence_ty,
         ),
@@ -170,6 +177,7 @@ fn wasm_effect_abi_target() -> ConversionTarget {
         .illegal_op("effect", "extend")
         .illegal_op("effect", "mask")
         .illegal_op("effect", "dup")
+        .illegal_op("effect", "outer")
         .illegal_op("effect", "dispatch_tail")
         .illegal_op("effect", "dispatch_cps")
 }
@@ -182,6 +190,7 @@ struct HelperRequirements {
     extend: bool,
     mask: bool,
     dup: bool,
+    outer: bool,
 }
 
 fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequirements {
@@ -193,6 +202,7 @@ fn evidence_helper_requirements(ctx: &IrContext, module: Module) -> HelperRequir
                 needs.extend |= effect::Extend::matches(ctx, op);
                 needs.mask |= effect::Mask::matches(ctx, op);
                 needs.dup |= effect::Dup::matches(ctx, op);
+                needs.outer |= effect::Outer::matches(ctx, op);
                 for nested in ctx.op_regions(op) {
                     visit(ctx, nested, needs);
                 }
@@ -271,6 +281,7 @@ impl RewritePattern for LowerEffectExtendToWasm {
             ability_id,
             extend_op.prompt_tag(ctx),
             tr_dispatch,
+            extend_op.outer(ctx),
         ])
         .callee(SymbolPath::from(evidence_abi::EXTEND))
         .results([result_ty])
@@ -281,7 +292,8 @@ impl RewritePattern for LowerEffectExtendToWasm {
     }
 }
 
-/// `effect.mask` / `effect.dup` → the runtime call of the same name.
+/// `effect.mask` / `effect.dup` / `effect.outer` → the runtime call of the
+/// same name.
 struct LowerEffectStackOpToWasm;
 
 impl RewritePattern for LowerEffectStackOpToWasm {
@@ -299,6 +311,12 @@ impl RewritePattern for LowerEffectStackOpToWasm {
             )
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
             (evidence_abi::DUP, dup.ability_ref(ctx), dup.evidence(ctx))
+        } else if let Ok(outer) = effect::Outer::from_op(ctx, op) {
+            (
+                evidence_abi::OUTER,
+                outer.ability_ref(ctx),
+                outer.evidence(ctx),
+            )
         } else {
             return false;
         };
@@ -424,6 +442,9 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
             needs_set = true;
             needs_remove = true;
             Helper::Mask
+        } else if name == evidence_abi::OUTER {
+            needs_find = true;
+            Helper::Outer
         } else if name == evidence_abi::DUP {
             needs_find = true;
             needs_set = true;
@@ -468,6 +489,8 @@ enum Helper {
     Mask,
     /// Push a copy of the top marker of an ability.
     Dup,
+    /// Return the evidence the top marker of an ability was installed on.
+    Outer,
     /// Return the tag counter global at this index and increment it.
     NextTag(u32),
 }
@@ -564,7 +587,7 @@ fn build_helper(
         }
         Helper::Extend => {
             let shadowed = find_marker(ctx);
-            set_marker(ctx, [args[1], args[2], args[3], shadowed])
+            set_marker(ctx, [args[1], args[2], args[3], shadowed, args[4]])
         }
         Helper::Dup => {
             let i32_ty = intern_i32(ctx);
@@ -575,8 +598,21 @@ fn build_helper(
                 marker_field(ctx, top, MarkerField::PromptTag, i32_ty),
                 marker_field(ctx, top, MarkerField::TrDispatchFn, anyref_ty),
                 top,
+                marker_field(ctx, top, MarkerField::Outer, anyref_ty),
             ];
             set_marker(ctx, fields)
+        }
+        Helper::Outer => {
+            let anyref_ty = intern_anyref(ctx);
+            let top = find_marker(ctx);
+            let outer = marker_field(ctx, top, MarkerField::Outer, anyref_ty);
+            let evidence = wasm_dialect::RefCast::operands(outer)
+                .target_type(result_ty)
+                .type_idx(EVIDENCE_IDX)
+                .results(result_ty)
+                .build(ctx, location);
+            ctx.push_op(block, evidence.op_ref());
+            evidence.result(ctx)
         }
         Helper::Mask => {
             let i32_ty = intern_i32(ctx);
@@ -1162,7 +1198,7 @@ mod tests {
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
-    const TYPES: &str = r#"  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+    const TYPES: &str = r#"  !Evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !Closure = adt.struct<_closure(func_ptr: core.i32, env: tribute_rt.anyref), {layout = "closure"}>"#;
 
     fn module_text(body: &str) -> String {
@@ -1202,7 +1238,7 @@ mod tests {
   }"#;
 
     const EXTEND: &str = r#"  func.func @install(%ev: !Evidence, %prompt: core.i32, %tr: !Closure) -> !Evidence {
-    %extended = effect.extend %ev, %prompt, %tr {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
+    %extended = effect.extend %ev, %prompt, %tr, %ev {ability_ref = core.ability_ref<{name = "State"}>} : !Evidence
     func.return %extended
   }"#;
 
@@ -1290,7 +1326,7 @@ mod tests {
         });
         assert_eq!(
             calls,
-            [(SymbolPath::from(evidence_abi::EXTEND), 4)],
+            [(SymbolPath::from(evidence_abi::EXTEND), 5)],
             "{printed}"
         );
     }
@@ -1345,7 +1381,7 @@ mod tests {
             r#"core.module @test {
   func.func @__tribute_evidence_lookup(%ev: wasm.arrayref, %id: core.i32) -> core.i32 attributes {abi = "C"}
   func.func @__tribute_evidence_lookup_tr(%ev: wasm.arrayref, %id: core.i32) -> wasm.anyref attributes {abi = "C"}
-  func.func @__tribute_evidence_extend(%ev: wasm.arrayref, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref) -> wasm.arrayref attributes {abi = "C"}
+  func.func @__tribute_evidence_extend(%ev: wasm.arrayref, %id: core.i32, %prompt: core.i32, %tr: wasm.anyref, %outer: wasm.arrayref) -> wasm.arrayref attributes {abi = "C"}
 }"#,
         );
 

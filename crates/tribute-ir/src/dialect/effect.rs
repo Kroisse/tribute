@@ -19,11 +19,14 @@ mod effect {
     /// - `evidence`: current evidence value.
     /// - `prompt_tag`: runtime tag associated with the handler installation.
     /// - `tr_dispatch_fn`: tail-resumptive dispatch closure, or null.
+    /// - `outer`: the evidence the handler is installed on, before the
+    ///   installation's selection.
     fn extend(
         ability_ref: Attr<Type>,
         evidence: Value<_>,
         prompt_tag: Value<_>,
         tr_dispatch_fn: Value<_>,
+        outer: Value<_>,
     ) -> Value<_> {
     }
 
@@ -33,6 +36,9 @@ mod effect {
 
     /// Push a copy of the top handler of one ability onto the evidence.
     fn dup(ability_ref: Attr<Type>, evidence: Value<_>) -> Value<_> {}
+
+    /// The evidence the top handler of one ability was installed on.
+    fn outer(ability_ref: Attr<Type>, evidence: Value<_>) -> Value<_> {}
 
     /// Dispatch a tail-resumptive `fn` ability operation.
     ///
@@ -67,6 +73,7 @@ mod effect {
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Extend>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Mask>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<Dup>() }
+inventory::submit! { trunk_ir::op_interface::PureOps::register::<Outer>() }
 
 impl trunk_ir::op_interface::CallableExitModel for DispatchCps {
     fn verify_callable_exit(
@@ -140,7 +147,7 @@ mod tests {
         let evidence = const_i32(&mut ctx, loc, ptr_ty, 0);
         let prompt_tag = const_i32(&mut ctx, loc, i32_ty, 7);
         let tr_dispatch_fn = const_i32(&mut ctx, loc, ptr_ty, 0);
-        let op = super::Extend::operands(evidence, prompt_tag, tr_dispatch_fn)
+        let op = super::Extend::operands(evidence, prompt_tag, tr_dispatch_fn, evidence)
             .ability_ref(ability)
             .results(evidence_ty)
             .build(&mut ctx, loc);
@@ -149,6 +156,7 @@ mod tests {
         assert_eq!(wrapper.evidence(&ctx), evidence);
         assert_eq!(wrapper.prompt_tag(&ctx), prompt_tag);
         assert_eq!(wrapper.tr_dispatch_fn(&ctx), tr_dispatch_fn);
+        assert_eq!(wrapper.outer(&ctx), evidence);
         assert_eq!(wrapper.ability_ref(&ctx), ability);
         assert_eq!(ctx.value_ty(wrapper.result(&ctx)), evidence_ty);
     }

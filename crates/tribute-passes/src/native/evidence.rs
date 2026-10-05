@@ -96,11 +96,12 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (evidence_abi::LOOKUP, &[ptr_ty, i32_ty][..], i32_ty),
         (
             evidence_abi::EXTEND,
-            &[ptr_ty, i32_ty, i32_ty, ptr_ty][..],
+            &[ptr_ty, i32_ty, i32_ty, ptr_ty, ptr_ty][..],
             ptr_ty,
         ),
         (evidence_abi::MASK, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::DUP, &[ptr_ty, i32_ty][..], ptr_ty),
+        (evidence_abi::OUTER, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
     ] {
         if module.ops(ctx).iter().copied().any(|op| {
@@ -146,6 +147,7 @@ fn native_effect_abi_target() -> ConversionTarget {
         .illegal_op("effect", "extend")
         .illegal_op("effect", "mask")
         .illegal_op("effect", "dup")
+        .illegal_op("effect", "outer")
         .illegal_op("effect", "dispatch_tail")
         .illegal_op("effect", "dispatch_cps")
 }
@@ -269,6 +271,7 @@ impl RewritePattern for LowerEffectExtendToNative {
             extend_op.prompt_tag(ctx),
         ];
         operands.push(tr_dispatch);
+        operands.push(extend_op.outer(ctx));
 
         let extend_call = func::Call::operands(operands)
             .callee(SymbolPath::from(evidence_abi::EXTEND))
@@ -301,7 +304,8 @@ fn replace_with_runtime_call_result(
     rewriter.erase_op(vec![evidence]);
 }
 
-/// `effect.mask` / `effect.dup` → the runtime call of the same name.
+/// `effect.mask` / `effect.dup` / `effect.outer` → the runtime call of the
+/// same name.
 struct LowerEffectStackOpToNative;
 
 impl RewritePattern for LowerEffectStackOpToNative {
@@ -319,6 +323,12 @@ impl RewritePattern for LowerEffectStackOpToNative {
             )
         } else if let Ok(dup) = effect::Dup::from_op(ctx, op) {
             (evidence_abi::DUP, dup.ability_ref(ctx), dup.evidence(ctx))
+        } else if let Ok(outer) = effect::Outer::from_op(ctx, op) {
+            (
+                evidence_abi::OUTER,
+                outer.ability_ref(ctx),
+                outer.evidence(ctx),
+            )
         } else {
             return false;
         };
@@ -564,7 +574,7 @@ mod tests {
             "core.module @test { func.func @user() -> core.i32 }",
         );
         prepare_native_evidence_runtime(&mut ctx, module);
-        assert_eq!(module.ops(&ctx).len(), 7);
+        assert_eq!(module.ops(&ctx).len(), 8);
         for (name, params, result) in [
             (evidence_abi::EMPTY, &[][..], "core.ptr"),
             (
@@ -574,7 +584,7 @@ mod tests {
             ),
             (
                 evidence_abi::EXTEND,
-                &["core.ptr", "core.i32", "core.i32", "core.ptr"][..],
+                &["core.ptr", "core.i32", "core.i32", "core.ptr", "core.ptr"][..],
                 "core.ptr",
             ),
             (
@@ -583,6 +593,11 @@ mod tests {
                 "core.ptr",
             ),
             (evidence_abi::DUP, &["core.ptr", "core.i32"][..], "core.ptr"),
+            (
+                evidence_abi::OUTER,
+                &["core.ptr", "core.i32"][..],
+                "core.ptr",
+            ),
             (
                 evidence_abi::LOOKUP_TR,
                 &["core.ptr", "core.i32"][..],
@@ -642,7 +657,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @external(%ev: !evidence) -> !marker
   func.func @selected(%ev: core.ptr, %payload: tribute_rt.anyref) -> core.ptr {
@@ -679,7 +694,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @select(%ev: !evidence) -> !evidence {
     %masked = effect.mask %ev {ability_ref = core.ability_ref<{name = "State"}>} : !evidence

@@ -462,14 +462,14 @@ Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 �
 소비하여 `effect.extend`를 만든다. Fresh prompt placeholder는 해당 delimiter에서
 한 번만 materialize하며, body의 evidence 인자 사용을 확장된 값으로 치환한다.
 호출이 가진 evidence 선택(`evidence_plan`, [ir.md](ir.md#direct-style-control))은
-같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`으로 만들고
+같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`/`effect.outer`로 만들고
 속성을 지운다. Delimiter의 선택은 extend 전에 바깥 evidence에 적용한다.
 CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 옮기기만 한다. 층을
 다시 만드는 transfer와 delimiter에도 같은 선택을 옮긴다.
 이 pass는 함수 signature나 본문 형상에서 hidden evidence를 추론하지 않는다.
 
 ```text
-%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn
+%ev2 = effect.extend %ev, %prompt_tag, %tr_dispatch_fn, %outer
   { ability_ref = core.ability_ref<{name = "State"}> }
 ```
 
@@ -482,12 +482,15 @@ struct Marker {
     prompt_tag: i32,
     tr_dispatch_fn: ptr,
     shadowed: ptr,
+    outer: ptr,
 }
 ```
 
 Evidence는 ability id 기준으로 정렬된 marker 배열이다. 각 칸은 그 ability의 가장
 위 marker이며, marker는 자신이 가린 같은 ability의 marker를 `shadowed`로 가리킨다.
-Handler 설치, `mask`, `dup`은 모두 새 evidence 값을 만들며 기존 값을 바꾸지 않는다.
+Marker의 `outer`는 그 handler를 설치한 지점의 evidence, 즉 설치의 선택을 적용하기
+전의 바깥 evidence다. Handler 설치, `mask`, `dup`은 모두 새 evidence 값을 만들며
+기존 값을 바꾸지 않는다.
 
 Marker layout과 evidence runtime ABI는 `tribute-ir`의
 `ability::MarkerField`와 `ability::evidence_abi`가 컴파일러 내부의 단일
@@ -500,10 +503,12 @@ Marker layout과 evidence runtime ABI는 `tribute-ir`의
 | `prompt_tag` | 1 | `i32` | prompt installed for the active handler |
 | `tr_dispatch_fn` | 2 | `ptr` | tail-resumptive dispatch closure or null |
 | `shadowed` | 3 | `ptr` | marker of the same ability this one shadows, or null |
+| `outer` | 4 | `ptr` | evidence the handler was installed on |
 
 WasmGC uses the same field order and shared field identifiers, but its concrete
 GC marker type stores the dispatch closures as `anyref` closure references
-instead of native `ptr` values, and `shadowed` as an `anyref` marker reference.
+instead of native `ptr` values, `shadowed` as an `anyref` marker reference, and
+`outer` as an `anyref` evidence reference.
 Marker construction and field access stay inside the target's helper
 implementations, so effect lowering never builds or reads a marker directly.
 
@@ -550,10 +555,12 @@ Handler와 evidence의 연결은 다음과 같다.
   lambda가 받은 evidence를 continuation에 넘긴다. Arm 본문의 resume은 resume하는
   지점의 arm evidence 위에 자기 handle을 같은 prompt로 다시 설치해 body evidence를
   만든다. Arm이 수행한 operation이 바깥 handler를 바꾸었으면 재개된 계산도 바뀐
-  handler를 본다. Arm 본문에 중첩된 handle body 안의 resume은 그 지점의 evidence에서
-  중첩 handle의 marker를 걷어 낸 것을 arm evidence로 쓴다. 중첩 handle이 설치 때
-  선택(`mask`)을 가졌으면 걷어 낸 것으로 arm evidence를 복원할 수 없으므로, 그 중첩
-  handle을 설치한 지점의 arm evidence를 쓴다.
+  handler를 본다. Arm 본문에 중첩된 handle body 안에서는 그 지점의 evidence가 arm
+  evidence가 아니다. 이때 arm evidence는 중첩 handle을 설치한 지점의 evidence이므로,
+  resume은 중첩 handle이 처리하는 instance의 marker에서 `outer`를 읽어 쓴다. 중첩이
+  여러 겹이면 안쪽 handle부터 한 겹에 한 번씩 읽는다. 중첩 handle의 층이 다시
+  만들어지면 marker의 `outer`도 새로 기록되므로 이 값은 언제나 현재의 arm
+  evidence다.
 - **재개된 frame:** 포착된 경로의 각 frame은 resume이 넘긴 handle body evidence에서
   자기 위치까지의 호출 선택과 그 사이에 설치된 handler(설치의 `mask` 포함)를 다시
   적용한 evidence를 본다. 포착 시점의 evidence를 그대로 재사용하지 않으며,
@@ -591,16 +598,20 @@ __tribute_evidence_extend(
     ability_id: i32,
     prompt_tag: i32,
     tr_dispatch_fn: ptr,
+    outer: ptr,
 ) -> ptr
 __tribute_evidence_mask(ev: ptr, ability_id: i32) -> ptr
 __tribute_evidence_dup(ev: ptr, ability_id: i32) -> ptr
+__tribute_evidence_outer(ev: ptr, ability_id: i32) -> ptr
 __tribute_evidence_lookup_tr(ev: ptr, ability_id: i32) -> ptr
 ```
 
-`extend`는 같은 ability의 기존 marker를 새 marker의 `shadowed`로 둔다. `mask`는
-그 칸을 `shadowed`로 바꾸고, `shadowed`가 null이면 칸을 지운다. `dup`은 가장 위
-marker의 복사본이 원본을 가리게 한다. 없는 ability를 `mask`하거나 `dup`하는 것은
-compiler bug이며 runtime은 이를 검사하지 않는다.
+`extend`는 같은 ability의 기존 marker를 새 marker의 `shadowed`로 두고 `outer`
+인자를 marker에 기록한다. `mask`는 그 칸을 `shadowed`로 바꾸고, `shadowed`가
+null이면 칸을 지운다. `dup`은 가장 위 marker의 복사본이 원본을 가리게 하며 복사본은
+원본의 `outer`를 그대로 가진다. `outer`는 가장 위 marker가 기록한 evidence를
+돌려준다. 없는 ability를 `mask`, `dup`, `outer`하는 것은 compiler bug이며 runtime은
+이를 검사하지 않는다.
 
 ### `ability.handle_dispatch`
 
@@ -660,10 +671,11 @@ semantics and concrete runtime layout.
 
 Operations:
 
-- `effect.extend(evidence, prompt_tag, tr_dispatch_fn)
+- `effect.extend(evidence, prompt_tag, tr_dispatch_fn, outer)
   { ability_ref } -> evidence`
 - `effect.mask(evidence) { ability_ref } -> evidence`
 - `effect.dup(evidence) { ability_ref } -> evidence`
+- `effect.outer(evidence) { ability_ref } -> evidence`
 - `effect.dispatch_tail(evidence, payload) { ability_ref, op_name } -> result`
 - `effect.dispatch_cps(evidence, dispatch, resume, payload)
   { ability_ref, op_name, answer_type } -> ()`
@@ -698,8 +710,9 @@ decomposition, and indirect calls로 변환한다.
 
 WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
 representation/ABI 경계 안에서 native와 같은 구조로 `effect.*`를 낮춘다.
-`effect.extend`, `effect.mask`, `effect.dup`은 각각 `__tribute_evidence_extend`,
-`__tribute_evidence_mask`, `__tribute_evidence_dup` 호출이 되고,
+`effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`는 각각
+`__tribute_evidence_extend`, `__tribute_evidence_mask`, `__tribute_evidence_dup`,
+`__tribute_evidence_outer` 호출이 되고,
 `effect.dispatch_tail` / `effect.dispatch_cps`는
 `__tribute_evidence_lookup_tr` / `__tribute_evidence_lookup`, closure field 접근,
 `func.call_indirect` 또는 proper-tail `func.tail_call_indirect`가 된다.

@@ -701,6 +701,9 @@ pub unsafe extern "C" fn __tribute_dealloc(ptr: *mut u8, size: u64) {
 /// It points into the evidence this marker's evidence was derived from. An
 /// evidence is immutable and never freed once returned, so the marker it
 /// points to stays valid.
+///
+/// `outer` is the evidence the handler was installed on, before the
+/// installation's selection. It stays valid for the same reason.
 #[repr(C)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Marker {
@@ -708,6 +711,7 @@ pub struct Marker {
     pub prompt_tag: i32,
     pub tr_dispatch_fn: *const u8,
     pub shadowed: *const Marker,
+    pub outer: *const Evidence,
 }
 
 /// Opaque evidence structure — an array of marker stacks sorted by
@@ -821,7 +825,7 @@ pub unsafe extern "C" fn __tribute_evidence_lookup(ev: *const Evidence, ability_
 
 /// Extend evidence with a new marker (persistent — returns a new evidence).
 ///
-/// Signature: `(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr) -> ptr`
+/// Signature: `(ev: ptr, ability_id: i32, prompt_tag: i32, tr_dispatch_fn: ptr, outer: ptr) -> ptr`
 ///
 /// # Safety
 ///
@@ -833,6 +837,7 @@ pub unsafe extern "C" fn __tribute_evidence_extend(
     ability_id: i32,
     prompt_tag: i32,
     tr_dispatch_fn: *const u8,
+    outer: *const Evidence,
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
     let marker = Marker {
@@ -840,6 +845,7 @@ pub unsafe extern "C" fn __tribute_evidence_extend(
         prompt_tag,
         tr_dispatch_fn,
         shadowed: core::ptr::null(),
+        outer,
     };
     Box::into_raw(Box::new(ev.extend(marker)))
 }
@@ -879,6 +885,23 @@ pub unsafe extern "C" fn __tribute_evidence_dup(
 ) -> *mut Evidence {
     let ev = unsafe { &*ev };
     Box::into_raw(Box::new(ev.dup(ability_id)))
+}
+
+/// Return the evidence the top handler of an ability was installed on.
+///
+/// Signature: `(ev: ptr, ability_id: i32) -> ptr`
+///
+/// # Safety
+///
+/// `ev` must be a valid pointer returned by a `__tribute_evidence_*` function
+/// and must hold a marker for `ability_id`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_outer(
+    ev: *const Evidence,
+    ability_id: i32,
+) -> *const Evidence {
+    let ev = unsafe { &*ev };
+    ev.lookup(ability_id).outer
 }
 
 /// Look up the tail-resumptive dispatch function pointer for an ability.
@@ -1180,8 +1203,15 @@ mod tests {
     fn test_evidence_runtime_function_signatures() {
         let _: extern "C" fn() -> *mut Evidence = __tribute_evidence_empty;
         let _: unsafe extern "C" fn(*const Evidence, i32) -> i32 = __tribute_evidence_lookup;
-        let _: unsafe extern "C" fn(*const Evidence, i32, i32, *const u8) -> *mut Evidence =
-            __tribute_evidence_extend;
+        let _: unsafe extern "C" fn(
+            *const Evidence,
+            i32,
+            i32,
+            *const u8,
+            *const Evidence,
+        ) -> *mut Evidence = __tribute_evidence_extend;
+        let _: unsafe extern "C" fn(*const Evidence, i32) -> *const Evidence =
+            __tribute_evidence_outer;
         let _: unsafe extern "C" fn(*const Evidence, i32) -> *mut Evidence =
             __tribute_evidence_mask;
         let _: unsafe extern "C" fn(*const Evidence, i32) -> *mut Evidence = __tribute_evidence_dup;
@@ -1218,7 +1248,7 @@ mod tests {
     fn test_evidence_extend_single() {
         unsafe {
             let ev = __tribute_evidence_empty();
-            let ev2 = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
+            let ev2 = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
 
             let ev2_ref = &*ev2;
             assert_eq!(ev2_ref.markers.len(), 1);
@@ -1240,9 +1270,9 @@ mod tests {
         unsafe {
             let ev = __tribute_evidence_empty();
             // Insert in reverse order: 30, 10, 20
-            let ev = __tribute_evidence_extend(ev, 30, 3, core::ptr::null());
-            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
-            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 30, 3, core::ptr::null(), ev);
+            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
+            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null(), ev);
 
             let ev_ref = &*ev;
             assert_eq!(ev_ref.markers.len(), 3);
@@ -1260,8 +1290,8 @@ mod tests {
     fn test_evidence_lookup_found() {
         unsafe {
             let ev = __tribute_evidence_empty();
-            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
-            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null());
+            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
+            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null(), ev);
 
             let prompt_tag = __tribute_evidence_lookup(ev, 20);
             assert_eq!(prompt_tag, 2);
@@ -1275,7 +1305,7 @@ mod tests {
         unsafe {
             let tr = 0x10usize as *const u8;
             let empty = __tribute_evidence_empty();
-            let ev = __tribute_evidence_extend(empty, 10, 1, tr);
+            let ev = __tribute_evidence_extend(empty, 10, 1, tr, empty);
 
             assert_eq!(__tribute_evidence_lookup_tr(ev, 10), tr);
 
@@ -1291,8 +1321,8 @@ mod tests {
             let inner_tr = 0x30usize as *const u8;
 
             let ev = __tribute_evidence_empty();
-            let outer = __tribute_evidence_extend(ev, 10, 1, outer_tr);
-            let inner = __tribute_evidence_extend(outer, 10, 2, inner_tr);
+            let outer = __tribute_evidence_extend(ev, 10, 1, outer_tr, ev);
+            let inner = __tribute_evidence_extend(outer, 10, 2, inner_tr, outer);
 
             let inner_ref = &*inner;
             assert_eq!(inner_ref.markers.len(), 1);
@@ -1318,10 +1348,10 @@ mod tests {
             let outer_tr = 0x10usize as *const u8;
 
             let ev = __tribute_evidence_empty();
-            let other = __tribute_evidence_extend(ev, 20, 9, core::ptr::null());
-            let outer = __tribute_evidence_extend(other, 10, 1, outer_tr);
-            let middle = __tribute_evidence_extend(outer, 10, 2, core::ptr::null());
-            let inner = __tribute_evidence_extend(middle, 10, 3, core::ptr::null());
+            let other = __tribute_evidence_extend(ev, 20, 9, core::ptr::null(), ev);
+            let outer = __tribute_evidence_extend(other, 10, 1, outer_tr, other);
+            let middle = __tribute_evidence_extend(outer, 10, 2, core::ptr::null(), outer);
+            let inner = __tribute_evidence_extend(middle, 10, 3, core::ptr::null(), middle);
 
             let once = __tribute_evidence_mask(inner, 10);
             assert_eq!(markers(once).len(), 2);
@@ -1344,12 +1374,34 @@ mod tests {
     }
 
     #[test]
+    fn test_evidence_outer_returns_the_evidence_a_handler_was_installed_on() {
+        unsafe {
+            let ev = __tribute_evidence_empty();
+            let other = __tribute_evidence_extend(ev, 20, 9, core::ptr::null(), ev);
+            // The handler of 10 is installed on `other`, after a selection
+            // produced the evidence it extends.
+            let masked = __tribute_evidence_mask(other, 20);
+            let inner = __tribute_evidence_extend(masked, 10, 1, core::ptr::null(), other);
+
+            assert_eq!(__tribute_evidence_outer(inner, 10), other.cast_const());
+            assert_eq!(__tribute_evidence_outer(other, 20), ev.cast_const());
+            // A copy keeps the evidence of the handler it copies.
+            let dup = __tribute_evidence_dup(inner, 10);
+            assert_eq!(__tribute_evidence_outer(dup, 10), other.cast_const());
+
+            for ev in [ev, other, masked, inner, dup] {
+                let _ = Box::from_raw(ev);
+            }
+        }
+    }
+
+    #[test]
     fn test_evidence_mask_removes_unshadowed_ability() {
         unsafe {
             let ev = __tribute_evidence_empty();
-            let one = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
-            let two = __tribute_evidence_extend(one, 20, 2, core::ptr::null());
-            let three = __tribute_evidence_extend(two, 30, 3, core::ptr::null());
+            let one = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
+            let two = __tribute_evidence_extend(one, 20, 2, core::ptr::null(), one);
+            let three = __tribute_evidence_extend(two, 30, 3, core::ptr::null(), two);
 
             let masked = __tribute_evidence_mask(three, 20);
             let masked_ref = &*masked;
@@ -1370,8 +1422,8 @@ mod tests {
             let tr = 0x10usize as *const u8;
 
             let ev = __tribute_evidence_empty();
-            let outer = __tribute_evidence_extend(ev, 10, 1, core::ptr::null());
-            let inner = __tribute_evidence_extend(outer, 10, 2, tr);
+            let outer = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
+            let inner = __tribute_evidence_extend(outer, 10, 2, tr, outer);
 
             let dup = __tribute_evidence_dup(inner, 10);
             assert_eq!(markers(dup).len(), 1);

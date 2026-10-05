@@ -798,15 +798,16 @@ impl Converter<'_> {
             Some(arm) => {
                 let (evidence, plan) = match arm.evidence {
                     ArmEvidence::Flow => (self.current_evidence(source, flow)?, None),
-                    ArmEvidence::Beneath(instances) => (
+                    // Leave the nested handles innermost first.
+                    ArmEvidence::Outside(instances) => (
                         self.current_evidence(source, flow)?,
                         tribute_control::EvidenceStep::plan_attribute(
                             instances
                                 .into_iter()
-                                .map(tribute_control::EvidenceStep::Mask),
+                                .rev()
+                                .map(tribute_control::EvidenceStep::Outer),
                         ),
                     ),
-                    ArmEvidence::Captured(evidence) => (evidence, None),
                 };
                 (arm.installed, evidence, plan)
             }
@@ -1172,21 +1173,17 @@ impl Converter<'_> {
             preserve_scf_yield: false,
             arm: flow.arm.clone(),
         };
-        // Inside the body, an enclosing arm's evidence lies beneath this
-        // handle's markers.
-        let masks = evidence_plan_of(self.ctx, source).is_some();
+        // Inside the body, an enclosing arm's evidence is the evidence this
+        // handle is installed on. A handle that handles nothing installs no
+        // marker and leaves the evidence as it is.
+        let handled = Self::layer_ability_refs(&layer).first().copied();
         let body_arm = flow.arm.clone().map(|arm| ArmResume {
-            evidence: match arm.evidence {
-                ArmEvidence::Flow if !masks => {
-                    ArmEvidence::Beneath(Self::layer_ability_refs(&layer))
-                }
-                ArmEvidence::Beneath(mut instances) if !masks => {
-                    instances.extend(Self::layer_ability_refs(&layer));
-                    ArmEvidence::Beneath(instances)
-                }
-                ArmEvidence::Captured(evidence) => ArmEvidence::Captured(evidence),
-                ArmEvidence::Flow | ArmEvidence::Beneath(_) => {
-                    ArmEvidence::Captured(outer_evidence)
+            evidence: match (arm.evidence, handled) {
+                (evidence, None) => evidence,
+                (ArmEvidence::Flow, Some(instance)) => ArmEvidence::Outside(vec![instance]),
+                (ArmEvidence::Outside(mut instances), Some(instance)) => {
+                    instances.push(instance);
+                    ArmEvidence::Outside(instances)
                 }
             },
             ..arm
