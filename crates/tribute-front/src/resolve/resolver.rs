@@ -174,7 +174,7 @@ impl<'db> Resolver<'db> {
             }
 
             if !self.module_path.is_empty() {
-                let namespace = Symbol::from_dynamic(
+                let namespace = Symbol::new(
                     &self
                         .module_path
                         .iter()
@@ -215,18 +215,14 @@ impl<'db> Resolver<'db> {
             // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
             // A path keyword names a package-root path, read from nowhere else.
             if let Some(namespace) = name.namespace() {
-                let segments: Vec<Symbol> = namespace
-                    .to_string()
-                    .split("::")
-                    .map(Symbol::from_dynamic)
-                    .collect();
+                let segments: Vec<Symbol> =
+                    namespace.to_string().split("::").map(Symbol::new).collect();
                 match absolute_path(self.package_depth, &self.module_path, &segments) {
                     Ok(Some(path)) => {
                         let binding = if path.is_empty() {
                             self.env.lookup(&sym)
                         } else {
-                            let namespace =
-                                Symbol::from_dynamic(&path.iter().format("::").to_string());
+                            let namespace = Symbol::new(&path.iter().format("::").to_string());
                             self.env.lookup_qualified(&namespace, &sym)
                         };
                         if let Some(binding) = binding {
@@ -260,7 +256,7 @@ impl<'db> Resolver<'db> {
     /// Whether the enclosing inline module itself defines `name`.
     fn defined_in_module(&self, name: &Symbol) -> bool {
         !self.module_path.is_empty() && {
-            let namespace = Symbol::from_dynamic(&self.module_path.iter().format("::").to_string());
+            let namespace = Symbol::new(&self.module_path.iter().format("::").to_string());
             self.env.lookup_qualified(&namespace, name).is_some()
         }
     }
@@ -280,13 +276,13 @@ impl<'db> Resolver<'db> {
             let (first, rest) = path.split_once("::").unwrap_or((path, ""));
             (first.to_owned(), rest.to_owned())
         });
-        let target = imports.get(&Symbol::from_dynamic(&first))?;
+        let target = imports.get(&Symbol::new(&first))?;
         let mut path = target.iter().format("::").to_string();
         if !rest.is_empty() {
             path.push_str("::");
             path.push_str(&rest);
         }
-        Some(Symbol::from_dynamic(&path))
+        Some(Symbol::new(&path))
     }
 
     /// The package-root namespace a qualified path's namespace names.
@@ -300,13 +296,13 @@ impl<'db> Resolver<'db> {
         }
         let spelling = namespace.to_string();
         let (first, rest) = spelling.split_once("::").unwrap_or((&spelling, ""));
-        let first = Symbol::from_dynamic(first);
+        let first = Symbol::new(first);
         if self.module_path.is_empty() {
             if self.env.has_namespace(&namespace) || self.env.declares(first.clone()) {
                 return Some(namespace);
             }
         } else {
-            let nested = Symbol::from_dynamic(&format!(
+            let nested = Symbol::new(&format!(
                 "{}::{namespace}",
                 self.module_path.iter().format("::")
             ));
@@ -320,7 +316,7 @@ impl<'db> Resolver<'db> {
                 path.push_str("::");
                 path.push_str(rest);
             }
-            return Some(Symbol::from_dynamic(&path));
+            return Some(Symbol::new(&path));
         }
         (self.module_path.is_empty() || self.env.is_library_root(&first)).then_some(namespace)
     }
@@ -333,7 +329,7 @@ impl<'db> Resolver<'db> {
         Some(
             namespace
                 .split("::")
-                .map(Symbol::from_dynamic)
+                .map(Symbol::new)
                 .chain(rest.iter().cloned())
                 .collect(),
         )
@@ -345,7 +341,7 @@ impl<'db> Resolver<'db> {
         if namespace.is_empty() {
             return self.env.lookup(last);
         }
-        let namespace = Symbol::from_dynamic(&namespace.iter().format("::").to_string());
+        let namespace = Symbol::new(&namespace.iter().format("::").to_string());
         self.env.lookup_qualified(&namespace, last)
     }
 
@@ -436,8 +432,7 @@ impl<'db> Resolver<'db> {
                         } else if let Some(path) = self.library_namespace_path(segments) {
                             *segments = path;
                         } else if !self.env.is_library_root(first) {
-                            let path =
-                                Symbol::from_dynamic(&segments.iter().format("::").to_string());
+                            let path = Symbol::new(&segments.iter().format("::").to_string());
                             self.report_unresolved_annotation(ann.id, &path);
                             ann.kind = TypeAnnotationKind::Error;
                         }
@@ -499,7 +494,7 @@ impl<'db> Resolver<'db> {
         if parent.is_empty() {
             return self.env.lookup(name);
         }
-        let namespace = Symbol::from_dynamic(&parent.iter().format("::").to_string());
+        let namespace = Symbol::new(&parent.iter().format("::").to_string());
         self.env.lookup_qualified(&namespace, name)
     }
 
@@ -819,7 +814,7 @@ impl<'db> Resolver<'db> {
                 if segs.is_empty() {
                     None
                 } else {
-                    Some(Symbol::from_dynamic(
+                    Some(Symbol::new(
                         &segs
                             .iter()
                             .map(|s| s.to_string())
@@ -905,13 +900,13 @@ impl<'db> Resolver<'db> {
             let Some((last, namespace)) = path.split_last() else {
                 return false;
             };
-            let full = Symbol::from_dynamic(&path.iter().format("::").to_string());
+            let full = Symbol::new(&path.iter().format("::").to_string());
             // A single-segment path must name a definition: `env.lookup`
             // would also find the module placeholder this import inserted.
             let found = if namespace.is_empty() {
                 self.env.has_definition(last)
             } else {
-                let namespace = Symbol::from_dynamic(&namespace.iter().format("::").to_string());
+                let namespace = Symbol::new(&namespace.iter().format("::").to_string());
                 self.env.lookup_qualified(&namespace, last).is_some()
             };
             found || self.env.has_namespace(&full)

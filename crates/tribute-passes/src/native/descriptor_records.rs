@@ -19,7 +19,7 @@ use trunk_ir::dialect::clif;
 use trunk_ir::ops::DialectType;
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::Location;
-use trunk_ir::{BlockRef, OpRef, StringRef, Symbol, SymbolPath, TypeRef};
+use trunk_ir::{BlockRef, OpRef, StringRef, SymbolPath, TypeRef};
 
 use super::rtti::{RTTI_BOOL, RTTI_FLOAT, RTTI_INT, RTTI_NAT, RTTI_NIL};
 
@@ -213,7 +213,7 @@ pub fn generate(
     // Zero bytes rather than zero-initialized data, so the table lives in a
     // data section: macOS linkers reject relocations in zero-fill sections.
     let table = clif::Data::operands()
-        .sym_name(Symbol::new(RTTI_TABLE))
+        .sym_name(RTTI_TABLE)
         .bytes(bytes.into())
         .align(POINTER_SIZE as u32)
         .regions(relocs)

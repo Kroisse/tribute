@@ -241,7 +241,7 @@ impl<'a> Converter<'a> {
     fn fresh_helper(&mut self, prefix: &str) -> Symbol {
         let index = self.helper_index;
         self.helper_index += 1;
-        Symbol::from_dynamic(&format!("__tribute_{prefix}_{index}"))
+        Symbol::new(&format!("__tribute_{prefix}_{index}"))
     }
 
     fn make_block(&mut self, location: Location, types: &[TypeRef]) -> BlockRef {
@@ -540,9 +540,8 @@ pub fn tribute_control_to_cps(
         blocks: trunk_ir::smallvec::smallvec![new_block],
         parent_op: None,
     });
-    let temp_symbol = Symbol::new("__tribute_control_to_cps_candidate");
     let temp_module = core::Module::operands()
-        .sym_name(temp_symbol)
+        .sym_name("__tribute_control_to_cps_candidate")
         .regions(new_region)
         .build(ctx, module_location);
     let candidate: Module = temp_module.into();

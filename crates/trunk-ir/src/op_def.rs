@@ -73,10 +73,7 @@ static REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static OpDef>> = LazyLock:
     let mut registry = HashMap::default();
     for OpDefRegistration(def) in inventory::iter::<OpDefRegistration> {
         let schema = &def.schema;
-        let key = (
-            Symbol::from_dynamic(schema.dialect),
-            Symbol::from_dynamic(schema.name),
-        );
+        let key = (Symbol::new(schema.dialect), Symbol::new(schema.name));
         if let Some(previous) = registry.insert(key, *def) {
             panic!(
                 "operation {}.{} is registered twice ({previous:p} and {def:p})",

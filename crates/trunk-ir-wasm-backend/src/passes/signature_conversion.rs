@@ -158,7 +158,7 @@ mod tests {
             parent_op: None,
         });
         wasm::Func::operands()
-            .sym_name(Symbol::new(name))
+            .sym_name(name)
             .r#type(signature)
             .regions(body)
             .build(ctx, loc)

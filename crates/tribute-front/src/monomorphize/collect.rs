@@ -698,7 +698,7 @@ mod tests {
                     type_params: (0..arity)
                         .map(|p| crate::ast::TypeParamDecl {
                             id: NodeId::from_raw(100 + i * 2 + p),
-                            name: Symbol::from_dynamic(&format!("t{p}")),
+                            name: Symbol::new(&format!("t{p}")),
                             bounds: vec![],
                         })
                         .collect(),

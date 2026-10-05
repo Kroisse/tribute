@@ -1752,8 +1752,7 @@ fn parameter_attributes_follow_their_parameters_to_the_physical_abi() {
             .copied()
             .find_map(|op| {
                 let function = func::Func::from_op(ctx, op).ok()?;
-                (function.sym_name(ctx) == Symbol::new("__tribute_func_ref_adapter_0"))
-                    .then_some(function)
+                (function.sym_name(ctx) == "__tribute_func_ref_adapter_0").then_some(function)
             })
             .expect("func_ref adapter");
         func::FuncSig::from_type_ref(ctx, adapter.r#type(ctx)).unwrap()

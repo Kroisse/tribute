@@ -357,11 +357,11 @@ mod tests {
             .collect::<Vec<_>>();
         let declaration = functions
             .iter()
-            .find(|function| function.sym_name(&ctx) == Symbol::new("declaration"))
+            .find(|function| function.sym_name(&ctx) == "declaration")
             .expect("bodyless declaration");
         let definition = functions
             .iter()
-            .find(|function| function.sym_name(&ctx) == Symbol::new("definition"))
+            .find(|function| function.sym_name(&ctx) == "definition")
             .expect("bodied definition");
 
         assert_eq!(ctx.op_region_count(declaration.op_ref()), 0);

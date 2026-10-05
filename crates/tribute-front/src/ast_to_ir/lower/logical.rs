@@ -100,7 +100,7 @@ fn op(
     let data = build(OperationDataBuilder::new(
         location,
         Symbol::new("tribute_control"),
-        Symbol::from_dynamic(name),
+        Symbol::new(name),
     ))
     .build(ir);
     let op = ir.create_op(data);
@@ -374,7 +374,7 @@ pub(super) fn lower_module<'db>(
         parent_op: None,
     });
     let module = core::Module::operands()
-        .sym_name(module_name)
+        .sym_name(ir.intern_symbol_text(&module_name))
         .regions(region)
         .build(ir, location);
     well_known_types.attach(ir, module.op_ref());
@@ -718,12 +718,9 @@ fn prescan_struct_accessor_signatures<'db>(
                 for (index, field) in declaration.fields.iter().enumerate() {
                     let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
                     let getter_name = if prefix.is_empty() {
-                        Symbol::from_dynamic(&format!("{}::{}", declaration.name, field_name))
+                        Symbol::new(&format!("{}::{}", declaration.name, field_name))
                     } else {
-                        Symbol::from_dynamic(&format!(
-                            "{}::{}::{}",
-                            prefix, declaration.name, field_name
-                        ))
+                        Symbol::new(&format!("{}::{}::{}", prefix, declaration.name, field_name))
                     };
                     let field_type = layout_fields
                         .get(index)
@@ -801,9 +798,9 @@ fn lower_struct_accessors<'db>(
     for (index, field) in declaration.fields.iter().enumerate() {
         let field_name = field.name.clone().unwrap_or_else(|| Symbol::new("_"));
         let getter_name = if prefix.is_empty() {
-            Symbol::from_dynamic(&format!("{}::{}", declaration.name, field_name))
+            Symbol::new(&format!("{}::{}", declaration.name, field_name))
         } else {
-            Symbol::from_dynamic(&format!("{}::{}::{}", prefix, declaration.name, field_name))
+            Symbol::new(&format!("{}::{}::{}", prefix, declaration.name, field_name))
         };
         let field_type = tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
             .and_then(|fields| fields.get(index).map(|(_, ty)| *ty))

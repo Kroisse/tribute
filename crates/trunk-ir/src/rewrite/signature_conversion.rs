@@ -332,7 +332,7 @@ mod tests {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new(name))
+            .sym_name(name)
             .r#type(func_type)
             .regions(body)
             .build(ctx, loc);

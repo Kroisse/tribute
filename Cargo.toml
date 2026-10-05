@@ -28,6 +28,7 @@ string_cache = { version = "0.11", default-features = false }
 malloc_size_of = { version = "0.1", default-features = false }
 string_cache_codegen = "0.11"
 libc = "0.2"
+litrs = { version = "1", default-features = false }
 lsp-server = "0.10"
 lsp-types = "0.97"
 object = { version = "0.38", features = ["write_core"] }

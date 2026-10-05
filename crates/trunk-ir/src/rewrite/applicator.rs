@@ -515,7 +515,7 @@ mod tests {
         let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
         let func_ty = crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref();
         wasm::Func::operands()
-            .sym_name(Symbol::new(name))
+            .sym_name(name)
             .r#type(func_ty)
             .regions(region)
             .build(ctx, loc)

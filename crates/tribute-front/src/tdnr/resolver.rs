@@ -419,7 +419,7 @@ impl<'db> TdnrResolver<'db> {
         // current module; the package root holds the rest.
         let scope = prefix.trim_end_matches("::");
         if !scope.is_empty() {
-            let candidate = Symbol::from_dynamic(&format!("{scope}::{spelling}"));
+            let candidate = Symbol::new(&format!("{scope}::{spelling}"));
             if let Some(id) = self.type_identities.get(&candidate) {
                 return *id;
             }

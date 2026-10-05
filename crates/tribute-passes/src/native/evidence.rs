@@ -49,7 +49,7 @@ pub fn lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) {
 }
 
 fn try_lower_evidence_to_native_func(ctx: &mut IrContext, func_op: func::Func) -> PassRunResult {
-    if is_evidence_runtime_fn(&Symbol::from_dynamic(func_op.sym_name(ctx))) {
+    if is_evidence_runtime_fn(&Symbol::new(func_op.sym_name(ctx))) {
         return Ok(());
     }
     lower_effect_abi_to_native(ctx, func_op)?;
@@ -104,8 +104,7 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
     ] {
         if module.ops(ctx).iter().copied().any(|op| {
-            func::Func::from_op(ctx, op)
-                .is_ok_and(|function| function.sym_name(ctx) == Symbol::new(name))
+            func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == name)
         }) {
             continue;
         }

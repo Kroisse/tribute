@@ -54,7 +54,7 @@ impl SymbolTable {
                         ctx.op(op)
                             .attributes
                             .get_str(ctx, SYM_NAME)
-                            .map(Symbol::from_dynamic),
+                            .map(Symbol::new),
                     );
                     for region in ctx.op_regions(op) {
                         self.collect_region(ctx, region, &nested);
@@ -62,7 +62,7 @@ impl SymbolTable {
                 } else {
                     if let Some(name) = ctx.op(op).attributes.get_str(ctx, SYM_NAME) {
                         self.definitions
-                            .entry(SymbolPath::in_modules(path, Symbol::from_dynamic(name)))
+                            .entry(SymbolPath::in_modules(path, Symbol::new(name)))
                             .or_default()
                             .push(op);
                     }
@@ -134,7 +134,7 @@ impl InfallibleAnalysis for SymbolTable {}
 pub fn qualified_name(ctx: &IrContext, op: OpRef) -> Option<SymbolPath> {
     let name = ctx.op(op).attributes.get_str(ctx, SYM_NAME)?;
     let path = parent_op(ctx, op).map_or_else(Vec::new, |parent| module_path(ctx, parent));
-    Some(SymbolPath::in_modules(&path, Symbol::from_dynamic(name)))
+    Some(SymbolPath::in_modules(&path, Symbol::new(name)))
 }
 
 /// The root-qualified path of the modules enclosing `op`, including `op`
@@ -150,7 +150,7 @@ fn module_path(ctx: &IrContext, op: OpRef) -> Vec<Symbol> {
                 ctx.op(op)
                     .attributes
                     .get_str(ctx, SYM_NAME)
-                    .map(Symbol::from_dynamic),
+                    .map(Symbol::new),
             );
         }
         current = parent;

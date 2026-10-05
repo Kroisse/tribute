@@ -258,13 +258,9 @@ impl CanonicalizeFold {
 /// Iterate every fold registered via inventory, keyed by interned
 /// `(dialect, op_name)` symbols ready for [`FoldDispatchPattern::from_folds`].
 fn folds_from_inventory() -> impl Iterator<Item = (Symbol, Symbol, FoldFn)> {
-    inventory::iter::<CanonicalizeFold>.into_iter().map(|reg| {
-        (
-            Symbol::from_dynamic(reg.dialect),
-            Symbol::from_dynamic(reg.op_name),
-            reg.fold,
-        )
-    })
+    inventory::iter::<CanonicalizeFold>
+        .into_iter()
+        .map(|reg| (Symbol::new(reg.dialect), Symbol::new(reg.op_name), reg.fold))
 }
 
 /// Iterate inventory folds whose dialect matches `dialect`. Used by
@@ -279,13 +275,7 @@ pub(crate) fn folds_for_dialect(
     inventory::iter::<CanonicalizeFold>
         .into_iter()
         .filter(move |reg| reg.dialect == dialect)
-        .map(|reg| {
-            (
-                Symbol::from_dynamic(reg.dialect),
-                Symbol::from_dynamic(reg.op_name),
-                reg.fold,
-            )
-        })
+        .map(|reg| (Symbol::new(reg.dialect), Symbol::new(reg.op_name), reg.fold))
 }
 
 // Registration is done via the `#[trunk_ir::canonicalize_fold(...)]`
@@ -363,8 +353,8 @@ mod tests {
     use std::ops::ControlFlow;
 
     fn count_ops(ctx: &IrContext, module: Module, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::from_dynamic(dialect);
-        let name_sym = Symbol::from_dynamic(name);
+        let dialect_sym = Symbol::new(dialect);
+        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
             let data = ctx.op(op);
@@ -377,8 +367,8 @@ mod tests {
     }
 
     fn count_ops_under(ctx: &IrContext, root: OpRef, dialect: &str, name: &str) -> usize {
-        let dialect_sym = Symbol::from_dynamic(dialect);
-        let name_sym = Symbol::from_dynamic(name);
+        let dialect_sym = Symbol::new(dialect);
+        let name_sym = Symbol::new(name);
         let mut count = 0usize;
         let _ = walk_op::<()>(ctx, root, &mut |op| {
             let data = ctx.op(op);

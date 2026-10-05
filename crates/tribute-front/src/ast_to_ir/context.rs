@@ -427,7 +427,7 @@ impl<'db> IrLoweringCtx<'db> {
             .join("::");
         prefix.push_str("::");
         name.with_str(|s| prefix.push_str(s));
-        Symbol::from_dynamic(&prefix)
+        Symbol::new(&prefix)
     }
 
     /// Register struct field order for lowering Record expressions.
@@ -563,7 +563,7 @@ impl<'db> IrLoweringCtx<'db> {
                     .enumerate()
                     .map(|(index, element)| {
                         (
-                            Symbol::from_dynamic(&index.to_string()),
+                            Symbol::new(&index.to_string()),
                             self.convert_logical_type(ir, *element),
                         )
                     })
@@ -594,7 +594,7 @@ impl<'db> IrLoweringCtx<'db> {
     /// arena dialect type names here: distinct callable signatures all share
     /// the `tribute_control.func_sig` dialect name.
     pub fn logical_tuple_name(&self, ty: crate::ast::Type<'db>) -> Symbol {
-        Symbol::from_dynamic(&format!("__logical_tuple_{}", self.logical_type_key(ty)))
+        Symbol::new(&format!("__logical_tuple_{}", self.logical_type_key(ty)))
     }
 
     fn logical_type_key(&self, ty: crate::ast::Type<'db>) -> String {
@@ -1046,7 +1046,7 @@ mod tests {
         let ctx = lowering_ctx(&db, &mut ir);
         let ability = Symbol::new("State");
         let effect = |name: &str| Effect {
-            ability_id: AbilityId::source(&db, Symbol::from_dynamic(name)),
+            ability_id: AbilityId::source(&db, Symbol::new(name)),
             args: vec![],
         };
         let open = |id, effects| EffectRow::new(&db, effects, Some(EffectVar { id }));

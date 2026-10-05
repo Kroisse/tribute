@@ -1358,7 +1358,7 @@ mod tests {
 
         // Function
         let f = func::Func::operands()
-            .sym_name(Symbol::new("add"))
+            .sym_name("add")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1402,7 +1402,7 @@ mod tests {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1422,7 +1422,7 @@ mod tests {
             parent_op: None,
         });
         let module = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(&mut ctx, loc);
 
@@ -1460,7 +1460,7 @@ mod tests {
             parent_op: None,
         });
         let inner_func = func::Func::operands()
-            .sym_name(Symbol::new("get_x"))
+            .sym_name("get_x")
             .r#type(func_ty)
             .regions(inner_body)
             .build(&mut ctx, loc);
@@ -1480,7 +1480,7 @@ mod tests {
             parent_op: None,
         });
         let inner_module = core::Module::operands()
-            .sym_name(Symbol::new("Point"))
+            .sym_name("Point")
             .regions(inner_mod_region)
             .build(&mut ctx, loc);
 
@@ -1507,7 +1507,7 @@ mod tests {
         });
         let make_func_ty = make_func_type(&mut ctx, &[], i32_ty);
         let outer_func = func::Func::operands()
-            .sym_name(Symbol::new("make"))
+            .sym_name("make")
             .r#type(make_func_ty)
             .regions(outer_body)
             .build(&mut ctx, loc);
@@ -1528,7 +1528,7 @@ mod tests {
             parent_op: None,
         });
         let outer_module = core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(outer_mod_region)
             .build(&mut ctx, loc);
 
@@ -1598,7 +1598,7 @@ mod tests {
 
         // Empty symbol (should quote)
         out.clear();
-        write_symbol(&mut out, &Symbol::from_dynamic("")).unwrap();
+        write_symbol(&mut out, &Symbol::new("")).unwrap();
         assert_eq!(out, r#"@"""#);
 
         // Float infinity (should not append .0)
@@ -1666,7 +1666,7 @@ mod tests {
             parent_op: None,
         });
         core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc)
             .op_ref()
@@ -1699,7 +1699,7 @@ mod tests {
         });
         let func_ty = make_func_type(ctx, &[param_ty], ret_ty);
         func::Func::operands()
-            .sym_name(Symbol::from_dynamic(name))
+            .sym_name(ctx.intern_str(name))
             .r#type(func_ty)
             .regions(body)
             .build(ctx, loc)
@@ -1766,7 +1766,7 @@ mod tests {
         let struct_ty = make_named_type(&mut ctx, "Point", &[("x", i32_ty), ("y", i32_ty)]);
 
         // Manually register this type as an alias
-        ctx.register_type_alias(Symbol::from_dynamic("my_point"), struct_ty);
+        ctx.register_type_alias(Symbol::new("my_point"), struct_ty);
 
         let f1 = make_identity_func(&mut ctx, loc, "f1", struct_ty, struct_ty);
         let f2 = make_identity_func(&mut ctx, loc, "f2", struct_ty, struct_ty);

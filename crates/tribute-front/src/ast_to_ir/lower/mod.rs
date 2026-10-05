@@ -154,7 +154,7 @@ pub(super) fn get_or_create_logical_tuple_type<'db>(
         .iter()
         .enumerate()
         .map(|(i, ty)| {
-            let name = Symbol::from_dynamic(&i.to_string());
+            let name = Symbol::new(&i.to_string());
             let ir_ty = ctx.convert_logical_type(ir, *ty);
             (name, ir_ty)
         })

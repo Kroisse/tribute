@@ -223,7 +223,7 @@ fn lower_single_lambda(
         .as_type_ref();
 
     let func_op = func::Func::operands()
-        .sym_name(lifted_name.clone())
+        .sym_name(ctx.intern_symbol_text(&lifted_name))
         .r#type(func_ty)
         .regions(func_body_region)
         .build(ctx, location);
@@ -457,7 +457,7 @@ impl LambdaNamer {
         let count = self.counters.entry_ref(parent).or_insert(0);
         let name = format!("{parent}::__clam_{count}");
         *count += 1;
-        Symbol::from_dynamic(&name)
+        Symbol::new(&name)
     }
 }
 
@@ -593,7 +593,7 @@ mod tests {
         let outer_func_ty =
             func::func_sig(&mut ctx, std::iter::empty::<TypeRef>(), [anyref_ty]).as_type_ref();
         let outer_func = func::Func::operands()
-            .sym_name(Symbol::new("test_fn"))
+            .sym_name("test_fn")
             .r#type(outer_func_ty)
             .regions(outer_body)
             .build(&mut ctx, loc);
@@ -622,10 +622,7 @@ mod tests {
 
         // The lifted function should exist.
         let lifted = func::Func::from_op(&ctx, ops[1]).unwrap();
-        assert_eq!(
-            lifted.sym_name(&ctx),
-            Symbol::from_dynamic("test_fn::__clam_0")
-        );
+        assert_eq!(lifted.sym_name(&ctx), "test_fn::__clam_0");
 
         // Direct lifted function has only the physical environment and source arg.
         let lifted_ty = lifted.r#type(&ctx);
@@ -714,7 +711,7 @@ mod tests {
             });
             let outer_ty = func::func_sig(&mut ctx, [evidence_ty], [anyref_ty]).as_type_ref();
             let outer = func::Func::operands()
-                .sym_name(Symbol::new("test_fn"))
+                .sym_name("test_fn")
                 .r#type(outer_ty)
                 .regions(outer_body)
                 .build(&mut ctx, loc);
@@ -800,7 +797,7 @@ mod tests {
         });
         let outer_func_ty = func::func_sig(&mut ctx, [i32_ty], [anyref_ty]).as_type_ref();
         let outer_func = func::Func::operands()
-            .sym_name(Symbol::new("test_fn"))
+            .sym_name("test_fn")
             .r#type(outer_func_ty)
             .regions(outer_body)
             .build(&mut ctx, loc);

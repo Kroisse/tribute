@@ -60,7 +60,7 @@ impl Converter<'_> {
         };
         self.frames.insert(answer, frame);
         self.frame_layout_aliases
-            .push((Symbol::from_dynamic(&name_text), layout));
+            .push((Symbol::new(&name_text), layout));
         frame
     }
 
@@ -206,10 +206,7 @@ impl Converter<'_> {
     }
 
     pub(super) fn copy_extra_attrs(&mut self, source: OpRef, target: OpRef, excluded: &[&str]) {
-        let excluded: HashSet<Symbol> = excluded
-            .iter()
-            .map(|name| Symbol::from_dynamic(name))
-            .collect();
+        let excluded: HashSet<Symbol> = excluded.iter().map(|name| Symbol::new(name)).collect();
         let attrs = self.convert_attrs(&self.ctx.op(source).attributes.clone());
         for (key, value) in attrs {
             if !excluded.contains(&key) {

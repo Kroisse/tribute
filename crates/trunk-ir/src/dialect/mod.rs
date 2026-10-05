@@ -157,7 +157,7 @@ mod tests {
 
         // Constructor order: ctx, location, attrs (sym_name, r#type), regions (body)
         let f = super::func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(func_ty)
             .regions(region)
             .build(&mut ctx, loc);
@@ -167,7 +167,7 @@ mod tests {
         assert_eq!(f.op_ref(), f2.op_ref());
 
         // Verify attrs
-        assert_eq!(f.sym_name(&ctx), Symbol::new("main"));
+        assert_eq!(f.sym_name(&ctx), "main");
 
         // Verify region accessor
         assert_eq!(f.body(&ctx), region);

@@ -52,8 +52,8 @@ static REGISTRY: LazyLock<PureOpRegistry> = LazyLock::new(|| {
     let mut registry = PureOpRegistry::new();
 
     for reg in inventory::iter::<PureOpRegistration> {
-        let dialect = Symbol::from_dynamic(reg.dialect);
-        let op_name = Symbol::from_dynamic(reg.op_name);
+        let dialect = Symbol::new(reg.dialect);
+        let op_name = Symbol::new(reg.op_name);
         registry.pure_ops.insert((dialect, op_name));
     }
 
@@ -170,8 +170,8 @@ static ISOLATED_REGISTRY: LazyLock<IsolatedFromAboveRegistry> = LazyLock::new(||
     let mut registry = IsolatedFromAboveRegistry::new();
 
     for reg in inventory::iter::<IsolatedFromAboveRegistration> {
-        let dialect = Symbol::from_dynamic(reg.dialect);
-        let op_name = Symbol::from_dynamic(reg.op_name);
+        let dialect = Symbol::new(reg.dialect);
+        let op_name = Symbol::new(reg.op_name);
         registry.isolated_ops.insert((dialect, op_name));
     }
 
@@ -417,8 +417,8 @@ static CALLABLE_OWNER_REGISTRY: LazyLock<
     let mut registry = HashMap::default();
     for registration in inventory::iter::<CallableOwnerRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -529,8 +529,8 @@ static CALLABLE_EXIT_REGISTRY: LazyLock<
     let mut registry = HashMap::default();
     for registration in inventory::iter::<CallableExitRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -610,8 +610,8 @@ static CALL_LIKE_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static CallLikeR
         let mut registry = HashMap::default();
         for registration in inventory::iter::<CallLikeRegistration> {
             let key = (
-                Symbol::from_dynamic(registration.dialect),
-                Symbol::from_dynamic(registration.op_name),
+                Symbol::new(registration.dialect),
+                Symbol::new(registration.op_name),
             );
             assert!(
                 registry.insert(key, registration).is_none(),
@@ -750,8 +750,8 @@ static INDIRECT_CALL_LIKE_REGISTRY: LazyLock<
     let mut registry = HashMap::default();
     for registration in inventory::iter::<IndirectCallLikeRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -863,8 +863,8 @@ static BRANCH_REGISTRY: LazyLock<HashMap<(Symbol, Symbol), &'static BranchRegist
         let mut registry = HashMap::default();
         for registration in inventory::iter::<BranchRegistration> {
             let key = (
-                Symbol::from_dynamic(registration.dialect),
-                Symbol::from_dynamic(registration.op_name),
+                Symbol::new(registration.dialect),
+                Symbol::new(registration.op_name),
             );
             assert!(
                 registry.insert(key, registration).is_none(),
@@ -1000,8 +1000,8 @@ static REGION_BRANCH_REGISTRY: LazyLock<
     let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),
@@ -1138,8 +1138,8 @@ static REGION_BRANCH_TERMINATOR_REGISTRY: LazyLock<
     let mut registry = HashMap::default();
     for registration in inventory::iter::<RegionBranchTerminatorRegistration> {
         let key = (
-            Symbol::from_dynamic(registration.dialect),
-            Symbol::from_dynamic(registration.op_name),
+            Symbol::new(registration.dialect),
+            Symbol::new(registration.op_name),
         );
         assert!(
             registry.insert(key, registration).is_none(),

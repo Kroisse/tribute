@@ -54,7 +54,7 @@ pub(crate) fn c_helper(
             ctx.op(declaration)
                 .attributes
                 .get_str(ctx, "sym_name")
-                .map(Symbol::from_dynamic)
+                .map(Symbol::new)
         })
         .flatten()
 }

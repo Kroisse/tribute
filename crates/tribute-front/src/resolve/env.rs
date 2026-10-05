@@ -310,8 +310,8 @@ impl<'db> ModuleEnv<'db> {
             let spelling = ns.to_string();
             if let Some(rest) = spelling.strip_prefix(&prefix) {
                 let alias = rest.split("::").next().unwrap_or_default();
-                let namespace = Symbol::from_dynamic(&format!("{prefix}{alias}"));
-                self.add_library_namespace(Symbol::from_dynamic(alias), namespace);
+                let namespace = Symbol::new(&format!("{prefix}{alias}"));
+                self.add_library_namespace(Symbol::new(alias), namespace);
             }
             for (name, binding) in bindings {
                 self.add_to_namespace_if_absent(ns.clone(), name, binding.clone());
@@ -323,5 +323,5 @@ impl<'db> ModuleEnv<'db> {
 /// The first segment of a qualified namespace.
 fn namespace_root(namespace: &Symbol) -> Symbol {
     let spelling = namespace.to_string();
-    Symbol::from_dynamic(spelling.split("::").next().unwrap_or_default())
+    Symbol::new(spelling.split("::").next().unwrap_or_default())
 }

@@ -4371,9 +4371,7 @@ mod tests {
                 )))),
                 abilities: names
                     .iter()
-                    .map(|name| {
-                        make_annotation(TypeAnnotationKind::Named(Symbol::from_dynamic(name)))
-                    })
+                    .map(|name| make_annotation(TypeAnnotationKind::Named(Symbol::new(name))))
                     .collect(),
             })
         };

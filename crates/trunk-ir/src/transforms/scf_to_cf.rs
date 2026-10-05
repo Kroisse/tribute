@@ -905,7 +905,7 @@ mod tests {
             parent_op: None,
         });
         func::Func::operands()
-            .sym_name(Symbol::new(name))
+            .sym_name(name)
             .r#type(fn_ty)
             .regions(body_region)
             .build(ctx, loc)
@@ -993,7 +993,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(body_region)
             .build(&mut ctx, loc);
@@ -1138,7 +1138,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(body_region)
             .build(&mut ctx, loc);
@@ -1849,7 +1849,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(func_body)
             .build(&mut ctx, loc);
@@ -1920,7 +1920,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(func_body)
             .build(&mut ctx, loc);
@@ -2066,7 +2066,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(func_body)
             .build(&mut ctx, loc);
@@ -2178,7 +2178,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(func_body)
             .build(&mut ctx, loc);
@@ -2240,7 +2240,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(func_body)
             .build(&mut ctx, loc);
@@ -2280,7 +2280,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -2378,7 +2378,7 @@ mod tests {
             parent_op: None,
         });
         let func_op = func::Func::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .r#type(fn_ty)
             .regions(body)
             .build(&mut ctx, loc);

@@ -181,7 +181,7 @@ fn logical_constructor_pattern<'p, 'db>(
         Some(fields) => {
             let (names, fields) = fields
                 .into_iter()
-                .map(|(name, ty)| (Symbol::from_dynamic(ir.str(name)), ty))
+                .map(|(name, ty)| (Symbol::new(ir.str(name)), ty))
                 .unzip();
             (ConstructorLayout::Struct { ty, fields }, names)
         }

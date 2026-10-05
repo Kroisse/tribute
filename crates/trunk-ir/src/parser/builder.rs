@@ -85,8 +85,8 @@ impl<'a> ArenaIrBuilder<'a> {
                 params,
                 attrs,
             } => {
-                let dialect = Symbol::from_dynamic(dialect);
-                let name = Symbol::from_dynamic(name);
+                let dialect = Symbol::new(dialect);
+                let name = Symbol::new(name);
                 let params = self.build_params(params)?;
                 let attrs = self.build_type_attrs(&dialect, &name, attrs)?;
 
@@ -127,7 +127,7 @@ impl<'a> ArenaIrBuilder<'a> {
     fn build_attr_dict(&mut self, attrs: &RawAttrDict<'_>) -> Result<AttributeMap, ParseError> {
         attrs
             .iter()
-            .map(|(key, value)| Ok((Symbol::from_dynamic(key), self.build_attribute(value)?)))
+            .map(|(key, value)| Ok((Symbol::new(key), self.build_attribute(value)?)))
             .collect()
     }
 
@@ -288,7 +288,7 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            &Symbol::new("func"),
+            &crate::symbol!("func"),
             &Symbol::new("func_sig"),
             attrs,
             &inputs,
@@ -325,8 +325,8 @@ impl<'a> ArenaIrBuilder<'a> {
         let inputs = self.build_params(inputs)?;
         let results = self.build_params(results)?;
         let attrs = self.build_function_type_attrs(
-            &Symbol::from_dynamic(dialect),
-            &Symbol::from_dynamic(name),
+            &Symbol::new(dialect),
+            &Symbol::new(name),
             attrs,
             &inputs,
             &results,
@@ -340,10 +340,9 @@ impl<'a> ArenaIrBuilder<'a> {
             message: format!("{dialect}.{name} result count exceeds u32"),
             offset: 0,
         })?;
-        let mut builder =
-            TypeDataBuilder::new(Symbol::from_dynamic(dialect), Symbol::from_dynamic(name))
-                .params(inputs)
-                .params(results);
+        let mut builder = TypeDataBuilder::new(Symbol::new(dialect), Symbol::new(name))
+            .params(inputs)
+            .params(results);
         for (key, value) in attrs {
             builder = builder.attr(key, value);
         }
@@ -368,7 +367,7 @@ impl<'a> ArenaIrBuilder<'a> {
             RawAttribute::Float(f) => Attribute::FloatBits(f.to_bits()),
             RawAttribute::String(s) => self.ctx.string_attr(s),
             RawAttribute::SymbolRef(components) => Attribute::SymbolRef(SymbolPath::new(
-                components.iter().map(|name| Symbol::from_dynamic(name)),
+                components.iter().map(|name| Symbol::new(name)),
             )),
             RawAttribute::Type(t) => Attribute::Type(self.build_type(t)?),
             RawAttribute::List(items) => {
@@ -382,7 +381,7 @@ impl<'a> ArenaIrBuilder<'a> {
                 let mut dict = crate::types::AttributeMap::new();
                 for (key, value) in entries {
                     let value = self.build_attribute(value)?;
-                    if dict.insert(Symbol::from_dynamic(key), value).is_some() {
+                    if dict.insert(Symbol::new(key), value).is_some() {
                         return Err(ParseError {
                             message: format!("duplicate dictionary attribute key '{key}'"),
                             offset: 0,
@@ -457,7 +456,7 @@ impl<'a> ArenaIrBuilder<'a> {
         for (name, raw_ty) in &raw.type_aliases {
             let ty = self.build_type(raw_ty)?;
             self.scope.type_alias_map.insert(name.to_string(), ty);
-            self.ctx.register_type_alias(Symbol::from_dynamic(name), ty);
+            self.ctx.register_type_alias(Symbol::new(name), ty);
         }
 
         // --- Pass 1: Pre-create all blocks (with args) to get BlockRefs ---
@@ -609,8 +608,8 @@ impl<'a> ArenaIrBuilder<'a> {
     // ----------------------------------------------------------------
 
     fn build_operation(&mut self, raw: &RawOperation<'_>) -> Result<OpRef, ParseError> {
-        let dialect = Symbol::from_dynamic(raw.dialect);
-        let op_name = Symbol::from_dynamic(raw.op_name);
+        let dialect = Symbol::new(raw.dialect);
+        let op_name = Symbol::new(raw.op_name);
 
         // Resolve operands
         let operands: Vec<ValueRef> = raw
@@ -638,7 +637,7 @@ impl<'a> ArenaIrBuilder<'a> {
         let mut attributes: AttributeMap = raw
             .attributes
             .iter()
-            .map(|(k, v)| Ok((Symbol::from_dynamic(k), self.build_attribute(v)?)))
+            .map(|(k, v)| Ok((Symbol::new(k), self.build_attribute(v)?)))
             .collect::<Result<_, ParseError>>()?;
 
         // Add sym_name if present
@@ -910,7 +909,7 @@ mod tests {
             parent_op: None,
         });
         core::Module::operands()
-            .sym_name(Symbol::new("test"))
+            .sym_name("test")
             .regions(mod_region)
             .build(ctx, loc)
             .op_ref()
@@ -947,7 +946,7 @@ mod tests {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1145,7 +1144,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("add"))
+            .sym_name("add")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1247,7 +1246,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("choose"))
+            .sym_name("choose")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1283,7 +1282,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("pure"))
+            .sym_name("pure")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);
@@ -1321,7 +1320,7 @@ core.module @test {
                 parent_op: None,
             });
             let f = func::Func::operands()
-                .sym_name(Symbol::new(name))
+                .sym_name(*name)
                 .r#type(func_ty)
                 .regions(body)
                 .build(&mut ctx, loc);
@@ -1360,7 +1359,7 @@ core.module @test {
             parent_op: None,
         });
         let callee = func::Func::operands()
-            .sym_name(Symbol::new("callee"))
+            .sym_name("callee")
             .r#type(callee_ty)
             .regions(body1)
             .build(&mut ctx, loc);
@@ -1387,7 +1386,7 @@ core.module @test {
             parent_op: None,
         });
         let main_fn = func::Func::operands()
-            .sym_name(Symbol::new("main"))
+            .sym_name("main")
             .r#type(main_ty)
             .regions(body2)
             .build(&mut ctx, loc);
@@ -1579,8 +1578,8 @@ core.module @test {
         let ops = module.ops(&ctx);
         assert_eq!(ops.len(), 1);
         let func_data = ctx.op(ops[0]);
-        assert_eq!(func_data.dialect, Symbol::new("func"));
-        assert_eq!(func_data.name, Symbol::new("func"));
+        assert_eq!(func_data.dialect, crate::symbol!("func"));
+        assert_eq!(func_data.name, crate::symbol!("func"));
     }
 
     // ================================================================
@@ -1938,7 +1937,7 @@ core.module @test {
             parent_op: None,
         });
         let f = func::Func::operands()
-            .sym_name(Symbol::new("identity"))
+            .sym_name("identity")
             .r#type(func_ty)
             .regions(body)
             .build(&mut ctx, loc);

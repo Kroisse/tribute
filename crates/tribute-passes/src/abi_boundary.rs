@@ -208,7 +208,7 @@ impl<'a> Verifier<'a> {
                     .op(declaration)
                     .attributes
                     .get_str(ctx, "sym_name")
-                    .map(Symbol::from_dynamic)
+                    .map(Symbol::new)
                 else {
                     continue;
                 };
@@ -222,7 +222,7 @@ impl<'a> Verifier<'a> {
                 .op(declaration)
                 .attributes
                 .get_str(ctx, "sym_name")
-                .map(Symbol::from_dynamic);
+                .map(Symbol::new);
             let name = name.map(|name| name.to_string()).unwrap_or_default();
             self.report(
                 ViolationKind::UnsatisfiableRuntimeBinding(name.clone()),

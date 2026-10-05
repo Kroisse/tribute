@@ -49,7 +49,7 @@ use trunk_ir::rewrite::{
 };
 use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
-use trunk_ir::{Symbol, SymbolPath};
+use trunk_ir::{StringRef, Symbol, SymbolPath};
 use trunk_ir_wasm_backend::gc_types::{EVIDENCE_IDX, MARKER_IDX};
 
 use crate::effect_dispatch;
@@ -212,7 +212,7 @@ fn has_function(ctx: &IrContext, module: Module, name: &'static str) -> bool {
         ctx.op(op)
             .attributes
             .get_str(ctx, "sym_name")
-            .map(Symbol::from_dynamic)
+            .map(Symbol::new)
             == Some(Symbol::new(name))
             && (func::Func::matches(ctx, op) || wasm_dialect::Func::matches(ctx, op))
     })
@@ -401,42 +401,39 @@ pub fn bind_wasm_evidence_runtime(ctx: &mut IrContext, module: Module) {
         if !is_function || ctx.op_has_regions(op) {
             continue;
         }
-        let Some(name) = data
-            .attributes
-            .get_str(ctx, "sym_name")
-            .map(Symbol::from_dynamic)
-        else {
+        let Some(name_ref) = data.attributes.get_string_ref("sym_name") else {
             continue;
         };
         let Some(signature) = data.attributes.get_type("type") else {
             continue;
         };
         let location = data.location;
-        let helper = if name == Symbol::new(evidence_abi::LOOKUP) {
+        let name = ctx.str(name_ref);
+        let helper = if name == evidence_abi::LOOKUP {
             needs_find = true;
             Helper::MarkerField(MarkerField::PromptTag)
-        } else if name == Symbol::new(evidence_abi::LOOKUP_TR) {
+        } else if name == evidence_abi::LOOKUP_TR {
             needs_find = true;
             Helper::MarkerField(MarkerField::TrDispatchFn)
-        } else if name == Symbol::new(evidence_abi::EXTEND) {
+        } else if name == evidence_abi::EXTEND {
             needs_find = true;
             needs_set = true;
             Helper::Extend
-        } else if name == Symbol::new(evidence_abi::MASK) {
+        } else if name == evidence_abi::MASK {
             needs_find = true;
             needs_set = true;
             needs_remove = true;
             Helper::Mask
-        } else if name == Symbol::new(evidence_abi::DUP) {
+        } else if name == evidence_abi::DUP {
             needs_find = true;
             needs_set = true;
             Helper::Dup
-        } else if name == Symbol::new(NEXT_TAG) {
+        } else if name == NEXT_TAG {
             Helper::NextTag(add_tag_counter(ctx, module, location))
         } else {
             continue;
         };
-        let implementation = build_helper(ctx, location, name, signature, helper);
+        let implementation = build_helper(ctx, location, name_ref, signature, helper);
         ctx.insert_op_before(block, op, implementation);
         ctx.remove_op_from_block(block, op);
         ctx.remove_op(op);
@@ -499,7 +496,7 @@ fn add_tag_counter(ctx: &mut IrContext, module: Module, location: Location) -> u
 fn build_helper(
     ctx: &mut IrContext,
     location: Location,
-    name: Symbol,
+    name: StringRef,
     signature: TypeRef,
     helper: Helper,
 ) -> OpRef {
@@ -661,7 +658,7 @@ fn build_helper(
 fn finish_helper(
     ctx: &mut IrContext,
     location: Location,
-    name: Symbol,
+    name: StringRef,
     inputs: Vec<TypeRef>,
     result_ty: TypeRef,
     block: BlockRef,
@@ -918,7 +915,7 @@ fn helper_function(
     let func_ty = wasm_dialect::func_sig(ctx, params.iter().copied(), [result]).as_type_ref();
     let body = single_block_region(ctx, location, body);
     wasm_dialect::Func::operands()
-        .sym_name(Symbol::new(name))
+        .sym_name(name)
         .r#type(func_ty)
         .regions(body)
         .build(ctx, location)
@@ -1318,7 +1315,7 @@ mod tests {
             .find_map(|op| {
                 func::Func::from_op(&ctx, op)
                     .ok()
-                    .filter(|f| f.sym_name(&ctx) == Symbol::new("cps"))
+                    .filter(|f| f.sym_name(&ctx) == "cps")
             })
             .unwrap();
 

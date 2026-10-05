@@ -492,7 +492,7 @@ mod tests {
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
-        AbilityId::source(db, Symbol::from_dynamic(name))
+        AbilityId::source(db, Symbol::new(name))
     }
 
     // =========================================================================

@@ -416,7 +416,7 @@ fn ownership_callable_body(ctx: &IrContext, op: OpRef) -> Result<CallableBody, O
             .op(op)
             .attributes
             .get_str(ctx, "sym_name")
-            .map(Symbol::from_dynamic)
+            .map(Symbol::new)
             .map(|name| format!("@{name}"))
             .unwrap_or_else(|| "<unnamed>".into());
         OwnershipPlanError::new(format!("func.func {symbol}: {error}"))

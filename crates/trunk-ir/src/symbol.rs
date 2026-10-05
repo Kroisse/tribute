@@ -11,9 +11,11 @@ use smallvec::SmallVec;
 // Interned Types
 // ============================================================================
 
-mod atom {
+#[doc(hidden)]
+pub mod atom {
     #![allow(dead_code, unused_macros)]
     include!(concat!(env!("OUT_DIR"), "/symbol_atom.rs"));
+    pub use symbol_atom as literal;
 }
 use atom::SymbolAtom;
 
@@ -64,14 +66,15 @@ impl std::fmt::Debug for Symbol {
 }
 
 impl Symbol {
-    /// Intern a static string and return its symbol.
-    pub fn new(text: &'static str) -> Self {
+    /// Intern a string, using the static set or inline representation when possible.
+    pub fn new(text: &str) -> Self {
         Symbol(SymbolAtom::from(text))
     }
 
-    /// Intern a string and return its symbol.
-    pub fn from_dynamic(text: &str) -> Self {
-        Symbol(SymbolAtom::from(text))
+    /// Wrap a compile-time atom produced by `symbol!`.
+    #[doc(hidden)]
+    pub const fn __from_atom(atom: SymbolAtom) -> Self {
+        Self(atom)
     }
 
     /// The symbol's text.
@@ -107,16 +110,43 @@ pub fn live_dynamic_symbols() -> usize {
     string_cache::malloc_size_of_dynamic_set(&mut ops) / 2
 }
 
-impl From<&'static str> for Symbol {
-    fn from(text: &'static str) -> Self {
+impl From<&str> for Symbol {
+    fn from(text: &str) -> Self {
         Symbol::new(text)
     }
 }
 
 impl From<Cow<'_, str>> for Symbol {
     fn from(text: Cow<'_, str>) -> Self {
-        Symbol::from_dynamic(&text)
+        Symbol::new(&text)
     }
+}
+
+/// Construct a compile-time symbol from trunk-ir's registered literal names.
+///
+/// ```
+/// use trunk_ir::{symbol, Symbol};
+/// const FUNC: Symbol = symbol!("func");
+/// assert_eq!(FUNC, Symbol::new("func"));
+/// ```
+///
+/// Runtime names use `Symbol::new` instead:
+///
+/// ```compile_fail
+/// use trunk_ir::symbol;
+/// let name = String::from("func");
+/// let _ = symbol!(name);
+/// ```
+#[macro_export]
+macro_rules! symbol {
+    ($name:ident) => {
+        compile_error!(
+            "symbol! requires a registered string literal; use Symbol::new for runtime names"
+        )
+    };
+    ($text:tt) => {
+        $crate::Symbol::__from_atom($crate::symbol::atom::literal!($text))
+    };
 }
 
 /// Helper macro for declaring multiple symbol helpers at once.
@@ -258,7 +288,7 @@ impl SymbolPath {
     pub fn to_symbol(&self) -> Symbol {
         match self.as_simple() {
             Some(name) => name.clone(),
-            None => Symbol::from_dynamic(&self.to_string()),
+            None => Symbol::new(&self.to_string()),
         }
     }
 }
@@ -302,7 +332,7 @@ impl From<&Symbol> for SymbolPath {
 
 impl From<&str> for SymbolPath {
     fn from(name: &str) -> Self {
-        SymbolPath::from(Symbol::from_dynamic(name))
+        SymbolPath::from(Symbol::new(name))
     }
 }
 
@@ -400,10 +430,21 @@ mod tests {
     }
 
     #[test]
+    fn escaped_literal_symbols_match_runtime_names() {
+        const QUOTED: Symbol = crate::symbol!("quoted\"symbol");
+        let unicode = Symbol::new("escaped_\u{1f980}");
+        assert_eq!(QUOTED.as_str(), "quoted\"symbol");
+        assert_eq!(unicode.as_str(), "escaped_🦀");
+        assert!(QUOTED.is_static_or_inline());
+        assert!(unicode.is_static_or_inline());
+    }
+
+    #[test]
     fn symbols_compare_and_order_by_text() {
         let short = Symbol::new("short");
-        let long = Symbol::from_dynamic("a_name_longer_than_seven_bytes");
-        assert_eq!(long, Symbol::from_dynamic("a_name_longer_than_seven_bytes"));
+        let text = String::from("a_name_longer_than_seven_bytes");
+        let long = Symbol::new(&text);
+        assert_eq!(long, Symbol::new(&text));
         assert_eq!(long, "a_name_longer_than_seven_bytes");
         assert!(long < short);
         assert!(short.is_static_or_inline());

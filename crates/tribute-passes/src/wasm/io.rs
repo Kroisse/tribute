@@ -96,7 +96,7 @@ fn declare_host_resources(
     let mut memory = None;
     for &op in &ctx.block(block).ops {
         if let Ok(declared) = wasm_dialect::ImportFunc::from_op(ctx, op) {
-            if declared.sym_name(ctx) == Symbol::new(FD_WRITE) {
+            if declared.sym_name(ctx) == FD_WRITE {
                 import = Some(declared);
             }
         } else if let Ok(declared) = wasm_dialect::Memory::from_op(ctx, op) {
@@ -134,7 +134,7 @@ fn declare_host_resources(
         let import = wasm_dialect::ImportFunc::operands()
             .module(WASI_MODULE)
             .name(FD_WRITE)
-            .sym_name(Symbol::new(FD_WRITE))
+            .sym_name(FD_WRITE)
             .r#type(import_ty)
             .build(ctx, loc);
         preamble.push(import.op_ref());
@@ -296,7 +296,7 @@ fn build_write_helper(ctx: &mut IrContext, loc: Location) -> OpRef {
     });
     let fn_ty = func::func_sig(ctx, [bytes_ty, i32_ty], [nil_ty]).as_type_ref();
     func::Func::operands()
-        .sym_name(Symbol::new(WRITE_HELPER))
+        .sym_name(WRITE_HELPER)
         .r#type(fn_ty)
         .regions(body)
         .build(ctx, loc)
@@ -698,11 +698,11 @@ mod tests {
         let ops = module.ops(&ctx);
         let import = wasm_dialect::ImportFunc::from_op(&ctx, ops[0]).expect("import");
         assert_eq!(import.module(&ctx), Symbol::new(WASI_MODULE));
-        assert_eq!(import.sym_name(&ctx), Symbol::new(FD_WRITE));
+        assert_eq!(import.sym_name(&ctx), FD_WRITE);
         let memory = wasm_dialect::Memory::from_op(&ctx, ops[1]).expect("memory");
         assert_eq!(memory.min(&ctx), 1);
         let helper = func::Func::from_op(&ctx, ops[3]).expect("write helper");
-        assert_eq!(helper.sym_name(&ctx), Symbol::new(WRITE_HELPER));
+        assert_eq!(helper.sym_name(&ctx), WRITE_HELPER);
     }
 
     #[test]

@@ -65,7 +65,7 @@ mod tests {
     use super::*;
 
     fn path(text: &str) -> Vec<Symbol> {
-        text.split("::").map(Symbol::from_dynamic).collect()
+        text.split("::").map(Symbol::new).collect()
     }
 
     #[test]
