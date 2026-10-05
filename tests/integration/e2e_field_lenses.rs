@@ -433,6 +433,42 @@ fn main() -> Nil {
 }
 
 #[salsa_test]
+fn diag_method_path_arity(db: &salsa::DatabaseImpl) {
+    // A path call's explicit arguments follow the receiver; a getter path
+    // takes none.
+    let diagnostics = messages(
+        db,
+        r#"
+struct User { name: String }
+
+fn main() -> Nil {
+    let user = User { name: "John" }
+    let _ = user.name::set()
+    let _ = user.name::set("a", "b")
+    let _ = user.User::name("x")
+}
+"#,
+    );
+    assert_eq!(
+        diagnostics,
+        [
+            (
+                "UFCS arity mismatch for 'name::set': expected 2 args, got 1".to_owned(),
+                "user.name::set()".to_owned()
+            ),
+            (
+                "UFCS arity mismatch for 'name::set': expected 2 args, got 3".to_owned(),
+                "user.name::set(\"a\", \"b\")".to_owned()
+            ),
+            (
+                "UFCS arity mismatch for 'User::name': expected 1 args, got 2".to_owned(),
+                "user.User::name(\"x\")".to_owned()
+            ),
+        ]
+    );
+}
+
+#[salsa_test]
 fn diag_companion_redefines_field_lens(db: &salsa::DatabaseImpl) {
     let diagnostics = messages(
         db,

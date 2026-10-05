@@ -274,7 +274,8 @@ impl<'db> TypeChecker<'db> {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
                 let path = path.as_ref().map(method_path_functions);
                 let selection = self.select_method(method, path.as_ref(), receiver_ty);
-                let field = self.method_field(receiver_ty, method, path.is_some(), &selection);
+                let field =
+                    self.method_field(receiver_ty, method, path.is_some(), args, &selection);
 
                 // Try to look up the method as a struct field accessor
                 if let Some(field) = &field
@@ -288,6 +289,8 @@ impl<'db> TypeChecker<'db> {
                     let callee_ty = ctx
                         .instantiate_function_reference(expr.id, func_id)
                         .unwrap_or_else(|| ctx.fresh_type_var());
+                    // Inference may visit a call more than once; report its arity once.
+                    let first_visit = ctx.get_resolved_method(expr.id).is_none();
                     ctx.record_resolved_method(expr.id, func_id, callee_ty);
                     match callee_ty.kind(self.db()) {
                         TypeKind::Func {
@@ -297,6 +300,9 @@ impl<'db> TypeChecker<'db> {
                             ..
                         } => {
                             ctx.evidence.record_call(expr.id, *effect);
+                            if first_visit {
+                                self.check_method_arity(expr.id, method, params.len(), args.len());
+                            }
                             // Constrain receiver against the method's first param
                             if let Some(first_param) = params.first() {
                                 ctx.constrain_coerce(receiver_ty, *first_param, receiver.id);
@@ -928,7 +934,8 @@ impl<'db> TypeChecker<'db> {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
                 let path = path.as_ref().map(method_path_functions);
                 let selection = self.select_method(method, path.as_ref(), receiver_ty);
-                let field = self.method_field(receiver_ty, method, path.is_some(), &selection);
+                let field =
+                    self.method_field(receiver_ty, method, path.is_some(), args, &selection);
                 if let Some(field) = &field
                     && let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, field)
                 {
@@ -938,6 +945,8 @@ impl<'db> TypeChecker<'db> {
                     let callee_ty = ctx
                         .instantiate_function_reference(expr.id, entry.func_id)
                         .unwrap_or_else(|| ctx.fresh_type_var());
+                    // Inference may visit a call more than once; report its arity once.
+                    let first_visit = ctx.get_resolved_method(expr.id).is_none();
                     ctx.record_resolved_method(expr.id, entry.func_id, callee_ty);
                     match callee_ty.kind(self.db()) {
                         TypeKind::Func {
@@ -947,6 +956,9 @@ impl<'db> TypeChecker<'db> {
                             ..
                         } => {
                             ctx.evidence.record_call(expr.id, *effect);
+                            if first_visit {
+                                self.check_method_arity(expr.id, method, params.len(), args.len());
+                            }
                             if let Some(param) = params.first() {
                                 ctx.constrain_coerce(receiver_ty, *param, receiver.id);
                             }
@@ -1727,6 +1739,24 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Report a method call whose receiver and explicit arguments do not
+    /// match the selected function's parameters.
+    fn check_method_arity(&self, node: NodeId, method: &Symbol, params: usize, args: usize) {
+        if args + 1 == params {
+            return;
+        }
+        Diagnostic::new(
+            format!(
+                "UFCS arity mismatch for '{method}': expected {params} args, got {}",
+                args + 1
+            ),
+            self.get_span(node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+        .accumulate(self.db());
+    }
+
     /// The field a method call reads from its receiver, if it names one: an
     /// unqualified method is the field's name, and a path names the field's
     /// getter `T::f` in the receiver's struct `T` when the path selects that
@@ -1736,6 +1766,7 @@ impl<'db> TypeChecker<'db> {
         receiver_ty: Type<'db>,
         method: &Symbol,
         qualified: bool,
+        args: &[Expr<ResolvedRef<'db>>],
         selection: &MethodSelection<'db>,
     ) -> Option<Symbol> {
         if !qualified {
@@ -1744,6 +1775,9 @@ impl<'db> TypeChecker<'db> {
         let MethodSelection::One(selected) = selection else {
             return None;
         };
+        if !args.is_empty() {
+            return None;
+        }
         let owner = match receiver_ty.kind(self.db()) {
             TypeKind::Named { id, .. } => *id,
             TypeKind::App { ctor, .. } => match ctor.kind(self.db()) {
