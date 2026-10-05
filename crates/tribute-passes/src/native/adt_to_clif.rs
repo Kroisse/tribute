@@ -3,7 +3,6 @@
 //! This pass converts ADT operations to their Cranelift equivalents:
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
 //! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
-//! - `tribute_rtti.descriptor(ref)` -> `clif.load(ref, -4)`
 //! - `adt.variant_cast(ref, type, tag)` -> identity (native pointers are untyped)
 //! - `adt.variant_get(ref, type, tag, field)` -> `clif.load(ref, field_offset)`
 //! - `adt.ref_null(type)` -> `clif.iconst(0)` (null pointer)
@@ -29,8 +28,6 @@ use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_mem_struct_layout, find_variant_layout, get_enum_variants,
 };
-use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, RTTI_IDX_OFFSET};
-use tribute_ir::dialect::tribute_rtti;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -60,7 +57,6 @@ pub fn lower(
         .with_auto_type_conversion(true)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(DescriptorPattern)
         .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
         .add_pattern(RefNullPattern)
@@ -84,10 +80,6 @@ fn adt_to_clif_target() -> ConversionTarget {
         .legal_op("adt", "array_len")
         .legal_op("adt", "string_const")
         .legal_op("adt", "bytes_const")
-}
-
-fn intern_i32_type(ctx: &mut IrContext) -> TypeRef {
-    ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
 }
 
 /// The converted result type of a comparison-like op, if it can hold the `i8`
@@ -189,34 +181,6 @@ impl RewritePattern for StructSetPattern {
             .offset(offset)
             .build(ctx, loc);
         rewriter.replace_op(store_op.op_ref());
-        true
-    }
-}
-
-/// `tribute_rtti.descriptor` -> a load of the RTTI index in the allocation's
-/// RC header.
-struct DescriptorPattern;
-
-impl RewritePattern for DescriptorPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(descriptor) = tribute_rtti::Descriptor::from_op(ctx, op) else {
-            return false;
-        };
-        let loc = ctx.op(op).location;
-        let i32_ty = intern_i32_type(ctx);
-
-        // The header precedes the payload the reference points to.
-        let header_offset = RTTI_IDX_OFFSET as i32 - RC_HEADER_SIZE as i32;
-        let index_load = clif::Load::operands(descriptor.r#ref(ctx))
-            .offset(header_offset)
-            .results(i32_ty)
-            .build(ctx, loc);
-        rewriter.replace_op(index_load.op_ref());
         true
     }
 }
@@ -519,25 +483,6 @@ mod tests {
         );
         assert!(result.contains("clif.icmp"));
         assert!(!result.contains("clif.uextend"));
-    }
-
-    #[test]
-    fn descriptor_loads_the_header_index() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @test_fn() -> core.i32 {
-    %0 = clif.iconst {value = 42} : core.ptr
-    %1 = tribute_rtti.descriptor %0 : core.i32
-    func.return %1
-  }
-}"#,
-        );
-        // The RTTI index sits in the RC header, 4 bytes before the payload.
-        assert!(
-            result.contains("clif.load %0 {offset = -4} : core.i32"),
-            "{result}"
-        );
-        assert!(!result.contains("tribute_rtti."), "{result}");
     }
 
     #[test]

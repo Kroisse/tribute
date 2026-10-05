@@ -1354,6 +1354,9 @@ fn prepare_module_to_native(
         pm.add_pass(tribute_passes::native::struct_to_mem::StructToMem::new(
             ownership_plan,
         ));
+        // A descriptor read takes a managed reference, so it is lowered before
+        // type conversion turns its operand into a pointer.
+        pm.add_pass(tribute_passes::native::descriptor_to_clif::DescriptorToClif);
         pm.run(ctx, core_module, &mut analyses)
             .map_err(native_pass_failure)?;
         func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;

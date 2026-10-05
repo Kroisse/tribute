@@ -263,7 +263,8 @@ native closure layout으로 바꾸는 일은 Tribute target 단계가 소유하�
 nominal layout을 [`mem.struct`](ir.md#nominal-수준과-structural-수준)로 바꾸며, 선언의
 필드 종류에서 해제되는 필드를 읽는다. 같은 단계가 variant 판별을 값의 descriptor
 번호(`tribute_rtti.descriptor`)와 선언된 번호의 정수 비교로 바꾼다. Descriptor 번호를
-읽는 연산은 RC header의 index를 읽는 `clif.load`가 되고, 비교는 일반 정수 비교로
+읽는 연산은 managed 참조만 받으며, native 타입 변환이 그 참조를 pointer로 바꾸기
+전에 RC header의 index를 읽는 `clif.load`가 된다. 비교는 일반 정수 비교로
 내려간다. RC header lowering은 선언된 index를
 header에 기록하고 선언을 지운다. Backend는 RTTI 이름 규칙을 알지 않는다.
 
