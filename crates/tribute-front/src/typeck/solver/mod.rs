@@ -86,6 +86,13 @@ pub struct TypeSolver<'db> {
         crate::ast::RowRemoval<'db>,
         Option<super::constraint::ConstraintOrigin>,
     )>,
+    /// Row equalities that wait for a pending union to name the labels of a
+    /// row tail (see [`Self::waits_for_union`]).
+    pending_row_eqs: Vec<(EffectRow<'db>, EffectRow<'db>, Option<ConstraintOrigin>)>,
+    /// The origin of the equality constraint being solved.
+    current_origin: Option<ConstraintOrigin>,
+    /// Set while a relation unifies its own rows, which never wait.
+    solving_row_relation: bool,
     /// Results whose producer signature has not yet been resolved.
     pending_producers: Vec<PendingProducer<'db>>,
     /// Row variables of the checked function's signature. Unification keeps
@@ -110,6 +117,9 @@ impl<'db> TypeSolver<'db> {
             pending_relations: Vec::new(),
             pending_row_unions: Vec::new(),
             pending_row_removals: Vec::new(),
+            pending_row_eqs: Vec::new(),
+            current_origin: None,
+            solving_row_relation: false,
             pending_producers: Vec::new(),
             rigid_rows: Vec::new(),
         }
@@ -231,6 +241,7 @@ impl<'db> TypeSolver<'db> {
                 self.row_subst.map.len(),
                 self.pending_relations.len(),
                 self.pending_row_unions.len() + self.pending_row_removals.len(),
+                self.pending_row_eqs.len(),
             );
             let protected = self.protected_relation_results();
             for relation in std::mem::take(&mut self.pending_relations) {
@@ -274,13 +285,24 @@ impl<'db> TypeSolver<'db> {
             if let Err(error) = self.settle_row_unions() {
                 first_error.get_or_insert(error);
             }
+            if let Err(error) = self.settle_row_eqs(false) {
+                first_error.get_or_insert(error);
+            }
             let after = (
                 self.type_subst.map.len(),
                 self.row_subst.map.len(),
                 self.pending_relations.len(),
                 self.pending_row_unions.len() + self.pending_row_removals.len(),
+                self.pending_row_eqs.len(),
             );
             if before == after {
+                if !self.pending_row_eqs.is_empty() {
+                    // No union can name more labels: the tails hold none.
+                    if let Err(error) = self.settle_row_eqs(true) {
+                        first_error.get_or_insert(error);
+                    }
+                    continue;
+                }
                 if finalize {
                     match self.resolve_join_cycle() {
                         Ok(true) => continue,
@@ -466,13 +488,19 @@ impl<'db> TypeSolver<'db> {
                 })
             }
             Constraint::TypeEqAt(t1, t2, origin) => {
-                self.unify_types(t1, t2).map_err(|error| LocatedSolveError {
+                self.current_origin = Some(origin);
+                let result = self.unify_types(t1, t2);
+                self.current_origin = None;
+                result.map_err(|error| LocatedSolveError {
                     error,
                     origin: Some(origin),
                 })
             }
             Constraint::RowEqAt(r1, r2, origin) => {
-                self.unify_rows(r1, r2).map_err(|error| LocatedSolveError {
+                self.current_origin = Some(origin);
+                let result = self.unify_rows(r1, r2);
+                self.current_origin = None;
+                result.map_err(|error| LocatedSolveError {
                     error,
                     origin: Some(origin),
                 })
