@@ -9,7 +9,7 @@
 //!
 //! ## Runtime type descriptors
 //!
-//! A user struct or variant object carries its runtime type descriptor
+//! A user struct or variant value carries its runtime type descriptor
 //! number as an `i32` first field, so its source fields start at index 1.
 //! The number comes from the module's `tribute_rtti.layout` declarations
 //! ([`super::descriptors::declare`]), which this pass erases. Builtin layouts
@@ -107,12 +107,12 @@ fn physical_variant_field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
 /// The declared number of each user allocation descriptor.
 type DescriptorNumbers = HashMap<(TypeRef, Option<StringRef>), u32>;
 
-/// The field index of source field `field` in an object of layout `ty`.
+/// The field index of source field `field` in a value of layout `ty`.
 fn physical_field(ctx: &IrContext, ty: TypeRef, field: u32) -> u32 {
     field + u32::from(has_descriptor_field(ctx, ty))
 }
 
-/// The descriptor field operand for a new object of the descriptor
+/// The descriptor field operand for a new value of the descriptor
 /// `(ty, tag)`, inserted before the allocation, or `None` when the module does
 /// not declare that descriptor.
 fn descriptor_operand(
@@ -841,7 +841,7 @@ mod tests {
     }
 
     #[test]
-    fn user_objects_lead_with_their_descriptor_number() {
+    fn user_values_lead_with_their_descriptor_number() {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,

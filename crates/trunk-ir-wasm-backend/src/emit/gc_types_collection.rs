@@ -188,8 +188,8 @@ fn register_builtin_evidence_type(
 
 /// Normalize a type for GC struct field comparison.
 ///
-/// Normalizes recursive ADT references and the closure layout to their
-/// canonical form.
+/// Normalizes `core.i1` storage and the closure layout to their canonical
+/// form.
 fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // Wasm has no i1 storage type. Match type_to_valtype before comparing
     // constructor, getter, and setter observations of the same field.
@@ -297,7 +297,7 @@ fn record_struct_field(
         }
         // `anyref` is the widest compatible reference type. Otherwise, keep
         // the physical struct supertype rather than an equivalent concrete
-        // ADT reference, independent of visitation order.
+        // struct type, independent of visitation order.
         let existing_is_anyref = helpers::is_type(ctx, existing, "wasm", "anyref");
         let new_is_anyref = helpers::is_type(ctx, ty, "wasm", "anyref");
         let existing_is_structref = helpers::is_type(ctx, existing, "wasm", "structref");
@@ -346,7 +346,7 @@ fn type_to_field_type(
     })
 }
 
-/// Create the physical WasmGC struct supertype used for recursive ADT fields.
+/// Create the physical WasmGC struct supertype `structref`.
 fn intern_wasm_structref(ctx: &mut IrContext) -> TypeRef {
     ctx.intern_type(TypeData {
         dialect: Symbol::new("wasm"),
