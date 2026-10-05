@@ -9,14 +9,13 @@
 //! - Each field is naturally aligned (aligned to its own size)
 //! - Total struct size is padded to the maximum field alignment
 //!
-//! ## Enum layout (tagged union)
+//! ## Enum layout
 //!
-//! ```text
-//! [Payload]
-//!   offset 0: tag (i32)         discriminant (0, 1, 2, ...)
-//!   offset 4: <padding 4B>      fixed alignment to 8
-//!   offset 8: variant fields    union: sized to max variant
-//! ```
+//! A variant object holds only its own fields, laid out like a struct from
+//! offset 0. Which variant it is comes from the object's runtime type
+//! descriptor, not from the payload. Every variant of an enum is allocated
+//! with the payload size of the largest one, so a value of the enum type has
+//! one static allocation size.
 //!
 //! ## Size mapping
 //!
@@ -51,37 +50,26 @@ pub struct StructLayout {
     pub alignment: u32,
 }
 
-/// Fixed offset from payload start to variant fields (tag 4B + padding 4B).
-pub const ENUM_FIELDS_OFFSET: u32 = 8;
-
-/// Memory layout of an enum type (tagged union).
+/// Memory layout of an enum type.
 ///
-/// All variants share the same allocation, sized to the largest variant.
-/// Tag is stored at offset 0 (i32), fields start at offset 8.
+/// All variants share one allocation size, that of the largest variant. Each
+/// variant's fields start at offset 0.
 #[derive(Debug, Clone)]
 pub struct EnumLayout {
-    /// Byte offset of the tag field (always 0).
-    pub tag_offset: u32,
-    /// Size of the tag field in bytes (always 4 = i32).
-    pub tag_size: u32,
-    /// Byte offset where variant fields begin (always 8).
-    pub fields_offset: u32,
     /// Layout for each variant, in declaration order.
     pub variant_layouts: Vec<VariantFieldLayout>,
-    /// Total payload size (8 + max variant fields size).
+    /// Total payload size (max variant fields size).
     pub total_size: u32,
     /// Overall alignment.
     pub alignment: u32,
 }
 
-/// Layout of a single variant's fields within the union payload.
+/// Layout of a single variant's fields.
 #[derive(Debug, Clone)]
 pub struct VariantFieldLayout {
     /// Variant name.
     pub name: StringRef,
-    /// Discriminant value (0, 1, 2, ...).
-    pub tag_value: u32,
-    /// Field offsets relative to `fields_offset`.
+    /// Field offsets from the payload start.
     pub field_offsets: Vec<u32>,
     /// Total size of this variant's fields.
     pub fields_size: u32,
@@ -254,7 +242,7 @@ pub fn compute_enum_layout(
     let mut max_fields_size: u32 = 0;
     let mut max_align: u32 = 8;
 
-    for (tag_value, (variant_name, field_types)) in variants.iter().enumerate() {
+    for (variant_name, field_types) in &variants {
         let mut offset: u32 = 0;
         let mut field_offsets = Vec::with_capacity(field_types.len());
 
@@ -273,20 +261,14 @@ pub fn compute_enum_layout(
 
         variant_layouts.push(VariantFieldLayout {
             name: *variant_name,
-            tag_value: tag_value as u32,
             field_offsets,
             fields_size,
         });
     }
 
-    let total_size = ENUM_FIELDS_OFFSET + max_fields_size;
-
     Some(EnumLayout {
-        tag_offset: 0,
-        tag_size: 4,
-        fields_offset: ENUM_FIELDS_OFFSET,
         variant_layouts,
-        total_size,
+        total_size: max_fields_size,
         alignment: max_align,
     })
 }

@@ -1,4 +1,5 @@
-//! Lower the nominal `adt.struct` layouts of field accesses to `mem.struct`.
+//! Lower the nominal `adt.struct` layouts of field accesses to `mem.struct`,
+//! and variant tests to descriptor comparisons.
 //!
 //! Allocation is the last use of a nominal layout: `adt_rc_header` finds an
 //! allocation's descriptor by its `adt.struct` type. A field access needs only
@@ -14,6 +15,12 @@
 //! declaration, or from the ownership plan for a layout the module never
 //! allocates. The pass therefore runs after closure layout adaptation
 //! settles the declarations and before `adt_rc_header` erases them.
+//!
+//! A variant is told apart by its runtime type descriptor. The same
+//! declarations number the descriptors, so this pass replaces each
+//! `adt.variant_is` with a `tribute_rtti.descriptor_is` of the variant's
+//! number. A variant the module never allocates has no number, and its test
+//! is constant false.
 
 use rustc_hash::FxHashMap as HashMap;
 use std::ops::ControlFlow;
@@ -23,12 +30,14 @@ use tribute_ir::dialect::adt::layout::get_struct_fields;
 use tribute_ir::dialect::{tribute_rt, tribute_rtti};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::{core, mem};
+use trunk_ir::dialect::{arith, core, mem};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef};
-use trunk_ir::rewrite::{Module, TypeConverter};
-use trunk_ir::types::Attribute;
+use trunk_ir::rewrite::{
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+};
+use trunk_ir::types::{Attribute, StringRef};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 use super::ownership_plan::NativeOwnershipPlan;
@@ -65,7 +74,8 @@ impl Pass for StructToMem {
 }
 
 /// Replace the `adt.struct` layout of every struct field access in `module`
-/// with its `mem.struct`.
+/// with its `mem.struct`, and every variant test with a comparison of the
+/// variant's descriptor number.
 pub fn lower(
     ctx: &mut IrContext,
     module: Module,
@@ -120,6 +130,47 @@ pub fn lower(
         ctx.op_mut(op)
             .attributes
             .insert("type", Attribute::Type(structural));
+    }
+
+    let numbers = tribute_rtti::Layout::declared_indices(ctx, module);
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(VariantIsPattern { numbers })
+        .apply_partial(ctx, module);
+}
+
+/// `adt.variant_is` -> `tribute_rtti.descriptor_is` of the variant's declared
+/// descriptor number, or constant false for a variant without one.
+struct VariantIsPattern {
+    numbers: HashMap<(TypeRef, Option<StringRef>), u32>,
+}
+
+impl RewritePattern for VariantIsPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(variant_is) = adt::VariantIs::from_op(ctx, op) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let result_ty = variant_is.result_ty(ctx);
+        let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag_ref(ctx)));
+        let replacement = match self.numbers.get(&descriptor) {
+            Some(&number) => tribute_rtti::DescriptorIs::operands(variant_is.r#ref(ctx))
+                .index(number)
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref(),
+            None => arith::Const::operands()
+                .value(Attribute::Bool(false))
+                .results(result_ty)
+                .build(ctx, loc)
+                .op_ref(),
+        };
+        rewriter.replace_op(replacement);
+        true
     }
 }
 
@@ -285,6 +336,35 @@ mod tests {
         assert!(mem::Struct::matches(&ctx, structural));
         assert!(
             printed.contains("type = mem.struct<core.i64, tribute_rt.anyref>"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn variant_tests_compare_the_declared_descriptor_number() {
+        let (ctx, module, _layouts) = lower_module(
+            r#"core.module @test {
+  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Choice = adt.enum<{name = "Choice", variants = [["None", []], ["Some", [core.i32]], ["Other", []]]}>
+  tribute_rtti.layout {fields = [], index = 5, type = !Choice, tag = "None"}
+  tribute_rtti.layout {fields = ["u32"], index = 6, type = !Choice, tag = "Some"}
+  func.func @test(%choice: !ChoiceRef) -> core.i1 {
+    %is_some = adt.variant_is %choice {tag = "Some", type = !Choice} : core.i1
+    %is_other = adt.variant_is %choice {tag = "Other", type = !Choice} : core.i1
+    func.return %is_some
+  }
+}"#,
+        );
+
+        let printed = print_module(&ctx, module.op());
+        assert!(!printed.contains("adt.variant_is"), "{printed}");
+        assert!(
+            printed.contains("tribute_rtti.descriptor_is %0 {index = 6} : core.i1"),
+            "{printed}"
+        );
+        // `Other` is never allocated, so no object has its descriptor.
+        assert!(
+            printed.contains("arith.const {value = false} : core.i1"),
             "{printed}"
         );
     }

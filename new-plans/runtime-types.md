@@ -129,9 +129,10 @@ WasmGC 객체에는 header가 없으므로 객체가 descriptor를 필드로 가
 
 - Wasm은 descriptor 필드를 읽어 비교한다. 서로 다른 GC 타입 index에 대한
   `ref.test`로 variant를 판별하지 않는다.
-- Native tagged union은 payload에 tag 필드를 가진다. Descriptor가 variant를 이미
-  알려 주므로 tag 필드를 유지할지, descriptor로 대체할지는 enum 표현을 정할 때
-  함께 정한다.
+- Native는 RC header의 descriptor index를 읽어 그 variant의 descriptor 번호와
+  비교한다. Payload에는 tag 필드를 두지 않고, variant 객체는 자기 필드만 가진다.
+- 프로그램이 할당하지 않는 variant는 descriptor 번호가 없으며, 그 variant에 대한
+  판별은 두 target 모두에서 항상 거짓이다.
 
 ## 불변 조건
 

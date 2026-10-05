@@ -2463,6 +2463,40 @@ fn main() -> Nil {
 }
 
 #[test]
+fn test_native_variants_are_told_apart_by_descriptor() {
+    assert_native_output(
+        "variant_descriptor.trb",
+        r#"
+enum Shape {
+    Circle(Nat),
+    Square(Nat),
+    Pair(Nat, Nat),
+    Empty,
+    Unused(Nat),
+}
+
+fn area(shape: Shape) -> Nat {
+    case shape {
+        Circle(r) -> r * r * 3
+        Square(s) -> s * s
+        Pair(w, h) -> w * h
+        Empty -> 0
+        Unused(n) -> n + 1000
+    }
+}
+
+fn main() -> Nil {
+    __tribute_print_nat(area(Circle(2)))
+    __tribute_print_nat(area(Square(3)))
+    __tribute_print_nat(area(Pair(4, 5)))
+    __tribute_print_nat(area(Empty))
+}
+"#,
+        "12\n9\n20\n0",
+    );
+}
+
+#[test]
 fn test_native_bytes_case_mixes_literal_and_parameter() {
     assert_native_output(
         "bytes_case_literal_and_parameter.trb",

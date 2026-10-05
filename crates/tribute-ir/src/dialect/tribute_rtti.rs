@@ -36,6 +36,10 @@ mod tribute_rtti {
         fields: Attr<[String]>,
     ) {
     }
+
+    /// Whether the allocation `ref` points to has the runtime type descriptor
+    /// number `index`.
+    fn descriptor_is(index: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
 }
 
 /// How the runtime reads one field of an allocation.

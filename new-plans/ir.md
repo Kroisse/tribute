@@ -1568,8 +1568,12 @@ descriptor로만 구별된다.
   [`layout`](#runtime-layout-식별자)으로 식별한다.
 - 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
   reference로 끊겨 있다.
-- `adt.enum`은 `variants` 속성으로 variant별 필드를 표현한다. 저수준 struct를 이용한
-  enum 표현은 별도로 정한다.
+- `adt.enum`은 `variants` 속성으로 variant별 필드를 표현한다. 두 target 모두
+  variant 객체를 자기 필드만 가진 저수준 struct로 두고, 어느 variant인지는 값의
+  [descriptor](runtime-types.md#variant-판별)로 판별한다. Native에서 필드는 payload의
+  offset 0부터 자연 정렬로 놓인다. 한 enum의 variant는 모두 가장 큰 variant의
+  payload 크기로 할당하므로, enum 타입의 값은 variant와 무관하게 하나의 정적 할당
+  크기를 가진다.
 
 ### `func.func_sig` function type
 

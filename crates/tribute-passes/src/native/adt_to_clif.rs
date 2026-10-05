@@ -3,9 +3,9 @@
 //! This pass converts ADT operations to their Cranelift equivalents:
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
 //! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
-//! - `adt.variant_is(ref, type, tag)` -> `clif.load(ref, 0)` + `clif.icmp(eq, tag_val, expected)`
+//! - `tribute_rtti.descriptor_is(ref, index)` -> `clif.load(ref, -4)` + `clif.icmp(eq, loaded, index)`
 //! - `adt.variant_cast(ref, type, tag)` -> identity (native pointers are untyped)
-//! - `adt.variant_get(ref, type, tag, field)` -> `clif.load(ref, fields_offset + field_offset)`
+//! - `adt.variant_get(ref, type, tag, field)` -> `clif.load(ref, field_offset)`
 //! - `adt.ref_null(type)` -> `clif.iconst(0)` (null pointer)
 //! - `adt.ref_cast(ref, type)` -> identity (native pointers are untyped)
 //! - `adt.ref_is_null(ref)` -> `clif.icmp(eq, ref, 0)`
@@ -29,6 +29,8 @@ use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::{
     compute_enum_layout, compute_mem_struct_layout, find_variant_layout, get_enum_variants,
 };
+use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, RTTI_IDX_OFFSET};
+use tribute_ir::dialect::tribute_rtti;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -58,7 +60,7 @@ pub fn lower(
         .with_auto_type_conversion(true)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(VariantIsPattern)
+        .add_pattern(DescriptorIsPattern)
         .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
         .add_pattern(RefNullPattern)
@@ -73,6 +75,7 @@ fn adt_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
         .legal_dialect("clif")
         .illegal_dialect("adt")
+        .illegal_op("tribute_rtti", "descriptor_is")
         .legal_op("adt", "struct_new")
         .legal_op("adt", "variant_new")
         .legal_op("adt", "array_new")
@@ -190,59 +193,43 @@ impl RewritePattern for StructSetPattern {
     }
 }
 
-struct VariantIsPattern;
+/// `tribute_rtti.descriptor_is` -> a comparison of the RTTI index in the
+/// allocation's RC header with the descriptor number.
+struct DescriptorIsPattern;
 
-impl RewritePattern for VariantIsPattern {
+impl RewritePattern for DescriptorIsPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(variant_is) = adt::VariantIs::from_op(ctx, op) else {
+        let Ok(descriptor_is) = tribute_rtti::DescriptorIs::from_op(ctx, op) else {
             return false;
         };
-
-        let enum_ty = variant_is.r#type(ctx);
-        let tag = variant_is.tag_ref(ctx);
-        let tc = rewriter.type_converter();
-
-        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
-            warn!("adt_to_clif arena: cannot compute enum layout for variant_is");
-            return false;
-        };
-
-        let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
-            warn!("adt_to_clif arena: unknown variant tag {:?}", ctx.str(tag));
-            return false;
-        };
-
         let Some(result_ty) = flag_result_type(ctx, op, rewriter) else {
             return false;
         };
         let loc = ctx.op(op).location;
         let i32_ty = intern_i32_type(ctx);
         let i8_ty = intern_i8_type(ctx);
-        let ref_val = variant_is.r#ref(ctx);
 
-        // Load tag from payload_ptr + 0
-        let tag_load = clif::Load::operands(ref_val)
-            .offset(0)
+        // The header precedes the payload the reference points to.
+        let header_offset = RTTI_IDX_OFFSET as i32 - RC_HEADER_SIZE as i32;
+        let index_load = clif::Load::operands(descriptor_is.r#ref(ctx))
+            .offset(header_offset)
             .results(i32_ty)
             .build(ctx, loc);
-        let tag_val = tag_load.result(ctx);
-
-        // Compare with expected discriminant
         let expected = clif::Iconst::operands()
-            .value(variant_layout.tag_value as i64)
+            .value(i64::from(descriptor_is.index(ctx)))
             .results(i32_ty)
             .build(ctx, loc);
-        let cmp_op = clif::Icmp::operands(tag_val, expected.result(ctx))
+        let cmp_op = clif::Icmp::operands(index_load.result(ctx), expected.result(ctx))
             .cond("eq")
             .results(i8_ty)
             .build(ctx, loc);
 
-        rewriter.insert_op(tag_load.op_ref());
+        rewriter.insert_op(index_load.op_ref());
         rewriter.insert_op(expected.op_ref());
         finalize_cmp(
             ctx,
@@ -308,9 +295,8 @@ impl RewritePattern for VariantGetPattern {
         }
 
         let loc = ctx.op(op).location;
-        let offset =
-            i32::try_from(enum_layout.fields_offset + variant_layout.field_offsets[field_idx])
-                .expect("field offset exceeds i32");
+        let offset = i32::try_from(variant_layout.field_offsets[field_idx])
+            .expect("field offset exceeds i32");
         let ref_val = variant_get.r#ref(ctx);
 
         // Determine the load type from the enum type definition.
@@ -558,37 +544,64 @@ mod tests {
         assert!(!result.contains("clif.uextend"));
     }
 
-    const VARIANT_IS_ENUM: &str =
-        "adt.enum<{name = \"Choice\", variants = [[\"None\", []], [\"Some\", [core.i32]]]}>";
-
     #[test]
-    fn test_variant_is_widens_icmp_to_result_type() {
-        let result = run_pass(&format!(
-            r#"core.module @test {{
-  func.func @test_fn() -> core.i32 {{
-    %0 = clif.iconst {{value = 42}} : core.ptr
-    %1 = adt.variant_is %0 {{tag = "Some", type = {VARIANT_IS_ENUM}}} : core.i32
+    fn descriptor_is_compares_the_header_index_and_widens_to_the_result_type() {
+        let result = run_pass(
+            r#"core.module @test {
+  func.func @test_fn() -> core.i32 {
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = tribute_rtti.descriptor_is %0 {index = 7} : core.i32
     func.return %1
-  }}
-}}"#
-        ));
+  }
+}"#,
+        );
+        // The RTTI index sits in the RC header, 4 bytes before the payload.
+        assert!(
+            result.contains("clif.load %0 {offset = -4} : core.i32"),
+            "{result}"
+        );
+        assert!(
+            result.contains("clif.iconst {value = 7} : core.i32"),
+            "{result}"
+        );
         assert!(result.contains("clif.icmp"), "{result}");
         assert!(result.contains("clif.uextend"), "{result}");
         assert!(!result.contains("core.i1"), "{result}");
     }
 
     #[test]
-    fn test_variant_is_rejects_unlowered_i1_result() {
-        let result = run_pass_result(&format!(
-            r#"core.module @test {{
-  func.func @test_fn() -> core.i1 {{
-    %0 = clif.iconst {{value = 42}} : core.ptr
-    %1 = adt.variant_is %0 {{tag = "Some", type = {VARIANT_IS_ENUM}}} : core.i1
+    fn descriptor_is_rejects_unlowered_i1_result() {
+        let result = run_pass_result(
+            r#"core.module @test {
+  func.func @test_fn() -> core.i1 {
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = tribute_rtti.descriptor_is %0 {index = 7} : core.i1
     func.return %1
-  }}
-}}"#
-        ));
+  }
+}"#,
+        );
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn variant_test_with_a_nominal_layout_is_rejected() {
+        let error = run_pass_result(
+            r#"core.module @test {
+  func.func @test_fn() -> core.i32 {
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.variant_is %0 {tag = "Some", type = adt.enum<{name = "Choice", variants = [["None", []], ["Some", [core.i32]]]}>} : core.i32
+    func.return %1
+  }
+}"#,
+        )
+        .expect_err("struct_to_mem must run first");
+
+        assert!(
+            error
+                .operations()
+                .iter()
+                .any(|illegal| illegal.dialect == "adt" && illegal.name == "variant_is")
+        );
     }
 
     #[test]

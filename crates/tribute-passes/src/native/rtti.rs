@@ -504,12 +504,7 @@ fn descriptor_release(
                 .expect("enum type declared as an RTTI layout must have a valid layout");
             let variant = find_variant_layout(&layout, tag)
                 .expect("declared RTTI variant must exist in its enum layout");
-            let offsets = variant
-                .field_offsets
-                .iter()
-                .map(|offset| layout.fields_offset + offset)
-                .collect();
-            (offsets, layout.total_size)
+            (variant.field_offsets.clone(), layout.total_size)
         }
     };
     assert_eq!(offsets.len(), fields.len());
@@ -950,8 +945,7 @@ mod tests {
         let layout = compute_enum_layout(&ctx, choice, &tc).expect("enum layout");
         let alloc_size = i64::from(layout.total_size) + RC_HEADER_SIZE as i64;
         let pair = ctx.intern_str("Pair");
-        let pair_field =
-            layout.fields_offset + find_variant_layout(&layout, pair).unwrap().field_offsets[1];
+        let pair_field = find_variant_layout(&layout, pair).unwrap().field_offsets[1];
         let none = ctx.intern_str("None");
         let indices = tribute_rtti::Layout::declared_indices(&ctx, module);
         assert_eq!(indices.len(), 2, "one descriptor per allocated variant");
