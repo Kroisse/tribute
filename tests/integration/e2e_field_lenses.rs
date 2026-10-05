@@ -128,6 +128,7 @@ mod geometry {
 
     pub mod Line {
         pub fn describe(line: Line) -> String { line.label }
+        pub fn renamed(line: Line) -> Line { line.label::modify(fn(label) label <> "!") }
     }
 
     pub fn origin() -> Line {
@@ -152,9 +153,10 @@ fn main() ->{Io} Nil {
     print_line(Line::describe(line))
     print_line(Int::to_string(geometry::start_x(line)))
     print_line(Line::describe(client::relabel(line)))
+    print_line(Line::describe(Line::renamed(line)))
 }
 "#,
-        "moved\n7\nclient",
+        "moved\n7\nclient\nmoved!",
     );
 }
 

@@ -314,9 +314,9 @@ impl<'db> Resolver<'db> {
     /// The names an unqualified reference may use at this point, apart from
     /// local variables.
     fn names_in_scope(&self) -> Vec<Symbol> {
-        let Some(own) = self.module_path.last() else {
+        if self.module_path.is_empty() {
             return self.env.iter_all_names().collect();
-        };
+        }
         let namespace = Symbol::new(&self.module_path.iter().format("::").to_string());
         let imports = self.module_imports.last();
         self.env
@@ -327,7 +327,6 @@ impl<'db> Resolver<'db> {
                     .into_iter()
                     .flat_map(|imports| imports.keys().cloned()),
             )
-            .chain(self.companion(own).map(|_| own.clone()))
             .chain(self.env.iter_library_names())
             .collect()
     }
