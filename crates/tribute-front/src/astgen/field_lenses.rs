@@ -114,11 +114,14 @@ fn omitted_rows(ann: &TypeAnnotation) -> usize {
             result,
             abilities,
         } => {
-            let omitted = abilities
+            let rows: usize = abilities
                 .iter()
-                .filter(|ability| matches!(ability.kind, TypeAnnotationKind::Infer))
-                .count();
-            omitted + params.iter().map(omitted_rows).sum::<usize>() + omitted_rows(result)
+                .map(|ability| match ability.kind {
+                    TypeAnnotationKind::Infer => 1,
+                    _ => omitted_rows(ability),
+                })
+                .sum();
+            rows + params.iter().map(omitted_rows).sum::<usize>() + omitted_rows(result)
         }
         TypeAnnotationKind::Tuple(elements) => elements.iter().map(omitted_rows).sum(),
         TypeAnnotationKind::Named(_)

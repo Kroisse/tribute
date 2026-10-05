@@ -628,6 +628,18 @@ fn test_qualified_method_keeps_its_path() {
 }
 
 #[test]
+fn test_field_functions_name_rows_omitted_inside_ability_arguments() {
+    // The omitted row is in an argument of the callback's ability.
+    let module =
+        parse_and_lower("struct Task { run: fn() ->{State(fn(Int) -> Int)} Nil, id: Int }");
+
+    let [Decl::Struct(_), Decl::Module(fields)] = module.decls.as_slice() else {
+        panic!("Expected a struct and its field module");
+    };
+    assert_eq!(fields.body.as_ref().map(Vec::len), Some(2));
+}
+
+#[test]
 fn test_struct_generates_field_setters_and_modifiers() {
     let module = parse_and_lower("struct Pair(a) { left: a, right: Int }\nstruct Unit {}");
 

@@ -51,6 +51,33 @@ pub(crate) enum MethodSelection<'db> {
     None,
 }
 
+/// Whether a function a path names takes a receiver of type `actual` as its
+/// first parameter. A type variable takes any known receiver, and a function
+/// or tuple parameter takes a receiver of the same shape; a nominal or
+/// primitive parameter takes its own type. A receiver not inferred yet
+/// matches nothing, so its call waits.
+fn path_receiver_matches<'db>(
+    db: &'db dyn salsa::Database,
+    entry: &crate::typeck::MethodEntry<'db>,
+    actual: Type<'db>,
+) -> bool {
+    let Some(declared) = entry.receiver_ty(db) else {
+        return false;
+    };
+    match (declared.kind(db), actual.kind(db)) {
+        (_, TypeKind::UniVar { .. }) => false,
+        (TypeKind::BoundVar { .. }, _) => true,
+        (
+            TypeKind::Func {
+                params: declared, ..
+            },
+            TypeKind::Func { params: actual, .. },
+        ) => declared.len() == actual.len(),
+        (TypeKind::Tuple(declared), TypeKind::Tuple(actual)) => declared.len() == actual.len(),
+        _ => crate::typeck::receiver_type_matches(db, entry, actual),
+    }
+}
+
 /// A qualified method call's path as its node and the functions it may name.
 pub(crate) fn method_path_functions<'db>(
     path: &crate::ast::MethodPath<ResolvedRef<'db>>,
@@ -1752,7 +1779,7 @@ impl<'db> TypeChecker<'db> {
                 func_id: *candidate,
                 func_ty: scheme.body(self.db()),
             };
-            crate::typeck::receiver_type_matches(self.db(), &entry, receiver_ty).then_some(entry)
+            path_receiver_matches(self.db(), &entry, receiver_ty).then_some(entry)
         });
         match (matching.next(), matching.next()) {
             (Some(entry), None) => MethodSelection::One(entry),

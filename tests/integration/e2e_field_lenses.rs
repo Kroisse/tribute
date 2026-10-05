@@ -180,6 +180,37 @@ fn main() ->{Io} Nil {
     );
 }
 
+#[test]
+fn test_native_method_path_with_generic_and_structural_receivers() {
+    // A type variable takes any receiver; function and tuple parameters take
+    // receivers of their shape.
+    assert_native_output(
+        "method_path_receivers.trb",
+        r#"
+use std::io::{Io, print_line}
+
+mod util {
+    pub fn id(value: a) -> a { value }
+    pub fn apply(function: fn(Int) ->{} Int, value: Int) -> Int { function(value) }
+    pub fn first(pair: #(Int, String)) -> Int {
+        let #(number, _) = pair
+        number
+    }
+}
+
+fn double(n: Int) -> Int { n + n }
+
+fn main() ->{Io} Nil {
+    print_line(Int::to_string(+5.util::id()))
+    print_line("text".util::id())
+    print_line(Int::to_string(double.util::apply(+4)))
+    print_line(Int::to_string(#(+7, "seven").util::first()))
+}
+"#,
+        "5\ntext\n8\n7",
+    );
+}
+
 fn messages(db: &salsa::DatabaseImpl, code: &str) -> Vec<(String, String)> {
     let source = SourceCst::from_source_str(db, "test.trb", code);
     compile_with_diagnostics(db, source)
