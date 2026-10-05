@@ -929,7 +929,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Choice = adt.enum<{name = "Choice", variants = [["None", []], ["Pair", [core.i32, tribute_rt.anyref]]]}>
+  !Choice = adt.enum<Choice { None(), Pair(core.i32, tribute_rt.anyref) }>
   func.func @f(%n: core.i32, %v: tribute_rt.anyref) -> core.nil {
     %none = adt.variant_new {type = !Choice, tag = "None"} : !Choice
     %pair = adt.variant_new %n, %v {type = !Choice, tag = "Pair"} : !Choice

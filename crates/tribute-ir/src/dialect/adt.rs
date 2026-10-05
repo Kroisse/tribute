@@ -471,6 +471,322 @@ fn parse_struct_type<'a>(
     })
 }
 
+// === Nominal enum layout type ===
+
+/// A malformed `adt.enum` type.
+#[derive(Clone, Debug, PartialEq, Eq, derive_more::Display, derive_more::Error)]
+pub enum EnumTypeError {
+    #[display("missing `{STRUCT_NAME_ATTR}` string")]
+    MissingName,
+    #[display("variant {_0} is not an `adt.variant` with a `{STRUCT_NAME_ATTR}` string")]
+    MalformedVariant(#[error(not(source))] usize),
+    #[display("duplicate variant name {_0:?}")]
+    DuplicateVariantName(#[error(not(source))] String),
+    #[display("`variants` is not an `adt.enum` attribute; variants are type parameters")]
+    VariantsAttribute,
+}
+
+/// Validated wrapper for a nominal `adt.enum` layout type.
+///
+/// Each variant is one type parameter: an `adt.variant` whose parameters are
+/// the variant's field types and whose `name` attribute is the variant's
+/// name. A field may carry a `name` parameter attribute. The enum's name is
+/// the type's `name` attribute.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct Enum(TypeRef);
+
+impl Enum {
+    /// Validate a name-matching `adt.enum`.
+    pub fn validate(ctx: &IrContext, ty: TypeRef) -> Result<Self, EnumTypeError> {
+        let data = ctx.get_type(ty);
+        debug_assert!(Self::matches(ctx, ty));
+        if data.attrs.contains_key("variants") {
+            return Err(EnumTypeError::VariantsAttribute);
+        }
+        if data.attrs.get_string_ref(STRUCT_NAME_ATTR).is_none() {
+            return Err(EnumTypeError::MissingName);
+        }
+        let mut names: smallvec::SmallVec<[StringRef; 8]> = smallvec::SmallVec::new();
+        for (index, &variant) in data.params.iter().enumerate() {
+            let name = variant_name(ctx, variant).ok_or(EnumTypeError::MalformedVariant(index))?;
+            if names.contains(&name) {
+                return Err(EnumTypeError::DuplicateVariantName(
+                    ctx.str(name).to_owned(),
+                ));
+            }
+            names.push(name);
+        }
+        Ok(Self(ty))
+    }
+
+    pub fn as_type_ref(self) -> TypeRef {
+        self.0
+    }
+
+    /// The enum's name.
+    pub fn name(self, ctx: &IrContext) -> &str {
+        ctx.str(self.name_ref(ctx))
+    }
+
+    /// The enum's name as a pooled handle.
+    pub fn name_ref(self, ctx: &IrContext) -> StringRef {
+        ctx.get_type(self.0)
+            .attrs
+            .get_string_ref(STRUCT_NAME_ATTR)
+            .expect("validated adt.enum must retain its name")
+    }
+
+    pub fn variant_count(self, ctx: &IrContext) -> usize {
+        ctx.get_type(self.0).params.len()
+    }
+
+    /// Each variant's name and field types, in declaration order.
+    pub fn variants(
+        self,
+        ctx: &IrContext,
+    ) -> impl ExactSizeIterator<Item = (StringRef, &[TypeRef])> + '_ {
+        ctx.get_type(self.0).params.iter().map(|&variant| {
+            let name = variant_name(ctx, variant).expect("validated adt.enum variant");
+            (name, &ctx.get_type(variant).params[..])
+        })
+    }
+
+    /// The field types of the variant named `tag`.
+    pub fn variant_fields(self, ctx: &IrContext, tag: StringRef) -> Option<&[TypeRef]> {
+        self.variants(ctx)
+            .find_map(|(name, fields)| (name == tag).then_some(fields))
+    }
+
+    /// The type attributes other than the name.
+    pub fn extra_attrs(self, ctx: &IrContext) -> impl Iterator<Item = (&Symbol, &Attribute)> + '_ {
+        ctx.get_type(self.0).attrs.iter().filter(|(key, _)| {
+            **key != Symbol::new(STRUCT_NAME_ATTR) && **key != Symbol::new(PARAM_ATTRS_ATTR)
+        })
+    }
+}
+
+/// The name of an `adt.variant` type.
+fn variant_name(ctx: &IrContext, variant: TypeRef) -> Option<StringRef> {
+    let data = ctx.get_type(variant);
+    (data.dialect == Symbol::new("adt") && data.name == Symbol::new("variant"))
+        .then(|| data.attrs.get_string_ref(STRUCT_NAME_ATTR))
+        .flatten()
+}
+
+impl DialectType for Enum {
+    const DIALECT_NAME: &'static str = "adt";
+    const TYPE_NAME: &'static str = "enum";
+
+    fn from_type_ref(ctx: &IrContext, ty: TypeRef) -> Option<Self> {
+        if !Self::matches(ctx, ty) {
+            return None;
+        }
+        Self::validate(ctx, ty).ok()
+    }
+
+    fn as_type_ref(&self) -> TypeRef {
+        self.0
+    }
+}
+
+inventory::submit! {
+    trunk_ir::type_verifier::TypeVerifier::new::<Enum>(|ctx, ty| {
+        Enum::validate(ctx, ty).map(|_| ()).map_err(|error| error.to_string())
+    })
+}
+
+impl From<Enum> for TypeRef {
+    fn from(ty: Enum) -> Self {
+        ty.0
+    }
+}
+
+/// Construct an `adt.enum` named `name` with `variants` in declaration order,
+/// each a name and its field types.
+///
+/// `attrs` holds the remaining type attributes.
+///
+/// # Panics
+///
+/// If two variants have the same name or `attrs` has a `variants` entry.
+pub fn enum_type<N: Into<StringArg>, F: IntoIterator<Item = TypeRef>>(
+    ctx: &mut IrContext,
+    name: impl Into<StringArg>,
+    variants: impl IntoIterator<Item = (N, F)>,
+    mut attrs: AttributeMap,
+) -> Enum {
+    let mut builder = TypeDataBuilder::new("adt", "enum");
+    for (variant, fields) in variants {
+        let variant = ctx.intern_string_arg(variant.into());
+        let variant = ctx.intern_type(
+            TypeDataBuilder::new("adt", "variant")
+                .params(fields)
+                .attr(STRUCT_NAME_ATTR, variant)
+                .build(),
+        );
+        builder = builder.param(variant);
+    }
+    let name = ctx.intern_string_arg(name.into());
+    attrs.remove(PARAM_ATTRS_ATTR);
+    attrs.insert(STRUCT_NAME_ATTR, name);
+    for (key, value) in attrs {
+        builder = builder.attr(key, value);
+    }
+    let ty = ctx.intern_type(builder.build());
+    Enum::validate(ctx, ty).unwrap_or_else(|error| panic!("adt.enum: {error}"))
+}
+
+// === Textual syntax: `adt.enum<Name { Variant(field: type, ...), ... }, {attrs}>` ===
+//
+// A field is `name: type` or, without a name, `type`. Either may be followed
+// by the field's other attributes.
+
+inventory::submit! {
+    trunk_ir::asm_format::TypeAsmFormat::new::<Enum>(print_enum_type, parse_enum_type)
+}
+
+fn print_enum_type(
+    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
+    ty: TypeRef,
+) -> Option<std::fmt::Result> {
+    let adt_enum = Enum::from_type_ref(h.ctx(), ty)?;
+    Some(write_enum_type(h, adt_enum))
+}
+
+fn write_enum_type(
+    h: &mut trunk_ir::printer::TypePrintHelper<'_, '_>,
+    adt_enum: Enum,
+) -> std::fmt::Result {
+    use std::fmt::Write;
+
+    let ctx = h.ctx();
+    let data = ctx.get_type(adt_enum.as_type_ref());
+    h.write_str("adt.enum<")?;
+    h.write_name(adt_enum.name(ctx))?;
+    h.write_str(" {")?;
+    for (index, &variant) in data.params.iter().enumerate() {
+        h.write_str(if index > 0 { ", " } else { " " })?;
+        let variant_data = ctx.get_type(variant);
+        let name = variant_name(ctx, variant).expect("validated adt.enum variant");
+        h.write_name(ctx.str(name))?;
+        h.write_char('(')?;
+        for (field, &field_ty) in variant_data.params.iter().enumerate() {
+            if field > 0 {
+                h.write_str(", ")?;
+            }
+            let field_attrs = variant_data.param_attrs(field);
+            if let Some(field_name) = field_attrs.get_string_ref(STRUCT_NAME_ATTR) {
+                h.write_name(ctx.str(field_name))?;
+                h.write_str(": ")?;
+            }
+            h.write_type(field_ty)?;
+            let mut attrs = field_attrs
+                .iter()
+                .filter(|(key, _)| **key != Symbol::new(STRUCT_NAME_ATTR))
+                .peekable();
+            if attrs.peek().is_some() {
+                h.write_char(' ')?;
+                h.write_attr_dict(attrs)?;
+            }
+        }
+        h.write_char(')')?;
+    }
+    h.write_str(if data.params.is_empty() { "}" } else { " }" })?;
+    let mut attrs = adt_enum.extra_attrs(ctx).peekable();
+    if attrs.peek().is_some() {
+        h.write_str(", ")?;
+        h.write_attr_dict(attrs)?;
+    }
+    h.write_char('>')
+}
+
+/// Parse the rest of `adt.enum<Name { Variant(field: type, ...), ... }, {attrs}>`
+/// after its opening bracket into the generic form: each variant becomes an
+/// `adt.variant` parameter named by its `name` attribute.
+///
+/// The syntax owns the names, so `name` may not appear in a dictionary.
+/// Anything else, including a generic spelling, backtracks to generic parsing.
+fn parse_enum_type<'a>(
+    input: &mut &'a str,
+    dialect: &'a str,
+    name: &'a str,
+) -> winnow::ModalResult<trunk_ir::parser::raw::RawType<'a>> {
+    use trunk_ir::parser::raw::{
+        RawAttribute, RawParam, RawType, name_token, raw_attr_dict, raw_param, ws,
+    };
+    use winnow::combinator::{delimited, opt, preceded, separated, terminated};
+    use winnow::prelude::*;
+
+    type Field<'a> = (Option<String>, RawParam<'a>);
+
+    let backtrack = || winnow::error::ErrMode::Backtrack(winnow::error::ContextError::new());
+    let field = |input: &mut &'a str| -> winnow::ModalResult<Field<'a>> {
+        (
+            ws,
+            opt(terminated(name_token, (ws, ':', ws))),
+            raw_param,
+            ws,
+        )
+            .map(|(_, field, param, _)| (field, param))
+            .parse_next(input)
+    };
+    let variant = |input: &mut &'a str| -> winnow::ModalResult<(String, Vec<Field<'a>>)> {
+        (
+            ws,
+            name_token,
+            ws,
+            delimited('(', separated(0.., field, ','), (ws, ')')),
+            ws,
+        )
+            .map(|(_, variant, _, fields, _)| (variant, fields))
+            .parse_next(input)
+    };
+
+    let enum_name = name_token.parse_next(input)?;
+    ws.parse_next(input)?;
+    let variants: Vec<(String, Vec<Field<'a>>)> =
+        delimited('{', separated(0.., variant, ','), (ws, '}')).parse_next(input)?;
+    ws.parse_next(input)?;
+    let mut attrs = opt(preceded((',', ws), raw_attr_dict))
+        .parse_next(input)?
+        .unwrap_or_default();
+    ws.parse_next(input)?;
+    '>'.parse_next(input)?;
+
+    let is_name = |key: &str| key == STRUCT_NAME_ATTR;
+    if attrs.iter().any(|(key, _)| is_name(key)) {
+        return Err(backtrack());
+    }
+    attrs.push((STRUCT_NAME_ATTR.into(), RawAttribute::String(enum_name)));
+    let mut params = Vec::with_capacity(variants.len());
+    for (variant, fields) in variants {
+        let mut field_params = Vec::with_capacity(fields.len());
+        for (field, mut param) in fields {
+            if param.attrs.iter().any(|(key, _)| is_name(key)) {
+                return Err(backtrack());
+            }
+            if let Some(field) = field {
+                param
+                    .attrs
+                    .push((STRUCT_NAME_ATTR.into(), RawAttribute::String(field)));
+            }
+            field_params.push(param);
+        }
+        params.push(RawParam::from(RawType::Concrete {
+            dialect: "adt",
+            name: "variant",
+            params: field_params,
+            attrs: vec![(STRUCT_NAME_ATTR.into(), RawAttribute::String(variant))],
+        }));
+    }
+    Ok(RawType::Concrete {
+        dialect,
+        name,
+        params,
+        attrs,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -571,6 +887,93 @@ mod tests {
             "{printed}"
         );
         assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
+    fn test_roundtrip_adt_enum() {
+        let input = r#"core.module @test {
+  !option = adt.enum<Option { None(), Some(value: core.i32) }>
+  !shape = adt.enum<"geo::Shape" { Dot(), Rect(core.f64, core.f64 {k = 1}), Named(label: core.ptr {k = 2}) }, {layout = "x"}>
+  !never = adt.enum<Never {}>
+  !list = adt.enum<List { Empty(), Cons(core.i32, adt.typeref<{name = "List"}>) }>
+}"#;
+        let mut ctx = IrContext::new();
+        let module = parse_module(&mut ctx, input).expect("adt.enum syntax should parse");
+        let aliases: HashMap<_, _> = ctx
+            .type_aliases()
+            .iter()
+            .map(|(name, ty)| (name.to_string(), *ty))
+            .collect();
+        let i32_ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+
+        let option = Enum::from_type_ref(&ctx, aliases["option"]).unwrap();
+        assert_eq!(option.name(&ctx), "Option");
+        let variants: Vec<_> = option
+            .variants(&ctx)
+            .map(|(name, fields)| (ctx.str(name), fields.to_vec()))
+            .collect();
+        assert_eq!(variants, [("None", vec![]), ("Some", vec![i32_ty])]);
+        let some = ctx.intern_str("Some");
+        assert_eq!(option.variant_fields(&ctx, some), Some(&[i32_ty][..]));
+        let missing = ctx.intern_str("Missing");
+        assert_eq!(option.variant_fields(&ctx, missing), None);
+        // A variant is one type parameter, so type traversal reaches fields.
+        assert_eq!(ctx.get_type(aliases["option"]).params.len(), 2);
+
+        let never = Enum::from_type_ref(&ctx, aliases["never"]).unwrap();
+        assert_eq!(never.variant_count(&ctx), 0);
+
+        // The constructor builds the type the syntax denotes, apart from the
+        // field name the syntax adds.
+        let built = enum_type(
+            &mut ctx,
+            "List",
+            [("Empty", vec![]), ("Cons", vec![i32_ty])],
+            AttributeMap::new(),
+        );
+        assert_eq!(built.variant_count(&ctx), 2);
+
+        let printed = print_module(&ctx, module);
+        for expected in [
+            "!option = adt.enum<Option { None(), Some(value: core.i32) }>",
+            "adt.enum<\"geo::Shape\" { Dot(), Rect(core.f64, core.f64 {k = 1}), Named(label: core.ptr {k = 2}) }, {layout = \"x\"}>",
+            "!never = adt.enum<Never {}>",
+            "adt.enum<List { Empty(), Cons(core.i32, adt.typeref<{name = \"List\"}>) }>",
+        ] {
+            assert!(printed.contains(expected), "{expected}\n{printed}");
+        }
+        assert_roundtrip(&ctx, module);
+    }
+
+    #[test]
+    fn test_adt_enum_reserved_names_are_parse_errors() {
+        for spelling in [
+            "adt.enum<E { A() }, {name = @Q}>",
+            "adt.enum<E { A(core.i32 {name = @x}) }>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            parse_module(&mut ctx, &input).expect_err(spelling);
+        }
+    }
+
+    #[test]
+    fn test_malformed_adt_enum_parses_but_fails_validation() {
+        for spelling in [
+            "adt.enum<E { A(), A(core.i32) }>",
+            "adt.enum<{name = \"E\", variants = [[\"A\", []]]}>",
+            "adt.enum<core.i32, {name = @E}>",
+            "adt.enum<adt.variant<core.i32>, {name = @E}>",
+            "adt.enum<adt.variant<{name = \"A\"}>>",
+        ] {
+            let mut ctx = IrContext::new();
+            let input = format!("core.module @test {{ !bad = {spelling} }}");
+            let module = parse_module(&mut ctx, &input).expect(spelling);
+            let alias = ctx.type_aliases()[0].1;
+            assert!(Enum::from_type_ref(&ctx, alias).is_none(), "{spelling}");
+            let result = validate_operation_verifiers(&ctx, Module::new(&ctx, module).unwrap());
+            assert!(!result.is_ok(), "{spelling}");
+        }
     }
 
     #[test]

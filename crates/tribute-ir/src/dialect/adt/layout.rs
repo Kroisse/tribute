@@ -37,7 +37,7 @@ use trunk_ir::dialect::mem;
 use trunk_ir::ops::DialectType;
 use trunk_ir::refs::TypeRef;
 use trunk_ir::rewrite::type_converter::TypeConverter;
-use trunk_ir::types::{Attribute, StringRef};
+use trunk_ir::types::StringRef;
 
 /// Memory layout of a struct type.
 #[derive(Debug, Clone)]
@@ -123,56 +123,15 @@ pub fn get_struct_fields(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef,
 
 /// Extract enum variants from an arena TypeRef.
 ///
-/// Returns `None` if the type is not `adt.enum`.
+/// Returns `None` if the type is not a valid `adt.enum`.
 pub fn get_enum_variants(ctx: &IrContext, ty: TypeRef) -> Option<Vec<(StringRef, Vec<TypeRef>)>> {
-    let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
-        return None;
-    }
-
-    let variants_attr = data.attrs.get("variants")?;
-    let Attribute::List(variants) = variants_attr else {
-        return None;
-    };
-
-    let mut result = Vec::new();
-    for (i, variant) in variants.iter().enumerate() {
-        let Attribute::List(pair) = variant else {
-            panic!("get_enum_variants: variant[{i}] expected List, got {variant:?}");
-        };
-        assert!(
-            pair.len() >= 2,
-            "get_enum_variants: variant[{i}] pair too short (len={})",
-            pair.len()
-        );
-        let Attribute::String(name) = &pair[0] else {
-            panic!(
-                "get_enum_variants: variant[{i}] name expected String, got {:?}",
-                pair[0]
-            );
-        };
-        let Attribute::List(field_types_attr) = &pair[1] else {
-            panic!(
-                "get_enum_variants: variant[{i}] fields expected List, got {:?}",
-                pair[1]
-            );
-        };
-
-        let field_types: Vec<TypeRef> = field_types_attr
-            .iter()
-            .enumerate()
-            .map(|(j, a)| {
-                let Attribute::Type(ty) = a else {
-                    panic!("get_enum_variants: variant[{i}] field[{j}] expected Type, got {a:?}");
-                };
-                *ty
-            })
-            .collect();
-
-        result.push((*name, field_types));
-    }
-
-    Some(result)
+    let adt_enum = super::Enum::from_type_ref(ctx, ty)?;
+    Some(
+        adt_enum
+            .variants(ctx)
+            .map(|(name, fields)| (name, fields.to_vec()))
+            .collect(),
+    )
 }
 
 /// Lay out fields of the given native types in order, each at its natural

@@ -30,7 +30,7 @@ const BORROW_FIXTURE: &str = r#"core.module @test {
 const CAST_FIXTURE: &str = r#"core.module @test {
   !Child = adt.struct<Child(value: core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<{name = "Choice", variants = [["Some", [!ChildRef]]]}>
+  !Choice = adt.enum<Choice { Some(!ChildRef) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref

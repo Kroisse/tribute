@@ -328,7 +328,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Choice = adt.enum<{name = "Choice", variants = [["None", []], ["Some", [tribute_rt.anyref]]]}>
+  !Choice = adt.enum<Choice { None(), Some(tribute_rt.anyref) }>
   func.func @f() -> core.nil {
     func.return
   }

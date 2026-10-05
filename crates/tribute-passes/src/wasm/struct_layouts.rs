@@ -131,7 +131,7 @@ mod tests {
             r#"core.module @test {
   !Point = adt.struct<Point(x: core.f64, y: core.f64)>
   !Size = adt.struct<Size(width: core.f64, height: core.f64)>
-  !Shape = adt.enum<{name = "Shape", variants = [["Rect", [core.f64, core.f64]], ["Dot", []]]}>
+  !Shape = adt.enum<Shape { Rect(core.f64, core.f64), Dot() }>
 }"#,
         );
         let [point, size, shape] = ["Point", "Size", "Shape"].map(|name| alias(&ctx, name));
@@ -156,7 +156,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Pair = adt.struct<Pair(left: core.i64, right: core.i64)>
-  !Shape = adt.enum<{name = "Shape", variants = [["Dot", []]]}>
+  !Shape = adt.enum<Shape { Dot() }>
   wasm.func @f(%pair: adt.typeref<{name = "Pair"}>, %shape: adt.typeref<{name = "Shape"}>, %unknown: adt.typeref<{name = "Missing"}>) -> core.nil {
     wasm.return
   }
@@ -188,7 +188,7 @@ mod tests {
             r#"core.module @test {
   !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
   !Inner = adt.struct<Inner(value: core.i64)>
-  !E = adt.enum<{name = "E", variants = [["None", []]]}>
+  !E = adt.enum<E { None() }>
   !Outer = adt.struct<Outer(flag: core.i1, next: adt.typeref<{name = "Outer"}>, e: !E, inner: !Inner, f: !Closure)>
 }"#,
         );
