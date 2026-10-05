@@ -1,13 +1,17 @@
 //! Typed intermediate operations for WebAssembly GC lowering.
 //!
-//! Unlike the indexed `wasm` dialect, these operations identify nominal heap
-//! types with `TypeRef`. A module-wide layout pass must fully convert them to
+//! Unlike the indexed `wasm` dialect, these operations identify heap types
+//! with `TypeRef`. A module-wide layout pass must fully convert them to
 //! `wasm` operations before binary emission.
 
 use crate::attr_kind::Type;
 
 #[trunk_ir::dialect]
 mod wasm_gc {
+    /// A structural GC struct: its field types in order, each a Wasm
+    /// storage representation. Equal field lists are one GC type.
+    struct Struct<#[rest] Fields>;
+
     fn struct_new(r#type: Attr<Type>, fields: Variadic<_>) -> Value<_> {}
 
     fn struct_get(r#type: Attr<Type>, field_idx: Attr<u32>, r#ref: Value<_>) -> Value<_> {}

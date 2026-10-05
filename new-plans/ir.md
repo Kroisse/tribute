@@ -1166,8 +1166,10 @@ cast를 명시한다.
 numeric operations, memory operations, and WasmGC constructs.
 
 `wasm_gc.*` is a typed intermediate dialect for WasmGC lowering. Its operations
-carry semantic heap types as mandatory `TypeRef` attributes and must not infer
-nominal identity from an erased operand such as `anyref`. A module-wide type
+carry heap types as mandatory `TypeRef` attributes and must not infer a type
+from an erased operand such as `anyref`. A user struct or variant is the
+structural `wasm_gc.struct<T...>`, whose parameters are its physical field
+types; equal field lists are one GC type. A module-wide type
 layout pass assigns binary type-section indices and fully converts these
 operations to `wasm.*` operations, whose required integer attributes correspond
 to WebAssembly instruction immediates. This pass runs once, after unrealized
@@ -1175,9 +1177,9 @@ conversion casts have been converted and reconciled, because materialization
 may introduce additional typed GC operations.
 
 ```text
-wasm_gc.struct_get { type = !String$Leaf, field_idx = 0 }
+wasm_gc.struct_get { type = wasm_gc.struct<core.i32, !Bytes>, field_idx = 1 }
   -- module GC type layout -->
-wasm.struct_get { type_idx = 9, field_idx = 0 }
+wasm.struct_get { type_idx = 9, field_idx = 1 }
 ```
 
 Builtin layouts follow the same rule. Lowering refers to canonical semantic
@@ -1553,10 +1555,11 @@ descriptor로만 구별된다.
   nominal `adt.struct`의 마지막 사용처다. Field offset 계산은 타입 변환 없이
   `mem.struct`만 읽고, field 접근이 `clif.load`와 `clif.store`의 offset이 될 때
   `mem.struct`도 사라진다. Cranelift에는 aggregate 타입이 없다.
-- Wasm은 타입 변환에서 `adt.struct`를 이름 없는 `wasm_gc.struct<T...>`로 바꾼다.
-  함수 signature와 block 인자도 같은 변환을 거치므로 모든 위치가 같은 타입을
-  가진다. 필드 표현이 같은 struct와 variant는 같은 GC 타입이며, 첫 필드의
-  descriptor가 runtime identity를 맡는다. Compiler 소유 layout은
+- Wasm은 nominal layout을 마지막으로 읽는 `adt_to_wasm` 뒤에 `adt.struct`를 이름
+  없는 `wasm_gc.struct<T...>`로 바꾼다. 이 치환은 함수 signature와 block 인자를
+  포함한 모듈 전체에 적용되므로 모든 위치가 같은 타입을 가진다. Variant는 처음부터
+  자기 필드의 `wasm_gc.struct`로 낮춘다. 필드 표현이 같은 struct와 variant는 같은
+  GC 타입이며, 첫 필드의 descriptor가 runtime identity를 맡는다. Compiler 소유 layout은
   [`layout`](#runtime-layout-식별자)으로 식별한다.
 - 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
   reference로 끊겨 있다.

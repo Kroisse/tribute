@@ -599,7 +599,7 @@ pub fn finalize_closure_storage_layout(ctx: &mut IrContext, module: Module) {
 pub(crate) fn substitute_module_types(
     ctx: &mut IrContext,
     module: Module,
-    substitute: impl Fn(&IrContext, TypeRef) -> Option<TypeRef>,
+    substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
@@ -700,7 +700,7 @@ struct TypeSubstitution<'a, F> {
     visiting: HashSet<TypeRef>,
 }
 
-impl<'a, F: Fn(&IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> {
+impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> {
     fn new(ctx: &'a mut IrContext, substitute: F) -> Self {
         Self {
             ctx,
@@ -711,11 +711,12 @@ impl<'a, F: Fn(&IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> 
     }
 
     fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
-        if let Some(replacement) = (self.substitute)(self.ctx, ty) {
-            return replacement;
-        }
         if let Some(&converted) = self.cache.get(&ty) {
             return converted;
+        }
+        if let Some(replacement) = (self.substitute)(self.ctx, ty) {
+            self.cache.insert(ty, replacement);
+            return replacement;
         }
         if !self.visiting.insert(ty) {
             return ty;
