@@ -9,6 +9,7 @@
 
 use std::fmt;
 use trunk_ir::attr_kind::Type;
+use trunk_ir::dialect::core::I32;
 
 use rustc_hash::FxHashMap as HashMap;
 
@@ -21,7 +22,7 @@ use trunk_ir::types::{Attribute, Location, StringRef};
 use crate::dialect::adt;
 use crate::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 
-trunk_ir::register_pure_op!(DescriptorIs);
+trunk_ir::register_pure_op!(Descriptor);
 
 #[trunk_ir::dialect]
 mod tribute_rtti {
@@ -39,9 +40,11 @@ mod tribute_rtti {
     ) {
     }
 
-    /// Whether the allocation `ref` points to has the runtime type descriptor
-    /// number `index`.
-    fn descriptor_is(index: Attr<u32>, r#ref: Value<_>) -> Value<_> {}
+    /// The runtime type descriptor number of the allocation `ref` points to.
+    ///
+    /// `ref` is a managed reference, or the `core.ptr` it becomes under
+    /// native type conversion. Reading a null reference is undefined.
+    fn descriptor(r#ref: Value<_>) -> Value<I32> {}
 }
 
 /// How the runtime reads one field of an allocation.

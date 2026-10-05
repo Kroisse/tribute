@@ -3,7 +3,7 @@
 //! This pass converts ADT operations to their Cranelift equivalents:
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
 //! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
-//! - `tribute_rtti.descriptor_is(ref, index)` -> `clif.load(ref, -4)` + `clif.icmp(eq, loaded, index)`
+//! - `tribute_rtti.descriptor(ref)` -> `clif.load(ref, -4)`
 //! - `adt.variant_cast(ref, type, tag)` -> identity (native pointers are untyped)
 //! - `adt.variant_get(ref, type, tag, field)` -> `clif.load(ref, field_offset)`
 //! - `adt.ref_null(type)` -> `clif.iconst(0)` (null pointer)
@@ -60,7 +60,7 @@ pub fn lower(
         .with_auto_type_conversion(true)
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
-        .add_pattern(DescriptorIsPattern)
+        .add_pattern(DescriptorPattern)
         .add_pattern(VariantCastPattern)
         .add_pattern(VariantGetPattern)
         .add_pattern(RefNullPattern)
@@ -75,7 +75,7 @@ fn adt_to_clif_target() -> ConversionTarget {
     ConversionTarget::new()
         .legal_dialect("clif")
         .illegal_dialect("adt")
-        .illegal_op("tribute_rtti", "descriptor_is")
+        .illegal_op("tribute_rtti", "descriptor")
         .legal_op("adt", "struct_new")
         .legal_op("adt", "variant_new")
         .legal_op("adt", "array_new")
@@ -193,53 +193,30 @@ impl RewritePattern for StructSetPattern {
     }
 }
 
-/// `tribute_rtti.descriptor_is` -> a comparison of the RTTI index in the
-/// allocation's RC header with the descriptor number.
-struct DescriptorIsPattern;
+/// `tribute_rtti.descriptor` -> a load of the RTTI index in the allocation's
+/// RC header.
+struct DescriptorPattern;
 
-impl RewritePattern for DescriptorIsPattern {
+impl RewritePattern for DescriptorPattern {
     fn match_and_rewrite(
         &self,
         ctx: &mut IrContext,
         op: OpRef,
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
-        let Ok(descriptor_is) = tribute_rtti::DescriptorIs::from_op(ctx, op) else {
-            return false;
-        };
-        let Some(result_ty) = flag_result_type(ctx, op, rewriter) else {
+        let Ok(descriptor) = tribute_rtti::Descriptor::from_op(ctx, op) else {
             return false;
         };
         let loc = ctx.op(op).location;
         let i32_ty = intern_i32_type(ctx);
-        let i8_ty = intern_i8_type(ctx);
 
         // The header precedes the payload the reference points to.
         let header_offset = RTTI_IDX_OFFSET as i32 - RC_HEADER_SIZE as i32;
-        let index_load = clif::Load::operands(descriptor_is.r#ref(ctx))
+        let index_load = clif::Load::operands(descriptor.r#ref(ctx))
             .offset(header_offset)
             .results(i32_ty)
             .build(ctx, loc);
-        let expected = clif::Iconst::operands()
-            .value(i64::from(descriptor_is.index(ctx)))
-            .results(i32_ty)
-            .build(ctx, loc);
-        let cmp_op = clif::Icmp::operands(index_load.result(ctx), expected.result(ctx))
-            .cond("eq")
-            .results(i8_ty)
-            .build(ctx, loc);
-
-        rewriter.insert_op(index_load.op_ref());
-        rewriter.insert_op(expected.op_ref());
-        finalize_cmp(
-            ctx,
-            loc,
-            rewriter,
-            cmp_op.op_ref(),
-            cmp_op.result(ctx),
-            result_ty,
-            i8_ty,
-        );
+        rewriter.replace_op(index_load.op_ref());
         true
     }
 }
@@ -545,12 +522,12 @@ mod tests {
     }
 
     #[test]
-    fn descriptor_is_compares_the_header_index_and_widens_to_the_result_type() {
+    fn descriptor_loads_the_header_index() {
         let result = run_pass(
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = clif.iconst {value = 42} : core.ptr
-    %1 = tribute_rtti.descriptor_is %0 {index = 7} : core.i32
+    %1 = tribute_rtti.descriptor %0 : core.i32
     func.return %1
   }
 }"#,
@@ -560,27 +537,7 @@ mod tests {
             result.contains("clif.load %0 {offset = -4} : core.i32"),
             "{result}"
         );
-        assert!(
-            result.contains("clif.iconst {value = 7} : core.i32"),
-            "{result}"
-        );
-        assert!(result.contains("clif.icmp"), "{result}");
-        assert!(result.contains("clif.uextend"), "{result}");
-        assert!(!result.contains("core.i1"), "{result}");
-    }
-
-    #[test]
-    fn descriptor_is_rejects_unlowered_i1_result() {
-        let result = run_pass_result(
-            r#"core.module @test {
-  func.func @test_fn() -> core.i1 {
-    %0 = clif.iconst {value = 42} : core.ptr
-    %1 = tribute_rtti.descriptor_is %0 {index = 7} : core.i1
-    func.return %1
-  }
-}"#,
-        );
-        assert!(result.is_err());
+        assert!(!result.contains("tribute_rtti."), "{result}");
     }
 
     #[test]

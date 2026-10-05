@@ -18,8 +18,9 @@
 //!
 //! A variant is told apart by its runtime type descriptor. The same
 //! declarations number the descriptors, so this pass replaces each
-//! `adt.variant_is` with a `tribute_rtti.descriptor_is` of the variant's
-//! number. A variant the module never allocates has no number, and its test
+//! `adt.variant_is` with a comparison of the value's
+//! `tribute_rtti.descriptor` with the variant's number. A variant the module
+//! never allocates has no number, and its test
 //! is constant false without reading the reference. A variant test of a null
 //! reference is undefined, so that path need not fault as a header read does.
 
@@ -139,8 +140,9 @@ pub fn lower(
         .apply_partial(ctx, module);
 }
 
-/// `adt.variant_is` -> `tribute_rtti.descriptor_is` of the variant's declared
-/// descriptor number, or constant false for a variant without one.
+/// `adt.variant_is` -> `arith.cmpi eq` of the value's
+/// `tribute_rtti.descriptor` and the variant's declared descriptor number, or
+/// constant false for a variant without one.
 struct VariantIsPattern {
     numbers: HashMap<(TypeRef, Option<StringRef>), u32>,
 }
@@ -158,19 +160,30 @@ impl RewritePattern for VariantIsPattern {
         let loc = ctx.op(op).location;
         let result_ty = variant_is.result_ty(ctx);
         let descriptor = (variant_is.r#type(ctx), Some(variant_is.tag_ref(ctx)));
-        let replacement = match self.numbers.get(&descriptor) {
-            Some(&number) => tribute_rtti::DescriptorIs::operands(variant_is.r#ref(ctx))
-                .index(number)
-                .results(result_ty)
-                .build(ctx, loc)
-                .op_ref(),
-            None => arith::Const::operands()
+        let Some(&number) = self.numbers.get(&descriptor) else {
+            let never = arith::Const::operands()
                 .value(Attribute::Bool(false))
                 .results(result_ty)
-                .build(ctx, loc)
-                .op_ref(),
+                .build(ctx, loc);
+            rewriter.replace_op(never.op_ref());
+            return true;
         };
-        rewriter.replace_op(replacement);
+        // The comparison yields `core.i1`, the type a variant test has.
+        if !core::I1::matches(ctx, result_ty) {
+            return false;
+        }
+        let actual = tribute_rtti::Descriptor::operands(variant_is.r#ref(ctx)).build(ctx, loc);
+        let i32_ty = ctx.value_ty(actual.result(ctx));
+        let expected = arith::Const::operands()
+            .value(Attribute::Int(i128::from(number)))
+            .results(i32_ty)
+            .build(ctx, loc);
+        let matches = arith::Cmpi::operands(actual.result(ctx), expected.result(ctx))
+            .predicate("eq")
+            .build(ctx, loc);
+        rewriter.insert_op(actual.op_ref());
+        rewriter.insert_op(expected.op_ref());
+        rewriter.replace_op(matches.op_ref());
         true
     }
 }
@@ -360,9 +373,14 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(!printed.contains("adt.variant_is"), "{printed}");
         assert!(
-            printed.contains("tribute_rtti.descriptor_is %0 {index = 6} : core.i1"),
+            printed.contains("tribute_rtti.descriptor %0 : core.i32"),
             "{printed}"
         );
+        assert!(
+            printed.contains("arith.const {value = 6} : core.i32"),
+            "{printed}"
+        );
+        assert!(printed.contains("arith.cmpi"), "{printed}");
         // `Other` is never allocated, so no object has its descriptor.
         assert!(
             printed.contains("arith.const {value = false} : core.i1"),
