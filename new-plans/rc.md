@@ -75,7 +75,7 @@ Structs are laid out with fields in declaration order, naturally aligned:
 
 ```text
 Struct: [fields in order, naturally aligned]
-Enum:   [tag: i32] [padding] [payload: max(variant sizes)]
+Enum:   [variant fields in order, naturally aligned], sized to max(variant sizes)
 Array:  [length: i64] [elements...]
 ```
 

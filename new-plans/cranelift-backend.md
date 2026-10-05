@@ -261,7 +261,10 @@ native closure layout으로 바꾸는 일은 Tribute target 단계가 소유하�
 주소와 descriptor 내용을 담는 RTTI table(`clif.data`와 재배치), table을 통해 해제를 디스패치하는
 `__tribute_deep_release`를 IR에 선언한다. `struct_to_mem`은 struct field 접근의
 nominal layout을 [`mem.struct`](ir.md#nominal-수준과-structural-수준)로 바꾸며, 선언의
-필드 종류에서 해제되는 필드를 읽는다. RC header lowering은 선언된 index를
+필드 종류에서 해제되는 필드를 읽는다. 같은 단계가 variant 판별을 값의 descriptor
+번호(`tribute_rtti.descriptor`)와 선언된 번호의 정수 비교로 바꾼다. Descriptor 번호를
+읽는 연산은 RC header의 index를 읽는 `clif.load`가 되고, 비교는 일반 정수 비교로
+내려간다. RC header lowering은 선언된 index를
 header에 기록하고 선언을 지운다. Backend는 RTTI 이름 규칙을 알지 않는다.
 
 Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan을 즉시
@@ -275,7 +278,7 @@ Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan
 
 ```text
 Struct: [fields in order, naturally aligned]
-Enum:   [tag: i32] [padding] [payload: max(variant sizes)]
+Enum:   [variant fields in order, naturally aligned], sized to max(variant sizes)
 Array:  [length: i64] [elements...]
 ```
 

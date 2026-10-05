@@ -1338,9 +1338,10 @@ fn prepare_module_to_native(
             ownership_plan.rtti_types(),
         );
         tribute_passes::native::adapt_closure_layout::lower(ctx, module);
-        // Field accesses need only the structural `mem.struct` layout. The
-        // nominal layouts stay on allocations, which RC header lowering
-        // resolves to descriptors.
+        // Field accesses need only the structural `mem.struct` layout, and
+        // variant tests only the variant's descriptor number. The nominal
+        // layouts stay on allocations, which RC header lowering resolves to
+        // descriptors.
         let core_module = core_dialect::Module::from_op(ctx, module.op()).map_err(|_| {
             trunk_ir_cranelift_backend::CompilationError::ir_validation(
                 "native lowering requires a core.module".to_owned(),

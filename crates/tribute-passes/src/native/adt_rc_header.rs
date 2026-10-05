@@ -233,7 +233,10 @@ impl RewritePattern for StructNewPattern {
     }
 }
 
-/// Pattern for `adt.variant_new(fields...)` -> heap allocation + RC header + tag + stores.
+/// Pattern for `adt.variant_new(fields...)` -> heap allocation + RC header + stores.
+///
+/// The header's RTTI index is the variant's descriptor number and is what
+/// tells the variant apart; the payload holds only the variant's fields.
 ///
 /// Generates:
 /// ```text
@@ -245,10 +248,8 @@ impl RewritePattern for StructNewPattern {
 /// clif.store(%rtti_idx, %raw_ptr, offset=4)      // rtti_idx
 /// %hdr_size  = clif.iconst(8)
 /// %payload   = clif.iadd(%raw_ptr, %hdr_size)    // payload_ptr
-/// %tag       = clif.iconst(<tag_value>)
-/// clif.store(%tag, %payload, offset=0)            // discriminant
-/// clif.store(%field0, %payload, offset=8)         // first field
-/// clif.store(%field1, %payload, offset=16)        // second field
+/// clif.store(%field0, %payload, offset=0)         // first field
+/// clif.store(%field1, %payload, offset=8)         // second field
 /// ...
 /// %result    = clif.iadd(%payload, %zero)         // identity
 /// ```
@@ -360,19 +361,7 @@ impl RewritePattern for VariantNewPattern {
         let payload_val = payload_ptr.result(ctx);
         ops.push(payload_ptr.op_ref());
 
-        // 6. Store tag at payload + 0
-        let tag_const = clif::Iconst::operands()
-            .value(variant_layout.tag_value as i64)
-            .results(self.i32_ty)
-            .build(ctx, loc);
-        let tag_val = tag_const.result(ctx);
-        ops.push(tag_const.op_ref());
-        let store_tag = clif::Store::operands(tag_val, payload_val)
-            .offset(0)
-            .build(ctx, loc);
-        ops.push(store_tag.op_ref());
-
-        // 7. Store each field at its computed offset (relative to payload + fields_offset)
+        // 6. Store each field at its computed offset from the payload
         assert_eq!(
             fields.len(),
             variant_layout.field_offsets.len(),
@@ -381,14 +370,14 @@ impl RewritePattern for VariantNewPattern {
             variant_layout.field_offsets.len(),
         );
         for (i, &field_val) in fields.iter().enumerate() {
-            let offset = (enum_layout.fields_offset + variant_layout.field_offsets[i]) as i32;
+            let offset = variant_layout.field_offsets[i] as i32;
             let store_op = clif::Store::operands(field_val, payload_val)
                 .offset(offset)
                 .build(ctx, loc);
             ops.push(store_op.op_ref());
         }
 
-        // 8. Identity pass-through
+        // 7. Identity pass-through
         let zero_op = clif::Iconst::operands()
             .value(0)
             .results(self.i64_ty)
