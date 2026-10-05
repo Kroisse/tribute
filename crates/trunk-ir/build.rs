@@ -5,6 +5,9 @@
 //! literals passed to `Symbol::new`. A name missing from the set is still a
 //! valid symbol; it is interned in the dynamic set instead.
 
+#[path = "build/string_literal.rs"]
+mod string_literal;
+
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
@@ -40,26 +43,17 @@ fn scan_dir(dir: &Path, atoms: &mut BTreeSet<String>) {
 /// Collect literal `Symbol::new` and `symbol!` arguments, `symbols!` entries, and `&str`
 /// constants, which name attributes passed to `Symbol::new`.
 fn scan_symbol_literals(text: &str, atoms: &mut BTreeSet<String>) {
-    let marker = "symbol!(";
-    for (start, _) in text.match_indices(marker) {
-        let rest = text[start + marker.len()..].trim_start();
-        if let Some(rest) = rest.strip_prefix('"')
-            && let Some(end) = rest.find('"')
-        {
-            insert_name(&rest[..end], atoms);
-        }
-    }
-
     for marker in [
-        "Symbol::new(\"",
-        "=> \"",
-        ": &str = \"",
-        ": &'static str = \"",
+        "Symbol::new(",
+        "symbol!(",
+        "=> ",
+        ": &str = ",
+        ": &'static str = ",
     ] {
         for (start, _) in text.match_indices(marker) {
-            let rest = &text[start + marker.len()..];
-            if let Some(end) = rest.find('"') {
-                insert_name(&rest[..end], atoms);
+            let rest = text[start + marker.len()..].trim_start();
+            if let Some(value) = string_literal::value(rest) {
+                insert_name(&value, atoms);
             }
         }
     }

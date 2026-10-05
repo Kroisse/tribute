@@ -1905,6 +1905,7 @@ dependencies = [
  "smallvec",
  "string_cache",
  "string_cache_codegen",
+ "syn 2.0.119",
  "tracing",
  "trunk-ir-macros",
  "trybuild",

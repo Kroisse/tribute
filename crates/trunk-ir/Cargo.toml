@@ -31,9 +31,11 @@ trunk-ir-macros.workspace = true
 winnow.workspace = true
 
 [build-dependencies]
+syn = { version = "2", default-features = false, features = ["derive", "parsing"] }
 string_cache_codegen.workspace = true
 
 [dev-dependencies]
+syn = { version = "2", default-features = false, features = ["derive", "parsing"] }
 insta.workspace = true
 proptest.workspace = true
 salsa.workspace = true

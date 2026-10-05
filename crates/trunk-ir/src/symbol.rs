@@ -430,6 +430,16 @@ mod tests {
     }
 
     #[test]
+    fn escaped_literal_symbols_match_runtime_names() {
+        const QUOTED: Symbol = crate::symbol!("quoted\"symbol");
+        let unicode = Symbol::new("escaped_\u{1f980}");
+        assert_eq!(QUOTED.as_str(), "quoted\"symbol");
+        assert_eq!(unicode.as_str(), "escaped_🦀");
+        assert!(QUOTED.is_static_or_inline());
+        assert!(unicode.is_static_or_inline());
+    }
+
+    #[test]
     fn symbols_compare_and_order_by_text() {
         let short = Symbol::new("short");
         let text = String::from("a_name_longer_than_seven_bytes");
