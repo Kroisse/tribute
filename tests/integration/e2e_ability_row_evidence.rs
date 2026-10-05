@@ -390,3 +390,62 @@ fn main() ->{Io} Nil {
     // tick() is the state plus 9: 10, stored, then 19.
     assert_program("nested_resume_after_reinstall.trb", code, "29");
 }
+
+/// A handle nested in an arm may handle an instance the arm's row also names.
+/// A resume in its body still installs the arm's handle on the arm's current
+/// evidence: the nested handler's marker is taken off and the handler it hid
+/// comes back, also after an outer handler reinstalled itself in between.
+#[test]
+fn test_nested_resume_restores_the_handler_a_nested_handle_hid() {
+    let code = r#"
+ability Tick {
+    op tick() -> Int
+}
+
+ability Cell(c) {
+    op read() -> c
+    op write(value: c) -> Nil
+}
+
+fn run_cell(comp: fn() ->{e, Cell(c)} a, init: c) ->{e} a {
+    handle comp() {
+        do result { result }
+        op Cell::read() { run_cell(fn() { resume init }, init) }
+        op Cell::write(v) { run_cell(fn() { resume Nil }, v) }
+    }
+}
+
+fn with_tick(
+    comp: fn() ->{e, Tick, State(Int), Cell(Int)} Int
+) ->{e, State(Int), Cell(Int)} Int {
+    handle comp() {
+        do result { result }
+        op Tick::tick() {
+            handle {
+                let c = Cell::read()
+                let s = State::get()
+                resume s + c
+            } {
+                do inner { inner }
+                op State::get() { resume +100 }
+                op State::set(v) { resume Nil }
+            }
+        }
+    }
+}
+
+fn main() ->{Io} Nil {
+    show(run_cell(fn() {
+        run_state(fn() {
+            with_tick(fn() {
+                let t = Tick::tick()
+                t + Cell::read() + State::get()
+            })
+        }, +1)
+    }, +5))
+}
+"#;
+    // tick() is the nested state (100) plus the cell (5). The resumed
+    // computation then reads the cell (5) and the outer state (1).
+    assert_program("nested_resume_restores_hidden_handler.trb", code, "111");
+}

@@ -172,14 +172,11 @@ struct ArmResume {
 enum ArmEvidence {
     /// The flow's evidence.
     Flow,
-    /// The flow's evidence beneath the top handler of each of these
-    /// instances: inside handle bodies nested in the arm that installed them
-    /// without a selection.
-    Beneath(Vec<TypeRef>),
-    /// The evidence a handle nested in the arm was installed on. A nested
-    /// handle that masks an instance leaves no way to recover the arm's
-    /// evidence from its body's.
-    Captured(ValueRef),
+    /// The evidence the handles nested in the arm were installed on, read
+    /// from the flow's evidence: one handled instance per nested handle,
+    /// outermost first. Each handle's marker records the evidence it was
+    /// installed on.
+    Outside(Vec<TypeRef>),
 }
 
 /// The operations of a source block that follow the one being converted.

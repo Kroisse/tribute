@@ -906,7 +906,7 @@ fn named_boundaries_report_local_and_core_validation_errors() {
     );
 
     let malformed_delimiter = r#"core.module @test {
-  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @broken() -> core.never attributes {tribute.calling_convention = 2} {
     ability.handle_dispatch {ability_refs = []} {
       ^body(%inner: !evidence):
@@ -1056,7 +1056,7 @@ fn post_boundary_rejects_malformed_physical_callable_transfers() {
 #[test]
 fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     let dispatcher_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   !tr = closure.closure<func.func_sig<(!evidence, core.i32, tribute_rt.anyref) -> tribute_rt.anyref>>
   func.func @caller(%ev: !evidence, %prompt: core.i32, %tr: !tr) -> core.never attributes {tribute.calling_convention = 2} {
     ability.handle_dispatch %ev, %prompt, %tr {ability_refs = [core.ability_ref<{name = "State"}>]} {
@@ -1075,7 +1075,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     );
 
     let wrong_abi_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence) -> tribute_rt.anyref {tribute.calling_convention = 1} {
       func.unreachable
@@ -1095,7 +1095,7 @@ fn post_boundary_rejects_nonphysical_dispatchers_and_residual_control_ops() {
     );
 
     let wrong_metadata_input = r#"core.module @test {
-  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
+  !evidence = core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>, {layout = "evidence"}>
   func.func @caller(%ev: !evidence, %prompt: core.i32) -> core.never attributes {tribute.calling_convention = 2} {
     %tr = closure.lambda(%inner: !evidence, %op_idx: core.i32, %payload: tribute_rt.anyref) -> tribute_rt.anyref {tribute.calling_convention = 0} {
       func.unreachable

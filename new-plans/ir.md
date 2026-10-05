@@ -700,6 +700,10 @@ typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`, `handle`
 - 원소는 key 하나짜리 dictionary다. Key `mask` 또는 `dup`이 연산을, 값이 exact
   ability instance(`core.ability_ref` type)를 나타내며 원소는 순서대로 적용한다.
   한 instance는 한 번만 나온다.
+- Key `outer`는 그 instance의 가장 위 handler를 설치한 지점의 evidence로 바꾼다.
+  Source-logical operation은 이 key를 쓰지 않는다. CPS legalization이 arm 본문에
+  중첩된 handle body 안의 `resume`에만 붙이며, 중첩 한 겹에 한 원소다. 같은
+  instance가 여러 번 나올 수 있다.
 - 속성이 없으면 그대로 전달한다. 빈 목록은 쓰지 않는다.
 - Verifier는 원소 형상, `handle`의 `mask` 전용 규칙, instance 중복만 검사한다.
   Row 정보는 IR에 없으므로 선택의 옳고 그름은 typechecking이 책임진다.
@@ -707,7 +711,7 @@ typechecking 결과로 복사한다. `call`, `call_indirect`, `resume`, `handle`
   만든 evidence-taking `func.call`, `func.tail_call`, `func.call_indirect`,
   `func.tail_call_indirect`에, `handle`의 선택은 `ability.handle_dispatch`에 같은
   이름의 속성으로 둔다. Evidence를 받지 않는 callee로 가는 호출에는 옮기지 않는다.
-  `resolve_evidence`가 이를 `effect.mask`/`effect.dup`으로 만든다
+  `resolve_evidence`가 이를 `effect.mask`/`effect.dup`/`effect.outer`로 만든다
   ([cps-effects.md](cps-effects.md#row-directed-evidence)).
 
 #### `tribute_control.return`

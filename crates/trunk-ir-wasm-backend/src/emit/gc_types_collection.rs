@@ -124,6 +124,7 @@ fn validate_marker_layout(ctx: &IrContext, ty: TypeRef) -> CompilationResult<()>
         "prompt_tag",
         "tr_dispatch_fn",
         "shadowed",
+        "outer",
     ]) {
         let field_type = ctx.get_type(ty);
         if attrs.get_str(ctx, "name") != Some(role)
@@ -771,7 +772,7 @@ mod tests {
                 };
                 let module = trunk_ir::parser::parse_test_module(&mut ctx, &format!(
                     "core.module @test {{
-                        !Marker = adt.struct<{field_type} {{name = \"ability_id\"}}, core.i32 {{name = \"prompt_tag\"}}, core.ptr {{name = \"tr_dispatch_fn\"}}, core.ptr {{name = \"shadowed\"}}, {{name = \"_Marker\", layout = \"evidence_marker\"}}>
+                        !Marker = adt.struct<{field_type} {{name = \"ability_id\"}}, core.i32 {{name = \"prompt_tag\"}}, core.ptr {{name = \"tr_dispatch_fn\"}}, core.ptr {{name = \"shadowed\"}}, core.ptr {{name = \"outer\"}}, {{name = \"_Marker\", layout = \"evidence_marker\"}}>
                         wasm.func @test(%marker: !Marker) -> core.i32 {{
                             {producer}
                             wasm.unreachable
@@ -827,7 +828,7 @@ mod tests {
             &mut ctx,
             &format!(
                 r#"core.module @test {{
-            !Marker = adt.struct<core.i32 {{name = "ability_id"}}, core.i32 {{name = "prompt_tag"}}, core.ptr {{name = "tr_dispatch_fn"}}, core.ptr {{name = "shadowed"}}, {{name = "_Marker"}}>
+            !Marker = adt.struct<core.i32 {{name = "ability_id"}}, core.i32 {{name = "prompt_tag"}}, core.ptr {{name = "tr_dispatch_fn"}}, core.ptr {{name = "shadowed"}}, core.ptr {{name = "outer"}}, {{name = "_Marker"}}>
             wasm.func @test(%marker: !Marker) -> core.i32 {{
                 %value = wasm.struct_get %marker {{type_idx = {CLOSURE_STRUCT_IDX}, field_idx = 0}} : core.i32
                 wasm.return %value

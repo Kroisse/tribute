@@ -304,7 +304,7 @@ mod tests {
 
     /// Build the canonical evidence type string for use in test IR.
     fn evidence_type_str() -> &'static str {
-        "core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
+        "core.array<adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = \"evidence_marker\"}>, {layout = \"evidence\"}>"
     }
 
     fn attach_exact_perform_types(ctx: &mut IrContext, module: trunk_ir::rewrite::Module) {

@@ -3,8 +3,8 @@
 //! Shared CPS legalization has already established callable signatures and
 //! explicit evidence operands. This pass resolves handler prompt identities and
 //! replaces each delimiter body evidence argument with its extended evidence.
-//! It also turns each `evidence_plan` selection into `effect.mask` /
-//! `effect.dup` on the evidence the operation passes.
+//! It also turns each `evidence_plan` selection into `effect.mask`,
+//! `effect.dup`, or `effect.outer` on the evidence the operation passes.
 
 use itertools::Itertools;
 use std::error::Error;
@@ -288,6 +288,13 @@ fn apply_evidence_plan(
                     .build(ctx, location);
                 (dup.op_ref(), dup.result(ctx))
             }
+            EvidenceStep::Outer(instance) => {
+                let outer = effect::Outer::operands(evidence)
+                    .ability_ref(instance)
+                    .results(evidence_ty)
+                    .build(ctx, location);
+                (outer.op_ref(), outer.result(ctx))
+            }
         };
         ctx.insert_op_before(block, op, selected.0);
         selected.1
@@ -369,10 +376,15 @@ fn resolve_delimiters(
                 }
                 let evidence_ty = ability::evidence_adt_type_ref(ctx);
                 for (ability_ref, tr_dispatch) in shape.dispatchers {
-                    let extend = effect::Extend::operands(current_ev, prompt_tag, tr_dispatch)
-                        .ability_ref(ability_ref)
-                        .results(evidence_ty)
-                        .build(ctx, location);
+                    let extend = effect::Extend::operands(
+                        current_ev,
+                        prompt_tag,
+                        tr_dispatch,
+                        shape.evidence,
+                    )
+                    .ability_ref(ability_ref)
+                    .results(evidence_ty)
+                    .build(ctx, location);
                     current_ev = extend.result(ctx);
                     ctx.insert_op_before(block, op, extend.op_ref());
                 }
@@ -498,7 +510,7 @@ mod tests {
     fn final_dispatch_fixture(operation: &str) -> String {
         format!(
             r#"core.module @test {{
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {{layout = "evidence_marker"}}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {{layout = "evidence_marker"}}>
   !evidence = core.array<!marker, {{layout = "evidence"}}>
   func.func @test(%ev: !evidence, %prompt: core.i32, %tr: core.ptr, %tr2: core.ptr) -> core.never {{
     {operation}
@@ -825,7 +837,7 @@ mod tests {
     #[test]
     fn bodyless_declarations_are_preserved_during_evidence_resolution() {
         let input = r#"core.module @test {
-  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr), {layout = "evidence_marker"}>
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
   !evidence = core.array<!marker, {layout = "evidence"}>
   func.func @plain_external() -> core.i32
   func.func @evidence_external(%ev: !evidence) -> !marker

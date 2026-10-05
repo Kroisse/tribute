@@ -24,6 +24,7 @@ pub const PROVIDED: &[&str] = &[
     evidence_abi::EXTEND,
     evidence_abi::MASK,
     evidence_abi::DUP,
+    evidence_abi::OUTER,
     NEXT_TAG,
     BYTES_LEN,
     BYTES_CONCAT,

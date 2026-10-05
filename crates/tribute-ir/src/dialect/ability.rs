@@ -250,6 +250,7 @@ pub enum MarkerField {
     PromptTag = 1,
     TrDispatchFn = 2,
     Shadowed = 3,
+    Outer = 4,
 }
 
 impl MarkerField {
@@ -283,7 +284,7 @@ pub struct MarkerFieldSpec {
 }
 
 /// Canonical field layout for the `_Marker` ADT.
-pub const MARKER_FIELDS: [MarkerFieldSpec; 4] = [
+pub const MARKER_FIELDS: [MarkerFieldSpec; 5] = [
     MarkerFieldSpec {
         field: MarkerField::AbilityId,
         symbol_name: "ability_id",
@@ -302,6 +303,11 @@ pub const MARKER_FIELDS: [MarkerFieldSpec; 4] = [
     MarkerFieldSpec {
         field: MarkerField::Shadowed,
         symbol_name: "shadowed",
+        field_type: MarkerFieldType::Ptr,
+    },
+    MarkerFieldSpec {
+        field: MarkerField::Outer,
+        symbol_name: "outer",
         field_type: MarkerFieldType::Ptr,
     },
 ];
@@ -343,16 +349,18 @@ pub mod evidence_abi {
     pub const EXTEND: &str = "__tribute_evidence_extend";
     pub const MASK: &str = "__tribute_evidence_mask";
     pub const DUP: &str = "__tribute_evidence_dup";
+    pub const OUTER: &str = "__tribute_evidence_outer";
     pub const LOOKUP_TR: &str = "__tribute_evidence_lookup_tr";
 }
 
-pub fn evidence_runtime_symbols() -> [Symbol; 6] {
+pub fn evidence_runtime_symbols() -> [Symbol; 7] {
     [
         Symbol::new(evidence_abi::EMPTY),
         Symbol::new(evidence_abi::LOOKUP),
         Symbol::new(evidence_abi::EXTEND),
         Symbol::new(evidence_abi::MASK),
         Symbol::new(evidence_abi::DUP),
+        Symbol::new(evidence_abi::OUTER),
         Symbol::new(evidence_abi::LOOKUP_TR),
     ]
 }
@@ -366,10 +374,12 @@ pub fn evidence_runtime_symbols() -> [Symbol; 6] {
 ///     prompt_tag: i32,
 ///     tr_dispatch_fn: ptr,
 ///     shadowed: ptr,
+///     outer: ptr,
 /// }
 /// ```
 ///
 /// `shadowed` is the marker of the same ability this one shadows, or null.
+/// `outer` is the evidence the handler was installed on.
 /// `tr_dispatch_fn` stores an erased closure reference whose tail-resumptive
 /// operations return their source result. General operations read only the
 /// prompt and dispatch through the continuation frame.
@@ -468,11 +478,12 @@ mod tests {
         assert_eq!(MarkerField::PromptTag.index(), 1);
         assert_eq!(MarkerField::TrDispatchFn.index(), 2);
         assert_eq!(MarkerField::Shadowed.index(), 3);
+        assert_eq!(MarkerField::Outer.index(), 4);
     }
 
     #[test]
     fn test_marker_field_specs_are_canonical() {
-        assert_eq!(MARKER_FIELDS.len(), 4);
+        assert_eq!(MARKER_FIELDS.len(), 5);
         assert_eq!(
             MARKER_FIELDS,
             [
@@ -496,6 +507,11 @@ mod tests {
                     symbol_name: "shadowed",
                     field_type: MarkerFieldType::Ptr,
                 },
+                MarkerFieldSpec {
+                    field: MarkerField::Outer,
+                    symbol_name: "outer",
+                    field_type: MarkerFieldType::Ptr,
+                },
             ]
         );
     }
@@ -510,6 +526,7 @@ mod tests {
                 Symbol::new(evidence_abi::EXTEND),
                 Symbol::new(evidence_abi::MASK),
                 Symbol::new(evidence_abi::DUP),
+                Symbol::new(evidence_abi::OUTER),
                 Symbol::new(evidence_abi::LOOKUP_TR),
             ]
         );

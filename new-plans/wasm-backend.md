@@ -351,7 +351,7 @@ user-defined type은 그 뒤에 배치된다:
 | 1 | `BytesArray` |
 | 2 | `BytesStruct` |
 | 3 | `_closure { table_idx: i32, env: anyref }` |
-| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref }` |
+| 4 | `_Marker { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }` |
 | 5 | `Evidence` array |
 | 6 | `Described { descriptor: i32 }`, 사용자 struct와 variant의 공통 supertype |
 | 7+ | user-defined structs, arrays, variants, closures |

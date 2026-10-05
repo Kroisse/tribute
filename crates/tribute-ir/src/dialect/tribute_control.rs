@@ -155,21 +155,25 @@ mod tribute_control {
 /// receives from the evidence of the code around it.
 pub const EVIDENCE_PLAN_ATTR: &str = "evidence_plan";
 
-/// One element of an `evidence_plan`: `{mask = instance}` or `{dup = instance}`,
-/// where the instance is an exact `core.ability_ref` type.
+/// One element of an `evidence_plan`: `{mask = instance}`, `{dup = instance}`,
+/// or `{outer = instance}`, where the instance is an exact `core.ability_ref`
+/// type.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum EvidenceStep {
     /// Hide the top handler of the instance, uncovering the one beneath.
     Mask(TypeRef),
     /// Stack one more copy of the top handler of the instance.
     Dup(TypeRef),
+    /// Take the evidence the top handler of the instance was installed on.
+    /// CPS legalization adds this step; source operations never carry it.
+    Outer(TypeRef),
 }
 
 impl EvidenceStep {
     /// The `core.ability_ref` instance this step changes.
     pub fn instance(self) -> TypeRef {
         match self {
-            Self::Mask(instance) | Self::Dup(instance) => instance,
+            Self::Mask(instance) | Self::Dup(instance) | Self::Outer(instance) => instance,
         }
     }
 
@@ -177,6 +181,7 @@ impl EvidenceStep {
         match self {
             Self::Mask(_) => "mask",
             Self::Dup(_) => "dup",
+            Self::Outer(_) => "outer",
         }
     }
 
@@ -202,8 +207,9 @@ impl EvidenceStep {
         key.with_str(|key| match key {
             "mask" => Ok(Self::Mask(instance)),
             "dup" => Ok(Self::Dup(instance)),
+            "outer" => Ok(Self::Outer(instance)),
             other => Err(format!(
-                "evidence_plan element must be mask or dup, found {other}"
+                "evidence_plan element must be mask, dup, or outer, found {other}"
             )),
         })
     }
@@ -261,6 +267,9 @@ fn verify_evidence_plan(ctx: &IrContext, op: OpRef, mask_only: bool) -> Result<(
     let mut seen = HashSet::default();
     for item in items.iter() {
         let step = EvidenceStep::from_attribute(ctx, item)?;
+        if matches!(step, EvidenceStep::Outer(_)) {
+            return Err("a source operation's evidence_plan may not use outer".into());
+        }
         if mask_only && matches!(step, EvidenceStep::Dup(_)) {
             return Err("a handle's evidence_plan may only mask".into());
         }
@@ -5742,7 +5751,12 @@ mod tests {
             (
                 "[{keep = !state}]",
                 "[{mask = !state}]",
-                "must be mask or dup, found keep",
+                "must be mask, dup, or outer, found keep",
+            ),
+            (
+                "[{outer = !state}]",
+                "[{mask = !state}]",
+                "may not use outer",
             ),
             (
                 "[{mask = core.i32}]",
