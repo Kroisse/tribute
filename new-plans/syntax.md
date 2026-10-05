@@ -882,9 +882,10 @@ ExprList ::= Expression (',' Expression)* ','?
 - `x.a::b(y)` → `a::b(x, y)` (qualified path도 가능)
 
 Qualified UFCS `x.a::b(y)`도 비한정 UFCS처럼 receiver 타입으로 후보를 고른다
-([modules.md](modules.md#type-directed-resolution)). 타입에는 namespace가 없고
-`User::name::set`의 `User`는 타입과 동명인 모듈이므로, 후보는 호출 위치 스코프의
-경로로만 찾는다:
+([modules.md](modules.md#type-directed-resolution)). `User::name::set`의 `User`는
+타입 binding이 아니라 타입 선언이 만드는 [동명 namespace](modules.md#타입과-동명-네임스페이스)
+(companion 모듈이 항목을 더하는 모듈)이므로, 후보는 호출 위치 스코프의 경로로만
+찾는다:
 
 - 스코프에서 그대로 해소되는 `a::b`
 - 스코프 안의 모듈 `m`마다 `m::a::b`
