@@ -585,31 +585,35 @@ fn test_method_call_with_args() {
 }
 
 #[test]
-fn test_qualified_method_path_for_field_update() {
-    let source = "fn main() -> Nil { user.name::set(\"Jane\") }";
-    let module = parse_and_lower(source);
+fn test_qualified_method_path_is_a_call() {
+    let cases = [
+        ("fn main() -> Nil { user.name::set(\"Jane\") }", 2),
+        ("fn main() -> Nil { user.name::get }", 1),
+    ];
+    for (source, arg_count) in cases {
+        let module = parse_and_lower(source);
 
-    let Decl::Function(func) = &module.decls[0] else {
-        panic!("Expected function");
-    };
-    let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
-        panic!("Expected block");
-    };
-    let ExprKind::MethodCall {
-        receiver,
-        method,
-        args,
-    } = value.kind.as_ref()
-    else {
-        panic!("Expected method call, got {:?}", value.kind);
-    };
-    let ExprKind::Var(name) = receiver.kind.as_ref() else {
-        panic!("Expected var receiver");
-    };
+        let Decl::Function(func) = &module.decls[0] else {
+            panic!("Expected function");
+        };
+        let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
+            panic!("Expected block");
+        };
+        let ExprKind::Call { callee, args } = value.kind.as_ref() else {
+            panic!("Expected call, got {:?}", value.kind);
+        };
+        let ExprKind::Var(path) = callee.kind.as_ref() else {
+            panic!("Expected path callee");
+        };
+        let ExprKind::Var(receiver) = args[0].kind.as_ref() else {
+            panic!("Expected var receiver");
+        };
 
-    assert_eq!(name.name().to_string(), "user");
-    assert_eq!(method.to_string(), "name::set");
-    assert_eq!(args.len(), 1);
+        assert!(path.qualified.to_string().starts_with("name::"));
+        assert_eq!(receiver.name().to_string(), "user");
+        assert_eq!(args.len(), arg_count);
+        assert_ne!(callee.id, value.id);
+    }
 }
 
 #[test]
