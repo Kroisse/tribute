@@ -104,7 +104,9 @@ fn call_indirect<S: FuncSig>(
   `(Symbol, value)` entries.
 - Regions and successors are declared in the body: `#[region(name)] {}`,
   `#[region(name?)] {}` for an optional last region such as the body of an
-  external function, and `#[successor(name)] {}`.
+  external function, and `#[successor(name)] {}`. `#[successors(name)] {}`
+  declares the rest of the successor list and must come last; its accessor
+  iterates those blocks.
 - Bounds are Rust types implementing `type_constraint::TypeConstraint`:
   `core` scalar categories (`IntegerLike`, `BoolLike`, `FloatLike`,
   `NumericLike`, `ScalarLike`), exact `core` scalars (`I1`–`I64`, `F32`,
@@ -141,8 +143,9 @@ single operand or a required attribute, or projections of such variables;
 `.results(..)` exists only when they are not all inferred, as for
 `-> Value<impl BoolLike>`. Result types,
 regions (`.regions(..)`), and successors (`.successors(..)`) are each set in
-one call, in declaration order. Missing required inputs panic in `build`; the
-builder does not check input types.
+one call, in declaration order; variadic successors are passed as an
+iterator. Missing required inputs panic in `build`; the builder does not check
+input types.
 
 **Operation definition**: every generated operation wrapper exposes
 `DialectOp::DEF`, a static `op_def::OpDef` registered by operation name.

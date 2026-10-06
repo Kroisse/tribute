@@ -197,6 +197,8 @@ legality 검사가 거부한다.
 생성된 builder는 entity 종류별로 입력을 묶는다. Operand 전체를 선언 순서대로
 받는 것으로 시작하고, attribute는 이름별로 받는다. 추론할 수 없는 결과 타입,
 region, successor는 각각 한 묶음으로 받는다. 묶음 안의 순서는 선언 순서다.
+마지막 successor는 가변 목록으로 선언할 수 있으며, 고정 successor 뒤의 나머지
+전부가 그 목록이다.
 Builder는 결과 타입이 고정 타입, 단일 operand나 필수 attribute로 바인딩된
 변수, 또는 그 변수의 투영으로 유일하게 결정될 때만 결과 타입을 추론한다.
 입력 타입을 검사하거나 cast를 삽입하지 않으며, 필수 입력의 누락은 프로그래밍

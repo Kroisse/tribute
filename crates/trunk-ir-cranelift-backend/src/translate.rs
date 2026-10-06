@@ -704,6 +704,67 @@ mod tests {
         assert!(!object.is_empty());
     }
 
+    fn branch_error(index_ty: &str, branch: &str, target_params: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  clif.func {{sym_name = "select", type = clif.func_sig<({index_ty}) -> ()>}} {{
+    ^entry(%index: {index_ty}):
+      clif.{branch}
+    ^default:
+      clif.return
+    ^target{target_params}:
+      clif.return
+  }}
+}}"#
+            ),
+        );
+        emit_module_to_native(&ctx, module)
+            .expect_err("the branch is rejected")
+            .to_string()
+    }
+
+    #[test]
+    fn br_table_requires_an_i32_index_and_parameterless_successors() {
+        let branch = "br_table %index [^default, ^target]";
+        let wide_index = branch_error("core.i64", branch, "");
+        assert!(
+            wide_index.contains("operand #0 `index`: expected core.i32, found core.i64"),
+            "{wide_index}"
+        );
+        let parameters = branch_error("core.i32", branch, "(%value: core.i32)");
+        assert!(
+            parameters.contains("clif.br_table: a successor block has parameters"),
+            "{parameters}"
+        );
+    }
+
+    #[test]
+    fn switch_rejects_what_the_index_cannot_select() {
+        let too_wide = branch_error(
+            "core.i8",
+            "switch %index [^default, ^target] {cases = [256]}",
+            "",
+        );
+        assert!(
+            too_wide.contains("case 256 does not fit the i8 index"),
+            "{too_wide}"
+        );
+        let branch = "switch %index [^default, ^target] {cases = [1]}";
+        let parameters = branch_error("core.i32", branch, "(%value: core.i32)");
+        assert!(
+            parameters.contains("clif.switch: a successor block has parameters"),
+            "{parameters}"
+        );
+        let float_index = branch_error("core.f64", branch, "");
+        assert!(
+            float_index.contains("operand #0 `index`: expected IntegerLike, found core.f64"),
+            "{float_index}"
+        );
+    }
+
     #[test]
     fn native_emission_defines_declared_data_objects() {
         use object::{Object, ObjectSection, ObjectSymbol};

@@ -105,11 +105,10 @@ pub enum ResultDef {
 
 pub enum RegionOrSuccessor {
     /// A region; `optional` regions are declared as `#[region(name?)]`.
-    Region {
-        name: String,
-        optional: bool,
-    },
-    Successor(String),
+    Region { name: String, optional: bool },
+    /// A successor; a `variadic` one, declared as `#[successors(name)]`, is
+    /// the rest of the successor list.
+    Successor { name: String, variadic: bool },
 }
 
 // ============================================================================
@@ -298,7 +297,7 @@ fn entity_names(op: &OperationDef) -> impl Iterator<Item = &str> {
         .map(|operand| operand.name.as_str())
         .chain(op.attrs.iter().map(|attr| attr.name.as_str()))
         .chain(op.regions.iter().map(|item| match item {
-            RegionOrSuccessor::Region { name, .. } | RegionOrSuccessor::Successor(name) => {
+            RegionOrSuccessor::Region { name, .. } | RegionOrSuccessor::Successor { name, .. } => {
                 name.as_str()
             }
         }))
@@ -397,7 +396,8 @@ fn parse_operation(iter: &mut TokenIter) -> Result<OperationDef, String> {
     constraint::parse_typed_operation(iter, name_ident)
 }
 
-/// Parse body content: `#[region(name)] {}` and `#[successor(name)] {}`.
+/// Parse body content: `#[region(name)] {}`, `#[successor(name)] {}`, and
+/// `#[successors(name)] {}`.
 fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccessor>, String> {
     let mut iter = stream.to_token_iter();
     let mut items = Vec::new();
@@ -440,15 +440,28 @@ fn parse_regions(stream: proc_macro2::TokenStream) -> Result<Vec<RegionOrSuccess
                 }
                 items.push(RegionOrSuccessor::Region { name, optional });
             }
-            "successor" => {
+            keyword @ ("successor" | "successors") => {
                 if optional {
                     return Err("successors cannot be optional".into());
                 }
+                if items
+                    .iter()
+                    .any(|item| matches!(item, RegionOrSuccessor::Successor { variadic: true, .. }))
+                {
+                    return Err("variadic successors must be the last successors".into());
+                }
                 // Consume `{}` after the attribute (required for valid Rust syntax)
                 let _body = expect_group(&mut iter, Delimiter::Brace)?;
-                items.push(RegionOrSuccessor::Successor(name));
+                items.push(RegionOrSuccessor::Successor {
+                    name,
+                    variadic: keyword == "successors",
+                });
             }
-            other => return Err(format!("expected `region` or `successor`, got `{other}`")),
+            other => {
+                return Err(format!(
+                    "expected `region`, `successor`, or `successors`, got `{other}`"
+                ));
+            }
         }
     }
 
@@ -822,8 +835,55 @@ mod tests {
             _ => panic!("expected operation"),
         };
         assert_eq!(op.regions.len(), 2);
-        assert!(matches!(&op.regions[0], RegionOrSuccessor::Successor(s) if s == "then_dest"));
-        assert!(matches!(&op.regions[1], RegionOrSuccessor::Successor(s) if s == "else_dest"));
+        assert!(matches!(
+            &op.regions[0],
+            RegionOrSuccessor::Successor { name, variadic: false } if name == "then_dest"
+        ));
+        assert!(matches!(
+            &op.regions[1],
+            RegionOrSuccessor::Successor { name, variadic: false } if name == "else_dest"
+        ));
+    }
+
+    #[test]
+    fn test_parse_variadic_successors() {
+        let module = parse_test_module(quote! {
+            mod test {
+                fn switch(index: Value<_>) {
+                    #[successor(default)] {}
+                    #[successors(targets)] {}
+                }
+            }
+        })
+        .unwrap();
+
+        let op = match &module.items[0] {
+            DialectItem::Operation(op) => op,
+            _ => panic!("expected operation"),
+        };
+        assert!(matches!(
+            &op.regions[0],
+            RegionOrSuccessor::Successor { name, variadic: false } if name == "default"
+        ));
+        assert!(matches!(
+            &op.regions[1],
+            RegionOrSuccessor::Successor { name, variadic: true } if name == "targets"
+        ));
+
+        let not_last = parse_test_module(quote! {
+            mod test {
+                fn switch(index: Value<_>) {
+                    #[successors(targets)] {}
+                    #[successor(default)] {}
+                }
+            }
+        });
+        assert!(
+            not_last
+                .err()
+                .unwrap()
+                .contains("variadic successors must be the last successors")
+        );
     }
 
     #[test]

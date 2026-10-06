@@ -8,7 +8,8 @@
 Cranelift 백엔드는 WASM 백엔드와 동일한 **lowering/emission 분리**을 따른다:
 
 1. **타겟 독립적 IR 유지**: trunk-ir는 특정 타겟에 종속되지 않음
-2. **Backend-specific lowering**: `clif.*` dialect은 Cranelift IR과 1:1 대응
+2. **Backend-specific lowering**: `clif.*` dialect은 Cranelift IR의 명령과
+   `cranelift-frontend`가 제공하는 구성에 1:1 대응
 3. **관심사 분리**: lowering (tribute-passes/native)과
    emission (trunk-ir-cranelift-backend) 분리
 
@@ -134,7 +135,12 @@ flowchart TB
 
 ## `clif.*` Dialect
 
-Cranelift IR과 1:1 대응하는 저수준 연산. 전체 연산 목록은 [ir.md](ir.md#clif-dialect)를 참조.
+Cranelift와 1:1 대응하는 저수준 연산. 각 operation은 Cranelift IR의 명령 하나나
+`cranelift-frontend`가 제공하는 구성 하나에 대응한다. 예를 들어 `clif.br_table`은
+`br_table` 명령에, `clif.switch`는 `cranelift_frontend::Switch`에 대응한다.
+Operation의 이름과 의미는 대응하는 대상을 따르며, Cranelift에 대응 대상이 없는
+operation은 이 dialect에 두지 않는다. 전체 연산 목록은
+[ir.md](ir.md#clif-dialect)를 참조.
 
 핵심 차이점 (`wasm.*` 대비):
 
@@ -142,6 +148,41 @@ Cranelift IR과 1:1 대응하는 저수준 연산. 전체 연산 목록은 [ir.m
 - **CFG 기반**: structured control flow 대신 brif/jump/br_table
 - **스택 할당**: stack_slot으로 로컬 메모리 할당 가능
 - **함수 포인터**: funcref 대신 symbol_addr로 함수 주소 획득
+
+### `clif.br_table` jump table 분기
+
+`clif.br_table`은 Cranelift의 `br_table` 명령과 같은 의미를 가진다.
+
+```text
+clif.br_table %index [^default, ^entry0, ^entry1, ^entry2]
+```
+
+- Successor는 `default`가 먼저이고, 그 뒤가 0번부터의 table 항목이다.
+- `index`의 타입은 `core.i32`이며 부호 없는 값으로 읽는다. Table 범위 안이면 그 위치의 successor로,
+  범위를 벗어나면 `default`로 분기한다.
+- Successor는 block argument를 받지 않는다. 값을 넘겨야 하는 분기는
+  `clif.jump`로 끝나는 블록을 거친다.
+
+연속이 아닌 값이나 0에서 시작하지 않는 값에 대한 분기는 `clif.switch`가 표현한다.
+
+### `clif.switch` 다중 분기
+
+`clif.switch`는 `cranelift_frontend::Switch`와 같은 의미를 가진다.
+
+```text
+clif.switch %index [^default, ^a, ^b, ^c] {cases = [0, 1, 7]}
+```
+
+- Successor는 `default`가 먼저이고, 그 뒤로 `cases`의 값마다 하나씩 같은 순서로
+  온다. `cases`의 길이와 대상 successor의 수는 같다.
+- `index`의 타입은 정수 타입(`IntegerLike`)이며 부호 없는 값으로 비교한다. `cases`의 한 값과 같으면 그
+  위치의 successor로, 어느 값과도 같지 않으면 `default`로 분기한다.
+- Case 값은 서로 달라야 하고 `index` 타입의 부호 없는 범위 안에 있어야 한다.
+  연속이거나 0에서 시작할 필요는 없다.
+- Successor는 block argument를 받지 않는다.
+
+Jump table, 비교 분기, 또는 둘의 조합 중 무엇을 방출할지는 `Switch`가 case 값의
+분포를 보고 정한다. Operation은 그 선택을 표현하지 않는다.
 
 ### `clif.func_sig` 네이티브 호출 계약
 

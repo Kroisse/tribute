@@ -2,6 +2,7 @@
 
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
+use crate::dialect::core::{I32, IntegerLike};
 use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
@@ -95,7 +96,31 @@ mod clif {
         {}
     }
 
-    fn br_table(table: Attr<_>, index: Value<_>) {}
+    /// A branch through a jump table, like Cranelift's `br_table`.
+    ///
+    /// `index` is an unsigned 32-bit position in `table`. Control transfers
+    /// to the successor at that position, or to `default` when the index is
+    /// out of bounds. Successors take no block arguments.
+    fn br_table(index: Value<I32>) {
+        #[successor(default)]
+        {}
+        #[successors(table)]
+        {}
+    }
+
+    /// A multi-way branch, like `cranelift_frontend::Switch`.
+    ///
+    /// Control transfers to the `targets` successor at the position where
+    /// `cases` holds the unsigned value of `index`, or to `default` when no
+    /// case matches. Cases may be sparse and need not start at 0. Successors
+    /// take no block arguments.
+    #[verify]
+    fn switch(cases: Attr<[u64]>, index: Value<impl IntegerLike>) {
+        #[successor(default)]
+        {}
+        #[successors(targets)]
+        {}
+    }
 
     fn trap(code: Attr<String>) {}
 
@@ -384,6 +409,22 @@ fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = c
         .into_iter()
         .flat_map(|region| ctx.region(region).blocks.iter())
         .flat_map(|&block| ctx.block(block).ops.iter().copied())
+}
+
+impl crate::ops::Verify for Switch {
+    /// Every case has one target, and no case value repeats.
+    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
+        let cases = self.cases(ctx).count();
+        let targets = self.targets(ctx).count();
+        if cases != targets {
+            return Err(format!("{cases} case(s) but {targets} target(s)"));
+        }
+        let mut seen = HashSet::default();
+        match self.cases(ctx).find(|&case| !seen.insert(case)) {
+            Some(case) => Err(format!("duplicate case {case}")),
+            None => Ok(()),
+        }
+    }
 }
 
 impl crate::ops::Verify for Data {
@@ -683,5 +724,116 @@ mod tests {
         let mut attrs = AttributeMap::new();
         attrs.insert(NUM_INPUTS_ATTR, Attribute::Int(0));
         let _ = func_sig_with_attrs(&mut ctx, [], [], attrs);
+    }
+}
+
+#[cfg(test)]
+mod branch_table_tests {
+    use super::*;
+    use crate::op_def::OpDef;
+    use crate::parser::parse_test_module;
+    use crate::printer::print_module;
+
+    fn module(branch: &str) -> String {
+        format!(
+            r#"core.module @test {{
+  clif.func {{sym_name = "select", type = clif.func_sig<(core.i32) -> ()>}} {{
+    ^entry(%index: core.i32):
+      clif.{branch}
+    ^default:
+      clif.return
+    ^first:
+      clif.return
+    ^second:
+      clif.return
+  }}
+}}"#
+        )
+    }
+
+    fn assert_round_trips(branch: &str, printed_branch: &str) {
+        let mut ctx = crate::IrContext::new();
+        let parsed = parse_test_module(&mut ctx, &module(branch));
+        let printed = print_module(&ctx, parsed.op());
+        assert!(printed.contains(printed_branch), "{printed}");
+        let mut reparsed_ctx = crate::IrContext::new();
+        let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
+        assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
+    }
+
+    /// The violations of the `clif.switch` in [`module`], one per line.
+    fn switch_violations(branch: &str) -> String {
+        let mut ctx = crate::IrContext::new();
+        let module = parse_test_module(&mut ctx, &module(branch));
+        let mut violations = String::new();
+        let _ = crate::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
+            if Switch::matches(&ctx, op) {
+                let found = OpDef::of(&ctx, op)
+                    .expect("clif.switch is registered")
+                    .verify(&ctx, op);
+                violations = found.iter().format("\n").to_string();
+            }
+            std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
+        });
+        violations
+    }
+
+    #[test]
+    fn branch_tables_round_trip() {
+        assert_round_trips(
+            "br_table %index [^default, ^first, ^second]",
+            "clif.br_table %0 [^bb1, ^bb2, ^bb3]",
+        );
+        assert_round_trips(
+            "switch %index [^default, ^first, ^second] {cases = [0, 5]}",
+            "clif.switch %0 [^bb1, ^bb2, ^bb3] {cases = [0, 5]}",
+        );
+    }
+
+    #[test]
+    fn branch_table_builders_take_the_default_then_the_rest() {
+        let mut ctx = crate::IrContext::new();
+        let parsed = parse_test_module(&mut ctx, &module("br_table %index [^default]"));
+        let func = Func::from_op(&ctx, parsed.ops(&ctx)[0]).unwrap();
+        let blocks = ctx.region(func.body(&ctx)).blocks.clone();
+        let index = ctx.block_args(blocks[0])[0];
+        let location = ctx.op(func.op_ref()).location;
+
+        let br_table = BrTable::operands(index)
+            .successors(blocks[1], [blocks[2], blocks[3]])
+            .build(&mut ctx, location);
+        assert_eq!(br_table.default(&ctx), blocks[1]);
+        assert_eq!(
+            br_table.table(&ctx).collect::<Vec<_>>(),
+            [blocks[2], blocks[3]]
+        );
+
+        let switch = Switch::operands(index)
+            .cases([3, 9])
+            .successors(blocks[1], [blocks[2], blocks[3]])
+            .build(&mut ctx, location);
+        assert_eq!(switch.default(&ctx), blocks[1]);
+        assert_eq!(
+            switch.targets(&ctx).collect::<Vec<_>>(),
+            [blocks[2], blocks[3]]
+        );
+        assert_eq!(switch.cases(&ctx).collect::<Vec<_>>(), [3, 9]);
+    }
+
+    #[test]
+    fn switch_requires_one_target_per_distinct_case() {
+        assert_eq!(
+            switch_violations("switch %index [^default, ^first, ^second] {cases = [0, 5]}"),
+            ""
+        );
+        assert_eq!(
+            switch_violations("switch %index [^default] {cases = []}"),
+            ""
+        );
+        let mismatch = switch_violations("switch %index [^default, ^first] {cases = [0, 5]}");
+        assert!(mismatch.contains("2 case(s) but 1 target(s)"), "{mismatch}");
+        let duplicate =
+            switch_violations("switch %index [^default, ^first, ^second] {cases = [5, 5]}");
+        assert!(duplicate.contains("duplicate case 5"), "{duplicate}");
     }
 }
