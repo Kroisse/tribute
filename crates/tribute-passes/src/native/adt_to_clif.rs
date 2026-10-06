@@ -410,6 +410,27 @@ mod tests {
     }
 
     #[test]
+    fn variant_field_access_with_a_nominal_layout_is_rejected() {
+        let error = run_pass_result(
+            r#"core.module @test {
+  func.func @test_fn() -> core.i32 {
+    %0 = clif.iconst {value = 42} : core.ptr
+    %1 = adt.variant_get %0 {tag = "Some", field = 0, type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
+    func.return %1
+  }
+}"#,
+        )
+        .expect_err("struct_to_mem must run first");
+
+        assert!(
+            error
+                .operations()
+                .iter()
+                .any(|illegal| illegal.dialect == "adt" && illegal.name == "variant_get")
+        );
+    }
+
+    #[test]
     fn variant_test_with_a_nominal_layout_is_rejected() {
         let error = run_pass_result(
             r#"core.module @test {

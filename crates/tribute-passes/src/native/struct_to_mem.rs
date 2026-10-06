@@ -453,6 +453,48 @@ mod tests {
     }
 
     #[test]
+    fn variant_field_accesses_use_the_variants_own_structural_layout() {
+        let (ctx, module, layouts) = lower_module(
+            r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  !Choice = adt.enum<Choice { None(), Pair(core.i8, !ChildRef), Raw(core.ptr, core.i64) }>
+  tribute_rtti.layout {fields = ["u8", "managed"], index = 6, type = !Choice, tag = "Pair"}
+  func.func @test(%choice: !ChoiceRef) -> !ChildRef {
+    %child = adt.variant_get %choice {tag = "Pair", field = 1, type = !Choice} : !ChildRef
+    %raw = adt.variant_get %choice {tag = "Raw", field = 1, type = !Choice} : core.i64
+    func.return %child
+  }
+}"#,
+        );
+
+        let printed = print_module(&ctx, module.op());
+        assert!(!printed.contains("adt.variant_get"), "{printed}");
+        // `Pair` is declared, `Raw` reads its fields from the ownership plan.
+        let [pair, raw] = layouts[..] else {
+            panic!("two variant accesses: {printed}")
+        };
+        assert!(
+            printed.contains("{field = 1, type = mem.struct<core.i8, tribute_rt.anyref>}"),
+            "{printed}"
+        );
+        assert!(
+            printed.contains("{field = 1, type = mem.struct<core.ptr, core.i64>}"),
+            "{printed}"
+        );
+        // Fields start at the payload, with no tag before them.
+        assert_eq!(
+            compute_mem_struct_layout(&ctx, pair).unwrap().field_offsets,
+            [0, 8]
+        );
+        assert_eq!(
+            compute_mem_struct_layout(&ctx, raw).unwrap().field_offsets,
+            [0, 8]
+        );
+    }
+
+    #[test]
     fn undeclared_layout_reads_managed_fields_from_the_ownership_plan() {
         let (ctx, module, _layouts) = lower_module(
             r#"core.module @test {
