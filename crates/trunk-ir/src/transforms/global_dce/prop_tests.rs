@@ -1,19 +1,17 @@
 //! Property test comparing global DCE with a naive reachability search on
 //! random modules.
 //!
-//! The modules come from the call graph's [`BuiltModule`]: functions in the
-//! root module and a nested module, with `abi` definitions, bodyless `abi`
-//! imports, calls and address references between functions and externals,
-//! and exports. The oracle reads the roots from the pass contract and the
+//! The modules are random [`ModuleSpec`]s: functions in the root module and
+//! a nested module, with `abi` definitions, bodyless `abi` imports, calls and
+//! address references between functions and externals in reachable and
+//! unreachable blocks, and exports. The oracle reads the roots from the pass contract and the
 //! edges from the spec, and keeps exactly the functions a search from the
 //! roots reaches, plus the functions the configuration does not analyze.
 
 use proptest::prelude::*;
 
 use super::*;
-use crate::transforms::call_graph::prop_tests::{
-    BuiltModule, ModuleSpec, built_module, reachable_from,
-};
+use crate::prop::{Built, ModuleSpec, built, module_spec, reachable_from};
 
 fn config() -> impl Strategy<Value = (bool, Vec<bool>)> {
     (
@@ -31,12 +29,12 @@ fn expected_removed(spec: &ModuleSpec, recursive: bool, extra: &[bool]) -> HashS
         .enumerate()
         .filter(|&(index, function)| {
             let entry = !function.nested && (function.name == "main" || function.name == "_start");
-            let exported = function.abi && !function.bodyless;
+            let exported = function.abi && function.body.is_some();
             !candidate(index) || entry || exported || extra[index]
         })
         .map(|(index, _)| index)
         .chain(spec.module_refs.iter().map(|reference| reference.target));
-    let reachable = reachable_from(&spec.successors(false), roots);
+    let reachable = reachable_from(&spec.successors(false), roots, None);
     (0..spec.functions.len())
         .filter(|&index| candidate(index) && !reachable[index])
         .collect()
@@ -55,10 +53,10 @@ proptest! {
 
     #[test]
     fn global_dce_keeps_exactly_the_functions_reachable_from_roots(
-        built in built_module(12),
+        built in built(module_spec(12)),
         (recursive, extra) in config(),
     ) {
-        let BuiltModule { spec, mut ctx, module } = built;
+        let Built { spec, mut ctx, module } = built;
         let paths = spec.paths();
         let extra = &extra[..spec.functions.len()];
         let config = GlobalDceConfig {

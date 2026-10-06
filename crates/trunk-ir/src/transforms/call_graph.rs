@@ -289,7 +289,7 @@ fn strongconnect(v: &SymbolPath, state: &mut TarjanState, graph: &CallGraph, edg
 // =========================================================================
 
 #[cfg(test)]
-pub(crate) mod prop_tests;
+mod prop_tests;
 
 #[cfg(test)]
 mod tests {

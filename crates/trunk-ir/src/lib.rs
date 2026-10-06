@@ -62,6 +62,10 @@ pub mod conversion;
 // === IR text format parser ===
 pub mod parser;
 
+// === Random IR for property tests ===
+#[cfg(test)]
+mod prop;
+
 // Re-export proc macro for dialect definitions
 pub use trunk_ir_macros::dialect;
 

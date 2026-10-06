@@ -1,177 +1,30 @@
 //! Property tests comparing [`DominatorTree`] with the definition of
 //! dominance on random control-flow graphs.
 //!
-//! Each case builds a `func.func` body whose blocks end in real terminators
-//! (`func.return`, `cf.br`, `cf.cond_br`, `cf.switch`) with random successor
-//! lists, so the graphs include loops, self-loops, repeated edges, and
-//! blocks unreachable from the entry. The oracle uses no dataflow: a block is
-//! reachable when a search from the entry finds it, and `d` dominates a
-//! reachable `n` when `d == n` or `n` is unreachable once `d` is removed.
-//! Tests receive a [`BuiltCfg`], so proptest shrinks the successor lists and
-//! reports a failing case with its IR text.
+//! Each case is a [`CfgSpec`](crate::prop::CfgSpec) built as the body of one function, so the
+//! graphs include loops, self-loops, repeated edges, and blocks unreachable
+//! from the entry. The oracle uses no dataflow: a block is reachable when a
+//! search from the entry finds it, and `d` dominates a reachable `n` when
+//! `d == n` or `n` is unreachable once `d` is removed.
 
 use proptest::prelude::*;
-use smallvec::smallvec;
 
 use super::*;
-use crate::dialect::{arith, cf, core, func};
-use crate::location::Span;
-use crate::printer::print_op;
-use crate::{Attribute, BlockData, Location, OpRef, RegionData};
-
-/// The successor list of each block, by block index; block 0 is the entry.
-fn cfg() -> impl Strategy<Value = Vec<Vec<usize>>> {
-    (0usize..=12).prop_flat_map(|blocks| {
-        // Successor counts favor jumps and two-way branches but include
-        // returns and multi-way switches.
-        let successors = prop_oneof![
-            2 => Just(0usize),
-            4 => Just(1usize),
-            4 => Just(2usize),
-            1 => 3usize..=4,
-        ]
-        .prop_flat_map(move |count| prop::collection::vec(0..blocks.max(1), count));
-        prop::collection::vec(successors, blocks)
-    })
-}
-
-fn location(ctx: &mut IrContext) -> Location {
-    let path = ctx.intern_path("file:///prop.trb");
-    Location::new(path, Span::new(0, 0))
-}
-
-/// A successor list per block together with the function built from it.
-struct BuiltCfg {
-    cfg: Vec<Vec<usize>>,
-    ctx: IrContext,
-    func: OpRef,
-    body: RegionRef,
-    blocks: Vec<BlockRef>,
-}
-
-impl std::fmt::Debug for BuiltCfg {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "{:?}", self.cfg)?;
-        f.write_str(&print_op(&self.ctx, self.func))
-    }
-}
-
-/// Random control-flow graphs, shrunk through their successor lists.
-fn built_cfg() -> impl Strategy<Value = BuiltCfg> {
-    cfg().prop_map(|cfg| {
-        let mut ctx = IrContext::new();
-        let (func, body, blocks) = build_function(&mut ctx, &cfg);
-        BuiltCfg {
-            cfg,
-            ctx,
-            func,
-            body,
-            blocks,
-        }
-    })
-}
-
-/// Build a function whose body has one block per entry of `cfg`, and return
-/// it with its body region and blocks.
-fn build_function(ctx: &mut IrContext, cfg: &[Vec<usize>]) -> (OpRef, RegionRef, Vec<BlockRef>) {
-    let loc = location(ctx);
-    let blocks: Vec<BlockRef> = cfg
-        .iter()
-        .map(|_| {
-            ctx.create_block(BlockData {
-                location: loc,
-                args: vec![],
-                ops: smallvec![],
-                parent_region: None,
-            })
-        })
-        .collect();
-    let i1 = core::I1::type_ref(ctx);
-    let i32_ty = core::I32::type_ref(ctx);
-    for (&block, successors) in blocks.iter().zip(cfg) {
-        let targets: Vec<BlockRef> = successors.iter().map(|&i| blocks[i]).collect();
-        let terminator = match targets.as_slice() {
-            [] => func::Return::operands(std::iter::empty())
-                .build(ctx, loc)
-                .op_ref(),
-            &[dest] => cf::Br::operands(std::iter::empty::<crate::ValueRef>())
-                .successors(dest)
-                .build(ctx, loc)
-                .op_ref(),
-            &[then_dest, else_dest] => {
-                let cond = arith::Const::operands()
-                    .value(Attribute::Int(1))
-                    .results(i1)
-                    .build(ctx, loc);
-                ctx.push_op(block, cond.op_ref());
-                let cond = cond.result(ctx);
-                cf::CondBr::operands(cond)
-                    .successors(then_dest, else_dest)
-                    .build(ctx, loc)
-                    .op_ref()
-            }
-            [default, cases @ ..] => {
-                let discriminant = arith::Const::operands()
-                    .value(Attribute::Int(0))
-                    .results(i32_ty)
-                    .build(ctx, loc);
-                ctx.push_op(block, discriminant.op_ref());
-                let discriminant = discriminant.result(ctx);
-                cf::Switch::operands(discriminant)
-                    .cases(0..cases.len() as i64)
-                    .successors(*default, cases.iter().copied())
-                    .build(ctx, loc)
-                    .op_ref()
-            }
-        };
-        ctx.push_op(block, terminator);
-    }
-    let body = ctx.create_region(RegionData {
-        location: loc,
-        blocks: blocks.iter().copied().collect(),
-        parent_op: None,
-    });
-    let nil = core::nil(ctx).as_type_ref();
-    let sig = func::func_sig(ctx, [], [nil]).as_type_ref();
-    let func = func::Func::operands()
-        .sym_name("f")
-        .r#type(sig)
-        .regions(body)
-        .build(ctx, loc)
-        .op_ref();
-    (func, body, blocks)
-}
-
-/// Blocks reachable from the entry without passing through `removed`.
-fn reachable_avoiding(cfg: &[Vec<usize>], removed: Option<usize>) -> Vec<bool> {
-    let mut seen = vec![false; cfg.len()];
-    if cfg.is_empty() || removed == Some(0) {
-        return seen;
-    }
-    let mut pending = vec![0];
-    while let Some(block) = pending.pop() {
-        if std::mem::replace(&mut seen[block], true) {
-            continue;
-        }
-        pending.extend(
-            cfg[block]
-                .iter()
-                .copied()
-                .filter(|&successor| Some(successor) != removed),
-        );
-    }
-    seen
-}
+use crate::prop::{Built, built, cfg_spec, reachable_from};
 
 proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn dominance_matches_its_definition(built in built_cfg()) {
-        let BuiltCfg { cfg, ctx, body, blocks, .. } = &built;
-        let tree = DominatorTree::compute(ctx, *body);
+    fn dominance_matches_its_definition(built in built(cfg_spec(0..=12))) {
+        let Built { spec, ctx, module } = &built;
+        let cfg = &spec.successors;
+        let function = module.ops(ctx)[0];
+        let body = ctx.op_region(function, 0).expect("function body");
+        let blocks: Vec<BlockRef> = ctx.region(body).blocks.iter().copied().collect();
+        let tree = DominatorTree::compute(ctx, body);
 
-        prop_assert_eq!(tree.region(), *body);
+        prop_assert_eq!(tree.region(), body);
         prop_assert_eq!(tree.entry(), blocks.first().copied());
         prop_assert!(tree.is_valid());
 
@@ -190,12 +43,13 @@ proptest! {
             prop_assert_eq!(tree.predecessors(block), predecessors.as_slice());
         }
 
-        let reachable = reachable_avoiding(cfg, None);
+        let entry = (!cfg.is_empty()).then_some(0);
+        let reachable = reachable_from(cfg, entry, None);
         for (n, &block) in blocks.iter().enumerate() {
             prop_assert_eq!(tree.is_reachable(block), reachable[n], "block {}", n);
         }
         for (d, &dominator) in blocks.iter().enumerate() {
-            let without_d = reachable_avoiding(cfg, Some(d));
+            let without_d = reachable_from(cfg, entry, Some(d));
             for (n, &block) in blocks.iter().enumerate() {
                 let expected = reachable[n] && (d == n || !without_d[n]);
                 prop_assert_eq!(
