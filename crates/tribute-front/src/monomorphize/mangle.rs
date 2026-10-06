@@ -10,22 +10,26 @@ use crate::ast::{
 /// Generate a mangled symbol for a specialized generic function or type.
 ///
 /// Mangling rules use `$` as the only structural character, with `$0`/`$1`
-/// as open/close markers for nested type arguments (unambiguous because
-/// Tribute identifiers cannot start with a digit). Before its result, a
-/// function type writes its effect row between `$2` and `$1`, or `$3$n` for
-/// the `n`th row variable of an open row, and a calling-convention floor
-/// above `Direct` after `$4`. `$5` precedes a compiler-owned ability.
-/// Distinct type argument lists get distinct names:
+/// as open/close markers for nested type arguments. Tribute identifiers
+/// cannot start with a digit, so every type the compiler constructs rather
+/// than a source declaration names starts with a digit tag, and a segment
+/// starting with a letter is always a primitive or a source-declared name:
+/// `$6` starts a function type, `$7` a tuple, `$8$n` the `n`th bound type
+/// variable, and `$5` a compiler-owned nominal type or ability. Before its
+/// result, a function type writes its effect row between `$2` and `$1`, or
+/// `$3$n` for the `n`th row variable of an open row, and a calling-convention
+/// floor above `Direct` after `$4`. Distinct type argument lists get distinct
+/// names:
 ///
 /// - `identity + [Int]`              → `identity$Int`
 /// - `first + [Int, Text]`           → `first$Int$Text`
 /// - `map + [Int, Option(Int)]`      → `map$Int$Option$0$Int$1`
-/// - `f + [List(Option(Int))]`       → `f$List$0$Option$0$Int$1$1`
-/// - `apply + [fn(Int) -> Bool]`     → `apply$Fn$0$Int$1$Bool`
-/// - `swap + [(Int, Bool)]`          → `swap$Tup$0$Int$Bool$1`
-/// - `apply + [fn() ->{Ask} Nat]`    → `apply$Fn$0$$1$2$Ask$1$Nat`
+/// - `f + [List(Option(Int))]`       → `f$5$List$0$Option$0$Int$1$1`
+/// - `apply + [fn(Int) -> Bool]`     → `apply$6$0$Int$1$Bool`
+/// - `swap + [(Int, Bool)]`          → `swap$7$0$Int$Bool$1`
+/// - `apply + [fn() ->{Ask} Nat]`    → `apply$6$0$$1$2$Ask$1$Nat`
 /// - `apply + [fn() ->{State(Int), e} Nat]`
-///   → `apply$Fn$0$$1$2$State$0$Int$1$3$0$Nat`
+///   → `apply$6$0$$1$2$State$0$Int$1$3$0$Nat`
 pub fn mangle_name(db: &dyn salsa::Database, base: &Symbol, type_args: &[Type<'_>]) -> Symbol {
     let mut buf = String::new();
     let mut row_vars = Vec::new();
@@ -48,7 +52,7 @@ pub fn mangle_type_name(
 
 fn nominal_mangle_base(db: &dyn salsa::Database, id: TypeDefId<'_>, name: Symbol) -> Symbol {
     if id.is_builtin_list(db) {
-        Symbol::new("BuiltinList")
+        Symbol::new("5$List")
     } else {
         let qualified = id.qualified(db);
         if *qualified == name {
@@ -89,7 +93,7 @@ fn write_type_mangled(
             effect,
             minimum_convention,
         } => {
-            f.write_str("Fn$0$")?;
+            f.write_str("6$0$")?;
             write_type_mangled_list(db, params, row_vars, f)?;
             f.write_str("$1$")?;
             if !effect.is_pure(db) {
@@ -103,15 +107,15 @@ fn write_type_mangled(
             write_type_mangled(db, *result, row_vars, f)
         }
         TypeKind::Tuple(elems) => {
-            f.write_str("Tup$0$")?;
+            f.write_str("7$0$")?;
             write_type_mangled_list(db, elems, row_vars, f)?;
             f.write_str("$1")
         }
-        TypeKind::BoundVar { index } => write!(f, "T{index}"),
+        TypeKind::BoundVar { index } => write!(f, "8${index}"),
         // Local binders are source-body metadata. Monomorphization retains the
         // existing uniform representation boundary, where both kinds of
         // quantified variables use their index only.
-        TypeKind::LocalBoundVar { index, .. } => write!(f, "T{index}"),
+        TypeKind::LocalBoundVar { index, .. } => write!(f, "8${index}"),
         TypeKind::UniVar { .. } | TypeKind::App { .. } | TypeKind::Continuation { .. } => {
             panic!("mangle_name requires fully-resolved concrete types");
         }
@@ -263,7 +267,7 @@ mod tests {
             },
         );
         let result = mangle_name(&db, &base, &[list_option_int]);
-        assert_eq!(result.to_string(), "f$BuiltinList$0$Option$0$Int$1$1");
+        assert_eq!(result.to_string(), "f$5$List$0$Option$0$Int$1$1");
     }
 
     #[test]
@@ -295,7 +299,7 @@ mod tests {
 
         assert_eq!(
             mangle_name(&db, &base, &[builtin]).to_string(),
-            "identity$BuiltinList$0$Int$1"
+            "identity$5$List$0$Int$1"
         );
         assert_eq!(
             mangle_name(&db, &base, &[source]).to_string(),
@@ -385,7 +389,7 @@ mod tests {
             },
         );
         let result = mangle_name(&db, &base, &[func_ty]);
-        assert_eq!(result.to_string(), "apply$Fn$0$Int$1$Bool");
+        assert_eq!(result.to_string(), "apply$6$0$Int$1$Bool");
     }
 
     fn ability<'db>(db: &'db TestDb, name: &str, args: Vec<Type<'db>>) -> crate::ast::Effect<'db> {
@@ -421,21 +425,21 @@ mod tests {
             .to_string()
         };
 
-        assert_eq!(mangle(vec![]), "run_state$Fn$0$$1$Nat");
+        assert_eq!(mangle(vec![]), "run_state$6$0$$1$Nat");
         assert_eq!(
             mangle(vec![ability(&db, "Ask", vec![])]),
-            "run_state$Fn$0$$1$2$Ask$1$Nat"
+            "run_state$6$0$$1$2$Ask$1$Nat"
         );
         assert_eq!(
             mangle(vec![ability(&db, "Tell", vec![])]),
-            "run_state$Fn$0$$1$2$Tell$1$Nat"
+            "run_state$6$0$$1$2$Tell$1$Nat"
         );
         assert_eq!(
             mangle(vec![
                 ability(&db, "std::State", vec![int_ty]),
                 ability(&db, "Ask", vec![])
             ]),
-            "run_state$Fn$0$$1$2$std::State$0$Int$1$Ask$1$Nat"
+            "run_state$6$0$$1$2$std::State$0$Int$1$Ask$1$Nat"
         );
         // Rows are distinct interned types in either order.
         assert_ne!(
@@ -464,8 +468,8 @@ mod tests {
             mangle_name(&db, &base, &[thunk(&db, EffectRow::single(&db, effect))]).to_string()
         };
 
-        assert_eq!(mangle(source), "f$Fn$0$$1$2$std::io::Io$1$Nat");
-        assert_eq!(mangle(builtin), "f$Fn$0$$1$2$5$std::io::Io$1$Nat");
+        assert_eq!(mangle(source), "f$6$0$$1$2$std::io::Io$1$Nat");
+        assert_eq!(mangle(builtin), "f$6$0$$1$2$5$std::io::Io$1$Nat");
     }
 
     #[test]
@@ -492,11 +496,11 @@ mod tests {
         let inner = returning(thunk(&db, ask()), pure, direct);
         assert_eq!(
             mangle_name(&db, &base, &[outer]).to_string(),
-            "f$Fn$0$$1$2$Ask$1$Fn$0$$1$Nat"
+            "f$6$0$$1$2$Ask$1$6$0$$1$Nat"
         );
         assert_eq!(
             mangle_name(&db, &base, &[inner]).to_string(),
-            "f$Fn$0$$1$Fn$0$$1$2$Ask$1$Nat"
+            "f$6$0$$1$6$0$$1$2$Ask$1$Nat"
         );
 
         let outer = returning(thunk(&db, pure), pure, cps);
@@ -513,7 +517,7 @@ mod tests {
         let both = returning(Type::new(&db, TypeKind::Nat), ask(), cps);
         assert_eq!(
             mangle_name(&db, &base, &[both]).to_string(),
-            "f$Fn$0$$1$2$Ask$1$4$cps$Nat"
+            "f$6$0$$1$2$Ask$1$4$cps$Nat"
         );
     }
 
@@ -525,7 +529,7 @@ mod tests {
 
         assert_eq!(
             mangle_name(&db, &base, &[open(7)]).to_string(),
-            "f$Fn$0$$1$2$3$0$Nat"
+            "f$6$0$$1$2$3$0$Nat"
         );
         assert_eq!(
             mangle_name(&db, &base, &[open(7)]),
@@ -533,11 +537,11 @@ mod tests {
         );
         assert_eq!(
             mangle_name(&db, &base, &[open(7), open(7)]).to_string(),
-            "f$Fn$0$$1$2$3$0$Nat$Fn$0$$1$2$3$0$Nat"
+            "f$6$0$$1$2$3$0$Nat$6$0$$1$2$3$0$Nat"
         );
         assert_eq!(
             mangle_name(&db, &base, &[open(7), open(42)]).to_string(),
-            "f$Fn$0$$1$2$3$0$Nat$Fn$0$$1$2$3$1$Nat"
+            "f$6$0$$1$2$3$0$Nat$6$0$$1$2$3$1$Nat"
         );
     }
 
@@ -559,11 +563,11 @@ mod tests {
 
         assert_eq!(
             mangle_name(&db, &base, &[func(CallingConvention::EvidenceDirect)]).to_string(),
-            "f$Fn$0$$1$4$evidence_direct$Nat"
+            "f$6$0$$1$4$evidence_direct$Nat"
         );
         assert_eq!(
             mangle_name(&db, &base, &[func(CallingConvention::Cps)]).to_string(),
-            "f$Fn$0$$1$4$cps$Nat"
+            "f$6$0$$1$4$cps$Nat"
         );
     }
 
@@ -577,8 +581,8 @@ mod tests {
             mangle_type_name(&db, id, name.clone(), &[thunk(&db, row)]).to_string()
         };
 
-        assert_eq!(mangle("Ask"), "Holder$Fn$0$$1$2$Ask$1$Nat");
-        assert_eq!(mangle("Tell"), "Holder$Fn$0$$1$2$Tell$1$Nat");
+        assert_eq!(mangle("Ask"), "Holder$6$0$$1$2$Ask$1$Nat");
+        assert_eq!(mangle("Tell"), "Holder$6$0$$1$2$Tell$1$Nat");
     }
 
     #[test]
@@ -589,7 +593,7 @@ mod tests {
         let bool_ty = Type::new(&db, TypeKind::Bool);
         let tup_ty = Type::new(&db, TypeKind::Tuple(vec![int_ty, bool_ty]));
         let result = mangle_name(&db, &base, &[tup_ty]);
-        assert_eq!(result.to_string(), "swap$Tup$0$Int$Bool$1");
+        assert_eq!(result.to_string(), "swap$7$0$Int$Bool$1");
     }
 
     #[test]
@@ -626,7 +630,7 @@ mod tests {
         let base = Symbol::new("f");
         let bv = Type::new(&db, TypeKind::BoundVar { index: 0 });
         let result = mangle_name(&db, &base, &[bv]);
-        assert_eq!(result.to_string(), "f$T0");
+        assert_eq!(result.to_string(), "f$8$0");
     }
 
     #[test]
@@ -798,12 +802,11 @@ mod laws {
         }
     }
 
-    /// Minimal repro: a source type named `Fn` (accepted by the frontend as
-    /// `struct Fn(a) { value: a }`) mangles like a function type's prefix,
-    /// so a function type taking `Fn(Int)` and `Bool` and one taking
-    /// `fn(Int) -> Bool` get the same name.
+    /// A source type named `Fn` (accepted by the frontend as
+    /// `struct Fn(a) { value: a }`) does not mangle like a function type, so
+    /// a function type taking `Fn(Int)` and `Bool` and one taking
+    /// `fn(Int) -> Bool` get distinct names.
     #[test]
-    #[ignore = "#1373: mangling collides for a source type named `Fn` (or `Tup`)"]
     fn source_type_named_fn_mangles_distinctly() {
         let db = salsa::DatabaseImpl::new();
         let int = Type::new(&db, TypeKind::Int);
@@ -835,6 +838,61 @@ mod laws {
         assert_ne!(
             mangle_name(&db, &base, &[takes_struct]),
             mangle_name(&db, &base, &[takes_func])
+        );
+    }
+    /// Source types spelled like the mangled form of a compiler-constructed
+    /// type get names distinct from that type.
+    #[test]
+    fn source_types_spelled_like_compiler_types_mangle_distinctly() {
+        let db = salsa::DatabaseImpl::new();
+        let int = Type::new(&db, TypeKind::Int);
+        let source = |name: &str, node, args| {
+            let name = Symbol::new(name);
+            Type::new(
+                &db,
+                TypeKind::Named {
+                    id: TypeDefId::source(&db, name.clone(), crate::ast::NodeId::from_raw(node)),
+                    name,
+                    args,
+                },
+            )
+        };
+        let builtin_list = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::builtin_list(&db),
+                name: Symbol::new("List"),
+                args: vec![int],
+            },
+        );
+        let cases = [
+            (
+                source("Tup", 1, vec![int]),
+                Type::new(&db, TypeKind::Tuple(vec![int])),
+            ),
+            (
+                source("T0", 2, vec![]),
+                Type::new(&db, TypeKind::BoundVar { index: 0 }),
+            ),
+            (source("BuiltinList", 3, vec![int]), builtin_list),
+        ];
+        let base = Symbol::new("identity");
+        for (named, constructed) in cases {
+            assert_ne!(
+                mangle_name(&db, &base, &[named]),
+                mangle_name(&db, &base, &[constructed])
+            );
+        }
+        let type_name =
+            |id, args: &[Type<'_>]| mangle_type_name(&db, id, Symbol::new("List"), args);
+        let source_list = TypeDefId::source(
+            &db,
+            Symbol::new("BuiltinList"),
+            crate::ast::NodeId::from_raw(3),
+        );
+        assert_ne!(
+            type_name(TypeDefId::builtin_list(&db), &[int]),
+            type_name(source_list, &[int])
         );
     }
 }

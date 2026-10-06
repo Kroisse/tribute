@@ -396,7 +396,7 @@ mod tests {
             (
                 "builtin and source List",
                 [
-                    (TypeDefId::builtin_list(&db), "BuiltinList$Int"),
+                    (TypeDefId::builtin_list(&db), "5$List$Int"),
                     (source("List", 1), "List$Int"),
                 ],
             ),

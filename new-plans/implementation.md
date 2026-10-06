@@ -202,7 +202,9 @@ to distinguish same-spelled declarations. When the qualified identity equals
 the existing display name, the ordinary mangle remains unchanged.
 
 Specialization mangle은 type argument의 identity에 대해 단사(injective)다. 서로
-다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입은 parameter와 result
+다른 type argument 목록은 서로 다른 이름을 얻는다. 함수 타입, 튜플, bound type
+variable, compiler-owned nominal 타입처럼 소스 선언이 이름 짓지 않는 타입은 숫자
+태그로 시작하므로, 같은 철자의 소스 타입 이름과 구분된다. 함수 타입은 parameter와 result
 외에 effect row와 calling-convention 하한을 함께 인코딩한다. Effect row는 각
 ability의 origin과 qualified identity, ability argument를 row에 저장된 순서대로 쓰고,
 열린 row의 row variable은 한 mangle 안에서 처음 나타난 순서로 번호를 매겨 추론
