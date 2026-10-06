@@ -711,6 +711,9 @@ Operations:
 
 Rules:
 
+- Every `evidence`, `outer`, `tail`, and `source` operand has the evidence
+  type, and an evidence result has the type of its `evidence` operand.
+  `prompt_tag` is `core.i32`. The operation schemas check this.
 - `ability.perform` and `ability.call` are illegal after the shared
   ability-dispatch lowering boundary.
 - `effect.*` operations may remain after shared lowering and before

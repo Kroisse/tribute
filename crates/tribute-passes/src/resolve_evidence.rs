@@ -275,7 +275,6 @@ fn apply_evidence_plan(
     plan: &[EvidenceStep],
 ) -> ValueRef {
     let location = ctx.op(op).location;
-    let evidence_ty = ctx.value_ty(evidence);
     let mut source = evidence;
     let mut selected = evidence;
     for step in plan {
@@ -287,21 +286,18 @@ fn apply_evidence_plan(
             EvidenceStep::Mask(instance) => {
                 let mask = effect::Mask::operands(selected)
                     .ability_ref(*instance)
-                    .results(evidence_ty)
                     .build(ctx, location);
                 stack_op(ctx, (mask.op_ref(), mask.result(ctx)))
             }
             EvidenceStep::Dup(instance) => {
                 let dup = effect::Dup::operands(selected)
                     .ability_ref(*instance)
-                    .results(evidence_ty)
                     .build(ctx, location);
                 stack_op(ctx, (dup.op_ref(), dup.result(ctx)))
             }
             EvidenceStep::Outer(instance) => {
                 let outer = effect::Outer::operands(selected)
                     .ability_ref(*instance)
-                    .results(evidence_ty)
                     .build(ctx, location);
                 source = stack_op(ctx, (outer.op_ref(), outer.result(ctx)));
                 source
@@ -309,14 +305,12 @@ fn apply_evidence_plan(
             EvidenceStep::Select(index) => {
                 let tail = effect::Tail::operands(selected)
                     .index(*index)
-                    .results(evidence_ty)
                     .build(ctx, location);
                 stack_op(ctx, (tail.op_ref(), tail.result(ctx)))
             }
             EvidenceStep::Push(instance) => {
                 let push = effect::Push::operands(selected, source)
                     .ability_ref(*instance)
-                    .results(evidence_ty)
                     .build(ctx, location);
                 stack_op(ctx, (push.op_ref(), push.result(ctx)))
             }
@@ -326,7 +320,6 @@ fn apply_evidence_plan(
                     let tail = apply_evidence_plan(ctx, block, op, source, plan);
                     let with_tail = effect::WithTail::operands(attached, tail)
                         .index(index as u32)
-                        .results(evidence_ty)
                         .build(ctx, location);
                     ctx.insert_op_before(block, op, with_tail.op_ref());
                     attached = with_tail.result(ctx);
@@ -411,7 +404,6 @@ fn resolve_delimiters(
                     erase_op(ctx, prompt_op);
                     prompt_tag = resolved;
                 }
-                let evidence_ty = ability::evidence_adt_type_ref(ctx);
                 for (ability_ref, tr_dispatch) in shape.dispatchers {
                     let extend = effect::Extend::operands(
                         current_ev,
@@ -420,7 +412,6 @@ fn resolve_delimiters(
                         shape.evidence,
                     )
                     .ability_ref(ability_ref)
-                    .results(evidence_ty)
                     .build(ctx, location);
                     current_ev = extend.result(ctx);
                     ctx.insert_op_before(block, op, extend.op_ref());

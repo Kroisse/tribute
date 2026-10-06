@@ -6,12 +6,15 @@
 //! closure function/environment layout to shared lowering passes.
 
 use trunk_ir::attr_kind::Type;
+use trunk_ir::dialect::core::I32;
+
+use super::ability::Evidence;
 
 #[trunk_ir::dialect]
 mod effect {
     /// Allocate the runtime-unique prompt token for one dynamic handler
     /// installation. `resolve_evidence` lowers this before target lowering.
-    fn fresh_prompt_tag() -> Value<_> {}
+    fn fresh_prompt_tag() -> Value<I32> {}
 
     /// Extend the current evidence with a handler for one ability.
     ///
@@ -21,45 +24,50 @@ mod effect {
     /// - `tr_dispatch_fn`: tail-resumptive dispatch closure, or null.
     /// - `outer`: the evidence the handler is installed on, before the
     ///   installation's selection.
-    fn extend(
+    fn extend<E: Evidence>(
         ability_ref: Attr<Type>,
-        evidence: Value<_>,
-        prompt_tag: Value<_>,
+        evidence: Value<E>,
+        prompt_tag: Value<I32>,
         tr_dispatch_fn: Value<_>,
-        outer: Value<_>,
-    ) -> Value<_> {
+        outer: Value<E>,
+    ) -> Value<E> {
     }
 
     /// Remove the top handler of one ability from the evidence, exposing the
     /// handler it shadows.
-    fn mask(ability_ref: Attr<Type>, evidence: Value<_>) -> Value<_> {}
+    fn mask<E: Evidence>(ability_ref: Attr<Type>, evidence: Value<E>) -> Value<E> {}
 
     /// Push a copy of the top handler of one ability onto the evidence.
-    fn dup(ability_ref: Attr<Type>, evidence: Value<_>) -> Value<_> {}
+    fn dup<E: Evidence>(ability_ref: Attr<Type>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence the top handler of one ability was installed on.
-    fn outer(ability_ref: Attr<Type>, evidence: Value<_>) -> Value<_> {}
+    fn outer<E: Evidence>(ability_ref: Attr<Type>, evidence: Value<E>) -> Value<E> {}
 
     /// The evidence of the row tail `index` of the callable that received
     /// `evidence`, or `evidence` itself when it holds no such row tail.
-    fn tail(index: Attr<u32>, evidence: Value<_>) -> Value<_> {}
+    fn tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>) -> Value<E> {}
 
     /// Set the evidence of the row tail `index` that a callee receives with
     /// `evidence`.
-    fn with_tail(index: Attr<u32>, evidence: Value<_>, tail: Value<_>) -> Value<_> {}
+    fn with_tail<E: Evidence>(index: Attr<u32>, evidence: Value<E>, tail: Value<E>) -> Value<E> {}
 
     /// Push the top handler that `source` holds for one ability onto
     /// `evidence`.
-    fn push(ability_ref: Attr<Type>, evidence: Value<_>, source: Value<_>) -> Value<_> {}
+    fn push<E: Evidence>(
+        ability_ref: Attr<Type>,
+        evidence: Value<E>,
+        source: Value<E>,
+    ) -> Value<E> {
+    }
 
     /// Dispatch a tail-resumptive `fn` ability operation.
     ///
     /// The operation carries ability identity and operation name as attributes,
     /// while the backend chooses the concrete lookup and callable layout.
-    fn dispatch_tail(
+    fn dispatch_tail<E: Evidence>(
         ability_ref: Attr<Type>,
         op_name: Attr<String>,
-        evidence: Value<_>,
+        evidence: Value<E>,
         payload: Value<_>,
     ) -> Value<_> {
     }
@@ -70,11 +78,11 @@ mod effect {
     /// types. `payload` is the single packed operation argument value. The
     /// operation is resultless: backend lowering performs the final proper tail
     /// transfer.
-    fn dispatch_cps(
+    fn dispatch_cps<E: Evidence>(
         ability_ref: Attr<Type>,
         op_name: Attr<String>,
         answer_type: Attr<Type>,
-        evidence: Value<_>,
+        evidence: Value<E>,
         dispatch: Value<_>,
         resume: Value<_>,
         payload: Value<_>,
@@ -150,21 +158,29 @@ mod tests {
             .result(ctx)
     }
 
+    fn violations(ctx: &IrContext, op: trunk_ir::OpRef) -> Vec<String> {
+        trunk_ir::op_def::OpDef::of(ctx, op)
+            .expect("effect operations are registered")
+            .verify(ctx, op)
+            .iter()
+            .map(|violation| format!("{violation:?}"))
+            .collect()
+    }
+
     #[test]
     fn extend_round_trips_through_typed_wrapper() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
         let i32_ty = type_ref(&mut ctx, "core", "i32");
         let ptr_ty = type_ref(&mut ctx, "core", "ptr");
-        let evidence_ty = type_ref(&mut ctx, "core", "ptr");
+        let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
         let ability = ability_ref(&mut ctx, "State");
 
-        let evidence = const_i32(&mut ctx, loc, ptr_ty, 0);
+        let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
         let prompt_tag = const_i32(&mut ctx, loc, i32_ty, 7);
         let tr_dispatch_fn = const_i32(&mut ctx, loc, ptr_ty, 0);
         let op = super::Extend::operands(evidence, prompt_tag, tr_dispatch_fn, evidence)
             .ability_ref(ability)
-            .results(evidence_ty)
             .build(&mut ctx, loc);
         let wrapper = super::Extend::from_op(&ctx, op.op_ref()).expect("effect.extend matches");
 
@@ -174,16 +190,44 @@ mod tests {
         assert_eq!(wrapper.outer(&ctx), evidence);
         assert_eq!(wrapper.ability_ref(&ctx), ability);
         assert_eq!(ctx.value_ty(wrapper.result(&ctx)), evidence_ty);
+        assert!(violations(&ctx, op.op_ref()).is_empty());
+    }
+
+    #[test]
+    fn evidence_operands_must_have_the_evidence_type() {
+        let mut ctx = IrContext::new();
+        let loc = dummy_location();
+        let ptr_ty = type_ref(&mut ctx, "core", "ptr");
+        let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let ability = ability_ref(&mut ctx, "State");
+        let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
+        let pointer = const_i32(&mut ctx, loc, ptr_ty, 0);
+
+        let mask = super::Mask::operands(pointer)
+            .ability_ref(ability)
+            .build(&mut ctx, loc);
+        assert!(!violations(&ctx, mask.op_ref()).is_empty());
+
+        let push = super::Push::operands(evidence, pointer)
+            .ability_ref(ability)
+            .build(&mut ctx, loc);
+        assert!(!violations(&ctx, push.op_ref()).is_empty());
+
+        let with_tail = super::WithTail::operands(evidence, evidence)
+            .index(1)
+            .build(&mut ctx, loc);
+        assert!(violations(&ctx, with_tail.op_ref()).is_empty());
+        assert_eq!(ctx.value_ty(with_tail.result(&ctx)), evidence_ty);
     }
 
     #[test]
     fn dispatch_ops_round_trip_and_print_generically() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
-        let ptr_ty = type_ref(&mut ctx, "core", "ptr");
         let anyref_ty = type_ref(&mut ctx, "tribute_rt", "anyref");
         let ability = ability_ref(&mut ctx, "Console");
-        let evidence = const_i32(&mut ctx, loc, ptr_ty, 0);
+        let evidence_ty = crate::dialect::ability::evidence_adt_type_ref(&mut ctx);
+        let evidence = const_i32(&mut ctx, loc, evidence_ty, 0);
         let payload = const_i32(&mut ctx, loc, anyref_ty, 1);
         let dispatch = const_i32(&mut ctx, loc, anyref_ty, 2);
         let resume = const_i32(&mut ctx, loc, anyref_ty, 3);

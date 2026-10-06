@@ -1155,10 +1155,7 @@ impl Converter<'_> {
         let outer_evidence = self.current_evidence(source, flow)?;
 
         let evidence_type = self.evidence_type();
-        let i32_type = self.i32_type();
-        let prompt = effect::FreshPromptTag::operands()
-            .results(i32_type)
-            .build(self.ctx, location);
+        let prompt = effect::FreshPromptTag::operands().build(self.ctx, location);
         self.ctx.push_op(block, prompt.op_ref());
         let body_block = self.make_block(location, &[evidence_type]);
         let extended_evidence = self.ctx.block_args(body_block)[0];

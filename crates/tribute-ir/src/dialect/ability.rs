@@ -437,6 +437,21 @@ pub fn is_evidence_type_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     runtime_layout::has_runtime_layout(ctx, ty, runtime_layout::EVIDENCE)
 }
 
+/// The evidence type, identified by its runtime layout.
+pub struct Evidence;
+
+impl trunk_ir::type_constraint::TypeConstraint for Evidence {
+    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
+        &trunk_ir::type_constraint::ConstraintDesc {
+            name: "Evidence",
+            exact: false,
+            projections: &[],
+            matches: is_evidence_type_ref,
+            project: |_, _, _| None,
+            fixed: None,
+        };
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
