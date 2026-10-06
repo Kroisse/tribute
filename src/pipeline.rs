@@ -1348,9 +1348,9 @@ fn prepare_module_to_native(
 /// run one after another.
 ///
 /// Stages share one analysis cache and, except in the middle segment, the debug
-/// verifier. That segment starts with closure layout adaptation, which retypes
-/// loaded values in place, so its IR is not schema-clean until the clif
-/// lowerings finish; the next segment's entry check verifies its result. The ownership plan, which
+/// verifier. That segment starts with `func-to-clif`, whose type conversion
+/// retypes values before their users are converted, so its IR is not
+/// schema-clean until the clif lowerings finish; the next segment's entry check verifies its result. The ownership plan, which
 /// several stages read, travels in a cell captured by those stages. A stage
 /// that fails is named in the resulting [`PassError`].
 fn native_lowering_passes(
@@ -1450,30 +1450,30 @@ fn native_lowering_passes(
             tribute_passes::native::rtti::declare_rtti_layouts(ctx, m.into(), plan.rtti_types());
             Ok(())
         }
-    }));
+    }))
+    .add_pass(pass_fn(
+        "adapt-closure-layout",
+        |ctx, m: core_dialect::Module, _| {
+            tribute_passes::native::adapt_closure_layout::lower(ctx, m.into());
+            Ok(())
+        },
+    ))
+    // Field accesses need only the structural `mem.struct` layout, and
+    // variant tests only the variant's descriptor number. The nominal layouts
+    // stay on allocations, which RC header lowering resolves to descriptors.
+    .add_pass(pass_fn("struct-to-mem", {
+        let plan = Rc::clone(&shared_plan);
+        move |ctx, m: core_dialect::Module, analyses| {
+            let owned = plan.borrow_mut().take().ok_or_else(missing_plan)?;
+            tribute_passes::native::struct_to_mem::StructToMem::new(owned).run(ctx, m, analyses)
+        }
+    }))
+    // A descriptor read takes a managed reference, so it is lowered before
+    // type conversion turns its operand into a pointer.
+    .add_pass(tribute_passes::native::descriptor_to_clif::DescriptorToClif);
 
     let mut lowering = PassManager::new();
     lowering
-        .add_pass(pass_fn(
-            "adapt-closure-layout",
-            |ctx, m: core_dialect::Module, _| {
-                tribute_passes::native::adapt_closure_layout::lower(ctx, m.into());
-                Ok(())
-            },
-        ))
-        // Field accesses need only the structural `mem.struct` layout, and
-        // variant tests only the variant's descriptor number. The nominal layouts
-        // stay on allocations, which RC header lowering resolves to descriptors.
-        .add_pass(pass_fn("struct-to-mem", {
-            let plan = Rc::clone(&shared_plan);
-            move |ctx, m: core_dialect::Module, analyses| {
-                let owned = plan.borrow_mut().take().ok_or_else(missing_plan)?;
-                tribute_passes::native::struct_to_mem::StructToMem::new(owned).run(ctx, m, analyses)
-            }
-        }))
-        // A descriptor read takes a managed reference, so it is lowered before
-        // type conversion turns its operand into a pointer.
-        .add_pass(tribute_passes::native::descriptor_to_clif::DescriptorToClif)
         .add_pass(pass_fn(
             "func-to-clif",
             |ctx, m: core_dialect::Module, _| {

@@ -85,10 +85,21 @@ impl RewritePattern for ClosureStructAdaptPattern {
             ctx.op_mut(new_op)
                 .attributes
                 .insert("type", Attribute::Type(native_ty));
-            if !ctx.op_result_types(new_op).is_empty() {
-                ctx.set_op_result_type(new_op, 0, native_ty);
-            }
-            rewriter.replace_op(new_op);
+            let Some(&original_ty) = ctx.op_result_types(new_op).first() else {
+                rewriter.replace_op(new_op);
+                return true;
+            };
+            ctx.set_op_result_type(new_op, 0, native_ty);
+            // Users still declare the semantic closure type, so the
+            // allocation is cast back to it; type conversion reconciles the cast.
+            let location = ctx.op(op).location;
+            let allocated = ctx.op_result(new_op, 0);
+            let restored = core::UnrealizedConversionCast::operands(allocated)
+                .results(original_ty)
+                .build(ctx, location);
+            rewriter.insert_op(new_op);
+            rewriter.insert_op(restored.op_ref());
+            rewriter.erase_op(vec![restored.result(ctx)]);
             return true;
         }
 
@@ -98,18 +109,33 @@ impl RewritePattern for ClosureStructAdaptPattern {
                 return false;
             }
             let field_idx = struct_get.field(ctx);
+            let original_ty = struct_get.result(ctx);
+            let original_ty = ctx.value_ty(original_ty);
             let new_op = rebuild_op_as(ctx, op, Symbol::new("adt"), Symbol::new("struct_get"));
             ctx.op_mut(new_op)
                 .attributes
                 .insert("type", Attribute::Type(native_ty));
-            if field_idx == 0 {
-                let i64_ty = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
-                ctx.set_op_result_type(new_op, 0, i64_ty);
-            } else if field_idx == 1 {
-                let ptr_ty = core::ptr(ctx).as_type_ref();
-                ctx.set_op_result_type(new_op, 0, ptr_ty);
+            let adapted_ty = match field_idx {
+                0 => ctx.intern_type(TypeDataBuilder::new("core", "i64").build()),
+                1 => core::ptr(ctx).as_type_ref(),
+                _ => original_ty,
+            };
+            ctx.set_op_result_type(new_op, 0, adapted_ty);
+            // The function slot is the callee operand, which declares no type.
+            if adapted_ty == original_ty || field_idx == 0 {
+                rewriter.replace_op(new_op);
+                return true;
             }
-            rewriter.replace_op(new_op);
+            // Users still declare the semantic field type, so the retyped
+            // read is cast back to it; type conversion reconciles the cast.
+            let location = ctx.op(op).location;
+            let loaded = ctx.op_result(new_op, 0);
+            let restored = core::UnrealizedConversionCast::operands(loaded)
+                .results(original_ty)
+                .build(ctx, location);
+            rewriter.insert_op(new_op);
+            rewriter.insert_op(restored.op_ref());
+            rewriter.erase_op(vec![restored.result(ctx)]);
             return true;
         }
 
@@ -177,12 +203,14 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
         lower(&mut ctx, module);
-        trunk_ir_cranelift_backend::passes::func_to_clif::lower(
-            &mut ctx,
-            module,
-            TypeConverter::new(),
-        )
-        .expect("func_to_clif");
+        let (type_converter, _) = crate::native::type_converter::native_type_converter(&mut ctx);
+        trunk_ir_cranelift_backend::passes::func_to_clif::lower(&mut ctx, module, type_converter)
+            .expect("func_to_clif");
+        let (type_converter, _) = crate::native::type_converter::native_type_converter(&mut ctx);
+        PatternApplicator::new(type_converter)
+            .add_pattern(trunk_ir::conversion::UnrealizedCastConversionPattern)
+            .apply_partial(&mut ctx, module);
+        trunk_ir::conversion::reconcile_unrealized_casts(&mut ctx, module);
         print_module(&ctx, module.op())
     }
 
@@ -208,11 +236,11 @@ mod tests {
     fn test_closure_struct_anyref_adaptation() {
         let result = adapt_then_lower_func(
             r#"core.module @test {
-  func.func @test_fn(%1: wasm.anyref) -> core.i32 {
+  func.func @test_fn(%1: tribute_rt.anyref) -> core.i32 {
     %0 = func.constant {func_ref = @lifted_fn} : core.i32
-    %2 = adt.struct_new %0, %1 {type = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>} : adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
-    %3 = adt.struct_get %2 {field = 0, type = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>} : core.i32
-    %4 = adt.struct_get %2 {field = 1, type = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>} : wasm.anyref
+    %2 = adt.struct_new %0, %1 {type = adt.struct<_closure(table_idx: core.i32, env: tribute_rt.anyref), {layout = "closure"}>} : adt.struct<_closure(table_idx: core.i32, env: tribute_rt.anyref), {layout = "closure"}>
+    %3 = adt.struct_get %2 {field = 0, type = adt.struct<_closure(table_idx: core.i32, env: tribute_rt.anyref), {layout = "closure"}>} : core.i32
+    %4 = adt.struct_get %2 {field = 1, type = adt.struct<_closure(table_idx: core.i32, env: tribute_rt.anyref), {layout = "closure"}>} : tribute_rt.anyref
     %5 = func.call_indirect %3, %4 {signature = func.func_sig<(core.ptr) -> core.i32>} : core.i32
     func.return %5
   }
