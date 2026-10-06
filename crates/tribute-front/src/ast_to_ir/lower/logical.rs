@@ -416,6 +416,21 @@ fn prescan_definition_conventions<'db>(
                 }
                 ctx.register_definition_convention(name, convention);
             }
+            // A field's modifier performs whatever its callback performs, so
+            // its callers must already see it as Cps when they are promoted.
+            Decl::Struct(declaration) => {
+                let saved = crate::push_prefix(prefix, &declaration.name);
+                for field in declaration
+                    .fields
+                    .iter()
+                    .filter_map(|field| field.name.clone())
+                {
+                    let getter = declaration_name(prefix, field);
+                    let [_, modifier] = field_update_names(&getter);
+                    ctx.register_definition_convention(modifier, CallingConvention::Cps);
+                }
+                prefix.truncate(saved);
+            }
             Decl::Module(module) => {
                 if let Some(body) = &module.body {
                     let saved = crate::push_prefix(prefix, &module.name);
@@ -695,6 +710,12 @@ fn constructor_schema_fields<'db>(
     }
 }
 
+/// The names of the setter and the modifier of the field whose getter is
+/// `getter`: `T::f::set` and `T::f::modify`.
+fn field_update_names(getter: &Symbol) -> [Symbol; 2] {
+    crate::ast::FIELD_LENS_FUNCTIONS.map(|name| Symbol::new(&format!("{getter}::{name}")))
+}
+
 fn prescan_struct_accessor_signatures<'db>(
     ctx: &mut IrLoweringCtx<'db>,
     ir: &mut IrContext,
@@ -731,6 +752,25 @@ fn prescan_struct_accessor_signatures<'db>(
                         vec![struct_type],
                         field_type,
                         CallingConvention::Direct,
+                    );
+                    if field.name.is_none() {
+                        continue;
+                    }
+                    let [setter_name, modifier_name] = field_update_names(&getter_name);
+                    ctx.register_logical_generated_signature(
+                        &setter_name,
+                        vec![struct_type, field_type],
+                        struct_type,
+                        CallingConvention::Direct,
+                    );
+                    // The modifier performs whatever its callback performs.
+                    let callback =
+                        func_sig_type(ir, field_type, [field_type], CallingConvention::Cps);
+                    ctx.register_logical_generated_signature(
+                        &modifier_name,
+                        vec![struct_type, callback],
+                        struct_type,
+                        CallingConvention::Cps,
                     );
                 }
             }
@@ -833,6 +873,89 @@ fn lower_struct_accessors<'db>(
         let getter = tribute_control::func_declaration(ir, location, &getter_name, callable);
         ir.push_op_region(getter.op_ref(), body);
         ir.push_op(top, getter.op_ref());
+
+        if field.name.is_none() {
+            continue;
+        }
+        let field_types: Vec<TypeRef> =
+            tribute_ir::dialect::adt::layout::get_struct_fields(ir, layout_type)
+                .unwrap_or_else(|| panic!("malformed logical struct layout"))
+                .iter()
+                .map(|(_, ty)| *ty)
+                .collect();
+        let [setter_name, modifier_name] = field_update_names(&getter_name);
+        let callback = func_sig_type(ir, field_type, [field_type], CallingConvention::Cps);
+        for (name, argument_ty, convention) in [
+            (setter_name, field_type, CallingConvention::Direct),
+            (modifier_name, callback, CallingConvention::Cps),
+        ] {
+            let entry = ir.create_block(BlockData {
+                location,
+                args: [struct_type, argument_ty]
+                    .map(|ty| BlockArgData {
+                        ty,
+                        attrs: Default::default(),
+                    })
+                    .to_vec(),
+                ops: Default::default(),
+                parent_region: None,
+            });
+            let subject = ir.block_arg(entry, 0);
+            let argument = ir.block_arg(entry, 1);
+            // The modifier applies its callback to the field's current value.
+            let replacement = if convention == CallingConvention::Cps {
+                let current = adt::StructGet::operands(subject)
+                    .r#type(layout_type)
+                    .field(index as u32)
+                    .results(field_type)
+                    .build(ir, location);
+                ir.push_op(entry, current.op_ref());
+                let current = current.result(ir);
+                let call = op(ir, entry, location, "call_indirect", |builder| {
+                    builder
+                        .operand(argument)
+                        .operand(current)
+                        .result(field_type)
+                });
+                result(ir, call)
+            } else {
+                argument
+            };
+            let values: Vec<ValueRef> = field_types
+                .iter()
+                .enumerate()
+                .map(|(other, ty)| {
+                    if other == index {
+                        return replacement;
+                    }
+                    let get = adt::StructGet::operands(subject)
+                        .r#type(layout_type)
+                        .field(other as u32)
+                        .results(*ty)
+                        .build(ir, location);
+                    ir.push_op(entry, get.op_ref());
+                    get.result(ir)
+                })
+                .collect();
+            let updated = adt::StructNew::operands(values)
+                .r#type(layout_type)
+                .results(struct_type)
+                .build(ir, location);
+            ir.push_op(entry, updated.op_ref());
+            let updated = updated.result(ir);
+            op(ir, entry, location, "return", |builder| {
+                builder.operand(updated)
+            });
+            let body = ir.create_region(RegionData {
+                location,
+                blocks: trunk_ir::smallvec::smallvec![entry],
+                parent_op: None,
+            });
+            let callable = func_sig_type(ir, struct_type, [struct_type, argument_ty], convention);
+            let function = tribute_control::func_declaration(ir, location, &name, callable);
+            ir.push_op_region(function.op_ref(), body);
+            ir.push_op(top, function.op_ref());
+        }
     }
 }
 

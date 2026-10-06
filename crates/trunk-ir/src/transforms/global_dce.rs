@@ -25,7 +25,7 @@ use crate::refs::OpRef;
 use crate::rewrite::Module;
 use crate::symbol::SymbolPath;
 use crate::symbol_table::SymbolTable;
-use crate::transforms::call_graph::CallGraph;
+use crate::transforms::call_graph::{CallGraph, FunctionDefinition, call_graph_over};
 
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
@@ -70,7 +70,31 @@ pub fn eliminate_dead_functions_with_config(
     config: GlobalDceConfig,
     analyses: &mut AnalysisCache,
 ) -> GlobalDceResult {
-    run(ctx, module, &config, analyses)
+    let symbols = analyses.require::<SymbolTable>(ctx, module.op());
+    let graph = analyses.require::<CallGraph>(ctx, module.op());
+    run(ctx, module, &config, &symbols, &graph, func::Func::matches)
+}
+
+/// Eliminate the unreachable function definitions `is_function` identifies.
+///
+/// This is global DCE for a dialect whose function definition is not
+/// `func.func`, such as a source-level callable. It follows the same roots
+/// and reference edges, and builds its own symbol table and call graph.
+pub fn eliminate_dead_definitions(
+    ctx: &mut IrContext,
+    module: Module,
+    is_function: FunctionDefinition,
+) -> GlobalDceResult {
+    let symbols = SymbolTable::collect(ctx, module);
+    let graph = call_graph_over(ctx, module.op(), &symbols, is_function);
+    run(
+        ctx,
+        module,
+        &GlobalDceConfig::default(),
+        &symbols,
+        &graph,
+        is_function,
+    )
 }
 
 /// Eliminate the functions of `module` not reachable from its roots.
@@ -82,13 +106,14 @@ fn run(
     ctx: &mut IrContext,
     module: Module,
     config: &GlobalDceConfig,
-    analyses: &mut AnalysisCache,
+    symbols: &SymbolTable,
+    graph: &CallGraph,
+    is_function: FunctionDefinition,
 ) -> GlobalDceResult {
-    let symbols = analyses.require::<SymbolTable>(ctx, module.op());
     let functions = || {
         symbols
             .all_definitions()
-            .filter(|&(_, op)| func::Func::matches(ctx, op))
+            .filter(|&(_, op)| is_function(ctx, op))
     };
     let is_candidate = |op| config.recursive || !in_nested_module(ctx, module, op);
     let candidates: Vec<(&SymbolPath, OpRef)> =
@@ -98,9 +123,8 @@ fn run(
         .filter(|(name, op)| !is_candidate(*op) || is_root(ctx, name, *op, config))
         .map(|(name, _)| name.clone())
         .collect();
-    let graph = analyses.require::<CallGraph>(ctx, module.op());
     roots.extend(graph.module_references.iter().cloned());
-    let reachable = compute_reachable(&graph, roots);
+    let reachable = compute_reachable(graph, roots);
 
     // A function containing a reachable function definition is kept with it.
     let mut kept = HashSet::default();

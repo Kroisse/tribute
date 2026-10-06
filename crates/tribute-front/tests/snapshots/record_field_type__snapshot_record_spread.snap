@@ -5,15 +5,42 @@ expression: ir_text
 core.module @test {
   !Point = adt.struct<Point(x: core.i32, y: core.i32)>
   !Point_1 = adt.typeref<{name = "Point"}>
-  !t0 = tribute_control.func_sig<(!Point_1) -> core.i32, {tribute.calling_convention = 0}>
+  !t1 = tribute_control.func_sig<(!Point_1, core.i32) -> !Point_1, {tribute.calling_convention = 0}>
+  !t2 = tribute_control.func_sig<(!Point_1) -> core.i32, {tribute.calling_convention = 0}>
+  !t3 = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 2}>
+  !t0 = tribute_control.func_sig<(!Point_1, !t3) -> !Point_1, {tribute.calling_convention = 2}>
 
   tribute_control.func @"Point::x"(%0: !Point_1) -> core.i32 convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
       tribute_control.return %1
   }
+  tribute_control.func @"Point::x::set"(%0: !Point_1, %1: core.i32) -> !Point_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
+      %3 = adt.struct_new %1, %2 {type = !Point} : !Point_1
+      tribute_control.return %3
+  }
+  tribute_control.func @"Point::x::modify"(%0: !Point_1, %1: !t3) -> !Point_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
+      %3 = tribute_control.call_indirect %1, %2 : core.i32
+      %4 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
+      %5 = adt.struct_new %3, %4 {type = !Point} : !Point_1
+      tribute_control.return %5
+  }
   tribute_control.func @"Point::y"(%0: !Point_1) -> core.i32 convention(direct) {
       %1 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
       tribute_control.return %1
+  }
+  tribute_control.func @"Point::y::set"(%0: !Point_1, %1: core.i32) -> !Point_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
+      %3 = adt.struct_new %2, %1 {type = !Point} : !Point_1
+      tribute_control.return %3
+  }
+  tribute_control.func @"Point::y::modify"(%0: !Point_1, %1: !t3) -> !Point_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 1, type = !Point} : core.i32
+      %3 = tribute_control.call_indirect %1, %2 : core.i32
+      %4 = adt.struct_get %0 {field = 0, type = !Point} : core.i32
+      %5 = adt.struct_new %4, %3 {type = !Point} : !Point_1
+      tribute_control.return %5
   }
   tribute_control.func @update_x(%0: !Point_1) -> !Point_1 convention(direct) {
       %1 = arith.const {value = 100} : core.i32

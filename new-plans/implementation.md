@@ -670,6 +670,7 @@ exact root contract에 따라 생성하며 별도의 호환 lowering 경로를 �
 
 ```text
 공통: parse → resolve → typecheck → tdnr → ast_to_ir
+      → source-logical global DCE (산출물 컴파일)
       → tribute_control_to_cps
       → lower_closure_lambda → lower_ability_perform
       → resolve_evidence → lower_handle_dispatch
@@ -819,7 +820,8 @@ flowchart TB
 | ---- | ---- | ---- |
 | `parse`, `resolve`, `typecheck`, `tdnr` | source와 선언 환경 | 해석·검사된 AST와 callable/operation metadata; frontend query |
 | `monomorphize`, lowering preparation | checked generic AST | 구체 AST instance와 함께 치환된 metadata |
-| `ast_to_ir` | prepared typed AST | source-logical `tribute_control`과 일반 value IR; frontend |
+| `ast_to_ir` | prepared typed AST | source-logical `tribute_control`과 일반 value IR, struct 필드 함수(getter·setter·modifier) 정의; frontend |
+| source-logical `global_dce` | source-logical 함수 정의와 symbol 참조 | root에서 도달 가능한 정의와 모든 본문 없는 선언; 산출물 컴파일에서만, module-wide |
 | `tribute_control_to_cps` | validated source-logical callable/control | `func`/`closure`, proper tail transfer, explicit `ability.*`; atomic module conversion |
 | `lower_closure_lambda` | exact physical lambda contract | `func.func` + `closure.new`; module-wide extraction |
 | `lower_ability_perform` | `ability.perform`/`call` | packed payload + `effect.dispatch_*`; function-anchored |

@@ -5,8 +5,8 @@ use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, BinOpKind, Expr, ExprKind, FloatBits, HandlerArm, HandlerKind, Param, Pattern, Stmt,
-    UnresolvedName,
+    Arm, BinOpKind, Expr, ExprKind, FloatBits, HandlerArm, HandlerKind, MethodPath, Param, Pattern,
+    Stmt, UnresolvedName,
 };
 
 use super::context::AstLoweringCtx;
@@ -186,6 +186,7 @@ fn lower_binary_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
         return ExprKind::MethodCall {
             receiver: lhs,
             method,
+            path: None,
             args: vec![rhs],
         };
     }
@@ -235,27 +236,31 @@ fn lower_method_call(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
 
     let receiver = lower_expr(ctx, receiver_node);
     let method = ctx.node_symbol(&method_node);
-    let mut args = args_node
+    let args = args_node
         .map(|args| lower_argument_list(ctx, args))
         .unwrap_or_default();
 
-    // A qualified method names its function by path, so it needs no receiver
-    // type: `x.a::b(y)` is the call `a::b(x, y)`.
-    if !method.is_simple() {
-        let callee_id = ctx.fresh_id_with_span(&method_node);
-        let callee = Expr::new(
-            callee_id,
-            ExprKind::Var(UnresolvedName::new(method, callee_id)),
-        );
-        args.insert(0, receiver);
-        return ExprKind::Call { callee, args };
-    }
+    let path = method_path(ctx, &method, &method_node);
 
     ExprKind::MethodCall {
         receiver,
         method,
+        path,
         args,
     }
+}
+
+/// The path of a qualified method `x.a::b(y)`. It names its function by
+/// path; the receiver's type selects among the functions the path may name.
+fn method_path(
+    ctx: &mut AstLoweringCtx<'_>,
+    method: &Symbol,
+    node: &Node,
+) -> Option<MethodPath<UnresolvedName>> {
+    (!method.is_simple()).then(|| MethodPath {
+        id: ctx.fresh_id_with_span(node),
+        candidates: Vec::new(),
+    })
 }
 
 fn lower_constructor_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {
@@ -349,10 +354,13 @@ fn lower_field_access(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unre
     let expr = lower_expr(ctx, expr_node);
     let field = ctx.node_symbol(&field_node);
 
+    let path = method_path(ctx, &field, &field_node);
+
     // Field access is syntactic sugar for a zero-arg method call: expr.field → expr.field()
     ExprKind::MethodCall {
         receiver: expr,
         method: field,
+        path,
         args: vec![],
     }
 }

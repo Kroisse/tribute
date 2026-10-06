@@ -200,10 +200,50 @@ impl WellKnownTypes<'_> {
 #[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
 pub enum FunctionInstanceOrigin<'db> {
     Declaration,
+    /// A function a struct has for its named field, with no declaration of
+    /// its own.
     FieldAccessor {
         owner: TypeDefId<'db>,
         field: Symbol,
+        kind: FieldFunctionKind,
     },
+}
+
+/// The functions a struct `T` has for each named field `f`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub enum FieldFunctionKind {
+    /// `T::f : fn(T) -> F`
+    Get,
+    /// `T::f::set : fn(T, F) -> T`
+    Set,
+    /// `T::f::modify : fn(T, fn(F) ->{e} F) ->{e} T`
+    Modify,
+}
+
+impl FieldFunctionKind {
+    /// The function's name in the namespace `T::f`; the getter is `T::f`
+    /// itself.
+    pub fn name(self) -> Option<&'static str> {
+        match self {
+            Self::Get => None,
+            Self::Set => Some(crate::ast::FIELD_LENS_FUNCTIONS[0]),
+            Self::Modify => Some(crate::ast::FIELD_LENS_FUNCTIONS[1]),
+        }
+    }
+
+    /// The qualified name of this function for the field `field` of the
+    /// struct named `owner`.
+    pub fn qualified(self, owner: &Symbol, field: &Symbol) -> Symbol {
+        let mut prefix = owner.to_string();
+        let getter = crate::qualified_symbol(&mut prefix, field);
+        match self.name() {
+            None => getter,
+            Some(name) => {
+                let mut prefix = getter.to_string();
+                crate::qualified_symbol(&mut prefix, &Symbol::new(name))
+            }
+        }
+    }
 }
 
 /// The instantiation chosen for one source function reference. Argument order

@@ -5,15 +5,42 @@ expression: ir_text
 core.module @test {
   !Config = adt.struct<Config(debug: core.i1, verbose: core.i1)>
   !Config_1 = adt.typeref<{name = "Config"}>
-  !t0 = tribute_control.func_sig<(!Config_1) -> core.i1, {tribute.calling_convention = 0}>
+  !t1 = tribute_control.func_sig<(!Config_1, core.i1) -> !Config_1, {tribute.calling_convention = 0}>
+  !t2 = tribute_control.func_sig<(!Config_1) -> core.i1, {tribute.calling_convention = 0}>
+  !t3 = tribute_control.func_sig<(core.i1) -> core.i1, {tribute.calling_convention = 2}>
+  !t0 = tribute_control.func_sig<(!Config_1, !t3) -> !Config_1, {tribute.calling_convention = 2}>
 
   tribute_control.func @"Config::debug"(%0: !Config_1) -> core.i1 convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
       tribute_control.return %1
   }
+  tribute_control.func @"Config::debug::set"(%0: !Config_1, %1: core.i1) -> !Config_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
+      %3 = adt.struct_new %1, %2 {type = !Config} : !Config_1
+      tribute_control.return %3
+  }
+  tribute_control.func @"Config::debug::modify"(%0: !Config_1, %1: !t3) -> !Config_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
+      %3 = tribute_control.call_indirect %1, %2 : core.i1
+      %4 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
+      %5 = adt.struct_new %3, %4 {type = !Config} : !Config_1
+      tribute_control.return %5
+  }
   tribute_control.func @"Config::verbose"(%0: !Config_1) -> core.i1 convention(direct) {
       %1 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
       tribute_control.return %1
+  }
+  tribute_control.func @"Config::verbose::set"(%0: !Config_1, %1: core.i1) -> !Config_1 convention(direct) {
+      %2 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
+      %3 = adt.struct_new %2, %1 {type = !Config} : !Config_1
+      tribute_control.return %3
+  }
+  tribute_control.func @"Config::verbose::modify"(%0: !Config_1, %1: !t3) -> !Config_1 convention(cps) {
+      %2 = adt.struct_get %0 {field = 1, type = !Config} : core.i1
+      %3 = tribute_control.call_indirect %1, %2 : core.i1
+      %4 = adt.struct_get %0 {field = 0, type = !Config} : core.i1
+      %5 = adt.struct_new %4, %3 {type = !Config} : !Config_1
+      tribute_control.return %5
   }
   tribute_control.func @copy_config(%0: !Config_1) -> !Config_1 convention(direct) {
       %1 = adt.struct_get %0 {field = 0, type = !Config} : core.i1

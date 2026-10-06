@@ -14,6 +14,7 @@ mod e2e_ability_nested;
 mod e2e_ability_row_evidence;
 mod e2e_add;
 mod e2e_effect_instances;
+mod e2e_field_lenses;
 mod e2e_float;
 mod e2e_int_text;
 mod e2e_local_callables;

@@ -579,9 +579,13 @@ impl<'db> TypeChecker<'db> {
 
             for mc in std::mem::take(&mut deferred) {
                 let resolved_receiver = solver.type_subst().apply(self.db(), mc.receiver_ty);
-                if let Some(entry) = self.env.lookup_method(&mc.method, resolved_receiver) {
+                if let super::expr::MethodSelection::One(entry) =
+                    self.select_method(&mc.method, mc.path.as_ref(), resolved_receiver)
+                {
                     // Method found — instantiate the TypeScheme to get fresh types
-                    let func_ty = if let Some(scheme) = self.env.lookup_function(entry.func_id) {
+                    let func_ty = if let Some((scheme, origin)) =
+                        self.env.function_scheme(entry.func_id)
+                    {
                         let instance = crate::typeck::subst::instantiate_scheme_details_for_solver(
                             self.db(),
                             scheme,
@@ -591,7 +595,7 @@ impl<'db> TypeChecker<'db> {
                         instances.insert(
                             mc.node_id,
                             crate::typeck::FunctionInstance {
-                                origin: crate::typeck::FunctionInstanceOrigin::Declaration,
+                                origin,
                                 function: entry.func_id,
                                 scheme,
                                 callable,
@@ -659,7 +663,11 @@ impl<'db> TypeChecker<'db> {
                 // These calls may become resolvable after the surrounding
                 // function's types have propagated through TDNR. Keep them in
                 // the AST for that pass; any calls still unresolved afterward
-                // are diagnosed at the frontend boundary.
+                // are diagnosed at the frontend boundary. A qualified call
+                // has only the functions its path names, so it is final here.
+                for mc in &remaining {
+                    self.report_unresolved_method_path(solver, mc);
+                }
                 break;
             }
             if let Err(error) = solver.solve(new_constraints) {
@@ -683,6 +691,39 @@ impl<'db> TypeChecker<'db> {
             deferred = remaining;
         }
         resolved
+    }
+
+    /// Report a qualified method call whose path names no single function
+    /// for its receiver's type.
+    fn report_unresolved_method_path(
+        &self,
+        solver: &TypeSolver<'db>,
+        call: &crate::typeck::func_context::DeferredMethodCall<'db>,
+    ) {
+        let Some((path, _)) = &call.path else {
+            return;
+        };
+        let receiver = solver.type_subst().apply(self.db(), call.receiver_ty);
+        let message = match self.select_method(&call.method, call.path.as_ref(), receiver) {
+            super::expr::MethodSelection::Ambiguous(functions) => format!(
+                "ambiguous path `{}` for a receiver of type `{receiver}`: it names {}",
+                call.method,
+                functions.iter().format_with(", ", |function, f| {
+                    f(&format_args!("`{}`", function.qualified(self.db())))
+                }),
+            ),
+            _ => format!(
+                "unresolved path `{}`: no function it names takes a receiver of type `{receiver}`",
+                call.method
+            ),
+        };
+        Diagnostic::new(
+            message,
+            self.get_span(*path),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+        .accumulate(self.db());
     }
 
     /// Concrete effects of `body` that `declared` does not name.

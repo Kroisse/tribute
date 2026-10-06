@@ -98,6 +98,11 @@ pub enum ExprKind<V> {
     MethodCall {
         receiver: Expr<V>,
         method: Symbol,
+        /// The path of a qualified call `expr.a::b(args)`, which `method`
+        /// spells in full.
+        // V is the only phase-dependent value.
+        #[salsa_value(unsafe(prove(V: salsa::SalsaValue)))]
+        path: Option<MethodPath<V>>,
         args: Vec<Expr<V>>,
     },
 
@@ -220,6 +225,16 @@ pub struct Param {
     pub ty: Option<TypeAnnotation>,
     /// Local ID assigned during name resolution (None before resolution).
     pub local_id: Option<super::phases::LocalId>,
+}
+
+/// The path a qualified method call names its function by.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct MethodPath<V> {
+    /// The path's node, for span lookup.
+    pub id: NodeId,
+    /// The functions the path may name, found from the call's scope. Name
+    /// resolution fills this in; the receiver's type selects one.
+    pub candidates: Vec<V>,
 }
 
 /// Binary operators.
