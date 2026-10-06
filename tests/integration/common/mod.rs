@@ -257,7 +257,7 @@ pub struct NativeTestBinary {
     temp_dir: tempfile::TempDir,
 }
 impl NativeTestBinary {
-    fn from_object_bytes(object_bytes: &[u8]) -> Self {
+    pub fn from_object_bytes(object_bytes: &[u8]) -> Self {
         let temp_dir = tempfile::tempdir().expect("Failed to create temp dir");
         let exec_path = temp_dir.path().join("tribute_test_bin");
         link_native_binary(object_bytes, &exec_path, None).unwrap_or_else(|e| {

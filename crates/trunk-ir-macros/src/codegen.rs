@@ -157,10 +157,12 @@ fn gen_op_def(crate_path: &TokenStream, dialect: &str, op: &OperationDef) -> Tok
         RegionOrSuccessor::Region { name, optional } => {
             Some(quote!(#schema_mod::RegionSchema { name: #name, optional: #optional }))
         }
-        RegionOrSuccessor::Successor(_) => None,
+        RegionOrSuccessor::Successor { .. } => None,
     });
     let successors = op.regions.iter().filter_map(|item| match item {
-        RegionOrSuccessor::Successor(name) => Some(name),
+        RegionOrSuccessor::Successor { name, variadic } => {
+            Some(quote!(#schema_mod::SuccessorSchema { name: #name, variadic: #variadic }))
+        }
         RegionOrSuccessor::Region { .. } => None,
     });
 
@@ -478,7 +480,22 @@ fn gen_region_accessors(crate_path: &TokenStream, regions: &[RegionOrSuccessor])
                 });
                 region_idx += 1;
             }
-            RegionOrSuccessor::Successor(name) => {
+            RegionOrSuccessor::Successor {
+                name,
+                variadic: true,
+            } => {
+                let name_ident = format_ident!("{name}");
+                let idx = succ_idx;
+                methods.push(quote! {
+                    pub fn #name_ident<'a>(
+                        &self,
+                        ctx: &'a #crate_path::IrContext,
+                    ) -> impl Iterator<Item = #crate_path::BlockRef> + 'a {
+                        ctx.op_successors(self.0).skip(#idx)
+                    }
+                });
+            }
+            RegionOrSuccessor::Successor { name, .. } => {
                 let name_ident = format_ident!("{name}");
                 let idx = succ_idx;
                 let missing = format!("missing successor `{name}`");
@@ -658,7 +675,7 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
             RegionOrSuccessor::Region { name, optional } => {
                 Some((format_ident!("{name}"), *optional))
             }
-            RegionOrSuccessor::Successor(_) => None,
+            RegionOrSuccessor::Successor { .. } => None,
         })
         .collect();
     if !regions.is_empty() {
@@ -699,17 +716,35 @@ fn gen_fluent_builder(crate_path: &TokenStream, dialect: &str, op: &OperationDef
         .regions
         .iter()
         .filter_map(|item| match item {
-            RegionOrSuccessor::Successor(name) => Some(format_ident!("{name}")),
+            RegionOrSuccessor::Successor { name, variadic } => {
+                Some((format_ident!("{name}"), *variadic))
+            }
             RegionOrSuccessor::Region { .. } => None,
         })
         .collect();
     if !successors.is_empty() {
+        let params = successors.iter().map(|(name, variadic)| {
+            if *variadic {
+                quote!(#name: impl ::std::iter::IntoIterator<Item = #crate_path::BlockRef>)
+            } else {
+                quote!(#name: #crate_path::BlockRef)
+            }
+        });
+        let pushes = successors.iter().map(|(name, variadic)| {
+            if *variadic {
+                quote!(__successors.extend(#name);)
+            } else {
+                quote!(__successors.push(#name);)
+            }
+        });
         fields.push(quote!(successors: Option<::std::vec::Vec<#crate_path::BlockRef>>));
         field_inits.push(quote!(successors: None,));
         methods.push(quote! {
             /// Set the successor blocks in declaration order.
-            pub fn successors(mut self, #(#successors: #crate_path::BlockRef),*) -> Self {
-                self.successors = Some(::std::vec![#(#successors),*]);
+            pub fn successors(mut self, #(#params),*) -> Self {
+                let mut __successors = ::std::vec::Vec::new();
+                #(#pushes)*
+                self.successors = Some(__successors);
                 self
             }
         });

@@ -704,6 +704,44 @@ mod tests {
         assert!(!object.is_empty());
     }
 
+    fn br_table_error(index_ty: &str, cases: &str, target_params: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            &format!(
+                r#"core.module @test {{
+  clif.func {{sym_name = "select", type = clif.func_sig<({index_ty}) -> ()>}} {{
+    ^entry(%index: {index_ty}):
+      clif.br_table %index [^default, ^target] {{cases = {cases}}}
+    ^default:
+      clif.return
+    ^target{target_params}:
+      clif.return
+  }}
+}}"#
+            ),
+        );
+        emit_module_to_native(&ctx, module)
+            .expect_err("clif.br_table is rejected")
+            .to_string()
+    }
+
+    #[test]
+    fn br_table_rejects_what_the_index_cannot_select() {
+        let too_wide = br_table_error("core.i8", "[256]", "");
+        assert!(
+            too_wide.contains("case 256 does not fit the 8-bit index"),
+            "{too_wide}"
+        );
+        let parameters = br_table_error("core.i32", "[1]", "(%value: core.i32)");
+        assert!(
+            parameters.contains("a successor block has parameters"),
+            "{parameters}"
+        );
+        let float_index = br_table_error("core.f64", "[1]", "");
+        assert!(float_index.contains("not an integer"), "{float_index}");
+    }
+
     #[test]
     fn native_emission_defines_declared_data_objects() {
         use object::{Object, ObjectSection, ObjectSymbol};

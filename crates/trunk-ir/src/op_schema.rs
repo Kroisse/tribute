@@ -41,8 +41,16 @@ pub struct OpSchema {
     pub attributes: &'static [AttributeSchema],
     /// Declared regions in order. Only the last region may be optional.
     pub regions: &'static [RegionSchema],
-    /// Declared successor names in order.
-    pub successors: &'static [&'static str],
+    /// Declared successors in order. Only the last may be variadic.
+    pub successors: &'static [SuccessorSchema],
+}
+
+/// Static description of one declared successor.
+#[derive(Debug)]
+pub struct SuccessorSchema {
+    pub name: &'static str,
+    /// Whether this is the rest of the successor list.
+    pub variadic: bool,
 }
 
 /// Static description of one declared operand.
@@ -223,7 +231,7 @@ pub enum SchemaViolation {
         actual: usize,
     },
     SuccessorCount {
-        expected: usize,
+        expected: CountRange,
         actual: usize,
     },
     MissingAttribute {
@@ -446,6 +454,19 @@ impl OpSchema {
         }
     }
 
+    /// Allowed successor count.
+    pub fn successor_count(&self) -> CountRange {
+        let fixed = self
+            .successors
+            .iter()
+            .filter(|successor| !successor.variadic)
+            .count();
+        CountRange {
+            min: fixed,
+            max: (fixed == self.successors.len()).then_some(fixed),
+        }
+    }
+
     /// Check `op`'s counts and attributes against this schema.
     ///
     /// Returns every violation found. Callers must not assume the typed
@@ -482,10 +503,11 @@ impl OpSchema {
             });
         }
 
+        let expected_successors = self.successor_count();
         let successors = ctx.op_successor_count(op);
-        if successors != self.successors.len() {
+        if !expected_successors.contains(successors) {
             violations.push(SchemaViolation::SuccessorCount {
-                expected: self.successors.len(),
+                expected: expected_successors,
                 actual: successors,
             });
         }

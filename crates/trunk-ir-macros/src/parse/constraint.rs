@@ -451,7 +451,9 @@ pub(super) fn parse_typed_operation(
     let regions = parse_regions(body.stream())?;
     for item in &regions {
         let name = match item {
-            RegionOrSuccessor::Region { name, .. } | RegionOrSuccessor::Successor(name) => name,
+            RegionOrSuccessor::Region { name, .. } | RegionOrSuccessor::Successor { name, .. } => {
+                name
+            }
         };
         check_name(name, &mut names)?;
     }
