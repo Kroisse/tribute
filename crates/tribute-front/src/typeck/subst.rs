@@ -811,7 +811,7 @@ mod laws {
     /// result for an index past the arguments, but an out-of-range index in
     /// a function type's effect row panics inside `substitute_effect_row`.
     #[test]
-    #[ignore = "substitute_bound_vars panics instead of returning OutOfBounds for an index in an effect row"]
+    #[ignore = "#1372: substitute_bound_vars panics instead of returning OutOfBounds for an index in an effect row"]
     fn out_of_range_bound_var_in_effect_row_is_reported() {
         let db = salsa::DatabaseImpl::new();
         let bound = TypeShape::BoundVar(1);

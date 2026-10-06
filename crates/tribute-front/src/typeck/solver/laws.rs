@@ -375,7 +375,7 @@ fn row_of<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
 /// it ambiguous and defers the equation as a `RowUnion` that never settles,
 /// so solving (and finalizing) succeeds.
 #[test]
-#[ignore = "closed-row equality outcome depends on effect order under ambiguity"]
+#[ignore = "#1371: closed-row equality outcome depends on effect order under ambiguity"]
 fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
     use crate::typeck::prop::{EffectShape, Prim};
     let db = salsa::DatabaseImpl::new();
@@ -413,7 +413,7 @@ fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
 /// then rebinds `e1` to the closed empty remainder. `e2` stays open, so the
 /// solved rows differ.
 #[test]
-#[ignore = "row tail rebinding discards a binding made by argument unification"]
+#[ignore = "#1370: row tail rebinding discards a binding made by argument unification"]
 fn open_row_tail_binding_keeps_argument_bindings() {
     use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
     let db = salsa::DatabaseImpl::new();

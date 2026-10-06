@@ -752,7 +752,7 @@ mod laws {
     /// so a function type taking `Fn(Int)` and `Bool` and one taking
     /// `fn(Int) -> Bool` get the same name.
     #[test]
-    #[ignore = "mangling collides for a source type named `Fn` (or `Tup`)"]
+    #[ignore = "#1373: mangling collides for a source type named `Fn` (or `Tup`)"]
     fn source_type_named_fn_mangles_distinctly() {
         let db = salsa::DatabaseImpl::new();
         let int = Type::new(&db, TypeKind::Int);
