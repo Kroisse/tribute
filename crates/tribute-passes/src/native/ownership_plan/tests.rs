@@ -879,6 +879,29 @@ fn borrowed_load_return_acquires_a_transfer_unit() {
 }
 
 #[test]
+fn enum_release_leaves_the_size_to_the_descriptor() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Choice = adt.enum<Choice { None(), Some(core.i64, core.i64) }>
+  !ChoiceRef = adt.typeref<{name = "Choice"}>
+  func.func @drop() -> core.nil {
+    %choice = adt.variant_new {tag = "None", type = !Choice} : !ChoiceRef
+    func.return
+  }
+}"#,
+    );
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let materialized = print_module(&ctx, module.op());
+
+    // Each variant has its own allocation size, so the release of an enum
+    // value carries the dynamic-size signal instead of one static size.
+    assert!(
+        materialized.contains("tribute_rt.release %0 {alloc_size = 0}"),
+        "{materialized}"
+    );
+}
+
+#[test]
 fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
     let (mut ctx, module, plan) = build(
         r#"core.module @test {

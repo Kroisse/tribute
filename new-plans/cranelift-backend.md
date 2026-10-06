@@ -279,7 +279,7 @@ Native RC materialization은 같은 type-erasure 전 경계에서 검증된 plan
 
 ```text
 Struct: [fields in order, naturally aligned]
-Enum:   [variant fields in order, naturally aligned], sized to max(variant sizes)
+Enum:   [the variant's fields in order, naturally aligned], sized per variant
 Array:  [length: i64] [elements...]
 ```
 
