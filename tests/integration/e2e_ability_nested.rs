@@ -2,24 +2,30 @@
 //!
 //! These tests verify correct behavior when multiple abilities are composed
 //! through nested handler expressions, including shadowing, cross-ability
-//! interactions, and deep nesting.
+//! interactions, and deep nesting. Programs that print only through
+//! `std::io` run on both the native and Wasm targets.
 
 use crate::common;
 
-use common::assert_native_output;
+use common::{PRINT_NAT, assert_native_output, assert_output_on_both_targets};
 
 // =============================================================================
 // Multi-Ability Execution Tests (#499)
 // =============================================================================
 
-/// Test two different abilities (State + Reader) with nested handlers.
+/// Test two different abilities (State + Reader) with nested handlers, in
+/// both nesting orders; handlers of the two abilities keep separate evidence
+/// slots.
 ///
 /// `use_both()` performs Reader::ask() then State::set/get.
-/// Outer handler provides Reader(42), inner handler runs State starting at 0.
+/// One handler provides Reader(42), the other runs State starting at 0.
 /// Expected: Reader::ask() returns 42, State::set(42), State::get() returns 42.
 #[test]
 fn test_two_abilities_nested_handlers() {
-    let code = r#"ability State(s) {
+    let code = format!(
+        "{PRINT_NAT}{}",
+        r#"
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -49,12 +55,15 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn main() -> Nil {
+fn main() ->{std::io::Io} Nil {
     let result = run_reader(fn() { run_state(fn() { use_both() }, 0) }, 42)
-    __tribute_print_nat(result)
+    print_nat(result)
+    let swapped = run_state(fn() { run_reader(fn() { use_both() }, 42) }, 0)
+    print_nat(swapped)
 }
-"#;
-    assert_native_output("two_abilities_nested.trb", code, "42");
+"#
+    );
+    assert_output_on_both_targets("two_abilities_nested.trb", &code, "42\n42");
 }
 
 /// Test same ability with different type parameter instances nested (State inside State).
@@ -141,10 +150,14 @@ fn main() -> Nil {
 /// Test inner handler shadowing outer handler with same ability and same type.
 ///
 /// Both handlers handle `State(Nat)`. The inner handler (init=0) should shadow
-/// the outer handler (init=100). After inner completes, outer's state remains 100.
+/// the outer handler (init=100). After inner completes, the outer handler is
+/// selected again and its state remains 100.
 #[test]
 fn test_nested_handler_same_ability_same_type_shadowing() {
-    let code = r#"ability State(s) {
+    let code = format!(
+        "{PRINT_NAT}{}",
+        r#"
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -162,21 +175,19 @@ fn inner_comp() ->{State(Nat)} Nat {
     State::get()
 }
 
-fn main() -> Nil {
+fn main() ->{std::io::Io} Nil {
     let result = run_state(fn() {
         let inner_result = run_state(fn() { inner_comp() }, 0)
-        __tribute_print_nat(inner_result)
         let outer_val = State::get()
-        __tribute_print_nat(outer_val)
-        outer_val
+        inner_result * 1000 + outer_val
     }, 100)
-    __tribute_print_nat(result)
+    print_nat(result)
 }
-"#;
+"#
+    );
     // inner: get()→0, set(1), get()→1 → inner_result=1
     // outer: get()→100 (unchanged) → outer_val=100
-    // final result=100
-    assert_native_output("nested_handler_shadowing.trb", code, "1\n100\n100");
+    assert_output_on_both_targets("nested_handler_shadowing.trb", &code, "1100");
 }
 
 /// Test calling a different ability operation inside a handler arm.
@@ -277,11 +288,14 @@ fn main() -> Nil {
 /// Test deep nesting (4 levels) of the same handler.
 ///
 /// Four nested `run_state` handlers with init values 1, 2, 3, 4 (innermost first).
-/// Each level performs get() to read its own state. The innermost computation
-/// reads its state (init=1) and returns it.
+/// Each level performs get() to read its own state, and the levels' values
+/// are combined into one decimal digit each.
 #[test]
 fn test_nested_handler_deep_four_levels_same_ability() {
-    let code = r#"ability State(s) {
+    let code = format!(
+        "{PRINT_NAT}{}",
+        r#"
+ability State(s) {
     op get() -> s
     op set(value: s) -> Nil
 }
@@ -293,36 +307,32 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
     }
 }
 
-fn level4() ->{State(Nat)} Nat {
+fn level1() ->{State(Nat)} Nat {
     let v = State::get()
-    __tribute_print_nat(v)
     State::set(v + 1)
-    State::get()
+    v * 10 + State::get()
 }
 
-fn main() -> Nil {
+fn main() ->{std::io::Io} Nil {
     let result = run_state(fn() {
         let v4 = State::get()
-        __tribute_print_nat(v4)
-        run_state(fn() {
+        v4 * 10000 + run_state(fn() {
             let v3 = State::get()
-            __tribute_print_nat(v3)
-            run_state(fn() {
+            v3 * 1000 + run_state(fn() {
                 let v2 = State::get()
-                __tribute_print_nat(v2)
-                run_state(fn() { level4() }, 1)
+                v2 * 100 + run_state(fn() { level1() }, 1)
             }, 2)
         }, 3)
     }, 4)
-    __tribute_print_nat(result)
+    print_nat(result)
 }
-"#;
+"#
+    );
     // level 4 (outermost): get()→4
     // level 3: get()→3
     // level 2: get()→2
     // level 1 (innermost): get()→1, set(2), get()→2
-    // result = 2
-    assert_native_output("nested_handler_deep_four_levels.trb", code, "4\n3\n2\n1\n2");
+    assert_output_on_both_targets("nested_handler_deep_four_levels.trb", &code, "43212");
 }
 
 /// Two instances of one ability whose arguments share a representation
