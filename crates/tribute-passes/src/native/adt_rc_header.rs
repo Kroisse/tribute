@@ -16,9 +16,7 @@
 use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{
-    compute_enum_layout, compute_struct_layout, find_variant_layout,
-};
+use tribute_ir::dialect::adt::layout::{compute_struct_layout, compute_variant_layout};
 use tribute_ir::dialect::tribute_rt::{RC_HEADER_SIZE, REFCOUNT_OFFSET, RTTI_IDX_OFFSET};
 use trunk_ir::SymbolPath;
 use trunk_ir::context::IrContext;
@@ -240,7 +238,7 @@ impl RewritePattern for StructNewPattern {
 ///
 /// Generates:
 /// ```text
-/// %size      = clif.iconst(enum_layout.total_size + 8)
+/// %size      = clif.iconst(variant_layout.total_size + 8)
 /// %raw_ptr   = clif.call @__tribute_alloc(%size)
 /// %rc_one    = clif.iconst(1)
 /// clif.store(%rc_one, %raw_ptr, offset=0)        // refcount
@@ -275,18 +273,10 @@ impl RewritePattern for VariantNewPattern {
         let tag = variant_new.tag_ref(ctx);
         let tc = rewriter.type_converter();
 
-        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
+        let Some(variant_layout) = compute_variant_layout(ctx, enum_ty, tag, tc) else {
             panic!(
-                "adt_rc_header: cannot compute enum layout for variant_new type {:?}; \
-                 the enum type matched adt.variant_new but has no valid layout",
-                enum_ty
-            );
-        };
-
-        let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
-            panic!(
-                "adt_rc_header: unknown variant tag {:?} for enum type {:?}; \
-                 the variant_new references a tag not present in the enum layout",
+                "adt_rc_header: cannot compute the layout of variant {:?} of {:?}; \
+                 the variant_new names no variant of a valid adt.enum layout",
                 tag, enum_ty
             );
         };
@@ -297,7 +287,7 @@ impl RewritePattern for VariantNewPattern {
         let mut ops: Vec<OpRef> = Vec::new();
 
         // 1. Compute allocation size (payload + RC header)
-        let alloc_size = enum_layout.total_size as u64 + RC_HEADER_SIZE;
+        let alloc_size = variant_layout.total_size as u64 + RC_HEADER_SIZE;
         let size_op = clif::Iconst::operands()
             .value(alloc_size as i64)
             .results(self.i64_ty)

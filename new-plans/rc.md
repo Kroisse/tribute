@@ -75,7 +75,7 @@ Structs are laid out with fields in declaration order, naturally aligned:
 
 ```text
 Struct: [fields in order, naturally aligned]
-Enum:   [variant fields in order, naturally aligned], sized to max(variant sizes)
+Enum:   [the variant's fields in order, naturally aligned], sized per variant
 Array:  [length: i64] [elements...]
 ```
 
@@ -274,8 +274,9 @@ provenance에서 action을 새로 발견하지 않는다. Duplicate owning desti
 각 materialize된 release는 plan action이 가리키는 type-erasure 전 nominal layout에서
 계산한 **payload size + RC header size**를 가진다. Replaced-field release도 field의
 exact declared layout으로 같은 size를 사용한다. `tribute_rt.anyref`와 `intref`처럼
-static nominal layout이 없는 opaque dynamic reference의 `alloc_size = 0`은
-deallocation size가 아니라 RTTI dispatch 전용 신호다. backend는 header RTTI로 이를
+static nominal layout이 없는 opaque dynamic reference와, variant마다 할당 크기가
+다른 enum 값의 `alloc_size = 0`은 deallocation size가 아니라 RTTI dispatch 전용
+신호다. backend는 header RTTI로 이를
 exact release function으로 해소한 뒤에만 deallocate하며, entry가 없으면 zero-size
 deallocation 대신 fail-closed한다. physical def-chain에서 size를 추론하지 않는다.
 

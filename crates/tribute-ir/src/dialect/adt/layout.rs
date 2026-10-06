@@ -12,10 +12,8 @@
 //! ## Enum layout
 //!
 //! A variant object holds only its own fields, laid out like a struct from
-//! offset 0. Which variant it is comes from the object's runtime type
-//! descriptor, not from the payload. Every variant of an enum is allocated
-//! with the payload size of the largest one, so a value of the enum type has
-//! one static allocation size.
+//! offset 0, and is allocated with the size of those fields. Which variant it
+//! is comes from the object's runtime type descriptor, not from the payload.
 //!
 //! ## Size mapping
 //!
@@ -48,31 +46,6 @@ pub struct StructLayout {
     pub total_size: u32,
     /// Maximum alignment of any field.
     pub alignment: u32,
-}
-
-/// Memory layout of an enum type.
-///
-/// All variants share one allocation size, that of the largest variant. Each
-/// variant's fields start at offset 0.
-#[derive(Debug, Clone)]
-pub struct EnumLayout {
-    /// Layout for each variant, in declaration order.
-    pub variant_layouts: Vec<VariantFieldLayout>,
-    /// Total payload size (max variant fields size).
-    pub total_size: u32,
-    /// Overall alignment.
-    pub alignment: u32,
-}
-
-/// Layout of a single variant's fields.
-#[derive(Debug, Clone)]
-pub struct VariantFieldLayout {
-    /// Variant name.
-    pub name: StringRef,
-    /// Field offsets from the payload start.
-    pub field_offsets: Vec<u32>,
-    /// Total size of this variant's fields.
-    pub fields_size: u32,
 }
 
 /// Get the size and alignment of a native type in bytes.
@@ -186,53 +159,23 @@ pub fn compute_mem_struct_layout(ctx: &IrContext, struct_ty: TypeRef) -> Option<
     Some(natural_layout(ctx, fields.iter().copied()))
 }
 
-/// Compute the memory layout for an `adt.enum` type.
+/// Compute the memory layout of the variant `tag` of an `adt.enum` type.
 ///
-/// Uses the `TypeConverter` to determine the native size of each field type.
-/// Returns `None` if the type is not an `adt.enum` or variants cannot be extracted.
-pub fn compute_enum_layout(
+/// A variant object holds only its own fields, so its layout is that of a
+/// struct with those fields. Uses the `TypeConverter` to determine the native
+/// size of each field type. Returns `None` if the type is not an `adt.enum`
+/// or has no such variant.
+pub fn compute_variant_layout(
     ctx: &IrContext,
     enum_ty: TypeRef,
+    tag: StringRef,
     type_converter: &TypeConverter,
-) -> Option<EnumLayout> {
-    let variants = get_enum_variants(ctx, enum_ty)?;
-
-    let mut variant_layouts = Vec::with_capacity(variants.len());
-    let mut max_fields_size: u32 = 0;
-    let mut max_align: u32 = 8;
-
-    for (variant_name, field_types) in &variants {
-        let mut offset: u32 = 0;
-        let mut field_offsets = Vec::with_capacity(field_types.len());
-
-        for field_ty in field_types {
-            let native_ty = type_converter.convert_type_or_identity(ctx, *field_ty);
-            let (size, align) = type_size_align(ctx, native_ty);
-
-            offset = (offset + align - 1) & !(align - 1);
-            field_offsets.push(offset);
-            offset += size;
-            max_align = max_align.max(align);
-        }
-
-        let fields_size = (offset + max_align - 1) & !(max_align - 1);
-        max_fields_size = max_fields_size.max(fields_size);
-
-        variant_layouts.push(VariantFieldLayout {
-            name: *variant_name,
-            field_offsets,
-            fields_size,
-        });
-    }
-
-    Some(EnumLayout {
-        variant_layouts,
-        total_size: max_fields_size,
-        alignment: max_align,
-    })
-}
-
-/// Find the variant layout for a given tag name.
-pub fn find_variant_layout(layout: &EnumLayout, tag: StringRef) -> Option<&VariantFieldLayout> {
-    layout.variant_layouts.iter().find(|v| v.name == tag)
+) -> Option<StructLayout> {
+    let fields = super::Enum::from_type_ref(ctx, enum_ty)?.variant_fields(ctx, tag)?;
+    Some(natural_layout(
+        ctx,
+        fields
+            .iter()
+            .map(|&field_ty| type_converter.convert_type_or_identity(ctx, field_ty)),
+    ))
 }

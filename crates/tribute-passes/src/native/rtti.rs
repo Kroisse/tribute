@@ -33,9 +33,7 @@ use rustc_hash::FxHashMap as HashMap;
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
-use tribute_ir::dialect::adt::layout::{
-    compute_enum_layout, compute_struct_layout, find_variant_layout,
-};
+use tribute_ir::dialect::adt::layout::{compute_struct_layout, compute_variant_layout};
 use tribute_ir::dialect::tribute_rtti::FieldKind;
 use trunk_ir::SymbolPath;
 use trunk_ir::TypeDataBuilder;
@@ -483,7 +481,7 @@ struct DescriptorRelease {
 }
 
 /// The released field offsets and allocation size of the descriptor
-/// `(ty, tag)`. A variant allocation has the size of its whole enum layout.
+/// `(ty, tag)`. A variant allocation has the size of its own fields.
 fn descriptor_release(
     ctx: &IrContext,
     ty: TypeRef,
@@ -500,11 +498,9 @@ fn descriptor_release(
             (layout.field_offsets, layout.total_size)
         }
         Some(tag) => {
-            let layout = compute_enum_layout(ctx, ty, type_converter)
-                .expect("enum type declared as an RTTI layout must have a valid layout");
-            let variant = find_variant_layout(&layout, tag)
+            let layout = compute_variant_layout(ctx, ty, tag, type_converter)
                 .expect("declared RTTI variant must exist in its enum layout");
-            (variant.field_offsets.clone(), layout.total_size)
+            (layout.field_offsets, layout.total_size)
         }
     };
     assert_eq!(offsets.len(), fields.len());
@@ -942,11 +938,16 @@ mod tests {
         generate_rtti(&mut ctx, module, &tc).expect("declared layouts");
 
         let choice = ctx.type_alias_by_text("Choice").expect("Choice alias");
-        let layout = compute_enum_layout(&ctx, choice, &tc).expect("enum layout");
-        let alloc_size = i64::from(layout.total_size) + RC_HEADER_SIZE as i64;
         let pair = ctx.intern_str("Pair");
-        let pair_field = find_variant_layout(&layout, pair).unwrap().field_offsets[1];
         let none = ctx.intern_str("None");
+        let pair_layout = compute_variant_layout(&ctx, choice, pair, &tc).expect("Pair layout");
+        let none_layout = compute_variant_layout(&ctx, choice, none, &tc).expect("None layout");
+        // Each variant is allocated, and so freed, with its own size.
+        assert_eq!((none_layout.total_size, pair_layout.total_size), (0, 16));
+        let alloc_size = |layout: &tribute_ir::dialect::adt::layout::StructLayout| {
+            i64::from(layout.total_size) + RC_HEADER_SIZE as i64
+        };
+        let pair_field = pair_layout.field_offsets[1];
         let indices = tribute_rtti::Layout::declared_indices(&ctx, module);
         assert_eq!(indices.len(), 2, "one descriptor per allocated variant");
 
@@ -985,11 +986,11 @@ mod tests {
 
         assert_eq!(
             summary(indices[&(choice, Some(none))]),
-            (vec![], vec![alloc_size])
+            (vec![], vec![alloc_size(&none_layout)])
         );
         assert_eq!(
             summary(indices[&(choice, Some(pair))]),
-            (vec![pair_field as i32], vec![alloc_size])
+            (vec![pair_field as i32], vec![alloc_size(&pair_layout)])
         );
     }
 

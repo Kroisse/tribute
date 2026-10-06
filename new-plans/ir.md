@@ -1587,9 +1587,9 @@ descriptor로만 구별된다.
   필드만 가진 저수준 struct로 두고, 어느 variant인지는 값의
   [descriptor](runtime-types.md#variant-판별)로 판별한다. Native에서 필드는 payload의
   offset 0부터 자연 정렬로 놓이고, variant field 접근은 struct field 접근과 같이 그
-  variant의 `mem.struct`를 읽는다. 한 enum의 variant는 모두 가장 큰 variant의
-  payload 크기로 할당하므로, enum 타입의 값은 variant와 무관하게 하나의 정적 할당
-  크기를 가진다.
+  variant의 `mem.struct`를 읽는다. Variant 객체는 자기 필드의 크기로 할당하므로
+  enum 타입의 값은 하나의 정적 할당 크기를 갖지 않는다. 그 값의 해제 크기는 값의
+  descriptor가 정한다.
 
 ### `adt.enum` nominal layout type
 

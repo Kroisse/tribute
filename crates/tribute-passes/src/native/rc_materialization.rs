@@ -7,12 +7,10 @@
 use rustc_hash::FxHashMap as HashMap;
 
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{
-    compute_enum_layout, compute_struct_layout, get_struct_fields,
-};
+use tribute_ir::dialect::adt::layout::{compute_struct_layout, get_struct_fields};
 use tribute_ir::dialect::tribute_rt::{self, RC_HEADER_SIZE};
 use trunk_ir::context::IrContext;
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::rewrite::{Module, TypeConverter};
 use trunk_ir::{BlockRef, OpRef, Symbol, TypeRef, ValueRef};
 
@@ -177,11 +175,13 @@ fn allocation_size_for_type(
         return Ok(0);
     }
     let layout = plan.allocation_layout_for_type(ctx, ty)?;
+    // Each variant of an enum has its own allocation size, so an enum value's
+    // size is also resolved by its header RTTI.
+    if adt::Enum::from_type_ref(ctx, layout).is_some() {
+        return Ok(0);
+    }
     let payload_size = compute_struct_layout(ctx, layout, type_converter)
         .map(|layout| layout.total_size)
-        .or_else(|| {
-            compute_enum_layout(ctx, layout, type_converter).map(|layout| layout.total_size)
-        })
         .ok_or_else(|| OwnershipPlanError::new("planned release layout has no native size"))?;
     Ok(u64::from(payload_size) + RC_HEADER_SIZE)
 }
