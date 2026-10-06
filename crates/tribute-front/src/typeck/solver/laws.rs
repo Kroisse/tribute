@@ -11,9 +11,8 @@
 //!   only floor source function types carry; unification does not relate
 //!   floors.
 //!
-//! The ignored tests at the end are minimal failing examples of behavior the
-//! laws expect but the solver does not provide yet; the generators that would
-//! reach them are narrowed where noted.
+//! The tests at the end are minimal examples of cases the laws once found
+//! failing, kept as regressions.
 
 use proptest::prelude::*;
 
@@ -458,4 +457,77 @@ fn open_row_tail_binding_keeps_argument_bindings() {
     assert!(result.is_ok());
     let (open, closed) = (solver.normalize_row(open), solver.normalize_row(closed));
     assert!(rows_equiv(&db, open, closed, RowRelation::SetEqual));
+}
+
+/// A tail may occur in the effects bound to the other tail: equating
+/// `{State(fn() ->{e1} Nil) | e1}` with `{|e2}` binds `e1` to a fresh tail
+/// and `e2` to `State(fn() ->{e1} Nil)` over it, which is no cycle.
+#[test]
+fn open_rows_allow_a_tail_in_the_other_remainder() {
+    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    let db = salsa::DatabaseImpl::new();
+    let (e1, e2) = (ROW_VAR_BASE, ROW_VAR_BASE + 1);
+    let state = EffectShape {
+        ability: 1,
+        args: vec![TypeShape::Func {
+            params: vec![],
+            result: Box::new(TypeShape::Prim(Prim::Nil)),
+            effect: RowShape {
+                effects: vec![],
+                rest: Some(e1),
+            },
+            convention: crate::ast::CallingConvention::Direct,
+        }],
+    };
+    let left = RowShape {
+        effects: vec![state],
+        rest: Some(e1),
+    }
+    .build(&db);
+    let right = RowShape {
+        effects: vec![],
+        rest: Some(e2),
+    }
+    .build(&db);
+    let (solver, result) = solve_rows(&db, left, right);
+    assert!(result.is_ok(), "{result:?}");
+    let (left, right) = (solver.normalize_row(left), solver.normalize_row(right));
+    assert!(rows_equiv(&db, left, right, RowRelation::SetEqual));
+}
+
+/// Binding both tails must not form a cycle through each other: in
+/// `{State(fn() ->{e1} Nil) | e1}` against `{Choice(fn() ->{e2} Nil, Nil) | e2}`,
+/// `e1` would name `Choice` over `e2` and `e2` would name `State` over `e1`.
+#[test]
+fn open_rows_reject_a_cycle_through_both_tails() {
+    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    let db = salsa::DatabaseImpl::new();
+    let thunk = |tail| TypeShape::Func {
+        params: vec![],
+        result: Box::new(TypeShape::Prim(Prim::Nil)),
+        effect: RowShape {
+            effects: vec![],
+            rest: Some(tail),
+        },
+        convention: crate::ast::CallingConvention::Direct,
+    };
+    let (e1, e2) = (ROW_VAR_BASE, ROW_VAR_BASE + 1);
+    let left = RowShape {
+        effects: vec![EffectShape {
+            ability: 1,
+            args: vec![thunk(e1)],
+        }],
+        rest: Some(e1),
+    }
+    .build(&db);
+    let right = RowShape {
+        effects: vec![EffectShape {
+            ability: 3,
+            args: vec![thunk(e2), TypeShape::Prim(Prim::Nil)],
+        }],
+        rest: Some(e2),
+    }
+    .build(&db);
+    let (_, result) = solve_rows(&db, left, right);
+    assert!(result.is_err());
 }

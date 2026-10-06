@@ -1008,15 +1008,15 @@ impl<'db> TypeSolver<'db> {
                 if self.row_subst.get(v1.id).is_some() || self.row_subst.get(v2.id).is_some() {
                     return self.unify_rows_inner(r1, r2);
                 }
-                // Row occurs check: each tail is bound to the other side's
-                // remaining effects, so neither may occur in them.
-                let remainders = [
-                    EffectRow::new(self.db, only_r1.clone(), None),
-                    EffectRow::new(self.db, only_r2.clone(), None),
-                ];
-                if remainders
-                    .iter()
-                    .any(|row| self.row_occurs_in(v1, *row) || self.row_occurs_in(v2, *row))
+                // Row occurs check: `v1` is bound to `only_r2` and `v2` to
+                // `only_r1`, so a tail may not occur in its own remainder,
+                // nor may each occur in the other's while the other's tail
+                // occurs in its own, which would cycle through both bindings.
+                let only_r1_row = EffectRow::new(self.db, only_r1.clone(), None);
+                let only_r2_row = EffectRow::new(self.db, only_r2.clone(), None);
+                if self.row_occurs_in(v1, only_r2_row)
+                    || self.row_occurs_in(v2, only_r1_row)
+                    || (self.row_occurs_in(v1, only_r1_row) && self.row_occurs_in(v2, only_r2_row))
                 {
                     return Err(SolveError::RowMismatch {
                         expected: r1,
