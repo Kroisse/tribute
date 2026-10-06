@@ -9,7 +9,7 @@
 //!
 //! A bodyless `abi` declaration is an import, not a root: it stays only while
 //! something reachable references it.
-//! - Custom entry points from configuration, by qualified name
+//! - Custom entry points from configuration, by root-qualified path
 //!
 //! Follows the [`CallGraph`] edges of calls and address references, then
 //! removes unreachable functions via BFS.
@@ -30,8 +30,10 @@ use crate::transforms::call_graph::{CallGraph, FunctionDefinition, call_graph_ov
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
 pub struct GlobalDceConfig {
-    /// Additional entry point qualified function names (besides main/_start).
-    pub extra_entry_points: Vec<String>,
+    /// Additional entry points (besides main/_start), by root-qualified
+    /// path: `SymbolPath::new(["m", "init"])` names `init` in the nested
+    /// module `m`.
+    pub extra_entry_points: Vec<SymbolPath>,
     /// Whether to recursively process nested modules. Default: true.
     pub recursive: bool,
 }
@@ -172,10 +174,7 @@ fn is_root(ctx: &IrContext, name: &SymbolPath, op: OpRef, config: &GlobalDceConf
     *name == "main"
         || *name == "_start"
         || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
-        || config
-            .extra_entry_points
-            .iter()
-            .any(|extra| *name == extra.as_str())
+        || config.extra_entry_points.contains(name)
 }
 
 /// Whether `op` lies inside a `core.module` nested in `module`.
@@ -233,251 +232,13 @@ fn compute_reachable(graph: &CallGraph, roots: HashSet<SymbolPath>) -> HashSet<S
 }
 
 #[cfg(test)]
+mod prop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dialect::func;
-    use crate::location::Span;
     use crate::symbol::SymbolPath;
     use crate::*;
-    use smallvec::smallvec;
-
-    fn test_ctx() -> (IrContext, Location) {
-        let mut ctx = IrContext::new();
-        let path = ctx.intern_path("test.trb");
-        let loc = Location::new(path, Span::new(0, 0));
-        (ctx, loc)
-    }
-
-    fn fn_type(ctx: &mut IrContext) -> TypeRef {
-        let nil_ty = crate::dialect::core::nil(ctx).as_type_ref();
-        crate::dialect::func::func_sig(ctx, [], [nil_ty]).as_type_ref()
-    }
-
-    fn i32_type(ctx: &mut IrContext) -> TypeRef {
-        ctx.intern_type(TypeDataBuilder::new("core", "i32").build())
-    }
-
-    fn build_simple_func(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
-        let fn_ty = fn_type(ctx);
-        let sym_name = SymbolPath::from(name);
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        func::Func::operands()
-            .sym_name(sym_name.to_string())
-            .r#type(fn_ty)
-            .regions(body)
-            .build(ctx, loc)
-            .op_ref()
-    }
-
-    fn build_func_with_call(ctx: &mut IrContext, loc: Location, name: &str, callee: &str) -> OpRef {
-        let fn_ty = fn_type(ctx);
-        let i32_ty = i32_type(ctx);
-        let sym_name = SymbolPath::from(name);
-        let sym_callee = SymbolPath::from(callee);
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let call = func::Call::operands(std::iter::empty())
-            .callee(sym_callee)
-            .results([i32_ty])
-            .build(ctx, loc);
-        let call_result = call.result(ctx);
-        ctx.push_op(entry, call.op_ref());
-        let ret = func::Return::operands([call_result]).build(ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        func::Func::operands()
-            .sym_name(sym_name.to_string())
-            .r#type(fn_ty)
-            .regions(body)
-            .build(ctx, loc)
-            .op_ref()
-    }
-
-    fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
-        let block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        for op in ops {
-            ctx.push_op(block, op);
-        }
-        let region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![block],
-            parent_op: None,
-        });
-        let module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("test")))
-                .region(region)
-                .build(ctx);
-        let module_op = ctx.create_op(module_data);
-        Module::new(ctx, module_op).unwrap()
-    }
-
-    fn count_funcs(ctx: &IrContext, module: Module) -> usize {
-        module
-            .ops(ctx)
-            .iter()
-            .filter(|&&op| {
-                ctx.op(op).dialect == Symbol::new("func") && ctx.op(op).name == Symbol::new("func")
-            })
-            .count()
-    }
-
-    #[test]
-    fn removes_unreachable_function() {
-        let (mut ctx, loc) = test_ctx();
-        let main = build_simple_func(&mut ctx, loc, "main");
-        let unused = build_simple_func(&mut ctx, loc, "unused");
-        let module = build_module(&mut ctx, loc, vec![main, unused]);
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        assert_eq!(result.removed_count, 1);
-        assert_eq!(count_funcs(&ctx, module), 1);
-    }
-
-    #[test]
-    fn keeps_called_function() {
-        let (mut ctx, loc) = test_ctx();
-        let helper = build_simple_func(&mut ctx, loc, "helper");
-        let main = build_func_with_call(&mut ctx, loc, "main", "helper");
-        let module = build_module(&mut ctx, loc, vec![helper, main]);
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        assert_eq!(result.removed_count, 0);
-        assert_eq!(count_funcs(&ctx, module), 2);
-    }
-
-    #[test]
-    fn keeps_transitive_calls() {
-        let (mut ctx, loc) = test_ctx();
-        let leaf = build_simple_func(&mut ctx, loc, "leaf");
-        let middle = build_func_with_call(&mut ctx, loc, "middle", "leaf");
-        let main = build_func_with_call(&mut ctx, loc, "main", "middle");
-        let unreachable = build_simple_func(&mut ctx, loc, "unreachable");
-        let module = build_module(&mut ctx, loc, vec![leaf, middle, main, unreachable]);
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        assert_eq!(result.removed_count, 1);
-        assert_eq!(count_funcs(&ctx, module), 3);
-    }
-
-    #[test]
-    fn keeps_func_constant_reference() {
-        let (mut ctx, loc) = test_ctx();
-        let fn_ty = fn_type(&mut ctx);
-
-        let callback = build_simple_func(&mut ctx, loc, "callback");
-
-        // Build main that references callback via func.constant
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let const_op = func::Constant::operands()
-            .func_ref(SymbolPath::from("callback"))
-            .results(fn_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, const_op.op_ref());
-        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let main = func::Func::operands()
-            .sym_name("main")
-            .r#type(fn_ty)
-            .regions(body)
-            .build(&mut ctx, loc)
-            .op_ref();
-
-        let module = build_module(&mut ctx, loc, vec![callback, main]);
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        assert_eq!(result.removed_count, 0);
-    }
-
-    #[test]
-    fn handles_start_entry_point() {
-        let (mut ctx, loc) = test_ctx();
-        let start = build_simple_func(&mut ctx, loc, "_start");
-        let module = build_module(&mut ctx, loc, vec![start]);
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        assert_eq!(result.removed_count, 0);
-    }
-
-    #[test]
-    fn extra_entry_points_config() {
-        let (mut ctx, loc) = test_ctx();
-        let custom = build_simple_func(&mut ctx, loc, "custom_init");
-        let module = build_module(&mut ctx, loc, vec![custom]);
-
-        let config = GlobalDceConfig {
-            extra_entry_points: vec!["custom_init".to_string()],
-            recursive: true,
-        };
-        let result =
-            eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
-
-        assert_eq!(result.removed_count, 0);
-    }
-
-    #[test]
-    fn keeps_wasm_exported_function() {
-        let (mut ctx, loc) = test_ctx();
-        let exported = build_simple_func(&mut ctx, loc, "exported_func");
-        let unused = build_simple_func(&mut ctx, loc, "unused_func");
-
-        // Create wasm.export_func op
-        let export_data =
-            OperationDataBuilder::new(loc, Symbol::new("wasm"), Symbol::new("export_func"))
-                .attr("name", ctx.string_attr("my_export"))
-                .attr(
-                    "func",
-                    Attribute::SymbolRef(SymbolPath::from("exported_func")),
-                )
-                .build(&mut ctx);
-        let export_op = ctx.create_op(export_data);
-
-        let module = build_module(&mut ctx, loc, vec![exported, export_op, unused]);
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        assert_eq!(result.removed_count, 1); // Only unused_func removed
-    }
 
     #[test]
     fn keeps_functions_referenced_by_any_operation() {
@@ -519,200 +280,6 @@ mod tests {
                 .into_iter()
                 .collect::<HashSet<_>>()
         );
-    }
-
-    #[test]
-    fn preserves_extern_declarations() {
-        let (mut ctx, loc) = test_ctx();
-        let fn_ty = fn_type(&mut ctx);
-        let main = build_simple_func(&mut ctx, loc, "main");
-
-        // Build an unreachable extern func with abi attribute
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::String(ctx.intern_str("extern_fn")))
-            .attr("type", Attribute::Type(fn_ty))
-            .attr("abi", ctx.string_attr("C"))
-            .region(body)
-            .build(&mut ctx);
-        let extern_op = ctx.create_op(extern_data);
-
-        let module = build_module(&mut ctx, loc, vec![main, extern_op]);
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        assert_eq!(result.removed_count, 0);
-        assert_eq!(count_funcs(&ctx, module), 2);
-    }
-
-    #[test]
-    fn unreferenced_abi_declarations_are_removed() {
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @used() -> core.i32 attributes {abi = "C"}
-  func.func @unused() -> core.i32 attributes {abi = "C"}
-  func.func @exported() -> core.i32 attributes {abi = "C"} {
-    %value = func.call {callee = @used} : core.i32
-    func.return %value
-  }
-}"#,
-        );
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        assert_eq!(result.removed_functions, [SymbolPath::from("unused")]);
-        assert_eq!(count_funcs(&ctx, module), 2);
-    }
-
-    #[test]
-    fn abi_function_callees_are_reachable() {
-        let (mut ctx, loc) = test_ctx();
-        let fn_ty = fn_type(&mut ctx);
-
-        let main = build_simple_func(&mut ctx, loc, "main");
-
-        // helper is only called by extern_fn
-        let helper = build_simple_func(&mut ctx, loc, "helper");
-
-        // extern_fn (abi) calls helper
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let i32_ty = i32_type(&mut ctx);
-        let call = func::Call::operands(std::iter::empty())
-            .callee(SymbolPath::from("helper"))
-            .results([i32_ty])
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, call.op_ref());
-        let ret = func::Return::operands(std::iter::empty()).build(&mut ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        let extern_data = OperationDataBuilder::new(loc, Symbol::new("func"), Symbol::new("func"))
-            .attr("sym_name", Attribute::String(ctx.intern_str("extern_fn")))
-            .attr("type", Attribute::Type(fn_ty))
-            .attr("abi", ctx.string_attr("C"))
-            .region(body)
-            .build(&mut ctx);
-        let extern_op = ctx.create_op(extern_data);
-
-        let module = build_module(&mut ctx, loc, vec![main, helper, extern_op]);
-
-        let result = eliminate_dead_functions(&mut ctx, module, &mut Default::default());
-
-        // extern_fn is preserved (abi) and helper is reachable from extern_fn
-        assert_eq!(result.removed_count, 0);
-        assert_eq!(count_funcs(&ctx, module), 3);
-    }
-
-    #[test]
-    fn nested_module_recursive() {
-        let (mut ctx, loc) = test_ctx();
-
-        let top_main = build_simple_func(&mut ctx, loc, "main");
-
-        // Build nested module with its own main and an unused func. Only the
-        // root module's `main` is an entry point.
-        let nested_main = build_simple_func(&mut ctx, loc, "main");
-        let nested_unused = build_simple_func(&mut ctx, loc, "unused_in_nested");
-
-        let nested_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        ctx.push_op(nested_block, nested_main);
-        ctx.push_op(nested_block, nested_unused);
-        let nested_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![nested_block],
-            parent_op: None,
-        });
-        let nested_module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("nested")))
-                .region(nested_region)
-                .build(&mut ctx);
-        let nested_module_op = ctx.create_op(nested_module_data);
-
-        let module = build_module(&mut ctx, loc, vec![top_main, nested_module_op]);
-
-        let config = GlobalDceConfig {
-            extra_entry_points: vec![],
-            recursive: true,
-        };
-        let result =
-            eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
-
-        assert_eq!(result.removed_count, 2);
-        assert_eq!(
-            HashSet::<SymbolPath>::from_iter(result.removed_functions),
-            [
-                SymbolPath::new(["nested", "main"]),
-                SymbolPath::new(["nested", "unused_in_nested"]),
-            ]
-            .into_iter()
-            .collect::<HashSet<_>>()
-        );
-    }
-
-    #[test]
-    fn non_recursive_keeps_nested() {
-        let (mut ctx, loc) = test_ctx();
-
-        let top_main = build_simple_func(&mut ctx, loc, "main");
-
-        // Same nested module setup
-        let nested_unused = build_simple_func(&mut ctx, loc, "unused_in_nested");
-        let nested_block = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        ctx.push_op(nested_block, nested_unused);
-        let nested_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![nested_block],
-            parent_op: None,
-        });
-        let nested_module_data =
-            OperationDataBuilder::new(loc, Symbol::new("core"), Symbol::new("module"))
-                .attr("sym_name", Attribute::String(ctx.intern_str("nested")))
-                .region(nested_region)
-                .build(&mut ctx);
-        let nested_module_op = ctx.create_op(nested_module_data);
-
-        let module = build_module(&mut ctx, loc, vec![top_main, nested_module_op]);
-
-        let config = GlobalDceConfig {
-            extra_entry_points: vec![],
-            recursive: false,
-        };
-        let result =
-            eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
-
-        // With recursive=false, nested module is not analyzed
-        assert_eq!(result.removed_count, 0);
     }
 
     fn surviving_functions(ctx: &IrContext, module: Module) -> HashSet<SymbolPath> {
@@ -758,37 +325,27 @@ mod tests {
     }
 
     #[test]
-    fn non_recursive_keeps_callees_of_nested_functions() {
+    fn extra_entry_point_names_a_nested_function_by_qualified_name() {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(
             &mut ctx,
             r#"core.module @root {
-  func.func @main() {
-    func.return
-  }
-  func.func @helper() {
-    func.return
-  }
-  func.func @unused() {
-    func.return
-  }
-  core.module @nested {
-    func.func @user() {
-      func.call {callee = @helper}
+  core.module @m {
+    func.func @init() {
       func.return
     }
   }
 }"#,
         );
-
         let config = GlobalDceConfig {
-            extra_entry_points: vec![],
-            recursive: false,
+            extra_entry_points: vec![SymbolPath::new(["m", "init"])],
+            recursive: true,
         };
+
         let result =
             eliminate_dead_functions_with_config(&mut ctx, module, config, &mut Default::default());
 
-        assert_eq!(result.removed_functions, [SymbolPath::from("unused")]);
+        assert_eq!(result.removed_functions, [] as [SymbolPath; 0]);
     }
 
     #[test]

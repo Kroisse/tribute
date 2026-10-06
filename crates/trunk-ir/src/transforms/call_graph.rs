@@ -289,6 +289,9 @@ fn strongconnect(v: &SymbolPath, state: &mut TarjanState, graph: &CallGraph, edg
 // =========================================================================
 
 #[cfg(test)]
+mod prop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::dialect::func;
@@ -366,39 +369,6 @@ mod tests {
             .op_ref()
     }
 
-    fn func_that_takes_constant_of(
-        ctx: &mut IrContext,
-        loc: Location,
-        name: &str,
-        target: &str,
-    ) -> OpRef {
-        let fn_ty = fn_type(ctx);
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let c = func::Constant::operands()
-            .func_ref(SymbolPath::from(target))
-            .results(fn_ty)
-            .build(ctx, loc);
-        ctx.push_op(entry, c.op_ref());
-        let ret = func::Return::operands(std::iter::empty()).build(ctx, loc);
-        ctx.push_op(entry, ret.op_ref());
-        let body = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![entry],
-            parent_op: None,
-        });
-        func::Func::operands()
-            .sym_name(ctx.intern_str(name))
-            .r#type(fn_ty)
-            .regions(body)
-            .build(ctx, loc)
-            .op_ref()
-    }
-
     fn build_module(ctx: &mut IrContext, loc: Location, ops: Vec<OpRef>) -> Module {
         let module_op = build_module_op(ctx, loc, "test", ops);
         Module::new(ctx, module_op).unwrap()
@@ -425,54 +395,6 @@ mod tests {
                 .region(region)
                 .build(ctx);
         ctx.create_op(module_data)
-    }
-
-    #[test]
-    fn call_graph_records_direct_calls() {
-        let (mut ctx, loc) = test_ctx();
-        let leaf = simple_func(&mut ctx, loc, "leaf");
-        let mid = func_that_calls(&mut ctx, loc, "mid", &["leaf"]);
-        let main = func_that_calls(&mut ctx, loc, "main", &["mid"]);
-        let module = build_module(&mut ctx, loc, vec![leaf, mid, main]);
-
-        let g = build_call_graph(&ctx, module);
-        assert!(
-            g.edges
-                .get(&SymbolPath::from("main"))
-                .unwrap()
-                .contains(&SymbolPath::from("mid"))
-        );
-        assert!(
-            g.edges
-                .get(&SymbolPath::from("mid"))
-                .unwrap()
-                .contains(&SymbolPath::from("leaf"))
-        );
-        assert!(g.func_ops.contains_key(&SymbolPath::from("leaf")));
-        assert!(g.func_ops.contains_key(&SymbolPath::from("mid")));
-        assert!(g.func_ops.contains_key(&SymbolPath::from("main")));
-    }
-
-    #[test]
-    fn call_graph_records_func_constant_as_edge() {
-        let (mut ctx, loc) = test_ctx();
-        let target = simple_func(&mut ctx, loc, "target");
-        let holder = func_that_takes_constant_of(&mut ctx, loc, "holder", "target");
-        let module = build_module(&mut ctx, loc, vec![target, holder]);
-
-        let g = build_call_graph(&ctx, module);
-        assert!(
-            g.edges
-                .get(&SymbolPath::from("holder"))
-                .unwrap()
-                .contains(&SymbolPath::from("target"))
-        );
-        assert!(g.address_taken.contains(&SymbolPath::from("target")));
-        // func.constant should NOT count toward call_site_count
-        assert_eq!(
-            g.call_site_count.get(&SymbolPath::from("target")).copied(),
-            None
-        );
     }
 
     #[test]
@@ -521,89 +443,6 @@ mod tests {
     }
 
     #[test]
-    fn a_cycle_through_an_address_reference_is_not_direct_recursion() {
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  func.func @make() {
-    test.make_closure {func_ref = @body}
-    func.return
-  }
-  func.func @body() {
-    func.call {callee = @make}
-    func.return
-  }
-  func.func @looping() {
-    func.call {callee = @looping}
-    func.return
-  }
-}"#,
-        );
-
-        let g = build_call_graph(&ctx, module);
-        let [make, body, looping] = ["make", "body", "looping"].map(SymbolPath::from);
-        assert_eq!(
-            recursive_functions(&g),
-            [make, body, looping.clone()]
-                .into_iter()
-                .collect::<HashSet<_>>()
-        );
-        assert_eq!(
-            directly_recursive_functions(&g),
-            [looping].into_iter().collect::<HashSet<_>>()
-        );
-    }
-
-    #[test]
-    fn a_reference_outside_functions_takes_the_address() {
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(
-            &mut ctx,
-            r#"core.module @test {
-  test.table {entries = [@exported]}
-  func.func @exported() {
-    func.return
-  }
-  func.func @main() {
-    func.call {callee = @exported}
-    func.return
-  }
-}"#,
-        );
-
-        let g = build_call_graph(&ctx, module);
-        let exported = SymbolPath::from("exported");
-        assert_eq!(
-            g.module_references,
-            [exported.clone()].into_iter().collect::<HashSet<_>>()
-        );
-        assert_eq!(
-            g.address_taken,
-            [exported.clone()].into_iter().collect::<HashSet<_>>()
-        );
-        assert_eq!(
-            g.call_site_count,
-            [(exported.clone(), 1)]
-                .into_iter()
-                .collect::<HashMap<_, _>>()
-        );
-        assert!(!g.edges.contains_key(&exported));
-    }
-
-    #[test]
-    fn call_graph_counts_static_call_sites() {
-        let (mut ctx, loc) = test_ctx();
-        let leaf = simple_func(&mut ctx, loc, "leaf");
-        // main calls leaf twice in its body
-        let main = func_that_calls(&mut ctx, loc, "main", &["leaf", "leaf"]);
-        let module = build_module(&mut ctx, loc, vec![leaf, main]);
-
-        let g = build_call_graph(&ctx, module);
-        assert_eq!(g.call_site_count[&SymbolPath::from("leaf")], 2);
-    }
-
-    #[test]
     fn cached_call_graph_recomputes_after_call_target_changes() {
         use crate::analysis::AnalysisCache;
 
@@ -636,42 +475,6 @@ mod tests {
         );
         assert_eq!(old.call_site_count.get(&SymbolPath::from("leaf")), Some(&1));
         assert!(!std::sync::Arc::ptr_eq(&old, &fresh));
-    }
-
-    #[test]
-    fn tarjan_detects_self_recursion() {
-        let (mut ctx, loc) = test_ctx();
-        let f = func_that_calls(&mut ctx, loc, "f", &["f"]);
-        let module = build_module(&mut ctx, loc, vec![f]);
-
-        let g = build_call_graph(&ctx, module);
-        let rec = recursive_functions(&g);
-        assert!(rec.contains(&SymbolPath::from("f")));
-    }
-
-    #[test]
-    fn tarjan_detects_mutual_recursion() {
-        let (mut ctx, loc) = test_ctx();
-        let a = func_that_calls(&mut ctx, loc, "a", &["b"]);
-        let b = func_that_calls(&mut ctx, loc, "b", &["a"]);
-        let module = build_module(&mut ctx, loc, vec![a, b]);
-
-        let g = build_call_graph(&ctx, module);
-        let rec = recursive_functions(&g);
-        assert!(rec.contains(&SymbolPath::from("a")));
-        assert!(rec.contains(&SymbolPath::from("b")));
-    }
-
-    #[test]
-    fn tarjan_trivial_scc_not_flagged() {
-        let (mut ctx, loc) = test_ctx();
-        let leaf = simple_func(&mut ctx, loc, "leaf");
-        let main = func_that_calls(&mut ctx, loc, "main", &["leaf"]);
-        let module = build_module(&mut ctx, loc, vec![leaf, main]);
-
-        let g = build_call_graph(&ctx, module);
-        let rec = recursive_functions(&g);
-        assert!(rec.is_empty());
     }
 
     #[test]
@@ -730,20 +533,6 @@ mod tests {
         // Second call should hit the cache.
         let cached2 = am.require::<CallGraph>(&ctx, module.op());
         assert!(std::sync::Arc::ptr_eq(&cached, &cached2));
-    }
-
-    #[test]
-    fn tarjan_assigns_scc_ids_to_all_functions() {
-        let (mut ctx, loc) = test_ctx();
-        let a = simple_func(&mut ctx, loc, "a");
-        let b = simple_func(&mut ctx, loc, "b");
-        let module = build_module(&mut ctx, loc, vec![a, b]);
-
-        let g = build_call_graph(&ctx, module);
-        let ids = tarjan_scc(&g);
-        assert_eq!(ids.len(), 2);
-        // Two non-recursive functions → two distinct SCCs
-        assert_ne!(ids[&SymbolPath::from("a")], ids[&SymbolPath::from("b")]);
     }
 
     #[test]
