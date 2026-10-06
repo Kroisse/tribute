@@ -21,12 +21,16 @@
 //!   still attached to the matched op's regions (e.g. yields and the
 //!   dead branch in `scf.if(const)`).
 //!
-//! Currently registered (across `arith`, `core`):
+//! Currently registered (across `arith`, `core`, `scf`, `adt`, `tribute_rt`):
 //!
 //! - `arith.addi`/`subi`/`muli` — integer identity (`x+0`, `x-0`,
 //!   `x*0`, `x*1`) and constant folding at the result type's bit-width.
 //! - `core.unrealized_conversion_cast` — identity (same source/target
 //!   type) and round-trip elimination (`A → B → A`).
+//! - `scf.if` / `scf.switch` with a constant condition or selector — splice
+//!   the chosen arm.
+//! - `adt.struct_get` of an `adt.struct_new`, and identity `adt.ref_cast`.
+//! - `tribute_rt.unbox_*` of the matching `box_*`.
 //!
 //! Float and div/rem folds are deferred until each one's edge cases
 //! (NaN/-0.0, division-by-zero) are pinned down.
