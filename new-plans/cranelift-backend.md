@@ -184,6 +184,10 @@ clif.switch %index [^default, ^a, ^b, ^c] {cases = [0, 1, 7]}
 Jump table, 비교 분기, 또는 둘의 조합 중 무엇을 방출할지는 `Switch`가 case 값의
 분포를 보고 정한다. Operation은 그 선택을 표현하지 않는다.
 
+`cf.switch`는 `clif.switch`로 내려간다. `cf.switch`의 case는 discriminant 타입의
+값이고 `clif.switch`는 부호 없는 값으로 비교하므로, 각 case는 discriminant 폭에서의
+비트열이 된다.
+
 ### `clif.func_sig` 네이티브 호출 계약
 
 네이티브 lowering은 공통 callable type을 유지하지 않고 `clif.func_sig`를 소유한다.

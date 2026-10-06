@@ -3,11 +3,12 @@
 //! This pass converts CFG-based control flow operations to Cranelift equivalents:
 //! - `cf.br` -> `clif.jump`
 //! - `cf.cond_br` -> `clif.brif`
+//! - `cf.switch` -> `clif.switch`
 
 use trunk_ir::OperationDataBuilder;
 use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
-use trunk_ir::dialect::cf;
+use trunk_ir::dialect::{cf, clif, core};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::refs::OpRef;
 use trunk_ir::rewrite::{
@@ -25,6 +26,7 @@ pub fn lower(
         .with_auto_type_conversion(true)
         .add_pattern(CfBrPattern)
         .add_pattern(CfCondBrPattern)
+        .add_pattern(CfSwitchPattern)
         .with_target(cf_to_clif_target());
     applicator.apply_partial_conversion(ctx, module, "cf-to-clif")?;
     Ok(())
@@ -76,6 +78,45 @@ impl RewritePattern for CfCondBrPattern {
     }
 }
 
+/// Pattern: `cf.switch` -> `clif.switch`
+///
+/// A `cf.switch` case is a value of the discriminant's type. `clif.switch`
+/// compares unsigned, so each case becomes its bit pattern at the
+/// discriminant's width.
+struct CfSwitchPattern;
+
+impl RewritePattern for CfSwitchPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(switch) = cf::Switch::from_op(ctx, op) else {
+            return false;
+        };
+        let discriminant = switch.discriminant(ctx);
+        let Some(width) = core::IntegerLike::width(ctx, ctx.value_ty(discriminant)) else {
+            return false;
+        };
+        let mask = if width >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << width) - 1
+        };
+        let cases: Vec<u64> = switch.cases(ctx).map(|case| case as u64 & mask).collect();
+        let default = switch.default(ctx);
+        let targets: trunk_ir::BlockList = switch.targets(ctx).collect();
+        let location = ctx.op(op).location;
+        let new_op = clif::Switch::operands(discriminant)
+            .cases(cases)
+            .successors(default, targets)
+            .build(ctx, location);
+        rewriter.replace_op(new_op.op_ref());
+        true
+    }
+}
+
 /// Rebuild an operation with a new dialect/name, transferring all operands,
 /// results, attributes, regions, and successors from the original.
 ///
@@ -108,4 +149,49 @@ pub fn rebuild_op_as(ctx: &mut IrContext, op: OpRef, dialect: Symbol, name: Symb
     }
     let data = builder.build(ctx);
     ctx.create_op(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+
+    #[test]
+    fn switch_cases_become_bit_patterns_of_the_discriminant_width() {
+        for (discriminant_ty, expected) in [
+            ("core.i8", "[7, 255]"),
+            ("core.i32", "[7, 4294967295]"),
+            ("core.i64", "[7, 18446744073709551615]"),
+        ] {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(
+                &mut ctx,
+                &format!(
+                    r#"core.module @test {{
+  clif.func {{sym_name = "select", type = clif.func_sig<({discriminant_ty}) -> ()>}} {{
+    ^entry(%choice: {discriminant_ty}):
+      cf.switch %choice [^fallback, ^first, ^second] {{cases = [7, -1]}}
+    ^fallback:
+      clif.return
+    ^first:
+      clif.return
+    ^second:
+      clif.return
+  }}
+}}"#
+                ),
+            );
+
+            lower(&mut ctx, module, TypeConverter::new()).expect("cf.switch lowers");
+
+            let printed = print_module(&ctx, module.op());
+            assert!(
+                printed.contains(&format!(
+                    "clif.switch %0 [^bb1, ^bb2, ^bb3] {{cases = {expected}}}"
+                )),
+                "{printed}"
+            );
+        }
+    }
 }

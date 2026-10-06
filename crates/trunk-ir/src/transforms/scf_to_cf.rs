@@ -40,7 +40,7 @@ use crate::context::{BlockArgData, BlockData, IrContext};
 use crate::dialect::{arith, cf, func, scf};
 use crate::ops::DialectOp;
 use crate::pass::{Pass, pass_fn};
-use crate::refs::{BlockRef, OpRef, RegionRef, ValueRef};
+use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
 use crate::symbol::Symbol;
@@ -562,6 +562,12 @@ impl SwitchDispatch<'_> {
                 .successors(default_entry)
                 .build(ctx, loc);
             ctx.push_op(block, br.op_ref());
+        } else if let Some(values) = switch_case_values(ctx, disc_ty, cases) {
+            let switch = cf::Switch::operands(discriminant)
+                .cases(values)
+                .successors(default_entry, case_entries.iter().copied())
+                .build(ctx, loc);
+            ctx.push_op(block, switch.op_ref());
         } else {
             // Build chained comparisons
             // We'll use the entry block for the first comparison, and create
@@ -620,6 +626,26 @@ impl SwitchDispatch<'_> {
             }
         }
     }
+}
+
+/// The case values of a switch that `cf.switch` can express: distinct
+/// integers on an integer discriminant. Other switches compare case by case.
+fn switch_case_values(
+    ctx: &IrContext,
+    discriminant_ty: TypeRef,
+    cases: &[(Attribute, RegionRef)],
+) -> Option<Vec<i64>> {
+    if !crate::dialect::core::IntegerLike::matches(ctx, discriminant_ty) {
+        return None;
+    }
+    let values = cases
+        .iter()
+        .map(|(value, _)| match value {
+            Attribute::Int(value) => i64::try_from(*value).ok(),
+            _ => None,
+        })
+        .collect::<Option<Vec<_>>>()?;
+    values.iter().all_unique().then_some(values)
 }
 
 /// Replace `scf.yield` ops in the given blocks with `cf.br` to the target block.
@@ -1294,7 +1320,7 @@ mod tests {
             !names.iter().any(|name| name.starts_with("scf.")),
             "terminal switch must be fully lowered: {names:?}"
         );
-        assert!(names.iter().any(|name| name == "cf.cond_br"));
+        assert!(names.iter().any(|name| name == "cf.switch"));
         assert!(names.iter().any(|name| name == "func.unreachable"));
         assert!(names.iter().any(|name| name == "func.tail_call_indirect"));
         assert_eq!(
@@ -2081,13 +2107,72 @@ mod tests {
             "scf ops remain: {names:?}"
         );
         assert!(
-            names.iter().any(|n| n == "cf.cond_br"),
-            "missing cf.cond_br: {names:?}"
+            names.iter().any(|n| n == "cf.switch"),
+            "missing cf.switch: {names:?}"
         );
         assert!(
-            names.iter().any(|n| n == "arith.cmpi"),
-            "missing arith.cmpi: {names:?}"
+            !names.iter().any(|n| n == "arith.cmpi"),
+            "an integer switch needs no comparison: {names:?}"
         );
+    }
+
+    fn lower_switch_function(input: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        lower_scf_to_cf(&mut ctx, module, &mut Default::default());
+        let operation_verifiers = crate::validation::validate_operation_verifiers(&ctx, module);
+        assert!(operation_verifiers.is_ok(), "{operation_verifiers}");
+        crate::printer::print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn integer_switch_lowers_to_cf_switch_with_its_case_values() {
+        let printed = lower_switch_function(
+            r#"core.module @test {
+  func.func @main(%choice: core.i32) {
+    scf.switch %choice {
+      scf.case {value = 7} {
+        scf.yield
+      }
+      scf.case {value = -1} {
+        scf.yield
+      }
+      scf.default {
+        scf.yield
+      }
+    }
+    func.return
+  }
+}"#,
+        );
+        assert!(
+            printed.contains("cf.switch %0 [^bb3, ^bb1, ^bb2] {cases = [7, -1]}"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn switch_with_a_repeated_case_compares_case_by_case() {
+        let printed = lower_switch_function(
+            r#"core.module @test {
+  func.func @main(%choice: core.i32) {
+    scf.switch %choice {
+      scf.case {value = 3} {
+        scf.yield
+      }
+      scf.case {value = 3} {
+        scf.yield
+      }
+      scf.default {
+        scf.yield
+      }
+    }
+    func.return
+  }
+}"#,
+        );
+        assert!(!printed.contains("cf.switch"), "{printed}");
+        assert_eq!(printed.matches("cf.cond_br").count(), 2, "{printed}");
     }
 
     #[test]
