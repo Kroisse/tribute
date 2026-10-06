@@ -1,5 +1,5 @@
-//! Lower the nominal `adt.struct` layouts of field accesses to `mem.struct`,
-//! and variant tests to descriptor comparisons.
+//! Lower the nominal layouts of struct and variant field accesses to
+//! `mem.struct`, and variant tests to descriptor comparisons.
 //!
 //! Allocation is the last use of a nominal layout: `adt_rc_header` finds an
 //! allocation's descriptor by its `adt.struct` type. A field access needs only
@@ -15,6 +15,10 @@
 //! declaration, or from the ownership plan for a layout the module never
 //! allocates. The pass therefore runs after closure layout adaptation
 //! settles the declarations and before `adt_rc_header` erases them.
+//!
+//! A variant object holds only its own fields, so a variant field access is
+//! a struct field access: each `adt.variant_get` becomes an `adt.struct_get`
+//! of the variant's `mem.struct`.
 //!
 //! A variant is told apart by its runtime type descriptor. The same
 //! declarations number the descriptors, so this pass replaces each
@@ -33,7 +37,7 @@ use tribute_ir::dialect::{tribute_rt, tribute_rtti};
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, mem};
-use trunk_ir::ops::DialectOp;
+use trunk_ir::ops::{DialectOp, DialectType};
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
@@ -84,19 +88,22 @@ pub fn lower(
     plan: &NativeOwnershipPlan,
     type_converter: &TypeConverter,
 ) {
-    let released: HashMap<TypeRef, Vec<bool>> = tribute_rtti::Layout::declared(ctx, module)
-        .iter()
-        .filter(|layout| layout.tag_ref(ctx).is_none())
-        .map(|layout| {
-            let fields = layout.field_kinds(ctx);
-            (
-                layout.r#type(ctx),
-                fields.into_iter().map(|kind| kind.is_released()).collect(),
-            )
-        })
-        .collect();
+    // Whether each field of a declared descriptor is released: a struct
+    // layout, or an enum layout and one of its variant tags.
+    let released: HashMap<(TypeRef, Option<StringRef>), Vec<bool>> =
+        tribute_rtti::Layout::declared(ctx, module)
+            .iter()
+            .map(|layout| {
+                let fields = layout.field_kinds(ctx);
+                (
+                    (layout.r#type(ctx), layout.tag_ref(ctx)),
+                    fields.into_iter().map(|kind| kind.is_released()).collect(),
+                )
+            })
+            .collect();
 
     let mut accesses: Vec<(OpRef, TypeRef)> = Vec::new();
+    let mut variants: Vec<(TypeRef, StringRef)> = Vec::new();
     let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
         let layout = if let Ok(get) = adt::StructGet::from_op(ctx, op) {
             Some(get.r#type(ctx))
@@ -108,6 +115,9 @@ pub fn lower(
         if let Some(layout) = layout {
             accesses.push((op, layout));
         }
+        if let Ok(get) = adt::VariantGet::from_op(ctx, op) {
+            variants.push((get.r#type(ctx), get.tag_ref(ctx)));
+        }
         ControlFlow::Continue(WalkAction::Advance)
     });
 
@@ -116,15 +126,16 @@ pub fn lower(
         let structural = match converted.get(&layout) {
             Some(&structural) => structural,
             None => {
-                let Some(structural) = structural_layout(
-                    ctx,
-                    layout,
-                    released.get(&layout).map(Vec::as_slice),
-                    plan,
-                    type_converter,
-                ) else {
+                let Some(fields) = get_struct_fields(ctx, layout) else {
                     continue;
                 };
+                let structural = structural_layout(
+                    ctx,
+                    fields.into_iter().map(|(_name, field_ty)| field_ty),
+                    released.get(&(layout, None)).map(Vec::as_slice),
+                    plan,
+                    type_converter,
+                );
                 converted.insert(layout, structural);
                 structural
             }
@@ -134,10 +145,65 @@ pub fn lower(
             .insert("type", Attribute::Type(structural));
     }
 
+    // A variant holds only its own fields, so its layout is a struct's.
+    let mut variant_layouts: HashMap<(TypeRef, StringRef), TypeRef> = HashMap::default();
+    for (enum_ty, tag) in variants {
+        if variant_layouts.contains_key(&(enum_ty, tag)) {
+            continue;
+        }
+        let Some(fields) = adt::Enum::from_type_ref(ctx, enum_ty)
+            .and_then(|adt_enum| adt_enum.variant_fields(ctx, tag))
+            .map(<[TypeRef]>::to_vec)
+        else {
+            continue;
+        };
+        let structural = structural_layout(
+            ctx,
+            fields,
+            released.get(&(enum_ty, Some(tag))).map(Vec::as_slice),
+            plan,
+            type_converter,
+        );
+        variant_layouts.insert((enum_ty, tag), structural);
+    }
+
     let numbers = tribute_rtti::Layout::declared_indices(ctx, module);
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(VariantIsPattern { numbers })
+        .add_pattern(VariantGetPattern {
+            layouts: variant_layouts,
+        })
         .apply_partial(ctx, module);
+}
+
+/// `adt.variant_get` -> `adt.struct_get` of the variant's `mem.struct`.
+struct VariantGetPattern {
+    layouts: HashMap<(TypeRef, StringRef), TypeRef>,
+}
+
+impl RewritePattern for VariantGetPattern {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Ok(variant_get) = adt::VariantGet::from_op(ctx, op) else {
+            return false;
+        };
+        let variant = (variant_get.r#type(ctx), variant_get.tag_ref(ctx));
+        let Some(&structural) = self.layouts.get(&variant) else {
+            return false;
+        };
+        let loc = ctx.op(op).location;
+        let field_get = adt::StructGet::operands(variant_get.r#ref(ctx))
+            .r#type(structural)
+            .field(variant_get.field(ctx))
+            .results(variant_get.result_ty(ctx))
+            .build(ctx, loc);
+        rewriter.replace_op(field_get.op_ref());
+        true
+    }
 }
 
 /// `adt.variant_is` -> `arith.cmpi eq` of the value's
@@ -188,21 +254,20 @@ impl RewritePattern for VariantIsPattern {
     }
 }
 
-/// The `mem.struct` of the `adt.struct` `layout`, or `None` if `layout` is
-/// not an `adt.struct`. `released` is the declared release of each field.
+/// The `mem.struct` of a struct or variant with the source field types
+/// `fields`. `released` is the declared release of each field.
 fn structural_layout(
     ctx: &mut IrContext,
-    layout: TypeRef,
+    fields: impl IntoIterator<Item = TypeRef>,
     released: Option<&[bool]>,
     plan: &NativeOwnershipPlan,
     type_converter: &TypeConverter,
-) -> Option<TypeRef> {
-    let fields = get_struct_fields(ctx, layout)?;
+) -> TypeRef {
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
     let fields: Vec<TypeRef> = fields
         .into_iter()
         .enumerate()
-        .map(|(index, (_name, field_ty))| {
+        .map(|(index, field_ty)| {
             let is_released = match released {
                 Some(released) => released[index],
                 None => plan.is_managed_type(ctx, field_ty),
@@ -214,7 +279,7 @@ fn structural_layout(
             }
         })
         .collect();
-    Some(mem::r#struct(ctx, fields).as_type_ref())
+    mem::r#struct(ctx, fields).as_type_ref()
 }
 
 #[cfg(test)]
@@ -224,7 +289,6 @@ mod tests {
     use crate::native::type_converter::native_type_converter;
     use tribute_ir::dialect::adt::layout::{compute_mem_struct_layout, compute_struct_layout};
     use trunk_ir::dialect::core;
-    use trunk_ir::ops::DialectType;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
     use trunk_ir::types::TypeDataBuilder;

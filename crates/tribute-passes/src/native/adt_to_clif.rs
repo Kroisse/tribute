@@ -4,7 +4,6 @@
 //! - `adt.struct_get(ref, field)` -> `clif.load(ref + offset)`
 //! - `adt.struct_set(ref, value, field)` -> `clif.store(value, ref + offset)`
 //! - `adt.variant_cast(ref, type, tag)` -> identity (native pointers are untyped)
-//! - `adt.variant_get(ref, type, tag, field)` -> `clif.load(ref, field_offset)`
 //! - `adt.ref_null(type)` -> `clif.iconst(0)` (null pointer)
 //! - `adt.ref_cast(ref, type)` -> identity (native pointers are untyped)
 //! - `adt.ref_is_null(ref)` -> `clif.icmp(eq, ref, 0)`
@@ -25,9 +24,7 @@
 use tracing::warn;
 
 use tribute_ir::dialect::adt;
-use tribute_ir::dialect::adt::layout::{
-    compute_enum_layout, compute_mem_struct_layout, find_variant_layout, get_enum_variants,
-};
+use tribute_ir::dialect::adt::layout::compute_mem_struct_layout;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -58,7 +55,6 @@ pub fn lower(
         .add_pattern(StructGetPattern)
         .add_pattern(StructSetPattern)
         .add_pattern(VariantCastPattern)
-        .add_pattern(VariantGetPattern)
         .add_pattern(RefNullPattern)
         .add_pattern(RefCastPattern)
         .add_pattern(RefIsNullPattern)
@@ -199,78 +195,6 @@ impl RewritePattern for VariantCastPattern {
         };
         let ref_val = variant_cast.r#ref(ctx);
         rewriter.erase_op(vec![ref_val]);
-        true
-    }
-}
-
-struct VariantGetPattern;
-
-impl RewritePattern for VariantGetPattern {
-    fn match_and_rewrite(
-        &self,
-        ctx: &mut IrContext,
-        op: OpRef,
-        rewriter: &mut PatternRewriter<'_>,
-    ) -> bool {
-        let Ok(variant_get) = adt::VariantGet::from_op(ctx, op) else {
-            return false;
-        };
-
-        let enum_ty = variant_get.r#type(ctx);
-        let tag = variant_get.tag_ref(ctx);
-        let field_idx = variant_get.field(ctx) as usize;
-        let tc = rewriter.type_converter();
-
-        let Some(enum_layout) = compute_enum_layout(ctx, enum_ty, tc) else {
-            warn!("adt_to_clif arena: cannot compute enum layout for variant_get");
-            return false;
-        };
-
-        let Some(variant_layout) = find_variant_layout(&enum_layout, tag) else {
-            warn!("adt_to_clif arena: unknown variant tag {:?}", ctx.str(tag));
-            return false;
-        };
-
-        if field_idx >= variant_layout.field_offsets.len() {
-            return false;
-        }
-
-        let loc = ctx.op(op).location;
-        let offset = i32::try_from(variant_layout.field_offsets[field_idx])
-            .expect("field offset exceeds i32");
-        let ref_val = variant_get.r#ref(ctx);
-
-        // Determine the load type from the enum type definition.
-        // The field was stored with its native type, so we must load with the
-        // same type rather than the type-erased result type (which may be
-        // tribute_rt.any instead of core.ptr).
-        let load_ty = get_enum_variants(ctx, enum_ty)
-            .and_then(|variants| {
-                variants
-                    .iter()
-                    .find(|(name, _)| *name == tag)
-                    .and_then(|(_, fields)| fields.get(field_idx).copied())
-            })
-            .map(|field_ty| {
-                // Convert the field type to native (e.g., tribute_rt.any -> core.ptr).
-                tc.convert_type_or_identity(ctx, field_ty)
-            })
-            .or_else(|| {
-                let result_types = ctx.op_result_types(op);
-                let result_ty = result_types.first().copied()?;
-                Some(tc.convert_type_or_identity(ctx, result_ty))
-            });
-
-        let Some(load_ty) = load_ty else {
-            warn!("adt_to_clif arena: variant_get has no result type");
-            return false;
-        };
-
-        let load_op = clif::Load::operands(ref_val)
-            .offset(offset)
-            .results(load_ty)
-            .build(ctx, loc);
-        rewriter.replace_op(load_op.op_ref());
         true
     }
 }
