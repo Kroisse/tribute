@@ -103,6 +103,38 @@ mod tests {
     }
 
     #[test]
+    fn pass_lowers_every_descriptor_read_of_a_module() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  func.func @first(%value: tribute_rt.anyref) -> core.i32 {
+    %0 = tribute_rtti.descriptor %value : core.i32
+    func.return %0
+  }
+  func.func @second(%value: adt.typeref<{name = "Choice"}>) -> core.i32 {
+    %0 = tribute_rtti.descriptor %value : core.i32
+    func.return %0
+  }
+}"#,
+        );
+        let core_module = core::Module::from_op(&ctx, module.op()).expect("core.module");
+
+        let pass = DescriptorToClif;
+        assert_eq!(pass.name(), "descriptor-to-clif");
+        let mut manager = trunk_ir::pass::PassManager::new();
+        manager.add_pass(pass);
+        manager.with_debug_verifier();
+        manager
+            .run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .expect("descriptor lowering");
+
+        let printed = print_module(&ctx, module.op());
+        assert_eq!(printed.matches("clif.load").count(), 2, "{printed}");
+        assert!(!printed.contains("tribute_rtti."), "{printed}");
+    }
+
+    #[test]
     fn descriptor_of_an_unmanaged_pointer_or_scalar_is_rejected() {
         for ty in ["core.ptr", "core.i32", "core.bytes"] {
             let mut ctx = IrContext::new();
