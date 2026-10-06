@@ -77,6 +77,66 @@ mod adt {
     fn bytes_const(value: Attr<Bytes>) -> Value<_> {}
 }
 
+// === Canonicalization folds ===
+
+use trunk_ir::ops::DialectOp;
+use trunk_ir::refs::{OpRef, ValueDef};
+use trunk_ir::transforms::canonicalize::FoldResult;
+
+/// `adt.struct_get(adt.struct_new(.., %f, ..))` → `%f`.
+///
+/// Both ops must name the same layout type, the field index must be in
+/// range, and the stored operand must already have the result type: a fold
+/// never forwards a value of another type. The struct is immutable here, so
+/// the fold bails if an `adt.struct_set` writes it, and also if any
+/// `tribute_rt` ownership operation already consumes it, since forwarding the
+/// field would then bypass an explicit ownership unit. Reference counting
+/// materializes after these folds run; the ownership plan then sees the
+/// forwarded use directly.
+#[trunk_ir::canonicalize_fold(StructGet)]
+pub(crate) fn fold_struct_get(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let get = StructGet::from_op(ctx, op).ok()?;
+    let source = get.r#ref(ctx);
+    let ValueDef::OpResult(producer, _) = ctx.value_def(source) else {
+        return None;
+    };
+    let new = StructNew::from_op(ctx, producer).ok()?;
+    if new.r#type(ctx) != get.r#type(ctx) {
+        return None;
+    }
+    let stored = *ctx.op_operands(producer).get(get.field(ctx) as usize)?;
+    let [result_ty] = ctx.op_result_types(op) else {
+        return None;
+    };
+    if ctx.value_ty(stored) != *result_ty {
+        return None;
+    }
+    let mutated_or_owned = ctx.uses(source).iter().any(|usage| {
+        StructSet::matches(ctx, usage.user)
+            || crate::dialect::tribute_rt::Retain::matches(ctx, usage.user)
+            || crate::dialect::tribute_rt::Release::matches(ctx, usage.user)
+            || crate::dialect::tribute_rt::IntoRaw::matches(ctx, usage.user)
+    });
+    if mutated_or_owned {
+        return None;
+    }
+    Some(FoldResult::Forward(stored))
+}
+
+/// `adt.ref_cast {type = T} (%x : T)` → `%x`.
+///
+/// The cast is the identity when its operand already has the result type.
+#[trunk_ir::canonicalize_fold(RefCast)]
+pub(crate) fn fold_ref_cast(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let cast = RefCast::from_op(ctx, op).ok()?;
+    let operand = cast.r#ref(ctx);
+    let [result_ty] = ctx.op_result_types(op) else {
+        return None;
+    };
+    (ctx.value_ty(operand) == *result_ty && cast.r#type(ctx) == *result_ty)
+        .then_some(FoldResult::Forward(operand))
+}
+
 // === Nominal struct layout type ===
 
 use trunk_ir::Symbol;
@@ -1085,5 +1145,170 @@ mod tests {
                 .attrs
                 .contains_key(PARAM_ATTRS_ATTR)
         );
+    }
+}
+
+#[cfg(test)]
+mod canonicalize_tests {
+    use trunk_ir::IrContext;
+    use trunk_ir::parser::parse_test_module;
+    use trunk_ir::printer::print_module;
+    use trunk_ir::rewrite::Module;
+    use trunk_ir::transforms::canonicalize::canonicalize;
+
+    fn count(ctx: &IrContext, module: Module, name: &str) -> usize {
+        print_module(ctx, module.op()).matches(name).count()
+    }
+
+    fn fold(input: &str) -> (IrContext, Module, usize) {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(&mut ctx, input);
+        let changes = canonicalize(&mut ctx, module).total_changes;
+        (ctx, module, changes)
+    }
+
+    const PAIR: &str = r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
+    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
+    func.return %r
+  }
+}"#;
+
+    #[test]
+    fn struct_get_of_struct_new_forwards_the_field() {
+        let (ctx, module, changes) = fold(PAIR);
+        assert!(changes >= 1);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 0);
+        assert!(print_module(&ctx, module.op()).contains("func.return %1"));
+    }
+
+    #[test]
+    fn struct_get_of_a_block_argument_is_not_folded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%p: !pair) -> core.i64 {
+    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
+    }
+
+    #[test]
+    fn struct_get_with_a_different_layout_type_is_not_folded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  !other = adt.struct<Other(a: core.i32, b: core.i64)>
+  func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
+    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %r = adt.struct_get %p {type = !other, field = 1} : core.i64
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
+    }
+
+    #[test]
+    fn struct_get_with_a_mismatched_result_type_is_not_folded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%x: core.i32, %y: core.i64) -> core.i32 {
+    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %r = adt.struct_get %p {type = !pair, field = 1} : core.i32
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
+    }
+
+    #[test]
+    fn struct_get_out_of_range_field_is_not_folded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
+    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %r = adt.struct_get %p {type = !pair, field = 2} : core.i64
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
+    }
+
+    #[test]
+    fn struct_get_of_a_mutated_struct_is_not_folded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
+    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    adt.struct_set %p, %z {type = !pair, field = 1}
+    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
+    }
+
+    #[test]
+    fn struct_get_of_a_struct_with_explicit_ownership_is_not_folded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
+    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
+    tribute_rt.release %p {alloc_size = 24}
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
+    }
+
+    #[test]
+    fn ref_cast_to_the_operand_type_is_forwarded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%p: !pair) -> !pair {
+    %r = adt.ref_cast %p {type = !pair} : !pair
+    func.return %r
+  }
+}"#,
+        );
+        assert!(changes >= 1);
+        assert_eq!(count(&ctx, module, "adt.ref_cast"), 0);
+    }
+
+    #[test]
+    fn ref_cast_to_another_type_is_not_folded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%p: !pair) -> tribute_rt.anyref {
+    %r = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.ref_cast"), 1);
     }
 }

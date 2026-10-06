@@ -39,6 +39,8 @@ pub use tribute_rc::HEADER_SIZE as RC_HEADER_SIZE;
 pub use tribute_rc::REFCOUNT_OFFSET;
 pub use tribute_rc::RTTI_IDX_OFFSET;
 
+use trunk_ir::ops::DialectOp;
+
 // === Pure operation registrations ===
 // Boxing and unboxing operations are pure (no side effects)
 
@@ -50,6 +52,53 @@ inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxFloat>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxFloat>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<BoxBool>() }
 inventory::submit! { trunk_ir::op_interface::PureOps::register::<UnboxBool>() }
+
+// === Canonicalization folds ===
+
+use trunk_ir::context::IrContext;
+use trunk_ir::refs::{OpRef, ValueDef};
+use trunk_ir::transforms::canonicalize::FoldResult;
+
+/// `unbox_*(box_*(%x))` → `%x` for one box/unbox pair with the same contract,
+/// provided the boxed value already has the unboxed result type.
+fn fold_unbox_of_box<Box: DialectOp>(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    let &[boxed] = ctx.op_operands(op) else {
+        return None;
+    };
+    let ValueDef::OpResult(producer, _) = ctx.value_def(boxed) else {
+        return None;
+    };
+    if !Box::matches(ctx, producer) {
+        return None;
+    }
+    let &[inner] = ctx.op_operands(producer) else {
+        return None;
+    };
+    let [result_ty] = ctx.op_result_types(op) else {
+        return None;
+    };
+    (ctx.value_ty(inner) == *result_ty).then_some(FoldResult::Forward(inner))
+}
+
+#[trunk_ir::canonicalize_fold(UnboxInt)]
+pub(crate) fn fold_unbox_int(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    fold_unbox_of_box::<BoxInt>(ctx, op)
+}
+
+#[trunk_ir::canonicalize_fold(UnboxNat)]
+pub(crate) fn fold_unbox_nat(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    fold_unbox_of_box::<BoxNat>(ctx, op)
+}
+
+#[trunk_ir::canonicalize_fold(UnboxFloat)]
+pub(crate) fn fold_unbox_float(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    fold_unbox_of_box::<BoxFloat>(ctx, op)
+}
+
+#[trunk_ir::canonicalize_fold(UnboxBool)]
+pub(crate) fn fold_unbox_bool(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
+    fold_unbox_of_box::<BoxBool>(ctx, op)
+}
 
 #[cfg(test)]
 mod tests {
@@ -158,5 +207,79 @@ mod tests {
         assert!(super::UnboxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Retain::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Release::from_op(&ctx, c.op_ref()).is_err());
+    }
+
+    mod fold {
+        use trunk_ir::IrContext;
+        use trunk_ir::parser::parse_test_module;
+        use trunk_ir::printer::print_module;
+        use trunk_ir::transforms::canonicalize::canonicalize;
+
+        fn run(input: &str) -> (String, usize) {
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, input);
+            let changes = canonicalize(&mut ctx, module).total_changes;
+            (print_module(&ctx, module.op()), changes)
+        }
+
+        #[test]
+        fn unbox_of_box_forwards_each_pair() {
+            for (boxed, unboxed, ty) in [
+                ("box_int", "unbox_int", "core.i64"),
+                ("box_nat", "unbox_nat", "core.i64"),
+                ("box_float", "unbox_float", "core.f64"),
+                ("box_bool", "unbox_bool", "core.i1"),
+            ] {
+                let (text, changes) = run(&format!(
+                    r#"core.module @test {{
+  func.func @f(%x: {ty}) -> {ty} {{
+    %b = tribute_rt.{boxed} %x : tribute_rt.anyref
+    %u = tribute_rt.{unboxed} %b : {ty}
+    func.return %u
+  }}
+}}"#
+                ));
+                assert!(changes >= 1, "{unboxed}");
+                assert!(!text.contains(unboxed), "{unboxed}: {text}");
+            }
+        }
+
+        #[test]
+        fn unbox_of_a_different_box_kind_is_not_folded() {
+            let (text, changes) = run(r#"core.module @test {
+  func.func @f(%x: core.i64) -> core.f64 {
+    %b = tribute_rt.box_int %x : tribute_rt.anyref
+    %u = tribute_rt.unbox_float %b : core.f64
+    func.return %u
+  }
+}"#);
+            assert_eq!(changes, 0);
+            assert!(text.contains("unbox_float"));
+        }
+
+        #[test]
+        fn unbox_of_a_mistyped_box_is_not_folded() {
+            let (text, changes) = run(r#"core.module @test {
+  func.func @f(%x: core.i32) -> core.i64 {
+    %b = tribute_rt.box_int %x : tribute_rt.anyref
+    %u = tribute_rt.unbox_int %b : core.i64
+    func.return %u
+  }
+}"#);
+            assert_eq!(changes, 0);
+            assert!(text.contains("unbox_int"));
+        }
+
+        #[test]
+        fn unbox_of_a_block_argument_is_not_folded() {
+            let (text, changes) = run(r#"core.module @test {
+  func.func @f(%b: tribute_rt.anyref) -> core.i64 {
+    %u = tribute_rt.unbox_int %b : core.i64
+    func.return %u
+  }
+}"#);
+            assert_eq!(changes, 0);
+            assert!(text.contains("unbox_int"));
+        }
     }
 }
