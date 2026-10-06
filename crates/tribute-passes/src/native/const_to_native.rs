@@ -473,6 +473,28 @@ impl RewritePattern for StringConstNativePattern {
     }
 }
 
+/// Pass form of [`analyze_consts`] followed by [`lower`].
+pub struct ConstToNative;
+
+impl trunk_ir::pass::Pass for ConstToNative {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "const-to-native"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        let analysis = analyze_consts(ctx, target.into());
+        lower(ctx, target.into(), &analysis)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

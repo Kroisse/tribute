@@ -448,6 +448,27 @@ fn gen_deep_release_call(
     ctx.push_op(block, jump.op_ref());
 }
 
+/// Pass form of [`lower_rc`].
+pub struct RcLowering;
+
+impl trunk_ir::pass::Pass for RcLowering {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "rc-lowering"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        lower_rc(ctx, target.into());
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

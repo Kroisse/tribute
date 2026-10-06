@@ -502,6 +502,28 @@ impl RewritePattern for UnboxFloatPattern {
     }
 }
 
+/// Pass form of [`lower`].
+pub struct TributeRtToClif;
+
+impl trunk_ir::pass::Pass for TributeRtToClif {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "tribute-rt-to-clif"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        let (type_converter, _) = crate::native::type_converter::native_type_converter(ctx);
+        lower(ctx, target.into(), type_converter)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

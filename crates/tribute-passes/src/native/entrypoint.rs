@@ -144,6 +144,30 @@ fn replace_with_exit_code(
     ctx.remove_op(ret);
 }
 
+/// Pass form of [`generate_native_entrypoint`].
+pub struct GenerateNativeEntrypoint {
+    /// Whether the entrypoint initializes the sanitizer runtime.
+    pub sanitize: bool,
+}
+
+impl trunk_ir::pass::Pass for GenerateNativeEntrypoint {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "native-entrypoint"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        generate_native_entrypoint(ctx, target.into(), self.sanitize);
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

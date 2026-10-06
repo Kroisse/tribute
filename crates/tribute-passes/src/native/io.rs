@@ -293,6 +293,27 @@ fn op_region(ctx: &mut IrContext, loc: Location, op: OpRef, result: ValueRef) ->
     })
 }
 
+/// Pass form of [`lower`].
+pub struct IoToNative;
+
+impl trunk_ir::pass::Pass for IoToNative {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "io-to-native"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        lower(ctx, target.into())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -206,6 +206,27 @@ impl RewritePattern for IsEmptyPattern {
     }
 }
 
+/// Pass form of [`lower`].
+pub struct ListToNative;
+
+impl trunk_ir::pass::Pass for ListToNative {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "list-to-native"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        lower(ctx, target.into())?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
