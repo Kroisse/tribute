@@ -1015,7 +1015,8 @@ fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
     }
 }
 
-/// Run canonicalization and DCE on every function.
+/// Forward known struct reads module-wide, then run canonicalization and DCE
+/// on every function.
 ///
 /// `stage` names the caller in diagnostics. A failed pass is returned so the
 /// caller stops lowering.
@@ -1029,6 +1030,7 @@ fn run_canonicalize_passes(
         tracing::warn!("{stage} skipped function passes: root op is not core.module");
         return Ok(());
     };
+    tribute_ir::dialect::adt::forward_struct_gets(ctx, m);
     let mut pm = PassManager::new();
     pm.nest::<func_dialect::Func>()
         .add_pass(trunk_ir::transforms::canonicalize_pass())

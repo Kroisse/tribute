@@ -79,77 +79,97 @@ mod adt {
 
 // === Canonicalization folds ===
 
+use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, TypeRef, ValueDef};
+use trunk_ir::refs::{OpRef, TypeRef, ValueDef, ValueRef};
+use trunk_ir::rewrite::{
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
+};
 use trunk_ir::transforms::canonicalize::FoldResult;
 use trunk_ir::walk::{WalkAction, walk_op};
 
-/// `adt.struct_get(adt.struct_new(.., %f, ..))` → `%f`.
+/// `adt.struct_get(adt.struct_new(.., %f, ..))` → `%f`, over the whole module.
 ///
 /// Both ops must name the same layout type, the field index must be in
 /// range, and the stored operand must already have the result type: a fold
 /// never forwards a value of another type. A layout type that any
 /// `adt.struct_set` in the module writes is mutable (compiler-generated cells
 /// reach their writers through casts and closure environments, so use lists
-/// cannot prove a particular struct unwritten) and is never folded. The fold
-/// also bails if any `tribute_rt` ownership operation already consumes the
-/// struct, since forwarding the field would then bypass an explicit ownership
-/// unit. Reference counting
-/// materializes after these folds run; the ownership plan then sees the
-/// forwarded use directly.
-#[trunk_ir::canonicalize_fold(StructGet)]
-pub(crate) fn fold_struct_get(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let get = StructGet::from_op(ctx, op).ok()?;
-    let source = get.r#ref(ctx);
-    let ValueDef::OpResult(producer, _) = ctx.value_def(source) else {
-        return None;
-    };
-    let new = StructNew::from_op(ctx, producer).ok()?;
-    if new.r#type(ctx) != get.r#type(ctx) {
-        return None;
-    }
-    let stored = *ctx.op_operands(producer).get(get.field(ctx) as usize)?;
-    let [result_ty] = ctx.op_result_types(op) else {
-        return None;
-    };
-    if ctx.value_ty(stored) != *result_ty {
-        return None;
-    }
-    if layout_is_written(ctx, op, get.r#type(ctx)) {
-        return None;
-    }
-    let owned = ctx.uses(source).iter().any(|usage| {
-        crate::dialect::tribute_rt::Retain::matches(ctx, usage.user)
-            || crate::dialect::tribute_rt::Release::matches(ctx, usage.user)
-            || crate::dialect::tribute_rt::IntoRaw::matches(ctx, usage.user)
+/// cannot prove a particular struct unwritten) and is never folded. The pass
+/// also skips a struct that any `tribute_rt` ownership operation already
+/// consumes, since forwarding the field would then bypass an explicit
+/// ownership unit. Reference counting materializes after this pass runs; the
+/// ownership plan then sees the forwarded use directly.
+///
+/// This is a module-level pass rather than a per-op canonicalize fold so the
+/// written layouts are collected once per run instead of once per candidate.
+/// Returns the number of forwarded reads.
+pub fn forward_struct_gets(ctx: &mut IrContext, root: Module) -> usize {
+    let mut written = HashSet::default();
+    let _ = walk_op::<()>(ctx, root.op(), &mut |op| {
+        if let Ok(set) = StructSet::from_op(ctx, op) {
+            written.insert(set.r#type(ctx));
+        }
+        ControlFlow::Continue(WalkAction::Advance)
     });
-    if owned {
-        return None;
-    }
-    Some(FoldResult::Forward(stored))
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(ForwardStructGet { written })
+        .apply_partial(ctx, root)
+        .total_changes
 }
 
-/// Whether any `adt.struct_set` in the module enclosing `op` writes `layout`.
-fn layout_is_written(ctx: &IrContext, op: OpRef, layout: TypeRef) -> bool {
-    let mut root = op;
-    while let Some(parent) = ctx
-        .op(root)
-        .parent_block
-        .and_then(|block| ctx.block(block).parent_region)
-        .and_then(|region| ctx.region(region).parent_op)
-    {
-        root = parent;
+struct ForwardStructGet {
+    written: HashSet<TypeRef>,
+}
+
+impl RewritePattern for ForwardStructGet {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Some(stored) = self.forwarded_field(ctx, op) else {
+            return false;
+        };
+        rewriter.erase_op(vec![stored]);
+        true
     }
-    walk_op::<()>(
-        ctx,
-        root,
-        &mut |candidate| match StructSet::from_op(ctx, candidate) {
-            Ok(set) if set.r#type(ctx) == layout => ControlFlow::Break(()),
-            _ => ControlFlow::Continue(WalkAction::Advance),
-        },
-    )
-    .is_break()
+
+    fn name(&self) -> &'static str {
+        "ForwardStructGet"
+    }
+}
+
+impl ForwardStructGet {
+    fn forwarded_field(&self, ctx: &IrContext, op: OpRef) -> Option<ValueRef> {
+        let get = StructGet::from_op(ctx, op).ok()?;
+        if self.written.contains(&get.r#type(ctx)) {
+            return None;
+        }
+        let source = get.r#ref(ctx);
+        let ValueDef::OpResult(producer, _) = ctx.value_def(source) else {
+            return None;
+        };
+        let new = StructNew::from_op(ctx, producer).ok()?;
+        if new.r#type(ctx) != get.r#type(ctx) {
+            return None;
+        }
+        let stored = *ctx.op_operands(producer).get(get.field(ctx) as usize)?;
+        let [result_ty] = ctx.op_result_types(op) else {
+            return None;
+        };
+        if ctx.value_ty(stored) != *result_ty {
+            return None;
+        }
+        let owned = ctx.uses(source).iter().any(|usage| {
+            crate::dialect::tribute_rt::Retain::matches(ctx, usage.user)
+                || crate::dialect::tribute_rt::Release::matches(ctx, usage.user)
+                || crate::dialect::tribute_rt::IntoRaw::matches(ctx, usage.user)
+        });
+        (!owned).then_some(stored)
+    }
 }
 
 /// `adt.ref_cast {type = T} (%x : T)` → `%x`.
@@ -1178,6 +1198,7 @@ mod tests {
 
 #[cfg(test)]
 mod canonicalize_tests {
+    use super::forward_struct_gets;
     use trunk_ir::IrContext;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
@@ -1191,7 +1212,8 @@ mod canonicalize_tests {
     fn fold(input: &str) -> (IrContext, Module, usize) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
-        let changes = canonicalize(&mut ctx, module).total_changes;
+        let changes =
+            forward_struct_gets(&mut ctx, module) + canonicalize(&mut ctx, module).total_changes;
         (ctx, module, changes)
     }
 
