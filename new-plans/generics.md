@@ -122,13 +122,19 @@ Pattern matching도 frontend의 source-logical IR 생성에 포함한다. 별도
 `$`만 구조적 문자로 사용한다. `$0`/`$1`은 중첩 타입 인자의 시작/끝을 나타내며,
 Tribute 식별자는 숫자로 시작할 수 없으므로 타입 이름과 충돌하지 않는다.
 
+소스 선언이 아니라 컴파일러가 구성하는 타입은 모두 숫자 태그로 시작한다. 함수
+타입은 `$6`, 튜플은 `$7`, n번째 bound type variable은 `$8$n`, 내장 `List` 같은
+compiler-owned nominal 타입은 `$5`로 시작한다. 따라서 문자로 시작하는 구간은
+항상 원시 타입이나 소스가 선언한 이름이고, 소스 타입 이름이 `Fn`이나 `Tup`이어도
+구조 타입과 같은 이름을 얻지 않는다.
+
 ```text
 identity + [Int]              → identity$Int
 first + [Int, String]           → first$Int$String
 map + [Int, Option(Int)]      → map$Int$Option$0$Int$1
-f + [List(Option(Int))]       → f$List$0$Option$0$Int$1$1
-apply + [fn(Int) -> Bool]     → apply$Fn$0$Int$1$Bool
-swap + [(Int, Bool)]          → swap$Tup$0$Int$Bool$1
+f + [List(Option(Int))]       → f$5$List$0$Option$0$Int$1$1
+apply + [fn(Int) -> Bool]     → apply$6$0$Int$1$Bool
+swap + [(Int, Bool)]          → swap$7$0$Int$Bool$1
 ```
 
 ### 알고리즘
