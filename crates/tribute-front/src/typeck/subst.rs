@@ -92,7 +92,10 @@ pub fn substitute_bound_vars<'db>(
                 SubstResult::Ok(ty) => ty,
                 err @ SubstResult::OutOfBounds { .. } => return err,
             };
-            let new_effect = substitute_effect_row(db, *effect, subst);
+            let new_effect = match try_substitute_effect_row(db, *effect, subst) {
+                Ok(row) => row,
+                Err((index, max)) => return SubstResult::OutOfBounds { index, max },
+            };
             SubstResult::Ok(Type::new(
                 db,
                 TypeKind::Func {
@@ -146,7 +149,10 @@ pub fn substitute_bound_vars<'db>(
                 SubstResult::Ok(ty) => ty,
                 err @ SubstResult::OutOfBounds { .. } => return err,
             };
-            let new_effect = substitute_effect_row(db, *effect, subst);
+            let new_effect = match try_substitute_effect_row(db, *effect, subst) {
+                Ok(row) => row,
+                Err((index, max)) => return SubstResult::OutOfBounds { index, max },
+            };
             SubstResult::Ok(Type::new(
                 db,
                 TypeKind::Continuation {
@@ -163,44 +169,55 @@ pub fn substitute_bound_vars<'db>(
 
 /// Substitute BoundVars within an effect row.
 ///
-/// Panics if a BoundVar index is out of bounds.
+/// Panics if a BoundVar index is out of bounds; use
+/// [`try_substitute_effect_row`] to report it instead.
 pub fn substitute_effect_row<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
     subst: &[Type<'db>],
 ) -> EffectRow<'db> {
+    try_substitute_effect_row(db, row, subst).unwrap_or_else(|(index, max)| {
+        panic!(
+            "BoundVar index out of range in effect row: index={}, subst.len()={}",
+            index, max
+        )
+    })
+}
+
+/// Substitute BoundVars within an effect row.
+///
+/// Returns the out-of-range index and `subst.len()` if a BoundVar index
+/// exceeds `subst.len()`.
+pub fn try_substitute_effect_row<'db>(
+    db: &'db dyn salsa::Database,
+    row: EffectRow<'db>,
+    subst: &[Type<'db>],
+) -> Result<EffectRow<'db>, (u32, usize)> {
     let effects = row.effects(db);
     let mut changed = false;
 
-    let new_effects: Vec<_> = effects
-        .iter()
-        .map(|effect| {
-            let new_args: Vec<_> = effect
-                .args
-                .iter()
-                .map(|a| {
-                    substitute_bound_vars(db, *a, subst).unwrap_or_else(|index, max| {
-                        panic!(
-                            "BoundVar index out of range in effect row: index={}, subst.len()={}",
-                            index, max
-                        )
-                    })
-                })
-                .collect();
-            if new_args != effect.args {
-                changed = true;
+    let mut new_effects = Vec::with_capacity(effects.len());
+    for effect in effects {
+        let mut new_args = Vec::with_capacity(effect.args.len());
+        for arg in &effect.args {
+            match substitute_bound_vars(db, *arg, subst) {
+                SubstResult::Ok(ty) => new_args.push(ty),
+                SubstResult::OutOfBounds { index, max } => return Err((index, max)),
             }
-            Effect {
-                ability_id: effect.ability_id,
-                args: new_args,
-            }
-        })
-        .collect();
+        }
+        if new_args != effect.args {
+            changed = true;
+        }
+        new_effects.push(Effect {
+            ability_id: effect.ability_id,
+            args: new_args,
+        });
+    }
 
     if changed {
-        EffectRow::new(db, new_effects, row.rest(db))
+        Ok(EffectRow::new(db, new_effects, row.rest(db)))
     } else {
-        row
+        Ok(row)
     }
 }
 
@@ -785,12 +802,11 @@ mod laws {
         }
 
         /// An index past the arguments is reported with the argument count,
-        /// as long as it is outside effect rows (see
-        /// `out_of_range_bound_var_in_effect_row_is_reported`).
+        /// including one inside an effect row.
         #[test]
         fn out_of_range_index_is_reported(
             (ty, args) in (0u32..=2).prop_flat_map(|n| (
-                type_shape(ARGS.bound_vars(n + 2).bound_vars_in_rows(false).higher_kinded(true)),
+                type_shape(ARGS.bound_vars(n + 2).higher_kinded(true)),
                 proptest::collection::vec(type_shape(ARGS), n as usize),
             )),
         ) {
@@ -809,11 +825,9 @@ mod laws {
         }
     }
 
-    /// Minimal repro: `substitute_bound_vars` documents an `OutOfBounds`
-    /// result for an index past the arguments, but an out-of-range index in
-    /// a function type's effect row panics inside `substitute_effect_row`.
+    /// An out-of-range index in a function type's effect row is reported as
+    /// `OutOfBounds` rather than panicking.
     #[test]
-    #[ignore = "#1372: substitute_bound_vars panics instead of returning OutOfBounds for an index in an effect row"]
     fn out_of_range_bound_var_in_effect_row_is_reported() {
         let db = salsa::DatabaseImpl::new();
         let bound = TypeShape::BoundVar(1);
