@@ -1363,7 +1363,7 @@ target dialect lowering에 들어가기 전에 컴파일이 실패한다. 이 �
 출구에는 target type 변환을 기다리는 `core.unrealized_conversion_cast`가 남을 수
 있다. 이런 cast의 적법성은 target 타입에 따라 정해지므로 target type 변환이 결과
 타입을 변환하고 필요한 representation 변경을 materialize한다. 그 끝에서 converter
-없는 `reconcile_unrealized_casts`가 cast를 닫으며, 그 뒤 남은 cast는 target emission
+없는 `ReconcileUnrealizedCasts` pass가 cast를 닫으며, 그 뒤 남은 cast는 target emission
 경계가 거부한다.
 
 #### 직렬화

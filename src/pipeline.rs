@@ -91,7 +91,7 @@ use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::conversion::{
-    UnrealizedCastConversionPattern, materialize_unrealized_casts, reconcile_unrealized_casts,
+    ReconcileUnrealizedCasts, UnrealizedCastConversionPattern, materialize_unrealized_casts,
 };
 use trunk_ir::dialect::{core as core_dialect, func as func_dialect};
 use trunk_ir::ops::DialectOp;
@@ -767,7 +767,14 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
         if !result.reached_fixpoint {
             tracing::warn!("wasm cast legalization did not reach a fixpoint");
         }
-        reconcile_unrealized_casts(ctx, module);
+        let core_module = core_dialect::Module::from_op(ctx, module.op())
+            .expect("wasm cast reconciliation requires a core.module");
+        let mut reconcile = PassManager::new();
+        reconcile.add_pass(ReconcileUnrealizedCasts);
+        reconcile
+            .run(ctx, core_module, &mut analyses)
+            .map_err(tribute_passes::wasm::lower::WasmLowerError::from)
+            .map_err(wasm_lowering_failure)?;
     }
 
     // Materialization may introduce semantic WasmGC operations after the main
@@ -1437,6 +1444,7 @@ fn native_lowering_passes(
 
     finish
         .add_pass(LegalizeCasts)
+        .add_pass(ReconcileUnrealizedCasts)
         // Lower RC operations (retain/release) to inline clif code.
         .add_pass(RcLowering);
 

@@ -2,15 +2,16 @@
 
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
-use trunk_ir::conversion::{UnrealizedCastConversionPattern, reconcile_unrealized_casts};
+use trunk_ir::conversion::UnrealizedCastConversionPattern;
 use trunk_ir::dialect::core;
 use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::rewrite::{Module, PatternApplicator};
 
 use super::type_converter::native_type_converter;
 
-/// Convert the result types of unrealized casts, materialize real
-/// representation changes, and reconcile the identities left behind. A
+/// Convert the result types of unrealized casts and materialize real
+/// representation changes. The identities left behind are reconciled by
+/// [`trunk_ir::conversion::ReconcileUnrealizedCasts`], which runs next; a
 /// remaining cast is rejected by `validate_clif_ir` before emission.
 pub struct LegalizeCasts;
 
@@ -31,7 +32,6 @@ impl Pass for LegalizeCasts {
         PatternApplicator::new(type_converter)
             .add_pattern(UnrealizedCastConversionPattern)
             .apply_partial(ctx, Module::from(target));
-        reconcile_unrealized_casts(ctx, target.into());
         Ok(())
     }
 }

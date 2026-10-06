@@ -210,7 +210,14 @@ mod tests {
         PatternApplicator::new(type_converter)
             .add_pattern(trunk_ir::conversion::UnrealizedCastConversionPattern)
             .apply_partial(&mut ctx, module);
-        trunk_ir::conversion::reconcile_unrealized_casts(&mut ctx, module);
+        let core_module = core::Module::from_op(&ctx, module.op()).unwrap();
+        trunk_ir::pass::Pass::run(
+            &mut trunk_ir::conversion::ReconcileUnrealizedCasts,
+            &mut ctx,
+            core_module,
+            &mut trunk_ir::analysis::AnalysisCache::new(),
+        )
+        .unwrap();
         print_module(&ctx, module.op())
     }
 

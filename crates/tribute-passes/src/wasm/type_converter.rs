@@ -624,7 +624,9 @@ mod tests {
 
     #[test]
     fn cast_legalization_retypes_then_elides_reference_upcasts() {
-        use trunk_ir::conversion::{UnrealizedCastConversionPattern, reconcile_unrealized_casts};
+        use trunk_ir::analysis::AnalysisCache;
+        use trunk_ir::conversion::{ReconcileUnrealizedCasts, UnrealizedCastConversionPattern};
+        use trunk_ir::pass::Pass;
         use trunk_ir_wasm_backend::passes::reference_upcast_elision::ReferenceUpcastElisionPattern;
 
         let mut ctx = IrContext::new();
@@ -645,7 +647,10 @@ mod tests {
             .add_pattern(UnrealizedCastConversionPattern)
             .add_pattern(ReferenceUpcastElisionPattern)
             .apply_partial(&mut ctx, module);
-        reconcile_unrealized_casts(&mut ctx, module);
+        let core_module = trunk_ir::dialect::core::Module::from_op(&ctx, module.op()).unwrap();
+        ReconcileUnrealizedCasts
+            .run(&mut ctx, core_module, &mut AnalysisCache::new())
+            .unwrap();
 
         assert!(result.reached_fixpoint);
         let printed = trunk_ir::printer::print_module(&ctx, module.op());
