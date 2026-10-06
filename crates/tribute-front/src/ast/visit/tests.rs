@@ -1,7 +1,7 @@
 use trunk_ir::Symbol;
 
 use super::*;
-use crate::ast::{BinOpKind, FieldPattern, LiteralPattern, ModuleDecl, Param};
+use crate::ast::{BinOpKind, FieldInit, FieldPattern, LiteralPattern, ModuleDecl, Param};
 
 fn id(raw: usize) -> NodeId {
     NodeId::from_raw(raw)
@@ -44,11 +44,13 @@ fn sample() -> Module<u32> {
                         fields: vec![
                             FieldPattern {
                                 id: id(22),
+                                name_id: id(61),
                                 name: Symbol::new("a"),
                                 pattern: Some(bind(23)),
                             },
                             FieldPattern {
                                 id: id(24),
+                                name_id: id(62),
                                 name: Symbol::new("b"),
                                 pattern: None,
                             },
@@ -114,7 +116,11 @@ fn sample() -> Module<u32> {
                         10,
                         ExprKind::Record {
                             type_name: 3,
-                            fields: vec![(Symbol::new("a"), leaf(11))],
+                            fields: vec![FieldInit {
+                                id: id(60),
+                                name: Symbol::new("a"),
+                                value: leaf(11),
+                            }],
                             spread: Some(leaf(12)),
                         },
                     ),
@@ -266,9 +272,18 @@ fn visits_every_phase_value_and_node_identity_in_source_order() {
             (RefSite::HandlerAbility, 47, 7),
         ]
     );
-    // Every node from 1 to 50 in source order; parameters (99), the module
-    // (0), and the inline module declaration (98) are not visited.
-    assert_eq!(record.ids, (1..=50).collect::<Vec<_>>());
+    // Every node from 1 to 50 in source order, plus the field name nodes (60 to
+    // 62) after the record they belong to; parameters (99), the module (0), and
+    // the inline module declaration (98) are not visited.
+    let mut expected = (1..=50).collect::<Vec<_>>();
+    let after = |expected: &mut Vec<usize>, anchor: usize, extra: &[usize]| {
+        let at = expected.iter().position(|&id| id == anchor).unwrap() + 1;
+        expected.splice(at..at, extra.iter().copied());
+    };
+    after(&mut expected, 10, &[60]);
+    after(&mut expected, 22, &[61]);
+    after(&mut expected, 24, &[62]);
+    assert_eq!(record.ids, expected);
 }
 
 struct Shift;
@@ -361,7 +376,7 @@ fn for_each_visits_expressions_in_pre_order() {
     expected.retain(|id| {
         ![1, 3, 9, 13, 19, 41, 44, 47].contains(id)
             && !(20..=32).contains(id)
-            && ![4, 42, 45, 48].contains(id)
+            && ![4, 42, 45, 48, 60, 61, 62].contains(id)
     });
     assert_eq!(ids, expected);
 }

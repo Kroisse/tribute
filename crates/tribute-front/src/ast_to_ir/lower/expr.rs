@@ -90,8 +90,8 @@ pub(super) fn logical_evaluation_control_class<'db>(
                 .map_or(EvaluationControlClass::Direct, |spread| {
                     logical_evaluation_control_class(ctx, spread)
                 });
-            fields.iter().fold(spread, |class, (_, field)| {
-                class.join(logical_evaluation_control_class(ctx, field))
+            fields.iter().fold(spread, |class, field| {
+                class.join(logical_evaluation_control_class(ctx, &field.value))
             })
         }
         ExprKind::Block { stmts, value } => {

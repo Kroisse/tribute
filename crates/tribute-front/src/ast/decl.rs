@@ -141,6 +141,8 @@ pub const FIELD_LENS_FUNCTIONS: [&str; 2] = ["set", "modify"];
 pub struct FieldDecl {
     /// Node ID for span lookup.
     pub id: NodeId,
+    /// Node ID whose span is the field name (same as `id` for positional fields).
+    pub name_id: NodeId,
     /// Whether this field is public (for struct fields).
     pub is_pub: bool,
     /// Field name (None for positional fields in tuple-like variants).

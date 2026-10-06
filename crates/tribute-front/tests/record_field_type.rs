@@ -439,11 +439,11 @@ fn expected_argument() -> Pair(Int, Bool) { take(Pair { first: +1, second: True 
         };
         assert_eq!(fields.len(), 2);
         assert!(matches!(
-            node_type(metadata, &fields[0].1).kind(db),
+            node_type(metadata, &fields[0].value).kind(db),
             TypeKind::Int
         ));
         assert!(matches!(
-            node_type(metadata, &fields[1].1).kind(db),
+            node_type(metadata, &fields[1].value).kind(db),
             TypeKind::Bool
         ));
     }
@@ -456,11 +456,11 @@ fn expected_argument() -> Pair(Int, Bool) { take(Pair { first: +1, second: True 
     };
     assert_named_args(db, node_type(metadata, &args[0]), pair, "Pair", &expected);
     assert!(matches!(
-        node_type(metadata, &fields[0].1).kind(db),
+        node_type(metadata, &fields[0].value).kind(db),
         TypeKind::Int
     ));
     assert!(matches!(
-        node_type(metadata, &fields[1].1).kind(db),
+        node_type(metadata, &fields[1].value).kind(db),
         TypeKind::Bool
     ));
 }
@@ -577,7 +577,7 @@ fn mapper() -> Mapper(Int, Bool) { Mapper { map: fn(value) { True } } }
     let ExprKind::Record { fields, .. } = &*mapper.kind else {
         panic!("mapper must end in a record");
     };
-    let lambda = &fields[0].1;
+    let lambda = &fields[0].value;
     let signature = checked
         .lambda_signatures(db)
         .iter()

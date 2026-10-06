@@ -384,16 +384,33 @@ impl LspServer {
 
             // Add the definition itself
             edits.push(TextEdit {
-                range: span_to_range(&rope, def.span),
+                range: span_to_range(&rope, def.name_span),
                 new_text: new_name.clone(),
             });
 
             // Add all references using target-aware matching to avoid cross-scope edits
             let target = index.target_from_definition(def);
-            for reference in index.references_of_target(db, &target) {
+            for reference in index
+                .references_of_target(db, &target)
+                .into_iter()
+                .filter(|r| !r.shorthand)
+            {
                 edits.push(TextEdit {
                     range: span_to_range(&rope, reference.span),
                     new_text: new_name.clone(),
+                });
+            }
+
+            // A shorthand field pattern `Point { x }` also binds `x`; keep
+            // that binding by expanding it to `Point { new: x }`.
+            // The binding keeps its source spelling (`r#type` stays raw).
+            for shorthand in index.shorthand_fields_of_target(db, &target) {
+                let binding = rope
+                    .get_byte_slice(shorthand.span.start..shorthand.span.end)
+                    .map_or_else(|| def.name.to_string(), |s| s.to_string());
+                edits.push(TextEdit {
+                    range: span_to_range(&rope, shorthand.span),
+                    new_text: format!("{new_name}: {binding}"),
                 });
             }
 
@@ -2087,6 +2104,138 @@ mod tests {
                 "All edits should use new name"
             );
         }
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_struct_field_keeps_type_and_expands_shorthand() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_field_msg");
+        let source = "struct Point { x: Int, y: Int }\n\nfn main() -> Int {\n    let p = Point { x: 1, y: 2 }\n    let Point { x, y } = p\n    x + y\n}";
+
+        harness.open_document(&uri, source);
+
+        let params = RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 3,
+                    character: 20, // On `x` in `Point { x: 1, .. }`
+                },
+            },
+            new_name: "px".to_string(),
+            work_done_progress_params: Default::default(),
+        };
+
+        let edit = harness
+            .request::<Rename>(params)
+            .expect("Should return workspace edit for field rename");
+        let changes = edit.changes.expect("Should have changes");
+        let mut edits = changes.get(&uri).expect("Should have edits").clone();
+        edits.sort_by_key(|e| std::cmp::Reverse((e.range.start.line, e.range.start.character)));
+
+        let mut lines: Vec<String> = source.lines().map(str::to_string).collect();
+        for e in &edits {
+            assert_eq!(e.range.start.line, e.range.end.line);
+            let line = &mut lines[e.range.start.line as usize];
+            line.replace_range(
+                e.range.start.character as usize..e.range.end.character as usize,
+                &e.new_text,
+            );
+        }
+        assert_eq!(
+            lines.join("\n"),
+            "struct Point { px: Int, y: Int }\n\nfn main() -> Int {\n    let p = Point { px: 1, y: 2 }\n    let Point { px: x, y } = p\n    x + y\n}"
+        );
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_field_from_shorthand_expands_it_once() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_shorthand_msg");
+        let source = "struct Point { x: Int }\n\nfn main(p: Point) -> Int {\n    let Point { x } = p\n    x\n}";
+        harness.open_document(&uri, source);
+
+        let edit = harness
+            .request::<Rename>(RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                    position: lsp_types::Position {
+                        line: 3,
+                        character: 16, // On the shorthand `x`
+                    },
+                },
+                new_name: "px".to_string(),
+                work_done_progress_params: Default::default(),
+            })
+            .expect("Should rename the field from its shorthand use");
+        let edits = edit.changes.unwrap().remove(&uri).unwrap();
+        let on_line_3: Vec<_> = edits.iter().filter(|e| e.range.start.line == 3).collect();
+        assert_eq!(on_line_3.len(), 1, "shorthand must be edited exactly once");
+        assert_eq!(on_line_3[0].new_text, "px: x");
+        assert_eq!(edits.len(), 2);
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_field_expands_raw_identifier_shorthand_verbatim() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_raw_shorthand_msg");
+        let source = "struct Point { r#type: Int }\n\nfn main(p: Point) -> Int {\n    let Point { r#type } = p\n    r#type\n}";
+        harness.open_document(&uri, source);
+
+        let edit = harness
+            .request::<Rename>(RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                    position: lsp_types::Position {
+                        line: 3,
+                        character: 17, // On the shorthand `r#type`
+                    },
+                },
+                new_name: "kind".to_string(),
+                work_done_progress_params: Default::default(),
+            })
+            .expect("Should rename the field from its shorthand use");
+        let edits = edit.changes.unwrap().remove(&uri).unwrap();
+        let shorthand = edits
+            .iter()
+            .find(|e| e.range.start.line == 3)
+            .expect("shorthand edit");
+        assert_eq!(shorthand.new_text, "kind: r#type");
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_on_field_declaration_covers_name_only() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_field_decl_msg");
+        harness.open_document(&uri, "struct Point { x: Int, y: Int }");
+
+        let position_params = |character| TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position { line: 0, character },
+        };
+
+        // On the name `x`: the range is the name alone.
+        let result = harness.request::<PrepareRenameRequest>(position_params(15));
+        let Some(PrepareRenameResponse::RangeWithPlaceholder { range, placeholder }) = result
+        else {
+            panic!("expected a rename range on the field name");
+        };
+        assert_eq!(placeholder, "x");
+        assert_eq!((range.start.character, range.end.character), (15, 16));
+
+        // On the type annotation `Int`: not renamable.
+        let result = harness.request::<PrepareRenameRequest>(position_params(18));
+        assert!(result.is_none(), "annotation must not select the field");
+        let result = harness.request::<Rename>(RenameParams {
+            text_document_position: position_params(18),
+            new_name: "px".to_string(),
+            work_done_progress_params: Default::default(),
+        });
+        assert!(result.is_none(), "annotation must not be renamed");
     }
 
     #[test]

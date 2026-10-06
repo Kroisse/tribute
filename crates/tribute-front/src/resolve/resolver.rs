@@ -12,10 +12,10 @@ use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, Decl, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldPattern, FuncDecl, HandlerArm,
-    HandlerKind, LocalId, LocalIdGen, MethodPath, Module, ModulePath, NodeId, Param, ParamDecl,
-    Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
-    TypeParamDecl, UnresolvedName, UseDecl,
+    Arm, Decl, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldInit, FieldPattern, FuncDecl,
+    HandlerArm, HandlerKind, LocalId, LocalIdGen, MethodPath, Module, ModulePath, NodeId, Param,
+    ParamDecl, Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation,
+    TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -1147,7 +1147,11 @@ impl<'db> Resolver<'db> {
                 let resolved_type = self.resolve_name(type_name);
                 let fields = fields
                     .iter()
-                    .map(|(name, expr)| (name.clone(), self.resolve_expr(expr)))
+                    .map(|f| FieldInit {
+                        id: f.id,
+                        name: f.name.clone(),
+                        value: self.resolve_expr(&f.value),
+                    })
                     .collect();
                 let spread = spread.as_ref().map(|e| self.resolve_expr(e));
                 ExprKind::Record {
@@ -1439,6 +1443,7 @@ impl<'db> Resolver<'db> {
                         };
                         FieldPattern {
                             id: f.id,
+                            name_id: f.name_id,
                             name: f.name.clone(),
                             pattern: Some(pattern),
                         }

@@ -59,8 +59,10 @@ pub enum DefinitionKind {
 pub struct AstDefinitionEntry {
     /// The NodeId of the definition.
     pub node_id: NodeId,
-    /// The span of the definition name.
+    /// The span of the whole definition, which goto-definition targets.
     pub span: Span,
+    /// The span of the definition name alone, which rename edits.
+    pub name_span: Span,
     /// The name of the definition.
     pub name: Symbol,
     /// The kind of definition.
@@ -78,6 +80,9 @@ pub struct AstReferenceEntry {
     pub span: Span,
     /// The resolved target of the reference.
     pub target: ResolvedTarget,
+    /// Whether this is a shorthand record-pattern field (`Point { x }`), whose
+    /// span is shared with the local binding it introduces.
+    pub shorthand: bool,
 }
 
 /// Target of a resolved reference.
@@ -357,6 +362,20 @@ impl<'db> AstDefinitionIndex<'db> {
         }
     }
 
+    /// Shorthand record-pattern fields (`Point { x }`) that name `target`.
+    ///
+    /// Renaming the field must expand each into `Point { new: x }`.
+    pub fn shorthand_fields_of_target(
+        &self,
+        db: &'db dyn salsa::Database,
+        target: &ResolvedTarget,
+    ) -> Vec<&AstReferenceEntry> {
+        self.references(db)
+            .iter()
+            .filter(|r| r.shorthand && r.target == *target)
+            .collect()
+    }
+
     /// Find references from a position (works for both definitions and references).
     ///
     /// Returns the resolved target and all references to it.
@@ -442,8 +461,13 @@ impl<'db> AstDefinitionIndex<'db> {
         }
 
         // Fall back to definition
-        if let Some(def) = self.definition_at_position(db, offset) {
-            return Some((def, def.span));
+        // Only the name is renamable, not the rest of the declaration
+        // (a field's type annotation, for instance).
+        if let Some(def) = self.definition_at_position(db, offset)
+            && def.name_span.start <= offset
+            && offset < def.name_span.end
+        {
+            return Some((def, def.name_span));
         }
 
         None
@@ -475,10 +499,24 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         kind: DefinitionKind,
         local_id: Option<LocalId>,
     ) {
+        self.add_definition_named_at(node_id, node_id, name, kind, local_id);
+    }
+
+    /// Add a definition whose name is spanned by `name_id`.
+    fn add_definition_named_at(
+        &mut self,
+        node_id: NodeId,
+        name_id: NodeId,
+        name: Symbol,
+        kind: DefinitionKind,
+        local_id: Option<LocalId>,
+    ) {
         let span = self.span_map.get_or_default(node_id);
+        let name_span = self.span_map.get_or_default(name_id);
         self.definitions.push(AstDefinitionEntry {
             node_id,
             span,
+            name_span,
             name,
             kind,
             local_id,
@@ -491,6 +529,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             node_id,
             span,
             target,
+            shorthand: false,
         });
     }
 
@@ -517,8 +556,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         // Add field definitions
         for field in &s.fields {
             if let Some(name) = field.name.clone() {
-                self.add_definition(
+                self.add_definition_named_at(
                     field.id,
+                    field.name_id,
                     name,
                     DefinitionKind::Field {
                         owner: s.name.clone(),
@@ -558,6 +598,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
                 },
                 None,
             );
+        }
+    }
+
+    /// The name of the type that declares the fields written against `resolved`.
+    fn field_owner(&self, resolved: &ResolvedRef<'db>) -> Symbol {
+        match self.resolve_resolved_ref(resolved) {
+            ResolvedTarget::Constructor { type_name, .. } => type_name,
+            target => target.name(),
         }
     }
 
@@ -627,11 +675,54 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
                 );
             }
         }
+        if let ExprKind::Record {
+            type_name, fields, ..
+        } = expr.kind.as_ref()
+        {
+            let owner = self.field_owner(&type_name.resolved);
+            for field in fields {
+                self.add_reference(
+                    field.id,
+                    ResolvedTarget::Field {
+                        owner: owner.clone(),
+                        name: field.name.clone(),
+                    },
+                );
+            }
+        }
         walk_expr(self, expr);
     }
 
     fn visit_pattern(&mut self, pattern: &'ast Pattern<TypedRef<'db>>) {
         walk_pattern(self, pattern);
+        if let PatternKind::Record {
+            type_name, fields, ..
+        } = pattern.kind.as_ref()
+        {
+            let owner = self.field_owner(&type_name.resolved);
+            for field in fields {
+                // A shorthand `{ name }` has no name span apart from the
+                // binding it introduces, which owns that span.
+                let shorthand = field.pattern.as_ref().is_some_and(|p| {
+                    p.id == field.id && matches!(p.kind.as_ref(), PatternKind::Bind { .. })
+                });
+                let target = ResolvedTarget::Field {
+                    owner: owner.clone(),
+                    name: field.name.clone(),
+                };
+                if shorthand {
+                    let span = self.span_map.get_or_default(field.id);
+                    self.references.push(AstReferenceEntry {
+                        node_id: field.id,
+                        span,
+                        target,
+                        shorthand: true,
+                    });
+                } else {
+                    self.add_reference(field.name_id, target);
+                }
+            }
+        }
         // Bindings carry the LocalId from name resolution, which tells
         // shadowed variables apart.
         match pattern.kind.as_ref() {
@@ -1926,6 +2017,150 @@ struct Rect { x: Int, width: Int }"#,
                 r.target
             );
         }
+    }
+
+    fn field_target(owner: &str, name: &str) -> ResolvedTarget {
+        ResolvedTarget::Field {
+            owner: trunk_ir::Symbol::new(owner),
+            name: trunk_ir::Symbol::new(name),
+        }
+    }
+
+    /// The text of every reference to `target`, in source order.
+    fn reference_texts<'a>(
+        db: &salsa::DatabaseImpl,
+        index: AstDefinitionIndex<'_>,
+        text: &'a str,
+        target: &ResolvedTarget,
+    ) -> Vec<&'a str> {
+        let mut spans: Vec<_> = index
+            .references_of_target(db, target)
+            .iter()
+            .map(|r| (r.span.start, r.span.end))
+            .collect();
+        spans.sort();
+        spans.into_iter().map(|(s, e)| &text[s..e]).collect()
+    }
+
+    #[test]
+    fn test_record_expression_fields_reference_struct_fields() {
+        let db = salsa::DatabaseImpl::default();
+        let text = r#"struct Point { x: Int, y: Int }
+struct Rect { x: Int, width: Int }
+
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    let r = Rect { x: 3, width: 4 }
+    p
+}"#;
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        let point_x = field_target("Point", "x");
+        assert_eq!(reference_texts(&db, index, text, &point_x), ["x"]);
+        let rect_x = field_target("Rect", "x");
+        assert_eq!(reference_texts(&db, index, text, &rect_x), ["x"]);
+        let width = field_target("Rect", "width");
+        assert_eq!(reference_texts(&db, index, text, &width), ["width"]);
+
+        // Go-to-definition from the field name in the expression lands on the
+        // declaring struct's field.
+        let offset = text.find("Point { x: 1").unwrap() + "Point { ".len();
+        let def = index.definition_at(&db, offset).expect("field definition");
+        assert_eq!(
+            def.kind,
+            DefinitionKind::Field {
+                owner: trunk_ir::Symbol::new("Point")
+            }
+        );
+        assert!(text[def.span.start..def.span.end].starts_with("x: Int"));
+        assert!(def.span.end < text.find("struct Rect").unwrap());
+    }
+
+    #[test]
+    fn test_record_pattern_fields_reference_struct_fields() {
+        let db = salsa::DatabaseImpl::default();
+        let text = r#"struct Point { x: Int, y: Int }
+
+fn sum(p: Point) -> Int {
+    let Point { x: a, y } = p
+    a + y
+}"#;
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        // `x: a` names the field, and so does the shorthand `y`.
+        let x = field_target("Point", "x");
+        assert_eq!(reference_texts(&db, index, text, &x), ["x"]);
+        let y = field_target("Point", "y");
+        assert_eq!(reference_texts(&db, index, text, &y), ["y"]);
+
+        // The cursor on the shorthand resolves to the field, not the binding.
+        let offset = text.find("y }").unwrap();
+        let def = index.definition_at(&db, offset).expect("field definition");
+        assert_eq!(
+            def.kind,
+            DefinitionKind::Field {
+                owner: trunk_ir::Symbol::new("Point")
+            }
+        );
+        let (target, refs) = index.references_at(&db, offset).unwrap();
+        assert_eq!(target, y);
+        assert_eq!(refs.len(), 1);
+
+        let offset = text.find("x: a").unwrap();
+        let def = index.definition_at(&db, offset).expect("field definition");
+        assert_eq!(
+            def.kind,
+            DefinitionKind::Field {
+                owner: trunk_ir::Symbol::new("Point")
+            }
+        );
+    }
+
+    #[test]
+    fn test_field_definition_name_span_excludes_type_and_shorthand_is_tracked() {
+        let db = salsa::DatabaseImpl::default();
+        let text = r#"struct Point { x: Int, y: Int }
+
+fn sum(p: Point) -> Int {
+    let Point { x, y: b } = p
+    x + b
+}"#;
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        let x = field_target("Point", "x");
+        let def = index.definition_of_target(&db, &x).unwrap();
+        assert_eq!(&text[def.name_span.start..def.name_span.end], "x");
+        assert!(text[def.span.start..def.span.end].starts_with("x: Int"));
+
+        let shorthand = index.shorthand_fields_of_target(&db, &x);
+        assert_eq!(shorthand.len(), 1);
+        assert_eq!(&text[shorthand[0].span.start..shorthand[0].span.end], "x");
+        assert!(
+            index
+                .shorthand_fields_of_target(&db, &field_target("Point", "y"))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn test_record_field_references_include_expressions_and_patterns() {
+        let db = salsa::DatabaseImpl::default();
+        let text = r#"struct Point { x: Int, y: Int }
+
+fn main() -> Int {
+    let p = Point { x: 1, y: 2 }
+    case p {
+        Point { x: a, .. } -> a
+    }
+}"#;
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        let x = field_target("Point", "x");
+        assert_eq!(reference_texts(&db, index, text, &x), ["x", "x"]);
     }
 
     #[test]

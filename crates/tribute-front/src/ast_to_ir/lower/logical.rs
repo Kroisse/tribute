@@ -23,9 +23,9 @@ use trunk_ir::types::{Attribute, Location};
 
 use crate::SortedMap;
 use crate::ast::{
-    Arm, CallingConvention, CtorId, Decl, EffectRow, Expr, ExprKind, ExternFuncDecl, FuncDecl,
-    HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef, Stmt, TypeKind,
-    TypedRef,
+    Arm, CallingConvention, CtorId, Decl, EffectRow, Expr, ExprKind, ExternFuncDecl, FieldInit,
+    FuncDecl, HandlerArm, HandlerKind, OpDeclKind, Pattern, PatternKind, ResolvedRef, Stmt,
+    TypeKind, TypedRef,
 };
 
 use super::super::context::IrLoweringCtx;
@@ -1723,7 +1723,7 @@ fn lower_record<'db>(
     location: Location,
     id: crate::ast::NodeId,
     type_name: TypedRef<'db>,
-    fields: Vec<(Symbol, Expr<TypedRef<'db>>)>,
+    fields: Vec<FieldInit<TypedRef<'db>>>,
     spread: Option<Expr<TypedRef<'db>>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
@@ -1767,7 +1767,10 @@ fn lower_record<'db>(
     // Lower explicit fields in source order, then place their already-evaluated
     // values in declaration layout order.
     let mut values = HashMap::default();
-    for (name, field) in fields {
+    for FieldInit {
+        name, value: field, ..
+    } in fields
+    {
         if !field_order.contains(&name) || values.contains_key(&name) {
             panic!("typechecked record has an invalid field layout");
         }
@@ -1813,7 +1816,7 @@ fn lower_variant_record<'db>(
     id: crate::ast::NodeId,
     layout: TypeRef,
     variant: &Symbol,
-    fields: Vec<(Symbol, Expr<TypedRef<'db>>)>,
+    fields: Vec<FieldInit<TypedRef<'db>>>,
     declarations: &mut Declarations<'db>,
 ) -> Option<ValueRef> {
     let field_order = builder
@@ -1821,7 +1824,10 @@ fn lower_variant_record<'db>(
         .variant_field_names(layout, variant.clone())
         .unwrap_or_else(|| panic!("prescan did not register field names of variant {variant}"));
     let mut values = HashMap::default();
-    for (name, field) in fields {
+    for FieldInit {
+        name, value: field, ..
+    } in fields
+    {
         if !field_order.contains(&name) || values.contains_key(&name) {
             panic!("typechecked variant record has an invalid field layout");
         }
