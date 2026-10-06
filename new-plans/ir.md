@@ -513,6 +513,8 @@ resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 comp
 | `tribute_control.func_ref` | named function을 first-class callable value로 참조 |
 | `tribute_control.call` | named source callable 직접 호출 |
 | `tribute_control.call_indirect` | source callable value 간접 호출 |
+| `tribute_control.tail_call` | source `become`의 named callable 직접 proper tail call |
+| `tribute_control.tail_call_indirect` | source `become`의 callable value 간접 proper tail call |
 | `tribute_control.return` | `func` 또는 `lambda` body의 logical result 반환 |
 | `tribute_control.perform` | source `fn` 또는 general `op` 하나를 semantic kind를 보존한 직접형으로 호출 |
 | `tribute_control.handle` | 직접형 computation, completion arm, handler table의 경계를 설정 |
@@ -520,10 +522,13 @@ resolution을 검사하며 physical `func.func_sig`나 `closure.closure`를 comp
 | `tribute_control.resume` | resumptive general handler arm에 바인딩된 affine resumption을 소비 |
 | `tribute_control.yield` | 실행 가능한 `tribute_control` region을 logical value로 종료 |
 
-`func.tail_call`, `func.tail_call_indirect`, `func.constant`, `func.unreachable`의
-logical 복제는 없다. Tail 형상은 legalization 결과이고 named function value는
-`func_ref`가 표현한다. Legalization은 알려진 target에 `func.tail_call`, closure,
-continuation과 `done_k` target에 새 `func.tail_call_indirect`를 만들 수 있다.
+`func.constant`, `func.unreachable`의 logical 복제는 없다. Named function value는
+`func_ref`가 표현한다. Source [`become`](syntax.md#tail-call-become)은
+`tribute_control.tail_call`/`tail_call_indirect`로 나타나며, 이 두 operation이
+`func.tail_call`/`func.tail_call_indirect`의 source-logical 짝이다. 표시 없는 호출은
+어떤 단계도 proper tail transfer로 바꾸지 않는다.
+Legalization은 알려진 target에 `func.tail_call`, closure, continuation과 `done_k`
+target에 새 `func.tail_call_indirect`를 만들 수 있다.
 `func.constant`는 후속 physical closure lowering이 만들며 `func.unreachable`은
 reject adapter 같은 compiler helper 안에서만 legalization 뒤에 사용한다.
 
@@ -703,6 +708,51 @@ callable producer를 요구한다. Return은 enclosing callable의 logical resul
 - **소유권과 값 흐름:** callee와 argument는 일반 SSA use이고 environment,
   evidence, `ContinuationFrame<R>`는 없다.
 - **위치:** callee와 argument를 포함한 source indirect-call span이다.
+
+#### `tribute_control.tail_call`
+
+```text
+tribute_control.tail_call %arg0, ... {callee = @f}
+```
+
+- **형상:** declaration 순서의 source argument, `callee: Symbol`, 선택적
+  [`evidence_plan`](#evidence-선택-속성)을 가진다. 결과와 region은 없는
+  terminator이며 `CallableExit`를 등록한다.
+- **위치 규칙:** `tribute_control.func` 또는 `lambda` body를 끝낼 수 있고, 꼬리
+  위치에 있는 structured control operation의 arm을 `scf.yield` 대신 끝낼 수 있다.
+  그 arm은 terminal region이며 operation의 결과는 `scf.yield`로 끝나는 arm만 낸다.
+  꼬리 위치인 structured operation은 결과가 감싼 region의 terminator로 곧바로
+  이어지는 operation이다(callable body의 `return`, 또는 다시 꼬리 위치인 바깥
+  arm의 `scf.yield`). `tribute_control.handle` body와 handler region 안에서는
+  invalid다.
+- **의미:** named source callable을 proper tail call한다. 호출이 끝나면 callee의
+  결과가 감싼 callable의 결과가 되며 caller frame은 남지 않는다.
+- **검증:** local verifier는 attribute, 위치 규칙, callee result type과 감싼
+  callable result type의 일치를 검사한다. Whole-IR verifier는
+  `tribute_control.call`과 같이 callee의 arity/type과 convention 순서를 맞춘다.
+  Tail position과 handler 규칙의 소스 진단은 typechecking이 책임지며 이 검사는
+  lowering이 그 결과를 보존했는지 확인한다.
+- **소유권과 값 흐름:** argument는 일반 SSA use이고 hidden operand는 없다.
+  Shared legalization이 모든 convention 조합에서 proper tail transfer로 바꾼다
+  ([cps-effects.md](cps-effects.md#source-proper-tail-call의-적법화)).
+- **위치:** `become` keyword와 call을 포함한 source span이다.
+
+#### `tribute_control.tail_call_indirect`
+
+```text
+tribute_control.tail_call_indirect %callee, %arg0, ...
+```
+
+- **형상:** `tribute_control.func_sig` callee, source argument, 선택적
+  [`evidence_plan`](#evidence-선택-속성)을 가진다. 결과와 region은 없는
+  terminator이며 `CallableExit`를 등록한다.
+- **위치 규칙:** `tribute_control.tail_call`과 같다.
+- **의미:** callable value를 proper tail call한다.
+- **검증:** local verifier는 callee signature와 argument type, 위치 규칙, callee
+  result type과 감싼 callable result type의 일치를 검사한다.
+- **소유권과 값 흐름:** `tribute_control.call_indirect`와 같이 environment,
+  evidence, `ContinuationFrame<R>`는 operand가 아니다.
+- **위치:** `become` keyword와 indirect call을 포함한 source span이다.
 
 #### Evidence 선택 속성
 

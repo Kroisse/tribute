@@ -37,6 +37,15 @@ type where in
 
 **Note:** 대부분의 제어 흐름은 algebraic effect로 처리하므로 예약어를 최소화함
 
+### Contextual Keywords
+
+```text
+become
+```
+
+`become`은 [Tail Call](#tail-call-become) 구문의 시작에서만 키워드로 읽고 그 밖에서는
+식별자로 남는다.
+
 ### 키워드 규칙
 
 - 위의 키워드와 예약어는 모두 **strict**하다. 문맥과 관계없이 식별자로 쓸 수
@@ -921,6 +930,71 @@ data
     .fold(0, fn(a, b) a + b)
 ```
 
+### Tail Call (`become`)
+
+```ebnf
+BecomeExpr ::= 'become' Expression        // Expression은 인자 목록이 있는 호출
+```
+
+`become f(args)`는 `f(args)`를 호출하면서 현재 callable의 frame을 callee에게 넘기는
+proper tail transfer다. Callee가 돌려주는 값이 그대로 현재 callable의 결과가 되고,
+`become`으로 이어지는 호출이 몇 번 반복되어도 stack 사용량은 늘지 않는다. 루프 문법이
+없으므로 반복은 `become`으로 쓴다.
+
+```rust
+fn sum(n: Int, acc: Int) -> Int {
+    case n == +0 {
+        True -> acc
+        False -> become sum(n - +1, acc + +1)
+    }
+}
+
+fn is_even(n: Int) -> Bool {
+    case n == +0 {
+        True -> True
+        False -> become is_odd(n - +1)
+    }
+}
+
+fn is_odd(n: Int) -> Bool {
+    case n == +0 {
+        True -> False
+        False -> become is_even(n - +1)
+    }
+}
+```
+
+`become`은 contextual keyword다. 같은 줄에서 바로 뒤에 식이 올 때만 키워드로 읽으며,
+그 밖에서는 식별자다.
+
+`become`이 없는 호출은 꼬리 위치에 있어도 일반 호출이다. 컴파일러는 표시 없는 호출을
+꼬리 이전으로 바꾸지 않으므로 stack 사용량은 소스에 적힌 대로 정해진다.
+
+다음 규칙을 어기면 컴파일 오류다. 진단은 보장할 수 없는 이유를 `become` 위치에서
+알려 준다.
+
+- **피연산자:** 인자 목록이 있는 함수 호출이어야 한다. Named function, qualified
+  path, UFCS, callable value(lambda, parameter, capture) 호출이 해당한다. 생성자,
+  ability operation, `resume`, `extern` 함수 호출은 피연산자가 될 수 없다. `extern`
+  함수는 foreign 호출 규약을 쓰므로 frame을 넘길 수 없다.
+- **위치:** `become` 식은 감싼 callable(`fn` 정의나 lambda)의 tail position에 있어야
+  한다. Tail position은 callable body block의 마지막 식, tail position에 있는 block의
+  마지막 식, tail position에 있는 `case`의 각 arm 결과 식이다. 그 밖의 위치(`let`
+  우변, 인자, 연산자 피연산자, `case` scrutinee와 guard)는 tail position이 아니다.
+  Lambda body의 tail position은 그 lambda에 대한 것이며 바깥 callable의 tail
+  position이 아니다.
+- **Handler:** `handle` body는 handler가 설치된 채 실행되므로 그 안은 tail position이
+  아니다. Handler arm(`do`, `fn`, `op`)의 결과는 handle 식의 값이나 resume 값이 되므로
+  역시 tail position이 아니다.
+- **타입:** 호출 결과 타입은 감싼 callable의 결과 타입과 같아야 하고, callee의 effect
+  row는 일반 호출처럼 감싼 callable의 effect row에 포함되어야 한다. `become` 식의
+  타입은 호출 결과 타입이다.
+
+인자는 일반 호출처럼 왼쪽에서 오른쪽으로 평가한다. 모든 인자를 평가한 뒤 현재
+callable의 지역 값을 정리하고 이전한다. 이 정리는 관찰할 수 없으므로 reference
+counting 같은 구현 세부는 `become`을 거부할 이유가 되지 않는다. 보장은 모든 호출
+규약과 target에 똑같이 적용된다.
+
 ### Binary Operators
 
 ```ebnf
@@ -1319,6 +1393,7 @@ fn main() ->{Io} Nil {
 | `a T::<> b`           | Qualified operator     |
 | `(+)`, `(T::<>)`      | Operator as function   |
 | `resume expr`         | Continuation 재개      |
+| `become f(x)`         | Proper tail call       |
 
 ### Patterns
 
