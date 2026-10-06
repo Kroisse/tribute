@@ -133,6 +133,7 @@ mod tests {
             Pattern,
             PatternKind,
             FieldPattern,
+            FieldInit,
         );
     }
 }

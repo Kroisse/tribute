@@ -13,6 +13,17 @@ use super::pattern::Pattern;
 use super::phases::LocalId;
 use super::types::TypeAnnotation;
 
+/// A field initializer in a record expression: `name: value`.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, salsa::SalsaValue)]
+pub struct FieldInit<V> {
+    /// Identifier whose span is the field name.
+    pub id: NodeId,
+    /// The field name.
+    pub name: Symbol,
+    /// The initializing expression.
+    pub value: Expr<V>,
+}
+
 /// An expression in the AST, parameterized by phase type `V`.
 ///
 /// The phase type determines what information is available about
@@ -86,7 +97,7 @@ pub enum ExprKind<V> {
     /// Record construction: `User { name: "Alice", age: 30 }`
     Record {
         type_name: V,
-        fields: Vec<(Symbol, Expr<V>)>,
+        fields: Vec<FieldInit<V>>,
         /// Optional spread expression: `{ ..base, field: value }`
         spread: Option<Expr<V>>,
     },

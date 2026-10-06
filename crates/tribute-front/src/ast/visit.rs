@@ -160,8 +160,9 @@ pub fn walk_expr<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(visitor: &mut T, exp
             spread,
         } => {
             visitor.visit_ref(RefSite::RecordType, expr.id, type_name);
-            for (_, field) in fields {
-                visitor.visit_expr(field);
+            for field in fields {
+                visitor.visit_node_id(field.id);
+                visitor.visit_expr(&field.value);
             }
             if let Some(spread) = spread {
                 visitor.visit_expr(spread);
@@ -305,6 +306,7 @@ pub fn walk_field_pattern<'ast, V: 'ast, T: Visit<'ast, V> + ?Sized>(
     field: &'ast FieldPattern<V>,
 ) {
     visitor.visit_node_id(field.id);
+    visitor.visit_node_id(field.name_id);
     if let Some(pattern) = &field.pattern {
         visitor.visit_pattern(pattern);
     }
@@ -463,8 +465,9 @@ pub fn walk_expr_mut<V, T: VisitMut<V> + ?Sized>(visitor: &mut T, expr: &mut Exp
             spread,
         } => {
             visitor.visit_ref_mut(RefSite::RecordType, id, type_name);
-            for (_, field) in fields {
-                visitor.visit_expr_mut(field);
+            for field in fields {
+                visitor.visit_node_id_mut(&mut field.id);
+                visitor.visit_expr_mut(&mut field.value);
             }
             if let Some(spread) = spread {
                 visitor.visit_expr_mut(spread);
@@ -603,6 +606,7 @@ pub fn walk_field_pattern_mut<V, T: VisitMut<V> + ?Sized>(
     field: &mut FieldPattern<V>,
 ) {
     visitor.visit_node_id_mut(&mut field.id);
+    visitor.visit_node_id_mut(&mut field.name_id);
     if let Some(pattern) = &mut field.pattern {
         visitor.visit_pattern_mut(pattern);
     }

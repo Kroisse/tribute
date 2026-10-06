@@ -107,6 +107,8 @@ pub enum PatternKind<V> {
 pub struct FieldPattern<V> {
     /// Unique identifier for span lookup.
     pub id: NodeId,
+    /// Identifier whose span is the field name.
+    pub name_id: NodeId,
     /// The field name.
     pub name: Symbol,
     /// The pattern to match the field value.

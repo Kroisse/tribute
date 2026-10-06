@@ -561,6 +561,14 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         }
     }
 
+    /// The name of the type that declares the fields written against `resolved`.
+    fn field_owner(&self, resolved: &ResolvedRef<'db>) -> Symbol {
+        match self.resolve_resolved_ref(resolved) {
+            ResolvedTarget::Constructor { type_name, .. } => type_name,
+            target => target.name(),
+        }
+    }
+
     fn resolve_typed_ref(&self, typed_ref: &TypedRef<'db>) -> ResolvedTarget {
         self.resolve_resolved_ref(&typed_ref.resolved)
     }
@@ -627,11 +635,48 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
                 );
             }
         }
+        if let ExprKind::Record {
+            type_name, fields, ..
+        } = expr.kind.as_ref()
+        {
+            let owner = self.field_owner(&type_name.resolved);
+            for field in fields {
+                self.add_reference(
+                    field.id,
+                    ResolvedTarget::Field {
+                        owner: owner.clone(),
+                        name: field.name.clone(),
+                    },
+                );
+            }
+        }
         walk_expr(self, expr);
     }
 
     fn visit_pattern(&mut self, pattern: &'ast Pattern<TypedRef<'db>>) {
         walk_pattern(self, pattern);
+        if let PatternKind::Record {
+            type_name, fields, ..
+        } = pattern.kind.as_ref()
+        {
+            let owner = self.field_owner(&type_name.resolved);
+            for field in fields {
+                // A shorthand `{ name }` has no name span apart from the
+                // binding it introduces, which owns that span.
+                let shorthand = field.pattern.as_ref().is_some_and(|p| {
+                    p.id == field.id && matches!(p.kind.as_ref(), PatternKind::Bind { .. })
+                });
+                if !shorthand {
+                    self.add_reference(
+                        field.name_id,
+                        ResolvedTarget::Field {
+                            owner: owner.clone(),
+                            name: field.name.clone(),
+                        },
+                    );
+                }
+            }
+        }
         // Bindings carry the LocalId from name resolution, which tells
         // shadowed variables apart.
         match pattern.kind.as_ref() {
@@ -1926,6 +1971,110 @@ struct Rect { x: Int, width: Int }"#,
                 r.target
             );
         }
+    }
+
+    fn field_target(owner: &str, name: &str) -> ResolvedTarget {
+        ResolvedTarget::Field {
+            owner: trunk_ir::Symbol::new(owner),
+            name: trunk_ir::Symbol::new(name),
+        }
+    }
+
+    /// The text of every reference to `target`, in source order.
+    fn reference_texts<'a>(
+        db: &salsa::DatabaseImpl,
+        index: AstDefinitionIndex<'_>,
+        text: &'a str,
+        target: &ResolvedTarget,
+    ) -> Vec<&'a str> {
+        let mut spans: Vec<_> = index
+            .references_of_target(db, target)
+            .iter()
+            .map(|r| (r.span.start, r.span.end))
+            .collect();
+        spans.sort();
+        spans.into_iter().map(|(s, e)| &text[s..e]).collect()
+    }
+
+    #[test]
+    fn test_record_expression_fields_reference_struct_fields() {
+        let db = salsa::DatabaseImpl::default();
+        let text = r#"struct Point { x: Int, y: Int }
+struct Rect { x: Int, width: Int }
+
+fn main() {
+    let p = Point { x: 1, y: 2 }
+    let r = Rect { x: 3, width: 4 }
+    p
+}"#;
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        let point_x = field_target("Point", "x");
+        assert_eq!(reference_texts(&db, index, text, &point_x), ["x"]);
+        let rect_x = field_target("Rect", "x");
+        assert_eq!(reference_texts(&db, index, text, &rect_x), ["x"]);
+        let width = field_target("Rect", "width");
+        assert_eq!(reference_texts(&db, index, text, &width), ["width"]);
+
+        // Go-to-definition from the field name in the expression lands on the
+        // declaring struct's field.
+        let offset = text.find("Point { x: 1").unwrap() + "Point { ".len();
+        let def = index.definition_at(&db, offset).expect("field definition");
+        assert_eq!(
+            def.kind,
+            DefinitionKind::Field {
+                owner: trunk_ir::Symbol::new("Point")
+            }
+        );
+        assert!(text[def.span.start..def.span.end].starts_with("x: Int"));
+        assert!(def.span.end < text.find("struct Rect").unwrap());
+    }
+
+    #[test]
+    fn test_record_pattern_fields_reference_struct_fields() {
+        let db = salsa::DatabaseImpl::default();
+        let text = r#"struct Point { x: Int, y: Int }
+
+fn sum(p: Point) -> Int {
+    let Point { x: a, y } = p
+    a + y
+}"#;
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        // `x: a` names the field; the shorthand `y` is owned by its binding.
+        let x = field_target("Point", "x");
+        assert_eq!(reference_texts(&db, index, text, &x), ["x"]);
+        let y = field_target("Point", "y");
+        assert!(reference_texts(&db, index, text, &y).is_empty());
+
+        let offset = text.find("x: a").unwrap();
+        let def = index.definition_at(&db, offset).expect("field definition");
+        assert_eq!(
+            def.kind,
+            DefinitionKind::Field {
+                owner: trunk_ir::Symbol::new("Point")
+            }
+        );
+    }
+
+    #[test]
+    fn test_record_field_references_include_expressions_and_patterns() {
+        let db = salsa::DatabaseImpl::default();
+        let text = r#"struct Point { x: Int, y: Int }
+
+fn main() -> Int {
+    let p = Point { x: 1, y: 2 }
+    case p {
+        Point { x: a, .. } -> a
+    }
+}"#;
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        let x = field_target("Point", "x");
+        assert_eq!(reference_texts(&db, index, text, &x), ["x", "x"]);
     }
 
     #[test]

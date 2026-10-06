@@ -184,9 +184,11 @@ fn lower_constructor_fields(
                 let name = ctx.node_symbol(&name_node);
                 if let Some(pattern_node) = child.child_by_field_name("pattern") {
                     let id = ctx.fresh_id_with_span(&child);
+                    let name_id = ctx.fresh_id_with_span(&name_node);
                     let pattern = lower_pattern(ctx, pattern_node);
                     fields.push(FieldPattern {
                         id,
+                        name_id,
                         name,
                         pattern: Some(pattern),
                     });
@@ -195,6 +197,7 @@ fn lower_constructor_fields(
                     let id = ctx.fresh_id_with_span(&name_node);
                     fields.push(FieldPattern {
                         id,
+                        name_id: id,
                         name,
                         pattern: None,
                     });

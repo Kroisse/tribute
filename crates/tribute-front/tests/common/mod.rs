@@ -271,8 +271,8 @@ fn collect_tdnr_summary<'db>(
             }
         }
         ExprKind::Record { fields, spread, .. } => {
-            for (_, field) in fields {
-                collect_tdnr_summary(db, field, summary);
+            for field in fields {
+                collect_tdnr_summary(db, &field.value, summary);
             }
             if let Some(spread) = spread {
                 collect_tdnr_summary(db, spread, summary);

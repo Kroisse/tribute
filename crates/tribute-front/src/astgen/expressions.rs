@@ -5,8 +5,8 @@ use tribute_ir::ModulePathExt;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, BinOpKind, Expr, ExprKind, FloatBits, HandlerArm, HandlerKind, MethodPath, Param, Pattern,
-    Stmt, UnresolvedName,
+    Arm, BinOpKind, Expr, ExprKind, FieldInit, FloatBits, HandlerArm, HandlerKind, MethodPath,
+    Param, Pattern, Stmt, UnresolvedName,
 };
 
 use super::context::AstLoweringCtx;
@@ -314,8 +314,8 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
                         if let Some(value_node) = child.child_by_field_name("value") {
                             spread = Some(lower_expr(ctx, value_node));
                         }
-                    } else if let Some((name, value)) = lower_field_initializer(ctx, child) {
-                        fields.push((name, value));
+                    } else if let Some(field) = lower_field_initializer(ctx, child) {
+                        fields.push(field);
                     }
                 }
                 _ => {}
@@ -333,14 +333,15 @@ fn lower_record_expr(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<Unres
 fn lower_field_initializer(
     ctx: &mut AstLoweringCtx<'_>,
     node: Node,
-) -> Option<(Symbol, Expr<UnresolvedName>)> {
+) -> Option<FieldInit<UnresolvedName>> {
     let name_node = node.child_by_field_name("name")?;
     let value_node = node.child_by_field_name("value")?;
 
     let name = ctx.node_symbol(&name_node);
+    let id = ctx.fresh_id_with_span(&name_node);
     let value = lower_expr(ctx, value_node);
 
-    Some((name, value))
+    Some(FieldInit { id, name, value })
 }
 
 fn lower_field_access(ctx: &mut AstLoweringCtx<'_>, node: Node) -> ExprKind<UnresolvedName> {

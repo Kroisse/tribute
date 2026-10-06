@@ -13,9 +13,9 @@ use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, Arm, BinOpKind, Effect, EffectRow, Expr, ExprKind, FieldPattern, HandlerArm,
-    HandlerKind, LiteralPattern, LocalId, ModulePath, NodeId, OpDeclKind, Pattern, PatternKind,
-    ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, collect_effect_vars,
+    AbilityId, Arm, BinOpKind, Effect, EffectRow, Expr, ExprKind, FieldInit, FieldPattern,
+    HandlerArm, HandlerKind, LiteralPattern, LocalId, ModulePath, NodeId, OpDeclKind, Pattern,
+    PatternKind, ResolvedRef, Stmt, Type, TypeKind, TypeScheme, TypedRef, collect_effect_vars,
 };
 
 use super::super::constraint::ConstraintOriginKind;
@@ -1123,7 +1123,7 @@ impl<'db> TypeChecker<'db> {
         ctx: &mut FunctionInferenceContext<'_, 'db>,
         record_id: NodeId,
         type_name: &ResolvedRef<'db>,
-        fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
+        fields: &[FieldInit<ResolvedRef<'db>>],
         spread: Option<&Expr<ResolvedRef<'db>>>,
     ) -> Type<'db> {
         let ctor_ty = self.instantiate_value_constructor_with_ctx(ctx, record_id, type_name);
@@ -1142,10 +1142,11 @@ impl<'db> TypeChecker<'db> {
             spread.is_some(),
         );
 
-        let written: Vec<Symbol> = fields.iter().map(|(name, _)| name.clone()).collect();
+        let written: Vec<Symbol> = fields.iter().map(|f| f.name.clone()).collect();
         let (_, _, variant_field_tys) =
             self.constructor_field_shape(ctx, record_id, type_name, &written);
-        for ((field_name, field_expr), variant_field_ty) in fields.iter().zip(variant_field_tys) {
+        for (field, variant_field_ty) in fields.iter().zip(variant_field_tys) {
+            let (field_name, field_expr) = (&field.name, &field.value);
             // Struct fields are read from the struct declaration; a named
             // variant's fields are its constructor instance's parameters.
             if let Some(expected_field_ty) = self
@@ -1173,7 +1174,7 @@ impl<'db> TypeChecker<'db> {
         record_id: NodeId,
         type_name: &ResolvedRef<'db>,
         struct_ty: Type<'db>,
-        fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
+        fields: &[FieldInit<ResolvedRef<'db>>],
         has_spread: bool,
     ) {
         let ResolvedRef::Constructor { id, .. } = type_name else {
@@ -1199,7 +1200,7 @@ impl<'db> TypeChecker<'db> {
             record_id,
             format_args!("struct `{}`", id.qualified(self.db())),
             &declared,
-            fields.iter().map(|(name, _)| name.clone()),
+            fields.iter().map(|f| f.name.clone()),
             has_spread,
         );
     }
@@ -1213,7 +1214,7 @@ impl<'db> TypeChecker<'db> {
         record_id: NodeId,
         id: crate::ast::CtorId<'db>,
         result: Type<'db>,
-        fields: &[(Symbol, Expr<ResolvedRef<'db>>)],
+        fields: &[FieldInit<ResolvedRef<'db>>],
         has_spread: bool,
     ) {
         let is_variant = matches!(
@@ -1246,7 +1247,7 @@ impl<'db> TypeChecker<'db> {
             record_id,
             format_args!("variant `{qualified}`"),
             declared,
-            fields.iter().map(|(name, _)| name.clone()),
+            fields.iter().map(|f| f.name.clone()),
             has_spread,
         );
     }
@@ -2050,11 +2051,10 @@ impl<'db> TypeChecker<'db> {
                 },
                 fields: fields
                     .iter()
-                    .map(|(name, expr)| {
-                        (
-                            name.clone(),
-                            self.check_expr_with_ctx(ctx, expr, Mode::Infer),
-                        )
+                    .map(|f| FieldInit {
+                        id: f.id,
+                        name: f.name.clone(),
+                        value: self.check_expr_with_ctx(ctx, &f.value, Mode::Infer),
                     })
                     .collect(),
                 spread: spread
@@ -2991,6 +2991,7 @@ impl<'db> TypeChecker<'db> {
     ) -> FieldPattern<TypedRef<'db>> {
         FieldPattern {
             id: fp.id,
+            name_id: fp.name_id,
             name: fp.name.clone(),
             pattern: fp
                 .pattern
@@ -3008,6 +3009,7 @@ impl<'db> TypeChecker<'db> {
     ) -> FieldPattern<TypedRef<'db>> {
         FieldPattern {
             id: fp.id,
+            name_id: fp.name_id,
             name: fp.name.clone(),
             pattern: fp
                 .pattern

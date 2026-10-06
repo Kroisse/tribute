@@ -639,6 +639,7 @@ mod tests {
                 type_name: typed_ref(2),
                 fields: vec![FieldPattern {
                     id: node_id(11),
+                    name_id: node_id(11),
                     name: Symbol::new("field"),
                     pattern: Some(Pattern::new(
                         node_id(12),
