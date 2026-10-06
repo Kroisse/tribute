@@ -403,10 +403,14 @@ impl LspServer {
 
             // A shorthand field pattern `Point { x }` also binds `x`; keep
             // that binding by expanding it to `Point { new: x }`.
+            // The binding keeps its source spelling (`r#type` stays raw).
             for shorthand in index.shorthand_fields_of_target(db, &target) {
+                let binding = rope
+                    .get_byte_slice(shorthand.span.start..shorthand.span.end)
+                    .map_or_else(|| def.name.to_string(), |s| s.to_string());
                 edits.push(TextEdit {
                     range: span_to_range(&rope, shorthand.span),
-                    new_text: format!("{new_name}: {}", def.name),
+                    new_text: format!("{new_name}: {binding}"),
                 });
             }
 
@@ -2171,6 +2175,35 @@ mod tests {
         assert_eq!(on_line_3.len(), 1, "shorthand must be edited exactly once");
         assert_eq!(on_line_3[0].new_text, "px: x");
         assert_eq!(edits.len(), 2);
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_field_expands_raw_identifier_shorthand_verbatim() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_raw_shorthand_msg");
+        let source = "struct Point { r#type: Int }\n\nfn main(p: Point) -> Int {\n    let Point { r#type } = p\n    r#type\n}";
+        harness.open_document(&uri, source);
+
+        let edit = harness
+            .request::<Rename>(RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                    position: lsp_types::Position {
+                        line: 3,
+                        character: 17, // On the shorthand `r#type`
+                    },
+                },
+                new_name: "kind".to_string(),
+                work_done_progress_params: Default::default(),
+            })
+            .expect("Should rename the field from its shorthand use");
+        let edits = edit.changes.unwrap().remove(&uri).unwrap();
+        let shorthand = edits
+            .iter()
+            .find(|e| e.range.start.line == 3)
+            .expect("shorthand edit");
+        assert_eq!(shorthand.new_text, "kind: r#type");
     }
 
     #[test]
