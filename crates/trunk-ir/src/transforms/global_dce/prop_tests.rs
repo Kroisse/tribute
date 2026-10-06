@@ -1,7 +1,7 @@
 //! Property test comparing global DCE with a naive reachability search on
 //! random modules.
 //!
-//! The modules come from the call graph's [`ModuleSpec`]: functions in the
+//! The modules come from the call graph's [`BuiltModule`]: functions in the
 //! root module and a nested module, with `abi` definitions, bodyless `abi`
 //! imports, calls and address references between functions and externals,
 //! and exports. The oracle reads the roots from the pass contract and the
@@ -11,7 +11,9 @@
 use proptest::prelude::*;
 
 use super::*;
-use crate::transforms::call_graph::prop_tests::{ModuleSpec, module_spec, reachable_from};
+use crate::transforms::call_graph::prop_tests::{
+    BuiltModule, ModuleSpec, built_module, reachable_from,
+};
 
 fn config() -> impl Strategy<Value = (bool, Vec<bool>)> {
     (
@@ -53,11 +55,10 @@ proptest! {
 
     #[test]
     fn global_dce_keeps_exactly_the_functions_reachable_from_roots(
-        spec in module_spec(12),
+        built in built_module(12),
         (recursive, extra) in config(),
     ) {
-        let mut ctx = IrContext::new();
-        let module = spec.build(&mut ctx);
+        let BuiltModule { spec, mut ctx, module } = built;
         let paths = spec.paths();
         let extra = &extra[..spec.functions.len()];
         let config = GlobalDceConfig {
@@ -83,9 +84,7 @@ proptest! {
         prop_assert_eq!(result.removed_count, removed.len());
         prop_assert_eq!(
             result.removed_functions.iter().cloned().collect::<HashSet<_>>(),
-            removed_paths.clone(),
-            "{:?}",
-            spec
+            removed_paths.clone()
         );
         let survivors: HashSet<SymbolPath> = (0..spec.functions.len())
             .filter(|index| !removed.contains(index))

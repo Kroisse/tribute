@@ -7,7 +7,9 @@
 //! calls. Module-level operations reference functions as exports. The
 //! oracle reads the edges straight from the spec: SCCs are the classes of
 //! mutual reachability, and a function is recursive when it reaches itself.
-//! Global DCE's property tests build their modules from the same spec.
+//! Tests receive a [`BuiltModule`], so proptest shrinks the spec and reports
+//! a failing case with its IR text. Global DCE's property tests use the same
+//! modules.
 
 use proptest::prelude::*;
 use smallvec::smallvec;
@@ -15,6 +17,7 @@ use smallvec::smallvec;
 use super::*;
 use crate::dialect::{core, func, wasm};
 use crate::location::Span;
+use crate::printer::print_module;
 use crate::{
     Attribute, BlockData, BlockRef, Location, OperationDataBuilder, RegionData, Symbol, TypeRef,
 };
@@ -75,7 +78,7 @@ pub(crate) struct ModuleSpec {
 /// The number of undefined external names references may target.
 const EXTERNALS: usize = 2;
 
-pub(crate) fn module_spec(max_functions: usize) -> impl Strategy<Value = ModuleSpec> {
+fn module_spec(max_functions: usize) -> impl Strategy<Value = ModuleSpec> {
     (1..=max_functions).prop_flat_map(|count| {
         let targets = count + EXTERNALS;
         let kind = prop_oneof![
@@ -172,7 +175,7 @@ impl ModuleSpec {
     }
 
     /// Build the module this spec describes.
-    pub fn build(&self, ctx: &mut IrContext) -> Module {
+    fn build(&self, ctx: &mut IrContext) -> Module {
         let loc = location(ctx);
         let paths = self.paths();
         let nil = core::nil(ctx).as_type_ref();
@@ -211,6 +214,30 @@ impl ModuleSpec {
         let root = module_op(ctx, loc, "root", root_block);
         Module::new(ctx, root).expect("core.module")
     }
+}
+
+/// A [`ModuleSpec`] together with the module built from it.
+pub(crate) struct BuiltModule {
+    pub spec: ModuleSpec,
+    pub ctx: IrContext,
+    pub module: Module,
+}
+
+impl std::fmt::Debug for BuiltModule {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{:?}", self.spec)?;
+        f.write_str(&print_module(&self.ctx, self.module.op()))
+    }
+}
+
+/// Random modules with up to `max_functions` functions. Shrinking acts on
+/// the spec, and each shrunk spec is built again.
+pub(crate) fn built_module(max_functions: usize) -> impl Strategy<Value = BuiltModule> {
+    module_spec(max_functions).prop_map(|spec| {
+        let mut ctx = IrContext::new();
+        let module = spec.build(&mut ctx);
+        BuiltModule { spec, ctx, module }
+    })
 }
 
 fn location(ctx: &mut IrContext) -> Location {
@@ -349,10 +376,10 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn call_graph_records_every_reference(spec in module_spec(10)) {
-        let mut ctx = IrContext::new();
-        let module = spec.build(&mut ctx);
-        let graph = build_call_graph(&ctx, module);
+    fn call_graph_records_every_reference(built in built_module(10)) {
+        let BuiltModule { spec, ctx, module } = &built;
+        let module = *module;
+        let graph = build_call_graph(ctx, module);
         let paths = spec.paths();
         let functions = spec.functions.len();
 
@@ -395,10 +422,10 @@ proptest! {
     }
 
     #[test]
-    fn sccs_are_the_classes_of_mutual_reachability(spec in module_spec(10)) {
-        let mut ctx = IrContext::new();
-        let module = spec.build(&mut ctx);
-        let graph = build_call_graph(&ctx, module);
+    fn sccs_are_the_classes_of_mutual_reachability(built in built_module(10)) {
+        let BuiltModule { spec, ctx, module } = &built;
+        let module = *module;
+        let graph = build_call_graph(ctx, module);
         let paths = spec.paths();
         let functions = spec.functions.len();
         let successors = spec.successors(false);
@@ -415,10 +442,9 @@ proptest! {
                 prop_assert_eq!(
                     ids[&paths[a]] == ids[&paths[b]],
                     mutual,
-                    "{} and {} in {:?}",
+                    "{} and {}",
                     paths[a],
-                    paths[b],
-                    spec
+                    paths[b]
                 );
             }
         }

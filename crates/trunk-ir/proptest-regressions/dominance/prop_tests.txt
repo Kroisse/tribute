@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc af2da29c5cc8ad5da5da276871427a8d39cdfc380322f8170956f93278ad54fc # shrinks to built = [[], [], []] func.func @f() -> core.nil {   ^bb0:     func.return   ^bb1:     func.return   ^bb2:     func.return } 

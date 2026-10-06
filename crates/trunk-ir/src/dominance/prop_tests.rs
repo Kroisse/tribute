@@ -7,6 +7,8 @@
 //! blocks unreachable from the entry. The oracle uses no dataflow: a block is
 //! reachable when a search from the entry finds it, and `d` dominates a
 //! reachable `n` when `d == n` or `n` is unreachable once `d` is removed.
+//! Tests receive a [`BuiltCfg`], so proptest shrinks the successor lists and
+//! reports a failing case with its IR text.
 
 use proptest::prelude::*;
 use smallvec::smallvec;
@@ -14,7 +16,8 @@ use smallvec::smallvec;
 use super::*;
 use crate::dialect::{arith, cf, core, func};
 use crate::location::Span;
-use crate::{Attribute, BlockData, Location, RegionData};
+use crate::printer::print_op;
+use crate::{Attribute, BlockData, Location, OpRef, RegionData};
 
 /// The successor list of each block, by block index; block 0 is the entry.
 fn cfg() -> impl Strategy<Value = Vec<Vec<usize>>> {
@@ -37,9 +40,40 @@ fn location(ctx: &mut IrContext) -> Location {
     Location::new(path, Span::new(0, 0))
 }
 
+/// A successor list per block together with the function built from it.
+struct BuiltCfg {
+    cfg: Vec<Vec<usize>>,
+    ctx: IrContext,
+    func: OpRef,
+    body: RegionRef,
+    blocks: Vec<BlockRef>,
+}
+
+impl std::fmt::Debug for BuiltCfg {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{:?}", self.cfg)?;
+        f.write_str(&print_op(&self.ctx, self.func))
+    }
+}
+
+/// Random control-flow graphs, shrunk through their successor lists.
+fn built_cfg() -> impl Strategy<Value = BuiltCfg> {
+    cfg().prop_map(|cfg| {
+        let mut ctx = IrContext::new();
+        let (func, body, blocks) = build_function(&mut ctx, &cfg);
+        BuiltCfg {
+            cfg,
+            ctx,
+            func,
+            body,
+            blocks,
+        }
+    })
+}
+
 /// Build a function whose body has one block per entry of `cfg`, and return
-/// its body region and blocks.
-fn build_function(ctx: &mut IrContext, cfg: &[Vec<usize>]) -> (RegionRef, Vec<BlockRef>) {
+/// it with its body region and blocks.
+fn build_function(ctx: &mut IrContext, cfg: &[Vec<usize>]) -> (OpRef, RegionRef, Vec<BlockRef>) {
     let loc = location(ctx);
     let blocks: Vec<BlockRef> = cfg
         .iter()
@@ -99,12 +133,13 @@ fn build_function(ctx: &mut IrContext, cfg: &[Vec<usize>]) -> (RegionRef, Vec<Bl
     });
     let nil = core::nil(ctx).as_type_ref();
     let sig = func::func_sig(ctx, [], [nil]).as_type_ref();
-    func::Func::operands()
+    let func = func::Func::operands()
         .sym_name("f")
         .r#type(sig)
         .regions(body)
-        .build(ctx, loc);
-    (body, blocks)
+        .build(ctx, loc)
+        .op_ref();
+    (func, body, blocks)
 }
 
 /// Blocks reachable from the entry without passing through `removed`.
@@ -132,12 +167,11 @@ proptest! {
     #![proptest_config(ProptestConfig::with_cases(256))]
 
     #[test]
-    fn dominance_matches_its_definition(cfg in cfg()) {
-        let mut ctx = IrContext::new();
-        let (region, blocks) = build_function(&mut ctx, &cfg);
-        let tree = DominatorTree::compute(&ctx, region);
+    fn dominance_matches_its_definition(built in built_cfg()) {
+        let BuiltCfg { cfg, ctx, body, blocks, .. } = &built;
+        let tree = DominatorTree::compute(ctx, *body);
 
-        prop_assert_eq!(tree.region(), region);
+        prop_assert_eq!(tree.region(), *body);
         prop_assert_eq!(tree.entry(), blocks.first().copied());
         prop_assert!(tree.is_valid());
 
@@ -156,21 +190,20 @@ proptest! {
             prop_assert_eq!(tree.predecessors(block), predecessors.as_slice());
         }
 
-        let reachable = reachable_avoiding(&cfg, None);
+        let reachable = reachable_avoiding(cfg, None);
         for (n, &block) in blocks.iter().enumerate() {
             prop_assert_eq!(tree.is_reachable(block), reachable[n], "block {}", n);
         }
         for (d, &dominator) in blocks.iter().enumerate() {
-            let without_d = reachable_avoiding(&cfg, Some(d));
+            let without_d = reachable_avoiding(cfg, Some(d));
             for (n, &block) in blocks.iter().enumerate() {
                 let expected = reachable[n] && (d == n || !without_d[n]);
                 prop_assert_eq!(
                     tree.dominates(dominator, block),
                     expected,
-                    "dominates({}, {}) in {:?}",
+                    "dominates({}, {})",
                     d,
-                    n,
-                    cfg
+                    n
                 );
             }
         }
