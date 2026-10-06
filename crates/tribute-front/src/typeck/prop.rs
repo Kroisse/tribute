@@ -550,8 +550,6 @@ pub(crate) struct TypeGen {
     pub univars: u64,
     /// Bound variables `BoundVar(0..bound_vars)`; `0` for none.
     pub bound_vars: u32,
-    /// Whether bound variables also appear in effect arguments.
-    pub bound_vars_in_rows: bool,
     /// Row tails from `ROW_VAR_BASE..ROW_VAR_BASE + row_vars`; `0` closes
     /// every row.
     pub row_vars: u64,
@@ -574,7 +572,6 @@ impl TypeGen {
         depth: 3,
         univars: 0,
         bound_vars: 0,
-        bound_vars_in_rows: true,
         row_vars: 0,
         error: false,
         higher_kinded: false,
@@ -589,13 +586,6 @@ impl TypeGen {
 
     pub(crate) const fn bound_vars(self, bound_vars: u32) -> Self {
         Self { bound_vars, ..self }
-    }
-
-    pub(crate) const fn bound_vars_in_rows(self, bound_vars_in_rows: bool) -> Self {
-        Self {
-            bound_vars_in_rows,
-            ..self
-        }
     }
 
     pub(crate) const fn row_vars(self, row_vars: u64) -> Self {
@@ -713,21 +703,12 @@ fn row_with(cfg: TypeGen, args: BoxedStrategy<TypeShape>) -> BoxedStrategy<RowSh
 }
 
 /// Strategy for effect arguments: shallow types without function types
-/// unless `row_functions`, and without bound variables unless
-/// `bound_vars_in_rows`.
+/// unless `row_functions`.
 fn row_args(cfg: TypeGen, inner: &BoxedStrategy<TypeShape>) -> BoxedStrategy<TypeShape> {
-    let leaf_cfg = TypeGen {
-        bound_vars: if cfg.bound_vars_in_rows {
-            cfg.bound_vars
-        } else {
-            0
-        },
-        ..cfg
-    };
-    if cfg.row_functions && cfg.bound_vars_in_rows {
-        prop_oneof![3 => leaf(leaf_cfg), 1 => inner.clone()].boxed()
+    if cfg.row_functions {
+        prop_oneof![3 => leaf(cfg), 1 => inner.clone()].boxed()
     } else {
-        leaf(leaf_cfg)
+        leaf(cfg)
     }
 }
 

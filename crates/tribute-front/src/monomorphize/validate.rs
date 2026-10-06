@@ -212,19 +212,12 @@ pub(super) fn validate<'db>(
             }
             let mut invalid_row = false;
             for (variable, row) in selected.row_args.iter().zip(&instance.row_arguments) {
-                if row
-                    .effects(db)
-                    .iter()
-                    .flat_map(|effect| &effect.args)
-                    .any(|ty| substitute(db, *ty, &arguments).is_none())
-                {
+                let Ok(row) = crate::typeck::subst::substitute_effect_row(db, *row, &arguments)
+                else {
                     invalid_row = true;
                     break;
-                }
-                constraints.add_row_eq(
-                    *variable,
-                    crate::typeck::subst::substitute_effect_row(db, *row, &arguments),
-                );
+                };
+                constraints.add_row_eq(*variable, row);
             }
             constraints.add_type_eq(selected.ty, callable);
             if invalid_row

@@ -13,8 +13,8 @@ use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
-use crate::ast::{CtorId, Decl, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
-use crate::typeck::subst::substitute_bound_vars;
+use crate::ast::{CtorId, Decl, EffectRow, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
+use crate::typeck::subst::{BoundVarOutOfBounds, substitute_bound_vars, substitute_effect_row};
 use crate::typeck::{
     EvidenceStep, InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature,
 };
@@ -346,7 +346,7 @@ fn specialize_metadata<'db>(
         instance.row_arguments = instance
             .row_arguments
             .into_iter()
-            .map(|row| crate::typeck::subst::substitute_effect_row(db, row, type_args))
+            .map(|row| substitute_row(db, row, type_args))
             .collect();
         metadata
             .function_instances
@@ -370,7 +370,7 @@ fn specialize_metadata<'db>(
             .map_types(db, |ty| substitute_type(db, ty, type_args))
             .build(db);
         for row in &mut instance.row_arguments {
-            *row = crate::typeck::subst::substitute_effect_row(db, *row, type_args);
+            *row = substitute_row(db, *row, type_args);
         }
         metadata
             .local_instances
@@ -506,6 +506,16 @@ fn substitute_type<'db>(
     })
 }
 
+fn substitute_row<'db>(
+    db: &'db dyn salsa::Database,
+    row: EffectRow<'db>,
+    type_args: &[Type<'db>],
+) -> EffectRow<'db> {
+    substitute_effect_row(db, row, type_args).unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
+        panic!("BoundVar index out of range in specialization metadata: index={index}, subst.len()={max}")
+    })
+}
+
 /// Build a map from (original FuncDefId, concrete callee type) → mangled Symbol
 /// for use during call site rewriting.
 fn build_rewrite_map<'db>(
@@ -540,7 +550,7 @@ fn build_rewrite_map<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, CallingConvention, EffectRow, OpDeclKind, TypeKind};
+    use crate::ast::{AbilityId, CallingConvention, OpDeclKind, TypeKind};
 
     #[salsa::db]
     #[derive(Default)]
