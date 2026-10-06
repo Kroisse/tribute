@@ -2,6 +2,7 @@
 
 use crate::attr_kind::Bytes;
 use crate::attr_kind::SymbolRef;
+use crate::dialect::core::{I32, IntegerLike};
 use crate::op_interface::{CallLikeModel, CallLikeOps, IndirectCallLikeModel, IndirectCallLikeOps};
 use crate::ops::{DialectOp, DialectType};
 use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
@@ -100,7 +101,7 @@ mod clif {
     /// `index` is an unsigned 32-bit position in `table`. Control transfers
     /// to the successor at that position, or to `default` when the index is
     /// out of bounds. Successors take no block arguments.
-    fn br_table(index: Value<_>) {
+    fn br_table(index: Value<I32>) {
         #[successor(default)]
         {}
         #[successors(table)]
@@ -114,7 +115,7 @@ mod clif {
     /// case matches. Cases may be sparse and need not start at 0. Successors
     /// take no block arguments.
     #[verify]
-    fn switch(cases: Attr<[u64]>, index: Value<_>) {
+    fn switch<T: IntegerLike>(cases: Attr<[u64]>, index: Value<T>) {
         #[successor(default)]
         {}
         #[successors(targets)]

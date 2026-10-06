@@ -731,7 +731,7 @@ mod tests {
         let branch = "br_table %index [^default, ^target]";
         let wide_index = branch_error("core.i64", branch, "");
         assert!(
-            wide_index.contains("index has type i64, not i32"),
+            wide_index.contains("operand #0 `index`: expected core.i32, found core.i64"),
             "{wide_index}"
         );
         let parameters = branch_error("core.i32", branch, "(%value: core.i32)");
@@ -759,7 +759,10 @@ mod tests {
             "{parameters}"
         );
         let float_index = branch_error("core.f64", branch, "");
-        assert!(float_index.contains("not an integer"), "{float_index}");
+        assert!(
+            float_index.contains("operand #0 `index`: expected T: IntegerLike, found core.f64"),
+            "{float_index}"
+        );
     }
 
     #[test]

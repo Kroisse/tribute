@@ -476,12 +476,6 @@ impl<'a> FunctionTranslator<'a> {
 
         if let Ok(br_table) = clif::BrTable::from_op(ctx, op) {
             let index = self.lookup(br_table.index(ctx))?;
-            let index_ty = self.builder.func.dfg.value_type(index);
-            if index_ty != cl_types::I32 {
-                return Err(CompilationError::codegen(format!(
-                    "clif.br_table: index has type {index_ty}, not i32"
-                )));
-            }
             let default = self.jump_table_entry(br_table.default(ctx))?;
             let table = br_table
                 .table(ctx)
@@ -497,11 +491,6 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(switch) = clif::Switch::from_op(ctx, op) {
             let index = self.lookup(switch.index(ctx))?;
             let index_ty = self.builder.func.dfg.value_type(index);
-            if !index_ty.is_int() {
-                return Err(CompilationError::codegen(format!(
-                    "clif.switch: index has type {index_ty}, not an integer"
-                )));
-            }
             let max = index_ty.bounds(false).1;
             let mut emitter = cranelift_frontend::Switch::new();
             for (case, target) in switch.cases(ctx).zip(switch.targets(ctx)) {
