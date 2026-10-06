@@ -384,7 +384,7 @@ impl LspServer {
 
             // Add the definition itself
             edits.push(TextEdit {
-                range: span_to_range(&rope, def.span),
+                range: span_to_range(&rope, def.name_span),
                 new_text: new_name.clone(),
             });
 
@@ -394,6 +394,15 @@ impl LspServer {
                 edits.push(TextEdit {
                     range: span_to_range(&rope, reference.span),
                     new_text: new_name.clone(),
+                });
+            }
+
+            // A shorthand field pattern `Point { x }` also binds `x`; keep
+            // that binding by expanding it to `Point { new: x }`.
+            for shorthand in index.shorthand_fields_of_target(db, &target) {
+                edits.push(TextEdit {
+                    range: span_to_range(&rope, shorthand.span),
+                    new_text: format!("{new_name}: {}", def.name),
                 });
             }
 
@@ -2087,6 +2096,49 @@ mod tests {
                 "All edits should use new name"
             );
         }
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_struct_field_keeps_type_and_expands_shorthand() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_field_msg");
+        let source = "struct Point { x: Int, y: Int }\n\nfn main() -> Int {\n    let p = Point { x: 1, y: 2 }\n    let Point { x, y } = p\n    x + y\n}";
+
+        harness.open_document(&uri, source);
+
+        let params = RenameParams {
+            text_document_position: TextDocumentPositionParams {
+                text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                position: lsp_types::Position {
+                    line: 3,
+                    character: 20, // On `x` in `Point { x: 1, .. }`
+                },
+            },
+            new_name: "px".to_string(),
+            work_done_progress_params: Default::default(),
+        };
+
+        let edit = harness
+            .request::<Rename>(params)
+            .expect("Should return workspace edit for field rename");
+        let changes = edit.changes.expect("Should have changes");
+        let mut edits = changes.get(&uri).expect("Should have edits").clone();
+        edits.sort_by_key(|e| std::cmp::Reverse((e.range.start.line, e.range.start.character)));
+
+        let mut lines: Vec<String> = source.lines().map(str::to_string).collect();
+        for e in &edits {
+            assert_eq!(e.range.start.line, e.range.end.line);
+            let line = &mut lines[e.range.start.line as usize];
+            line.replace_range(
+                e.range.start.character as usize..e.range.end.character as usize,
+                &e.new_text,
+            );
+        }
+        assert_eq!(
+            lines.join("\n"),
+            "struct Point { px: Int, y: Int }\n\nfn main() -> Int {\n    let p = Point { px: 1, y: 2 }\n    let Point { px: x, y } = p\n    x + y\n}"
+        );
     }
 
     #[test]

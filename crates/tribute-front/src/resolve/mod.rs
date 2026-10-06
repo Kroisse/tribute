@@ -622,6 +622,7 @@ mod tests {
             type_params: vec![],
             fields: vec![FieldDecl {
                 id: fresh_node_id(),
+                name_id: fresh_node_id(),
                 is_pub: false,
                 name: Some(Symbol::new("value")),
                 ty: TypeAnnotation {
@@ -902,6 +903,7 @@ mod tests {
                 fields: vec![
                     FieldDecl {
                         id: fresh_node_id(),
+                        name_id: fresh_node_id(),
                         is_pub: false,
                         name: Some(Symbol::new("x")),
                         ty: TypeAnnotation {
@@ -911,6 +913,7 @@ mod tests {
                     },
                     FieldDecl {
                         id: fresh_node_id(),
+                        name_id: fresh_node_id(),
                         is_pub: false,
                         name: Some(Symbol::new("y")),
                         ty: TypeAnnotation {

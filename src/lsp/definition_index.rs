@@ -59,8 +59,10 @@ pub enum DefinitionKind {
 pub struct AstDefinitionEntry {
     /// The NodeId of the definition.
     pub node_id: NodeId,
-    /// The span of the definition name.
+    /// The span of the whole definition, which goto-definition targets.
     pub span: Span,
+    /// The span of the definition name alone, which rename edits.
+    pub name_span: Span,
     /// The name of the definition.
     pub name: Symbol,
     /// The kind of definition.
@@ -145,6 +147,10 @@ pub struct AstDefinitionIndex<'db> {
     /// All references, sorted by span.
     #[returns(deref)]
     pub references: Vec<AstReferenceEntry>,
+    /// Shorthand record-pattern fields (`Point { x }`), which are not
+    /// references because the binding they introduce owns their span.
+    #[returns(deref)]
+    pub shorthand_fields: Vec<AstReferenceEntry>,
     /// Map from name to definition indices.
     by_name: BTreeMap<Symbol, Vec<usize>>,
 }
@@ -161,10 +167,12 @@ impl<'db> AstDefinitionIndex<'db> {
 
         let mut definitions = collector.definitions;
         let mut references = collector.references;
+        let mut shorthand_fields = collector.shorthand_fields;
 
         // Sort by span
         definitions.sort_by_key(|e| (e.span.start, e.span.end));
         references.sort_by_key(|e| (e.span.start, e.span.end));
+        shorthand_fields.sort_by_key(|e| (e.span.start, e.span.end));
 
         // Build name index
         let mut by_name = BTreeMap::<_, Vec<_>>::new();
@@ -172,7 +180,7 @@ impl<'db> AstDefinitionIndex<'db> {
             by_name.entry(def.name.clone()).or_default().push(i);
         }
 
-        Self::new(db, definitions, references, by_name)
+        Self::new(db, definitions, references, shorthand_fields, by_name)
     }
 
     /// Find the definition at a given offset (when cursor is on a definition).
@@ -357,6 +365,20 @@ impl<'db> AstDefinitionIndex<'db> {
         }
     }
 
+    /// Shorthand record-pattern fields (`Point { x }`) that name `target`.
+    ///
+    /// Renaming the field must expand each into `Point { new: x }`.
+    pub fn shorthand_fields_of_target(
+        &self,
+        db: &'db dyn salsa::Database,
+        target: &ResolvedTarget,
+    ) -> Vec<&AstReferenceEntry> {
+        self.shorthand_fields(db)
+            .iter()
+            .filter(|r| r.target == *target)
+            .collect()
+    }
+
     /// Find references from a position (works for both definitions and references).
     ///
     /// Returns the resolved target and all references to it.
@@ -456,6 +478,7 @@ struct DefinitionCollector<'a, 'db> {
     span_map: &'a SpanMap,
     definitions: Vec<AstDefinitionEntry>,
     references: Vec<AstReferenceEntry>,
+    shorthand_fields: Vec<AstReferenceEntry>,
 }
 
 impl<'a, 'db> DefinitionCollector<'a, 'db> {
@@ -465,6 +488,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             span_map,
             definitions: Vec::new(),
             references: Vec::new(),
+            shorthand_fields: Vec::new(),
         }
     }
 
@@ -475,10 +499,24 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         kind: DefinitionKind,
         local_id: Option<LocalId>,
     ) {
+        self.add_definition_named_at(node_id, node_id, name, kind, local_id);
+    }
+
+    /// Add a definition whose name is spanned by `name_id`.
+    fn add_definition_named_at(
+        &mut self,
+        node_id: NodeId,
+        name_id: NodeId,
+        name: Symbol,
+        kind: DefinitionKind,
+        local_id: Option<LocalId>,
+    ) {
         let span = self.span_map.get_or_default(node_id);
+        let name_span = self.span_map.get_or_default(name_id);
         self.definitions.push(AstDefinitionEntry {
             node_id,
             span,
+            name_span,
             name,
             kind,
             local_id,
@@ -517,8 +555,9 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
         // Add field definitions
         for field in &s.fields {
             if let Some(name) = field.name.clone() {
-                self.add_definition(
+                self.add_definition_named_at(
                     field.id,
+                    field.name_id,
                     name,
                     DefinitionKind::Field {
                         owner: s.name.clone(),
@@ -666,14 +705,19 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
                 let shorthand = field.pattern.as_ref().is_some_and(|p| {
                     p.id == field.id && matches!(p.kind.as_ref(), PatternKind::Bind { .. })
                 });
-                if !shorthand {
-                    self.add_reference(
-                        field.name_id,
-                        ResolvedTarget::Field {
-                            owner: owner.clone(),
-                            name: field.name.clone(),
-                        },
-                    );
+                let target = ResolvedTarget::Field {
+                    owner: owner.clone(),
+                    name: field.name.clone(),
+                };
+                if shorthand {
+                    let span = self.span_map.get_or_default(field.id);
+                    self.shorthand_fields.push(AstReferenceEntry {
+                        node_id: field.id,
+                        span,
+                        target,
+                    });
+                } else {
+                    self.add_reference(field.name_id, target);
                 }
             }
         }
@@ -2056,6 +2100,33 @@ fn sum(p: Point) -> Int {
             DefinitionKind::Field {
                 owner: trunk_ir::Symbol::new("Point")
             }
+        );
+    }
+
+    #[test]
+    fn test_field_definition_name_span_excludes_type_and_shorthand_is_tracked() {
+        let db = salsa::DatabaseImpl::default();
+        let text = r#"struct Point { x: Int, y: Int }
+
+fn sum(p: Point) -> Int {
+    let Point { x, y: b } = p
+    x + b
+}"#;
+        let source = make_source(&db, text);
+        let index = definition_index(&db, source).unwrap();
+
+        let x = field_target("Point", "x");
+        let def = index.definition_of_target(&db, &x).unwrap();
+        assert_eq!(&text[def.name_span.start..def.name_span.end], "x");
+        assert!(text[def.span.start..def.span.end].starts_with("x: Int"));
+
+        let shorthand = index.shorthand_fields_of_target(&db, &x);
+        assert_eq!(shorthand.len(), 1);
+        assert_eq!(&text[shorthand[0].span.start..shorthand[0].span.end], "x");
+        assert!(
+            index
+                .shorthand_fields_of_target(&db, &field_target("Point", "y"))
+                .is_empty()
         );
     }
 

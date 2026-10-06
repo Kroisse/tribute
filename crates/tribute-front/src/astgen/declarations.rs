@@ -530,11 +530,13 @@ fn lower_struct_field(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Option<FieldD
     let type_node = node.child_by_field_name("type")?;
 
     let id = ctx.fresh_id_with_span(&node);
+    let name_id = ctx.fresh_id_with_span(&name_node);
     let name = Some(ctx.node_symbol(&name_node));
     let ty = lower_type_annotation(ctx, type_node)?;
 
     Some(FieldDecl {
         id,
+        name_id,
         is_pub: false, // TODO: parse visibility
         name,
         ty,
@@ -634,6 +636,7 @@ fn lower_variant_fields(ctx: &mut AstLoweringCtx<'_>, node: Node) -> Vec<FieldDe
                     let id = ctx.fresh_id_with_span(&child);
                     fields.push(FieldDecl {
                         id,
+                        name_id: id,
                         is_pub: false,
                         name: None, // Tuple fields are anonymous
                         ty,

@@ -242,6 +242,7 @@ fn specialize_struct_decl<'db>(
             .iter()
             .map(|f| FieldDecl {
                 id: f.id.with_variant(variant),
+                name_id: f.name_id.with_variant(variant),
                 is_pub: f.is_pub,
                 name: f.name.clone(),
                 ty: substitute_annotation(db, &f.ty, &param_names, type_args),
@@ -275,6 +276,7 @@ fn specialize_enum_decl<'db>(
                     .iter()
                     .map(|f| FieldDecl {
                         id: f.id.with_variant(variant),
+                        name_id: f.name_id.with_variant(variant),
                         is_pub: f.is_pub,
                         name: f.name.clone(),
                         ty: substitute_annotation(db, &f.ty, &param_names, type_args),
@@ -1160,6 +1162,7 @@ mod tests {
             fields: vec![
                 FieldDecl {
                     id: node_id(4),
+                    name_id: node_id(4),
                     is_pub: false,
                     name: Some(Symbol::new("first")),
                     ty: TypeAnnotation {
@@ -1169,6 +1172,7 @@ mod tests {
                 },
                 FieldDecl {
                     id: node_id(6),
+                    name_id: node_id(6),
                     is_pub: false,
                     name: Some(Symbol::new("second")),
                     ty: TypeAnnotation {
@@ -1223,6 +1227,7 @@ mod tests {
                     name: Symbol::new("Some"),
                     fields: vec![FieldDecl {
                         id: node_id(4),
+                        name_id: node_id(4),
                         is_pub: false,
                         name: None,
                         ty: TypeAnnotation {
