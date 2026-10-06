@@ -91,12 +91,11 @@ use tribute_passes::generic_type_converter;
 use trunk_ir::Span;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::conversion::{
-    UnrealizedCastConversionPattern, materialize_unrealized_casts, reconcile_unrealized_casts,
+    ReconcileUnrealizedCasts, UnrealizedCastConversionPattern, materialize_unrealized_casts,
 };
 use trunk_ir::dialect::{core as core_dialect, func as func_dialect};
 use trunk_ir::ops::DialectOp;
 use trunk_ir::pass::{PassError, PassManager, PassResult};
-use trunk_ir::rewrite::ConversionError;
 use trunk_ir::rewrite::PatternApplicator;
 use trunk_ir::{IrContext, Module};
 use trunk_ir_wasm_backend::passes::reference_upcast_elision::ReferenceUpcastElisionPattern;
@@ -247,7 +246,6 @@ use tribute_front::resolve::ModuleEnv;
 use tribute_front::tdnr as ast_tdnr;
 use tribute_front::typeck as ast_typeck;
 use tribute_front::typeck::PreludeExports;
-use trunk_ir_cranelift_backend::passes::{arith_to_clif, cf_to_clif, func_to_clif, mem_to_clif};
 use trunk_ir_cranelift_backend::{
     CompilationResult as NativeCompilationResult, emit_module_to_native,
 };
@@ -769,7 +767,14 @@ fn compile_to_wasm(ctx: &mut IrContext, module: Module) -> WasmCompilationResult
         if !result.reached_fixpoint {
             tracing::warn!("wasm cast legalization did not reach a fixpoint");
         }
-        reconcile_unrealized_casts(ctx, module);
+        let core_module = core_dialect::Module::from_op(ctx, module.op())
+            .expect("wasm cast reconciliation requires a core.module");
+        let mut reconcile = PassManager::new();
+        reconcile.add_pass(ReconcileUnrealizedCasts);
+        reconcile
+            .run(ctx, core_module, &mut analyses)
+            .map_err(tribute_passes::wasm::lower::WasmLowerError::from)
+            .map_err(wasm_lowering_failure)?;
     }
 
     // Materialization may introduce semantic WasmGC operations after the main
@@ -1332,174 +1337,118 @@ fn prepare_module_to_native(
 ) -> NativeCompilationResult<()> {
     let _span = tracing::info_span!("prepare_module_to_native").entered();
     let mut analyses = AnalysisCache::new();
-
-    // Phase -1 - Generate native entrypoint
-    tribute_passes::native::entrypoint::generate_native_entrypoint(ctx, module, sanitize);
-
-    // Phase -0.5 - Const analysis + lowering
-    // Declare a clif.data object per string/bytes payload.
-    // Lower adt.string_const → adt.variant_new + bytes alloc,
-    // and adt.bytes_const → clif alloc + data reference.
-    let const_analysis = tribute_passes::native::const_to_native::analyze_consts(ctx, module);
-    tribute_passes::native::const_to_native::lower(ctx, module, &const_analysis)
-        .map_err(native_conversion_failure)?;
-
-    // Phase -0.2 - Lower target-independent I/O to the native runtime ABI.
-    tribute_passes::native::io::lower(ctx, module).map_err(native_conversion_failure)?;
-
-    // Phase -0.1 - Select the private native representation for opaque lists.
-    tribute_passes::native::list::lower(ctx, module).map_err(native_conversion_failure)?;
-
-    // Phase 0 - Lower structured control flow to CFG-based control flow
-    if let Ok(core_module) = core_dialect::Module::from_op(ctx, module.op()) {
-        let mut pm = PassManager::new();
-        pm.nest::<func_dialect::Func>()
-            .add_pass(trunk_ir::transforms::scf_to_cf_pass());
-        pm.with_debug_verifier();
-        pm.run(ctx, core_module, &mut analyses)
-            .map_err(native_pass_failure)?;
-    } else {
-        trunk_ir::transforms::scf_to_cf::lower_scf_to_cf(ctx, module, &mut analyses);
-    }
-
-    // Phase 1 - Plan ownership and RTTI, then lower func dialect to clif dialect
-    {
-        let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter(ctx);
-        let plan_options = native_ownership_plan_options(stop_after, optimizations);
-        let ownership_plan = tribute_passes::native::ownership_plan::build_native_ownership_plan(
-            ctx,
-            module,
-            plan_options,
-            &mut analyses,
+    let core_module = core_dialect::Module::from_op(ctx, module.op()).map_err(|_| {
+        trunk_ir_cranelift_backend::CompilationError::ir_validation(
+            "native lowering requires a core.module".to_owned(),
         )
-        .map_err(|error| {
-            trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
-        })?;
-        tribute_passes::native::rc_materialization::materialize(ctx, module, &ownership_plan)
-            .map_err(|error| {
-                trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
-            })?;
-        // Record the planned RTTI layouts in the IR, then adapt semantic
-        // closure allocations and their declaration to the native layout.
-        tribute_passes::native::rtti::declare_rtti_layouts(
-            ctx,
-            module,
-            ownership_plan.rtti_types(),
-        );
-        tribute_passes::native::adapt_closure_layout::lower(ctx, module);
-        // Field accesses need only the structural `mem.struct` layout, and
-        // variant tests only the variant's descriptor number. The nominal
-        // layouts stay on allocations, which RC header lowering resolves to
-        // descriptors.
-        let core_module = core_dialect::Module::from_op(ctx, module.op()).map_err(|_| {
-            trunk_ir_cranelift_backend::CompilationError::ir_validation(
-                "native lowering requires a core.module".to_owned(),
-            )
-        })?;
-        // No debug verifier: closure layout adaptation retypes loaded
-        // values in place, so this IR is not schema-clean until the clif
-        // lowerings below finish.
-        let mut pm = PassManager::new();
-        pm.add_pass(tribute_passes::native::struct_to_mem::StructToMem::new(
-            ownership_plan,
-        ));
-        // A descriptor read takes a managed reference, so it is lowered before
-        // type conversion turns its operand into a pointer.
-        pm.add_pass(tribute_passes::native::descriptor_to_clif::DescriptorToClif);
-        pm.run(ctx, core_module, &mut analyses)
+    })?;
+    for mut stage in native_lowering_passes(sanitize, optimizations, stop_after) {
+        stage
+            .run(ctx, core_module, &mut analyses)
             .map_err(native_pass_failure)?;
-        func_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
+    }
+    Ok(())
+}
+
+/// The native lowering stages, in order, as passes of [`PassManager`]s that
+/// run one after another.
+///
+/// Stages share one analysis cache and, except in the middle segment, the debug
+/// verifier. That segment starts with `func-to-clif`, whose type conversion
+/// retypes values before their users are converted, so its IR is not
+/// schema-clean until the clif lowerings finish (#1353); the next segment's
+/// entry check verifies its result. A stage that fails is named in the
+/// resulting [`PassError`].
+fn native_lowering_passes(
+    sanitize: bool,
+    optimizations: NativeOptimizationOptions,
+    stop_after: Option<NativePipelineStage>,
+) -> Vec<PassManager> {
+    use tribute_passes::native::{
+        adt_rc_header::AdtRcHeader,
+        adt_to_clif::AdtToClif,
+        cast_legalization::LegalizeCasts,
+        clif_lowering::{ArithToClif, CfToClif, FuncToClif, MemToClif},
+        const_to_native::ConstToNative,
+        descriptor_to_clif::DescriptorToClif,
+        entrypoint::GenerateNativeEntrypoint,
+        io::IoToNative,
+        list::ListToNative,
+        ownership_lowering::LowerNativeOwnership,
+        rc_lowering::RcLowering,
+        rc_optimization::EliminatePairedRc,
+        rtti::GenerateRtti,
+        tribute_rt_to_clif::TributeRtToClif,
+    };
+
+    let mut pm = PassManager::new();
+    pm.with_debug_verifier();
+
+    pm.add_pass(GenerateNativeEntrypoint { sanitize })
+        // Declare a clif.data object per string/bytes payload, then lower
+        // adt.string_const to adt.variant_new + bytes alloc and
+        // adt.bytes_const to a clif alloc + data reference.
+        .add_pass(ConstToNative)
+        // Lower target-independent I/O to the native runtime ABI.
+        .add_pass(IoToNative)
+        // Select the private native representation for opaque lists.
+        .add_pass(ListToNative);
+
+    // Lower structured control flow to CFG-based control flow.
+    pm.nest::<func_dialect::Func>()
+        .add_pass(trunk_ir::transforms::scf_to_cf_pass());
+
+    pm.add_pass(LowerNativeOwnership {
+        options: native_ownership_plan_options(stop_after, optimizations),
+    })
+    // A descriptor read takes a managed reference, so it is lowered before
+    // type conversion turns its operand into a pointer.
+    .add_pass(DescriptorToClif);
+
+    let mut lowering = PassManager::new();
+    lowering
+        .add_pass(FuncToClif)
+        .add_pass(CfToClif)
+        .add_pass(GenerateRtti)
+        .add_pass(AdtRcHeader)
+        .add_pass(AdtToClif)
+        .add_pass(ArithToClif)
+        .add_pass(MemToClif)
+        // Lower non-RC tribute runtime operations. The explicit RC operations
+        // were materialized from typed ownership actions before erasure.
+        .add_pass(TributeRtToClif);
+
+    if matches!(
+        stop_after,
+        Some(
+            NativePipelineStage::AfterRcInsertion
+                | NativePipelineStage::AfterBorrowedParameterOptimization
+                | NativePipelineStage::AfterTemporaryBorrowOptimization
+        )
+    ) {
+        return vec![pm, lowering];
     }
 
-    // Phase 1.5 - Lower cf dialect to clif dialect
-    {
-        let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter(ctx);
-        cf_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
-    }
+    let mut finish = PassManager::new();
+    finish.with_debug_verifier();
 
-    // Phase 1.9-1.95 - RTTI + ADT RC header
-    {
-        let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter(ctx);
-        tribute_passes::native::rtti::generate_rtti(ctx, module, &type_converter).map_err(
-            |error| trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string()),
-        )?;
-        tribute_passes::native::adt_rc_header::lower(ctx, module, type_converter)
-            .map_err(native_conversion_failure)?;
-    }
-
-    // Phase 2 - Lower ADT struct access operations to clif dialect
-    {
-        let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter(ctx);
-        tribute_passes::native::adt_to_clif::lower(ctx, module, type_converter)
-            .map_err(native_conversion_failure)?;
-    }
-
-    // Phase 2.5 - Lower arith dialect to clif dialect
-    {
-        let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter(ctx);
-        arith_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
-    }
-
-    // Phase 2.6 - Lower mem dialect to clif dialect
-    {
-        let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter(ctx);
-        mem_to_clif::lower(ctx, module, type_converter).map_err(native_conversion_failure)?;
-    }
-
-    // Phase 2.7 - Lower non-RC tribute runtime operations. The explicit RC
-    // operations were materialized from typed ownership actions before erasure.
-    {
-        let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter(ctx);
-        tribute_passes::native::tribute_rt_to_clif::lower(ctx, module, type_converter)
-            .map_err(native_conversion_failure)?;
-    }
-
-    if stop_after == Some(NativePipelineStage::AfterRcInsertion) {
-        return Ok(());
-    }
-
-    if stop_after == Some(NativePipelineStage::AfterBorrowedParameterOptimization) {
-        return Ok(());
-    }
-
-    if stop_after == Some(NativePipelineStage::AfterTemporaryBorrowOptimization) {
-        return Ok(());
-    }
-
-    // Phase 2.9 - Eliminate local retain/release pairs while they are still
-    // directly observable tribute_rt operations.
+    // Eliminate local retain/release pairs while they are still directly
+    // observable tribute_rt operations.
     if optimizations.paired_rc_elimination == PairedRcEliminationPolicy::Enabled {
-        tribute_passes::native::rc_optimization::eliminate_paired_rc(ctx, module);
+        finish.add_pass(EliminatePairedRc);
     }
 
     if stop_after == Some(NativePipelineStage::AfterRcOptimization) {
-        return Ok(());
+        return vec![pm, lowering, finish];
     }
 
-    // Phase 3 - Legalize unrealized_conversion_cast operations: convert their
-    // result types, materialize real representation changes, and reconcile
-    // the identities left behind. A remaining cast is rejected by
-    // `validate_clif_ir` before emission.
-    {
-        let (type_converter, _) =
-            tribute_passes::native::type_converter::native_type_converter(ctx);
-        PatternApplicator::new(type_converter)
-            .add_pattern(UnrealizedCastConversionPattern)
-            .apply_partial(ctx, module);
-        reconcile_unrealized_casts(ctx, module);
-    }
+    finish
+        .add_pass(LegalizeCasts)
+        .add_pass(ReconcileUnrealizedCasts)
+        // Lower RC operations (retain/release) to inline clif code.
+        .add_pass(RcLowering);
 
-    // Phase 3.5 - Lower RC operations (retain/release) to inline clif code
-    tribute_passes::native::rc_lowering::lower_rc(ctx, module);
-
-    Ok(())
+    vec![pm, lowering, finish]
 }
 
 fn compile_module_to_native(
@@ -1511,12 +1460,6 @@ fn compile_module_to_native(
     prepare_module_to_native(ctx, module, sanitize, optimizations, None)?;
     let _emit_span = tracing::info_span!("emit_module_to_native").entered();
     emit_module_to_native(ctx, module)
-}
-
-fn native_conversion_failure(
-    error: ConversionError,
-) -> trunk_ir_cranelift_backend::CompilationError {
-    trunk_ir_cranelift_backend::CompilationError::ir_validation(error.to_string())
 }
 
 fn native_pass_failure(error: PassError) -> trunk_ir_cranelift_backend::CompilationError {

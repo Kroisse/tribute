@@ -31,7 +31,7 @@ const BYTES_OFFSET: u32 = 8;
 const MESSAGE_OFFSET: u32 = 16;
 
 /// Lower every `tribute_io` operation and add the required runtime declarations.
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     ensure_runtime_declarations(ctx, module);
     let read_line_result_ty = find_read_line_result_type(ctx);
 
@@ -291,6 +291,27 @@ fn op_region(ctx: &mut IrContext, loc: Location, op: OpRef, result: ValueRef) ->
         blocks: smallvec![block],
         parent_op: None,
     })
+}
+
+/// Pass form of [`lower`].
+pub struct IoToNative;
+
+impl trunk_ir::pass::Pass for IoToNative {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "io-to-native"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        lower(ctx, target.into())?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]

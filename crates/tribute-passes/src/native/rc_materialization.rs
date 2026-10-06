@@ -47,7 +47,7 @@ enum ScheduledAction {
 
 /// Validate every requested insertion before materializing the plan's exact RC
 /// operations.  On error, no operation is attached to the module.
-pub fn materialize(
+pub(crate) fn materialize(
     ctx: &mut IrContext,
     module: Module,
     plan: &NativeOwnershipPlan,

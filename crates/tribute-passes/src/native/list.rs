@@ -17,7 +17,7 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{AttributeMap, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     lower_observations(ctx, module);
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(EmptyPattern)
@@ -203,6 +203,27 @@ impl RewritePattern for IsEmptyPattern {
             .build(ctx, ctx.op(op).location);
         rewriter.replace_op(check.op_ref());
         true
+    }
+}
+
+/// Pass form of [`lower`].
+pub struct ListToNative;
+
+impl trunk_ir::pass::Pass for ListToNative {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "list-to-native"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        lower(ctx, target.into())?;
+        Ok(())
     }
 }
 

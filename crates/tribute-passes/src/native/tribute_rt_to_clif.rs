@@ -136,7 +136,7 @@ fn box_value(
 ///
 /// This is a partial lowering: only box/unbox operations are converted.
 /// `retain`/`release` ops pass through (handled by a future RC lowering pass).
-pub fn lower(
+fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,
@@ -499,6 +499,28 @@ impl RewritePattern for UnboxFloatPattern {
             .build(ctx, loc);
         rewriter.replace_op(load_op.op_ref());
         true
+    }
+}
+
+/// Pass form of [`lower`].
+pub struct TributeRtToClif;
+
+impl trunk_ir::pass::Pass for TributeRtToClif {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "tribute-rt-to-clif"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        let (type_converter, _) = crate::native::type_converter::native_type_converter(ctx);
+        lower(ctx, target.into(), type_converter)?;
+        Ok(())
     }
 }
 

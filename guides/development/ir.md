@@ -169,7 +169,7 @@ conversion converts every value's type, including cast results through
 representation changes and never forwards a value of another type. A target
 whose type system accepts subtype references elides those upcasts itself; the
 Wasm target's `ReferenceUpcastElisionPattern` follows the backend's physical
-assignability rule. The converter-free `reconcile_unrealized_casts` then folds
+assignability rule. The converter-free `ReconcileUnrealizedCasts` pass then folds
 identities and cast chains, and a cast left after that is rejected by the
 target emission boundary.
 Typed accessors do not check the schema; for an optional region or result,

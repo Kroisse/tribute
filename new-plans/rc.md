@@ -459,7 +459,7 @@ continue_block:
 ```
 
 **Pipeline position:** After unrealized cast legalization and
-`reconcile_unrealized_casts`, before `emit_module_to_native`.
+`ReconcileUnrealizedCasts`, before `emit_module_to_native`.
 
 ---
 

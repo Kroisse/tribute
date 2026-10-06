@@ -158,7 +158,7 @@ pub fn native_type_converter(ctx: &mut IrContext) -> (TypeConverter, NativeTypeR
 
         // Values of different types are never forwarded: a target conversion
         // gives both sides of a representation-preserving cast the same type,
-        // and `reconcile_unrealized_casts` removes it. Only real
+        // and `ReconcileUnrealizedCasts` removes it. Only real
         // representation changes are materialized here.
         let to_is_ptr = to_ty == r.core_ptr || to_ty == r.tribute_rt_anyref;
 

@@ -248,12 +248,14 @@ pub fn generic_type_converter(ctx: &mut IrContext) -> TypeConverter {
 mod tests {
     use super::*;
     use trunk_ir::OperationDataBuilder;
+    use trunk_ir::analysis::AnalysisCache;
     use trunk_ir::conversion::{
-        UnrealizedCastConversionPattern, materialize_unrealized_casts, reconcile_unrealized_casts,
+        ReconcileUnrealizedCasts, UnrealizedCastConversionPattern, materialize_unrealized_casts,
     };
     use trunk_ir::dialect::{func, wasm};
     use trunk_ir::location::Span;
     use trunk_ir::ops::DialectOp;
+    use trunk_ir::pass::Pass;
     use trunk_ir::refs::ValueRef;
     use trunk_ir::types::{Attribute, Location};
     use trunk_ir::walk::{WalkAction, walk_op};
@@ -315,7 +317,10 @@ mod tests {
             trunk_ir::rewrite::PatternApplicator::new(tc)
                 .add_pattern(UnrealizedCastConversionPattern)
                 .apply_partial(&mut ctx, module);
-            reconcile_unrealized_casts(&mut ctx, module);
+            let core_module = trunk_ir::dialect::core::Module::from_op(&ctx, module.op()).unwrap();
+            ReconcileUnrealizedCasts
+                .run(&mut ctx, core_module, &mut AnalysisCache::new())
+                .unwrap();
             crate::wasm::lower::finalize_wasm_gc_types(&mut ctx, module).unwrap();
             let mut tails = Vec::new();
             let _: std::ops::ControlFlow<()> = walk_op(&ctx, module.op(), &mut |op| {
