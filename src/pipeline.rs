@@ -1017,16 +1017,17 @@ fn debug_validate_value_integrity(ctx: &IrContext, m: Module, boundary: &str) {
 
 /// Run canonicalization and DCE on every function.
 ///
-/// `stage` names the caller in diagnostics.
+/// `stage` names the caller in diagnostics. A failed pass is returned so the
+/// caller stops lowering.
 fn run_canonicalize_passes(
     ctx: &mut IrContext,
     m: Module,
     analyses: &mut AnalysisCache,
     stage: &str,
-) {
+) -> Result<(), PassError> {
     let Ok(core_module) = core_dialect::Module::from_op(ctx, m.op()) else {
         tracing::warn!("{stage} skipped function passes: root op is not core.module");
-        return;
+        return Ok(());
     };
     let mut pm = PassManager::new();
     pm.nest::<func_dialect::Func>()
@@ -1035,21 +1036,24 @@ fn run_canonicalize_passes(
             trunk_ir::transforms::DceConfig::default(),
         ));
     pm.with_debug_verifier();
-    if let Err(error) = pm.run(ctx, core_module, analyses) {
-        tracing::warn!("{stage} function passes failed: {error}");
-    }
+    pm.run(ctx, core_module, analyses)
 }
 
 /// Run inlining + DCE + cast materialization (shared cleanup after all lowering).
 ///
-fn run_cleanup_passes(ctx: &mut IrContext, m: Module, analyses: &mut AnalysisCache) {
+fn run_cleanup_passes(
+    ctx: &mut IrContext,
+    m: Module,
+    analyses: &mut AnalysisCache,
+) -> Result<(), PassError> {
     trunk_ir::transforms::global_dce::eliminate_dead_functions(ctx, m, analyses);
-    run_canonicalize_passes(ctx, m, analyses, "cleanup");
+    run_canonicalize_passes(ctx, m, analyses, "cleanup")?;
     // Target type conversion has not run yet: materialize only the casts that
     // need real operations and keep the ones that only retype a value, so
     // every use still sees the type its operation declares.
     let tc = generic_type_converter(ctx);
     materialize_unrealized_casts(ctx, m, &tc);
+    Ok(())
 }
 
 /// Run the WASM target pipeline: lowering + cleanup.
@@ -1067,7 +1071,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
     // Fold what inlining exposed (struct reads of known constructions, box
     // round trips, constant selectors) before closure storage and evidence
     // lowering see the IR.
-    run_canonicalize_passes(ctx, m, &mut analyses, "post-inline canonicalization");
+    run_canonicalize_passes(ctx, m, &mut analyses, "post-inline canonicalization")?;
 
     enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
 
@@ -1085,7 +1089,7 @@ fn run_wasm_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), DumpIr
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
     debug_validate_value_integrity(ctx, m, "after evidence_to_wasm");
 
-    run_cleanup_passes(ctx, m, &mut analyses);
+    run_cleanup_passes(ctx, m, &mut analyses)?;
     enforce_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Wasm)
 }
 
@@ -1106,7 +1110,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     // Fold what inlining exposed (struct reads of known constructions, box
     // round trips, constant selectors) before closure storage and evidence
     // lowering see the IR.
-    run_canonicalize_passes(ctx, m, &mut analyses, "post-inline canonicalization");
+    run_canonicalize_passes(ctx, m, &mut analyses, "post-inline canonicalization")?;
 
     enter_target_closure_storage_boundary(ctx, m, &mut analyses)?;
 
@@ -1126,7 +1130,7 @@ fn run_native_target_pipeline(ctx: &mut IrContext, m: Module) -> Result<(), Dump
     tribute_passes::closure_lower::finalize_closure_storage_layout(ctx, m);
     debug_validate_value_integrity(ctx, m, "after evidence_to_native");
 
-    run_cleanup_passes(ctx, m, &mut analyses);
+    run_cleanup_passes(ctx, m, &mut analyses)?;
     enforce_boundary_exit(ctx, m, tribute_passes::abi_boundary::TargetKind::Native)
 }
 

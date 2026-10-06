@@ -79,18 +79,23 @@ mod adt {
 
 // === Canonicalization folds ===
 
+use std::ops::ControlFlow;
 use trunk_ir::ops::DialectOp;
-use trunk_ir::refs::{OpRef, ValueDef};
+use trunk_ir::refs::{OpRef, TypeRef, ValueDef};
 use trunk_ir::transforms::canonicalize::FoldResult;
+use trunk_ir::walk::{WalkAction, walk_op};
 
 /// `adt.struct_get(adt.struct_new(.., %f, ..))` → `%f`.
 ///
 /// Both ops must name the same layout type, the field index must be in
 /// range, and the stored operand must already have the result type: a fold
-/// never forwards a value of another type. The struct is immutable here, so
-/// the fold bails if an `adt.struct_set` writes it, and also if any
-/// `tribute_rt` ownership operation already consumes it, since forwarding the
-/// field would then bypass an explicit ownership unit. Reference counting
+/// never forwards a value of another type. A layout type that any
+/// `adt.struct_set` in the module writes is mutable (compiler-generated cells
+/// reach their writers through casts and closure environments, so use lists
+/// cannot prove a particular struct unwritten) and is never folded. The fold
+/// also bails if any `tribute_rt` ownership operation already consumes the
+/// struct, since forwarding the field would then bypass an explicit ownership
+/// unit. Reference counting
 /// materializes after these folds run; the ownership plan then sees the
 /// forwarded use directly.
 #[trunk_ir::canonicalize_fold(StructGet)]
@@ -111,16 +116,40 @@ pub(crate) fn fold_struct_get(ctx: &IrContext, op: OpRef) -> Option<FoldResult> 
     if ctx.value_ty(stored) != *result_ty {
         return None;
     }
-    let mutated_or_owned = ctx.uses(source).iter().any(|usage| {
-        StructSet::matches(ctx, usage.user)
-            || crate::dialect::tribute_rt::Retain::matches(ctx, usage.user)
+    if layout_is_written(ctx, op, get.r#type(ctx)) {
+        return None;
+    }
+    let owned = ctx.uses(source).iter().any(|usage| {
+        crate::dialect::tribute_rt::Retain::matches(ctx, usage.user)
             || crate::dialect::tribute_rt::Release::matches(ctx, usage.user)
             || crate::dialect::tribute_rt::IntoRaw::matches(ctx, usage.user)
     });
-    if mutated_or_owned {
+    if owned {
         return None;
     }
     Some(FoldResult::Forward(stored))
+}
+
+/// Whether any `adt.struct_set` in the module enclosing `op` writes `layout`.
+fn layout_is_written(ctx: &IrContext, op: OpRef, layout: TypeRef) -> bool {
+    let mut root = op;
+    while let Some(parent) = ctx
+        .op(root)
+        .parent_block
+        .and_then(|block| ctx.block(block).parent_region)
+        .and_then(|region| ctx.region(region).parent_op)
+    {
+        root = parent;
+    }
+    walk_op::<()>(
+        ctx,
+        root,
+        &mut |candidate| match StructSet::from_op(ctx, candidate) {
+            Ok(set) if set.r#type(ctx) == layout => ControlFlow::Break(()),
+            _ => ControlFlow::Continue(WalkAction::Advance),
+        },
+    )
+    .is_break()
 }
 
 /// `adt.ref_cast {type = T} (%x : T)` → `%x`.
@@ -143,7 +172,6 @@ use trunk_ir::Symbol;
 use trunk_ir::attr_kind::{Bytes, Type};
 use trunk_ir::context::IrContext;
 use trunk_ir::ops::DialectType;
-use trunk_ir::refs::TypeRef;
 use trunk_ir::types::{
     Attribute, AttributeMap, PARAM_ATTRS_ATTR, StringArg, StringRef, TypeDataBuilder,
 };
@@ -1240,6 +1268,45 @@ mod canonicalize_tests {
   func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
     %p = adt.struct_new %x, %y {type = !pair} : !pair
     %r = adt.struct_get %p {type = !pair, field = 2} : core.i64
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
+    }
+
+    #[test]
+    fn struct_get_of_a_struct_mutated_through_an_alias_is_not_folded() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @f(%x: core.i32, %y: core.i64, %z: core.i64) -> core.i64 {
+    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %any = adt.ref_cast %p {type = tribute_rt.anyref} : tribute_rt.anyref
+    %alias = adt.ref_cast %any {type = !pair} : !pair
+    adt.struct_set %alias, %z {type = !pair, field = 1}
+    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
+    func.return %r
+  }
+}"#,
+        );
+        assert_eq!(changes, 0);
+        assert_eq!(count(&ctx, module, "adt.struct_get"), 1);
+    }
+
+    #[test]
+    fn struct_get_is_not_folded_when_another_function_writes_the_layout() {
+        let (ctx, module, changes) = fold(
+            r#"core.module @test {
+  !pair = adt.struct<Pair(a: core.i32, b: core.i64)>
+  func.func @write(%p: !pair, %z: core.i64) {
+    adt.struct_set %p, %z {type = !pair, field = 1}
+    func.return
+  }
+  func.func @f(%x: core.i32, %y: core.i64) -> core.i64 {
+    %p = adt.struct_new %x, %y {type = !pair} : !pair
+    %r = adt.struct_get %p {type = !pair, field = 1} : core.i64
     func.return %r
   }
 }"#,
