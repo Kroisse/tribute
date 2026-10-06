@@ -92,7 +92,7 @@ pub fn substitute_bound_vars<'db>(
                 SubstResult::Ok(ty) => ty,
                 err @ SubstResult::OutOfBounds { .. } => return err,
             };
-            let new_effect = match try_substitute_effect_row(db, *effect, subst) {
+            let new_effect = match substitute_effect_row(db, *effect, subst) {
                 Ok(row) => row,
                 Err((index, max)) => return SubstResult::OutOfBounds { index, max },
             };
@@ -149,7 +149,7 @@ pub fn substitute_bound_vars<'db>(
                 SubstResult::Ok(ty) => ty,
                 err @ SubstResult::OutOfBounds { .. } => return err,
             };
-            let new_effect = match try_substitute_effect_row(db, *effect, subst) {
+            let new_effect = match substitute_effect_row(db, *effect, subst) {
                 Ok(row) => row,
                 Err((index, max)) => return SubstResult::OutOfBounds { index, max },
             };
@@ -169,26 +169,9 @@ pub fn substitute_bound_vars<'db>(
 
 /// Substitute BoundVars within an effect row.
 ///
-/// Panics if a BoundVar index is out of bounds; use
-/// [`try_substitute_effect_row`] to report it instead.
-pub fn substitute_effect_row<'db>(
-    db: &'db dyn salsa::Database,
-    row: EffectRow<'db>,
-    subst: &[Type<'db>],
-) -> EffectRow<'db> {
-    try_substitute_effect_row(db, row, subst).unwrap_or_else(|(index, max)| {
-        panic!(
-            "BoundVar index out of range in effect row: index={}, subst.len()={}",
-            index, max
-        )
-    })
-}
-
-/// Substitute BoundVars within an effect row.
-///
 /// Returns the out-of-range index and `subst.len()` if a BoundVar index
 /// exceeds `subst.len()`.
-pub fn try_substitute_effect_row<'db>(
+pub fn substitute_effect_row<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
     subst: &[Type<'db>],
@@ -756,7 +739,7 @@ mod laws {
             let ty = ty.build(&db);
             prop_assert_eq!(substitute_bound_vars(&db, ty, &args), SubstResult::Ok(ty));
             let row = row.build(&db);
-            prop_assert_eq!(substitute_effect_row(&db, row, &args), row);
+            prop_assert_eq!(substitute_effect_row(&db, row, &args), Ok(row));
         }
 
         /// Substituting each bound variable by itself is the identity.
