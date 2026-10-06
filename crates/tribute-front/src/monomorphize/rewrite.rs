@@ -103,6 +103,54 @@ pub fn build_type_rewrite_map<'db>(
     map
 }
 
+/// Redirect references to a generic struct's field functions (`T::f`,
+/// `T::f::set`, `T::f::modify`) to the same function of the struct's
+/// specialization for the reference's type arguments.
+///
+/// Field functions have no source declaration to clone; each specialized
+/// struct declaration has its own.  Run this before the instances' types are
+/// rewritten, since the map is keyed by the original type arguments.
+pub fn rewrite_field_function_refs<'db>(
+    db: &'db dyn salsa::Database,
+    module: &mut Module<TypedRef<'db>>,
+    type_rewrite_map: &TypeRewriteMap<'db>,
+    instances: &mut HashMap<NodeId, crate::typeck::FunctionInstance<'db>>,
+) {
+    walk_module_mut(
+        &mut Refs(|site, node, value: &mut TypedRef<'db>| {
+            if site != RefSite::Var {
+                return;
+            }
+            let ResolvedRef::Function { id } = &value.resolved else {
+                return;
+            };
+            let Some(instance) = instances.get_mut(&node) else {
+                return;
+            };
+            let crate::typeck::FunctionInstanceOrigin::FieldAccessor { owner, field, kind } =
+                &mut instance.origin
+            else {
+                return;
+            };
+            if instance.function != *id || instance.type_arguments.is_empty() {
+                return;
+            }
+            let Some((_, mangled)) = type_rewrite_map.get(owner).and_then(|entries| {
+                entries
+                    .iter()
+                    .find(|(args, _)| *args == instance.type_arguments)
+            }) else {
+                return;
+            };
+            let function = FuncDefId::new(db, kind.qualified(mangled, field));
+            *owner = owner.with_qualified(db, mangled.clone());
+            instance.function = function;
+            value.resolved = ResolvedRef::Function { id: function };
+        }),
+        module,
+    );
+}
+
 /// Rewrite all Named types with type arguments to their mangled monomorphic versions
 /// throughout a module's expressions and patterns.
 pub fn rewrite_types_in_module<'db>(

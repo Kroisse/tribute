@@ -249,6 +249,12 @@ pub fn monomorphize_functions<'db>(
 
         // Build type rewrite map and rewrite Named types throughout the module
         let type_rewrite_map = rewrite::build_type_rewrite_map(db, &type_instantiations);
+        rewrite::rewrite_field_function_refs(
+            db,
+            &mut module,
+            &type_rewrite_map,
+            &mut metadata.function_instances,
+        );
         let rewrite_ty = |ty| rewrite::rewrite_type(db, ty, &type_rewrite_map);
         let rewrite_scheme =
             |scheme: TypeScheme<'db>| scheme.to_builder(db).map_types(db, rewrite_ty).build(db);
