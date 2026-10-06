@@ -159,6 +159,7 @@ impl<'a, K, V> IntoIterator for &'a SortedMap<K, V> {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use proptest_state_machine::{ReferenceStateMachine, StateMachineTest, prop_state_machine};
     use std::collections::BTreeMap;
 
     /// An edit applied to both the map under test and the `BTreeMap` model.
@@ -170,87 +171,131 @@ mod tests {
         AddTo(u8, u32),
     }
 
-    fn edit() -> impl Strategy<Value = Edit> {
-        let key = 0u8..16;
-        prop_oneof![
-            (key.clone(), any::<u32>()).prop_map(|(key, value)| Edit::Insert(key, value)),
-            key.clone().prop_map(Edit::Remove),
-            (key, any::<u32>()).prop_map(|(key, delta)| Edit::AddTo(key, delta)),
-        ]
+    /// The reference model of a map built from `initial` and then edited.
+    #[derive(Clone, Debug)]
+    struct MapModel {
+        /// The entries the map is collected from, repeated keys included.
+        initial: Vec<(u8, u32)>,
+        entries: BTreeMap<u8, u32>,
+        /// What the last edit returned.
+        returned: Option<u32>,
+    }
+
+    impl ReferenceStateMachine for MapModel {
+        type State = Self;
+        type Transition = Edit;
+
+        fn init_state() -> BoxedStrategy<Self::State> {
+            prop::collection::vec((0u8..16, any::<u32>()), 0..16)
+                .prop_map(|initial| MapModel {
+                    // `BTreeMap` collection also lets the last repeated key win.
+                    entries: initial.iter().copied().collect(),
+                    initial,
+                    returned: None,
+                })
+                .boxed()
+        }
+
+        fn transitions(_state: &Self::State) -> BoxedStrategy<Self::Transition> {
+            let key = 0u8..16;
+            prop_oneof![
+                (key.clone(), any::<u32>()).prop_map(|(key, value)| Edit::Insert(key, value)),
+                key.clone().prop_map(Edit::Remove),
+                (key, any::<u32>()).prop_map(|(key, delta)| Edit::AddTo(key, delta)),
+            ]
+            .boxed()
+        }
+
+        fn apply(mut state: Self::State, edit: &Self::Transition) -> Self::State {
+            state.returned = match *edit {
+                Edit::Insert(key, value) => state.entries.insert(key, value),
+                Edit::Remove(key) => state.entries.remove(&key),
+                Edit::AddTo(key, delta) => state.entries.get_mut(&key).map(|value| {
+                    *value = value.wrapping_add(delta);
+                    *value
+                }),
+            };
+            state
+        }
     }
 
     /// Check every read accessor against the model.
-    fn assert_matches_model(
-        map: &SortedMap<u8, u32>,
-        model: &BTreeMap<u8, u32>,
-    ) -> Result<(), TestCaseError> {
+    fn assert_matches_model(map: &SortedMap<u8, u32>, model: &BTreeMap<u8, u32>) {
         let expected: Vec<(u8, u32)> = model.iter().map(|(&k, &v)| (k, v)).collect();
-        prop_assert_eq!(&**map, &expected[..]);
-        prop_assert!(map.keys().copied().eq(model.keys().copied()));
-        prop_assert!(map.values().copied().eq(model.values().copied()));
+        assert_eq!(&**map, &expected[..]);
+        assert!(map.keys().copied().eq(model.keys().copied()));
+        assert!(map.values().copied().eq(model.values().copied()));
         for key in 0u8..16 {
-            prop_assert_eq!(map.get(&key), model.get(&key));
-            prop_assert_eq!(map.contains_key(&key), model.contains_key(&key));
+            assert_eq!(map.get(&key), model.get(&key));
+            assert_eq!(map.contains_key(&key), model.contains_key(&key));
         }
-        Ok(())
     }
 
-    proptest! {
-        /// Any sequence of edits leaves the map equal to a `BTreeMap` given the
-        /// same edits, with the same return values along the way.
-        #[test]
-        fn edits_match_btree_model(
-            initial in prop::collection::vec((0u8..16, any::<u32>()), 0..16),
-            edits in prop::collection::vec(edit(), 0..64),
-        ) {
-            let mut map: SortedMap<u8, u32> = initial.iter().copied().collect();
-            // `BTreeMap` collection also lets the last repeated key win.
-            let mut model: BTreeMap<u8, u32> = initial.iter().copied().collect();
-            assert_matches_model(&map, &model)?;
+    /// Runs `SortedMap` edits against [`MapModel`].
+    struct SortedMapMachine;
 
-            for edit in edits {
-                match edit {
-                    Edit::Insert(key, value) => {
-                        prop_assert_eq!(map.insert(key, value), model.insert(key, value));
-                    }
-                    Edit::Remove(key) => {
-                        prop_assert_eq!(map.remove(&key), model.remove(&key));
-                    }
-                    Edit::AddTo(key, delta) => {
-                        let actual = map.get_mut(&key).map(|value| {
-                            *value = value.wrapping_add(delta);
-                            *value
-                        });
-                        let expected = model.get_mut(&key).map(|value| {
-                            *value = value.wrapping_add(delta);
-                            *value
-                        });
-                        prop_assert_eq!(actual, expected);
-                    }
-                }
-                assert_matches_model(&map, &model)?;
-            }
+    impl StateMachineTest for SortedMapMachine {
+        type SystemUnderTest = SortedMap<u8, u32>;
+        type Reference = MapModel;
 
+        fn init_test(model: &MapModel) -> Self::SystemUnderTest {
+            model.initial.iter().copied().collect()
+        }
+
+        fn apply(
+            mut map: Self::SystemUnderTest,
+            model: &MapModel,
+            edit: Edit,
+        ) -> Self::SystemUnderTest {
+            let returned = match edit {
+                Edit::Insert(key, value) => map.insert(key, value),
+                Edit::Remove(key) => map.remove(&key),
+                Edit::AddTo(key, delta) => map.get_mut(&key).map(|value| {
+                    *value = value.wrapping_add(delta);
+                    *value
+                }),
+            };
+            assert_eq!(returned, model.returned);
+            map
+        }
+
+        fn check_invariants(map: &Self::SystemUnderTest, model: &MapModel) {
+            assert_matches_model(map, &model.entries);
+        }
+
+        /// After the edits, the mutable iterators and the consuming
+        /// conversions also agree with the model.
+        fn teardown(mut map: Self::SystemUnderTest, model: MapModel) {
+            let mut model = model.entries;
             for (value, delta) in map.values_mut().zip(1u32..) {
                 *value = value.wrapping_add(delta);
             }
             for ((_, value), delta) in model.iter_mut().zip(1u32..) {
                 *value = value.wrapping_add(delta);
             }
-            assert_matches_model(&map, &model)?;
+            assert_matches_model(&map, &model);
             for (key, value) in map.iter_mut() {
                 *value ^= u32::from(*key);
             }
             for (key, value) in model.iter_mut() {
                 *value ^= u32::from(*key);
             }
-            assert_matches_model(&map, &model)?;
+            assert_matches_model(&map, &model);
 
             let expected: Vec<(u8, u32)> = model.into_iter().collect();
-            prop_assert_eq!(map.clone().into_iter().collect::<Vec<_>>(), expected.clone());
-            prop_assert_eq!(map.into_vec(), expected);
+            assert_eq!(map.clone().into_iter().collect::<Vec<_>>(), expected);
+            assert_eq!(map.into_vec(), expected);
         }
+    }
 
+    prop_state_machine! {
+        /// Any sequence of edits leaves the map equal to a `BTreeMap` given the
+        /// same edits, with the same return values along the way.
+        #[test]
+        fn edits_match_btree_model(sequential 1..64 => SortedMapMachine);
+    }
+
+    proptest! {
         /// Collecting any permutation of the same distinct-key entries gives
         /// equal maps, so the contents alone determine equality and hashing.
         #[test]

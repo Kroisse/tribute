@@ -2540,9 +2540,9 @@ proptest::proptest! {
     fn truncate_token_preview_cuts_first_trimmed_line(text in preview_input()) {
         let preview = truncate_token_preview(&text).to_string();
         let trimmed = text.trim();
-        let first_line = trimmed.lines().next().unwrap_or("");
+        let first_line = trimmed.split(['\n', '\r']).next().unwrap_or("");
 
-        proptest::prop_assert!(!preview.contains('\n'), "{preview:?}");
+        proptest::prop_assert!(!preview.contains(['\n', '\r']), "{preview:?}");
         let (shown, cut) = match preview.strip_suffix("...") {
             Some(shown) if first_line.chars().count() > 20 => (shown, true),
             _ => (preview.as_str(), false),

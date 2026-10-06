@@ -1005,6 +1005,8 @@ mod tests {
     use alloc::collections::BTreeMap;
     use proptest::prelude::*;
     use proptest::sample::Index;
+    use proptest::strategy::Union;
+    use proptest_state_machine::{ReferenceStateMachine, StateMachineTest, prop_state_machine};
 
     fn scripted_read(events: impl IntoIterator<Item = ReadByte>) -> *mut NativeReadLineResult {
         let mut events = events.into_iter();
@@ -1421,64 +1423,40 @@ mod tests {
         let _ = unsafe { Box::from_raw(ev) };
     }
 
-    /// Ability ids the evidence property draws from. The same ids serve as
-    /// row-tail slots, as the runtime does not distinguish them.
+    /// Ability ids the evidence state machine draws from. The same ids serve
+    /// as row-tail slots, as the runtime does not distinguish them.
     const EVIDENCE_IDS: core::ops::RangeInclusive<i32> = -2..=3;
 
+    /// A transition of the evidence state machine. Each one derives a new
+    /// evidence from members of the pool, named by their pool indices, and
+    /// appends it to the pool.
     #[derive(Clone, Debug)]
     enum EvidenceAction {
         Extend {
-            base: Index,
+            base: usize,
             ability: i32,
             prompt_tag: i32,
             tr: usize,
-            outer: Index,
+            outer: usize,
         },
         WithTail {
-            base: Index,
+            base: usize,
             slot: i32,
-            tail: Index,
+            tail: usize,
         },
         Mask {
-            base: Index,
-            ability: Index,
+            base: usize,
+            ability: i32,
         },
         Dup {
-            base: Index,
-            ability: Index,
+            base: usize,
+            ability: i32,
         },
         Push {
-            base: Index,
-            source: Index,
-            ability: Index,
+            base: usize,
+            source: usize,
+            ability: i32,
         },
-    }
-
-    fn evidence_action() -> impl Strategy<Value = EvidenceAction> {
-        prop_oneof![
-            4 => (any::<Index>(), EVIDENCE_IDS, 0i32..100, 0usize..3, any::<Index>()).prop_map(
-                |(base, ability, prompt_tag, tr, outer)| EvidenceAction::Extend {
-                    base,
-                    ability,
-                    prompt_tag,
-                    tr,
-                    outer,
-                }
-            ),
-            1 => (any::<Index>(), EVIDENCE_IDS, any::<Index>())
-                .prop_map(|(base, slot, tail)| EvidenceAction::WithTail { base, slot, tail }),
-            3 => (any::<Index>(), any::<Index>())
-                .prop_map(|(base, ability)| EvidenceAction::Mask { base, ability }),
-            1 => (any::<Index>(), any::<Index>())
-                .prop_map(|(base, ability)| EvidenceAction::Dup { base, ability }),
-            1 => (any::<Index>(), any::<Index>(), any::<Index>()).prop_map(
-                |(base, source, ability)| EvidenceAction::Push {
-                    base,
-                    source,
-                    ability,
-                }
-            ),
-        ]
     }
 
     /// A handler of the reference model. `outer` indexes the evidence pool.
@@ -1492,21 +1470,186 @@ mod tests {
     /// Each ability's handler stack, bottom first. Stacks are never empty.
     type ModelEvidence = BTreeMap<i32, Vec<ModelMarker>>;
 
-    /// A present ability of `model`, chosen by `index`.
-    fn present_ability(model: &ModelEvidence, index: Index) -> Option<i32> {
-        if model.is_empty() {
-            return None;
+    /// The reference model: the handler stacks of every evidence in the pool,
+    /// in creation order. Evidences are persistent, so a model never changes
+    /// once it is in the pool.
+    struct EvidenceModel;
+
+    impl ReferenceStateMachine for EvidenceModel {
+        type State = Vec<ModelEvidence>;
+        type Transition = EvidenceAction;
+
+        fn init_state() -> BoxedStrategy<Self::State> {
+            Just(vec![ModelEvidence::new()]).boxed()
         }
-        model.keys().nth(index.index(model.len())).copied()
+
+        fn transitions(state: &Self::State) -> BoxedStrategy<Self::Transition> {
+            let pool = 0..state.len();
+            let mut choices = vec![
+                (
+                    4,
+                    (
+                        pool.clone(),
+                        EVIDENCE_IDS,
+                        0i32..100,
+                        0usize..3,
+                        pool.clone(),
+                    )
+                        .prop_map(
+                            |(base, ability, prompt_tag, tr, outer)| EvidenceAction::Extend {
+                                base,
+                                ability,
+                                prompt_tag,
+                                tr: tr * 0x10,
+                                outer,
+                            },
+                        )
+                        .boxed(),
+                ),
+                (
+                    1,
+                    (pool.clone(), EVIDENCE_IDS, pool.clone())
+                        .prop_map(|(base, slot, tail)| EvidenceAction::WithTail {
+                            base,
+                            slot,
+                            tail,
+                        })
+                        .boxed(),
+                ),
+            ];
+            // Mask, dup, and push need an ability present in an evidence.
+            let present: Vec<(usize, i32)> = state
+                .iter()
+                .enumerate()
+                .flat_map(|(index, model)| model.keys().map(move |&ability| (index, ability)))
+                .collect();
+            if !present.is_empty() {
+                let present = prop::sample::select(present);
+                choices.push((
+                    3,
+                    present
+                        .clone()
+                        .prop_map(|(base, ability)| EvidenceAction::Mask { base, ability })
+                        .boxed(),
+                ));
+                choices.push((
+                    1,
+                    present
+                        .clone()
+                        .prop_map(|(base, ability)| EvidenceAction::Dup { base, ability })
+                        .boxed(),
+                ));
+                choices.push((
+                    1,
+                    (pool, present)
+                        .prop_map(|(base, (source, ability))| EvidenceAction::Push {
+                            base,
+                            source,
+                            ability,
+                        })
+                        .boxed(),
+                ));
+            }
+            Union::new_weighted(choices).boxed()
+        }
+
+        /// Shrinking may drop earlier transitions, so every pool index must
+        /// still exist and every masked, duplicated, or pushed ability must
+        /// still be present.
+        fn preconditions(state: &Self::State, action: &Self::Transition) -> bool {
+            let exists = |index: usize| index < state.len();
+            let present = |index: usize, ability: i32| {
+                state
+                    .get(index)
+                    .is_some_and(|model| model.contains_key(&ability))
+            };
+            match *action {
+                EvidenceAction::Extend { base, outer, .. } => exists(base) && exists(outer),
+                EvidenceAction::WithTail { base, tail, .. } => exists(base) && exists(tail),
+                EvidenceAction::Mask { base, ability } | EvidenceAction::Dup { base, ability } => {
+                    present(base, ability)
+                }
+                EvidenceAction::Push {
+                    base,
+                    source,
+                    ability,
+                } => exists(base) && present(source, ability),
+            }
+        }
+
+        fn apply(mut state: Self::State, action: &Self::Transition) -> Self::State {
+            let model = match *action {
+                EvidenceAction::Extend {
+                    base,
+                    ability,
+                    prompt_tag,
+                    tr,
+                    outer,
+                } => {
+                    let mut model = state[base].clone();
+                    model.entry(ability).or_default().push(ModelMarker {
+                        prompt_tag,
+                        tr,
+                        outer,
+                    });
+                    model
+                }
+                EvidenceAction::WithTail { base, slot, tail } => {
+                    let mut model = state[base].clone();
+                    model.entry(slot).or_default().push(ModelMarker {
+                        prompt_tag: 0,
+                        tr: 0,
+                        outer: tail,
+                    });
+                    model
+                }
+                EvidenceAction::Mask { base, ability } => {
+                    let mut model = state[base].clone();
+                    let stack = model.get_mut(&ability).expect("present ability");
+                    stack.pop();
+                    if stack.is_empty() {
+                        model.remove(&ability);
+                    }
+                    model
+                }
+                EvidenceAction::Dup { base, ability } => {
+                    let mut model = state[base].clone();
+                    let stack = model.get_mut(&ability).expect("present ability");
+                    stack.push(*stack.last().expect("non-empty stack"));
+                    model
+                }
+                EvidenceAction::Push {
+                    base,
+                    source,
+                    ability,
+                } => {
+                    let top = *state[source][&ability].last().expect("non-empty stack");
+                    let mut model = state[base].clone();
+                    model.entry(ability).or_default().push(top);
+                    model
+                }
+            };
+            state.push(model);
+            state
+        }
+    }
+
+    /// The real evidence pool. It owns every evidence the machine creates.
+    /// Markers point into other evidences, so all of them are freed together
+    /// when the pool drops, including when a check panics.
+    struct EvidencePool(Vec<*mut Evidence>);
+
+    impl Drop for EvidencePool {
+        fn drop(&mut self) {
+            for &ev in &self.0 {
+                let _ = unsafe { Box::from_raw(ev) };
+            }
+        }
     }
 
     /// The real evidence at `pool[index]` must hold exactly the stacks of
     /// `models[index]`, sorted by ability id, and every query must agree.
-    fn check_evidence(
-        pool: &[*mut Evidence],
-        models: &[ModelEvidence],
-        index: usize,
-    ) -> Result<(), TestCaseError> {
+    fn check_evidence(pool: &[*mut Evidence], models: &[ModelEvidence], index: usize) {
         let ev = pool[index].cast_const();
         let model = &models[index];
         let pool_index = |outer: *const Evidence| {
@@ -1517,14 +1660,14 @@ mod tests {
         let slots = unsafe { markers(ev) };
         let ids: Vec<i32> = slots.iter().map(|marker| marker.ability_id).collect();
         let expected_ids: Vec<i32> = model.keys().copied().collect();
-        prop_assert_eq!(ids, expected_ids, "evidence {} slots", index);
+        assert_eq!(ids, expected_ids, "evidence {index} slots");
 
         for slot in slots {
             let mut stack = Vec::new();
             let mut current: *const Marker = slot;
             while !current.is_null() {
                 let marker = unsafe { &*current };
-                prop_assert_eq!(marker.ability_id, slot.ability_id);
+                assert_eq!(marker.ability_id, slot.ability_id);
                 stack.push(ModelMarker {
                     prompt_tag: marker.prompt_tag,
                     tr: marker.tr_dispatch_fn.addr(),
@@ -1533,123 +1676,99 @@ mod tests {
                 current = marker.shadowed;
             }
             stack.reverse();
-            prop_assert_eq!(&stack, &model[&slot.ability_id], "evidence {} stack", index);
+            assert_eq!(&stack, &model[&slot.ability_id], "evidence {index} stack");
         }
 
         for id in EVIDENCE_IDS {
             let top = model.get(&id).and_then(|stack| stack.last());
             let expected_tail = top.map_or(index, |top| top.outer);
-            prop_assert_eq!(
+            assert_eq!(
                 unsafe { __tribute_evidence_tail(ev, id) },
                 pool[expected_tail].cast_const()
             );
             if let Some(top) = top {
-                prop_assert_eq!(unsafe { __tribute_evidence_lookup(ev, id) }, top.prompt_tag);
-                prop_assert_eq!(
+                assert_eq!(unsafe { __tribute_evidence_lookup(ev, id) }, top.prompt_tag);
+                assert_eq!(
                     unsafe { __tribute_evidence_lookup_tr(ev, id) }.addr(),
                     top.tr
                 );
-                prop_assert_eq!(
+                assert_eq!(
                     unsafe { __tribute_evidence_outer(ev, id) },
                     pool[top.outer].cast_const()
                 );
             }
         }
-        Ok(())
     }
 
-    proptest! {
+    /// Runs evidence operations against [`EvidenceModel`].
+    struct EvidenceMachine;
+
+    impl StateMachineTest for EvidenceMachine {
+        type SystemUnderTest = EvidencePool;
+        type Reference = EvidenceModel;
+
+        fn init_test(_models: &Vec<ModelEvidence>) -> Self::SystemUnderTest {
+            EvidencePool(vec![__tribute_evidence_empty()])
+        }
+
+        fn apply(
+            mut pool: Self::SystemUnderTest,
+            _models: &Vec<ModelEvidence>,
+            action: EvidenceAction,
+        ) -> Self::SystemUnderTest {
+            let evs = &pool.0;
+            let ev = match action {
+                EvidenceAction::Extend {
+                    base,
+                    ability,
+                    prompt_tag,
+                    tr,
+                    outer,
+                } => unsafe {
+                    __tribute_evidence_extend(
+                        evs[base],
+                        ability,
+                        prompt_tag,
+                        core::ptr::without_provenance(tr),
+                        evs[outer],
+                    )
+                },
+                EvidenceAction::WithTail { base, slot, tail } => unsafe {
+                    __tribute_evidence_with_tail(evs[base], slot, evs[tail])
+                },
+                EvidenceAction::Mask { base, ability } => unsafe {
+                    __tribute_evidence_mask(evs[base], ability)
+                },
+                EvidenceAction::Dup { base, ability } => unsafe {
+                    __tribute_evidence_dup(evs[base], ability)
+                },
+                EvidenceAction::Push {
+                    base,
+                    source,
+                    ability,
+                } => unsafe { __tribute_evidence_push(evs[base], evs[source], ability) },
+            };
+            pool.0.push(ev);
+            pool
+        }
+
+        /// Re-checks every evidence after each step, so a step that changed
+        /// an existing evidence fails persistence.
+        fn check_invariants(pool: &Self::SystemUnderTest, models: &Vec<ModelEvidence>) {
+            assert_eq!(pool.0.len(), models.len());
+            for index in 0..pool.0.len() {
+                check_evidence(&pool.0, models, index);
+            }
+        }
+    }
+
+    prop_state_machine! {
         /// Evidence operations behave like persistent per-ability handler
         /// stacks: extend, `with_tail`, `push`, and `dup` push a handler,
         /// `mask` pops one (dropping the slot when it empties), queries read
         /// the top handler, a row tail is the top handler's `outer` or the
         /// evidence itself, and no operation changes an existing evidence.
         #[test]
-        fn prop_evidence_matches_handler_stack_model(
-            actions in prop::collection::vec(evidence_action(), 1..40),
-        ) {
-            let mut pool = vec![__tribute_evidence_empty()];
-            let mut models = vec![ModelEvidence::new()];
-
-            for action in actions {
-                let pick = |index: Index| index.index(pool.len());
-                let (ev, model) = match action {
-                    EvidenceAction::Extend { base, ability, prompt_tag, tr, outer } => {
-                        let (base, outer) = (pick(base), pick(outer));
-                        let tr = tr * 0x10;
-                        let ev = unsafe {
-                            __tribute_evidence_extend(
-                                pool[base],
-                                ability,
-                                prompt_tag,
-                                core::ptr::without_provenance(tr),
-                                pool[outer],
-                            )
-                        };
-                        let mut model = models[base].clone();
-                        model.entry(ability).or_default().push(ModelMarker { prompt_tag, tr, outer });
-                        (ev, model)
-                    }
-                    EvidenceAction::WithTail { base, slot, tail } => {
-                        let (base, tail) = (pick(base), pick(tail));
-                        let ev = unsafe { __tribute_evidence_with_tail(pool[base], slot, pool[tail]) };
-                        let mut model = models[base].clone();
-                        model.entry(slot).or_default().push(ModelMarker {
-                            prompt_tag: 0,
-                            tr: 0,
-                            outer: tail,
-                        });
-                        (ev, model)
-                    }
-                    EvidenceAction::Mask { base, ability } => {
-                        let base = pick(base);
-                        let Some(ability) = present_ability(&models[base], ability) else {
-                            continue;
-                        };
-                        let ev = unsafe { __tribute_evidence_mask(pool[base], ability) };
-                        let mut model = models[base].clone();
-                        let stack = model.get_mut(&ability).expect("present ability");
-                        stack.pop();
-                        if stack.is_empty() {
-                            model.remove(&ability);
-                        }
-                        (ev, model)
-                    }
-                    EvidenceAction::Dup { base, ability } => {
-                        let base = pick(base);
-                        let Some(ability) = present_ability(&models[base], ability) else {
-                            continue;
-                        };
-                        let ev = unsafe { __tribute_evidence_dup(pool[base], ability) };
-                        let mut model = models[base].clone();
-                        let stack = model.get_mut(&ability).expect("present ability");
-                        stack.push(*stack.last().expect("non-empty stack"));
-                        (ev, model)
-                    }
-                    EvidenceAction::Push { base, source, ability } => {
-                        let (base, source) = (pick(base), pick(source));
-                        let Some(ability) = present_ability(&models[source], ability) else {
-                            continue;
-                        };
-                        let ev =
-                            unsafe { __tribute_evidence_push(pool[base], pool[source], ability) };
-                        let top = *models[source][&ability].last().expect("non-empty stack");
-                        let mut model = models[base].clone();
-                        model.entry(ability).or_default().push(top);
-                        (ev, model)
-                    }
-                };
-                pool.push(ev);
-                models.push(model);
-                for index in 0..pool.len() {
-                    check_evidence(&pool, &models, index)?;
-                }
-            }
-
-            // Markers point into other evidences, so free them all at once.
-            for ev in pool {
-                let _ = unsafe { Box::from_raw(ev) };
-            }
-        }
+        fn prop_evidence_matches_handler_stack_model(sequential 1..40 => EvidenceMachine);
     }
 }

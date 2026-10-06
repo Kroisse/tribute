@@ -1,5 +1,7 @@
 //! Model-based property tests for attribute maps and the interners.
 //!
+//! Each test is a state machine: a reference model generates the next action
+//! from its current state, and the system under test applies the same action.
 //! The attribute map test applies random inserts, removals, and extensions to
 //! an `AttributeMap` and to a `BTreeMap` keyed by the symbol text, and checks
 //! after every step that the map holds, orders, and converts exactly what the
@@ -11,8 +13,8 @@ use std::collections::BTreeMap;
 use std::hash::{BuildHasher, RandomState};
 
 use proptest::prelude::*;
-use proptest::sample::Index;
-use rustc_hash::FxHashMap as HashMap;
+use proptest::sample::select;
+use proptest_state_machine::{ReferenceStateMachine, StateMachineTest, prop_state_machine};
 
 use super::*;
 
@@ -105,68 +107,63 @@ fn check_lookup(
     attrs: &AttributeMap,
     model: &BTreeMap<String, Attribute>,
     key: &str,
-) -> Result<(), TestCaseError> {
+) {
     let expected = model.get(key);
     let symbol = Symbol::new(key);
-    prop_assert_eq!(attrs.get(key), expected);
-    prop_assert_eq!(attrs.get(&symbol), expected);
-    prop_assert_eq!(attrs.contains_key(key), expected.is_some());
-    prop_assert_eq!(attrs.get_bool(key), expected.and_then(Attribute::as_bool));
-    prop_assert_eq!(attrs.get_i128(key), expected.and_then(Attribute::as_i128));
-    prop_assert_eq!(
+    assert_eq!(attrs.get(key), expected);
+    assert_eq!(attrs.get(&symbol), expected);
+    assert_eq!(attrs.contains_key(key), expected.is_some());
+    assert_eq!(attrs.get_bool(key), expected.and_then(Attribute::as_bool));
+    assert_eq!(attrs.get_i128(key), expected.and_then(Attribute::as_i128));
+    assert_eq!(
         attrs.get_i64(key),
         expected_integer(expected, "i64", i64::try_from)
     );
-    prop_assert_eq!(
+    assert_eq!(
         attrs.get_i32(key),
         expected_integer(expected, "i32", i32::try_from)
     );
-    prop_assert_eq!(
+    assert_eq!(
         attrs.get_u64(key),
         expected_integer(expected, "u64", u64::try_from)
     );
-    prop_assert_eq!(
+    assert_eq!(
         attrs.get_u32(key),
         expected_integer(expected, "u32", u32::try_from)
     );
-    prop_assert_eq!(
+    assert_eq!(
         attrs.get_u8(key),
         expected_integer(expected, "u8", u8::try_from)
     );
-    prop_assert_eq!(
+    assert_eq!(
         attrs.get_str(ctx, key),
         expected.and_then(|value| value.as_str(ctx))
     );
-    prop_assert_eq!(
+    assert_eq!(
         attrs.get_symbol_ref(key),
         expected.and_then(Attribute::as_symbol_ref)
     );
-    Ok(())
 }
 
 /// `attrs` must hold exactly the model's entries, in the model's key order,
 /// and equal (with the same hash) a map built from them in reverse order.
-fn check_map(
-    attrs: &AttributeMap,
-    model: &BTreeMap<String, Attribute>,
-    hasher: &RandomState,
-) -> Result<(), TestCaseError> {
-    prop_assert_eq!(attrs.len(), model.len());
-    prop_assert_eq!(attrs.is_empty(), model.is_empty());
-    prop_assert!(
+fn check_map(attrs: &AttributeMap, model: &BTreeMap<String, Attribute>, hasher: &RandomState) {
+    assert_eq!(attrs.len(), model.len());
+    assert_eq!(attrs.is_empty(), model.is_empty());
+    assert!(
         attrs
             .iter()
             .map(|(key, value)| (key.as_str(), value))
             .eq(model.iter().map(|(key, value)| (key.as_str(), value)))
     );
-    prop_assert!(
+    assert!(
         attrs
             .keys()
             .map(Symbol::as_str)
             .eq(model.keys().map(String::as_str))
     );
-    prop_assert!(attrs.values().eq(model.values()));
-    prop_assert!(
+    assert!(attrs.values().eq(model.values()));
+    assert!(
         attrs
             .iter()
             .rev()
@@ -179,105 +176,223 @@ fn check_map(
         .rev()
         .map(|(key, value)| (Symbol::new(key), value.clone()))
         .collect();
-    prop_assert_eq!(attrs, &reversed);
-    prop_assert_eq!(hasher.hash_one(attrs), hasher.hash_one(&reversed));
-    Ok(())
+    assert_eq!(attrs, &reversed);
+    assert_eq!(hasher.hash_one(attrs), hasher.hash_one(&reversed));
 }
 
-proptest! {
-    #[test]
-    fn attribute_map_matches_a_btree_map_model(
-        actions in prop::collection::vec(map_action(), 1..48),
-        probes in prop::collection::vec(key(), 0..4),
-    ) {
-        let mut ctx = IrContext::new();
-        let hasher = RandomState::new();
-        let mut attrs = AttributeMap::new();
-        let mut model = BTreeMap::new();
+/// The model's value for `spec`: strings were interned when the system under
+/// test built the value.
+fn expected_value(ctx: &IrContext, spec: &ValueSpec) -> Attribute {
+    match spec {
+        ValueSpec::Unit => Attribute::Unit,
+        ValueSpec::Bool(b) => Attribute::Bool(*b),
+        ValueSpec::Int(v) => Attribute::Int(*v),
+        ValueSpec::Str(s) => Attribute::String(ctx.lookup_str(s).expect("interned value")),
+        ValueSpec::Symbol(s) => Attribute::SymbolRef(SymbolPath::from(s.as_str())),
+    }
+}
 
-        for action in actions {
-            let mut touched = Vec::new();
-            match action {
-                MapAction::Insert(key, spec) => {
-                    let value = build_value(&mut ctx, &spec);
-                    let replaced = attrs.insert(Symbol::new(&key), value.clone());
-                    prop_assert_eq!(replaced, model.insert(key.clone(), value));
-                    touched.push(key);
-                }
-                MapAction::Remove(key) => {
-                    prop_assert_eq!(attrs.remove(key.as_str()), model.remove(&key));
-                    touched.push(key);
-                }
-                MapAction::Extend(entries) => {
-                    // Later entries replace earlier ones with the same key.
-                    let entries: Vec<_> = entries
-                        .into_iter()
-                        .map(|(key, spec)| (key, build_value(&mut ctx, &spec)))
-                        .collect();
-                    attrs.extend(
-                        entries
-                            .iter()
-                            .map(|(key, value)| (Symbol::new(key), value.clone())),
-                    );
-                    for (key, value) in entries {
-                        model.insert(key.clone(), value);
-                        touched.push(key);
-                    }
-                }
-                MapAction::Clear => {
-                    attrs.clear();
-                    model.clear();
-                }
-            }
+/// Keys checked after every step besides those an action touches.
+#[derive(Clone, Debug)]
+struct MapModel {
+    probes: Vec<String>,
+    entries: BTreeMap<String, ValueSpec>,
+}
 
-            check_map(&attrs, &model, &hasher)?;
-            for key in touched.iter().chain(&probes) {
-                check_lookup(&ctx, &attrs, &model, key)?;
+impl MapModel {
+    fn expected(&self, ctx: &IrContext) -> BTreeMap<String, Attribute> {
+        self.entries
+            .iter()
+            .map(|(key, spec)| (key.clone(), expected_value(ctx, spec)))
+            .collect()
+    }
+}
+
+struct MapMachine;
+
+impl ReferenceStateMachine for MapMachine {
+    type State = MapModel;
+    type Transition = MapAction;
+
+    fn init_state() -> BoxedStrategy<MapModel> {
+        prop::collection::vec(key(), 0..4)
+            .prop_map(|probes| MapModel {
+                probes,
+                entries: BTreeMap::new(),
+            })
+            .boxed()
+    }
+
+    fn transitions(_: &MapModel) -> BoxedStrategy<MapAction> {
+        map_action().boxed()
+    }
+
+    fn apply(mut state: MapModel, action: &MapAction) -> MapModel {
+        match action {
+            MapAction::Insert(key, spec) => {
+                state.entries.insert(key.clone(), spec.clone());
             }
+            MapAction::Remove(key) => {
+                state.entries.remove(key);
+            }
+            // Later entries replace earlier ones with the same key.
+            MapAction::Extend(entries) => state.entries.extend(entries.iter().cloned()),
+            MapAction::Clear => state.entries.clear(),
         }
-        for key in model.keys() {
-            check_lookup(&ctx, &attrs, &model, key)?;
+        state
+    }
+}
+
+struct MapSut {
+    ctx: IrContext,
+    hasher: RandomState,
+    attrs: AttributeMap,
+}
+
+struct MapTest;
+
+impl StateMachineTest for MapTest {
+    type SystemUnderTest = MapSut;
+    type Reference = MapMachine;
+
+    fn init_test(_: &MapModel) -> MapSut {
+        MapSut {
+            ctx: IrContext::new(),
+            hasher: RandomState::new(),
+            attrs: AttributeMap::new(),
+        }
+    }
+
+    fn apply(mut sut: MapSut, model: &MapModel, action: MapAction) -> MapSut {
+        // The previous step checked the map against the model, so its entry
+        // for a key is the model's previous entry.
+        let mut touched = Vec::new();
+        match action {
+            MapAction::Insert(key, spec) => {
+                let value = build_value(&mut sut.ctx, &spec);
+                let previous = sut.attrs.get(key.as_str()).cloned();
+                let replaced = sut.attrs.insert(Symbol::new(&key), value);
+                assert_eq!(replaced, previous);
+                touched.push(key);
+            }
+            MapAction::Remove(key) => {
+                let previous = sut.attrs.get(key.as_str()).cloned();
+                assert_eq!(sut.attrs.remove(key.as_str()), previous);
+                touched.push(key);
+            }
+            MapAction::Extend(entries) => {
+                let entries: Vec<_> = entries
+                    .into_iter()
+                    .map(|(key, spec)| (key, build_value(&mut sut.ctx, &spec)))
+                    .collect();
+                sut.attrs.extend(
+                    entries
+                        .iter()
+                        .map(|(key, value)| (Symbol::new(key), value.clone())),
+                );
+                touched.extend(entries.into_iter().map(|(key, _)| key));
+            }
+            MapAction::Clear => sut.attrs.clear(),
+        }
+        let expected = model.expected(&sut.ctx);
+        for key in &touched {
+            check_lookup(&sut.ctx, &sut.attrs, &expected, key);
+        }
+        sut
+    }
+
+    fn check_invariants(sut: &MapSut, model: &MapModel) {
+        let expected = model.expected(&sut.ctx);
+        check_map(&sut.attrs, &expected, &sut.hasher);
+        for key in &model.probes {
+            check_lookup(&sut.ctx, &sut.attrs, &expected, key);
+        }
+    }
+
+    fn teardown(sut: MapSut, model: MapModel) {
+        let expected = model.expected(&sut.ctx);
+        for key in expected.keys() {
+            check_lookup(&sut.ctx, &sut.attrs, &expected, key);
         }
 
         // Collecting the same entries in any order yields an equal map.
-        let collected: AttributeMap = model
+        let collected: AttributeMap = expected
             .iter()
             .map(|(key, value)| (Symbol::new(key), value.clone()))
             .collect();
-        prop_assert_eq!(&collected, &attrs);
+        assert_eq!(&collected, &sut.attrs);
     }
+}
+
+prop_state_machine! {
+    #[test]
+    fn attribute_map_matches_a_btree_map_model(sequential 1..48 => MapTest);
 }
 
 // ============================================================================
 // Type interner
 // ============================================================================
 
-/// A type to intern: parameters name earlier types by index and may carry
-/// their own attributes.
+/// Small attribute dictionaries over a few keys and values, so specs collide.
+type SmallAttrs = Vec<(&'static str, i8)>;
+
+/// A type to intern: parameters name earlier distinct types by interning
+/// order and may carry their own attributes.
 #[derive(Clone, Debug)]
 struct TypeSpec {
     dialect: &'static str,
     name: &'static str,
-    params: Vec<(Index, Vec<(&'static str, i8)>)>,
-    attrs: Vec<(&'static str, i8)>,
+    params: Vec<(usize, SmallAttrs)>,
+    attrs: SmallAttrs,
 }
 
-/// Small attribute dictionaries over a few keys and values, so specs collide.
-fn small_attrs() -> impl Strategy<Value = Vec<(&'static str, i8)>> {
-    prop::collection::vec((prop::sample::select(vec!["k", "name"]), 0i8..2), 0..2)
+/// The canonical form of a spec: two specs build equal data exactly when
+/// their keys are equal.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TypeKey {
+    dialect: &'static str,
+    name: &'static str,
+    params: Vec<(usize, BTreeMap<&'static str, i8>)>,
+    attrs: BTreeMap<&'static str, i8>,
 }
 
-fn type_spec() -> impl Strategy<Value = TypeSpec> {
-    (
-        prop::sample::select(vec!["core", "test"]),
-        prop::sample::select(vec!["i32", "tuple", "numbered"]),
+impl TypeSpec {
+    fn key(&self) -> TypeKey {
+        TypeKey {
+            dialect: self.dialect,
+            name: self.name,
+            params: self
+                .params
+                .iter()
+                .map(|(param, attrs)| (*param, attrs.iter().copied().collect()))
+                .collect(),
+            attrs: self.attrs.iter().copied().collect(),
+        }
+    }
+}
+
+fn small_attrs() -> impl Strategy<Value = SmallAttrs> {
+    prop::collection::vec((select(vec!["k", "name"]), 0i8..2), 0..2)
+}
+
+/// A spec whose parameters name one of the `known` distinct types.
+fn type_spec(known: usize) -> impl Strategy<Value = TypeSpec> {
+    let params = if known == 0 {
+        Just(Vec::new()).boxed()
+    } else {
         prop::collection::vec(
             (
-                any::<Index>(),
+                0..known,
                 prop_oneof![3 => Just(Vec::new()), 1 => small_attrs()],
             ),
             0..3,
-        ),
+        )
+        .boxed()
+    };
+    (
+        select(vec!["core", "test"]),
+        select(vec!["i32", "tuple", "numbered"]),
+        params,
         small_attrs(),
     )
         .prop_map(|(dialect, name, params, attrs)| TypeSpec {
@@ -288,25 +403,34 @@ fn type_spec() -> impl Strategy<Value = TypeSpec> {
         })
 }
 
-fn small_map(entries: &[(&'static str, i8)]) -> AttributeMap {
+fn small_map(entries: impl IntoIterator<Item = (&'static str, i8)>) -> AttributeMap {
     entries
-        .iter()
-        .map(|&(key, value)| (Symbol::new(key), Attribute::Int(value.into())))
+        .into_iter()
+        .map(|(key, value)| (Symbol::new(key), Attribute::Int(value.into())))
         .collect()
 }
 
-/// Build the data for `spec`; parameters resolve against `known` and are
-/// dropped while nothing has been interned yet.
-fn build_type(spec: &TypeSpec, known: &[(TypeData, TypeRef)]) -> TypeData {
+/// Build the data for `spec`; parameters resolve against `refs`.
+fn build_type(spec: &TypeSpec, refs: &[TypeRef]) -> TypeData {
     let mut builder = TypeDataBuilder::new(spec.dialect, spec.name);
-    if !known.is_empty() {
-        for (index, attrs) in &spec.params {
-            let (_, ty) = index.get(known);
-            builder = builder.param_with_attrs(*ty, small_map(attrs));
-        }
+    for (param, attrs) in &spec.params {
+        builder = builder.param_with_attrs(refs[*param], small_map(attrs.iter().copied()));
     }
     for &(key, value) in &spec.attrs {
         builder = builder.attr(key, Attribute::Int(value.into()));
+    }
+    builder.build()
+}
+
+/// Build a fresh copy of the data for `key`.
+fn build_key(key: &TypeKey, refs: &[TypeRef]) -> TypeData {
+    let mut builder = TypeDataBuilder::new(key.dialect, key.name);
+    for (param, attrs) in &key.params {
+        let attrs = small_map(attrs.iter().map(|(&key, &value)| (key, value)));
+        builder = builder.param_with_attrs(refs[*param], attrs);
+    }
+    for (&name, &value) in &key.attrs {
+        builder = builder.attr(name, Attribute::Int(value.into()));
     }
     builder.build()
 }
@@ -316,57 +440,118 @@ enum InternAction {
     /// Intern data built from a spec.
     Intern(TypeSpec),
     /// Intern a fresh copy of data interned before.
-    Reintern(Index),
+    Reintern(usize),
 }
 
-fn intern_action() -> impl Strategy<Value = InternAction> {
-    prop_oneof![
-        3 => type_spec().prop_map(InternAction::Intern),
-        1 => any::<Index>().prop_map(InternAction::Reintern),
-    ]
-}
+/// Each distinct type once, in interning order.
+type InternModel = Vec<TypeKey>;
 
-proptest! {
-    #[test]
-    fn type_interner_dedups_and_keeps_references_stable(
-        actions in prop::collection::vec(intern_action(), 1..128),
-    ) {
-        let mut interner = TypeInterner::new();
-        // Each distinct data once, in interning order, with its reference.
-        let mut known: Vec<(TypeData, TypeRef)> = Vec::new();
-        let mut by_data: HashMap<TypeData, TypeRef> = HashMap::default();
+struct TypeInternMachine;
 
-        for action in actions {
-            let data = match action {
-                InternAction::Intern(spec) => build_type(&spec, &known),
-                InternAction::Reintern(index) if !known.is_empty() => index.get(&known).0.clone(),
-                InternAction::Reintern(_) => continue,
-            };
-            prop_assert_eq!(data.validate_param_attrs(), Ok(()));
-            let previous = by_data.get(&data).copied();
-            prop_assert_eq!(interner.lookup(&data), previous);
-            let r = interner.intern(data.clone());
-            match previous {
-                Some(existing) => prop_assert_eq!(r, existing),
-                None => {
-                    prop_assert!(known.iter().all(|&(_, other)| other != r));
-                    by_data.insert(data.clone(), r);
-                    known.push((data, r));
-                }
-            }
+impl ReferenceStateMachine for TypeInternMachine {
+    type State = InternModel;
+    type Transition = InternAction;
 
-            for (data, r) in &known {
-                prop_assert_eq!(interner.get(*r), data);
-                prop_assert_eq!(interner.lookup(data), Some(*r));
-            }
-            prop_assert_eq!(interner.iter().count(), known.len());
-            prop_assert!(
-                interner
-                    .iter()
-                    .eq(known.iter().map(|(data, r)| (*r, data)))
-            );
+    fn init_state() -> BoxedStrategy<InternModel> {
+        Just(Vec::new()).boxed()
+    }
+
+    fn transitions(state: &InternModel) -> BoxedStrategy<InternAction> {
+        let intern = type_spec(state.len()).prop_map(InternAction::Intern);
+        if state.is_empty() {
+            intern.boxed()
+        } else {
+            prop_oneof![
+                3 => intern,
+                1 => (0..state.len()).prop_map(InternAction::Reintern),
+            ]
+            .boxed()
         }
     }
+
+    fn preconditions(state: &InternModel, action: &InternAction) -> bool {
+        match action {
+            InternAction::Intern(spec) => spec.params.iter().all(|&(param, _)| param < state.len()),
+            InternAction::Reintern(index) => *index < state.len(),
+        }
+    }
+
+    fn apply(mut state: InternModel, action: &InternAction) -> InternModel {
+        if let InternAction::Intern(spec) = action {
+            let key = spec.key();
+            if !state.contains(&key) {
+                state.push(key);
+            }
+        }
+        state
+    }
+}
+
+struct TypeInternSut {
+    interner: TypeInterner,
+    /// The reference of each distinct type, in interning order.
+    refs: Vec<TypeRef>,
+    /// A copy of each distinct type's data, built from its key.
+    known: Vec<TypeData>,
+}
+
+struct TypeInternTest;
+
+impl StateMachineTest for TypeInternTest {
+    type SystemUnderTest = TypeInternSut;
+    type Reference = TypeInternMachine;
+
+    fn init_test(_: &InternModel) -> TypeInternSut {
+        TypeInternSut {
+            interner: TypeInterner::new(),
+            refs: Vec::new(),
+            known: Vec::new(),
+        }
+    }
+
+    fn apply(mut sut: TypeInternSut, model: &InternModel, action: InternAction) -> TypeInternSut {
+        let (data, key) = match action {
+            InternAction::Intern(spec) => (build_type(&spec, &sut.refs), spec.key()),
+            InternAction::Reintern(index) => {
+                (build_key(&model[index], &sut.refs), model[index].clone())
+            }
+        };
+        assert_eq!(data.validate_param_attrs(), Ok(()));
+        let index = model
+            .iter()
+            .position(|known| *known == key)
+            .expect("interned in the model");
+        let previous = sut.refs.get(index).copied();
+        assert_eq!(sut.interner.lookup(&data), previous);
+        let r = sut.interner.intern(data);
+        match previous {
+            Some(existing) => assert_eq!(r, existing),
+            None => {
+                assert!(sut.refs.iter().all(|&other| other != r));
+                sut.known.push(build_key(&key, &sut.refs));
+                sut.refs.push(r);
+            }
+        }
+        sut
+    }
+
+    fn check_invariants(sut: &TypeInternSut, model: &InternModel) {
+        assert_eq!(sut.refs.len(), model.len());
+        let known = &sut.known;
+        for (data, &r) in known.iter().zip(&sut.refs) {
+            assert_eq!(sut.interner.get(r), data);
+            assert_eq!(sut.interner.lookup(data), Some(r));
+        }
+        assert_eq!(sut.interner.iter().count(), known.len());
+        assert!(sut.interner.iter().eq(sut.refs.iter().copied().zip(known)));
+    }
+}
+
+prop_state_machine! {
+    #[test]
+    fn type_interner_dedups_and_keeps_references_stable(
+        sequential 1..128 => TypeInternTest
+    );
 }
 
 // ============================================================================
@@ -375,38 +560,94 @@ proptest! {
 
 fn path() -> impl Strategy<Value = String> {
     prop_oneof![
-        3 => prop::sample::select(vec!["", "file:///a.trb", "file:///b.trb", "a", "A"])
+        3 => select(vec!["", "file:///a.trb", "file:///b.trb", "a", "A"])
             .prop_map(str::to_owned),
         1 => any::<String>(),
     ]
 }
 
-proptest! {
-    #[test]
-    fn path_interner_dedups_and_keeps_references_stable(
-        actions in prop::collection::vec((path(), any::<bool>()), 1..128),
-    ) {
-        let mut interner = PathInterner::new();
-        let mut model: HashMap<String, PathRef> = HashMap::default();
+/// A path, and whether to intern it or only look it up.
+#[derive(Clone, Debug)]
+struct PathAction {
+    path: String,
+    intern: bool,
+}
 
-        for (path, intern) in actions {
-            let previous = model.get(&path).copied();
-            prop_assert_eq!(interner.lookup(&path), previous);
-            if intern {
-                let r = interner.intern(&path);
-                match previous {
-                    Some(existing) => prop_assert_eq!(r, existing),
-                    None => {
-                        prop_assert!(model.values().all(|&other| other != r));
-                        model.insert(path, r);
-                    }
-                }
-            }
+struct PathInternMachine;
 
-            for (path, r) in &model {
-                prop_assert_eq!(interner.get(*r), path.as_str());
-                prop_assert_eq!(interner.lookup(path), Some(*r));
-            }
+impl ReferenceStateMachine for PathInternMachine {
+    /// Each interned path once, in interning order.
+    type State = Vec<String>;
+    type Transition = PathAction;
+
+    fn init_state() -> BoxedStrategy<Vec<String>> {
+        Just(Vec::new()).boxed()
+    }
+
+    fn transitions(_: &Vec<String>) -> BoxedStrategy<PathAction> {
+        (path(), any::<bool>())
+            .prop_map(|(path, intern)| PathAction { path, intern })
+            .boxed()
+    }
+
+    fn apply(mut state: Vec<String>, action: &PathAction) -> Vec<String> {
+        if action.intern && !state.contains(&action.path) {
+            state.push(action.path.clone());
+        }
+        state
+    }
+}
+
+struct PathInternSut {
+    interner: PathInterner,
+    /// The reference of each interned path, in interning order.
+    refs: Vec<PathRef>,
+}
+
+struct PathInternTest;
+
+impl StateMachineTest for PathInternTest {
+    type SystemUnderTest = PathInternSut;
+    type Reference = PathInternMachine;
+
+    fn init_test(_: &Vec<String>) -> PathInternSut {
+        PathInternSut {
+            interner: PathInterner::new(),
+            refs: Vec::new(),
         }
     }
+
+    fn apply(mut sut: PathInternSut, model: &Vec<String>, action: PathAction) -> PathInternSut {
+        let previous = model
+            .iter()
+            .position(|path| *path == action.path)
+            .and_then(|index| sut.refs.get(index).copied());
+        assert_eq!(sut.interner.lookup(&action.path), previous);
+        if action.intern {
+            let r = sut.interner.intern(&action.path);
+            match previous {
+                Some(existing) => assert_eq!(r, existing),
+                None => {
+                    assert!(sut.refs.iter().all(|&other| other != r));
+                    sut.refs.push(r);
+                }
+            }
+        }
+        sut
+    }
+
+    fn check_invariants(sut: &PathInternSut, model: &Vec<String>) {
+        assert_eq!(sut.refs.len(), model.len());
+        for (path, &r) in model.iter().zip(&sut.refs) {
+            assert_eq!(sut.interner.get(r), path.as_str());
+            assert_eq!(sut.interner.lookup(path), Some(r));
+        }
+    }
+}
+
+prop_state_machine! {
+    #[test]
+    fn path_interner_dedups_and_keeps_references_stable(
+        sequential 1..128 => PathInternTest
+    );
 }

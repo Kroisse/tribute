@@ -102,48 +102,91 @@ impl Default for DataRegistry {
 mod tests {
     use super::*;
     use proptest::prelude::*;
+    use proptest_state_machine::{ReferenceStateMachine, StateMachineTest, prop_state_machine};
 
-    proptest! {
+    /// The reference model of a registry that byte payloads are added to.
+    #[derive(Clone, Debug, Default)]
+    struct RegistryModel {
+        /// Each distinct payload with its offset, in first-addition order.
+        entries: Vec<(Vec<u8>, u32)>,
+        next_offset: u32,
+        /// The `(offset, length)` the last addition returned.
+        returned: Option<(u32, u32)>,
+    }
+
+    impl ReferenceStateMachine for RegistryModel {
+        type State = Self;
+        /// A payload to add. A small byte and length space makes repeated
+        /// payloads common.
+        type Transition = Vec<u8>;
+
+        fn init_state() -> BoxedStrategy<Self::State> {
+            Just(Self::default()).boxed()
+        }
+
+        fn transitions(_state: &Self::State) -> BoxedStrategy<Self::Transition> {
+            prop::collection::vec(0u8..4, 0..5).boxed()
+        }
+
+        fn apply(mut state: Self::State, payload: &Self::Transition) -> Self::State {
+            let offset = match state.entries.iter().find(|(data, _)| data == payload) {
+                Some(&(_, offset)) => offset,
+                None => {
+                    let offset = state.next_offset;
+                    state.entries.push((payload.clone(), offset));
+                    state.next_offset += payload.len() as u32;
+                    offset
+                }
+            };
+            state.returned = Some((offset, payload.len() as u32));
+            state
+        }
+    }
+
+    /// Runs `DataRegistry::add_bytes` against [`RegistryModel`].
+    struct RegistryMachine;
+
+    impl StateMachineTest for RegistryMachine {
+        type SystemUnderTest = DataRegistry;
+        type Reference = RegistryModel;
+
+        fn init_test(_model: &RegistryModel) -> Self::SystemUnderTest {
+            DataRegistry::new()
+        }
+
+        fn apply(
+            mut registry: Self::SystemUnderTest,
+            model: &RegistryModel,
+            payload: Vec<u8>,
+        ) -> Self::SystemUnderTest {
+            assert_eq!(Some(registry.add_bytes(&payload, None)), model.returned);
+            registry
+        }
+
+        fn check_invariants(registry: &Self::SystemUnderTest, model: &RegistryModel) {
+            assert_eq!(registry.total_size(), model.next_offset);
+            let entries = registry.entries();
+            assert_eq!(entries.len(), model.entries.len());
+            assert_eq!(registry.is_empty(), model.entries.is_empty());
+            let mut end = 0u32;
+            for (entry, (data, offset)) in entries.iter().zip(&model.entries) {
+                assert_eq!(&entry.data, data);
+                assert_eq!(entry.offset, *offset);
+                assert_eq!(entry.offset, end);
+                end += entry.data.len() as u32;
+            }
+            assert_eq!(end, registry.total_size());
+        }
+    }
+
+    prop_state_machine! {
         /// Each distinct payload gets the next unaligned offset; a repeated
         /// payload returns its first offset without growing the section.
         #[test]
-        fn prop_offsets_contiguous_and_deduplicated(
-            payloads in prop::collection::vec(prop::collection::vec(0u8..4, 0..5), 0..24),
-        ) {
-            let mut registry = DataRegistry::new();
-            let mut model: Vec<(Vec<u8>, u32)> = Vec::new();
-            let mut next_offset = 0u32;
+        fn prop_offsets_contiguous_and_deduplicated(sequential 1..24 => RegistryMachine);
+    }
 
-            for payload in &payloads {
-                let expected = match model.iter().find(|(data, _)| data == payload) {
-                    Some(&(_, offset)) => offset,
-                    None => {
-                        let offset = next_offset;
-                        model.push((payload.clone(), offset));
-                        next_offset += payload.len() as u32;
-                        offset
-                    }
-                };
-                prop_assert_eq!(
-                    registry.add_bytes(payload, None),
-                    (expected, payload.len() as u32)
-                );
-                prop_assert_eq!(registry.total_size(), next_offset);
-            }
-
-            let entries = registry.entries();
-            prop_assert_eq!(entries.len(), model.len());
-            prop_assert_eq!(registry.is_empty(), model.is_empty());
-            let mut end = 0u32;
-            for (entry, (data, offset)) in entries.iter().zip(&model) {
-                prop_assert_eq!(&entry.data, data);
-                prop_assert_eq!(entry.offset, *offset);
-                prop_assert_eq!(entry.offset, end);
-                end += entry.data.len() as u32;
-            }
-            prop_assert_eq!(end, registry.total_size());
-        }
-
+    proptest! {
         /// Strings share the byte payload table and its deduplication.
         #[test]
         fn prop_strings_match_bytes(strings in prop::collection::vec("[ab]{0,3}", 0..16)) {
