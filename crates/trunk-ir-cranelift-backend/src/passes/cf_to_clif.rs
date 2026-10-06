@@ -99,12 +99,13 @@ impl RewritePattern for CfSwitchPattern {
         let Some(width) = core::IntegerLike::width(ctx, ctx.value_ty(discriminant)) else {
             return false;
         };
-        let mask = if width >= 64 {
-            u64::MAX
-        } else {
-            (1u64 << width) - 1
+        let Some(cases) = switch
+            .cases(ctx)
+            .map(|case| unsigned_case(width, case))
+            .collect::<Option<Vec<u64>>>()
+        else {
+            return false;
         };
-        let cases: Vec<u64> = switch.cases(ctx).map(|case| case as u64 & mask).collect();
         let default = switch.default(ctx);
         let targets: trunk_ir::BlockList = switch.targets(ctx).collect();
         let location = ctx.op(op).location;
@@ -114,6 +115,19 @@ impl RewritePattern for CfSwitchPattern {
             .build(ctx, location);
         rewriter.replace_op(new_op.op_ref());
         true
+    }
+}
+
+/// The unsigned value `clif.switch` compares for a `cf.switch` case on a
+/// discriminant `width` bits wide: its bit pattern at that width.
+///
+/// A `clif.switch` case is a `u64`, so a negative case of a wider
+/// discriminant, whose pattern has bits above the 64th, has none.
+fn unsigned_case(width: u32, case: i64) -> Option<u64> {
+    match width {
+        0..64 => Some(case as u64 & ((1u64 << width) - 1)),
+        64 => Some(case as u64),
+        _ => u64::try_from(case).ok(),
     }
 }
 
@@ -156,6 +170,14 @@ mod tests {
     use super::*;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
+
+    #[test]
+    fn unsigned_cases_are_the_bit_patterns_clif_switch_can_hold() {
+        assert_eq!(unsigned_case(8, -1), Some(255));
+        assert_eq!(unsigned_case(64, -1), Some(u64::MAX));
+        assert_eq!(unsigned_case(128, 7), Some(7));
+        assert_eq!(unsigned_case(128, -1), None);
+    }
 
     #[test]
     fn switch_cases_become_bit_patterns_of_the_discriminant_width() {
