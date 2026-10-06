@@ -2,4 +2,9 @@
 source: tests/integration/diagnostic_snapshots.rs
 expression: result.diagnostics
 ---
-[]
+- message: "handling `State` is missing an arm for `set`"
+  span:
+    start: 204
+    end: 320
+  severity: Error
+  phase: TypeChecking

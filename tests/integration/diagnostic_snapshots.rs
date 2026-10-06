@@ -707,8 +707,14 @@ fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
 "#,
     );
     let result = compile_with_diagnostics(db, source);
-    // Baseline: the compiler does not yet detect missing handler arms.
-    assert!(result.diagnostics.is_empty());
+    assert!(
+        result
+            .diagnostics
+            .iter()
+            .any(|d| d.inner.message.contains("missing an arm for `set`")),
+        "expected a missing handler arm diagnostic, got: {:?}",
+        result.diagnostics
+    );
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
