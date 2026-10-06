@@ -41,7 +41,13 @@ impl Converter<'_> {
         if let Some(frame) = self.frames.get(&answer).copied() {
             return frame;
         }
-        let name_text = format!("{}{answer:?}", tribute_ir::continuation_frame::NAME_PREFIX);
+        // Number frames in order of first use. A `TypeRef` is an interner
+        // index, which changes with the types interned before this pass.
+        let name_text = format!(
+            "{}{}",
+            tribute_ir::continuation_frame::NAME_PREFIX,
+            self.frames.len()
+        );
         let name = self.ctx.intern_str(&name_text);
         let reference = continuation_frame::ref_type(self.ctx, name, answer);
         let done = self.done_k_type(answer);
