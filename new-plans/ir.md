@@ -386,8 +386,10 @@ decode the switch's container shape themselves.
 
 `cf.switch`는 정수 타입(`IntegerLike`) discriminant에 대한 CFG 수준의 다중 분기다. Successor는
 `default`가 먼저이고 그 뒤로 `cases`의 값마다 하나씩 같은 순서로 오며, block
-argument를 받지 않는다. Case는 discriminant 타입의 값이고 서로 달라야 한다.
-Structured-to-CFG 변환은 정수 discriminant와 서로 다른 정수 case를 가진
+argument를 받지 않는다. Case는 discriminant 타입의 값이어야 한다. 그 폭의 부호
+있는 정수나 부호 없는 정수로 표현할 수 있어야 하고, 같은 폭에서 같은 비트열이
+되는 두 표기는 같은 값이다. Case는 서로 달라야 한다.
+Structured-to-CFG 변환은 case가 이 조건을 만족하는 정수 discriminant의
 `scf.switch`를 `cf.switch`로 내리고, 그렇게 표현할 수 없는 switch는 case마다
 비교하는 `cf.cond_br` 사슬로 내린다. Case 값의 분포에 따른 분기 전략은 target
 lowering이 정한다.

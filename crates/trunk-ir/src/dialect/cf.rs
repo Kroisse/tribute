@@ -72,19 +72,47 @@ inventory::submit! {
     BranchOps::register::<CondBr>()
 }
 
-impl crate::ops::Verify for Switch {
-    /// Every case has one target, and no case value repeats.
-    fn verify(self, ctx: &IrContext) -> Result<(), String> {
-        let cases = self.cases(ctx).count();
-        let targets = self.targets(ctx).count();
-        if cases != targets {
-            return Err(format!("{cases} case(s) but {targets} target(s)"));
-        }
+impl Switch {
+    /// Check that `cases` are distinct values of an integer type `width` bits
+    /// wide. A case may be written as a signed or an unsigned value of that
+    /// width; two spellings of one bit pattern are the same value.
+    pub fn check_cases(width: u32, cases: &[i64]) -> Result<(), String> {
         let mut seen = rustc_hash::FxHashSet::default();
-        match self.cases(ctx).find(|&case| !seen.insert(case)) {
-            Some(case) => Err(format!("duplicate case {case}")),
-            None => Ok(()),
+        for &case in cases {
+            let pattern = case_pattern(width, case)
+                .ok_or_else(|| format!("case {case} is not a value of a {width}-bit integer"))?;
+            if !seen.insert(pattern) {
+                return Err(format!("duplicate case {case}"));
+            }
         }
+        Ok(())
+    }
+}
+
+/// The bit pattern of `case` as an integer `width` bits wide, if it is a
+/// signed or an unsigned value of that width.
+fn case_pattern(width: u32, case: i64) -> Option<i128> {
+    if width >= 64 {
+        return Some(i128::from(case));
+    }
+    let unsigned = 0..1i64 << width;
+    let signed = -(1i64 << (width - 1))..0;
+    (unsigned.contains(&case) || signed.contains(&case))
+        .then(|| i128::from(case & ((1i64 << width) - 1)))
+}
+
+impl crate::ops::Verify for Switch {
+    /// Every case has one target and is a distinct value of the
+    /// discriminant's type.
+    fn verify(self, ctx: &IrContext) -> Result<(), String> {
+        let cases: Vec<i64> = self.cases(ctx).collect();
+        let targets = self.targets(ctx).count();
+        if cases.len() != targets {
+            return Err(format!("{} case(s) but {targets} target(s)", cases.len()));
+        }
+        let width = IntegerLike::width(ctx, ctx.value_ty(self.discriminant(ctx)))
+            .expect("schema-verified integer discriminant");
+        Self::check_cases(width, &cases)
     }
 }
 

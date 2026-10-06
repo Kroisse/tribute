@@ -2862,6 +2862,16 @@ mod tests {
         for (cases, successors, expected) in [
             ("[4, -1]", "^fallback, ^first", "2 case(s) but 1 target(s)"),
             ("[4, 4]", "^fallback, ^first, ^second", "duplicate case 4"),
+            (
+                "[-1, 4294967295]",
+                "^fallback, ^first, ^second",
+                "duplicate case 4294967295",
+            ),
+            (
+                "[4, 4294967296]",
+                "^fallback, ^first, ^second",
+                "case 4294967296 is not a value of a 32-bit integer",
+            ),
         ] {
             let mut ctx = IrContext::new();
             let module =

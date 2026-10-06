@@ -628,16 +628,14 @@ impl SwitchDispatch<'_> {
     }
 }
 
-/// The case values of a switch that `cf.switch` can express: distinct
-/// integers on an integer discriminant. Other switches compare case by case.
+/// The case values of a switch that `cf.switch` can express: distinct values
+/// of an integer discriminant's type. Other switches compare case by case.
 fn switch_case_values(
     ctx: &IrContext,
     discriminant_ty: TypeRef,
     cases: &[(Attribute, RegionRef)],
 ) -> Option<Vec<i64>> {
-    if !crate::dialect::core::IntegerLike::matches(ctx, discriminant_ty) {
-        return None;
-    }
+    let width = crate::dialect::core::IntegerLike::width(ctx, discriminant_ty)?;
     let values = cases
         .iter()
         .map(|(value, _)| match value {
@@ -645,7 +643,8 @@ fn switch_case_values(
             _ => None,
         })
         .collect::<Option<Vec<_>>>()?;
-    values.iter().all_unique().then_some(values)
+    cf::Switch::check_cases(width, &values).ok()?;
+    Some(values)
 }
 
 /// Replace `scf.yield` ops in the given blocks with `cf.br` to the target block.
@@ -2152,27 +2151,34 @@ mod tests {
     }
 
     #[test]
-    fn switch_with_a_repeated_case_compares_case_by_case() {
-        let printed = lower_switch_function(
-            r#"core.module @test {
-  func.func @main(%choice: core.i32) {
-    scf.switch %choice {
-      scf.case {value = 3} {
+    fn switch_whose_cases_are_not_distinct_discriminant_values_compares_case_by_case() {
+        for (discriminant_ty, cases) in [
+            ("core.i32", ["3", "3"]),
+            ("core.i8", ["-1", "255"]),
+            ("core.i8", ["1", "300"]),
+        ] {
+            let printed = lower_switch_function(&format!(
+                r#"core.module @test {{
+  func.func @main(%choice: {discriminant_ty}) {{
+    scf.switch %choice {{
+      scf.case {{value = {}}} {{
         scf.yield
-      }
-      scf.case {value = 3} {
+      }}
+      scf.case {{value = {}}} {{
         scf.yield
-      }
-      scf.default {
+      }}
+      scf.default {{
         scf.yield
-      }
-    }
+      }}
+    }}
     func.return
-  }
-}"#,
-        );
-        assert!(!printed.contains("cf.switch"), "{printed}");
-        assert_eq!(printed.matches("cf.cond_br").count(), 2, "{printed}");
+  }}
+}}"#,
+                cases[0], cases[1]
+            ));
+            assert!(!printed.contains("cf.switch"), "{printed}");
+            assert_eq!(printed.matches("cf.cond_br").count(), 2, "{printed}");
+        }
     }
 
     #[test]
