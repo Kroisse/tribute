@@ -390,7 +390,11 @@ impl LspServer {
 
             // Add all references using target-aware matching to avoid cross-scope edits
             let target = index.target_from_definition(def);
-            for reference in index.references_of_target(db, &target) {
+            for reference in index
+                .references_of_target(db, &target)
+                .into_iter()
+                .filter(|r| !r.shorthand)
+            {
                 edits.push(TextEdit {
                     range: span_to_range(&rope, reference.span),
                     new_text: new_name.clone(),
@@ -2139,6 +2143,34 @@ mod tests {
             lines.join("\n"),
             "struct Point { px: Int, y: Int }\n\nfn main() -> Int {\n    let p = Point { px: 1, y: 2 }\n    let Point { px: x, y } = p\n    x + y\n}"
         );
+    }
+
+    #[test]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_field_from_shorthand_expands_it_once() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_shorthand_msg");
+        let source = "struct Point { x: Int }\n\nfn main(p: Point) -> Int {\n    let Point { x } = p\n    x\n}";
+        harness.open_document(&uri, source);
+
+        let edit = harness
+            .request::<Rename>(RenameParams {
+                text_document_position: TextDocumentPositionParams {
+                    text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+                    position: lsp_types::Position {
+                        line: 3,
+                        character: 16, // On the shorthand `x`
+                    },
+                },
+                new_name: "px".to_string(),
+                work_done_progress_params: Default::default(),
+            })
+            .expect("Should rename the field from its shorthand use");
+        let edits = edit.changes.unwrap().remove(&uri).unwrap();
+        let on_line_3: Vec<_> = edits.iter().filter(|e| e.range.start.line == 3).collect();
+        assert_eq!(on_line_3.len(), 1, "shorthand must be edited exactly once");
+        assert_eq!(on_line_3[0].new_text, "px: x");
+        assert_eq!(edits.len(), 2);
     }
 
     #[test]

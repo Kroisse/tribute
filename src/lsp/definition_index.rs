@@ -80,6 +80,9 @@ pub struct AstReferenceEntry {
     pub span: Span,
     /// The resolved target of the reference.
     pub target: ResolvedTarget,
+    /// Whether this is a shorthand record-pattern field (`Point { x }`), whose
+    /// span is shared with the local binding it introduces.
+    pub shorthand: bool,
 }
 
 /// Target of a resolved reference.
@@ -147,10 +150,6 @@ pub struct AstDefinitionIndex<'db> {
     /// All references, sorted by span.
     #[returns(deref)]
     pub references: Vec<AstReferenceEntry>,
-    /// Shorthand record-pattern fields (`Point { x }`), which are not
-    /// references because the binding they introduce owns their span.
-    #[returns(deref)]
-    pub shorthand_fields: Vec<AstReferenceEntry>,
     /// Map from name to definition indices.
     by_name: BTreeMap<Symbol, Vec<usize>>,
 }
@@ -167,12 +166,10 @@ impl<'db> AstDefinitionIndex<'db> {
 
         let mut definitions = collector.definitions;
         let mut references = collector.references;
-        let mut shorthand_fields = collector.shorthand_fields;
 
         // Sort by span
         definitions.sort_by_key(|e| (e.span.start, e.span.end));
         references.sort_by_key(|e| (e.span.start, e.span.end));
-        shorthand_fields.sort_by_key(|e| (e.span.start, e.span.end));
 
         // Build name index
         let mut by_name = BTreeMap::<_, Vec<_>>::new();
@@ -180,7 +177,7 @@ impl<'db> AstDefinitionIndex<'db> {
             by_name.entry(def.name.clone()).or_default().push(i);
         }
 
-        Self::new(db, definitions, references, shorthand_fields, by_name)
+        Self::new(db, definitions, references, by_name)
     }
 
     /// Find the definition at a given offset (when cursor is on a definition).
@@ -373,9 +370,9 @@ impl<'db> AstDefinitionIndex<'db> {
         db: &'db dyn salsa::Database,
         target: &ResolvedTarget,
     ) -> Vec<&AstReferenceEntry> {
-        self.shorthand_fields(db)
+        self.references(db)
             .iter()
-            .filter(|r| r.target == *target)
+            .filter(|r| r.shorthand && r.target == *target)
             .collect()
     }
 
@@ -483,7 +480,6 @@ struct DefinitionCollector<'a, 'db> {
     span_map: &'a SpanMap,
     definitions: Vec<AstDefinitionEntry>,
     references: Vec<AstReferenceEntry>,
-    shorthand_fields: Vec<AstReferenceEntry>,
 }
 
 impl<'a, 'db> DefinitionCollector<'a, 'db> {
@@ -493,7 +489,6 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             span_map,
             definitions: Vec::new(),
             references: Vec::new(),
-            shorthand_fields: Vec::new(),
         }
     }
 
@@ -534,6 +529,7 @@ impl<'a, 'db> DefinitionCollector<'a, 'db> {
             node_id,
             span,
             target,
+            shorthand: false,
         });
     }
 
@@ -716,10 +712,11 @@ impl<'ast, 'db: 'ast> Visit<'ast, TypedRef<'db>> for DefinitionCollector<'_, 'db
                 };
                 if shorthand {
                     let span = self.span_map.get_or_default(field.id);
-                    self.shorthand_fields.push(AstReferenceEntry {
+                    self.references.push(AstReferenceEntry {
                         node_id: field.id,
                         span,
                         target,
+                        shorthand: true,
                     });
                 } else {
                     self.add_reference(field.name_id, target);
@@ -2092,11 +2089,24 @@ fn sum(p: Point) -> Int {
         let source = make_source(&db, text);
         let index = definition_index(&db, source).unwrap();
 
-        // `x: a` names the field; the shorthand `y` is owned by its binding.
+        // `x: a` names the field, and so does the shorthand `y`.
         let x = field_target("Point", "x");
         assert_eq!(reference_texts(&db, index, text, &x), ["x"]);
         let y = field_target("Point", "y");
-        assert!(reference_texts(&db, index, text, &y).is_empty());
+        assert_eq!(reference_texts(&db, index, text, &y), ["y"]);
+
+        // The cursor on the shorthand resolves to the field, not the binding.
+        let offset = text.find("y }").unwrap();
+        let def = index.definition_at(&db, offset).expect("field definition");
+        assert_eq!(
+            def.kind,
+            DefinitionKind::Field {
+                owner: trunk_ir::Symbol::new("Point")
+            }
+        );
+        let (target, refs) = index.references_at(&db, offset).unwrap();
+        assert_eq!(target, y);
+        assert_eq!(refs.len(), 1);
 
         let offset = text.find("x: a").unwrap();
         let def = index.definition_at(&db, offset).expect("field definition");
