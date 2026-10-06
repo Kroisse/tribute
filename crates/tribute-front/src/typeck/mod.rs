@@ -24,6 +24,8 @@ mod context;
 pub mod effect_row;
 mod evidence_plan;
 mod func_context;
+#[cfg(test)]
+pub(crate) mod prop;
 mod solver;
 pub mod subst;
 

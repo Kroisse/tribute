@@ -485,7 +485,7 @@ fn freshen_effect_vars_inner<'db>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ast::{AbilityId, CallingConvention, EffectRow, TypeDefId};
+    use crate::ast::{AbilityId, CallingConvention, EffectRow};
     use crate::typeck::TypeSolver;
     use salsa_test_macros::salsa_test;
     use trunk_ir::Symbol;
@@ -495,20 +495,11 @@ mod tests {
         AbilityId::source(db, Symbol::new(name))
     }
 
-    // =========================================================================
-    // Basic substitution tests
-    // =========================================================================
+    // Substitution laws are properties in `laws` below.
 
-    #[salsa_test]
-    fn test_substitute_bound_var_basic(db: &dyn salsa::Database) {
-        // BoundVar(0) + [Int] → Int
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let int_ty = Type::new(db, TypeKind::Int);
-        let subst = vec![int_ty];
-
-        let result = substitute_bound_vars(db, bound_var, &subst);
-        assert_eq!(result, SubstResult::Ok(int_ty));
-    }
+    // =========================================================================
+    // Instantiation tests
+    // =========================================================================
 
     #[salsa_test]
     fn instantiation_does_not_capture_rows_in_caller_type_arguments(db: &dyn salsa::Database) {
@@ -623,211 +614,6 @@ mod tests {
         assert!(first_tails[0].id > quantified_row.id);
     }
 
-    #[salsa_test]
-    fn test_substitute_multiple_bound_vars(db: &dyn salsa::Database) {
-        // (BoundVar(0), BoundVar(1)) + [Int, Bool] → (Int, Bool)
-        let bound0 = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let bound1 = Type::new(db, TypeKind::BoundVar { index: 1 });
-        let tuple_ty = Type::new(db, TypeKind::Tuple(vec![bound0, bound1]));
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let bool_ty = Type::new(db, TypeKind::Bool);
-        let subst = vec![int_ty, bool_ty];
-
-        let result = substitute_bound_vars(db, tuple_ty, &subst);
-        let expected = Type::new(db, TypeKind::Tuple(vec![int_ty, bool_ty]));
-        assert_eq!(result, SubstResult::Ok(expected));
-    }
-
-    #[salsa_test]
-    fn test_substitute_in_named_type(db: &dyn salsa::Database) {
-        // List(BoundVar(0)) + [Int] → List(Int)
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let list_ty = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![bound_var],
-            },
-        );
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let subst = vec![int_ty];
-
-        let result = substitute_bound_vars(db, list_ty, &subst);
-        let expected = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![int_ty],
-            },
-        );
-        assert_eq!(result, SubstResult::Ok(expected));
-    }
-
-    #[salsa_test]
-    fn test_substitute_in_func_type(db: &dyn salsa::Database) {
-        // fn(BoundVar(0)) -> BoundVar(0) + [Int] → fn(Int) -> Int
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let effect = EffectRow::pure(db);
-        let func_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![bound_var],
-                result: bound_var,
-                effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let subst = vec![int_ty];
-
-        let result = substitute_bound_vars(db, func_ty, &subst);
-        let expected = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![int_ty],
-                result: int_ty,
-                effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        assert_eq!(result, SubstResult::Ok(expected));
-    }
-
-    #[salsa_test]
-    fn test_substitute_in_tuple_type(db: &dyn salsa::Database) {
-        // (BoundVar(0), BoundVar(1)) + [Int, Bool]
-        let bound0 = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let bound1 = Type::new(db, TypeKind::BoundVar { index: 1 });
-        let tuple_ty = Type::new(db, TypeKind::Tuple(vec![bound0, bound1]));
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let bool_ty = Type::new(db, TypeKind::Bool);
-        let subst = vec![int_ty, bool_ty];
-
-        let result = substitute_bound_vars(db, tuple_ty, &subst);
-        let expected = Type::new(db, TypeKind::Tuple(vec![int_ty, bool_ty]));
-        assert_eq!(result, SubstResult::Ok(expected));
-    }
-
-    #[salsa_test]
-    fn test_substitute_out_of_bounds(db: &dyn salsa::Database) {
-        // BoundVar(5) + [Int] → OutOfBounds
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 5 });
-        let int_ty = Type::new(db, TypeKind::Int);
-        let subst = vec![int_ty];
-
-        let result = substitute_bound_vars(db, bound_var, &subst);
-        assert_eq!(result, SubstResult::OutOfBounds { index: 5, max: 1 });
-    }
-
-    #[salsa_test]
-    fn test_substitute_out_of_bounds_in_nested(db: &dyn salsa::Database) {
-        // List(BoundVar(5)) + [Int] → OutOfBounds
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 5 });
-        let list_ty = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![bound_var],
-            },
-        );
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let subst = vec![int_ty];
-
-        let result = substitute_bound_vars(db, list_ty, &subst);
-        assert_eq!(result, SubstResult::OutOfBounds { index: 5, max: 1 });
-    }
-
-    #[salsa_test]
-    fn test_substitute_primitive_unchanged(db: &dyn salsa::Database) {
-        // Int + [Bool] → Int (primitives are unchanged)
-        let int_ty = Type::new(db, TypeKind::Int);
-        let bool_ty = Type::new(db, TypeKind::Bool);
-        let subst = vec![bool_ty];
-
-        let result = substitute_bound_vars(db, int_ty, &subst);
-        assert_eq!(result, SubstResult::Ok(int_ty));
-    }
-
-    #[salsa_test]
-    fn test_substitute_empty_subst(db: &dyn salsa::Database) {
-        // Primitives with empty subst should work
-        let int_ty = Type::new(db, TypeKind::Int);
-        let result = substitute_bound_vars(db, int_ty, &[]);
-        assert_eq!(result, SubstResult::Ok(int_ty));
-    }
-
-    // =========================================================================
-    // Effect row substitution tests
-    // =========================================================================
-
-    #[salsa_test]
-    fn test_substitute_effect_row_with_bound_var(db: &dyn salsa::Database) {
-        // {State(BoundVar(0))} + [Int] → {State(Int)}
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let state_id = test_ability_id(db, "State");
-        let effect = EffectRow::new(
-            db,
-            vec![Effect {
-                ability_id: state_id,
-                args: vec![bound_var],
-            }],
-            None,
-        );
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let subst = vec![int_ty];
-
-        let result = substitute_effect_row(db, effect, &subst);
-        let expected = EffectRow::new(
-            db,
-            vec![Effect {
-                ability_id: state_id,
-                args: vec![int_ty],
-            }],
-            None,
-        );
-        assert_eq!(result, expected);
-    }
-
-    #[salsa_test]
-    fn test_substitute_effect_row_no_change(db: &dyn salsa::Database) {
-        // {IO} + [Int] → {IO} (no BoundVars in effect)
-        let io_id = test_ability_id(db, "IO");
-        let effect = EffectRow::new(
-            db,
-            vec![Effect {
-                ability_id: io_id,
-                args: vec![],
-            }],
-            None,
-        );
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let subst = vec![int_ty];
-
-        let result = substitute_effect_row(db, effect, &subst);
-        // Should be the same interned value (no change)
-        assert_eq!(result, effect);
-    }
-
-    #[salsa_test]
-    fn test_substitute_pure_effect_row(db: &dyn salsa::Database) {
-        let effect = EffectRow::pure(db);
-        let int_ty = Type::new(db, TypeKind::Int);
-        let subst = vec![int_ty];
-
-        let result = substitute_effect_row(db, effect, &subst);
-        assert_eq!(result, effect);
-    }
-
     // =========================================================================
     // SubstResult helper method tests
     // =========================================================================
@@ -875,5 +661,174 @@ mod tests {
 
         let err_result: SubstResult<'_> = SubstResult::OutOfBounds { index: 0, max: 0 };
         assert!(!err_result.is_ok());
+    }
+}
+
+/// Laws of bound-variable substitution, checked against a reference model on
+/// generated types.
+#[cfg(test)]
+mod laws {
+    use proptest::prelude::*;
+
+    use super::*;
+    use crate::typeck::prop::{RowShape, TypeGen, TypeShape, row_shape, type_shape};
+
+    /// Substitution arguments: open types without bound variables.
+    const ARGS: TypeGen = TypeGen::GROUND.univars(2).row_vars(2);
+
+    /// A type over `BoundVar(0..n)` with `n` arguments.
+    fn scheme_body_and_args(
+        cfg: impl Fn(u32) -> TypeGen + Clone + 'static,
+    ) -> BoxedStrategy<(TypeShape, Vec<TypeShape>)> {
+        (1u32..=3)
+            .prop_flat_map(move |n| {
+                (
+                    type_shape(cfg(n)),
+                    proptest::collection::vec(type_shape(ARGS), n as usize),
+                )
+            })
+            .boxed()
+    }
+
+    fn body(n: u32) -> TypeGen {
+        ARGS.bound_vars(n).higher_kinded(true).conventions(true)
+    }
+
+    fn build_all<'db>(db: &'db dyn salsa::Database, shapes: &[TypeShape]) -> Vec<Type<'db>> {
+        shapes.iter().map(|shape| shape.build(db)).collect()
+    }
+
+    proptest! {
+        /// Substitution replaces `BoundVar(i)` with `args[i]` everywhere,
+        /// effect arguments included, and changes nothing else.
+        #[test]
+        fn substitution_matches_its_model((ty, args) in scheme_body_and_args(body)) {
+            let db = salsa::DatabaseImpl::new();
+            let expected = ty.substitute_bound(&args).expect("indices in range");
+            prop_assert_eq!(
+                substitute_bound_vars(&db, ty.build(&db), &build_all(&db, &args)),
+                SubstResult::Ok(expected.build(&db))
+            );
+        }
+
+        /// A bound variable is replaced by its argument.
+        #[test]
+        fn bound_var_is_replaced_by_its_argument(
+            args in proptest::collection::vec(type_shape(ARGS), 1..=4),
+            pick in any::<proptest::sample::Index>(),
+        ) {
+            let db = salsa::DatabaseImpl::new();
+            let index = pick.index(args.len());
+            let bound = Type::new(&db, TypeKind::BoundVar { index: index as u32 });
+            prop_assert_eq!(
+                substitute_bound_vars(&db, bound, &build_all(&db, &args)),
+                SubstResult::Ok(args[index].build(&db))
+            );
+        }
+
+        /// Types without bound variables are returned unchanged, with any
+        /// arguments; rows without them keep their interned identity.
+        #[test]
+        fn types_without_bound_vars_are_unchanged(
+            ty in type_shape(ARGS.higher_kinded(true).conventions(true)),
+            row in row_shape(ARGS),
+            args in proptest::collection::vec(type_shape(ARGS), 0..=2),
+        ) {
+            let db = salsa::DatabaseImpl::new();
+            let args = build_all(&db, &args);
+            let ty = ty.build(&db);
+            prop_assert_eq!(substitute_bound_vars(&db, ty, &args), SubstResult::Ok(ty));
+            let row = row.build(&db);
+            prop_assert_eq!(substitute_effect_row(&db, row, &args), row);
+        }
+
+        /// Substituting each bound variable by itself is the identity.
+        #[test]
+        fn identity_arguments_are_the_identity((ty, args) in scheme_body_and_args(body)) {
+            let db = salsa::DatabaseImpl::new();
+            let identity: Vec<_> = (0..args.len() as u32)
+                .map(|index| Type::new(&db, TypeKind::BoundVar { index }))
+                .collect();
+            let ty = ty.build(&db);
+            prop_assert_eq!(substitute_bound_vars(&db, ty, &identity), SubstResult::Ok(ty));
+        }
+
+        /// Substituting in sequence equals substituting once with the first
+        /// arguments substituted by the second.
+        #[test]
+        fn substitutions_compose(
+            (ty, first) in scheme_body_and_args(|n| body(n).bound_vars(n)),
+            second in proptest::collection::vec(type_shape(ARGS), 3),
+        ) {
+            let db = salsa::DatabaseImpl::new();
+            // `first` may mention BoundVar(0..3) of the second substitution.
+            let first: Vec<_> = first
+                .iter()
+                .enumerate()
+                .map(|(i, arg)| if i % 2 == 0 { TypeShape::BoundVar(i as u32) } else { arg.clone() })
+                .collect();
+            let second = build_all(&db, &second);
+            let ty = ty.build(&db);
+            let SubstResult::Ok(once) = substitute_bound_vars(&db, ty, &build_all(&db, &first)) else {
+                panic!("indices in range");
+            };
+            let composed: Vec<_> = build_all(&db, &first)
+                .into_iter()
+                .map(|arg| substitute_bound_vars(&db, arg, &second).unwrap_or(arg))
+                .collect();
+            prop_assert_eq!(
+                substitute_bound_vars(&db, once, &second),
+                substitute_bound_vars(&db, ty, &composed)
+            );
+        }
+
+        /// An index past the arguments is reported with the argument count,
+        /// as long as it is outside effect rows (see
+        /// `out_of_range_bound_var_in_effect_row_is_reported`).
+        #[test]
+        fn out_of_range_index_is_reported(
+            (ty, args) in (0u32..=2).prop_flat_map(|n| (
+                type_shape(ARGS.bound_vars(n + 2).bound_vars_in_rows(false).higher_kinded(true)),
+                proptest::collection::vec(type_shape(ARGS), n as usize),
+            )),
+        ) {
+            let db = salsa::DatabaseImpl::new();
+            let indices = ty.bound_vars();
+            let in_range = indices.iter().all(|index| (*index as usize) < args.len());
+            let result = substitute_bound_vars(&db, ty.build(&db), &build_all(&db, &args));
+            match result {
+                SubstResult::Ok(_) => prop_assert!(in_range),
+                SubstResult::OutOfBounds { index, max } => {
+                    prop_assert!(!in_range);
+                    prop_assert_eq!(max, args.len());
+                    prop_assert!(index as usize >= max && indices.contains(&index));
+                }
+            }
+        }
+    }
+
+    /// Minimal repro: `substitute_bound_vars` documents an `OutOfBounds`
+    /// result for an index past the arguments, but an out-of-range index in
+    /// a function type's effect row panics inside `substitute_effect_row`.
+    #[test]
+    #[ignore = "substitute_bound_vars panics instead of returning OutOfBounds for an index in an effect row"]
+    fn out_of_range_bound_var_in_effect_row_is_reported() {
+        let db = salsa::DatabaseImpl::new();
+        let bound = TypeShape::BoundVar(1);
+        let state = crate::typeck::prop::EffectShape {
+            ability: 1,
+            args: vec![bound],
+        };
+        let func = TypeShape::Func {
+            params: vec![],
+            result: Box::new(TypeShape::Prim(crate::typeck::prop::Prim::Nil)),
+            effect: RowShape::closed(vec![state]),
+            convention: crate::ast::CallingConvention::Direct,
+        };
+        let int = Type::new(&db, TypeKind::Int);
+        assert_eq!(
+            substitute_bound_vars(&db, func.build(&db), &[int]),
+            SubstResult::OutOfBounds { index: 1, max: 1 }
+        );
     }
 }

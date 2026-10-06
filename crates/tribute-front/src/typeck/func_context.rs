@@ -1670,114 +1670,11 @@ mod merge_effect_tests {
     use super::*;
     use crate::ast::AbilityId;
     use crate::typeck::constraint::Constraint;
-    use crate::typeck::effect_row::simple_effect;
     use salsa_test_macros::salsa_test;
 
     /// Helper to create a simple AbilityId with empty module path
     fn test_ability_id<'db>(db: &'db dyn salsa::Database, name: &str) -> AbilityId<'db> {
         AbilityId::source(db, Symbol::new(name))
-    }
-
-    #[salsa_test]
-    fn merge_pure_rows(db: &dyn salsa::Database) {
-        let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, Symbol::new("test"));
-        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-
-        let pure = EffectRow::pure(db);
-
-        // Pure + Pure = Pure
-        ctx.set_current_effect(pure);
-        ctx.merge_effect(pure);
-        assert!(ctx.current_effect().is_pure(db));
-
-        // No constraints generated
-        assert!(ctx.take_constraints().is_empty());
-    }
-
-    #[salsa_test]
-    fn merge_concrete_effects(db: &dyn salsa::Database) {
-        let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, Symbol::new("test"));
-        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-
-        let console = simple_effect(db, test_ability_id(db, "Console"));
-        let state = simple_effect(db, test_ability_id(db, "State"));
-
-        let row1 = EffectRow::single(db, console.clone());
-        let row2 = EffectRow::single(db, state.clone());
-
-        // {Console} + {State} = {Console, State}
-        ctx.set_current_effect(row1);
-        ctx.merge_effect(row2);
-
-        let result = ctx.current_effect();
-        let effects = result.effects(db);
-        assert_eq!(effects.len(), 2);
-        assert!(effects.contains(&console));
-        assert!(effects.contains(&state));
-        assert!(result.rest(db).is_none()); // Still closed
-
-        // No constraints for closed rows
-        assert!(ctx.take_constraints().is_empty());
-    }
-
-    #[salsa_test]
-    fn merge_open_rows(db: &dyn salsa::Database) {
-        let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, Symbol::new("test"));
-        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-
-        let console = simple_effect(db, test_ability_id(db, "Console"));
-        let state = simple_effect(db, test_ability_id(db, "State"));
-
-        // Use IDs that won't collide with fresh_row_var (which starts at 1)
-        let e1 = EffectVar { id: 100 };
-        let e2 = EffectVar { id: 101 };
-
-        let row1 = EffectRow::new(db, vec![console.clone()], Some(e1));
-        let row2 = EffectRow::new(db, vec![state.clone()], Some(e2));
-
-        // {Console | e1} + {State | e2} = {Console, State | e3}
-        ctx.set_current_effect(row1);
-        ctx.merge_effect(row2);
-
-        let result = ctx.current_effect();
-        let effects = result.effects(db);
-        assert_eq!(effects.len(), 2);
-        assert!(effects.contains(&console));
-        assert!(effects.contains(&state));
-
-        // Result should have a fresh row variable (e3)
-        let e3 = result.rest(db).expect("Should have a row variable");
-        assert_ne!(e3, e1);
-        assert_ne!(e3, e2);
-
-        let constraints = ctx.take_constraints();
-        assert!(
-            matches!(constraints.constraints(), [Constraint::RowUnion(union, None)] if union.sources == vec![row1,row2] && union.result == result)
-        );
-    }
-
-    #[salsa_test]
-    fn merge_deduplicates(db: &dyn salsa::Database) {
-        let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, Symbol::new("test"));
-        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-
-        let console = simple_effect(db, test_ability_id(db, "Console"));
-
-        let row1 = EffectRow::single(db, console.clone());
-        let row2 = EffectRow::single(db, console.clone());
-
-        // {Console} + {Console} = {Console}
-        ctx.set_current_effect(row1);
-        ctx.merge_effect(row2);
-
-        let result = ctx.current_effect();
-        let effects = result.effects(db);
-        assert_eq!(effects.len(), 1);
-        assert!(effects.contains(&console));
     }
 
     #[salsa_test]
@@ -1863,98 +1760,58 @@ mod merge_effect_tests {
         }
     }
 
-    #[salsa_test]
-    fn merge_closed_with_open(db: &dyn salsa::Database) {
-        let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, Symbol::new("test"));
-        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-
-        let console = simple_effect(db, test_ability_id(db, "Console"));
-        let state = simple_effect(db, test_ability_id(db, "State"));
-
-        // Use ID that won't collide with fresh_row_var (which starts at 1)
-        let e1 = EffectVar { id: 100 };
-
-        let closed_row = EffectRow::single(db, console.clone());
-        let open_row = EffectRow::new(db, vec![state.clone()], Some(e1));
-
-        // {Console} + {State | e1} = {Console, State | e1}
-        ctx.set_current_effect(closed_row);
-        ctx.merge_effect(open_row);
-
-        let result = ctx.current_effect();
-        let effects = result.effects(db);
-        assert_eq!(effects.len(), 2);
-        assert!(effects.contains(&console));
-        assert!(effects.contains(&state));
-        assert_eq!(result.rest(db), Some(e1)); // Preserves the row variable
-
-        // No constraints needed when only one is open
-        assert!(ctx.take_constraints().is_empty());
+    proptest::proptest! {
+        /// Merging into the accumulated row is set union: the pure row is
+        /// an identity on either side; otherwise the current effects come
+        /// first, then the new ones, each once. A shared or single tail is
+        /// kept, and two distinct tails get a fresh tail and a retained
+        /// `RowUnion` of the two rows. Generated abilities have one arity
+        /// each, so no arity constraint arises.
+        #[test]
+        fn merge_is_row_union(
+            current in crate::typeck::prop::row_shape(ROWS),
+            incoming in crate::typeck::prop::row_shape(ROWS),
+        ) {
+            let db = salsa::DatabaseImpl::new();
+            let env = ModuleTypeEnv::new(&db);
+            let mut ctx = FunctionInferenceContext::new(&db, &env, FuncDefId::new(&db, Symbol::new("test")));
+            let (current_row, incoming_row) = (current.build(&db), incoming.build(&db));
+            ctx.set_current_effect(current_row);
+            ctx.merge_effect(incoming_row);
+            let result = ctx.current_effect();
+            let constraints = ctx.take_constraints().into_constraints();
+            if incoming_row.is_pure(&db) {
+                proptest::prop_assert_eq!(result, current_row);
+                proptest::prop_assert!(constraints.is_empty());
+                return Ok(());
+            }
+            if current_row.is_pure(&db) {
+                proptest::prop_assert_eq!(result, incoming_row);
+                proptest::prop_assert!(constraints.is_empty());
+                return Ok(());
+            }
+            let mut effects = current.effects.clone();
+            effects.extend(incoming.effects.iter().filter(|e| !current.effects.contains(e)).cloned());
+            let effects: Vec<_> = effects.iter().map(|effect| effect.build(&db)).collect();
+            proptest::prop_assert_eq!(result.effects(&db), effects.as_slice());
+            match (current.rest, incoming.rest) {
+                (Some(a), Some(b)) if a != b => {
+                    let tail = result.rest(&db).expect("open result");
+                    proptest::prop_assert!(tail.id != a && tail.id != b);
+                    proptest::prop_assert!(matches!(
+                        constraints.as_slice(),
+                        [Constraint::RowUnion(union, None)]
+                            if union.sources == vec![current_row, incoming_row] && union.result == result
+                    ));
+                }
+                (a, b) => {
+                    proptest::prop_assert_eq!(result.rest(&db), a.or(b).map(|id| EffectVar { id }));
+                    proptest::prop_assert!(constraints.is_empty());
+                }
+            }
+        }
     }
 
-    #[salsa_test]
-    fn merge_open_rows_same_rest_var(db: &dyn salsa::Database) {
-        let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, Symbol::new("test"));
-        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-
-        let console = simple_effect(db, test_ability_id(db, "Console"));
-        let state = simple_effect(db, test_ability_id(db, "State"));
-
-        // Both rows share the same rest variable
-        // Use ID that won't collide with fresh_row_var (which starts at 1)
-        let shared_var = EffectVar { id: 100 };
-
-        let row1 = EffectRow::new(db, vec![console.clone()], Some(shared_var));
-        let row2 = EffectRow::new(db, vec![state.clone()], Some(shared_var));
-
-        // {Console | e1} + {State | e1} = {Console, State | e1}
-        // When rest vars are the same, we optimize by skipping constraint generation
-        ctx.set_current_effect(row1);
-        ctx.merge_effect(row2);
-
-        let result = ctx.current_effect();
-        let effects = result.effects(db);
-        assert_eq!(effects.len(), 2);
-        assert!(effects.contains(&console));
-        assert!(effects.contains(&state));
-
-        // Result should preserve the shared row variable (no fresh var created)
-        assert_eq!(result.rest(db), Some(shared_var));
-
-        // No constraints should be generated for same rest var optimization
-        assert!(ctx.take_constraints().is_empty());
-    }
-
-    #[salsa_test]
-    fn merge_open_rows_same_rest_var_with_overlap(db: &dyn salsa::Database) {
-        let env = ModuleTypeEnv::new(db);
-        let func_id = FuncDefId::new(db, Symbol::new("test"));
-        let mut ctx = FunctionInferenceContext::new(db, &env, func_id);
-
-        let console = simple_effect(db, test_ability_id(db, "Console"));
-        let state = simple_effect(db, test_ability_id(db, "State"));
-
-        // Both rows share the same rest variable and have overlapping effects
-        // Use ID that won't collide with fresh_row_var (which starts at 1)
-        let shared_var = EffectVar { id: 100 };
-
-        let row1 = EffectRow::new(db, vec![console.clone(), state.clone()], Some(shared_var));
-        let row2 = EffectRow::new(db, vec![state.clone()], Some(shared_var));
-
-        // {Console, State | e1} + {State | e1} = {Console, State | e1}
-        ctx.set_current_effect(row1);
-        ctx.merge_effect(row2);
-
-        let result = ctx.current_effect();
-        let effects = result.effects(db);
-        assert_eq!(effects.len(), 2); // Deduplication should work
-        assert!(effects.contains(&console));
-        assert!(effects.contains(&state));
-        assert_eq!(result.rest(db), Some(shared_var));
-
-        // No constraints for same rest var
-        assert!(ctx.take_constraints().is_empty());
-    }
+    const ROWS: crate::typeck::prop::TypeGen =
+        crate::typeck::prop::TypeGen::GROUND.univars(2).row_vars(3);
 }

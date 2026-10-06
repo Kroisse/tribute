@@ -4244,75 +4244,8 @@ mod tests {
     // substitute_bound_vars tests (via TypeChecker methods)
     // =========================================================================
 
-    #[salsa_test]
-    fn test_substitute_basic(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // BoundVar(0) + [Int] → Int
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let int_ty = Type::new(db, TypeKind::Int);
-        let args = vec![int_ty];
-
-        let result = checker.substitute_bound_vars(&mut ctx, bound_var, &args);
-        assert_eq!(result, int_ty);
-    }
-
-    #[salsa_test]
-    fn test_substitute_multiple(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // (BoundVar(0), BoundVar(1)) + [Int, Bool] → (Int, Bool)
-        let bound0 = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let bound1 = Type::new(db, TypeKind::BoundVar { index: 1 });
-        let tuple_ty = Type::new(db, TypeKind::Tuple(vec![bound0, bound1]));
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let bool_ty = Type::new(db, TypeKind::Bool);
-        let args = vec![int_ty, bool_ty];
-
-        let result = checker.substitute_bound_vars(&mut ctx, tuple_ty, &args);
-        let expected = Type::new(db, TypeKind::Tuple(vec![int_ty, bool_ty]));
-        assert_eq!(result, expected);
-    }
-
-    #[salsa_test]
-    fn test_substitute_in_func(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // fn(BoundVar(0)) -> BoundVar(0) + [Int] → fn(Int) -> Int
-        let bound_var = Type::new(db, TypeKind::BoundVar { index: 0 });
-        let effect = EffectRow::pure(db);
-        let func_ty = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![bound_var],
-                result: bound_var,
-                effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-
-        let int_ty = Type::new(db, TypeKind::Int);
-        let args = vec![int_ty];
-
-        let result = checker.substitute_bound_vars(&mut ctx, func_ty, &args);
-        let expected = Type::new(
-            db,
-            TypeKind::Func {
-                params: vec![int_ty],
-                result: int_ty,
-                effect,
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        assert_eq!(result, expected);
-    }
+    // The checker delegates to `subst::substitute_bound_vars`, whose laws are
+    // properties in `typeck::subst::laws`; this checks the wrapper's panic.
 
     #[salsa_test]
     #[should_panic(expected = "BoundVar index out of range")]
@@ -4328,21 +4261,6 @@ mod tests {
 
         // This should panic
         checker.substitute_bound_vars(&mut ctx, bound_var, &args);
-    }
-
-    #[salsa_test]
-    fn test_substitute_primitive_unchanged(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // Int + [Bool] → Int (primitives are unchanged)
-        let int_ty = Type::new(db, TypeKind::Int);
-        let bool_ty = Type::new(db, TypeKind::Bool);
-        let args = vec![bool_ty];
-
-        let result = checker.substitute_bound_vars(&mut ctx, int_ty, &args);
-        assert_eq!(result, int_ty);
     }
 
     // =========================================================================
