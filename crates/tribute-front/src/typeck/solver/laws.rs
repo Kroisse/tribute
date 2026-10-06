@@ -11,9 +11,8 @@
 //!   only floor source function types carry; unification does not relate
 //!   floors.
 //!
-//! The ignored tests at the end are minimal failing examples of behavior the
-//! laws expect but the solver does not provide yet; the generators that would
-//! reach them are narrowed where noted.
+//! The tests at the end are minimal examples of cases the laws once found
+//! failing, kept as regressions.
 
 use proptest::prelude::*;
 
@@ -88,18 +87,15 @@ fn ground_and_generalization(sharing: Sharing) -> BoxedStrategy<(TypeShape, Type
 }
 
 /// Two generalizations of one ground type sharing a small variable pool, so
-/// they unify often but not always.
-///
-/// Effect arguments hold no function types and their variables come from a
-/// separate pool, so unifying effect arguments never binds a row variable
-/// (see `open_row_tail_binding_keeps_argument_bindings`).
+/// they unify often but not always. Effect arguments may hold function types
+/// and share variables with the rest of the type, so unifying them can bind
+/// a row tail being unified.
 fn related_pair() -> BoxedStrategy<(TypeShape, TypeShape)> {
     let sharing = Sharing::Pool {
         univars: 3,
         row_vars: 2,
-        separate_effect_args: true,
     };
-    type_shape(GROUND_UNIQUE.row_functions(false))
+    type_shape(GROUND_UNIQUE.row_functions(true))
         .prop_flat_map(move |shape| {
             (
                 generalization(&shape, sharing),
@@ -428,14 +424,12 @@ fn unsettled_ambiguous_row_equality_is_reported() {
     ));
 }
 
-/// Minimal repro: binding an open row's tail to the remaining effects
-/// overwrites a binding of that tail made while unifying effect arguments.
-/// Equating `{State(fn() ->{e1} Nil) | e1}` with `{State(fn() ->{e2} Nil)}`
-/// first unifies the arguments, binding `e1` and `e2` to a fresh common tail,
-/// then rebinds `e1` to the closed empty remainder. `e2` stays open, so the
-/// solved rows differ.
+/// Binding an open row's tail to the remaining effects keeps a binding of
+/// that tail made while unifying effect arguments. Equating
+/// `{State(fn() ->{e1} Nil) | e1}` with `{State(fn() ->{e2} Nil)}` first
+/// unifies the arguments, binding `e1` and `e2` to a fresh common tail; the
+/// rows are then equated again under that binding, closing the common tail.
 #[test]
-#[ignore = "#1370: row tail rebinding discards a binding made by argument unification"]
 fn open_row_tail_binding_keeps_argument_bindings() {
     use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
     let db = salsa::DatabaseImpl::new();
@@ -463,4 +457,77 @@ fn open_row_tail_binding_keeps_argument_bindings() {
     assert!(result.is_ok());
     let (open, closed) = (solver.normalize_row(open), solver.normalize_row(closed));
     assert!(rows_equiv(&db, open, closed, RowRelation::SetEqual));
+}
+
+/// A tail may occur in the effects bound to the other tail: equating
+/// `{State(fn() ->{e1} Nil) | e1}` with `{|e2}` binds `e1` to a fresh tail
+/// and `e2` to `State(fn() ->{e1} Nil)` over it, which is no cycle.
+#[test]
+fn open_rows_allow_a_tail_in_the_other_remainder() {
+    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    let db = salsa::DatabaseImpl::new();
+    let (e1, e2) = (ROW_VAR_BASE, ROW_VAR_BASE + 1);
+    let state = EffectShape {
+        ability: 1,
+        args: vec![TypeShape::Func {
+            params: vec![],
+            result: Box::new(TypeShape::Prim(Prim::Nil)),
+            effect: RowShape {
+                effects: vec![],
+                rest: Some(e1),
+            },
+            convention: crate::ast::CallingConvention::Direct,
+        }],
+    };
+    let left = RowShape {
+        effects: vec![state],
+        rest: Some(e1),
+    }
+    .build(&db);
+    let right = RowShape {
+        effects: vec![],
+        rest: Some(e2),
+    }
+    .build(&db);
+    let (solver, result) = solve_rows(&db, left, right);
+    assert!(result.is_ok(), "{result:?}");
+    let (left, right) = (solver.normalize_row(left), solver.normalize_row(right));
+    assert!(rows_equiv(&db, left, right, RowRelation::SetEqual));
+}
+
+/// Binding both tails must not form a cycle through each other: in
+/// `{State(fn() ->{e1} Nil) | e1}` against `{Choice(fn() ->{e2} Nil, Nil) | e2}`,
+/// `e1` would name `Choice` over `e2` and `e2` would name `State` over `e1`.
+#[test]
+fn open_rows_reject_a_cycle_through_both_tails() {
+    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    let db = salsa::DatabaseImpl::new();
+    let thunk = |tail| TypeShape::Func {
+        params: vec![],
+        result: Box::new(TypeShape::Prim(Prim::Nil)),
+        effect: RowShape {
+            effects: vec![],
+            rest: Some(tail),
+        },
+        convention: crate::ast::CallingConvention::Direct,
+    };
+    let (e1, e2) = (ROW_VAR_BASE, ROW_VAR_BASE + 1);
+    let left = RowShape {
+        effects: vec![EffectShape {
+            ability: 1,
+            args: vec![thunk(e1)],
+        }],
+        rest: Some(e1),
+    }
+    .build(&db);
+    let right = RowShape {
+        effects: vec![EffectShape {
+            ability: 3,
+            args: vec![thunk(e2), TypeShape::Prim(Prim::Nil)],
+        }],
+        rest: Some(e2),
+    }
+    .build(&db);
+    let (_, result) = solve_rows(&db, left, right);
+    assert!(result.is_err());
 }

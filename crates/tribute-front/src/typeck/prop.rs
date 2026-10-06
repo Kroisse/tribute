@@ -36,10 +36,6 @@ const OPENED_ROW_VAR_BASE: u64 = 5000;
 /// Unification variables introduced by a linear generalization.
 const LINEAR_UNIVAR_BASE: u64 = 1_000_000;
 
-/// Unification variables of effect arguments under
-/// `Sharing::Pool { separate_effect_args: true, .. }`.
-const EFFECT_ARG_UNIVAR_BASE: u64 = 100;
-
 /// Placeholder ids renumbered by [`renumber_placeholders`].
 const PLACEHOLDER: u64 = u64::MAX;
 
@@ -823,15 +819,7 @@ pub(crate) enum Sharing {
     /// Introduced unification variables come from `UniVar(0..univars)` and
     /// opened rows from `ROW_VAR_BASE..ROW_VAR_BASE + row_vars`, so
     /// generalizations of one type may share variables inconsistently.
-    /// With `separate_effect_args`, variables in effect arguments come from
-    /// a disjoint pool, so they never stand for a type outside a row.
-    Pool {
-        univars: u64,
-        row_vars: u64,
-        separate_effect_args: bool,
-    },
-    /// Variables of effect arguments under `separate_effect_args`.
-    EffectArgs { univars: u64 },
+    Pool { univars: u64, row_vars: u64 },
 }
 
 /// Strategy for a type obtained from `shape` by replacing subterms with
@@ -841,7 +829,7 @@ pub(crate) fn generalization(shape: &TypeShape, sharing: Sharing) -> BoxedStrate
     generalize_inner(shape, sharing)
         .prop_map(move |shape| match sharing {
             Sharing::Linear => renumber_placeholders(shape),
-            Sharing::Pool { .. } | Sharing::EffectArgs { .. } => shape,
+            Sharing::Pool { .. } => shape,
         })
         .boxed()
 }
@@ -858,10 +846,6 @@ fn generalize_inner(shape: &TypeShape, sharing: Sharing) -> BoxedStrategy<TypeSh
     let replaced = match sharing {
         Sharing::Linear => Just(TypeShape::UniVar(PLACEHOLDER)).boxed(),
         Sharing::Pool { univars, .. } => (0..univars.max(1)).prop_map(TypeShape::UniVar).boxed(),
-        Sharing::EffectArgs { univars } => (EFFECT_ARG_UNIVAR_BASE
-            ..EFFECT_ARG_UNIVAR_BASE + univars.max(1))
-            .prop_map(TypeShape::UniVar)
-            .boxed(),
     };
     prop_oneof![1 => replaced, 4 => generalize_children(shape, sharing)].boxed()
 }
@@ -923,20 +907,12 @@ fn generalize_children(shape: &TypeShape, sharing: Sharing) -> BoxedStrategy<Typ
 /// a subset of the effects into a row variable and shuffle the rest. An
 /// open row keeps its tail.
 fn generalize_row(row: &RowShape, sharing: Sharing) -> BoxedStrategy<RowShape> {
-    let arg_sharing = match sharing {
-        Sharing::Pool {
-            univars,
-            separate_effect_args: true,
-            ..
-        } => Sharing::EffectArgs { univars },
-        other => other,
-    };
     let effects = row
         .effects
         .iter()
         .map(|effect| {
             let ability = effect.ability;
-            generalize_all(&effect.args, arg_sharing)
+            generalize_all(&effect.args, sharing)
                 .prop_map(move |args| EffectShape { ability, args })
         })
         .collect::<Vec<_>>();
@@ -945,7 +921,6 @@ fn generalize_row(row: &RowShape, sharing: Sharing) -> BoxedStrategy<RowShape> {
     let tail = match sharing {
         Sharing::Linear => Just(PLACEHOLDER).boxed(),
         Sharing::Pool { row_vars, .. } => (ROW_VAR_BASE..ROW_VAR_BASE + row_vars.max(1)).boxed(),
-        Sharing::EffectArgs { .. } => Just(ROW_VAR_BASE).boxed(),
     };
     (
         effects,
