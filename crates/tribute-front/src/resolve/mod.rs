@@ -24,7 +24,8 @@ pub use resolver::Resolver;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    AbilityId, CtorId, Decl, FuncDefId, Module, ResolvedRef, SpanMap, TypeDefId, UnresolvedName,
+    AbilityId, CtorId, Decl, FIELD_LENS_FUNCTIONS, FuncDefId, Module, ResolvedRef, SpanMap,
+    TypeDefId, UnresolvedName,
 };
 use crate::{push_prefix, qualified_symbol};
 
@@ -275,7 +276,17 @@ fn collect_definition<'db>(
                     let func_id = FuncDefId::new(db, field_qualified);
                     let binding = Binding::Function { id: func_id };
                     // Add to namespace (e.g., Point::x)
-                    env.add_to_namespace(s.name.clone(), field_name, binding);
+                    env.add_to_namespace(s.name.clone(), field_name.clone(), binding);
+
+                    // The field's setter and modifier, e.g. Point::x::set
+                    let namespace = Symbol::new(&format!("{}::{}", s.name, field_name));
+                    let field_saved = push_prefix(prefix, &field_name);
+                    for name in FIELD_LENS_FUNCTIONS {
+                        let name = Symbol::new(name);
+                        let id = FuncDefId::new(db, qualified_symbol(prefix, &name));
+                        env.add_to_namespace(namespace.clone(), name, Binding::Function { id });
+                    }
+                    prefix.truncate(field_saved);
                 }
             }
             prefix.truncate(saved);

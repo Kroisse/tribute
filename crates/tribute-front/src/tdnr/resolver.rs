@@ -463,8 +463,13 @@ impl<'db> TdnrResolver<'db> {
     /// by looking up the method in the type's namespace. An unresolved call
     /// stays a `MethodCall`; later passes report it.
     fn resolve_method_call(&mut self, expr: &mut Expr<TypedRef<'db>>) {
+        // Type checking selects among the functions a path names; a path
+        // call it left unresolved is already reported.
         let ExprKind::MethodCall {
-            receiver, method, ..
+            receiver,
+            method,
+            path: None,
+            ..
         } = &*expr.kind
         else {
             return;

@@ -162,8 +162,9 @@ than the canonical examples above:
   `pattern_matching.trb`, `performance_test.trb`, `record-patterns.trb`,
   `result.trb`, `simple_closure.trb`, `simple_function.trb`, and
   `simple_test.trb`
-- `tuples.trb`, `ufcs-simple.trb`, `zero-arg-comprehensive.trb`,
-  `zero-arg-no-parens.trb`, and `zero-arg-simple.trb`
+- `tuples.trb`, `ufcs-simple.trb`, `ufcs-qualified.trb`, `field-lenses.trb`,
+  `zero-arg-comprehensive.trb`, `zero-arg-no-parens.trb`, and
+  `zero-arg-simple.trb`
 
 `--target none` validates the frontend without producing an artifact; a
 successful frontend check does not establish native or Wasm execution support.
@@ -175,7 +176,6 @@ and the frontend check expects their failure:
 
 - `string_interpolation.trb` and `strings/string_interpolation.trb`: string
   interpolation.
-- `ufcs-qualified.trb`: qualified UFCS (`x.a::b()`).
 
 ### Design-only examples
 

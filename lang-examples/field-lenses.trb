@@ -1,0 +1,12 @@
+// Field setters and modifiers generated for a struct's named fields.
+// user.name::set("Jane") resolves to User::name::set(user, "Jane")
+use std::io::{Io, print_line}
+
+struct User { name: String, age: Int }
+
+fn main() ->{Io} Nil {
+    let user = User { name: "John", age: +30 }
+    let updated = user.name::set("Jane").age::modify(fn(n) n + +1)
+    print_line(updated.name)
+    print_line(Int::to_string(updated.age))
+}

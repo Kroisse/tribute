@@ -126,6 +126,7 @@ fn sample() -> Module<u32> {
                         ExprKind::MethodCall {
                             receiver: leaf(15),
                             method: Symbol::new("m"),
+                            path: None,
                             args: vec![leaf(16)],
                         },
                     ),

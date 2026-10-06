@@ -262,6 +262,7 @@ fn collect_tdnr_summary<'db>(
             receiver,
             method,
             args,
+            ..
         } => {
             summary.method_calls.push(method.to_string());
             collect_tdnr_summary(db, receiver, summary);

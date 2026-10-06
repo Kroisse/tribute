@@ -24,14 +24,22 @@ evidence 전달과 target ABI 물리화는 필수 lowering이며 선택적인 �
 | 경계 | 변환 | 보존해야 하는 계약 |
 | ---- | ---- | ----------------- |
 | Frontend preparation | 함수·nominal 타입 monomorphization | 해석된 선언 identity, checked instance와 치환된 semantic metadata |
+| Source-logical IR 생성 직후, shared CPS 이전 | 도달 불가능한 source-logical 함수 정의를 지우는 global DCE | reachability root와 모든 symbol 참조([ir.md](ir.md)의 함수 참조 수집 규칙), 본문 없는 선언 |
 | Shared CPS 이후, 일반 inlining 이전 | 도달 불가능한 함수를 지우는 global DCE | reachability root와 모든 symbol 참조([ir.md](ir.md)의 함수 참조 수집 규칙) |
 | Shared CPS 이후, target closure storage 이전 | 일반 함수 inlining | exact callable ABI, 명시적 evidence·ContinuationFrame, proper-tail control flow |
 | Target cleanup | global DCE, canonicalization, local DCE, 실제 operation이 필요한 conversion cast materialization | side effect, reachable transfer와 target type legality |
 | Native typed ownership planning | proven borrowed parameter·field temporary elision | managed layout, entry ownership와 사용·탈출 증명 |
 | Native RC lowering 이전 | paired retain/release elimination | alias barrier, 각 reference의 수명과 소유권 |
 
-Target lowering은 도달 가능한 함수에만 적용한다. Prelude를 포함한 module 전체가
-shared middle-end를 지나므로, target pipeline은 다른 변환보다 먼저 global DCE를
+Prelude 전체와 모든 struct의 필드 함수가 source-logical IR로 내려오지만 프로그램은
+그 일부만 쓴다. 산출물을 만드는 컴파일은 shared CPS 이전에 global DCE를 실행해, 이후
+단계가 도달 불가능한 함수를 변환하지 않게 한다. 이 DCE는 source-logical 함수 정의
+operation을 함수로 보고 같은 root와 참조 규칙을 따른다. 본문 없는 선언은 지우지
+않는다. Shared CPS가 등록된 compiler intrinsic을 그 선언과 대조하기 때문이다. 진단만
+내는 컴파일은 이 DCE를 건너뛰어, 도달 불가능한 함수도 shared 단계의 검사를 받는다.
+
+Target lowering은 도달 가능한 함수에만 적용한다. Shared middle-end가 새로 만든
+함수가 있으므로, target pipeline은 다른 변환보다 먼저 global DCE를 다시
 실행한다. 이 시점에는 closure가 아직 `closure.new`이므로 call graph는 모든 symbol
 참조를 따라야 한다. Target cleanup의 global DCE는 inlining과 lowering이 남긴 함수를
 다시 지운다.

@@ -132,6 +132,10 @@ pub struct StructDecl {
     pub fields: Vec<FieldDecl>,
 }
 
+/// The functions each named struct field `f` of `T` has in the namespace
+/// `T::f`: the setter and the modifier.
+pub const FIELD_LENS_FUNCTIONS: [&str; 2] = ["set", "modify"];
+
 /// Field declaration in a struct or enum variant.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct FieldDecl {

@@ -9,6 +9,7 @@ use rustc_hash::FxHashSet as HashSet;
 use itertools::Itertools;
 use salsa::Accumulator;
 use tribute_core::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
 use crate::ast::{
@@ -40,6 +41,56 @@ struct PatternBinding<'db> {
     local_id: Option<LocalId>,
     scope: NodeId,
     ty: Type<'db>,
+}
+
+/// The function a method call selects for its receiver's type.
+pub(crate) enum MethodSelection<'db> {
+    One(crate::typeck::MethodEntry<'db>),
+    /// Several functions a path may name take the receiver.
+    Ambiguous(Vec<crate::ast::FuncDefId<'db>>),
+    None,
+}
+
+/// Whether a function a path names takes a receiver of type `actual` as its
+/// first parameter. A type variable takes any known receiver, and a function
+/// or tuple parameter takes a receiver of the same shape; a nominal or
+/// primitive parameter takes its own type. A receiver not inferred yet
+/// matches nothing, so its call waits.
+fn path_receiver_matches<'db>(
+    db: &'db dyn salsa::Database,
+    entry: &crate::typeck::MethodEntry<'db>,
+    actual: Type<'db>,
+) -> bool {
+    let Some(declared) = entry.receiver_ty(db) else {
+        return false;
+    };
+    match (declared.kind(db), actual.kind(db)) {
+        (_, TypeKind::UniVar { .. }) => false,
+        (TypeKind::BoundVar { .. }, _) => true,
+        (
+            TypeKind::Func {
+                params: declared, ..
+            },
+            TypeKind::Func { params: actual, .. },
+        ) => declared.len() == actual.len(),
+        (TypeKind::Tuple(declared), TypeKind::Tuple(actual)) => declared.len() == actual.len(),
+        _ => crate::typeck::receiver_type_matches(db, entry, actual),
+    }
+}
+
+/// A qualified method call's path as its node and the functions it may name.
+pub(crate) fn method_path_functions<'db>(
+    path: &crate::ast::MethodPath<ResolvedRef<'db>>,
+) -> (NodeId, Vec<crate::ast::FuncDefId<'db>>) {
+    let functions = path
+        .candidates
+        .iter()
+        .filter_map(|candidate| match candidate {
+            ResolvedRef::Function { id } => Some(*id),
+            _ => None,
+        })
+        .collect();
+    (path.id, functions)
 }
 
 /// Check if a type contains any unification variables (UniVar).
@@ -216,27 +267,30 @@ impl<'db> TypeChecker<'db> {
             ExprKind::MethodCall {
                 receiver,
                 method,
+                path,
                 args,
             } => {
                 // Infer receiver type first
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
+                let path = path.as_ref().map(method_path_functions);
+                let selection = self.select_method(method, path.as_ref(), receiver_ty);
+                let field =
+                    self.method_field(receiver_ty, method, path.is_some(), args, &selection);
 
                 // Try to look up the method as a struct field accessor
-                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, method) {
-                    self.record_field_instance(
-                        ctx,
-                        expr.id,
-                        receiver_ty,
-                        method.clone(),
-                        result_ty,
-                    );
+                if let Some(field) = &field
+                    && let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, field)
+                {
+                    self.record_field_instance(ctx, expr.id, receiver_ty, field.clone(), result_ty);
                     result_ty
-                } else if let Some(entry) = self.env.lookup_method(method, receiver_ty) {
+                } else if let MethodSelection::One(entry) = selection {
                     // UFCS method found — record for conversion phase and extract return type
                     let func_id = entry.func_id;
                     let callee_ty = ctx
                         .instantiate_function_reference(expr.id, func_id)
                         .unwrap_or_else(|| ctx.fresh_type_var());
+                    // Inference may visit a call more than once; report its arity once.
+                    let first_visit = ctx.get_resolved_method(expr.id).is_none();
                     ctx.record_resolved_method(expr.id, func_id, callee_ty);
                     match callee_ty.kind(self.db()) {
                         TypeKind::Func {
@@ -246,6 +300,9 @@ impl<'db> TypeChecker<'db> {
                             ..
                         } => {
                             ctx.evidence.record_call(expr.id, *effect);
+                            if first_visit {
+                                self.check_method_arity(expr.id, method, params.len(), args.len());
+                            }
                             // Constrain receiver against the method's first param
                             if let Some(first_param) = params.first() {
                                 ctx.constrain_coerce(receiver_ty, *first_param, receiver.id);
@@ -289,6 +346,7 @@ impl<'db> TypeChecker<'db> {
                         node_id: expr.id,
                         receiver_ty,
                         method: method.clone(),
+                        path,
                         result_ty,
                         arg_types,
                     });
@@ -870,22 +928,25 @@ impl<'db> TypeChecker<'db> {
             ExprKind::MethodCall {
                 receiver,
                 method,
+                path,
                 args,
             } => {
                 let receiver_ty = self.infer_expr_type_with_ctx(ctx, receiver);
-                if let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, method) {
-                    self.record_field_instance(
-                        ctx,
-                        expr.id,
-                        receiver_ty,
-                        method.clone(),
-                        result_ty,
-                    );
+                let path = path.as_ref().map(method_path_functions);
+                let selection = self.select_method(method, path.as_ref(), receiver_ty);
+                let field =
+                    self.method_field(receiver_ty, method, path.is_some(), args, &selection);
+                if let Some(field) = &field
+                    && let Some(result_ty) = self.lookup_struct_field_type(ctx, receiver_ty, field)
+                {
+                    self.record_field_instance(ctx, expr.id, receiver_ty, field.clone(), result_ty);
                     result_ty
-                } else if let Some(entry) = self.env.lookup_method(method, receiver_ty) {
+                } else if let MethodSelection::One(entry) = selection {
                     let callee_ty = ctx
                         .instantiate_function_reference(expr.id, entry.func_id)
                         .unwrap_or_else(|| ctx.fresh_type_var());
+                    // Inference may visit a call more than once; report its arity once.
+                    let first_visit = ctx.get_resolved_method(expr.id).is_none();
                     ctx.record_resolved_method(expr.id, entry.func_id, callee_ty);
                     match callee_ty.kind(self.db()) {
                         TypeKind::Func {
@@ -895,6 +956,9 @@ impl<'db> TypeChecker<'db> {
                             ..
                         } => {
                             ctx.evidence.record_call(expr.id, *effect);
+                            if first_visit {
+                                self.check_method_arity(expr.id, method, params.len(), args.len());
+                            }
                             if let Some(param) = params.first() {
                                 ctx.constrain_coerce(receiver_ty, *param, receiver.id);
                             }
@@ -916,6 +980,7 @@ impl<'db> TypeChecker<'db> {
                         node_id: expr.id,
                         receiver_ty,
                         method: method.clone(),
+                        path,
                         result_ty,
                         arg_types,
                     });
@@ -1674,6 +1739,95 @@ impl<'db> TypeChecker<'db> {
         }
     }
 
+    /// Report a method call whose receiver and explicit arguments do not
+    /// match the selected function's parameters.
+    fn check_method_arity(&self, node: NodeId, method: &Symbol, params: usize, args: usize) {
+        if args + 1 == params {
+            return;
+        }
+        Diagnostic::new(
+            format!(
+                "UFCS arity mismatch for '{method}': expected {params} args, got {}",
+                args + 1
+            ),
+            self.get_span(node),
+            DiagnosticSeverity::Error,
+            CompilationPhase::TypeChecking,
+        )
+        .accumulate(self.db());
+    }
+
+    /// The field a method call reads from its receiver, if it names one: an
+    /// unqualified method is the field's name, and a path names the field's
+    /// getter `T::f` in the receiver's struct `T` when the path selects that
+    /// getter alone.
+    fn method_field(
+        &self,
+        receiver_ty: Type<'db>,
+        method: &Symbol,
+        qualified: bool,
+        args: &[Expr<ResolvedRef<'db>>],
+        selection: &MethodSelection<'db>,
+    ) -> Option<Symbol> {
+        if !qualified {
+            return Some(method.clone());
+        }
+        let MethodSelection::One(selected) = selection else {
+            return None;
+        };
+        if !args.is_empty() {
+            return None;
+        }
+        let owner = match receiver_ty.kind(self.db()) {
+            TypeKind::Named { id, .. } => *id,
+            TypeKind::App { ctor, .. } => match ctor.kind(self.db()) {
+                TypeKind::Named { id, .. } => *id,
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let field = method.last_segment();
+        let mut prefix = owner.qualified(self.db()).to_string();
+        let getter = crate::qualified_symbol(&mut prefix, &field);
+        (*selected.func_id.qualified(self.db()) == getter).then_some(field)
+    }
+
+    /// Select the function a method call names for a receiver of type
+    /// `receiver_ty`: among the functions its path may name, or for an
+    /// unqualified method among the functions of that name.
+    pub(crate) fn select_method(
+        &self,
+        method: &Symbol,
+        path: Option<&(NodeId, Vec<crate::ast::FuncDefId<'db>>)>,
+        receiver_ty: Type<'db>,
+    ) -> MethodSelection<'db> {
+        let Some((_, candidates)) = path else {
+            return match self.env.lookup_method(method, receiver_ty) {
+                Some(entry) => MethodSelection::One(*entry),
+                None => MethodSelection::None,
+            };
+        };
+        let mut matching = candidates.iter().filter_map(|candidate| {
+            let (scheme, _) = self.env.function_scheme(*candidate)?;
+            let entry = crate::typeck::MethodEntry {
+                func_id: *candidate,
+                func_ty: scheme.body(self.db()),
+            };
+            path_receiver_matches(self.db(), &entry, receiver_ty).then_some(entry)
+        });
+        match (matching.next(), matching.next()) {
+            (Some(entry), None) => MethodSelection::One(entry),
+            (Some(first), Some(second)) => MethodSelection::Ambiguous(
+                [first, second]
+                    .into_iter()
+                    .chain(matching)
+                    .map(|entry| entry.func_id)
+                    .collect(),
+            ),
+            (None, _) => MethodSelection::None,
+        }
+    }
+
     /// Look up a struct field type from the receiver type.
     ///
     /// Given a receiver type like `Point` or `Point(Int)`, look up the field `x`
@@ -1733,6 +1887,7 @@ impl<'db> TypeChecker<'db> {
                 origin: crate::typeck::FunctionInstanceOrigin::FieldAccessor {
                     owner: *owner,
                     field,
+                    kind: crate::typeck::FieldFunctionKind::Get,
                 },
                 function,
                 scheme,
@@ -1909,6 +2064,7 @@ impl<'db> TypeChecker<'db> {
             ExprKind::MethodCall {
                 receiver,
                 method,
+                path,
                 args,
             } => {
                 let converted_receiver = self.check_expr_with_ctx(ctx, receiver, Mode::Infer);
@@ -1935,6 +2091,18 @@ impl<'db> TypeChecker<'db> {
                     ExprKind::MethodCall {
                         receiver: converted_receiver,
                         method: method.clone(),
+                        // Still unselected, so the candidates have no type.
+                        path: path.as_ref().map(|path| crate::ast::MethodPath {
+                            id: path.id,
+                            candidates: path
+                                .candidates
+                                .iter()
+                                .map(|candidate| TypedRef {
+                                    resolved: candidate.clone(),
+                                    ty: ctx.error_type(),
+                                })
+                                .collect(),
+                        }),
                         args: args
                             .iter()
                             .map(|a| self.check_expr_with_ctx(ctx, a, Mode::Infer))

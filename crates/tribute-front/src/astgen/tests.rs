@@ -554,6 +554,7 @@ fn test_method_call() {
         receiver,
         method,
         args,
+        ..
     } = value.kind.as_ref()
     else {
         panic!("Expected method call, got {:?}", value.kind);
@@ -585,12 +586,16 @@ fn test_method_call_with_args() {
 }
 
 #[test]
-fn test_qualified_method_path_is_a_call() {
+fn test_qualified_method_keeps_its_path() {
     let cases = [
-        ("fn main() -> Nil { user.name::set(\"Jane\") }", 2),
-        ("fn main() -> Nil { user.name::get }", 1),
+        (
+            "fn main() -> Nil { user.name::set(\"Jane\") }",
+            "name::set",
+            1,
+        ),
+        ("fn main() -> Nil { user.name::get }", "name::get", 0),
     ];
-    for (source, arg_count) in cases {
+    for (source, expected, arg_count) in cases {
         let module = parse_and_lower(source);
 
         let Decl::Function(func) = &module.decls[0] else {
@@ -599,20 +604,25 @@ fn test_qualified_method_path_is_a_call() {
         let ExprKind::Block { value, .. } = func.body.kind.as_ref() else {
             panic!("Expected block");
         };
-        let ExprKind::Call { callee, args } = value.kind.as_ref() else {
-            panic!("Expected call, got {:?}", value.kind);
+        let ExprKind::MethodCall {
+            receiver,
+            method,
+            path,
+            args,
+        } = value.kind.as_ref()
+        else {
+            panic!("Expected method call, got {:?}", value.kind);
         };
-        let ExprKind::Var(path) = callee.kind.as_ref() else {
-            panic!("Expected path callee");
-        };
-        let ExprKind::Var(receiver) = args[0].kind.as_ref() else {
+        let ExprKind::Var(receiver) = receiver.kind.as_ref() else {
             panic!("Expected var receiver");
         };
+        let path = path.as_ref().expect("a qualified method has a path");
 
-        assert!(path.qualified.to_string().starts_with("name::"));
+        assert_eq!(method.to_string(), expected);
         assert_eq!(receiver.name().to_string(), "user");
         assert_eq!(args.len(), arg_count);
-        assert_ne!(callee.id, value.id);
+        assert_ne!(path.id, value.id);
+        assert!(path.candidates.is_empty());
     }
 }
 
@@ -631,6 +641,7 @@ fn test_method_call_with_multiple_args() {
         receiver,
         method,
         args,
+        ..
     } = value.kind.as_ref()
     else {
         panic!("Expected method call, got {:?}", value.kind);
@@ -664,6 +675,7 @@ fn test_chained_method_call_with_args() {
         receiver: baz_recv,
         method: baz_method,
         args: baz_args,
+        ..
     } = value.kind.as_ref()
     else {
         panic!("Expected method call, got {:?}", value.kind);
@@ -676,6 +688,7 @@ fn test_chained_method_call_with_args() {
         receiver: bar_recv,
         method: bar_method,
         args: bar_args,
+        ..
     } = baz_recv.kind.as_ref()
     else {
         panic!("Expected method call, got {:?}", baz_recv.kind);

@@ -8,13 +8,14 @@ use rustc_hash::FxHashMap as HashMap;
 use itertools::Itertools;
 use salsa::Accumulator as _;
 use tribute_core::diagnostic::{CompilationPhase, Diagnostic, DiagnosticSeverity};
+use tribute_ir::ModulePathExt as _;
 use trunk_ir::Symbol;
 
 use crate::ast::{
-    Arm, Decl, Expr, ExprKind, FieldDecl, FieldPattern, FuncDecl, HandlerArm, HandlerKind, LocalId,
-    LocalIdGen, Module, ModulePath, NodeId, Param, ParamDecl, Pattern, PatternKind, ResolvedRef,
-    SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind, TypeParamDecl, UnresolvedName,
-    UseDecl,
+    Arm, Decl, Expr, ExprKind, FIELD_LENS_FUNCTIONS, FieldDecl, FieldPattern, FuncDecl, HandlerArm,
+    HandlerKind, LocalId, LocalIdGen, MethodPath, Module, ModulePath, NodeId, Param, ParamDecl,
+    Pattern, PatternKind, ResolvedRef, SpanMap, Stmt, TypeAnnotation, TypeAnnotationKind, TypeKind,
+    TypeParamDecl, UnresolvedName, UseDecl,
 };
 
 use super::env::{Binding, ModuleEnv};
@@ -81,6 +82,16 @@ fn best_matches_by<T>(
     heap.into_sorted_vec().into_iter().map(|e| e.item).collect()
 }
 
+/// What the path of a qualified method call names.
+enum MethodCandidates<'db> {
+    /// Functions, one of which the receiver's type selects.
+    Functions(Vec<ResolvedRef<'db>>),
+    /// The one callee the path names, which is not a function.
+    Callee(ResolvedRef<'db>),
+    /// Nothing; the path was reported.
+    Unresolved,
+}
+
 /// Resolver for transforming unresolved names to resolved references.
 pub struct Resolver<'db> {
     db: &'db dyn salsa::Database,
@@ -104,6 +115,9 @@ pub struct Resolver<'db> {
     /// package-root path it names. An import is visible only in the body of
     /// the module that declares it.
     module_imports: Vec<HashMap<Symbol, Vec<Symbol>>>,
+    /// Source functions that redefine a struct field's function. They are
+    /// reported and dropped, so the field's function is the definition.
+    redefinitions: Vec<NodeId>,
     /// How many leading segments of `module_path` are the package root:
     /// zero for a user package, one for the prelude inside its `std` module.
     package_depth: usize,
@@ -122,6 +136,7 @@ impl<'db> Resolver<'db> {
             effect_ops: HashMap::default(),
             module_path: Vec::new(),
             module_imports: Vec::new(),
+            redefinitions: Vec::new(),
             package_depth: 0,
         }
     }
@@ -213,44 +228,107 @@ impl<'db> Resolver<'db> {
             }
         } else {
             // Qualified path: e.g., State::get, Option::Some, abilities::Throw::throw
-            // A path keyword names a package-root path, read from nowhere else.
-            if let Some(namespace) = name.namespace() {
-                let segments: Vec<Symbol> =
-                    namespace.to_string().split("::").map(Symbol::new).collect();
-                match absolute_path(self.package_depth, &self.module_path, &segments) {
-                    Ok(Some(path)) => {
-                        let binding = if path.is_empty() {
-                            self.env.lookup(&sym)
-                        } else {
-                            let namespace = Symbol::new(&path.iter().format("::").to_string());
-                            self.env.lookup_qualified(&namespace, &sym)
-                        };
-                        if let Some(binding) = binding {
-                            return self.binding_to_ref(binding, sym);
-                        }
-                        self.report_unresolved_name(name);
-                        return ResolvedRef::local(LocalId::UNRESOLVED, sym);
-                    }
-                    Err(error) => {
-                        self.report_path_keyword(name.id, error);
-                        return ResolvedRef::local(LocalId::UNRESOLVED, sym);
-                    }
-                    Ok(None) => {}
+            match self.lookup_qualified_name(name) {
+                Ok(Some(binding)) => return self.binding_to_ref(binding, sym),
+                Ok(None) => {}
+                Err(error) => {
+                    self.report_path_keyword(name.id, error);
+                    return ResolvedRef::local(LocalId::UNRESOLVED, sym);
                 }
-            }
-            // A first segment the enclosing module imports names only the
-            // imported path; it does not fall back to the package root.
-            if let Some(namespace) = name.namespace()
-                && let Some(namespace) = self.namespace_in_scope(namespace)
-                && let Some(binding) = self.env.lookup_qualified(&namespace, &sym)
-            {
-                return self.binding_to_ref(binding, sym);
             }
         }
 
         // Not found - emit diagnostic and return unresolved sentinel
         self.report_unresolved_name(name);
         ResolvedRef::local(LocalId::UNRESOLVED, sym)
+    }
+
+    /// The binding a qualified path names from the current scope.
+    ///
+    /// A path keyword names a package-root path, read from nowhere else. A
+    /// first segment the enclosing module imports names only the imported
+    /// path; it does not fall back to the package root.
+    fn lookup_qualified_name(
+        &self,
+        name: &UnresolvedName,
+    ) -> Result<Option<&Binding<'db>>, PathKeywordError> {
+        let sym = name.name();
+        let Some(namespace) = name.namespace() else {
+            return Ok(None);
+        };
+        let segments: Vec<Symbol> = namespace.to_string().split("::").map(Symbol::new).collect();
+        if let Some(path) = absolute_path(self.package_depth, &self.module_path, &segments)? {
+            return Ok(if path.is_empty() {
+                self.env.lookup(&sym)
+            } else {
+                let namespace = Symbol::new(&path.iter().format("::").to_string());
+                self.env.lookup_qualified(&namespace, &sym)
+            });
+        }
+        Ok(self
+            .namespace_in_scope(namespace)
+            .and_then(|namespace| self.env.lookup_qualified(&namespace, &sym)))
+    }
+
+    /// The functions the path of a qualified method call `x.a::b(y)` may
+    /// name: `a::b` as the call's scope resolves it, and `m::a::b` for each
+    /// module `m` in that scope. A declaration's name counts as the module
+    /// that shares it.
+    fn method_candidates(&self, path: &UnresolvedName) -> MethodCandidates<'db> {
+        let mut functions: Vec<crate::ast::FuncDefId<'db>> = Vec::new();
+        match self.lookup_qualified_name(path) {
+            Ok(Some(Binding::Function { id })) => functions.push(*id),
+            // A constructor or an ability operation takes the receiver as
+            // its first argument without a choice by type.
+            Ok(Some(binding)) => {
+                return MethodCandidates::Callee(self.binding_to_ref(binding, path.name()));
+            }
+            Ok(None) => {}
+            Err(error) => {
+                self.report_path_keyword(path.id, error);
+                return MethodCandidates::Unresolved;
+            }
+        }
+        for module in self.names_in_scope() {
+            let nested = UnresolvedName::new(
+                Symbol::new(&format!("{module}::{}", path.qualified)),
+                path.id,
+            );
+            if let Ok(Some(Binding::Function { id })) = self.lookup_qualified_name(&nested)
+                && !functions.contains(id)
+            {
+                functions.push(*id);
+            }
+        }
+        if functions.is_empty() {
+            self.report_unresolved_name(path);
+            return MethodCandidates::Unresolved;
+        }
+        functions.sort_by(|left, right| {
+            left.qualified(self.db)
+                .with_str(|left| right.qualified(self.db).with_str(|right| left.cmp(right)))
+        });
+        MethodCandidates::Functions(functions.into_iter().map(ResolvedRef::function).collect())
+    }
+
+    /// The names an unqualified reference may use at this point, apart from
+    /// local variables.
+    fn names_in_scope(&self) -> Vec<Symbol> {
+        if self.module_path.is_empty() {
+            return self.env.iter_all_names().collect();
+        }
+        let namespace = Symbol::new(&self.module_path.iter().format("::").to_string());
+        let imports = self.module_imports.last();
+        self.env
+            .iter_namespace(&namespace)
+            .map(|(name, _)| name)
+            .chain(
+                imports
+                    .into_iter()
+                    .flat_map(|imports| imports.keys().cloned()),
+            )
+            .chain(self.env.iter_library_names())
+            .collect()
     }
 
     /// Whether the enclosing inline module itself defines `name`.
@@ -298,7 +376,20 @@ impl<'db> Resolver<'db> {
         let (first, rest) = spelling.split_once("::").unwrap_or((&spelling, ""));
         let first = Symbol::new(first);
         if self.module_path.is_empty() {
-            if self.env.has_namespace(&namespace) || self.env.declares(first.clone()) {
+            if self.env.has_namespace(&namespace) {
+                return Some(namespace);
+            }
+            // A `use` gives the imported name's own namespace; a namespace
+            // nested in it continues from the imported path.
+            if !rest.is_empty()
+                && let Some(path) = self.env.get_use_path(&first)
+            {
+                return Some(Symbol::new(&format!(
+                    "{}::{rest}",
+                    path.iter().format("::")
+                )));
+            }
+            if self.env.declares(first.clone()) {
                 return Some(namespace);
             }
         } else {
@@ -596,6 +687,7 @@ impl<'db> Resolver<'db> {
 
     /// Resolve a module, transforming all declarations.
     pub fn resolve_module(&mut self, module: &Module<UnresolvedName>) -> Module<ResolvedRef<'db>> {
+        self.report_field_lens_redefinitions(&module.decls);
         let decls = module
             .decls
             .iter()
@@ -653,6 +745,7 @@ impl<'db> Resolver<'db> {
         &mut self,
         module: &crate::ast::ModuleDecl<UnresolvedName>,
     ) -> crate::ast::ModuleDecl<ResolvedRef<'db>> {
+        self.report_field_lens_redefinitions(module.body.as_deref().unwrap_or_default());
         // For inline modules, recursively resolve nested declarations
         self.module_path.push(module.name.clone());
         // The module's imports are in scope throughout its body, including
@@ -691,10 +784,7 @@ impl<'db> Resolver<'db> {
                 .expect("pushed above")
                 .extend(resolved);
         }
-        let body = module
-            .body
-            .as_ref()
-            .map(|decls| decls.iter().map(|d| self.resolve_decl(d)).collect());
+        let body = module.body.as_ref().map(|decls| self.resolve_decls(decls));
         self.module_imports.pop();
         self.module_path.pop();
 
@@ -704,6 +794,77 @@ impl<'db> Resolver<'db> {
             is_pub: module.is_pub,
             body,
         }
+    }
+
+    /// Report a companion module that declares a function the struct beside
+    /// it already has, `T::f::set` or `T::f::modify` for a named field `f`,
+    /// and record the function as a redefinition.
+    fn report_field_lens_redefinitions(&mut self, decls: &[Decl<UnresolvedName>]) {
+        let companions = decls.iter().filter_map(|decl| match decl {
+            Decl::Module(module) => Some(module),
+            _ => None,
+        });
+        for companion in companions {
+            let fields: Vec<&Symbol> = decls
+                .iter()
+                .filter_map(|decl| match decl {
+                    Decl::Struct(declaration) if declaration.name == companion.name => {
+                        Some(&declaration.fields)
+                    }
+                    _ => None,
+                })
+                .flatten()
+                .filter_map(|field| field.name.as_ref())
+                .collect();
+            let lenses = companion
+                .body
+                .iter()
+                .flatten()
+                .filter_map(|decl| match decl {
+                    Decl::Module(field) if fields.contains(&&field.name) => Some(field),
+                    _ => None,
+                });
+            for field in lenses {
+                for decl in field.body.iter().flatten() {
+                    let (id, name) = match decl {
+                        Decl::Function(function) => (function.id, &function.name),
+                        Decl::ExternFunction(function) => (function.id, &function.name),
+                        _ => continue,
+                    };
+                    if !FIELD_LENS_FUNCTIONS.iter().any(|lens| name == lens) {
+                        continue;
+                    }
+                    Diagnostic::new(
+                        format!(
+                            "duplicate definition of `{}::{}::{name}`: struct `{}` defines it for its field `{}`",
+                            companion.name, field.name, companion.name, field.name
+                        ),
+                        self.span_map.get_or_default(id),
+                        DiagnosticSeverity::Error,
+                        CompilationPhase::NameResolution,
+                    )
+                    .accumulate(self.db);
+                    self.redefinitions.push(id);
+                }
+            }
+        }
+    }
+
+    /// Resolve the declarations of a module body, without the functions
+    /// reported as redefinitions.
+    fn resolve_decls(&mut self, decls: &[Decl<UnresolvedName>]) -> Vec<Decl<ResolvedRef<'db>>> {
+        let mut resolved = Vec::with_capacity(decls.len());
+        for decl in decls {
+            let redefinition = match decl {
+                Decl::Function(function) => self.redefinitions.contains(&function.id),
+                Decl::ExternFunction(function) => self.redefinitions.contains(&function.id),
+                _ => false,
+            };
+            if !redefinition {
+                resolved.push(self.resolve_decl(decl));
+            }
+        }
+        resolved
     }
 
     /// Resolve a function declaration.
@@ -999,14 +1160,39 @@ impl<'db> Resolver<'db> {
             ExprKind::MethodCall {
                 receiver,
                 method,
+                path,
                 args,
             } => {
                 let receiver = self.resolve_expr(receiver);
-                let args = args.iter().map(|a| self.resolve_expr(a)).collect();
-                ExprKind::MethodCall {
-                    receiver,
-                    method: method.clone(),
-                    args,
+                let mut args: Vec<_> = args.iter().map(|a| self.resolve_expr(a)).collect();
+                let candidates = path.as_ref().map(|path| {
+                    let name = UnresolvedName::new(method.clone(), path.id);
+                    (path.id, self.method_candidates(&name))
+                });
+                match candidates {
+                    None => ExprKind::MethodCall {
+                        receiver,
+                        method: method.clone(),
+                        path: None,
+                        args,
+                    },
+                    Some((id, MethodCandidates::Functions(candidates))) => ExprKind::MethodCall {
+                        receiver,
+                        method: method.clone(),
+                        path: Some(MethodPath { id, candidates }),
+                        args,
+                    },
+                    Some((id, candidates)) => {
+                        let callee = match candidates {
+                            MethodCandidates::Callee(callee) => callee,
+                            _ => ResolvedRef::local(LocalId::UNRESOLVED, method.last_segment()),
+                        };
+                        args.insert(0, receiver);
+                        ExprKind::Call {
+                            callee: Expr::new(id, ExprKind::Var(callee)),
+                            args,
+                        }
+                    }
                 }
             }
 
