@@ -469,3 +469,123 @@ fn main() -> Nil {
 "#;
     assert_native_output("same_ability_same_spelled_nominals.trb", code, "7");
 }
+
+// =============================================================================
+// Ability-heavy sanitizer smoke test (#407)
+// =============================================================================
+
+fn asan_ability_smoke_program() -> String {
+    format!(
+        "{}\n{}",
+        common::PRINT_EXTERNS,
+        r#"
+ability State(s) {
+    op get() -> s
+    op set(value: s) -> Nil
+}
+
+ability Scale {
+    op scale(x: Float) -> Float
+}
+
+fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
+    handle comp() {
+        do result { result }
+        op State::get() { run_state(fn() { resume init }, init) }
+        op State::set(v) { run_state(fn() { resume Nil }, v) }
+    }
+}
+
+// The handler arm captures `factor` (closure environment) and calls the
+// function value `adjust` indirectly before resuming once.
+fn run_scale(
+    comp: fn() ->{e, Scale} a,
+    factor: Float,
+    adjust: fn(Float) ->{} Float,
+) ->{e} a {
+    handle comp() {
+        do result { result }
+        op Scale::scale(x) {
+            let y = adjust(x * factor)
+            run_scale(fn() { resume y }, factor, adjust)
+        }
+    }
+}
+
+fn step(n: Int) ->{State(Int), Scale} Float {
+    let current = State::get()
+    State::set(current + n)
+    Scale::scale(1.5)
+}
+
+fn body() ->{State(Int), Scale} Float {
+    let a = step(+10)
+    let b = step(-3)
+    let c = step(+100)
+    let total = State::get()
+    __tribute_print_int(total)
+    a + b + c
+}
+
+fn main() -> Nil {
+    let offset = 0.25
+    let result = run_scale(
+        fn() { run_state(fn() { body() }, +5) },
+        2.0,
+        fn(v) { v + offset }
+    )
+    __tribute_print_float(result)
+}
+"#
+    )
+}
+
+/// Two abilities nested as handlers (multiple evidence entries/markers), a
+/// handler arm capturing a local and calling a closure indirectly, one-shot
+/// `resume`, and boxed `Int`/`Float` operation arguments and results. The
+/// native binary is run under the production, baseline and ASan profiles, and
+/// every profile must produce the same output.
+#[test]
+fn test_asan_ability_smoke_nested_handlers_closures_and_boxed_values() {
+    let source = asan_ability_smoke_program();
+    let profiles = [
+        (
+            "production",
+            "asan_ability_smoke_production.trb",
+            common::NativeTestProfile::Production,
+        ),
+        (
+            "baseline",
+            "asan_ability_smoke_baseline.trb",
+            common::NativeTestProfile::Baseline,
+        ),
+        (
+            "asan",
+            "asan_ability_smoke_asan.trb",
+            common::NativeTestProfile::Asan,
+        ),
+    ];
+    let mut outputs = Vec::new();
+    for (profile, source_name, kind) in profiles {
+        let output =
+            common::compile_native_test_binary(source_name, &source, kind).run_with_stdin(b"");
+        assert!(
+            output.status.success(),
+            "{profile}: exit={:?}, stderr='{}'",
+            output.status,
+            String::from_utf8_lossy(&output.stderr),
+        );
+        outputs.push((
+            profile,
+            String::from_utf8_lossy(&output.stdout).into_owned(),
+        ));
+    }
+    let (_, reference) = &outputs[0];
+    for (profile, stdout) in &outputs {
+        assert_eq!(
+            stdout, reference,
+            "{profile} output differs from production"
+        );
+    }
+    assert_eq!(reference.trim(), "112\n9.75");
+}
