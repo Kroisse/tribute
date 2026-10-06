@@ -28,7 +28,7 @@ fn assert_literal_error(
     let [error] = errors.as_slice() else {
         panic!("expected exactly one error for {text:?}, got {errors:?}");
     };
-    assert_eq!(error.phase, CompilationPhase::AstGeneration);
+    assert_eq!(error.phase, CompilationPhase::AstGeneration, "{text:?}");
     let start = text
         .find(literal)
         .expect("literal must occur in the source")
@@ -36,11 +36,11 @@ fn assert_literal_error(
     assert_eq!(
         (error.inner.span.start, error.inner.span.end),
         (start, start + part.len()),
-        "span must cover {part:?}"
+        "{text:?}: span must cover {part:?}"
     );
     assert!(
         error.inner.message.contains(message_part),
-        "unexpected message: {}",
+        "{text:?}: unexpected message: {}",
         error.inner.message
     );
 }
@@ -65,67 +65,51 @@ fn valid_numeric_literals_are_accepted(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
-fn unknown_suffix_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_literal_error(
-        db,
-        "fn main() -> Nil { 42u8 }",
-        "42u8",
-        "u8",
-        "unknown numeric literal suffix `u8`",
-    );
-}
-
-#[salsa_test]
-fn negative_exponent_on_integer_suggests_float(db: &salsa::DatabaseImpl) {
-    assert_literal_error(
-        db,
-        "fn main() -> Nil { 1e-3 }",
-        "1e-3",
-        "e-3",
-        "write `1.0e-3` or `1e-3f` for a Float",
-    );
-}
-
-#[salsa_test]
-fn invalid_radix_digit_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_literal_error(
-        db,
-        "fn main() -> Nil { 0b102 }",
-        "0b102",
-        "2",
-        "invalid digit `2` in binary literal",
-    );
-}
-
-#[salsa_test]
-fn suffix_conflict_in_pattern_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_literal_error(
-        db,
-        "fn f(x: Float) -> Nat { case x { 1.5i -> 1, _ -> 0 } }",
-        "1.5i",
-        "i",
-        "suffix `i` cannot be used on a literal with a decimal point",
-    );
-}
-
-#[salsa_test]
-fn overflowing_literal_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_literal_error(
-        db,
-        "fn main() -> Nil { 1e20 }",
-        "1e20",
-        "1e20",
-        "exceeds the current implementation limit for `Nat`",
-    );
-}
-
-#[salsa_test]
-fn suffix_on_hexadecimal_literal_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_literal_error(
-        db,
-        "fn main() -> Nil { 0xFFi }",
-        "0xFFi",
-        "i",
-        "write `+0xFF` for an Int",
-    );
+fn invalid_numeric_literals_are_rejected(db: &salsa::DatabaseImpl) {
+    for (text, literal, part, message_part) in [
+        // unknown suffix is rejected
+        (
+            "fn main() -> Nil { 42u8 }",
+            "42u8",
+            "u8",
+            "unknown numeric literal suffix `u8`",
+        ),
+        // negative exponent on integer suggests float
+        (
+            "fn main() -> Nil { 1e-3 }",
+            "1e-3",
+            "e-3",
+            "write `1.0e-3` or `1e-3f` for a Float",
+        ),
+        // invalid radix digit is rejected
+        (
+            "fn main() -> Nil { 0b102 }",
+            "0b102",
+            "2",
+            "invalid digit `2` in binary literal",
+        ),
+        // suffix conflict in pattern is rejected
+        (
+            "fn f(x: Float) -> Nat { case x { 1.5i -> 1, _ -> 0 } }",
+            "1.5i",
+            "i",
+            "suffix `i` cannot be used on a literal with a decimal point",
+        ),
+        // overflowing literal is rejected
+        (
+            "fn main() -> Nil { 1e20 }",
+            "1e20",
+            "1e20",
+            "exceeds the current implementation limit for `Nat`",
+        ),
+        // suffix on hexadecimal literal is rejected
+        (
+            "fn main() -> Nil { 0xFFi }",
+            "0xFFi",
+            "i",
+            "write `+0xFF` for an Int",
+        ),
+    ] {
+        assert_literal_error(db, text, literal, part, message_part);
+    }
 }

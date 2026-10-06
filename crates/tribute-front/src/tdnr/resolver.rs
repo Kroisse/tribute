@@ -646,39 +646,41 @@ mod tests {
     }
 
     #[test]
-    fn test_get_expr_type_int_literal() {
+    fn test_get_expr_type_of_scalar_exprs() {
         let db = test_db();
         let resolver = TdnrResolver::new(&db);
+        let lit = |kind| Expr::new(fresh_node_id(), kind);
 
-        let expr = Expr::new(fresh_node_id(), ExprKind::IntLit(42));
-        let ty = resolver.get_expr_type(&expr);
-
-        assert!(ty.is_some());
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Int));
-    }
-
-    #[test]
-    fn test_get_expr_type_nat_literal() {
-        let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
-        let expr = Expr::new(fresh_node_id(), ExprKind::NatLit(42));
-        let ty = resolver.get_expr_type(&expr);
-
-        assert!(ty.is_some());
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Nat));
-    }
-
-    #[test]
-    fn test_get_expr_type_bool_literal() {
-        let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
-        let expr = Expr::new(fresh_node_id(), ExprKind::BoolLit(true));
-        let ty = resolver.get_expr_type(&expr);
-
-        assert!(ty.is_some());
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Bool));
+        let cases = [
+            ("int literal", ExprKind::IntLit(42), TypeKind::Int),
+            ("nat literal", ExprKind::NatLit(42), TypeKind::Nat),
+            ("bool literal", ExprKind::BoolLit(true), TypeKind::Bool),
+            ("rune literal", ExprKind::RuneLit('a'), TypeKind::Rune),
+            ("nil", ExprKind::Nil, TypeKind::Nil),
+            (
+                "true && false",
+                ExprKind::BinOp {
+                    op: BinOpKind::And,
+                    lhs: lit(ExprKind::BoolLit(true)),
+                    rhs: lit(ExprKind::BoolLit(false)),
+                },
+                TypeKind::Bool,
+            ),
+            (
+                "{ 42 }",
+                ExprKind::Block {
+                    stmts: vec![],
+                    value: lit(ExprKind::IntLit(42)),
+                },
+                TypeKind::Int,
+            ),
+        ];
+        for (name, kind, expected) in cases {
+            let ty = resolver
+                .get_expr_type(&lit(kind))
+                .unwrap_or_else(|| panic!("{name}: expected a type"));
+            assert_eq!(*ty.kind(&db), expected, "{name}");
+        }
     }
 
     #[test]
@@ -730,28 +732,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_expr_type_binop_and_returns_bool() {
-        let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
-        // Create: true && false
-        let lhs = Expr::new(fresh_node_id(), ExprKind::BoolLit(true));
-        let rhs = Expr::new(fresh_node_id(), ExprKind::BoolLit(false));
-        let expr = Expr::new(
-            fresh_node_id(),
-            ExprKind::BinOp {
-                op: BinOpKind::And,
-                lhs,
-                rhs,
-            },
-        );
-
-        let ty = resolver.get_expr_type(&expr);
-        assert!(ty.is_some());
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Bool));
-    }
-
-    #[test]
     fn test_get_expr_type_tuple() {
         let db = test_db();
         let resolver = TdnrResolver::new(&db);
@@ -773,38 +753,6 @@ mod tests {
     }
 
     #[test]
-    fn test_get_expr_type_block() {
-        let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
-        // Create: { 42 }
-        let value = Expr::new(fresh_node_id(), ExprKind::IntLit(42));
-        let expr = Expr::new(
-            fresh_node_id(),
-            ExprKind::Block {
-                stmts: vec![],
-                value,
-            },
-        );
-
-        let ty = resolver.get_expr_type(&expr);
-        assert!(ty.is_some());
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Int));
-    }
-
-    #[test]
-    fn test_get_expr_type_nil() {
-        let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
-        let expr = Expr::new(fresh_node_id(), ExprKind::Nil);
-        let ty = resolver.get_expr_type(&expr);
-
-        assert!(ty.is_some());
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Nil));
-    }
-
-    #[test]
     fn test_annotation_to_type_rune() {
         use crate::ast::TypeAnnotationKind;
 
@@ -822,18 +770,6 @@ mod tests {
             "Expected Rune type, got {:?}",
             ty.kind(&db)
         );
-    }
-
-    #[test]
-    fn test_get_expr_type_rune_literal() {
-        let db = test_db();
-        let resolver = TdnrResolver::new(&db);
-
-        let expr = Expr::new(fresh_node_id(), ExprKind::RuneLit('a'));
-        let ty = resolver.get_expr_type(&expr);
-
-        assert!(ty.is_some());
-        assert!(matches!(*ty.unwrap().kind(&db), TypeKind::Rune));
     }
 
     #[salsa::tracked(returns(copy))]

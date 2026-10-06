@@ -6,9 +6,10 @@
 
 mod common;
 
-use self::common::run_ast_pipeline_with_ir;
+use self::common::{ast_pipeline_diagnostics, run_ast_pipeline_with_ir};
 use insta::assert_snapshot;
 use salsa_test_macros::salsa_test;
+use tribute_core::diagnostic::DiagnosticSeverity;
 use tribute_front::SourceCst;
 
 // ========================================================================
@@ -16,115 +17,69 @@ use tribute_front::SourceCst;
 // ========================================================================
 
 #[salsa_test]
-fn test_string_literal(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
+fn test_literal_expressions(db: &salsa::DatabaseImpl) {
+    for (name, text) in [
+        (
+            "string_literal",
+            r#"
 fn greeting() -> String {
     "hello"
 }
 "#,
-    );
-
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
-}
-
-#[salsa_test]
-fn test_bytes_literal(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
+        ),
+        (
+            "bytes_literal",
+            r#"
 fn data() -> Bytes {
     b"payload"
 }
 "#,
-    );
-
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
-}
-
-#[salsa_test]
-fn test_float_literal(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
+        ),
+        (
+            "float_literal",
+            r#"
 fn pi() -> Float {
     3.14
 }
 "#,
-    );
-
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
-}
-
-#[salsa_test]
-fn test_rune_literal(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
+        ),
+        (
+            "rune_literal",
+            r#"
 fn letter() -> Rune {
     ?a
 }
 "#,
-    );
-
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
-}
-
-#[salsa_test]
-fn test_bool_literal_true(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
+        ),
+        (
+            "bool_literal_true",
+            r#"
 fn yes() -> Bool {
     True
 }
 "#,
-    );
-
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
-}
-
-#[salsa_test]
-fn test_bool_literal_false(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
+        ),
+        (
+            "bool_literal_false",
+            r#"
 fn no() -> Bool {
     False
 }
 "#,
-    );
-
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
-}
-
-#[salsa_test]
-fn test_nil_literal(db: &salsa::DatabaseImpl) {
-    let source = SourceCst::from_source_str(
-        db,
-        "test.trb",
-        r#"
+        ),
+        (
+            "nil_literal",
+            r#"
 fn nothing() -> Nil {
     Nil
 }
 "#,
-    );
-
-    let ir_text = run_ast_pipeline_with_ir(db, source);
-    assert_snapshot!(ir_text);
+        ),
+    ] {
+        let source = SourceCst::from_source_str(db, "test.trb", text);
+        let ir_text = run_ast_pipeline_with_ir(db, source);
+        assert_snapshot!(name, ir_text);
+    }
 }
 
 // ========================================================================
@@ -286,4 +241,42 @@ fn test_ref() -> Nat {
 
     let ir_text = run_ast_pipeline_with_ir(db, source);
     assert_snapshot!(ir_text);
+}
+
+// ========================================================================
+// Binary Operator Operand Types
+// ========================================================================
+
+/// Binary operators require operands of matching, operator-appropriate types.
+/// `+1` is Int (explicit sign), `1` is Nat (no sign).
+#[salsa_test]
+fn test_binop_operand_types(db: &salsa::DatabaseImpl) {
+    // (operator expression, result type, accepted)
+    for (expr, result_ty, accepted) in [
+        ("+1 + 2", "Int", false),
+        ("+1 < 2.0", "Bool", false),
+        ("+1 && +2", "Bool", false),
+        ("+1 + +2", "Int", true),
+        ("1 + 2", "Nat", true),
+        ("1.5 + 2.5", "Float", true),
+        ("True && False", "Bool", true),
+    ] {
+        let text =
+            format!("fn compute() ->{{}} {result_ty} {{ {expr} }}\nfn main() -> Nil {{ }}\n");
+        let source = SourceCst::from_source_str(db, "binop.trb", &text);
+        let diagnostics = ast_pipeline_diagnostics(db, source);
+        if accepted {
+            assert!(
+                diagnostics.is_empty(),
+                "expected no diagnostics for `{expr}`, got {diagnostics:?}"
+            );
+        } else {
+            assert!(
+                diagnostics
+                    .iter()
+                    .any(|d| d.inner.severity == DiagnosticSeverity::Error),
+                "expected a type error for `{expr}`, got {diagnostics:?}"
+            );
+        }
+    }
 }

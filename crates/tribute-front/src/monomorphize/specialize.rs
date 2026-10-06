@@ -747,18 +747,16 @@ mod tests {
     }
 
     #[test]
-    fn test_subst_type_replaces_bound_var() {
+    fn test_subst_type_replaces_only_bound_vars() {
         let db = TestDb::default();
         let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
         let int = Type::new(&db, TypeKind::Int);
-        assert_eq!(subst_type(&db, bv0, &[int]), int);
-    }
-
-    #[test]
-    fn test_subst_type_leaves_concrete_unchanged() {
-        let db = TestDb::default();
-        let int = Type::new(&db, TypeKind::Int);
-        assert_eq!(subst_type(&db, int, &[]), int);
+        for (name, ty, args, expected) in [
+            ("BoundVar(0) with [Int]", bv0, &[int][..], int),
+            ("concrete Int with []", int, &[], int),
+        ] {
+            assert_eq!(subst_type(&db, ty, args), expected, "{name}");
+        }
     }
 
     #[test]
@@ -959,15 +957,24 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_type_to_annotation_primitives() {
+    fn test_type_to_annotation_named_types() {
         let db = TestDb::default();
         let id = node_id(1);
+        let named = |name: &str, args| TypeKind::Named {
+            id: crate::ast::TypeDefId::synthetic(&db, Symbol::new(name)),
+            name: Symbol::new(name),
+            args,
+        };
+        let int = Type::new(&db, TypeKind::Int);
+        // A named type with arguments uses its mangled name.
         let cases = [
             (TypeKind::Int, "Int"),
             (TypeKind::Nat, "Nat"),
             (TypeKind::Float, "Float"),
             (TypeKind::Bool, "Bool"),
             (TypeKind::Nil, "Nil"),
+            (named("Text", vec![]), "Text"),
+            (named("Option", vec![int]), "Option$Int"),
         ];
         for (kind, expected_name) in cases {
             let ty = Type::new(&db, kind);
@@ -976,47 +983,8 @@ mod tests {
                 TypeAnnotationKind::Named(name) => {
                     assert_eq!(name.to_string(), expected_name);
                 }
-                _ => panic!("expected Named annotation for {:?}", expected_name),
+                other => panic!("expected Named annotation for {expected_name:?}, got {other:?}"),
             }
-        }
-    }
-
-    #[test]
-    fn test_type_to_annotation_named_no_args() {
-        let db = TestDb::default();
-        let ty = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Text")),
-                name: Symbol::new("Text"),
-                args: vec![],
-            },
-        );
-        let ann = type_to_annotation(&db, ty, node_id(1));
-        match &ann.kind {
-            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Text"),
-            _ => panic!("expected Named"),
-        }
-    }
-
-    #[test]
-    fn test_type_to_annotation_named_with_args_uses_mangled() {
-        let db = TestDb::default();
-        let int = Type::new(&db, TypeKind::Int);
-        let ty = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Option")),
-                name: Symbol::new("Option"),
-                args: vec![int],
-            },
-        );
-        let ann = type_to_annotation(&db, ty, node_id(1));
-        match &ann.kind {
-            TypeAnnotationKind::Named(name) => {
-                assert_eq!(name.to_string(), "Option$Int");
-            }
-            _ => panic!("expected Named with mangled name"),
         }
     }
 
@@ -1269,32 +1237,21 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_substitute_annotation_replaces_param() {
+    fn test_substitute_annotation_replaces_only_params() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let ann = TypeAnnotation {
-            id: node_id(1),
-            kind: TypeAnnotationKind::Named(Symbol::new("a")),
-        };
-        let result = substitute_annotation(&db, &ann, &[Symbol::new("a")], &[int]);
-        match &result.kind {
-            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Int"),
-            other => panic!("expected Named(Int), got {:?}", other),
-        }
-    }
-
-    #[test]
-    fn test_substitute_annotation_leaves_non_param() {
-        let db = TestDb::default();
-        let int = Type::new(&db, TypeKind::Int);
-        let ann = TypeAnnotation {
-            id: node_id(1),
-            kind: TypeAnnotationKind::Named(Symbol::new("Text")),
-        };
-        let result = substitute_annotation(&db, &ann, &[Symbol::new("a")], &[int]);
-        match &result.kind {
-            TypeAnnotationKind::Named(name) => assert_eq!(name.to_string(), "Text"),
-            other => panic!("expected Named(Text), got {:?}", other),
+        for (input, expected) in [("a", "Int"), ("Text", "Text")] {
+            let ann = TypeAnnotation {
+                id: node_id(1),
+                kind: TypeAnnotationKind::Named(Symbol::new(input)),
+            };
+            let result = substitute_annotation(&db, &ann, &[Symbol::new("a")], &[int]);
+            match &result.kind {
+                TypeAnnotationKind::Named(name) => {
+                    assert_eq!(name.to_string(), expected, "{input}")
+                }
+                other => panic!("{input}: expected Named({expected}), got {other:?}"),
+            }
         }
     }
 }
