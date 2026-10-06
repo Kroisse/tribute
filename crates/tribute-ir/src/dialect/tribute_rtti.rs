@@ -42,9 +42,39 @@ mod tribute_rtti {
 
     /// The runtime type descriptor number of the allocation `ref` points to.
     ///
-    /// `ref` is a managed reference, or the `core.ptr` it becomes under
-    /// native type conversion. Reading a null reference is undefined.
-    fn descriptor(r#ref: Value<_>) -> Value<I32> {}
+    /// Reading a null reference is undefined.
+    fn descriptor(r#ref: Value<impl ManagedRef>) -> Value<I32> {}
+}
+
+/// A managed reference: a value that points to an allocation carrying a
+/// runtime type descriptor. Unmanaged pointers and scalars are not.
+pub struct ManagedRef;
+
+impl trunk_ir::type_constraint::TypeConstraint for ManagedRef {
+    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
+        &trunk_ir::type_constraint::ConstraintDesc {
+            name: "ManagedRef",
+            exact: false,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+            fixed: None,
+        };
+}
+
+impl ManagedRef {
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        let data = ctx.get_type(ty);
+        let is = |dialect: &'static str, name: &'static str| {
+            data.dialect == trunk_ir::Symbol::new(dialect)
+                && data.name == trunk_ir::Symbol::new(name)
+        };
+        is("adt", "typeref")
+            || is("adt", "struct")
+            || is("adt", "enum")
+            || is("tribute_rt", "anyref")
+            || is("tribute_rt", "intref")
+    }
 }
 
 /// How the runtime reads one field of an allocation.
