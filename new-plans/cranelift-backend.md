@@ -259,8 +259,8 @@ native closure layout으로 바꾸는 일은 Tribute target 단계가 소유하�
 그 layout의 RTTI 선언을 함께 바꾼다. RTTI 생성은 선언이 모든 할당 descriptor를 정확히
 한 번씩 이름 붙이는지 검사한 뒤, descriptor별 release 함수, index마다 release 함수
 주소와 descriptor 내용을 담는 RTTI table(`clif.data`와 재배치), table을 통해 해제를 디스패치하는
-`__tribute_deep_release`를 IR에 선언한다. `struct_to_mem`은 struct field 접근의
-nominal layout을 [`mem.struct`](ir.md#nominal-수준과-structural-수준)로 바꾸며, 선언의
+`__tribute_deep_release`를 IR에 선언한다. `struct_to_mem`은 struct와 variant field
+접근의 nominal layout을 [`mem.struct`](ir.md#nominal-수준과-structural-수준)로 바꾸며, 선언의
 필드 종류에서 해제되는 필드를 읽는다. 같은 단계가 variant 판별을 값의 descriptor
 번호(`tribute_rtti.descriptor`)와 선언된 번호의 정수 비교로 바꾼다. Descriptor 번호를
 읽는 연산은 managed 참조만 받으며, native 타입 변환이 그 참조를 pointer로 바꾸기

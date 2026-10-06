@@ -11,9 +11,7 @@ inventory::submit!(trunk_ir::asm_format::TypeAliasHint {
 // A value of a nominal layout type, or a reference to one by name, points to
 // an allocation of that layout.
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Struct>());
-inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::named(
-    "adt", "enum"
-));
+inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Enum>());
 inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::named(
     "adt", "typeref"
 ));

@@ -362,6 +362,7 @@ mod tests {
             r#"core.module @test {
   !point = adt.struct<Point(x: core.i32)>
   !point_ref = adt.typeref<{name = "Point"}>
+  !choice = adt.enum<Choice { None() }>
   !any = tribute_rt.anyref
   !small = tribute_rt.intref
   !raw = core.ptr
@@ -371,7 +372,7 @@ mod tests {
         );
         let alias = |name| ctx.type_alias_by_text(name).expect("fixture alias");
 
-        for name in ["point", "point_ref", "any", "small"] {
+        for name in ["point", "point_ref", "choice", "any", "small"] {
             assert!(ManagedRef::matches(&ctx, alias(name)), "{name}");
         }
         for name in ["raw", "int", "bytes"] {
