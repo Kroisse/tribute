@@ -1342,28 +1342,20 @@ fn prepare_module_to_native(
             "native lowering requires a core.module".to_owned(),
         )
     })?;
-    for mut stage in native_lowering_passes(sanitize, optimizations, stop_after) {
-        stage
-            .run(ctx, core_module, &mut analyses)
-            .map_err(native_pass_failure)?;
-    }
-    Ok(())
+    native_lowering_passes(sanitize, optimizations, stop_after)
+        .run(ctx, core_module, &mut analyses)
+        .map_err(native_pass_failure)
 }
 
-/// The native lowering stages, in order, as passes of [`PassManager`]s that
-/// run one after another.
+/// The native lowering stages, in order, as the passes of one
+/// [`PassManager`] with the debug verifier.
 ///
-/// Stages share one analysis cache and, except in the middle segment, the debug
-/// verifier. That segment starts with `func-to-clif`, whose type conversion
-/// retypes values before their users are converted, so its IR is not
-/// schema-clean until the clif lowerings finish (#1353); the next segment's
-/// entry check verifies its result. A stage that fails is named in the
-/// resulting [`PassError`].
+/// A stage that fails is named in the resulting [`PassError`].
 fn native_lowering_passes(
     sanitize: bool,
     optimizations: NativeOptimizationOptions,
     stop_after: Option<NativePipelineStage>,
-) -> Vec<PassManager> {
+) -> PassManager {
     use tribute_passes::native::{
         adt_rc_header::AdtRcHeader,
         adt_to_clif::AdtToClif,
@@ -1403,20 +1395,17 @@ fn native_lowering_passes(
     })
     // A descriptor read takes a managed reference, so it is lowered before
     // type conversion turns its operand into a pointer.
-    .add_pass(DescriptorToClif);
-
-    let mut lowering = PassManager::new();
-    lowering
-        .add_pass(FuncToClif)
-        .add_pass(CfToClif)
-        .add_pass(GenerateRtti)
-        .add_pass(AdtRcHeader)
-        .add_pass(AdtToClif)
-        .add_pass(ArithToClif)
-        .add_pass(MemToClif)
-        // Lower non-RC tribute runtime operations. The explicit RC operations
-        // were materialized from typed ownership actions before erasure.
-        .add_pass(TributeRtToClif);
+    .add_pass(DescriptorToClif)
+    .add_pass(FuncToClif)
+    .add_pass(CfToClif)
+    .add_pass(GenerateRtti)
+    .add_pass(AdtRcHeader)
+    .add_pass(AdtToClif)
+    .add_pass(ArithToClif)
+    .add_pass(MemToClif)
+    // Lower non-RC tribute runtime operations. The explicit RC operations
+    // were materialized from typed ownership actions before erasure.
+    .add_pass(TributeRtToClif);
 
     if matches!(
         stop_after,
@@ -1426,29 +1415,25 @@ fn native_lowering_passes(
                 | NativePipelineStage::AfterTemporaryBorrowOptimization
         )
     ) {
-        return vec![pm, lowering];
+        return pm;
     }
-
-    let mut finish = PassManager::new();
-    finish.with_debug_verifier();
 
     // Eliminate local retain/release pairs while they are still directly
     // observable tribute_rt operations.
     if optimizations.paired_rc_elimination == PairedRcEliminationPolicy::Enabled {
-        finish.add_pass(EliminatePairedRc);
+        pm.add_pass(EliminatePairedRc);
     }
 
     if stop_after == Some(NativePipelineStage::AfterRcOptimization) {
-        return vec![pm, lowering, finish];
+        return pm;
     }
 
-    finish
-        .add_pass(LegalizeCasts)
+    pm.add_pass(LegalizeCasts)
         .add_pass(ReconcileUnrealizedCasts)
         // Lower RC operations (retain/release) to inline clif code.
         .add_pass(RcLowering);
 
-    vec![pm, lowering, finish]
+    pm
 }
 
 fn compile_module_to_native(
