@@ -62,22 +62,15 @@ use trunk_ir::transforms::canonicalize::FoldResult;
 /// `unbox_*(box_*(%x))` → `%x` for one box/unbox pair with the same contract,
 /// provided the boxed value already has the unboxed result type.
 fn fold_unbox_of_box<Box: DialectOp>(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {
-    let &[boxed] = ctx.op_operands(op) else {
-        return None;
+    let [boxed] = *<&[_; 1]>::try_from(ctx.op_operands(op)).ok()?;
+    let [result_ty] = *<&[_; 1]>::try_from(ctx.op_result_types(op)).ok()?;
+    let producer = match ctx.value_def(boxed) {
+        ValueDef::OpResult(producer, _) => producer,
+        ValueDef::BlockArg(..) => return None,
     };
-    let ValueDef::OpResult(producer, _) = ctx.value_def(boxed) else {
-        return None;
-    };
-    if !Box::matches(ctx, producer) {
-        return None;
-    }
-    let &[inner] = ctx.op_operands(producer) else {
-        return None;
-    };
-    let [result_ty] = ctx.op_result_types(op) else {
-        return None;
-    };
-    (ctx.value_ty(inner) == *result_ty).then_some(FoldResult::Forward(inner))
+    let [inner] = *<&[_; 1]>::try_from(ctx.op_operands(producer)).ok()?;
+    (Box::matches(ctx, producer) && ctx.value_ty(inner) == result_ty)
+        .then_some(FoldResult::Forward(inner))
 }
 
 #[trunk_ir::canonicalize_fold(UnboxInt)]
