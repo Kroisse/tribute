@@ -11,10 +11,10 @@ use super::conversion_target::{
 use super::pattern::RewritePattern;
 use super::rewriter::{self, PatternRewriter};
 use super::type_converter::TypeConverter;
-use crate::context::IrContext;
+use crate::context::{IrContext, Use};
 use crate::dialect::{core, func, wasm};
 use crate::ops::DialectOp;
-use crate::refs::{BlockRef, OpRef, RegionRef};
+use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 
 /// Scope that bounds a pattern rewrite traversal.
 ///
@@ -302,6 +302,8 @@ impl PatternApplicator {
                     && new_ty != raw_ty
                 {
                     ctx.set_block_arg_type(block, i as u32, new_ty);
+                    let uses = ctx.uses(*arg_val).to_vec();
+                    self.restore_unconverted_uses(ctx, *arg_val, raw_ty, &uses);
                     changes += 1;
                 }
             }
@@ -340,7 +342,7 @@ impl PatternApplicator {
                 // Only insert casts when auto_type_conversion is enabled, so that
                 // non-conversion passes don't accidentally box/cast operands of
                 // unrelated ops.
-                if self.auto_type_conversion && !self.type_converter.is_empty() {
+                if self.converts_operands_of(ctx, op) {
                     changes += self.insert_conversion_casts(ctx, block, op);
                 }
 
@@ -350,7 +352,11 @@ impl PatternApplicator {
                     let matched = pattern.match_and_rewrite(ctx, op, &mut rw);
                     if matched && rw.has_mutations() {
                         let mutations = rw.take_mutations();
+                        let replaced = self.replaced_results(ctx, op, &mutations);
                         rewriter::apply_mutations(ctx, op, mutations, module_first_block);
+                        for (value, old_ty, uses) in replaced {
+                            self.restore_unconverted_uses(ctx, value, old_ty, &uses);
+                        }
                         changes += 1;
                         break; // Only apply one pattern per op per iteration
                     }
@@ -359,6 +365,79 @@ impl PatternApplicator {
         }
 
         changes
+    }
+
+    /// Whether this conversion casts the operands of `op` to their converted
+    /// types. With a conversion target, only an operation the target declares
+    /// illegal is converted here; one it has no rule for is left to a later
+    /// conversion and keeps the operand types its results agree with.
+    fn converts_operands_of(&self, ctx: &IrContext, op: OpRef) -> bool {
+        self.auto_type_conversion
+            && !self.type_converter.is_empty()
+            && (!self.target.has_constraints()
+                || self.target.is_legal(ctx, op) == LegalityCheck::Illegal)
+    }
+
+    /// The values that will replace the results of `op` with a different
+    /// type, each with the result's type and the uses it has before the
+    /// replacement.
+    fn replaced_results(
+        &self,
+        ctx: &IrContext,
+        op: OpRef,
+        mutations: &rewriter::Mutations,
+    ) -> Vec<(ValueRef, TypeRef, Vec<Use>)> {
+        if !self.auto_type_conversion || !self.target.has_constraints() {
+            return Vec::new();
+        }
+        let new_values = match (&mutations.replacement, &mutations.erase_values) {
+            (Some(replacement), _) => ctx.op_results(*replacement).to_vec(),
+            (None, Some(values)) => values.clone(),
+            (None, None) => return Vec::new(),
+        };
+        ctx.op_results(op)
+            .iter()
+            .zip(new_values)
+            .filter(|&(&old, new)| ctx.value_ty(old) != ctx.value_ty(new))
+            .map(|(&old, new)| (new, ctx.value_ty(old), ctx.uses(old).to_vec()))
+            .collect()
+    }
+
+    /// Cast `value`, whose type this conversion changed from `old_ty`, back to
+    /// `old_ty` at each of `uses` by an operation that the target has no rule
+    /// for and whose schema the new type violates.
+    ///
+    /// Such an operation is converted by a later pass and still relates the
+    /// old type to its other operands and results, so the IR stays
+    /// schema-valid until then. An operation that accepts the new type keeps
+    /// using the value directly.
+    fn restore_unconverted_uses(
+        &self,
+        ctx: &mut IrContext,
+        value: ValueRef,
+        old_ty: TypeRef,
+        uses: &[Use],
+    ) {
+        if !self.target.has_constraints() {
+            return;
+        }
+        for use_ in uses {
+            let user = use_.user;
+            if self.target.is_legal(ctx, user) != LegalityCheck::Unknown
+                || !violates_schema(ctx, user)
+            {
+                continue;
+            }
+            let Some(block) = ctx.op(user).parent_block else {
+                continue;
+            };
+            let loc = ctx.op(user).location;
+            let cast = core::UnrealizedConversionCast::operands(value)
+                .results(old_ty)
+                .build(ctx, loc);
+            ctx.insert_op_before(block, user, cast.op_ref());
+            ctx.set_op_operand(user, use_.operand_index, cast.result(ctx));
+        }
     }
 
     /// Insert `core.unrealized_conversion_cast` for operands whose types
@@ -390,6 +469,11 @@ impl PatternApplicator {
         }
         cast_count
     }
+}
+
+/// Whether `op` violates the declarative schema of its definition.
+fn violates_schema(ctx: &IrContext, op: OpRef) -> bool {
+    crate::op_def::OpDef::of(ctx, op).is_some_and(|def| !def.schema.verify(ctx, op).is_empty())
 }
 
 #[cfg(test)]
@@ -835,6 +919,68 @@ mod tests {
         assert_eq!(
             ctx.op(first_nested_op(&ctx, bodyful.op_ref())).name,
             Symbol::new("target")
+        );
+    }
+
+    /// Convert `core.i1` to `core.i32` in `input`, with `test.*` as the only
+    /// dialect the conversion declares illegal, and print the result.
+    fn convert_booleans(input: &str) -> String {
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(&mut ctx, input);
+        let i32_ty = i32_type(&mut ctx);
+        let mut converter = TypeConverter::new();
+        converter.add_conversion(move |ctx, ty| {
+            crate::dialect::core::I1::matches(ctx, ty).then_some(i32_ty)
+        });
+        let mut target = ConversionTarget::new();
+        target.add_illegal_dialect("test");
+        PatternApplicator::new(converter)
+            .with_auto_type_conversion(true)
+            .with_target(target)
+            .apply_partial(&mut ctx, module);
+        let schemas = crate::validation::validate_op_schemas(&ctx, module.op());
+        assert!(schemas.is_ok(), "{schemas}");
+        print_module(&ctx, module.op())
+    }
+
+    #[test]
+    fn retyped_value_is_cast_back_only_where_a_later_conversion_still_needs_it() {
+        let printed = convert_booleans(
+            r#"core.module @test {
+  func.func @main(%flag: core.i1, %other: core.i1) {
+    ^entry(%flag: core.i1, %other: core.i1):
+      %both = arith.and %flag, %other : core.i1
+      cf.br %flag [^exit]
+    ^exit(%forwarded: core.i1):
+      func.return
+  }
+}"#,
+        );
+        assert_eq!(
+            printed.matches("core.unrealized_conversion_cast").count(),
+            2,
+            "only the operands of arith.and return to core.i1: {printed}"
+        );
+        assert!(
+            printed.contains(": core.i1\n      cf.br %0 [^bb1]"),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn operands_of_an_operation_left_for_a_later_conversion_are_not_cast() {
+        let printed = convert_booleans(
+            r#"core.module @test {
+  func.func @main(%left: core.i32, %right: core.i32) {
+    %less = arith.cmpi %left, %right {predicate = "slt"} : core.i1
+    %both = arith.and %less, %less : core.i1
+    func.return
+  }
+}"#,
+        );
+        assert!(
+            !printed.contains("core.unrealized_conversion_cast"),
+            "{printed}"
         );
     }
 

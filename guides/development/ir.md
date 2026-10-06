@@ -165,8 +165,14 @@ Debug builds also run `validate_op_schemas`, the declarative stages without
 the `#[verify]` hook, after every pipeline pass, reporting the pass that left
 an operation in violation. A pass that retypes a value before target type
 conversion inserts `core.unrealized_conversion_cast` back to the type its uses
-declare. Shared cleanup's `materialize_unrealized_casts` materializes only
-casts that need real operations and keeps such retyping casts. A target
+declare. `PatternApplicator` does this for a staged conversion with
+`with_auto_type_conversion(true)` and a `ConversionTarget`. It casts the
+operands only of operations the target declares illegal. Where it retypes a
+block argument or a replaced result that an operation the target has no rule
+for still uses, it casts back to the old type if the new one violates that
+operation's schema. Shared cleanup's `materialize_unrealized_casts`
+materializes only casts that need real operations and keeps such retyping
+casts. A target
 conversion converts every value's type, including cast results through
 `UnrealizedCastConversionPattern`; its materializer builds only real
 representation changes and never forwards a value of another type. A target

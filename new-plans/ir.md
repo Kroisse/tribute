@@ -175,6 +175,12 @@ builder, operation clone, 결과 타입 재지정은 제약을 우회할 수 있
 target 타입 변환이 양쪽 타입을 같게 만든 뒤에 cast를 해소한다. 표현이 같다는
 이유만으로 타입이 다른 값을 cast 없이 대입하지 않는다.
 
+Target 타입 변환을 여러 단계로 나누어 수행할 때도 같은 규칙을 따른다. 한 변환
+단계는 자신이 변환 대상으로 선언한 operation의 operand만 변환된 타입으로 맞춘다.
+그 단계가 값의 타입을 바꿨는데 이후 단계가 변환할 operation이 그 값을 쓰고, 바뀐
+타입이 그 operation의 선언적 제약을 어기면, 그 use 앞에 원래 타입으로 되돌리는
+cast를 둔다. 바뀐 타입을 그대로 받는 operation은 값을 직접 쓴다.
+
 Cast 처리는 materialization과 reconciliation으로 나뉜다. Target 타입 변환 전의
 materialization은 boxing처럼 실제 operation이 필요한 cast만 물리화하고, 타입만
 바꾸는 cast는 남긴다. Target 타입 변환은 op 결과, block 인자, cast 결과를
