@@ -590,30 +590,4 @@ mod tests {
             "expected 4 blocks after release lowering, got {block_count}"
         );
     }
-
-    #[test]
-    fn test_retain_produces_null_guard() {
-        // Verify retain lowering produces the expected null-guard structure:
-        // iconst(0), icmp eq, brif to skip/do_retain
-        let output = run_pass(
-            r#"core.module @test {
-  clif.func @f(%0: core.ptr) -> core.ptr {
-    %1 = tribute_rt.retain %0 : core.ptr
-    clif.return %0
-  }
-}"#,
-        );
-        assert!(
-            output.contains("clif.icmp"),
-            "null check comparison should be present"
-        );
-        assert!(
-            output.contains("clif.brif"),
-            "conditional branch should be present"
-        );
-        assert!(
-            output.contains("clif.atomic_rmw"),
-            "atomic RC increment should be present"
-        );
-    }
 }

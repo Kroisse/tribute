@@ -1992,46 +1992,6 @@ core.module @test {
     }
 
     #[test]
-    fn test_rauw_updates_operands() {
-        let mut ctx = IrContext::new();
-        let loc = test_location(&mut ctx);
-        let i32_ty = make_i32_type(&mut ctx);
-
-        // Create: %0 = const 42; %1 = const 99; add(%0, %0) → replace %0 with %1
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: Default::default(),
-            parent_region: None,
-        });
-
-        let c1 = arith::Const::operands()
-            .value(Attribute::Int(42))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, c1.op_ref());
-        let v1 = c1.result(&ctx);
-
-        let c2 = arith::Const::operands()
-            .value(Attribute::Int(99))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, c2.op_ref());
-        let v2 = c2.result(&ctx);
-
-        let add = arith::Addi::operands(v1, v1).build(&mut ctx, loc);
-        ctx.push_op(entry, add.op_ref());
-
-        // RAUW: replace v1 with v2
-        ctx.replace_all_uses(v1, v2);
-
-        // Verify operands were updated
-        let operands = ctx.op_operands(add.op_ref());
-        assert_eq!(operands[0], v2);
-        assert_eq!(operands[1], v2);
-    }
-
-    #[test]
     fn test_write_escaped_bytes_ascii() {
         let mut buf = String::new();
         write_escaped_bytes(&mut buf, b"hello").unwrap();

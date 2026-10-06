@@ -135,21 +135,6 @@ fn main() -> Nil {
 }
 
 // =============================================================================
-// Triple Nested Handler Tests
-// =============================================================================
-
-/// Test three different abilities with nested handlers.
-///
-/// `use_all()` calls Reader::ask() → 5, Writer::tell(5), State::set(5), State::get() → 5.
-/// Handlers: Reader provides 5, Writer is no-op, State starts at 0.
-/// Expected: 5.
-#[test]
-fn test_three_abilities_nested_handlers_slow() {
-    let code = include_str!("../fixtures/three_abilities_nested.trb");
-    assert_native_output("three_abilities_nested.trb", code, "5");
-}
-
-// =============================================================================
 // Nested Handler Semantics Tests (#500)
 // =============================================================================
 

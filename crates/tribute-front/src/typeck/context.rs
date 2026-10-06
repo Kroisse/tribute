@@ -1344,12 +1344,64 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_type_name_nested_app() {
+        let db = salsa::DatabaseImpl::new();
+        let map = named(&db, "Map");
+        let int = Type::new(&db, TypeKind::Int);
+        let inner = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: map,
+                args: vec![int],
+            },
+        );
+        let string = Type::new(&db, TypeKind::string(&db));
+        let outer = Type::new(
+            &db,
+            TypeKind::App {
+                ctor: inner,
+                args: vec![string],
+            },
+        );
+        assert_eq!(
+            extract_type_name_from_type(&db, outer),
+            Some(Symbol::new("Map"))
+        );
+    }
+
+    #[test]
     fn test_extract_type_name_primitive() {
         let db = salsa::DatabaseImpl::new();
-        assert_eq!(
-            extract_type_name_from_type(&db, Type::new(&db, TypeKind::Bytes)),
-            Some(Symbol::new("Bytes"))
+        let cases = [
+            (TypeKind::Int, "Int"),
+            (TypeKind::Nat, "Nat"),
+            (TypeKind::Float, "Float"),
+            (TypeKind::Bool, "Bool"),
+            (TypeKind::string(&db), "String"),
+            (TypeKind::Bytes, "Bytes"),
+            (TypeKind::Rune, "Rune"),
+            (TypeKind::Nil, "Nil"),
+        ];
+        for (kind, expected) in cases {
+            assert_eq!(
+                extract_type_name_from_type(&db, Type::new(&db, kind)),
+                Some(Symbol::new(expected)),
+                "type name of primitive {expected}",
+            );
+        }
+    }
+
+    #[test]
+    fn test_extract_type_name_tuple_returns_none() {
+        let db = salsa::DatabaseImpl::new();
+        let tuple = Type::new(
+            &db,
+            TypeKind::Tuple(vec![
+                Type::new(&db, TypeKind::Int),
+                Type::new(&db, TypeKind::Bool),
+            ]),
         );
+        assert_eq!(extract_type_name_from_type(&db, tuple), None);
     }
 
     #[test]

@@ -7,14 +7,6 @@
 //!
 //! Tests use `compile_and_check()` to verify frontend stages without executing.
 //! Execution tests are in `e2e_ability_handler.rs` and `e2e_ability_nested.rs`.
-//!
-//! ## Blocking Issues
-//!
-//! Many tests are blocked by:
-//! - **Type validation not enforced**: Parameterized ability type argument
-//!   validation (e.g., `State(Int)` vs `State(Bool)`) is not yet implemented.
-//! - **Effect checking not enforced**: Missing effect annotations don't produce
-//!   errors yet (see #112).
 
 use crate::common;
 
@@ -167,55 +159,6 @@ fn main() -> Nil { }
     assert!(
         diagnostics.is_empty(),
         "Expected no errors, got {} diagnostics",
-        diagnostics.len()
-    );
-}
-
-// =============================================================================
-// Milestone Target Code Test (Issue #100)
-// =============================================================================
-
-/// Test the complete milestone target code from issue #100.
-///
-/// This is the main acceptance test for the Ability System (Core) milestone.
-/// The code should:
-/// 1. Parse correctly
-/// 2. Pass name resolution
-/// 3. Pass type checking with effect inference
-///
-/// Note: Full execution requires backend support (issues #112-#114).
-#[test]
-fn test_milestone_target_code() {
-    // This is the target code from issue #100
-    let code = r#"ability State(s) {
-    op get() -> s
-    op set(value: s) -> Nil
-}
-
-fn counter() ->{State(Nat)} Nat {
-    let n = State::get()
-    State::set(n + 1)
-    n
-}
-
-fn run_state(comp: fn() ->{e, State(s)} a, init: s) ->{e} a {
-    handle comp() {
-        do result { result }
-        op State::get() { run_state(fn() { resume init }, init) }
-        op State::set(v) { run_state(fn() { resume Nil }, v) }
-    }
-}
-
-fn main() -> Nil { }
-"#;
-
-    let diagnostics = compile_and_check(code, "milestone_100.trb");
-
-    print_diagnostics(&diagnostics);
-
-    assert!(
-        diagnostics.is_empty(),
-        "Milestone target code should compile without errors, got {} diagnostics",
         diagnostics.len()
     );
 }

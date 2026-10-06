@@ -635,7 +635,6 @@ impl<'db> VisitMut<TypedRef<'db>> for TdnrResolver<'db> {
 mod tests {
     use super::*;
     use crate::ast::{BinOpKind, CtorId, EffectRow, NodeId, ResolvedRef, TypeKind, TypedRef};
-    use crate::typeck::extract_type_name_from_type;
     use salsa_test_macros::salsa_test;
 
     fn test_db() -> salsa::DatabaseImpl {
@@ -644,12 +643,6 @@ mod tests {
 
     fn fresh_node_id() -> NodeId {
         NodeId::from_raw(1)
-    }
-
-    #[test]
-    fn test_tdnr_resolver_creation() {
-        let db = test_db();
-        let _resolver = TdnrResolver::new(&db);
     }
 
     #[test]
@@ -941,129 +934,6 @@ mod tests {
             test_cons_non_func_ctor_inner(db),
             "Cons with non-function ctor type should return the ctor type directly"
         );
-    }
-
-    // =========================================================================
-    // extract_type_name_from_type tests (수정 2: App type support)
-    // =========================================================================
-
-    #[test]
-    fn test_extract_type_name_from_named_type() {
-        let db = test_db();
-
-        let ty = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Foo")),
-                name: Symbol::new("Foo"),
-                args: vec![],
-            },
-        );
-        assert_eq!(
-            extract_type_name_from_type(&db, ty),
-            Some(Symbol::new("Foo"))
-        );
-    }
-
-    #[test]
-    fn test_extract_type_name_from_app_type() {
-        let db = test_db();
-        // App { ctor: Named("List"), args: [Int] }
-        let list_named = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::builtin_list(&db),
-                name: Symbol::new("List"),
-                args: vec![],
-            },
-        );
-        let int_ty = Type::new(&db, TypeKind::Int);
-        let app_ty = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: list_named,
-                args: vec![int_ty],
-            },
-        );
-
-        assert_eq!(
-            extract_type_name_from_type(&db, app_ty),
-            Some(Symbol::new("List"))
-        );
-    }
-
-    #[test]
-    fn test_extract_type_name_from_nested_app_type() {
-        let db = test_db();
-        // App { ctor: App { ctor: Named("Map"), args: [Int] }, args: [String] }
-        let map_named = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Map")),
-                name: Symbol::new("Map"),
-                args: vec![],
-            },
-        );
-        let int_ty = Type::new(&db, TypeKind::Int);
-        let inner_app = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: map_named,
-                args: vec![int_ty],
-            },
-        );
-        let string_ty = Type::new(&db, TypeKind::string(&db));
-        let outer_app = Type::new(
-            &db,
-            TypeKind::App {
-                ctor: inner_app,
-                args: vec![string_ty],
-            },
-        );
-
-        assert_eq!(
-            extract_type_name_from_type(&db, outer_app),
-            Some(Symbol::new("Map"))
-        );
-    }
-
-    #[test]
-    fn test_extract_type_name_from_primitive_types() {
-        let db = test_db();
-        let cases: Vec<(TypeKind, &str)> = vec![
-            (TypeKind::Int, "Int"),
-            (TypeKind::Nat, "Nat"),
-            (TypeKind::Float, "Float"),
-            (TypeKind::Bool, "Bool"),
-            (TypeKind::string(&db), "String"),
-            (TypeKind::Bytes, "Bytes"),
-            (TypeKind::Rune, "Rune"),
-            (TypeKind::Nil, "Nil"),
-        ];
-
-        for (kind, expected_name) in cases {
-            let ty = Type::new(&db, kind);
-            assert_eq!(
-                extract_type_name_from_type(&db, ty),
-                Some(Symbol::new(expected_name)),
-                "Expected type name '{}' for primitive type",
-                expected_name,
-            );
-        }
-    }
-
-    #[test]
-    fn test_extract_type_name_from_unsupported_type_returns_none() {
-        let db = test_db();
-        // Tuple type has no single type name
-        let ty = Type::new(
-            &db,
-            TypeKind::Tuple(vec![
-                Type::new(&db, TypeKind::Int),
-                Type::new(&db, TypeKind::Bool),
-            ]),
-        );
-        assert_eq!(extract_type_name_from_type(&db, ty), None);
     }
 
     // =========================================================================

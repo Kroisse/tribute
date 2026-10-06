@@ -337,9 +337,6 @@ fn test_float_literal() {
     assert!((f.value() - 2.5).abs() < 0.001);
 }
 
-// Note: Boolean literal tests removed - True/False syntax may vary
-// Note: String literal tests removed - string syntax may vary
-
 #[test]
 fn test_unit_literal() {
     let source = "fn main() -> Nil { () }";
@@ -1106,12 +1103,6 @@ fn test_nested_list() {
 }
 
 // =============================================================================
-// Expression Tests - Handle (Effect Handling)
-// =============================================================================
-
-// Note: handle expression test removed - requires grammar alignment
-
-// =============================================================================
 // Expression Tests - Parenthesized
 // =============================================================================
 
@@ -1470,8 +1461,6 @@ fn test_function_type_annotation_preserved() {
         panic!("Expected type annotation on f");
     };
 
-    // Note: Function type annotations in parameters may not be fully preserved
-    // in the current implementation. This test documents the current behavior.
     match &ty.kind {
         TypeAnnotationKind::Func { params, result, .. } => {
             assert_eq!(params.len(), 1, "Expected 1 parameter in function type");
@@ -1486,17 +1475,7 @@ fn test_function_type_annotation_preserved() {
                 result.kind
             );
         }
-        TypeAnnotationKind::Named(name) => {
-            // Currently, complex parameter types may be parsed as Named
-            // TODO: This should be Func { params: [Named("Int")], result: Named("Int") }
-            // For now, verify we at least got some type
-            assert!(
-                !name.to_string().is_empty(),
-                "Expected non-empty type name, got {:?}",
-                name
-            );
-        }
-        _ => panic!("Expected Func or Named type annotation, got {:?}", ty.kind),
+        _ => panic!("Expected Func type annotation, got {:?}", ty.kind),
     }
 }
 
@@ -1516,11 +1495,6 @@ fn test_generic_type_annotation_preserved() {
         panic!("Expected type annotation");
     };
 
-    // Note: Parameter type annotations may be parsed differently from return types.
-    // Currently, parameter types like `List(Int)` are lowered as Named types,
-    // while return types with the same structure are lowered as App types.
-    // This test verifies the current behavior - a separate issue should track
-    // making parameter types consistent with return types.
     match &ty.kind {
         TypeAnnotationKind::App { ctor, args } => {
             assert!(
@@ -1535,12 +1509,7 @@ fn test_generic_type_annotation_preserved() {
                 args[0].kind
             );
         }
-        TypeAnnotationKind::Named(name) => {
-            // Currently, generic parameter types are parsed as Named
-            // TODO: This should be App { ctor: Named("List"), args: [Named("Int")] }
-            assert_eq!(name.to_string(), "List", "Expected List type name");
-        }
-        _ => panic!("Expected App or Named type annotation, got {:?}", ty.kind),
+        _ => panic!("Expected App type annotation, got {:?}", ty.kind),
     }
 }
 
@@ -1560,11 +1529,8 @@ fn test_nested_generic_type_annotation() {
         panic!("Expected type annotation");
     };
 
-    // Note: Nested generic types in parameters may not be fully preserved
-    // in the current implementation. This test documents the current behavior.
     match &ty.kind {
         TypeAnnotationKind::App { ctor, args } => {
-            // Fully preserved case
             assert!(
                 matches!(&ctor.kind, TypeAnnotationKind::Named(n) if *n == "List"),
                 "Expected List constructor"
@@ -1590,12 +1556,7 @@ fn test_nested_generic_type_annotation() {
                 "Expected Int type argument"
             );
         }
-        TypeAnnotationKind::Named(name) => {
-            // Currently, complex parameter types may be parsed as Named
-            // TODO: This should be App { ctor: Named("List"), args: [...] }
-            assert_eq!(name.to_string(), "List", "Expected List type name");
-        }
-        _ => panic!("Expected App or Named type annotation, got {:?}", ty.kind),
+        _ => panic!("Expected App type annotation, got {:?}", ty.kind),
     }
 }
 
