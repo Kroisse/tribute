@@ -1,6 +1,11 @@
 [alias]
 xtask = "run --package xtask --"
 
+[build]
+# Incremental artifacts bypass the rustc-wrapper cache and grow each
+# worktree's target directory; every worktree builds from a cold cache.
+incremental = false
+
 [env]
 # Development sysroot that `cargo xtask runtime` populates. The compiler reads
 # it when linking native executables; an existing value takes precedence.
