@@ -1023,6 +1023,8 @@ impl<'db> TypeSolver<'db> {
         // after type substitution. Never choose the first of several possible
         // instances of the same ability.
         let mut pairs = Vec::new();
+        // An effect with no candidate fails whatever later substitutions
+        // decide, so it outranks ambiguity in any effect order.
         let mut ambiguous = false;
         for (source, target) in [(effects1, effects2), (effects2, effects1)] {
             for effect in source {

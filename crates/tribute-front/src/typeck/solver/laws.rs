@@ -368,14 +368,11 @@ fn row_of<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
     )
 }
 
-/// Minimal repro: closed-row equality depends on effect order when the other
-/// row holds several candidates for one effect. `Console` has no candidate
-/// in `{State(?1), State(?2)}`, so the rows cannot be equal. Listing
-/// `Console` first reports `RowMismatch`; listing `State(Int)` first finds
-/// it ambiguous and defers the equation as a `RowUnion` that never settles,
-/// so solving (and finalizing) succeeds.
+/// Closed-row equality does not depend on effect order when the other row
+/// holds several candidates for one effect. `Console` has no candidate in
+/// `{State(?1), State(?2)}`, so the rows cannot be equal, even though
+/// `State(Int)` is ambiguous between the two.
 #[test]
-
 fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
     use crate::typeck::prop::{EffectShape, Prim};
     let db = salsa::DatabaseImpl::new();

@@ -383,7 +383,11 @@ Row 단일화는 시그니처 row 변수를 별칭의 대표로 유지한다. �
 
 Effect 집합 equality는 양방향 후보 검사를 끝낸 뒤에 확정된 타입 치환을 적용한다.
 한쪽 순회에서 먼저 찾은 대응의 치환으로 다른 쪽의 모호성을 없애서는 안 되며,
-입력 row나 label의 순서를 바꾸어도 같은 제약을 보존해야 한다.
+입력 row나 label의 순서를 바꾸어도 같은 제약을 보존해야 한다. 그래서 모든 label의
+후보를 양방향으로 센 뒤에 결과를 정한다. 상대 row에 후보가 하나도 없는 label이
+있으면, 다른 label이 모호하더라도 두 row는 같지 않다. 이후의 타입 치환은 후보를
+줄일 뿐 늘리지 않으므로 이 불일치는 확정이다. 후보가 없는 label이 없고 모호한
+label만 있을 때에만 equality를 미룬다.
 
 Named row variables have declaration-scoped identity: repeated names share an
 identity and distinct names do not. Multiple row names denote their union.
