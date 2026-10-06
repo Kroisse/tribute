@@ -267,6 +267,43 @@ mod tests {
     }
 
     #[test]
+    fn test_builtin_and_source_list_mangle_distinctly() {
+        let db = TestDb::default();
+        let base = Symbol::new("identity");
+        let name = Symbol::new("List");
+        let int_ty = Type::new(&db, TypeKind::Int);
+        let builtin = Type::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::builtin_list(&db),
+                name: name.clone(),
+                args: vec![int_ty],
+            },
+        );
+        let source = Type::new(
+            &db,
+            TypeKind::Named {
+                id: crate::ast::TypeDefId::source(
+                    &db,
+                    name.clone(),
+                    crate::ast::NodeId::from_raw(1),
+                ),
+                name,
+                args: vec![int_ty],
+            },
+        );
+
+        assert_eq!(
+            mangle_name(&db, &base, &[builtin]).to_string(),
+            "identity$BuiltinList$0$Int$1"
+        );
+        assert_eq!(
+            mangle_name(&db, &base, &[source]).to_string(),
+            "identity$List$0$Int$1"
+        );
+    }
+
+    #[test]
     fn test_same_spelled_source_types_mangle_distinctly() {
         let db = TestDb::default();
         let base = Symbol::new("identity");
@@ -528,6 +565,20 @@ mod tests {
             mangle_name(&db, &base, &[func(CallingConvention::Cps)]).to_string(),
             "f$Fn$0$$1$4$cps$Nat"
         );
+    }
+
+    #[test]
+    fn test_type_names_mangle_effect_rows_distinctly() {
+        let db = TestDb::default();
+        let name = Symbol::new("Holder");
+        let id = TypeDefId::synthetic(&db, name.clone());
+        let mangle = |effect: &str| {
+            let row = EffectRow::single(&db, ability(&db, effect, vec![]));
+            mangle_type_name(&db, id, name.clone(), &[thunk(&db, row)]).to_string()
+        };
+
+        assert_eq!(mangle("Ask"), "Holder$Fn$0$$1$2$Ask$1$Nat");
+        assert_eq!(mangle("Tell"), "Holder$Fn$0$$1$2$Tell$1$Nat");
     }
 
     #[test]

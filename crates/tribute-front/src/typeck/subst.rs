@@ -757,16 +757,15 @@ mod laws {
         /// arguments substituted by the second.
         #[test]
         fn substitutions_compose(
-            (ty, first) in scheme_body_and_args(|n| body(n).bound_vars(n)),
+            (ty, first) in (1u32..=3).prop_flat_map(|n| (
+                type_shape(body(n)),
+                // Each argument of `first` may mention any BoundVar(0..3) of
+                // the second substitution, at any position.
+                proptest::collection::vec(type_shape(ARGS.bound_vars(3)), n as usize),
+            )),
             second in proptest::collection::vec(type_shape(ARGS), 3),
         ) {
             let db = salsa::DatabaseImpl::new();
-            // `first` may mention BoundVar(0..3) of the second substitution.
-            let first: Vec<_> = first
-                .iter()
-                .enumerate()
-                .map(|(i, arg)| if i % 2 == 0 { TypeShape::BoundVar(i as u32) } else { arg.clone() })
-                .collect();
             let second = build_all(&db, &second);
             let ty = ty.build(&db);
             let SubstResult::Ok(once) = substitute_bound_vars(&db, ty, &build_all(&db, &first)) else {
@@ -774,7 +773,10 @@ mod laws {
             };
             let composed: Vec<_> = build_all(&db, &first)
                 .into_iter()
-                .map(|arg| substitute_bound_vars(&db, arg, &second).unwrap_or(arg))
+                .map(|arg| match substitute_bound_vars(&db, arg, &second) {
+                    SubstResult::Ok(arg) => arg,
+                    SubstResult::OutOfBounds { .. } => panic!("indices in range"),
+                })
                 .collect();
             prop_assert_eq!(
                 substitute_bound_vars(&db, once, &second),
