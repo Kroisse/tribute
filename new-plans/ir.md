@@ -1144,11 +1144,12 @@ callable type, `resume_token`은 `tribute_control`의 것을 그대로 쓴다.
 | body와 completion의 `tribute_control.yield` | 각각 `ability_v2.yield`와 helper의 `tribute_control.return` |
 | handler body의 `tribute_control.resume` | `ability_v2.resume` |
 
-Helper의 convention은 handler arm과 completion이 타입 검사된 row에서 일반
-lambda와 같은 규칙으로 계산한다. Helper capture는 arm이 쓰는 바깥 SSA 값이며
-lambda capture 규칙을 따른다. 이 pass는 continuation을 만들지 않고, operation
-kind를 다시 분류하지 않으며, 선언을 다시 조회하는 마지막 단계다. 이후 단계는
-`scope`의 `handlers`와 호출 operation의 속성만 읽는다.
+이 pass는 row를 보지 않으므로 helper convention을 역할로 정한다. `fn` helper는
+`EvidenceDirect`, general `op` helper와 completion helper는 `Cps`다. Helper
+capture는 arm이 쓰는 바깥 SSA 값이며 lambda capture 규칙을 따른다. 이 pass는
+continuation을 만들지 않고, operation kind를 다시 분류하지 않으며, 선언을 다시
+조회하는 마지막 단계다. 이후 단계는 `scope`의 `handlers`와 호출 operation의
+속성만 읽는다.
 
 `tribute-abilities-elaborated` 경계는 `tribute-control-pre-cps`와 같은 dialect를
 허용하되 `tribute_control.handle`, `handler`, `perform`, `resume`, `yield`를 거부하고
