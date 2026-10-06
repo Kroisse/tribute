@@ -298,15 +298,23 @@ impl<'a> FunctionTranslator<'a> {
             .collect()
     }
 
-    /// The jump table entry for a `clif.br_table` successor, which receives
-    /// no arguments.
-    fn jump_table_entry(&mut self, ir_block: BlockRef) -> CompilationResult<cl_ir::BlockCall> {
+    /// The Cranelift block of a successor that receives no arguments.
+    fn argless_successor(
+        &self,
+        ir_block: BlockRef,
+        operation: &str,
+    ) -> CompilationResult<cl_ir::Block> {
         let block = self.lookup_block(ir_block)?;
         if !self.builder.block_params(block).is_empty() {
-            return Err(CompilationError::codegen(
-                "clif.br_table: a successor block has parameters",
-            ));
+            return Err(CompilationError::codegen(format!(
+                "{operation}: a successor block has parameters"
+            )));
         }
+        Ok(block)
+    }
+
+    fn jump_table_entry(&mut self, ir_block: BlockRef) -> CompilationResult<cl_ir::BlockCall> {
+        let block = self.argless_successor(ir_block, "clif.br_table")?;
         Ok(self.builder.func.dfg.block_call(block, &[]))
     }
 
@@ -483,6 +491,30 @@ impl<'a> FunctionTranslator<'a> {
                 .builder
                 .create_jump_table(cl_ir::JumpTableData::new(default, &table));
             self.builder.ins().br_table(index, jump_table);
+            return Ok(());
+        }
+
+        if let Ok(switch) = clif::Switch::from_op(ctx, op) {
+            let index = self.lookup(switch.index(ctx))?;
+            let index_ty = self.builder.func.dfg.value_type(index);
+            if !index_ty.is_int() {
+                return Err(CompilationError::codegen(format!(
+                    "clif.switch: index has type {index_ty}, not an integer"
+                )));
+            }
+            let max = index_ty.bounds(false).1;
+            let mut emitter = cranelift_frontend::Switch::new();
+            for (case, target) in switch.cases(ctx).zip(switch.targets(ctx)) {
+                if u128::from(case) > max {
+                    return Err(CompilationError::codegen(format!(
+                        "clif.switch: case {case} does not fit the {index_ty} index"
+                    )));
+                }
+                let target = self.argless_successor(target, "clif.switch")?;
+                emitter.set_entry(u128::from(case), target);
+            }
+            let default = self.argless_successor(switch.default(ctx), "clif.switch")?;
+            emitter.emit(&mut self.builder, index, default);
             return Ok(());
         }
 

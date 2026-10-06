@@ -305,7 +305,8 @@ trunk-ir-cranelift-backend/      언어 독립적 Cranelift codegen
   clif.* dialect → Cranelift IR → 네이티브 바이너리
 ```
 
-- `clif.*` dialect은 Cranelift IR과 1:1 대응 (`wasm.*`과 대칭)
+- `clif.*` dialect은 Cranelift IR의 명령과 `cranelift-frontend`의 구성에 1:1 대응
+  (`wasm.*`과 대칭)
 - `trunk-ir-cranelift-backend`은 `trunk-ir`만 의존 (Tribute 독립적)
 
 ### Effect 구현 전략: Tail-Call CPS
