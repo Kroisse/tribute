@@ -601,6 +601,7 @@ impl<'db> TypeChecker<'db> {
                         handled_ability_ids.push(ability_id);
                     }
                 }
+                self.report_missing_handler_arms(ctx, expr.id, handlers, &handled_ability_ids);
 
                 // Get the body's effect after checking (may have effects added)
                 let body_effect_after = ctx.current_effect();
@@ -3671,6 +3672,75 @@ impl<'db> TypeChecker<'db> {
     ///
     /// Used by handle expression to determine which abilities are being handled.
     /// Returns None for references that don't represent abilities.
+    /// Report each handled ability whose operations lack a handler arm.
+    ///
+    /// An ability with at least one `fn`/`op` arm in a `handle` must provide
+    /// an arm for every declared operation; a missing arm is never an
+    /// implicit forward. Abilities without arms are not handled and need no
+    /// check. Missing operations are listed in name order.
+    fn report_missing_handler_arms(
+        &self,
+        ctx: &mut FunctionInferenceContext<'_, 'db>,
+        handle_id: NodeId,
+        handlers: &[HandlerArm<ResolvedRef<'db>>],
+        handled_ability_ids: &[AbilityId<'db>],
+    ) {
+        let mut checked = HashSet::default();
+        for &ability_id in handled_ability_ids {
+            if !checked.insert(ability_id) {
+                continue;
+            }
+            let Some(info) = self.env.lookup_ability(ability_id) else {
+                continue;
+            };
+            let arms: Vec<(NodeId, &Symbol)> = handlers
+                .iter()
+                .filter_map(|handler| match &handler.kind {
+                    HandlerKind::Fn { ability, op, .. } | HandlerKind::Op { ability, op, .. }
+                        if self.extract_ability_id_from_ref(ability) == Some(ability_id) =>
+                    {
+                        Some((handler.id, op))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let Some(&(first_arm, _)) = arms.first() else {
+                continue;
+            };
+            let covered: HashSet<&Symbol> = arms.iter().map(|(_, op)| *op).collect();
+            let mut missing: Vec<&Symbol> = info
+                .operations
+                .keys()
+                .filter(|op| !covered.contains(op))
+                .collect();
+            if missing.is_empty() {
+                continue;
+            }
+            missing.sort_by(|left, right| {
+                left.with_str(|left| right.with_str(|right| left.cmp(right)))
+            });
+            // Keyed by the ability's first arm so each handled ability of
+            // this handle reports once.
+            if !ctx.mark_handler_error(first_arm, "missing handler arm") {
+                continue;
+            }
+            let plural = if missing.len() == 1 { "an arm" } else { "arms" };
+            Diagnostic::new(
+                format!(
+                    "handling `{}` is missing {plural} for {}",
+                    ability_id.name(self.db()),
+                    missing
+                        .iter()
+                        .format_with(", ", |op, f| f(&format_args!("`{op}`")))
+                ),
+                self.get_span(handle_id),
+                DiagnosticSeverity::Error,
+                CompilationPhase::TypeChecking,
+            )
+            .accumulate(self.db());
+        }
+    }
+
     fn extract_ability_id_from_ref(&self, resolved: &ResolvedRef<'db>) -> Option<AbilityId<'db>> {
         match resolved {
             ResolvedRef::AbilityOp { ability, .. } => Some(*ability),

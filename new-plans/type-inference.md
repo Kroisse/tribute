@@ -587,6 +587,11 @@ op : fn(A₁, ..., Aₙ) ->{Eff} B ∈ Ability
 Γ ⊢ handle comp() { clauses } ⇒ B ; E ∪ E₁
 ```
 
+`clauses`가 `fn`/`op` arm을 가진 각 ability `Eff`에 대해, `clauses`는 `Eff`가
+선언한 모든 operation의 arm을 가져야 한다. 빠진 arm은 typechecking 에러다
+([abilities.md](abilities.md#handler-arm-종류)). Arm이 없는 ability는 처리되지 않고
+`E`에 남는다.
+
 ### Subsumption
 
 Effect row 간의 subsumption:

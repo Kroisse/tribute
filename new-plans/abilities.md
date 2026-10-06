@@ -327,6 +327,19 @@ Handler arm은 `handle` 표현식 내에서만 사용할 수 있다.
 - `fn`으로 선언된 operation → handler에서 반드시 `fn`으로 구현 (`op`으로 구현 시 컴파일 에러)
 - `op`으로 선언된 operation → handler에서 `op` 또는 `fn`으로 구현 가능
 
+**Handler arm의 완전성:**
+
+- `handle` 표현식이 어떤 ability에 대해 `fn`/`op` arm을 하나라도 가지면, 그
+  ability가 선언한 모든 operation에 대한 arm을 가져야 한다. 빠진 arm이 있으면
+  typechecking 단계의 컴파일 에러이며, 진단은 ability와 빠진 operation을 모두
+  나열한다. Parametrized ability(`State(s)`)는 ability 선언 단위로 판단하고,
+  이름이 같아도 다른 module의 ability는 서로 다른 ability로 판단한다.
+- 빠진 arm은 암묵적으로 바깥 handler로 전달(forward)되거나 계산을 중단(abort)하거나
+  trap하지 않는다. 일부 operation만 처리하는 handler는 허용되지 않는다.
+- Arm이 하나도 없는 ability는 그 `handle`이 처리하지 않는다. 그 label은 결과
+  row에 그대로 남고, 그 operation은 바깥 handler로 간다. `do` arm만 있는
+  `handle`도 허용된다.
+
 ### `fn` Operation Handler
 
 `fn` operation은 continuation을 캡처하지 않는다. Handler body의 반환값이 곧
