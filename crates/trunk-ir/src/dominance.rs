@@ -155,106 +155,14 @@ impl DominatorTree {
 }
 
 #[cfg(test)]
+mod prop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::dialect::clif;
     use crate::ops::DialectOp;
     use crate::parser::parse_test_module;
-
-    fn function_cfg(ir: &str) -> (IrContext, RegionRef, BlockList) {
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, ir);
-        let module_block = module.first_block(&ctx).expect("module body");
-        let function =
-            clif::Func::from_op(&ctx, ctx.block(module_block).ops[0]).expect("clif.func");
-        let region = function.body(&ctx);
-        let blocks = ctx.region(region).blocks.clone();
-        (ctx, region, blocks)
-    }
-
-    #[test]
-    fn diamond_join_is_dominated_only_by_entry() {
-        let (ctx, region, blocks) = function_cfg(
-            r#"core.module @test {
-  clif.func @f(%0: core.i8) -> core.nil {
-  ^entry:
-    clif.brif %0 [^left, ^right]
-  ^left:
-    clif.jump [^join]
-  ^right:
-    clif.jump [^join]
-  ^join:
-    clif.return
-  }
-}"#,
-        );
-        let dominance = DominatorTree::compute(&ctx, region);
-        assert!(dominance.is_valid());
-        assert!(dominance.dominates(blocks[0], blocks[3]));
-        assert!(!dominance.dominates(blocks[1], blocks[3]));
-        assert!(!dominance.dominates(blocks[2], blocks[3]));
-    }
-
-    #[test]
-    fn branch_local_block_dominates_its_descendant() {
-        let (ctx, region, blocks) = function_cfg(
-            r#"core.module @test {
-  clif.func @f(%0: core.i8) -> core.nil {
-  ^entry:
-    clif.brif %0 [^left, ^exit]
-  ^left:
-    clif.jump [^child]
-  ^child:
-    clif.return
-  ^exit:
-    clif.return
-  }
-}"#,
-        );
-        let dominance = DominatorTree::compute(&ctx, region);
-        assert!(dominance.dominates(blocks[1], blocks[2]));
-        assert!(!dominance.dominates(blocks[1], blocks[3]));
-    }
-
-    #[test]
-    fn loop_header_dominates_loop_body_and_exit() {
-        let (ctx, region, blocks) = function_cfg(
-            r#"core.module @test {
-  clif.func @f(%0: core.i8) -> core.nil {
-  ^entry:
-    clif.jump [^header]
-  ^header:
-    clif.brif %0 [^body, ^exit]
-  ^body:
-    clif.jump [^header]
-  ^exit:
-    clif.return
-  }
-}"#,
-        );
-        let dominance = DominatorTree::compute(&ctx, region);
-        assert!(dominance.dominates(blocks[1], blocks[2]));
-        assert!(dominance.dominates(blocks[1], blocks[3]));
-        assert!(!dominance.dominates(blocks[2], blocks[1]));
-    }
-
-    #[test]
-    fn unreachable_blocks_have_no_dominance_relation() {
-        let (ctx, region, blocks) = function_cfg(
-            r#"core.module @test {
-  clif.func @f() -> core.nil {
-  ^entry:
-    clif.return
-  ^dead:
-    clif.return
-  }
-}"#,
-        );
-        let dominance = DominatorTree::compute(&ctx, region);
-        assert!(!dominance.is_reachable(blocks[1]));
-        assert!(!dominance.dominates(blocks[1], blocks[1]));
-        assert!(!dominance.dominates(blocks[0], blocks[1]));
-    }
 
     #[test]
     fn successor_outside_region_marks_analysis_invalid() {
