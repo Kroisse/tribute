@@ -76,18 +76,6 @@ pub(crate) fn is_closure_struct_type(ctx: &IrContext, ty: TypeRef) -> bool {
     has_layout(ctx, ty, crate::gc_types::CLOSURE_LAYOUT)
 }
 
-/// The canonical key standing for every type of one builtin runtime layout.
-pub(crate) fn intern_layout_key(ctx: &mut IrContext, layout: &'static str) -> TypeRef {
-    let mut attrs = AttributeMap::new();
-    attrs.insert(trunk_ir::types::LAYOUT_ATTR, ctx.string_attr(layout));
-    ctx.intern_type(trunk_ir::types::TypeData {
-        dialect: Symbol::new("wasm"),
-        name: Symbol::new("layout"),
-        params: Default::default(),
-        attrs,
-    })
-}
-
 // ============================================================================
 // Type conversion
 // ============================================================================

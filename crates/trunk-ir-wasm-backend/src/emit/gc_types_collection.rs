@@ -189,20 +189,12 @@ fn register_builtin_evidence_type(
 
 /// Normalize a type for GC struct field comparison.
 ///
-/// Normalizes `core.i1` storage and the closure layout to their canonical
-/// form.
+/// Normalizes `core.i1` storage to its canonical form.
 fn normalize_type_for_gc(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     // Wasm has no i1 storage type. Match type_to_valtype before comparing
     // constructor, getter, and setter observations of the same field.
     if helpers::is_type(ctx, ty, "core", "i1") {
         return ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
-    }
-
-    // The closure layout is the target-private builtin closure struct.
-    // Logical closure references and its materialized struct declaration
-    // must share this one physical field representation.
-    if helpers::is_closure_struct_type(ctx, ty) {
-        return helpers::intern_layout_key(ctx, crate::gc_types::CLOSURE_LAYOUT);
     }
 
     ty
@@ -229,6 +221,13 @@ fn types_equivalent_for_gc(ctx: &mut IrContext, ty1: TypeRef, ty2: TypeRef) -> b
     let ty1_norm = normalize_type_for_comparison(ctx, ty1);
     let ty2_norm = normalize_type_for_comparison(ctx, ty2);
     if ty1_norm == ty2_norm {
+        return true;
+    }
+    // Types of one builtin layout share its physical struct. A logical
+    // closure reference and the materialized closure struct declaration are
+    // such a pair.
+    let layout_1 = helpers::builtin_layout_type_idx(ctx, ty1_norm);
+    if layout_1.is_some() && layout_1 == helpers::builtin_layout_type_idx(ctx, ty2_norm) {
         return true;
     }
     // anyref is a supertype of all concrete GC reference types (builtin
@@ -968,6 +967,33 @@ wasm.return
 
         assert!(types_equivalent_for_gc(&mut ctx, structural, structref));
         assert_eq!(normalize_type_for_gc(&mut ctx, structural), structural);
+    }
+
+    #[test]
+    fn types_of_one_builtin_layout_are_gc_equivalent_without_a_new_type() {
+        let mut ctx = IrContext::new();
+        let mut closure_layout = |name: &'static str| {
+            let layout = ctx.string_attr(crate::gc_types::CLOSURE_LAYOUT);
+            ctx.intern_type(
+                TypeDataBuilder::new("test", name)
+                    .attr(trunk_ir::types::LAYOUT_ATTR, layout)
+                    .build(),
+            )
+        };
+        let reference = closure_layout("reference");
+        let declaration = closure_layout("declaration");
+        let bytes_layout = ctx.string_attr(crate::gc_types::BYTES_LAYOUT);
+        let bytes = ctx.intern_type(
+            TypeDataBuilder::new("test", "bytes")
+                .attr(trunk_ir::types::LAYOUT_ATTR, bytes_layout)
+                .build(),
+        );
+        let types_before = ctx.types().iter().count();
+
+        assert!(types_equivalent_for_gc(&mut ctx, reference, declaration));
+        assert!(!types_equivalent_for_gc(&mut ctx, reference, bytes));
+        assert_eq!(normalize_type_for_gc(&mut ctx, reference), reference);
+        assert_eq!(ctx.types().iter().count(), types_before);
     }
 
     #[test]
