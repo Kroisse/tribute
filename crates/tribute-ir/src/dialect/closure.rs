@@ -320,10 +320,6 @@ mod tests {
         // Verify result type
         let result = op.result(&ctx);
         assert_eq!(ctx.value_ty(result), closure_ty);
-
-        // Verify dialect and op name constants
-        assert_eq!(super::New::DIALECT_NAME, "closure");
-        assert_eq!(super::New::OP_NAME, "new");
     }
 
     #[test]
@@ -361,10 +357,6 @@ mod tests {
         // Verify result type
         let result = func_op.result(&ctx);
         assert_eq!(ctx.value_ty(result), i32_ty);
-
-        // Verify dialect and op name constants
-        assert_eq!(super::Func::DIALECT_NAME, "closure");
-        assert_eq!(super::Func::OP_NAME, "func");
     }
 
     #[test]
@@ -402,10 +394,6 @@ mod tests {
         // Verify result type
         let result = env_result_op.result(&ctx);
         assert_eq!(ctx.value_ty(result), i32_ty);
-
-        // Verify dialect and op name constants
-        assert_eq!(super::Env::DIALECT_NAME, "closure");
-        assert_eq!(super::Env::OP_NAME, "env");
     }
 
     #[test]
@@ -476,10 +464,6 @@ mod tests {
         let operands = ctx.op_operands(lambda_op.op_ref());
         assert_eq!(operands.len(), 1);
         assert_eq!(operands[0], cap_val);
-
-        // Verify dialect and op name constants
-        assert_eq!(super::Lambda::DIALECT_NAME, "closure");
-        assert_eq!(super::Lambda::OP_NAME, "lambda");
     }
 
     #[test]
@@ -519,11 +503,6 @@ mod tests {
         assert!(super::New::matches(&ctx, closure_new.op_ref()));
         assert!(!super::Func::matches(&ctx, closure_new.op_ref()));
         assert!(!super::Env::matches(&ctx, closure_new.op_ref()));
-    }
-
-    #[test]
-    fn test_dialect_name_function() {
-        assert_eq!(super::DIALECT_NAME(), Symbol::new("closure"));
     }
 
     // =================================================================

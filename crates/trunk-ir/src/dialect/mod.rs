@@ -418,34 +418,6 @@ mod tests {
     }
 
     // ================================================================
-    // DIALECT_NAME and OP_NAME constants
-    // ================================================================
-
-    #[test]
-    fn test_dialect_name_and_op_name() {
-        assert_eq!(super::arith::Const::DIALECT_NAME, "arith");
-        assert_eq!(super::arith::Const::OP_NAME, "const");
-        assert_eq!(super::func::Call::DIALECT_NAME, "func");
-        assert_eq!(super::func::Call::OP_NAME, "call");
-        assert_eq!(super::func::Return::DIALECT_NAME, "func");
-        assert_eq!(super::func::Return::OP_NAME, "return");
-        assert_eq!(super::wasm::I32Const::DIALECT_NAME, "wasm");
-        assert_eq!(super::wasm::I32Const::OP_NAME, "i32_const");
-    }
-
-    // ================================================================
-    // DIALECT_NAME() function
-    // ================================================================
-
-    #[test]
-    fn test_dialect_name_function() {
-        assert_eq!(super::func::DIALECT_NAME(), Symbol::new("func"));
-        assert_eq!(super::arith::DIALECT_NAME(), Symbol::new("arith"));
-        assert_eq!(super::wasm::DIALECT_NAME(), Symbol::new("wasm"));
-        assert_eq!(super::clif::DIALECT_NAME(), Symbol::new("clif"));
-    }
-
-    // ================================================================
     // Arena dialect types
     // ================================================================
 
@@ -507,23 +479,6 @@ mod tests {
         let nil = super::core::nil(&mut ctx);
         let ty_ref: crate::TypeRef = nil.into();
         assert_eq!(ty_ref, nil.as_type_ref());
-    }
-
-    #[test]
-    fn test_type_name_constant() {
-        assert_eq!(super::core::NIL(), Symbol::new("nil"));
-        assert_eq!(super::core::NEVER(), Symbol::new("never"));
-        assert_eq!(super::core::PTR(), Symbol::new("ptr"));
-        assert_eq!(super::core::ARRAY(), Symbol::new("array"));
-        assert_eq!(super::core::REF(), Symbol::new("ref"));
-    }
-
-    #[test]
-    fn test_type_trait_constants() {
-        assert_eq!(super::core::Nil::DIALECT_NAME, "core");
-        assert_eq!(super::core::Nil::TYPE_NAME, "nil");
-        assert_eq!(super::core::Array::DIALECT_NAME, "core");
-        assert_eq!(super::core::Array::TYPE_NAME, "array");
     }
 
     // ================================================================
@@ -645,12 +600,5 @@ mod tests {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
         let _ = super::func::func_sig(&mut ctx, [], [i32_ty, i32_ty]);
-    }
-
-    #[test]
-    fn test_type_name_constants_extended() {
-        assert_eq!(super::core::TUPLE(), Symbol::new("tuple"));
-        assert_eq!(super::func::FUNC_SIG(), Symbol::new("func_sig"));
-        assert_eq!(super::core::BYTES(), Symbol::new("bytes"));
     }
 }

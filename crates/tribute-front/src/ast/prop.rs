@@ -1,12 +1,9 @@
 //! Random AST generators for property-based testing.
 //!
 //! Provides `proptest` strategy functions that generate syntactically valid
-//! Tribute AST nodes.
-//!
-//! - Phase 1: Literals and arithmetic expressions.
-//! - Phase 2: `Block`, `Let`, and `Var` with scope-correct variable
-//!   references via a parameterized `env_size` approach.
-//! - Phase 3: `Lambda`, `Call`, `Tuple`, and multi-function modules.
+//! Tribute AST nodes: literals, logical binary operators, `Block`, `Let`, and
+//! `Var` with scope-correct variable references (via a parameterized
+//! `env_size`), `Lambda`, `Call`, `Tuple`, and multi-function modules.
 
 use proptest::prelude::*;
 
@@ -881,9 +878,9 @@ mod tests {
             }
         }
 
-        /// Call variants always have a callee expression.
+        /// Call variants have at most two arguments.
         #[test]
-        fn call_callee_exists(expr in call_variant(0, 3)) {
+        fn call_args_bounded(expr in call_variant(0, 3)) {
             if let ExprKind::Call { args, .. } = expr.kind.as_ref() {
                 prop_assert!(args.len() <= 2, "call must have ≤2 args");
             } else {

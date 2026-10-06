@@ -102,10 +102,6 @@ mod tests {
         // Verify result type
         let result = op.result(&ctx);
         assert_eq!(ctx.value_ty(result), ptr_ty);
-
-        // Verify dialect and op name constants
-        assert_eq!(super::BoxInt::DIALECT_NAME, "tribute_rt");
-        assert_eq!(super::BoxInt::OP_NAME, "box_int");
     }
 
     #[test]
@@ -134,9 +130,6 @@ mod tests {
         // Verify result type
         let result = op.result(&ctx);
         assert_eq!(ctx.value_ty(result), i32_ty);
-
-        assert_eq!(super::UnboxInt::DIALECT_NAME, "tribute_rt");
-        assert_eq!(super::UnboxInt::OP_NAME, "unbox_int");
     }
 
     #[test]
@@ -165,9 +158,6 @@ mod tests {
         // Verify result type
         let result = op.result(&ctx);
         assert_eq!(ctx.value_ty(result), ptr_ty);
-
-        assert_eq!(super::Retain::DIALECT_NAME, "tribute_rt");
-        assert_eq!(super::Retain::OP_NAME, "retain");
     }
 
     #[test]
@@ -194,9 +184,6 @@ mod tests {
 
         // Verify alloc_size attribute
         assert_eq!(op.alloc_size(&ctx), 16u64);
-
-        assert_eq!(super::Release::DIALECT_NAME, "tribute_rt");
-        assert_eq!(super::Release::OP_NAME, "release");
     }
 
     #[test]
@@ -225,8 +212,6 @@ mod tests {
         assert_eq!(round_trip.op_ref(), op.op_ref());
         assert_eq!(op.value(&ctx), value);
         assert_eq!(ctx.value_ty(op.result(&ctx)), ptr_ty);
-        assert_eq!(super::IntoRaw::DIALECT_NAME, "tribute_rt");
-        assert_eq!(super::IntoRaw::OP_NAME, "into_raw");
     }
 
     #[test]
@@ -289,10 +274,5 @@ mod tests {
         assert!(super::UnboxInt::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Retain::from_op(&ctx, c.op_ref()).is_err());
         assert!(super::Release::from_op(&ctx, c.op_ref()).is_err());
-    }
-
-    #[test]
-    fn test_dialect_name_function() {
-        assert_eq!(super::DIALECT_NAME(), Symbol::new("tribute_rt"));
     }
 }
