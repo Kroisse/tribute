@@ -2735,6 +2735,73 @@ mod tests {
     }
 
     #[test]
+    fn cf_switch_interface_reports_the_default_and_every_target() {
+        let module_text = |cases: &str, successors: &str| {
+            format!(
+                r#"core.module @test {{
+  func.func @main(%choice: core.i32) {{
+    ^entry:
+      cf.switch %choice [{successors}] {{cases = {cases}}}
+    ^fallback:
+      func.return
+    ^first:
+      func.return
+    ^second:
+      func.return
+  }}
+}}"#
+            )
+        };
+        let mut ctx = IrContext::new();
+        let module = crate::parser::parse_test_module(
+            &mut ctx,
+            &module_text("[4, -1]", "^fallback, ^first, ^second"),
+        );
+
+        let result = validate_operation_verifiers(&ctx, module);
+        assert!(result.is_ok(), "{result}");
+        let branch = operations_named(&ctx, module, "cf", "switch")[0];
+        let successors = BranchOps::get(&ctx, branch)
+            .expect("cf.switch must implement Branch")
+            .successors(&ctx, branch)
+            .unwrap();
+        let blocks: crate::BlockList = ctx.op_successors(branch).collect();
+        assert_eq!(blocks.len(), 3);
+        assert!(
+            successors
+                .as_slice()
+                .iter()
+                .zip(&blocks)
+                .all(|(edge, &block)| edge.block == block && edge.forwarded.is_empty())
+        );
+
+        for (cases, successors, expected) in [
+            ("[4, -1]", "^fallback, ^first", "2 case(s) but 1 target(s)"),
+            ("[4, 4]", "^fallback, ^first, ^second", "duplicate case 4"),
+            (
+                "[-1, 4294967295]",
+                "^fallback, ^first, ^second",
+                "duplicate case 4294967295",
+            ),
+            (
+                "[4, 4294967296]",
+                "^fallback, ^first, ^second",
+                "case 4294967296 is not a value of a 32-bit integer",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let module =
+                crate::parser::parse_test_module(&mut ctx, &module_text(cases, successors));
+            let result = validate_operation_verifiers(&ctx, module);
+            let errors = operation_error_messages(&result);
+            assert!(
+                errors.iter().any(|error| error.contains(expected)),
+                "{errors:?}"
+            );
+        }
+    }
+
+    #[test]
     fn cf_cond_branch_interface_reports_both_textual_successors() {
         let input = r#"core.module @test {
   func.func @main(%condition: core.i1, %value: core.i32) -> core.i32 {
