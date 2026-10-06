@@ -9,7 +9,7 @@
 //!
 //! A bodyless `abi` declaration is an import, not a root: it stays only while
 //! something reachable references it.
-//! - Custom entry points from configuration, by qualified name
+//! - Custom entry points from configuration, by root-qualified path
 //!
 //! Follows the [`CallGraph`] edges of calls and address references, then
 //! removes unreachable functions via BFS.
@@ -30,8 +30,10 @@ use crate::transforms::call_graph::{CallGraph, FunctionDefinition, call_graph_ov
 /// Configuration for global dead code elimination.
 #[derive(Debug, Clone)]
 pub struct GlobalDceConfig {
-    /// Additional entry point qualified function names (besides main/_start).
-    pub extra_entry_points: Vec<String>,
+    /// Additional entry points (besides main/_start), by root-qualified
+    /// path: `SymbolPath::new(["m", "init"])` names `init` in the nested
+    /// module `m`.
+    pub extra_entry_points: Vec<SymbolPath>,
     /// Whether to recursively process nested modules. Default: true.
     pub recursive: bool,
 }
@@ -172,10 +174,7 @@ fn is_root(ctx: &IrContext, name: &SymbolPath, op: OpRef, config: &GlobalDceConf
     *name == "main"
         || *name == "_start"
         || (ctx.op(op).attributes.contains_key("abi") && ctx.op_has_regions(op))
-        || config
-            .extra_entry_points
-            .iter()
-            .any(|extra| *name == extra.as_str())
+        || config.extra_entry_points.contains(name)
 }
 
 /// Whether `op` lies inside a `core.module` nested in `module`.
@@ -326,7 +325,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "an extra entry point matches only a root-level name; `m::init` cannot name a nested function"]
     fn extra_entry_point_names_a_nested_function_by_qualified_name() {
         let mut ctx = IrContext::new();
         let module = crate::parser::parse_test_module(
@@ -340,7 +338,7 @@ mod tests {
 }"#,
         );
         let config = GlobalDceConfig {
-            extra_entry_points: vec!["m::init".to_string()],
+            extra_entry_points: vec![SymbolPath::new(["m", "init"])],
             recursive: true,
         };
 

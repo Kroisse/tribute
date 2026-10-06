@@ -59,20 +59,13 @@ proptest! {
         let mut ctx = IrContext::new();
         let module = spec.build(&mut ctx);
         let paths = spec.paths();
-        // Extra entry points name root functions only.
-        let extra: Vec<bool> = spec
-            .functions
-            .iter()
-            .zip(extra)
-            .map(|(function, extra)| extra && !function.nested)
-            .collect();
+        let extra = &extra[..spec.functions.len()];
         let config = GlobalDceConfig {
-            extra_entry_points: spec
-                .functions
+            extra_entry_points: paths
                 .iter()
-                .zip(&extra)
+                .zip(extra)
                 .filter(|&(_, &extra)| extra)
-                .map(|(function, _)| function.name.clone())
+                .map(|(path, _)| path.clone())
                 .collect(),
             recursive,
         };
@@ -84,7 +77,7 @@ proptest! {
             &mut AnalysisCache::new(),
         );
 
-        let removed = expected_removed(&spec, recursive, &extra);
+        let removed = expected_removed(&spec, recursive, extra);
         let removed_paths: HashSet<SymbolPath> =
             removed.iter().map(|&index| paths[index].clone()).collect();
         prop_assert_eq!(result.removed_count, removed.len());
