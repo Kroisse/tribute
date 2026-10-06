@@ -375,7 +375,7 @@ fn row_of<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
 /// it ambiguous and defers the equation as a `RowUnion` that never settles,
 /// so solving (and finalizing) succeeds.
 #[test]
-#[ignore = "#1371: closed-row equality outcome depends on effect order under ambiguity"]
+
 fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
     use crate::typeck::prop::{EffectShape, Prim};
     let db = salsa::DatabaseImpl::new();

@@ -1023,6 +1023,7 @@ impl<'db> TypeSolver<'db> {
         // after type substitution. Never choose the first of several possible
         // instances of the same ability.
         let mut pairs = Vec::new();
+        let mut ambiguous = false;
         for (source, target) in [(effects1, effects2), (effects2, effects1)] {
             for effect in source {
                 let normalized = |candidate: &crate::ast::Effect<'db>| crate::ast::Effect {
@@ -1076,14 +1077,15 @@ impl<'db> TypeSolver<'db> {
                             actual: r2,
                         });
                     }
-                    _ => {
-                        return Err(SolveError::AmbiguousEffect {
-                            expected: r1,
-                            actual: r2,
-                        });
-                    }
+                    _ => ambiguous = true,
                 }
             }
+        }
+        if ambiguous {
+            return Err(SolveError::AmbiguousEffect {
+                expected: r1,
+                actual: r2,
+            });
         }
 
         // Do not let early matches erase ambiguity in the reverse direction.
