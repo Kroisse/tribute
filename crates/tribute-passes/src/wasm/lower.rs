@@ -955,7 +955,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i64) -> core.nil {
+  func.func @main(%bytes: core.bytes, %newline: core.i1, %choice: core.i16) -> core.nil {
     %write = tribute_io.write %bytes, %newline : core.nil
     scf.switch %choice {
       scf.case {value = 0} { scf.yield }
@@ -974,9 +974,9 @@ mod tests {
         assert!(matches!(error, WasmLowerError::Conversion(_)), "{error}");
         assert!(error.to_string().contains("scf-to-wasm"), "{error}");
         assert!(
-            error
-                .to_string()
-                .contains("unsupported discriminant type `core.i64`; expected `core.i32`"),
+            error.to_string().contains(
+                "unsupported discriminant type `core.i16`; expected `core.i32` or `core.i64`"
+            ),
             "{error}"
         );
         assert_eq!(print_module(&ctx, module.op()), before);
