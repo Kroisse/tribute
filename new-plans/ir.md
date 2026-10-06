@@ -384,7 +384,7 @@ implicit unmatched path when no default exists). The wrappers also expose
 their own parent/body boundary, so generic nested-region walkers never need to
 decode the switch's container shape themselves.
 
-`cf.switch`는 정수 discriminant에 대한 CFG 수준의 다중 분기다. Successor는
+`cf.switch`는 정수 타입(`IntegerLike`) discriminant에 대한 CFG 수준의 다중 분기다. Successor는
 `default`가 먼저이고 그 뒤로 `cases`의 값마다 하나씩 같은 순서로 오며, block
 argument를 받지 않는다. Case는 discriminant 타입의 값이고 서로 달라야 한다.
 Structured-to-CFG 변환은 정수 discriminant와 서로 다른 정수 case를 가진

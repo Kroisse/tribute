@@ -21,7 +21,7 @@ mod cf {
     /// matches. A case is a value of the discriminant's type. Successors
     /// receive no arguments.
     #[verify]
-    fn switch(cases: Attr<[i64]>, discriminant: Value<_>) {
+    fn switch<T: IntegerLike>(cases: Attr<[i64]>, discriminant: Value<T>) {
         #[successor(default)]
         {}
         #[successors(targets)]
@@ -30,6 +30,7 @@ mod cf {
 }
 
 use crate::IrContext;
+use crate::dialect::core::IntegerLike;
 use crate::op_interface::{
     BranchModel, BranchOps, BranchSuccessor, BranchSuccessors, ControlFlowInterfaceError,
 };
