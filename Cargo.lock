@@ -1879,6 +1879,7 @@ version = "0.1.0"
 dependencies = [
  "itoa",
  "libc",
+ "proptest",
  "smallvec",
  "tribute-rc",
  "zmij",
@@ -1954,6 +1955,7 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "itertools 0.14.0",
+ "proptest",
  "rustc-hash",
  "tempfile",
  "tracing",

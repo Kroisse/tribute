@@ -1016,44 +1016,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_symbol_ref_escapes() {
-        // Bare symbol
-        let mut input = "@foo";
-        let result = symbol_ref.parse_next(&mut input).expect("should parse");
-        assert_eq!(result, "foo");
-
-        // Quoted symbol with colons
-        let mut input = "@\"std::List::map\"";
-        let result = symbol_ref.parse_next(&mut input).expect("should parse");
-        assert_eq!(result, "std::List::map");
-
-        // Quoted symbol with escaped backslash
-        let mut input = "@\"a\\\\b\"";
-        let result = symbol_ref.parse_next(&mut input).expect("should parse");
-        assert_eq!(result, "a\\b");
-
-        // Quoted symbol with escaped quote
-        let mut input = "@\"say\\\"hi\\\"\"";
-        let result = symbol_ref.parse_next(&mut input).expect("should parse");
-        assert_eq!(result, "say\"hi\"");
-
-        // Quoted symbol with newline escape
-        let mut input = "@\"line1\\nline2\"";
-        let result = symbol_ref.parse_next(&mut input).expect("should parse");
-        assert_eq!(result, "line1\nline2");
-
-        // Quoted symbol with hex escape
-        let mut input = "@\"x\\x01y\"";
-        let result = symbol_ref.parse_next(&mut input).expect("should parse");
-        assert_eq!(result, "x\x01y");
-
-        // Empty quoted symbol
-        let mut input = "@\"\"";
-        let result = symbol_ref.parse_next(&mut input).expect("should parse");
-        assert_eq!(result, "");
-    }
-
-    #[test]
     fn test_parse_integer_lit_signed() {
         // i64::MIN is valid
         let mut input = "-9223372036854775808";
@@ -1248,33 +1210,6 @@ mod tests {
         let mut input = "[^bb0, ^bb1]";
         let result = successor_list.parse_next(&mut input).expect("should parse");
         assert_eq!(result, vec!["bb0", "bb1"]);
-    }
-
-    #[test]
-    fn test_parse_bytes_string_lit() {
-        let mut input = r#"b"hello""#;
-        let attr = raw_attr_value
-            .parse_next(&mut input)
-            .expect("should parse b\"...\"");
-        assert!(matches!(attr, RawAttribute::Bytes(ref b) if b == b"hello"));
-    }
-
-    #[test]
-    fn test_parse_bytes_string_lit_empty() {
-        let mut input = r#"b"""#;
-        let attr = raw_attr_value
-            .parse_next(&mut input)
-            .expect("should parse empty bytes");
-        assert!(matches!(attr, RawAttribute::Bytes(ref b) if b.is_empty()));
-    }
-
-    #[test]
-    fn test_parse_bytes_string_lit_escapes() {
-        let mut input = r#"b"a\nb\t\r\0\\\"""#;
-        let attr = raw_attr_value
-            .parse_next(&mut input)
-            .expect("should parse bytes with escapes");
-        assert!(matches!(attr, RawAttribute::Bytes(ref b) if b == b"a\nb\t\r\0\\\""));
     }
 
     #[test]

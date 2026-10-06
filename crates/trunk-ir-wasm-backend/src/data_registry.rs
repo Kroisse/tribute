@@ -101,53 +101,58 @@ impl Default for DataRegistry {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
 
-    #[test]
-    fn test_add_string() {
-        let mut registry = DataRegistry::new();
+    proptest! {
+        /// Each distinct payload gets the next unaligned offset; a repeated
+        /// payload returns its first offset without growing the section.
+        #[test]
+        fn prop_offsets_contiguous_and_deduplicated(
+            payloads in prop::collection::vec(prop::collection::vec(0u8..4, 0..5), 0..24),
+        ) {
+            let mut registry = DataRegistry::new();
+            let mut model: Vec<(Vec<u8>, u32)> = Vec::new();
+            let mut next_offset = 0u32;
 
-        let (offset1, len1) = registry.add_string("hello");
-        assert_eq!(offset1, 0);
-        assert_eq!(len1, 5);
+            for payload in &payloads {
+                let expected = match model.iter().find(|(data, _)| data == payload) {
+                    Some(&(_, offset)) => offset,
+                    None => {
+                        let offset = next_offset;
+                        model.push((payload.clone(), offset));
+                        next_offset += payload.len() as u32;
+                        offset
+                    }
+                };
+                prop_assert_eq!(
+                    registry.add_bytes(payload, None),
+                    (expected, payload.len() as u32)
+                );
+                prop_assert_eq!(registry.total_size(), next_offset);
+            }
 
-        let (offset2, len2) = registry.add_string("world");
-        assert_eq!(offset2, 5);
-        assert_eq!(len2, 5);
+            let entries = registry.entries();
+            prop_assert_eq!(entries.len(), model.len());
+            prop_assert_eq!(registry.is_empty(), model.is_empty());
+            let mut end = 0u32;
+            for (entry, (data, offset)) in entries.iter().zip(&model) {
+                prop_assert_eq!(&entry.data, data);
+                prop_assert_eq!(entry.offset, *offset);
+                prop_assert_eq!(entry.offset, end);
+                end += entry.data.len() as u32;
+            }
+            prop_assert_eq!(end, registry.total_size());
+        }
 
-        assert_eq!(registry.total_size(), 10);
-    }
-
-    #[test]
-    fn test_deduplication() {
-        let mut registry = DataRegistry::new();
-
-        let (offset1, len1) = registry.add_string("hello");
-        let (offset2, len2) = registry.add_string("hello");
-
-        // Same string should return same offset
-        assert_eq!(offset1, offset2);
-        assert_eq!(len1, len2);
-
-        // Should only have one entry
-        assert_eq!(registry.entries().len(), 1);
-        assert_eq!(registry.total_size(), 5);
-    }
-
-    #[test]
-    fn test_add_bytes() {
-        let mut registry = DataRegistry::new();
-
-        let data1 = vec![1, 2, 3, 4];
-        let data2 = vec![5, 6];
-
-        let (offset1, len1) = registry.add_bytes(&data1, None);
-        assert_eq!(offset1, 0);
-        assert_eq!(len1, 4);
-
-        let (offset2, len2) = registry.add_bytes(&data2, None);
-        assert_eq!(offset2, 4);
-        assert_eq!(len2, 2);
-
-        assert_eq!(registry.total_size(), 6);
+        /// Strings share the byte payload table and its deduplication.
+        #[test]
+        fn prop_strings_match_bytes(strings in prop::collection::vec("[ab]{0,3}", 0..16)) {
+            let mut by_string = DataRegistry::new();
+            let mut by_bytes = DataRegistry::new();
+            for s in &strings {
+                prop_assert_eq!(by_string.add_string(s), by_bytes.add_bytes(s.as_bytes(), None));
+            }
+            prop_assert_eq!(by_string.total_size(), by_bytes.total_size());
+        }
     }
 }

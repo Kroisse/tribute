@@ -158,34 +158,122 @@ impl<'a, K, V> IntoIterator for &'a SortedMap<K, V> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use proptest::prelude::*;
+    use std::collections::BTreeMap;
 
+    /// An edit applied to both the map under test and the `BTreeMap` model.
+    /// A small key space makes hits and misses both common.
+    #[derive(Clone, Debug)]
+    enum Edit {
+        Insert(u8, u32),
+        Remove(u8),
+        AddTo(u8, u32),
+    }
+
+    fn edit() -> impl Strategy<Value = Edit> {
+        let key = 0u8..16;
+        prop_oneof![
+            (key.clone(), any::<u32>()).prop_map(|(key, value)| Edit::Insert(key, value)),
+            key.clone().prop_map(Edit::Remove),
+            (key, any::<u32>()).prop_map(|(key, delta)| Edit::AddTo(key, delta)),
+        ]
+    }
+
+    /// Check every read accessor against the model.
+    fn assert_matches_model(
+        map: &SortedMap<u8, u32>,
+        model: &BTreeMap<u8, u32>,
+    ) -> Result<(), TestCaseError> {
+        let expected: Vec<(u8, u32)> = model.iter().map(|(&k, &v)| (k, v)).collect();
+        prop_assert_eq!(&**map, &expected[..]);
+        prop_assert!(map.keys().copied().eq(model.keys().copied()));
+        prop_assert!(map.values().copied().eq(model.values().copied()));
+        for key in 0u8..16 {
+            prop_assert_eq!(map.get(&key), model.get(&key));
+            prop_assert_eq!(map.contains_key(&key), model.contains_key(&key));
+        }
+        Ok(())
+    }
+
+    proptest! {
+        /// Any sequence of edits leaves the map equal to a `BTreeMap` given the
+        /// same edits, with the same return values along the way.
+        #[test]
+        fn edits_match_btree_model(
+            initial in prop::collection::vec((0u8..16, any::<u32>()), 0..16),
+            edits in prop::collection::vec(edit(), 0..64),
+        ) {
+            let mut map: SortedMap<u8, u32> = initial.iter().copied().collect();
+            // `BTreeMap` collection also lets the last repeated key win.
+            let mut model: BTreeMap<u8, u32> = initial.iter().copied().collect();
+            assert_matches_model(&map, &model)?;
+
+            for edit in edits {
+                match edit {
+                    Edit::Insert(key, value) => {
+                        prop_assert_eq!(map.insert(key, value), model.insert(key, value));
+                    }
+                    Edit::Remove(key) => {
+                        prop_assert_eq!(map.remove(&key), model.remove(&key));
+                    }
+                    Edit::AddTo(key, delta) => {
+                        let actual = map.get_mut(&key).map(|value| {
+                            *value = value.wrapping_add(delta);
+                            *value
+                        });
+                        let expected = model.get_mut(&key).map(|value| {
+                            *value = value.wrapping_add(delta);
+                            *value
+                        });
+                        prop_assert_eq!(actual, expected);
+                    }
+                }
+                assert_matches_model(&map, &model)?;
+            }
+
+            for (value, delta) in map.values_mut().zip(1u32..) {
+                *value = value.wrapping_add(delta);
+            }
+            for ((_, value), delta) in model.iter_mut().zip(1u32..) {
+                *value = value.wrapping_add(delta);
+            }
+            assert_matches_model(&map, &model)?;
+            for (key, value) in map.iter_mut() {
+                *value ^= u32::from(*key);
+            }
+            for (key, value) in model.iter_mut() {
+                *value ^= u32::from(*key);
+            }
+            assert_matches_model(&map, &model)?;
+
+            let expected: Vec<(u8, u32)> = model.into_iter().collect();
+            prop_assert_eq!(map.clone().into_iter().collect::<Vec<_>>(), expected.clone());
+            prop_assert_eq!(map.into_vec(), expected);
+        }
+
+        /// Collecting any permutation of the same distinct-key entries gives
+        /// equal maps, so the contents alone determine equality and hashing.
+        #[test]
+        fn permutations_collect_to_equal_maps(
+            (entries, shuffled) in prop::collection::btree_map(any::<u16>(), any::<u32>(), 0..32)
+                .prop_flat_map(|entries| {
+                    let entries: Vec<(u16, u32)> = entries.into_iter().collect();
+                    (Just(entries.clone()), Just(entries).prop_shuffle())
+                }),
+        ) {
+            let sorted: SortedMap<u16, u32> = entries.into_iter().collect();
+            let permuted: SortedMap<u16, u32> = shuffled.into_iter().collect();
+            prop_assert_eq!(sorted, permuted);
+        }
+    }
+
+    /// Documents the duplicate-key rule with the entries in view: the last
+    /// entry for a key wins regardless of where it sits in the input.
     #[test]
     fn collects_in_key_order_with_last_entry_winning() {
         let map: SortedMap<u32, &str> = [(3, "c"), (1, "a"), (3, "C"), (2, "b"), (1, "A")]
             .into_iter()
             .collect();
         assert_eq!(&*map, [(1, "A"), (2, "b"), (3, "C")]);
-        assert_eq!(map.get(&3), Some(&"C"));
-        assert_eq!(map.get(&4), None);
-        assert!(map.contains_key(&2));
-    }
-
-    #[test]
-    fn edits_values_in_place() {
-        let mut map: SortedMap<u32, u32> = [(1, 10), (2, 20), (3, 30)].into_iter().collect();
-        *map.get_mut(&2).unwrap() += 1;
-        assert_eq!(map.insert(0, 0), None);
-        assert_eq!(map.insert(3, 31), Some(30));
-        assert_eq!(map.remove(&0), Some(0));
-        assert_eq!(map.remove(&1), Some(10));
-        assert_eq!(map.remove(&1), None);
-        assert_eq!(&*map, [(2, 21), (3, 31)]);
-    }
-
-    #[test]
-    fn equal_contents_collect_to_equal_maps() {
-        let forward: SortedMap<u32, u32> = (0..64).map(|key| (key, key * 2)).collect();
-        let backward: SortedMap<u32, u32> = (0..64).rev().map(|key| (key, key * 2)).collect();
-        assert_eq!(forward, backward);
     }
 }

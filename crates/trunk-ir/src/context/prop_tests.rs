@@ -1,4 +1,5 @@
-//! Model-based property tests for operation region and successor lists.
+//! Model-based property tests for operation region, successor, and operand
+//! use-chain lists.
 //!
 //! Each test applies a random sequence of list operations to an `IrContext`
 //! and to a plain `Vec` model, and checks after every step that the context
@@ -10,6 +11,7 @@ use smallvec::SmallVec;
 
 use super::*;
 use crate::location::Span;
+use crate::rewrite::Module;
 
 fn location(ctx: &mut IrContext) -> Location {
     let path = ctx.intern_path("file:///prop.trb");
@@ -275,6 +277,359 @@ proptest! {
             for (op, successors) in &model {
                 check_successors(&ctx, *op, successors)?;
             }
+        }
+    }
+}
+
+// ============================================================================
+// Operand use chains
+// ============================================================================
+
+#[derive(Clone, Debug)]
+enum UseAction {
+    /// Create an operation in a live block with operands drawn from the live
+    /// values and this many results. A container also owns one region with
+    /// one single-argument block that later operations can be created in.
+    Create {
+        block: Index,
+        operands: Vec<Index>,
+        results: usize,
+        container: bool,
+    },
+    /// Replace one operand of an operation with a live value.
+    Set(Index, Index, Index),
+    /// Append a live value to an operation's operands.
+    Push(Index, Index),
+    /// Remove one operand of an operation.
+    RemoveOperand(Index, Index),
+    /// Replace every use of any value, live or not, with a live value.
+    ReplaceAllUses(Index, Index),
+    /// Detach and dispose of an operation whose results are unused.
+    Remove(Index),
+    /// Deep-clone an operation into its own block.
+    Clone(Index),
+}
+
+fn use_action() -> impl Strategy<Value = UseAction> {
+    prop_oneof![
+        3 => (
+            any::<Index>(),
+            prop::collection::vec(any::<Index>(), 0..=3),
+            0usize..=2,
+            prop::bool::weighted(0.25),
+        )
+            .prop_map(|(block, operands, results, container)| UseAction::Create {
+                block,
+                operands,
+                results,
+                container,
+            }),
+        2 => (any::<Index>(), any::<Index>(), any::<Index>())
+            .prop_map(|(op, index, value)| UseAction::Set(op, index, value)),
+        1 => (any::<Index>(), any::<Index>()).prop_map(|(op, value)| UseAction::Push(op, value)),
+        1 => (any::<Index>(), any::<Index>())
+            .prop_map(|(op, index)| UseAction::RemoveOperand(op, index)),
+        2 => (any::<Index>(), any::<Index>())
+            .prop_map(|(old, new)| UseAction::ReplaceAllUses(old, new)),
+        2 => any::<Index>().prop_map(UseAction::Remove),
+        1 => any::<Index>().prop_map(UseAction::Clone),
+    ]
+}
+
+/// What the model records for one live operation.
+#[derive(Clone, Debug)]
+struct ModelOp {
+    op: OpRef,
+    block: BlockRef,
+    operands: Vec<ValueRef>,
+    results: Vec<ValueRef>,
+    /// The single block of a container's region.
+    body: Option<BlockRef>,
+    /// The argument of `body`.
+    body_arg: Option<ValueRef>,
+}
+
+#[derive(Default)]
+struct UseModel {
+    /// Live operations, in creation order.
+    ops: Vec<ModelOp>,
+    /// Live blocks: the module body and every live container's body.
+    blocks: Vec<BlockRef>,
+    /// Operations of each live block, in block order.
+    block_ops: Vec<(BlockRef, Vec<OpRef>)>,
+    /// Values defined by live operations and blocks.
+    live_values: Vec<ValueRef>,
+    /// Every value ever created, including those of removed operations.
+    all_values: Vec<ValueRef>,
+}
+
+impl UseModel {
+    fn op(&self, op: OpRef) -> &ModelOp {
+        self.ops.iter().find(|m| m.op == op).expect("live model op")
+    }
+
+    fn block_ops_mut(&mut self, block: BlockRef) -> &mut Vec<OpRef> {
+        &mut self
+            .block_ops
+            .iter_mut()
+            .find(|(b, _)| *b == block)
+            .expect("live model block")
+            .1
+    }
+
+    fn add_block(&mut self, block: BlockRef, args: &[ValueRef]) {
+        self.blocks.push(block);
+        self.block_ops.push((block, Vec::new()));
+        self.live_values.extend(args);
+        self.all_values.extend(args);
+    }
+
+    /// Record `op`, which the context has just appended to `block`.
+    fn add_op(&mut self, ctx: &IrContext, op: OpRef, block: BlockRef, operands: Vec<ValueRef>) {
+        let results = ctx.op_results(op).to_vec();
+        self.live_values.extend(&results);
+        self.all_values.extend(&results);
+        let body = ctx
+            .op_region(op, 0)
+            .map(|region| ctx.region(region).blocks[0]);
+        let body_arg = body.map(|body| ctx.block_args(body)[0]);
+        if let Some(body) = body {
+            self.add_block(body, ctx.block_args(body));
+        }
+        self.block_ops_mut(block).push(op);
+        self.ops.push(ModelOp {
+            op,
+            block,
+            operands,
+            results,
+            body,
+            body_arg,
+        });
+    }
+
+    /// The uses the model expects for `value`, sorted.
+    fn expected_uses(&self, value: ValueRef) -> Vec<(OpRef, u32)> {
+        let mut uses: Vec<_> = self
+            .ops
+            .iter()
+            .flat_map(|m| {
+                m.operands
+                    .iter()
+                    .enumerate()
+                    .filter(move |&(_, &v)| v == value)
+                    .map(move |(index, _)| (m.op, index as u32))
+            })
+            .collect();
+        uses.sort_unstable();
+        uses
+    }
+
+    /// Mirror `IrContext::clone_op` of `src` into `clone`: operands are
+    /// remapped through what has been cloned so far, a body's argument is
+    /// mapped before its operations are cloned in order, and the results are
+    /// mapped after the body.
+    fn record_clone(
+        &mut self,
+        ctx: &IrContext,
+        src: OpRef,
+        clone: OpRef,
+        block: BlockRef,
+        mapping: &mut Vec<(ValueRef, ValueRef)>,
+    ) {
+        let original = self.op(src).clone();
+        let lookup = |mapping: &[(ValueRef, ValueRef)], v: ValueRef| {
+            mapping
+                .iter()
+                .find(|(from, _)| *from == v)
+                .map_or(v, |&(_, to)| to)
+        };
+        let operands = original
+            .operands
+            .iter()
+            .map(|&v| lookup(mapping, v))
+            .collect();
+        self.add_op(ctx, clone, block, operands);
+        let cloned = self.op(clone).clone();
+        if let (Some(src_body), Some(clone_body)) = (original.body, cloned.body) {
+            mapping.extend(
+                ctx.block_args(src_body)
+                    .iter()
+                    .copied()
+                    .zip(ctx.block_args(clone_body).iter().copied()),
+            );
+            let children = self.block_ops_mut(src_body).clone();
+            let cloned_children = ctx.block(clone_body).ops.clone();
+            assert_eq!(children.len(), cloned_children.len());
+            for (child, cloned_child) in children.into_iter().zip(cloned_children) {
+                self.record_clone(ctx, child, cloned_child, clone_body, mapping);
+            }
+        }
+        mapping.extend(original.results.iter().copied().zip(cloned.results));
+    }
+
+    /// Forget `op` and every operation nested in it.
+    fn remove(&mut self, op: OpRef) {
+        let model = self.op(op).clone();
+        if let Some(body) = model.body {
+            for child in self.block_ops_mut(body).clone() {
+                self.remove(child);
+            }
+            self.blocks.retain(|&b| b != body);
+            self.block_ops.retain(|(b, _)| *b != body);
+            self.live_values.retain(|&v| Some(v) != model.body_arg);
+        }
+        self.block_ops_mut(model.block).retain(|&o| o != op);
+        self.live_values.retain(|v| !model.results.contains(v));
+        self.ops.retain(|m| m.op != op);
+    }
+}
+
+/// The context's operands and use chains must match the model, and the
+/// validator's use-chain check must accept the module.
+fn check_uses(ctx: &IrContext, module: Module, model: &UseModel) -> Result<(), TestCaseError> {
+    for m in &model.ops {
+        prop_assert_eq!(ctx.op_operands(m.op), &m.operands[..]);
+    }
+    for &value in &model.all_values {
+        let mut actual: Vec<_> = ctx
+            .uses(value)
+            .iter()
+            .map(|u| (u.user, u.operand_index))
+            .collect();
+        actual.sort_unstable();
+        let expected = model.expected_uses(value);
+        prop_assert_eq!(ctx.has_uses(value), !expected.is_empty());
+        prop_assert_eq!(actual, expected, "uses of {}", value);
+    }
+    let result = crate::validation::validate_use_chains(ctx, module);
+    prop_assert!(result.is_ok(), "{}", result);
+    Ok(())
+}
+
+proptest! {
+    #[test]
+    fn use_chains_match_an_operand_model(
+        actions in prop::collection::vec(use_action(), 1..64),
+    ) {
+        let mut ctx = IrContext::new();
+        let loc = location(&mut ctx);
+        let ty = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let arg = || BlockArgData { ty, attrs: AttributeMap::new() };
+        let new_block = |ctx: &mut IrContext, args: usize| {
+            ctx.create_block(BlockData {
+                location: loc,
+                args: (0..args).map(|_| arg()).collect(),
+                ops: SmallVec::new(),
+                parent_region: None,
+            })
+        };
+
+        let module_block = new_block(&mut ctx, 2);
+        let module_region = ctx.create_region(RegionData {
+            location: loc,
+            blocks: smallvec::smallvec![module_block],
+            parent_op: None,
+        });
+        let module_op = crate::dialect::core::Module::operands()
+            .sym_name("test")
+            .regions(module_region)
+            .build(&mut ctx, loc)
+            .op_ref();
+        let module = Module::new(&ctx, module_op).expect("core.module");
+
+        let mut model = UseModel::default();
+        model.add_block(module_block, ctx.block_args(module_block));
+
+        for action in actions {
+            match action {
+                UseAction::Create { block, operands, results, container } => {
+                    let block = *block.get(&model.blocks);
+                    let operands: Vec<_> = if model.live_values.is_empty() {
+                        Vec::new()
+                    } else {
+                        operands.iter().map(|i| *i.get(&model.live_values)).collect()
+                    };
+                    let mut builder =
+                        OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("op"))
+                            .operands(operands.iter().copied())
+                            .results((0..results).map(|_| ty));
+                    if container {
+                        let body = new_block(&mut ctx, 1);
+                        let region = ctx.create_region(RegionData {
+                            location: loc,
+                            blocks: smallvec::smallvec![body],
+                            parent_op: None,
+                        });
+                        builder = builder.region(region);
+                    }
+                    let data = builder.build(&mut ctx);
+                    let op = ctx.create_op(data);
+                    ctx.push_op(block, op);
+                    model.add_op(&ctx, op, block, operands);
+                }
+                UseAction::Set(op, index, value)
+                    if !model.ops.is_empty() && !model.live_values.is_empty() =>
+                {
+                    let value = *value.get(&model.live_values);
+                    let m = op.get_mut(&mut model.ops);
+                    if m.operands.is_empty() {
+                        continue;
+                    }
+                    let index = index.index(m.operands.len());
+                    ctx.set_op_operand(m.op, index as u32, value);
+                    m.operands[index] = value;
+                }
+                UseAction::Push(op, value)
+                    if !model.ops.is_empty() && !model.live_values.is_empty() =>
+                {
+                    let value = *value.get(&model.live_values);
+                    let m = op.get_mut(&mut model.ops);
+                    ctx.push_op_operand(m.op, value);
+                    m.operands.push(value);
+                }
+                UseAction::RemoveOperand(op, index) if !model.ops.is_empty() => {
+                    let m = op.get_mut(&mut model.ops);
+                    if m.operands.is_empty() {
+                        continue;
+                    }
+                    let index = index.index(m.operands.len());
+                    ctx.remove_op_operand(m.op, index as u32);
+                    m.operands.remove(index);
+                }
+                UseAction::ReplaceAllUses(old, new) if !model.live_values.is_empty() => {
+                    let old = *old.get(&model.all_values);
+                    let new = *new.get(&model.live_values);
+                    ctx.replace_all_uses(old, new);
+                    for m in &mut model.ops {
+                        for operand in &mut m.operands {
+                            if *operand == old {
+                                *operand = new;
+                            }
+                        }
+                    }
+                    prop_assert!(old == new || !ctx.has_uses(old));
+                }
+                UseAction::Remove(op) if !model.ops.is_empty() => {
+                    let m = op.get(&model.ops).clone();
+                    // `remove_op` requires the operation's own results to be
+                    // unused; results nested in its body may stay in use.
+                    if m.results.iter().any(|&r| !model.expected_uses(r).is_empty()) {
+                        continue;
+                    }
+                    ctx.remove_op_from_block(m.block, m.op);
+                    ctx.remove_op(m.op);
+                    model.remove(m.op);
+                }
+                UseAction::Clone(op) if !model.ops.is_empty() => {
+                    let m = op.get(&model.ops).clone();
+                    let clone = ctx.clone_op(m.op, &mut IrMapping::new());
+                    ctx.push_op(m.block, clone);
+                    model.record_clone(&ctx, m.op, clone, m.block, &mut Vec::new());
+                }
+                _ => {}
+            }
+
+            check_uses(&ctx, module, &model)?;
         }
     }
 }
