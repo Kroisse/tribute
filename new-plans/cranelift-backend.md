@@ -158,7 +158,7 @@ clif.br_table %index [^default, ^entry0, ^entry1, ^entry2]
 ```
 
 - Successor는 `default`가 먼저이고, 그 뒤가 0번부터의 table 항목이다.
-- `index`는 부호 없는 32비트 정수다. Table 범위 안이면 그 위치의 successor로,
+- `index`의 타입은 `core.i32`이며 부호 없는 값으로 읽는다. Table 범위 안이면 그 위치의 successor로,
   범위를 벗어나면 `default`로 분기한다.
 - Successor는 block argument를 받지 않는다. 값을 넘겨야 하는 분기는
   `clif.jump`로 끝나는 블록을 거친다.
@@ -175,7 +175,7 @@ clif.switch %index [^default, ^a, ^b, ^c] {cases = [0, 1, 7]}
 
 - Successor는 `default`가 먼저이고, 그 뒤로 `cases`의 값마다 하나씩 같은 순서로
   온다. `cases`의 길이와 대상 successor의 수는 같다.
-- `index`는 정수이며 부호 없는 값으로 비교한다. `cases`의 한 값과 같으면 그
+- `index`의 타입은 정수 타입(`IntegerLike`)이며 부호 없는 값으로 비교한다. `cases`의 한 값과 같으면 그
   위치의 successor로, 어느 값과도 같지 않으면 `default`로 분기한다.
 - Case 값은 서로 달라야 하고 `index` 타입의 부호 없는 범위 안에 있어야 한다.
   연속이거나 0에서 시작할 필요는 없다.
