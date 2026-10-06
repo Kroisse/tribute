@@ -388,6 +388,35 @@ fn compile_native_test_binary_impl(
     })
 }
 
+/// Tribute source defining `print_nat`, which prints a `Nat` in decimal
+/// followed by a newline on every target, unlike the native-only
+/// `__tribute_print_nat` intrinsic.
+#[allow(dead_code)]
+pub const PRINT_NAT: &str = r#"
+fn nat_text(n: Nat) -> String {
+    let digit = case n % 10 {
+        0 -> "0"
+        1 -> "1"
+        2 -> "2"
+        3 -> "3"
+        4 -> "4"
+        5 -> "5"
+        6 -> "6"
+        7 -> "7"
+        8 -> "8"
+        _ -> "9"
+    }
+    case n < 10 {
+        True -> digit
+        False -> nat_text(n / 10) <> digit
+    }
+}
+
+fn print_nat(n: Nat) ->{std::io::Io} Nil {
+    std::io::print_line(nat_text(n))
+}
+"#;
+
 /// Compile Tribute source code to a Wasm module and run it with wasmtime.
 ///
 /// Panics if compilation fails or the module is not valid Wasm.
@@ -399,13 +428,49 @@ pub fn compile_and_run_wasm(source_name: &str, source_code: &str) -> Output {
             .unwrap_or_else(|diagnostics| panic!("Wasm compilation failed: {diagnostics:?}"))
             .to_vec()
     });
+    run_wasm(&binary)
+}
+
+/// Validate a Wasm module and run its start function with wasmtime.
+#[allow(dead_code)]
+pub fn run_wasm(binary: &[u8]) -> Output {
+    run_wasm_impl(binary, None)
+}
+
+/// Validate a Wasm module and invoke one of its exports with wasmtime.
+#[allow(dead_code)]
+pub fn run_wasm_invoking(binary: &[u8], export: &str) -> Output {
+    run_wasm_impl(binary, Some(export))
+}
+
+/// Run a Wasm module with wasmtime and assert that it succeeds and prints
+/// exactly `expected_stdout`.
+#[allow(dead_code)]
+pub fn assert_wasm_output(binary: &[u8], expected_stdout: impl AsRef<[u8]>) {
+    let output = run_wasm(binary);
+    assert!(
+        output.status.success(),
+        "wasmtime failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(expected_stdout.as_ref())
+    );
+}
+
+fn run_wasm_impl(binary: &[u8], invoke: Option<&str>) -> Output {
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::all())
-        .validate_all(&binary)
+        .validate_all(binary)
         .expect("compiled source must produce a valid Wasm binary");
     let mut wasm = tempfile::NamedTempFile::new().expect("temporary Wasm file");
-    wasm.write_all(&binary).expect("write Wasm module");
-    Command::new("wasmtime")
-        .arg("-Wgc=y,function-references=y")
+    wasm.write_all(binary).expect("write Wasm module");
+    let mut command = Command::new("wasmtime");
+    command.arg("-Wgc=y,function-references=y");
+    if let Some(export) = invoke {
+        command.arg("--invoke").arg(export);
+    }
+    command
         .arg(wasm.path())
         .output()
         .expect("run Wasm module with wasmtime")
@@ -415,10 +480,32 @@ pub fn compile_and_run_wasm(source_name: &str, source_code: &str) -> Output {
 /// the expected output.
 #[allow(dead_code)]
 pub fn assert_output_on_both_targets(source_name: &str, source_code: &str, expected_stdout: &str) {
-    for (target, output) in [
-        ("native", compile_and_run_native(source_name, source_code)),
-        ("wasm", compile_and_run_wasm(source_name, source_code)),
-    ] {
+    assert_target_outputs(
+        source_name,
+        expected_stdout,
+        compile_and_run_native(source_name, source_code),
+        compile_and_run_wasm(source_name, source_code),
+    );
+}
+
+/// Like [`assert_output_on_both_targets`], with the native binary built
+/// under AddressSanitizer.
+#[allow(dead_code)]
+pub fn assert_output_on_both_targets_with_native_asan(
+    source_name: &str,
+    source_code: &str,
+    expected_stdout: &str,
+) {
+    assert_target_outputs(
+        source_name,
+        expected_stdout,
+        compile_and_run_native_asan(source_name, source_code),
+        compile_and_run_wasm(source_name, source_code),
+    );
+}
+
+fn assert_target_outputs(source_name: &str, expected_stdout: &str, native: Output, wasm: Output) {
+    for (target, output) in [("native", native), ("wasm", wasm)] {
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
             output.status.success(),

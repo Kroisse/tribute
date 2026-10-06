@@ -5,15 +5,18 @@
 //!
 //! Tests that overlap with other e2e test files (e2e_add, e2e_ability_core)
 //! are kept there; this file contains native-specific tests for features
-//! like tuples, enums, pattern matching, and recursion.
+//! like tuples, enums, pattern matching, and recursion. Tests that check the
+//! same program on the Wasm target as well use
+//! `common::assert_output_on_both_targets`.
 
 use crate::common;
 
 #[cfg(unix)]
 use common::compile_and_run_native_with_closed_stdin;
 use common::{
-    assert_native_output, compile_and_run_native, compile_and_run_native_asan,
-    compile_and_run_native_with_stdin,
+    PRINT_NAT, assert_native_output, assert_output_on_both_targets,
+    assert_output_on_both_targets_with_native_asan, compile_and_run_native,
+    compile_and_run_native_asan, compile_and_run_native_with_stdin,
 };
 
 fn std_io_read_line_program() -> &'static str {
@@ -594,49 +597,49 @@ fn main() -> Nil {
 }
 
 /// Guarded arms after the last unguarded arm of an exhaustive case never
-/// run; the case compiles with scalar and managed results.
+/// run; the case compiles with scalar and managed results. The native binary
+/// runs under ASan.
 #[test]
-fn test_native_guarded_arms_after_coverage() {
-    let output = compile_and_run_native_asan(
-        "guarded_arms_after_coverage.trb",
-        &format!(
-            r#"{}
-fn count(flag: Bool, n: Nat) -> Nat {{
-    case flag {{
+fn test_guarded_arms_after_coverage() {
+    let code = format!(
+        "{PRINT_NAT}{}",
+        r#"
+fn count(flag: Bool, n: Nat) -> Nat {
+    case flag {
         True -> 1
         False -> 2
         _ if n > 0 -> 3
-    }}
-}}
+    }
+}
 
-fn wrap(flag: Bool, n: Nat) -> Option(Nat) {{
-    case flag {{
+fn wrap(flag: Bool, n: Nat) -> Option(Nat) {
+    case flag {
         True -> Some(n)
         False -> None
         _ if n > 0 -> Some(0)
-    }}
-}}
+    }
+}
 
-fn show(value: Option(Nat)) -> Nil {{
-    case value {{
-        Some(n) -> __tribute_print_nat(n)
-        None -> __tribute_print_nat(0)
-    }}
-}}
+fn show(value: Option(Nat)) ->{std::io::Io} Nil {
+    case value {
+        Some(n) -> print_nat(n)
+        None -> print_nat(0)
+    }
+}
 
-fn main() -> Nil {{
-    __tribute_print_nat(count(True, 1))
-    __tribute_print_nat(count(False, 1))
+fn main() ->{std::io::Io} Nil {
+    print_nat(count(True, 1))
+    print_nat(count(False, 1))
     show(wrap(True, 7))
     show(wrap(False, 7))
-}}
-"#,
-            common::PRINT_EXTERNS
-        ),
+}
+"#
     );
-    let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(output.status.success(), "{:?}: {stderr}", output.status);
-    assert_eq!(String::from_utf8_lossy(&output.stdout).trim(), "1\n2\n7\n0");
+    assert_output_on_both_targets_with_native_asan(
+        "guarded_arms_after_coverage.trb",
+        &code,
+        "1\n2\n7\n0",
+    );
 }
 
 /// Literal patterns match what their type's `==` finds equal: String by
@@ -644,10 +647,11 @@ fn main() -> Nil {{
 /// (`-0.0` matches `0.0`, NaN matches nothing), Rune by code point, and `Nil`
 /// always.
 #[test]
-fn test_native_literal_patterns() {
-    assert_native_output(
-        "literal_patterns.trb",
-        r#"fn s(x: String) -> Nat {
+fn test_literal_patterns() {
+    let code = format!(
+        "{PRINT_NAT}{}",
+        r#"
+fn s(x: String) -> Nat {
     case x {
         "abc" -> 1
         "" -> 2
@@ -686,25 +690,29 @@ fn t(x: #(Nil, String)) -> Nat {
         #(Nil, _) -> 0
     }
 }
-fn main() -> Nil {
-    __tribute_print_nat(s("abc"))
-    __tribute_print_nat(s("ab" <> "c"))
-    __tribute_print_nat(s(""))
-    __tribute_print_nat(s("x"))
-    __tribute_print_nat(by(b"a" <> b"b"))
-    __tribute_print_nat(by(b""))
-    __tribute_print_nat(by(b"abc"))
-    __tribute_print_nat(f(1.5))
-    __tribute_print_nat(f(-0.0))
-    __tribute_print_nat(f(0.0 / 0.0))
-    __tribute_print_nat(r(?a))
-    __tribute_print_nat(r(?\n))
-    __tribute_print_nat(r(?b))
-    __tribute_print_nat(n(Nil))
-    __tribute_print_nat(t(#(Nil, "a")))
-    __tribute_print_nat(t(#(Nil, "b")))
+fn main() ->{std::io::Io} Nil {
+    print_nat(s("abc"))
+    print_nat(s("ab" <> "c"))
+    print_nat(s(""))
+    print_nat(s("x"))
+    print_nat(by(b"a" <> b"b"))
+    print_nat(by(b""))
+    print_nat(by(b"abc"))
+    print_nat(f(1.5))
+    print_nat(f(-0.0))
+    print_nat(f(0.0 / 0.0))
+    print_nat(r(?a))
+    print_nat(r(?\n))
+    print_nat(r(?b))
+    print_nat(n(Nil))
+    print_nat(t(#(Nil, "a")))
+    print_nat(t(#(Nil, "b")))
 }
-"#,
+"#
+    );
+    assert_output_on_both_targets(
+        "literal_patterns.trb",
+        &code,
         "1\n1\n2\n0\n1\n2\n0\n1\n2\n0\n1\n2\n0\n7\n1\n0",
     );
 }
@@ -1697,77 +1705,82 @@ fn main() ->{std::io::Io} Nil {
 }
 
 #[test]
-fn test_native_string_equality() {
-    assert_native_output(
+fn test_string_equality() {
+    assert_output_on_both_targets(
         "string_equality.trb",
         r#"
-fn bool_to_nat(value: Bool) -> Nat {
+fn bool_text(value: Bool) -> String {
     case value {
-        True -> 1
-        False -> 0
+        True -> "1"
+        False -> "0"
     }
 }
 
-fn main() -> Nil {
-    __tribute_print_nat(bool_to_nat("same" == "same"))
-    __tribute_print_nat(bool_to_nat("same" != "different"))
-    __tribute_print_nat(bool_to_nat("" == String::empty()))
-    __tribute_print_nat(bool_to_nat("" != "x"))
-    __tribute_print_nat(bool_to_nat("안녕🌍" == "안녕🌍"))
-    __tribute_print_nat(bool_to_nat("안녕🌍" != "안녕🌎"))
+fn check(value: Bool) ->{std::io::Io} Nil {
+    std::io::print_line(bool_text(value))
+}
+
+fn main() ->{std::io::Io} Nil {
+    check("same" == "same")
+    check("same" != "different")
+    check("" == String::empty())
+    check("" != "x")
+    check("안녕🌍" == "안녕🌍")
+    check("안녕🌍" != "안녕🌎")
     let ab = "a" <> "b"
-    __tribute_print_nat(bool_to_nat("ab" == ab))
+    check("ab" == ab)
 
     let left_prefix = "a" <> "b"
     let left_shape = left_prefix <> "c"
     let right_suffix = "b" <> "c"
     let right_shape = "a" <> right_suffix
-    __tribute_print_nat(bool_to_nat(left_shape == right_shape))
+    check(left_shape == right_shape)
 
     let shared = "shared"
     let shared_twice = shared <> shared
-    __tribute_print_nat(bool_to_nat(shared_twice == "sharedshared"))
+    check(shared_twice == "sharedshared")
 
     let flat = "abcd"
     let two_leaves = "ab" <> "cd"
     let three_leaf_suffix = "bc" <> "d"
     let three_leaves = "a" <> three_leaf_suffix
-    __tribute_print_nat(bool_to_nat(flat == two_leaves))
-    __tribute_print_nat(bool_to_nat(flat == three_leaves))
+    check(flat == two_leaves)
+    check(flat == three_leaves)
 
     let boundaries_left = "ab" <> "cdef"
     let boundaries_prefix = "a" <> "bc"
     let boundaries_right = boundaries_prefix <> "def"
-    __tribute_print_nat(bool_to_nat(boundaries_left == boundaries_right))
+    check(boundaries_left == boundaries_right)
 
     let empty_end_suffix = "abcd" <> ""
     let empty_ends = "" <> empty_end_suffix
     let empty_middle_prefix = "ab" <> ""
     let empty_middle = empty_middle_prefix <> "cd"
-    __tribute_print_nat(bool_to_nat(empty_ends == empty_middle))
+    check(empty_ends == empty_middle)
 
     let shared_part = "xy"
     let repeated_suffix = shared_part <> shared_part
     let repeated_left = shared_part <> repeated_suffix
     let repeated_prefix = "x" <> "yxy"
     let repeated_right = repeated_prefix <> "xy"
-    __tribute_print_nat(bool_to_nat(repeated_left == repeated_right))
+    check(repeated_left == repeated_right)
 
     let unicode_suffix = "녕" <> "🌍"
     let unicode_rope = "안" <> unicode_suffix
-    __tribute_print_nat(bool_to_nat("안녕🌍" == unicode_rope))
+    check("안녕🌍" == unicode_rope)
 
-    __tribute_print_nat(bool_to_nat("short" != "shorter"))
-    __tribute_print_nat(bool_to_nat("xbc" != "abc"))
-    __tribute_print_nat(bool_to_nat("axc" != "abc"))
-    __tribute_print_nat(bool_to_nat("abx" != "abc"))
+    check("short" != "shorter")
+    check("xbc" != "abc")
+    check("axc" != "abc")
+    check("abx" != "abc")
 
-    __tribute_print_nat(bool_to_nat("abc" != "axc"))
-    __tribute_print_nat(bool_to_nat("a" != "a"))
-    __tribute_print_nat(bool_to_nat("a" == "b"))
+    check("abc" != "axc")
+    check("a" != "a")
+    check("a" == "b")
+    check(flat != flat)
 }
 "#,
-        "1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n0",
+        "1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n1\n0\n0\n0",
     );
 }
 
@@ -2357,19 +2370,19 @@ fn main() -> Nil {
 }
 
 #[test]
-fn test_native_bytes_get_or_panic_reads_high_bytes_unsigned() {
-    assert_native_output(
-        "bytes_get_or_panic_high.trb",
+fn test_bytes_get_or_panic_reads_high_bytes_unsigned() {
+    let code = format!(
+        "{PRINT_NAT}{}",
         r#"
-fn main() -> Nil {
+fn main() ->{std::io::Io} Nil {
     let bs = b"\xff\x80\x7f"
-    __tribute_print_nat(bs.get_or_panic(0))
-    __tribute_print_nat(bs.get_or_panic(1))
-    __tribute_print_nat(bs.get_or_panic(2))
+    print_nat(bs.get_or_panic(0))
+    print_nat(bs.get_or_panic(1))
+    print_nat(bs.get_or_panic(2))
 }
-"#,
-        "255\n128\n127",
+"#
     );
+    assert_output_on_both_targets("bytes_get_or_panic_high.trb", &code, "255\n128\n127");
 }
 
 #[test]
@@ -2430,18 +2443,33 @@ fn main() ->{Io} Nil {
 }
 
 #[test]
-fn test_native_bytes_slice_clamping() {
-    assert_native_output(
-        "bytes_slice_clamp.trb",
+fn test_nat_comparisons_and_bytes_slice_clamping() {
+    let code = format!(
+        "{PRINT_NAT}{}",
         r#"
-fn main() -> Nil {
+fn bit(value: Bool) -> String {
+    case value {
+        True -> "1"
+        False -> "0"
+    }
+}
+
+fn main() ->{std::io::Io} Nil {
+    std::io::print_line(bit(3 > 2) <> bit(2 > 3) <> bit(2 >= 2) <> bit(1 >= 2))
+    std::io::print_line(bit(1 < 2) <> bit(2 < 1) <> bit(2 <= 2) <> bit(3 <= 2))
+    let bytes = b"<hello>"
+    std::io::print_line(
+        bit(bytes.slice(1, 6) == b"hello")
+            <> bit(bytes.slice(1, 100) == b"hello>")
+            <> bit(bytes.slice(9, 3) == b"")
+    )
     let bs = b"hello"
     let sl = bs.slice(3, 100)
-    __tribute_print_nat(sl.len())
+    print_nat(sl.len())
 }
-"#,
-        "2",
+"#
     );
+    assert_output_on_both_targets("nat_comparisons.trb", &code, "1010\n1010\n111\n2");
 }
 
 #[test]
@@ -2582,8 +2610,8 @@ fn main() -> Nil {
 }
 
 #[test]
-fn test_native_specialized_enum_payloads() {
-    assert_native_output(
+fn test_specialized_enum_payloads() {
+    assert_output_on_both_targets(
         "specialized_enum_payloads.trb",
         include_str!("../specialized_enum_payloads.trb"),
         "43\n1",
