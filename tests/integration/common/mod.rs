@@ -453,9 +453,13 @@ pub fn assert_wasm_output(binary: &[u8], expected_stdout: impl AsRef<[u8]>) {
         "wasmtime failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let expected_stdout = expected_stdout.as_ref();
     assert_eq!(
+        output.stdout,
+        expected_stdout,
+        "stdout mismatch:\n  actual: {:?}\nexpected: {:?}",
         String::from_utf8_lossy(&output.stdout),
-        String::from_utf8_lossy(expected_stdout.as_ref())
+        String::from_utf8_lossy(expected_stdout)
     );
 }
 
