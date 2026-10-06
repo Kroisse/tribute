@@ -2,8 +2,8 @@
 xtask = "run --package xtask --"
 
 [build]
-# Incremental artifacts bypass the rustc-wrapper cache and grow each
-# worktree's target directory; every worktree builds from a cold cache.
+# Incremental artifacts bypass a rustc-wrapper cache (when one is
+# configured) and grow each worktree's target directory.
 incremental = false
 
 [env]

@@ -115,8 +115,8 @@ serde.workspace = true
 
 # Dev and test builds keep debug assertions, including the per-pass IR
 # verifier, but optimize lightly: unoptimized IR walks dominated test time.
-# Incremental compilation is off (see .cargo/config.toml), so rebuilds go
-# through the rustc-wrapper cache.
+# Incremental compilation is off (see .cargo/config.toml); a rustc-wrapper
+# cache, where configured, can serve rebuilds.
 [profile.dev]
 debug = "line-tables-only"
 opt-level = 1
