@@ -66,7 +66,7 @@ use trunk_ir::SymbolPath;
 
 /// Lower all `tribute_rt.retain` and `tribute_rt.release` operations to
 /// inline `clif.*` operations.
-pub fn lower_rc(ctx: &mut IrContext, module: Module) {
+fn lower_rc(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
@@ -446,6 +446,27 @@ fn gen_deep_release_call(
         .successors(continue_block)
         .build(ctx, loc);
     ctx.push_op(block, jump.op_ref());
+}
+
+/// Pass form of [`lower_rc`].
+pub struct RcLowering;
+
+impl trunk_ir::pass::Pass for RcLowering {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "rc-lowering"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        lower_rc(ctx, target.into());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

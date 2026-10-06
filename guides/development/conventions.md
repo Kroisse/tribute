@@ -156,6 +156,9 @@ Patterns implement `RewritePattern` with `match_and_rewrite`:
 - `op`: The matched `OpRef`, inspected through typed `from_op` wrappers
 - `rewriter`: `PatternRewriter` that records structural mutations
 
+A pass that converts types builds its type converter in `run` and passes it to
+`PatternApplicator`. `PassManager` holds no converter.
+
 ### Operand Access
 
 Read current operands through typed wrappers or the arena context. The rewriter

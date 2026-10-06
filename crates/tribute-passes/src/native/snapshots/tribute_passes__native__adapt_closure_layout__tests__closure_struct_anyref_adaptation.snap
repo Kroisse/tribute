@@ -4,14 +4,16 @@ expression: result
 ---
 core.module @test {
   !_closure = adt.struct<_closure(func_ptr: core.i64, env: core.ptr), {layout = "closure"}>
+  !t0 = clif.func_sig<(core.ptr) -> core.i32>
 
-  clif.func {sym_name = "test_fn", type = clif.func_sig<(wasm.anyref) -> core.i32>} {
-    ^bb0(%0: wasm.anyref):
+  clif.func {sym_name = "test_fn", type = !t0} {
+    ^bb0(%0: core.ptr):
       %1 = clif.symbol_addr {sym = @lifted_fn} : core.ptr
       %2 = adt.struct_new %1, %0 {type = !_closure} : !_closure
-      %3 = adt.struct_get %2 {field = 0, type = !_closure} : core.i64
-      %4 = adt.struct_get %2 {field = 1, type = !_closure} : core.ptr
-      %5 = clif.call_indirect %3, %4 {sig = clif.func_sig<(core.ptr) -> core.i32>} : core.i32
-      clif.return %5
+      %3 = core.unrealized_conversion_cast %2 : core.ptr
+      %4 = adt.struct_get %3 {field = 0, type = !_closure} : core.i64
+      %5 = adt.struct_get %3 {field = 1, type = !_closure} : core.ptr
+      %6 = clif.call_indirect %4, %5 {sig = !t0} : core.i32
+      clif.return %6
   }
 }

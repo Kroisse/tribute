@@ -41,7 +41,7 @@ impl Pass for DescriptorToClif {
 
 /// Replace every `tribute_rtti.descriptor` in `module` with a load of the
 /// RTTI index from the RC header.
-pub fn lower(ctx: &mut IrContext, module: Module) {
+fn lower(ctx: &mut IrContext, module: Module) {
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(DescriptorPattern)
         .apply_partial(ctx, module);

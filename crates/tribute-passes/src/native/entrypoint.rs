@@ -21,7 +21,7 @@ use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 /// 1. Ensures `__tribute_init` (and optionally `__asan_init`) declarations exist
 /// 2. Calls them at the start of `main`
 /// 3. Retypes `main` to `() -> i32` and makes each `func.return` return 0
-pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: bool) {
+fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: bool) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };
@@ -142,6 +142,30 @@ fn replace_with_exit_code(
     ctx.insert_op_before(block, ret, exit.op_ref());
     ctx.remove_op_from_block(block, ret);
     ctx.remove_op(ret);
+}
+
+/// Pass form of [`generate_native_entrypoint`].
+pub struct GenerateNativeEntrypoint {
+    /// Whether the entrypoint initializes the sanitizer runtime.
+    pub sanitize: bool,
+}
+
+impl trunk_ir::pass::Pass for GenerateNativeEntrypoint {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "native-entrypoint"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        generate_native_entrypoint(ctx, target.into(), self.sanitize);
+        Ok(())
+    }
 }
 
 #[cfg(test)]

@@ -155,7 +155,7 @@ intrinsic_to_wasm
 wasm_lowerer
 convert_struct_layouts
 verify_wasm_backend_ready
-cast legalization + reference upcast elision + reconcile_unrealized_casts
+cast legalization + reference upcast elision + ReconcileUnrealizedCasts
 finalize_wasm_gc_types
 verify_wasm_emission_ready
 ```
@@ -211,7 +211,7 @@ cf_to_clif
 adt_to_clif
 arith_to_clif + mem_to_clif
 runtime/constant/intrinsic lowering
-cast legalization + reconcile_unrealized_casts + RC lowering
+cast legalization + ReconcileUnrealizedCasts + RC lowering
 backend-ready verification
 ```
 

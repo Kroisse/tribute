@@ -15,7 +15,7 @@ use trunk_ir::rewrite::helpers::erase_op;
 use trunk_ir::{BlockRef, OpRef, RegionRef, ValueRef};
 
 /// Eliminate provably redundant retain/release pairs in `module`.
-pub fn eliminate_paired_rc(ctx: &mut IrContext, module: Module) {
+fn eliminate_paired_rc(ctx: &mut IrContext, module: Module) {
     let Some(body) = module.body(ctx) else {
         return;
     };
@@ -101,6 +101,27 @@ fn is_proven_non_escaping_use(ctx: &IrContext, op: OpRef, operand_index: usize) 
     }
 
     false
+}
+
+/// Pass form of [`eliminate_paired_rc`].
+pub struct EliminatePairedRc;
+
+impl trunk_ir::pass::Pass for EliminatePairedRc {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "eliminate-paired-rc"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        eliminate_paired_rc(ctx, target.into());
+        Ok(())
+    }
 }
 
 #[cfg(test)]

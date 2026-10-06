@@ -45,7 +45,7 @@ use trunk_ir_cranelift_backend::passes::arith_to_clif::finalize_cmp;
 /// The `type_converter` parameter converts result types and determines field
 /// sizes for enum layout computation. Struct field offsets come from the
 /// `mem.struct` layout alone.
-pub fn lower(
+fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,
@@ -280,6 +280,28 @@ impl RewritePattern for RefIsNullPattern {
             i8_ty,
         );
         true
+    }
+}
+
+/// Pass form of [`lower`].
+pub struct AdtToClif;
+
+impl trunk_ir::pass::Pass for AdtToClif {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "adt-to-clif"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        let (type_converter, _) = crate::native::type_converter::native_type_converter(ctx);
+        lower(ctx, target.into(), type_converter)?;
+        Ok(())
     }
 }
 

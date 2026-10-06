@@ -39,7 +39,7 @@ const ALLOC_FN: &str = "__tribute_alloc";
 ///
 /// Each header stores the RTTI index its `tribute_rtti.layout` declares. As
 /// the last reader of those declarations, this pass erases them.
-pub fn lower(
+fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,
@@ -386,6 +386,28 @@ impl RewritePattern for VariantNewPattern {
         }
         rewriter.replace_op(last);
         true
+    }
+}
+
+/// Pass form of [`lower`].
+pub struct AdtRcHeader;
+
+impl trunk_ir::pass::Pass for AdtRcHeader {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "adt-rc-header"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        let (type_converter, _) = crate::native::type_converter::native_type_converter(ctx);
+        lower(ctx, target.into(), type_converter)?;
+        Ok(())
     }
 }
 

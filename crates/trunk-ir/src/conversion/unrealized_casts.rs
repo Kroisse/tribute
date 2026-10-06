@@ -11,7 +11,7 @@
 //!   target conversion. It converts each cast's result type and materializes
 //!   only conversions that need real operations; it never forwards a value of
 //!   another type.
-//! - [`reconcile_unrealized_casts`] needs no converter. It removes casts that
+//! - [`ReconcileUnrealizedCasts`] needs no converter. It removes casts that
 //!   fold away: identities, cast chains that return to an earlier type, and
 //!   dead casts. A cast it cannot remove stays for the target's legality
 //!   boundary to reject.
@@ -19,9 +19,11 @@
 use rustc_hash::FxHashSet as HashSet;
 use std::ops::ControlFlow;
 
+use crate::analysis::AnalysisCache;
 use crate::context::IrContext;
 use crate::dialect::core;
 use crate::ops::DialectOp;
+use crate::pass::{Pass, PassRunResult};
 use crate::refs::{BlockRef, OpRef, TypeRef, ValueDef, ValueRef};
 use crate::rewrite::{Module, PatternRewriter, RewritePattern, TypeConverter};
 use crate::walk::{WalkAction, walk_op};
@@ -110,6 +112,31 @@ impl RewritePattern for UnrealizedCastConversionPattern {
     }
 }
 
+/// Pass that removes the casts that fold away without a type converter.
+///
+/// It removes identities, cast chains that return to an earlier type, and dead
+/// casts. A cast it cannot remove stays for the target's legality boundary to
+/// reject. See the module documentation.
+pub struct ReconcileUnrealizedCasts;
+
+impl Pass for ReconcileUnrealizedCasts {
+    type Target = core::Module;
+
+    fn name(&self) -> &'static str {
+        "reconcile-unrealized-casts"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: core::Module,
+        _analyses: &mut AnalysisCache,
+    ) -> PassRunResult {
+        reconcile_unrealized_casts(ctx, target.into());
+        Ok(())
+    }
+}
+
 /// Remove the casts that fold away without a type converter.
 ///
 /// Mirrors MLIR's `reconcileUnrealizedCasts`. Casts are processed bottom to
@@ -120,7 +147,7 @@ impl RewritePattern for UnrealizedCastConversionPattern {
 ///
 /// A cast that cannot be removed stays. Reconciliation never fails and can
 /// run at any point: it only forwards a value to uses of exactly its type.
-pub fn reconcile_unrealized_casts(ctx: &mut IrContext, module: Module) {
+fn reconcile_unrealized_casts(ctx: &mut IrContext, module: Module) {
     let mut worklist = collect_casts(ctx, module);
     let mut queued: HashSet<OpRef> = worklist.iter().copied().collect();
     let mut erased: HashSet<OpRef> = HashSet::default();

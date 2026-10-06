@@ -115,7 +115,7 @@ fn walk_ops_in_region(
 }
 
 /// Analyze a module to collect all string/bytes constants.
-pub fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
+fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
     let mut collector = ConstCollector::new();
 
     if let Some(body) = module.body(ctx) {
@@ -156,7 +156,7 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 ///
 /// `adt.string_const("hello")` becomes the above bytes lowering +
 /// `adt.variant_new(type=String, tag=Leaf, %bytes_payload)`
-pub fn lower(
+fn lower(
     ctx: &mut IrContext,
     module: Module,
     analysis: &NativeConstAnalysis,
@@ -470,6 +470,28 @@ impl RewritePattern for StringConstNativePattern {
 
     fn name(&self) -> &'static str {
         "StringConstNativePattern"
+    }
+}
+
+/// Pass form of [`analyze_consts`] followed by [`lower`].
+pub struct ConstToNative;
+
+impl trunk_ir::pass::Pass for ConstToNative {
+    type Target = trunk_ir::dialect::core::Module;
+
+    fn name(&self) -> &'static str {
+        "const-to-native"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut trunk_ir::context::IrContext,
+        target: trunk_ir::dialect::core::Module,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        let analysis = analyze_consts(ctx, target.into());
+        lower(ctx, target.into(), &analysis)?;
+        Ok(())
     }
 }
 

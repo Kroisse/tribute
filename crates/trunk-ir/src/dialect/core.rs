@@ -257,7 +257,7 @@ use crate::transforms::canonicalize::FoldResult;
 /// that carry no value-level conversion semantics. A resolved cast pair
 /// like `arith.trunci` followed by `arith.extsi` is *not* safe to collapse
 /// the same way (narrower intermediate types lose information).
-/// `reconcile_unrealized_casts` applies the same folds across longer cast
+/// `ReconcileUnrealizedCasts` applies the same folds across longer cast
 /// chains after target type conversion.
 #[trunk_ir::canonicalize_fold(UnrealizedConversionCast)]
 pub(crate) fn fold_unrealized_conversion_cast(ctx: &IrContext, op: OpRef) -> Option<FoldResult> {

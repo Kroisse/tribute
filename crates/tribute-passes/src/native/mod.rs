@@ -17,6 +17,8 @@
 pub mod adapt_closure_layout;
 pub mod adt_rc_header;
 pub mod adt_to_clif;
+pub mod cast_legalization;
+pub mod clif_lowering;
 pub mod const_to_native;
 pub mod descriptor_records;
 pub mod descriptor_to_clif;
@@ -25,6 +27,7 @@ pub mod evidence;
 pub mod intrinsic_to_native;
 pub mod io;
 pub mod list;
+pub mod ownership_lowering;
 pub mod ownership_plan;
 pub mod rc_lowering;
 pub mod rc_materialization;
