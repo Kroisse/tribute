@@ -202,7 +202,7 @@ pub fn monomorphize_functions<'db>(
         extra_types.push(op.result);
     }
     for step in metadata.evidence_plans.values().flatten() {
-        extra_types.extend(step.instance().args.iter().copied());
+        step.for_each_instance(|instance| extra_types.extend(instance.args.iter().copied()));
     }
     let nominal_index = nominal_index::NominalIndex::new(db, &module);
     let seeds =

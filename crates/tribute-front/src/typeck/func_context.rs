@@ -802,7 +802,9 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
             .iter()
             .map(|_| self.fresh_type_var())
             .collect();
-        self.instantiate_scheme_with(scheme, types, rows)
+        let instance = self.instantiate_scheme_with(scheme, types, rows);
+        self.evidence.record_own_unions(&instance.row_unions);
+        instance
     }
 
     fn instantiate_scheme_with(
@@ -812,6 +814,7 @@ impl<'a, 'db> FunctionInferenceContext<'a, 'db> {
         rows: Vec<EffectVar>,
     ) -> subst::SchemeInstance<'db> {
         let instance = subst::instantiate_with_arguments(self.db, scheme, types, rows);
+        self.evidence.record_unions(&instance.row_unions);
         for union in &instance.row_unions {
             self.constraints
                 .add(super::constraint::Constraint::RowUnion(union.clone(), None));

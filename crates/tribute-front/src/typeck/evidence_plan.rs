@@ -28,12 +28,20 @@
 //! instances and still reach a handler of the caller. A tail variable that
 //! solving left unconstrained can be instantiated with the empty row.
 //!
+//! A callable whose row tail is a declared union of row tails receives the
+//! evidence of each of those tails beside its own, in the order the union
+//! declares them. A call of such a callee gives each tail the caller's
+//! evidence after that tail's own selection, and the callee's calls whose
+//! callee row ends in one of those tails select that tail's evidence. A
+//! selected tail holds none of the handlers the callable itself names, so
+//! each position that takes one pushes it.
+//!
 //! Checking records each call against the evidence scope it runs in and
 //! computes the selections only after solving, when every row is known.
 
 use rustc_hash::FxHashMap as HashMap;
 
-use crate::ast::{Effect, EffectRow, EffectVar, LocalId, NodeId};
+use crate::ast::{Effect, EffectRow, EffectVar, LocalId, NodeId, RowUnion};
 
 use super::EvidenceStep;
 
@@ -82,6 +90,18 @@ pub(crate) struct EvidenceTracker<'db> {
     /// The handle body each continuation local resumes.
     continuations: HashMap<LocalId, usize>,
     sites: HashMap<NodeId, EvidenceSite<'db>>,
+    /// The unions of every instantiated scheme, with their unsolved rows.
+    unions: Vec<RowUnion<'db>>,
+    /// The unions the checked function's own signature declares.
+    own_unions: Vec<RowUnion<'db>>,
+}
+
+/// The evidence of a scope: its explicit instances, the row tail beneath
+/// them, and the row tails that tail is a declared union of.
+struct ScopeEvidence<'db> {
+    explicit: Vec<Effect<'db>>,
+    tail: Option<EffectVar>,
+    tails: Vec<EffectVar>,
 }
 
 impl<'db> EvidenceTracker<'db> {
@@ -160,6 +180,16 @@ impl<'db> EvidenceTracker<'db> {
         self.continuations.insert(local, body);
     }
 
+    /// Record the unions of an instantiated scheme.
+    pub(crate) fn record_unions(&mut self, unions: &[RowUnion<'db>]) {
+        self.unions.extend_from_slice(unions);
+    }
+
+    /// Record the unions of the checked function's own signature.
+    pub(crate) fn record_own_unions(&mut self, unions: &[RowUnion<'db>]) {
+        self.own_unions.extend_from_slice(unions);
+    }
+
     /// Record a call whose callee has the given row.
     pub(crate) fn record_call(&mut self, call: NodeId, callee: EffectRow<'db>) {
         if let Some(scope) = self.current {
@@ -194,9 +224,25 @@ impl<'db> EvidenceTracker<'db> {
         for (node, site) in &self.sites {
             let plan = match site {
                 EvidenceSite::Call { scope, callee } => {
-                    let (caller, tail) = self.explicit(db, *scope, &resolve, &mut explicit);
+                    let (explicit, tail) = self.explicit(db, *scope, &resolve, &mut explicit);
+                    let caller = ScopeEvidence {
+                        tails: self.declared_tails(db, tail, &resolve),
+                        explicit,
+                        tail,
+                    };
                     let (positions, callee_tail) = callee_positions(db, *callee, &resolve);
-                    call_plan(&caller, &positions, opens_into(callee_tail, tail))
+                    let mut plan = caller.select(&positions, callee_tail);
+                    if let Some(sources) = self.callee_tails(db, *callee) {
+                        let plans = sources
+                            .map(|source| {
+                                let source = resolve(source);
+                                let positions = unique(source.effects(db).iter().cloned());
+                                caller.select(&positions, source.rest(db))
+                            })
+                            .collect();
+                        plan.push(EvidenceStep::Tails(plans));
+                    }
+                    plan
                 }
                 EvidenceSite::Resume { scope, body } if scope != body => {
                     let (caller, tail) = self.explicit(db, *scope, &resolve, &mut explicit);
@@ -224,6 +270,45 @@ impl<'db> EvidenceTracker<'db> {
             }
         }
         plans
+    }
+
+    /// The row tails that `tail` is a union of in the checked function's
+    /// signature, in declaration order.
+    fn declared_tails(
+        &self,
+        db: &'db dyn salsa::Database,
+        tail: Option<EffectVar>,
+        resolve: &impl Fn(EffectRow<'db>) -> EffectRow<'db>,
+    ) -> Vec<EffectVar> {
+        let Some(tail) = tail else {
+            return Vec::new();
+        };
+        self.own_unions
+            .iter()
+            .filter(|union| resolve(union.result).rest(db) == Some(tail))
+            .find_map(|union| {
+                let tails: Vec<_> = open_sources(db, union)
+                    .map(|source| resolve(source).rest(db).filter(|source| *source != tail))
+                    .collect::<Option<_>>()?;
+                (tails.len() > 1).then_some(tails)
+            })
+            .unwrap_or_default()
+    }
+
+    /// The rows a callee's row tail is a union of, when its scheme declares
+    /// it as a union of row tails.
+    fn callee_tails(
+        &self,
+        db: &'db dyn salsa::Database,
+        callee: EffectRow<'db>,
+    ) -> Option<impl Iterator<Item = EffectRow<'db>>> {
+        let tail = callee.rest(db)?;
+        self.unions
+            .iter()
+            .find(|union| {
+                union.result.rest(db) == Some(tail) && open_sources(db, union).count() > 1
+            })
+            .map(|union| open_sources(db, union))
     }
 
     /// The explicit instances of a scope's evidence, and the row tail that
@@ -281,6 +366,47 @@ fn callee_positions<'db>(
         tail.rest(db)
     });
     (positions, tail)
+}
+
+/// The sources of a union that its declaration leaves open: one row tail
+/// each. Callers and the callee number the tails by this order.
+fn open_sources<'db>(
+    db: &'db dyn salsa::Database,
+    union: &RowUnion<'db>,
+) -> impl Iterator<Item = EffectRow<'db>> {
+    union
+        .sources
+        .iter()
+        .copied()
+        .filter(move |source| source.rest(db).is_some())
+}
+
+impl<'db> ScopeEvidence<'db> {
+    /// Select the evidence of a row with the explicit `positions` and the
+    /// row tail `target` from this scope's evidence.
+    fn select(
+        &self,
+        positions: &[Effect<'db>],
+        target: Option<EffectVar>,
+    ) -> Vec<EvidenceStep<'db>> {
+        let index = target.and_then(|target| self.tails.iter().position(|tail| *tail == target));
+        let Some(index) = index else {
+            return call_plan(&self.explicit, positions, opens_into(target, self.tail));
+        };
+        // The selected tail holds none of this scope's explicit handlers.
+        let mut plan = vec![EvidenceStep::Select(index as u32)];
+        for instance in &self.explicit {
+            let count = positions
+                .iter()
+                .filter(|position| *position == instance)
+                .count();
+            if count > 0 {
+                plan.push(EvidenceStep::Push(instance.clone()));
+                plan.extend((1..count).map(|_| EvidenceStep::Dup(instance.clone())));
+            }
+        }
+        plan
+    }
 }
 
 /// Whether operations through a callee's row tail reach the caller's tail.

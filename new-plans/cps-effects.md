@@ -462,8 +462,9 @@ Handle 하나는 실행 중 여러 번 설치될 수 있다. 처음 설치한 �
 소비하여 `effect.extend`를 만든다. Fresh prompt placeholder는 해당 delimiter에서
 한 번만 materialize하며, body의 evidence 인자 사용을 확장된 값으로 치환한다.
 호출이 가진 evidence 선택(`evidence_plan`, [ir.md](ir.md#direct-style-control))은
-같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`/`effect.outer`로 만들고
-속성을 지운다. Delimiter의 선택은 extend 전에 바깥 evidence에 적용한다.
+같은 pass가 그 호출의 evidence operand 앞에 `effect.mask`/`effect.dup`/
+`effect.outer`와 `effect.tail`/`effect.push`/`effect.with_tail`로 만들고 속성을
+지운다. Delimiter의 선택은 extend 전에 바깥 evidence에 적용한다.
 CPS legalization은 선택을 계산하거나 바꾸지 않고 만든 호출로 옮기기만 한다. 층을
 다시 만드는 transfer와 delimiter에도 같은 선택을 옮긴다.
 이 pass는 함수 signature나 본문 형상에서 hidden evidence를 추론하지 않는다.
@@ -491,6 +492,13 @@ Evidence는 ability id 기준으로 정렬된 marker 배열이다. 각 칸은 �
 Marker의 `outer`는 그 handler를 설치한 지점의 evidence, 즉 설치의 선택을 적용하기
 전의 바깥 evidence다. Handler 설치, `mask`, `dup`은 모두 새 evidence 값을 만들며
 기존 값을 바꾸지 않는다.
+
+Row가 여러 tail의 합집합인 callable이 받는 tail별 evidence도 같은 배열의 칸에
+담는다. `i`번째 tail의 칸은 key가 `ability::tail_slot_id(i)`인 marker이고, 그
+`outer`가 tail의 evidence다. 이 key는 음수이며 ability id는 음수가 아니므로 서로
+겹치지 않는다. Handler 설치, `mask`, `dup`은 다른 칸을 그대로 복사하므로 tail 칸은
+그 evidence에서 파생된 값에 그대로 남는다. Tail 칸이 없는 evidence에는 추가 비용이
+없다.
 
 Marker layout과 evidence runtime ABI는 `tribute-ir`의
 `ability::MarkerField`와 `ability::evidence_abi`가 컴파일러 내부의 단일
@@ -536,6 +544,18 @@ caller evidence의 ability별 marker 순서에 대한 두 연산으로 표현된
 | (없음) | 그대로 전달한다 | 1 |
 | `dup L` | `L`의 가장 위 marker를 한 번 더 쌓는다 | 2 |
 
+Row가 여러 tail의 합집합인 callable에 관한 선택은 세 연산을 더 쓴다.
+
+| 연산 | 뜻 | 쓰는 경우 |
+| --- | --- | --- |
+| `tails [plan, ...]` | Caller evidence에 각 tail의 선택을 적용한 값을 callee evidence의 tail 칸에 넣는다 | 이런 callee의 호출 |
+| `select i` | Evidence를 `i`번째 tail 칸이 담은 evidence로 바꾼다. 칸이 없으면 그대로 둔다 | Callee row의 tail이 자기 `i`번째 tail인 호출 |
+| `push L` | 고른 tail evidence 위에 원래 evidence의 `L`의 가장 위 marker를 얹는다 | `select` 뒤, callee가 caller의 명시 `L`을 받는 자리 |
+
+`tails`의 각 선택과 `push`는 그 호출이 시작한 evidence에서 읽는다. Tail의 evidence는
+그 자체로 완전한 evidence이며 caller가 받은 tail 칸을 그대로 가진다. Callee가 받는
+tail 칸은 caller가 받은 같은 번호의 칸을 가린다.
+
 선택이 모두 그대로 전달인 호출은 evidence를 바꾸지 않는다. 선택은 직접 호출,
 간접 호출, closure 호출, `resume`에 똑같이 적용한다. Perform은 별도의 분류 없이
 가장 위의 marker를 사용한다. Typechecking이 perform의 label을 언제나 둘러싼
@@ -572,7 +592,7 @@ Handler와 evidence의 연결은 다음과 같다.
 
 | 층 | 안쪽에 넘기는 evidence |
 | --- | --- |
-| CPS 직접·간접 호출의 suffix | 그 호출의 선택을 적용한 것 |
+| CPS 직접·간접 호출의 suffix | 그 호출의 선택을 적용한 것. `tails`, `select`, `push`도 들어온 evidence에서 다시 계산한다 |
 | `resume`의 suffix | 그 resume의 선택을 적용한 것 |
 | 구조적 분기의 suffix | 그대로 |
 | 설치된 handle | 설치의 선택(`mask`)을 적용하고 같은 prompt로 다시 extend한 것 |
@@ -604,13 +624,19 @@ __tribute_evidence_mask(ev: ptr, ability_id: i32) -> ptr
 __tribute_evidence_dup(ev: ptr, ability_id: i32) -> ptr
 __tribute_evidence_outer(ev: ptr, ability_id: i32) -> ptr
 __tribute_evidence_lookup_tr(ev: ptr, ability_id: i32) -> ptr
+__tribute_evidence_tail(ev: ptr, slot: i32) -> ptr
+__tribute_evidence_with_tail(ev: ptr, slot: i32, tail: ptr) -> ptr
+__tribute_evidence_push(ev: ptr, source: ptr, ability_id: i32) -> ptr
 ```
 
 `extend`는 같은 ability의 기존 marker를 새 marker의 `shadowed`로 두고 `outer`
 인자를 marker에 기록한다. `mask`는 그 칸을 `shadowed`로 바꾸고, `shadowed`가
 null이면 칸을 지운다. `dup`은 가장 위 marker의 복사본이 원본을 가리게 하며 복사본은
 원본의 `outer`를 그대로 가진다. `outer`는 가장 위 marker가 기록한 evidence를
-돌려준다. 없는 ability를 `mask`, `dup`, `outer`하는 것은 compiler bug이며 runtime은
+돌려준다. `with_tail`은 `slot` 칸에 `outer`가 `tail`인 marker를 두고, `tail`은 그
+칸의 `outer`를, 칸이 없으면 `ev` 자신을 돌려준다. `push`는 `source`의 가장 위
+marker를 복사해 `ev`의 같은 ability 위에 얹으며 복사본은 원본의 `outer`를 가진다.
+없는 ability를 `mask`, `dup`, `outer`, `push`하는 것은 compiler bug이며 runtime은
 이를 검사하지 않는다.
 
 ### `ability.handle_dispatch`
@@ -676,12 +702,18 @@ Operations:
 - `effect.mask(evidence) { ability_ref } -> evidence`
 - `effect.dup(evidence) { ability_ref } -> evidence`
 - `effect.outer(evidence) { ability_ref } -> evidence`
+- `effect.tail(evidence) { index } -> evidence`
+- `effect.with_tail(evidence, tail) { index } -> evidence`
+- `effect.push(evidence, source) { ability_ref } -> evidence`
 - `effect.dispatch_tail(evidence, payload) { ability_ref, op_name } -> result`
 - `effect.dispatch_cps(evidence, dispatch, resume, payload)
   { ability_ref, op_name, answer_type } -> ()`
 
 Rules:
 
+- Every `evidence`, `outer`, `tail`, and `source` operand has the evidence
+  type, and an evidence result has the type of its `evidence` operand.
+  `prompt_tag` is `core.i32`. The operation schemas check this.
 - `ability.perform` and `ability.call` are illegal after the shared
   ability-dispatch lowering boundary.
 - `effect.*` operations may remain after shared lowering and before
@@ -710,9 +742,9 @@ decomposition, and indirect calls로 변환한다.
 
 WasmGC도 같은 shared middle-end를 사용한다. `wasm/evidence_to_wasm`은
 representation/ABI 경계 안에서 native와 같은 구조로 `effect.*`를 낮춘다.
-`effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`는 각각
-`__tribute_evidence_extend`, `__tribute_evidence_mask`, `__tribute_evidence_dup`,
-`__tribute_evidence_outer` 호출이 되고,
+`effect.extend`, `effect.mask`, `effect.dup`, `effect.outer`, `effect.tail`,
+`effect.with_tail`, `effect.push`는 각각 같은 이름의 `__tribute_evidence_*` 호출이
+되고,
 `effect.dispatch_tail` / `effect.dispatch_cps`는
 `__tribute_evidence_lookup_tr` / `__tribute_evidence_lookup`, closure field 접근,
 `func.call_indirect` 또는 proper-tail `func.tail_call_indirect`가 된다.

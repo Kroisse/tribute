@@ -789,6 +789,14 @@ impl Evidence {
         new
     }
 
+    /// The evidence of the row tail in `slot`, or `self` without that slot.
+    fn tail(&self, slot: i32) -> *const Evidence {
+        match self.markers.binary_search_by_key(&slot, |m| m.ability_id) {
+            Ok(pos) => self.markers[pos].outer,
+            Err(_) => self,
+        }
+    }
+
     /// Push a copy of the top marker of `ability_id` onto its stack.
     fn dup(&self, ability_id: i32) -> Self {
         let pos = self.position(ability_id);
@@ -902,6 +910,69 @@ pub unsafe extern "C" fn __tribute_evidence_outer(
 ) -> *const Evidence {
     let ev = unsafe { &*ev };
     ev.lookup(ability_id).outer
+}
+
+/// Return the evidence of a row tail: the `outer` of the marker in `slot`, or
+/// `ev` itself when it holds no such marker.
+///
+/// Signature: `(ev: ptr, slot: i32) -> ptr`
+///
+/// # Safety
+///
+/// `ev` must be a valid pointer returned by a `__tribute_evidence_*` function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_tail(
+    ev: *const Evidence,
+    slot: i32,
+) -> *const Evidence {
+    let ev = unsafe { &*ev };
+    ev.tail(slot)
+}
+
+/// Set the evidence of a row tail: put a marker in `slot` whose `outer` is
+/// `tail` (persistent — returns a new evidence).
+///
+/// Signature: `(ev: ptr, slot: i32, tail: ptr) -> ptr`
+///
+/// # Safety
+///
+/// Both pointers must be valid pointers returned by a `__tribute_evidence_*`
+/// function.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_with_tail(
+    ev: *const Evidence,
+    slot: i32,
+    tail: *const Evidence,
+) -> *mut Evidence {
+    let ev = unsafe { &*ev };
+    let marker = Marker {
+        ability_id: slot,
+        prompt_tag: 0,
+        tr_dispatch_fn: core::ptr::null(),
+        shadowed: core::ptr::null(),
+        outer: tail,
+    };
+    Box::into_raw(Box::new(ev.extend(marker)))
+}
+
+/// Push the top marker that `source` holds for an ability onto `ev`
+/// (persistent — returns a new evidence).
+///
+/// Signature: `(ev: ptr, source: ptr, ability_id: i32) -> ptr`
+///
+/// # Safety
+///
+/// Both pointers must be valid pointers returned by a `__tribute_evidence_*`
+/// function, and `source` must hold a marker for `ability_id`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn __tribute_evidence_push(
+    ev: *const Evidence,
+    source: *const Evidence,
+    ability_id: i32,
+) -> *mut Evidence {
+    let ev = unsafe { &*ev };
+    let source = unsafe { &*source };
+    Box::into_raw(Box::new(ev.extend(*source.lookup(ability_id))))
 }
 
 /// Look up the tail-resumptive dispatch function pointer for an ability.
@@ -1390,6 +1461,63 @@ mod tests {
             assert_eq!(__tribute_evidence_outer(dup, 10), other.cast_const());
 
             for ev in [ev, other, masked, inner, dup] {
+                let _ = Box::from_raw(ev);
+            }
+        }
+    }
+
+    #[test]
+    fn test_evidence_tail_is_the_attached_evidence_or_the_evidence_itself() {
+        unsafe {
+            let ev = __tribute_evidence_empty();
+            let state = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
+            let first = __tribute_evidence_mask(state, 10);
+            let attached = __tribute_evidence_with_tail(state, -1, first);
+            let both = __tribute_evidence_with_tail(attached, -2, state);
+
+            assert_eq!(__tribute_evidence_tail(both, -1), first.cast_const());
+            assert_eq!(__tribute_evidence_tail(both, -2), state.cast_const());
+            // The handlers of the evidence itself are unchanged.
+            assert_eq!(__tribute_evidence_lookup(both, 10), 1);
+            // Without the slot, every row tail shares the evidence.
+            assert_eq!(__tribute_evidence_tail(attached, -2), attached.cast_const());
+            // A selection keeps the slots.
+            let masked = __tribute_evidence_mask(both, 10);
+            assert_eq!(__tribute_evidence_tail(masked, -1), first.cast_const());
+            // A callee's slot replaces the one its caller received.
+            let nested = __tribute_evidence_with_tail(both, -1, state);
+            assert_eq!(__tribute_evidence_tail(nested, -1), state.cast_const());
+
+            for ev in [ev, state, first, attached, both, masked, nested] {
+                let _ = Box::from_raw(ev);
+            }
+        }
+    }
+
+    #[test]
+    fn test_evidence_push_stacks_the_top_handler_of_another_evidence() {
+        unsafe {
+            let tr = 0x10usize as *const u8;
+
+            let ev = __tribute_evidence_empty();
+            let outer = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
+            let inner = __tribute_evidence_extend(outer, 10, 2, tr, outer);
+
+            // Onto an evidence without the ability.
+            let fresh = __tribute_evidence_push(ev, inner, 10);
+            assert_eq!(__tribute_evidence_lookup(fresh, 10), 2);
+            assert_eq!(__tribute_evidence_lookup_tr(fresh, 10), tr);
+            assert_eq!(__tribute_evidence_outer(fresh, 10), outer.cast_const());
+            let bare = __tribute_evidence_mask(fresh, 10);
+            assert!(markers(bare).is_empty());
+
+            // Onto an evidence that holds a handler of the ability.
+            let stacked = __tribute_evidence_push(outer, inner, 10);
+            assert_eq!(__tribute_evidence_lookup(stacked, 10), 2);
+            let beneath = __tribute_evidence_mask(stacked, 10);
+            assert_eq!(__tribute_evidence_lookup(beneath, 10), 1);
+
+            for ev in [ev, outer, inner, fresh, bare, stacked, beneath] {
                 let _ = Box::from_raw(ev);
             }
         }

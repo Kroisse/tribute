@@ -279,26 +279,62 @@ pub enum EvidenceStep<'db> {
     Mask(crate::ast::Effect<'db>),
     /// One more callee position takes the caller's handler for this instance.
     Dup(crate::ast::Effect<'db>),
+    /// The callee's row tail is the caller's row tail of this index, so the
+    /// callee takes that tail's evidence.
+    Select(u32),
+    /// The callee names this caller-explicit instance, which the selected
+    /// row tail's evidence does not hold.
+    Push(crate::ast::Effect<'db>),
+    /// The callee's row is a union of row tails: each takes the caller's
+    /// evidence after its own plan.
+    Tails(Vec<Vec<EvidenceStep<'db>>>),
 }
 
 impl<'db> EvidenceStep<'db> {
-    /// The ability instance this step changes.
-    pub fn instance(&self) -> &crate::ast::Effect<'db> {
+    /// Call `visit` with each ability instance the plan step names.
+    pub fn for_each_instance(&self, mut visit: impl FnMut(&crate::ast::Effect<'db>)) {
+        self.visit_instances(&mut visit);
+    }
+
+    // The recursion passes one `&mut dyn` down: a generic parameter would
+    // grow by a reference at each level of `Tails`.
+    fn visit_instances(&self, visit: &mut dyn FnMut(&crate::ast::Effect<'db>)) {
         match self {
-            Self::Mask(instance) | Self::Dup(instance) => instance,
+            Self::Mask(instance) | Self::Dup(instance) | Self::Push(instance) => visit(instance),
+            Self::Select(_) => {}
+            Self::Tails(plans) => {
+                for step in plans.iter().flatten() {
+                    step.visit_instances(visit);
+                }
+            }
         }
     }
 
-    /// Apply `map` to the type arguments of the instance.
+    /// Apply `map` to the type arguments of each instance.
     pub fn map_types(&self, mut map: impl FnMut(Type<'db>) -> Type<'db>) -> Self {
-        let instance = self.instance();
-        let instance = crate::ast::Effect {
+        self.map_instance_types(&mut map)
+    }
+
+    fn map_instance_types(&self, map: &mut dyn FnMut(Type<'db>) -> Type<'db>) -> Self {
+        let mut instance = |instance: &crate::ast::Effect<'db>| crate::ast::Effect {
             ability_id: instance.ability_id,
             args: instance.args.iter().map(|ty| map(*ty)).collect(),
         };
         match self {
-            Self::Mask(_) => Self::Mask(instance),
-            Self::Dup(_) => Self::Dup(instance),
+            Self::Mask(effect) => Self::Mask(instance(effect)),
+            Self::Dup(effect) => Self::Dup(instance(effect)),
+            Self::Push(effect) => Self::Push(instance(effect)),
+            Self::Select(index) => Self::Select(*index),
+            Self::Tails(plans) => Self::Tails(
+                plans
+                    .iter()
+                    .map(|plan| {
+                        plan.iter()
+                            .map(|step| step.map_instance_types(map))
+                            .collect()
+                    })
+                    .collect(),
+            ),
         }
     }
 }
