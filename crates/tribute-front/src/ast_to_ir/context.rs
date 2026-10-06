@@ -63,6 +63,8 @@ pub(crate) struct LogicalGeneratedSignature {
 pub struct IrLoweringCtx<'db> {
     pub db: &'db dyn salsa::Database,
     pub path: PathRef,
+    /// Paths of merged sources, keyed by the source hash of their nodes.
+    source_paths: HashMap<u64, PathRef>,
     /// Span map for looking up source locations.
     span_map: SpanMap,
     /// Stack of scopes, each mapping LocalId to (name, SSA value).
@@ -144,6 +146,7 @@ impl<'db> IrLoweringCtx<'db> {
         Self {
             db,
             path,
+            source_paths: HashMap::default(),
             span_map,
             scopes: vec![HashMap::default()],
             local_callable_values: vec![HashMap::default()],
@@ -173,6 +176,11 @@ impl<'db> IrLoweringCtx<'db> {
         compiler_intrinsics: HashMap<NodeId, Symbol>,
     ) -> Self {
         self.compiler_intrinsics = compiler_intrinsics;
+        self
+    }
+
+    pub(crate) fn with_source_paths(mut self, source_paths: HashMap<u64, PathRef>) -> Self {
+        self.source_paths = source_paths;
         self
     }
 
@@ -217,7 +225,12 @@ impl<'db> IrLoweringCtx<'db> {
     /// Create an arena Location for a node.
     pub fn location(&self, node_id: NodeId) -> Location {
         let span = self.span_map.get_or_default(node_id);
-        Location::new(self.path, span)
+        let path = self
+            .source_paths
+            .get(&node_id.source())
+            .copied()
+            .unwrap_or(self.path);
+        Location::new(path, span)
     }
 
     /// Enter a new scope, returning a guard that exits on drop.
@@ -899,27 +912,16 @@ impl<'db> IrLoweringCtx<'db> {
         Self::enum_type(ir, name, variants, AttributeMap::new())
     }
 
-    /// Create an `adt.enum` type with a stable source declaration identity.
+    /// Create an `adt.enum` type that records where it was declared.
     pub fn adt_enum_type_with_definition(
         &self,
         ir: &mut IrContext,
         name: &Symbol,
         variants: &[(Symbol, Vec<TypeRef>)],
-        definition: crate::typeck::DefinitionIdentity,
+        definition: Location,
     ) -> TypeRef {
         let mut attrs = AttributeMap::new();
-        attrs.insert(
-            "tribute.definition.source",
-            Attribute::Int(definition.source as i128),
-        );
-        attrs.insert(
-            "tribute.definition.start",
-            Attribute::Int(definition.start as i128),
-        );
-        attrs.insert(
-            "tribute.definition.end",
-            Attribute::Int(definition.end as i128),
-        );
+        attrs.insert("tribute.definition", Attribute::Location(definition));
         Self::enum_type(ir, name, variants, attrs)
     }
 

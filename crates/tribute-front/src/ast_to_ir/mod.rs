@@ -190,6 +190,8 @@ pub struct TypedModule<'db> {
     pub well_known_types: crate::typeck::WellKnownTypes<'db>,
     /// Exact intrinsic-directive declaration IDs and canonical identities.
     pub compiler_intrinsics: HashMap<NodeId, Symbol>,
+    /// URIs of the other sources whose declarations were merged into `ast`.
+    pub merged_sources: Vec<String>,
 }
 
 impl<'db> TypedModule<'db> {

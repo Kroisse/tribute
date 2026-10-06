@@ -40,9 +40,7 @@ const LANGUAGE_ATTRIBUTE_PREFIX: &str = "tribute.";
 /// type identity metadata, and the physical parameter ownership contract. A
 /// new key must be classified explicitly.
 const PRESERVED_ATTRIBUTES: &[&str] = &[
-    "tribute.definition.source",
-    "tribute.definition.start",
-    "tribute.definition.end",
+    "tribute.definition",
     "tribute.type.string",
     crate::target_abi::OWNERSHIP_ATTR,
 ];
@@ -526,7 +524,7 @@ mod tests {
     fn physical_module_has_no_violations() {
         let violations = kinds(
             r#"core.module @test {
-  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>, tribute.definition.source = @here} {
+  func.func @target(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>, tribute.type.string = @here} {
     func.return
   }
   func.func @caller(%value: core.i32) attributes {type = func.func_sig<(core.i32 {tribute.ownership = "consumed"}) -> (), {call_conv = "tail"}>} {
@@ -661,7 +659,7 @@ mod tests {
         assert_eq!(
             kinds(
                 r#"core.module @test {
-  func.func @run() attributes {tribute.renamed_convention = 2, tribute.definition.start = 1} {
+  func.func @run() attributes {tribute.renamed_convention = 2, tribute.definition = loc("test.trb" 1:2)} {
     func.return
   }
 }"#
@@ -855,8 +853,8 @@ mod tests {
         );
         let annotated = verify(
             r#"core.module @test {
-  !frame = adt.typeref<{name = "Frame", tribute.definition.end = 20, tribute.definition.source = 1, tribute.definition.start = 10}>
-  func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2, tribute.definition.end = 40, tribute.definition.source = 1, tribute.definition.start = 30} {
+  !frame = adt.typeref<{name = "Frame", tribute.definition = loc("test.trb" 10:20)}>
+  func.func @run(%frame: !frame) attributes {tribute.calling_convention = 2, tribute.definition = loc("test.trb" 30:40)} {
     %same = core.unrealized_conversion_cast %frame : !frame
     func.return
   }

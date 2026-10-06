@@ -1338,7 +1338,8 @@ pass — native ownership/RTTI 계획, target dialect lowering, backend 검증�
 - 기계 호출 규약, exact signature, 외부 바인딩(`abi`)
 - Typed managed layout, 명시적 layout 식별자, ownership/RTTI 입력(매개변수 속성
   `tribute.ownership` 포함)과 `tribute.type.string` 같은 타입 식별 metadata
-- Location과 `tribute.definition.*` 같은 실행에 관여하지 않는 source/debug 정보
+- Location과 선언 위치 속성 `tribute.definition` 같은 실행에 관여하지 않는
+  source/debug 정보
 
 경계 이후 pass는 금지된 metadata를 조회하거나 다시 만들지 않는다. 이름, 포인터 형태,
 arity, 빈 결과 목록에서 소실된 의미를 복원하지 않는다. 의미적 분류를 이름만 바꾼

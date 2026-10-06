@@ -322,7 +322,12 @@ pub(super) fn lower_module<'db>(
         evidence_plans,
         well_known_types,
         compiler_intrinsics,
+        merged_sources,
     } = typed;
+    let source_paths = merged_sources
+        .iter()
+        .map(|uri| (crate::ast::node_id::source_hash(uri), ir.intern_path(uri)))
+        .collect();
     let location = Location::new(path, span_map.get_or_default(ast.id));
     let module_name = ast.name.unwrap_or_else(|| Symbol::new("main"));
     let mut ctx = IrLoweringCtx::new(
@@ -335,6 +340,7 @@ pub(super) fn lower_module<'db>(
         node_types,
     )
     .with_compiler_intrinsics(compiler_intrinsics)
+    .with_source_paths(source_paths)
     .with_literal_equalities(crate::ast_to_ir::context::LiteralEqualities {
         string: well_known_types
             .string_equality
@@ -609,12 +615,11 @@ fn prescan_logical_nominal_layouts<'db>(
                     })
                     .collect::<Vec<_>>();
                 let name = super::qualified_type_name(ctx.db, &enum_ctor);
-                let definition = crate::typeck::DefinitionIdentity::new(
-                    enumeration.id,
-                    ctx.location(enumeration.id).span,
-                );
+                let location = ctx.location(enumeration.id);
+                let definition =
+                    crate::typeck::DefinitionIdentity::new(enumeration.id, location.span);
                 let layout = if well_known_types.is_string(definition) {
-                    ctx.adt_enum_type_with_definition(ir, &name, &variants, definition)
+                    ctx.adt_enum_type_with_definition(ir, &name, &variants, location)
                 } else {
                     ctx.adt_enum_type(ir, &name, &variants)
                 };
