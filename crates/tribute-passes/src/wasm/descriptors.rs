@@ -101,7 +101,7 @@ mod tests {
             r#"core.module @test {
   !S = adt.struct<S(next: adt.typeref<{name = "S"}>, any: tribute_rt.anyref, n: tribute_rt.nat)>
   !Closure = adt.struct<_closure(table_idx: core.i32, env: wasm.anyref), {layout = "closure"}>
-  !E = adt.enum<{name = "E", variants = [["None", []], ["Some", [core.f64]]]}>
+  !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%next: adt.typeref<{name = "S"}>, %any: tribute_rt.anyref, %n: tribute_rt.nat, %x: core.f64) -> core.nil {
     %one = wasm.i32_const {value = 1} : core.i32
     %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
@@ -157,7 +157,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !S = adt.struct<S(x: core.f64)>
-  !E = adt.enum<{name = "E", variants = [["None", []], ["Some", [core.f64]]]}>
+  !E = adt.enum<E { None(), Some(core.f64) }>
   wasm.func @main(%x: core.f64) -> core.nil {
     %some = adt.variant_new %x {type = !E, tag = "Some"} : !E
     %erased = adt.variant_new %x {type = tribute_rt.anyref, tag = "Some"} : tribute_rt.anyref

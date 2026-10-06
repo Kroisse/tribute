@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/block_scope.rs
 expression: ir_text
 ---
 core.module @test {
-  !Option = adt.enum<{name = "Option", variants = [["Some", [tribute_rt.anyref]], ["None", []]]}>
+  !Option = adt.enum<Option { Some(tribute_rt.anyref), None() }>
 
   tribute_control.func @example(%0: adt.typeref<{name = "Option"}>) -> core.i32 convention(direct) {
       %1 = adt.variant_is %0 {tag = "Some", type = !Option} : core.i1

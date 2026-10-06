@@ -122,7 +122,8 @@ fn call_indirect<S: FuncSig>(
 - A type whose data must satisfy rules beyond its generic shape registers
   `inventory::submit! { TypeVerifier::new::<T>(verify_fn) }`
   (`trunk_ir::type_verifier`). IR validation runs it on every interned type
-  of that kind; `func.func_sig` and `adt.struct` register theirs this way.
+  of that kind; `func.func_sig`, `adt.struct`, and `adt.enum` register theirs
+  this way.
 
 Each operation gets a builder that groups inputs by entity kind. For the
 declarations above:

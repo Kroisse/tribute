@@ -892,7 +892,7 @@ mod tests {
         let module = parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !String = adt.enum<{name = "String", variants = [["Leaf", [core.bytes]], ["Branch", [tribute_rt.anyref, tribute_rt.anyref, core.i32]]]}>
+  !String = adt.enum<String { Leaf(core.bytes), Branch(tribute_rt.anyref, tribute_rt.anyref, core.i32) }>
   func.func @main() -> core.nil {
     %string = adt.string_const {value = "wrong"} : core.i32
     func.return

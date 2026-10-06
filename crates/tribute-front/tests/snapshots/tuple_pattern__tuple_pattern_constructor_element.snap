@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/tuple_pattern.rs
 expression: ir_text
 ---
 core.module @test {
-  !Item = adt.enum<{name = "Item", variants = [["Number", [core.i32]], ["Empty", []]]}>
+  !Item = adt.enum<Item { Number(core.i32), Empty() }>
   !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat = adt.struct<__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat("0": adt.typeref<{name = "Item"}>, "1": core.i32)>
   !Item_1 = adt.typeref<{name = "Item"}>
   !__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat_1 = adt.typeref<{name = "__logical_tuple_tuple_3_1_2_36_named_1_25_nominal_2_6_source_4_Item_3_nat"}>

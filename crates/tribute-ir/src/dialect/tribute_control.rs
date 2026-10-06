@@ -2413,25 +2413,10 @@ fn variant_field_type(
     tag: StringRef,
     field: u32,
 ) -> Option<TypeRef> {
-    let data = ctx.get_type(layout);
-    if data.dialect != Symbol::new("adt") || data.name != Symbol::new("enum") {
-        return None;
-    }
-    let Attribute::List(variants) = data.attrs.get("variants")? else {
-        return None;
-    };
-    variants.iter().find_map(|variant| {
-        let Attribute::List(pair) = variant else {
-            return None;
-        };
-        let [Attribute::String(variant_tag), Attribute::List(fields)] = pair.as_slice() else {
-            return None;
-        };
-        (*variant_tag == tag).then(|| match fields.get(field as usize) {
-            Some(Attribute::Type(field_type)) => Some(*field_type),
-            _ => None,
-        })?
-    })
+    crate::dialect::adt::Enum::from_type_ref(ctx, layout)?
+        .variant_fields(ctx, tag)?
+        .get(usize::try_from(field).ok()?)
+        .copied()
 }
 
 struct CallableProvenance<'a> {
@@ -5329,7 +5314,7 @@ mod tests {
     fn managed_bodyless_external_read_line_shape_and_raw_pointer_cast_chain_fail_closed() {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
-  !ReadLineResult = adt.enum<{name = "ReadLineResult", variants = [["ReadLine", [core.bytes]], ["ReadEndOfFile", []], ["ReadInvalidEncoding", []], ["ReadSystem", [core.i32, core.bytes]]]}>
+  !ReadLineResult = adt.enum<ReadLineResult { ReadLine(core.bytes), ReadEndOfFile(), ReadInvalidEncoding(), ReadSystem(core.i32, core.bytes) }>
   !ReadLineResultRef = adt.typeref<{name = "ReadLineResult"}>
   tribute_control.func @user_read_line() -> !ReadLineResultRef convention(direct)
     attributes {abi = "intrinsic"}
@@ -5522,7 +5507,7 @@ mod tests {
   !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
   !Tuple = adt.struct<Tuple(callee: !F)>
   !TupleRef = adt.typeref<{name = "Tuple"}>
-  !Choice = adt.enum<{name = "Choice", variants = [["Some", [!F]]]}>
+  !Choice = adt.enum<Choice { Some(!F) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 convention(direct) {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
@@ -5546,7 +5531,7 @@ mod tests {
   !F = tribute_control.func_sig<(core.i32) -> core.i32, {tribute.calling_convention = 0}>
   !Tuple = adt.struct<Tuple(not_callable: core.i32)>
   !TupleRef = adt.typeref<{name = "Tuple"}>
-  !Choice = adt.enum<{name = "Choice", variants = [["Some", [core.i32]]]}>
+  !Choice = adt.enum<Choice { Some(core.i32) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   tribute_control.func @caller(%tuple: !TupleRef, %choice: !ChoiceRef, %value: core.i32) -> core.i32 convention(direct) {
     %tuple_callee = adt.struct_get %tuple {type = !Tuple, field = 0} : !F
@@ -5595,7 +5580,7 @@ mod tests {
         let (ctx, module) = parse_fixture(
             r#"core.module @test {
   !UnusedStruct = adt.struct<Unused(value: core.i32)>
-  !UnusedEnum = adt.enum<{name = "Unused", variants = [["Value", [core.i32]]]}>
+  !UnusedEnum = adt.enum<Unused { Value(core.i32) }>
   tribute_control.func @caller(%value: core.i32) -> core.i32 convention(direct) {
     tribute_control.return %value
   }

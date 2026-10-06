@@ -312,7 +312,7 @@ mod tests {
             &mut ctx,
             r#"core.module @test {
   !Pair = adt.struct<Pair(left: tribute_rt.anyref, right: core.i64)>
-  !Choice = adt.enum<{name = "Choice", variants = [["None", []], ["Some", [!Pair, core.f64]]]}>
+  !Choice = adt.enum<Choice { None(), Some(!Pair, core.f64) }>
   tribute_rtti.layout {type = !Pair, index = 32, fields = ["dynamic", "u64"]}
   tribute_rtti.layout {type = !Choice, tag = "Some", index = 33, fields = ["managed", "f64"]}
 }"#,
@@ -391,7 +391,7 @@ mod tests {
                 &format!(
                     r#"core.module @test {{
   !Pair = adt.struct<Pair(left: tribute_rt.anyref, right: core.i64)>
-  !Choice = adt.enum<{{name = "Choice", variants = [["None", []]]}}>
+  !Choice = adt.enum<Choice {{ None() }}>
   {layout}
 }}"#
                 ),

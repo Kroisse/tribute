@@ -737,7 +737,7 @@ mod tests {
         let module = trunk_ir::parser::parse_test_module(
             &mut ctx,
             r#"core.module @test {
-  !Option = adt.enum<{name = "Option", variants = [["None", []], ["Some", [tribute_rt.anyref]]]}>
+  !Option = adt.enum<Option { None(), Some(tribute_rt.anyref) }>
   !Sample = adt.struct<Sample(count: tribute_rt.nat, delta: tribute_rt.int, flag: tribute_rt.bool, ratio: tribute_rt.float, small: tribute_rt.intref, any: tribute_rt.anyref)>
   func.func @f(%sample: !Sample, %callee: core.i32, %value: tribute_rt.anyref) -> tribute_rt.int {
     %null = adt.ref_null {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -758,7 +758,7 @@ mod tests {
             ),
             "{printed}"
         );
-        assert!(printed.contains(r#"["Some", [wasm.anyref]]"#), "{printed}");
+        assert!(printed.contains("Some(wasm.anyref)"), "{printed}");
         assert!(
             printed.contains("func.func_sig<(wasm.anyref) -> core.i32>"),
             "{printed}"

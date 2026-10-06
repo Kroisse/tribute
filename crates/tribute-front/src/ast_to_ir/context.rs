@@ -896,25 +896,7 @@ impl<'db> IrLoweringCtx<'db> {
         name: &Symbol,
         variants: &[(Symbol, Vec<TypeRef>)],
     ) -> TypeRef {
-        let name = ir.intern_symbol_text(name);
-        let variants_attr: Vec<Attribute> = variants
-            .iter()
-            .map(|(variant_name, field_types)| {
-                let field_attrs: Vec<Attribute> =
-                    field_types.iter().map(|t| Attribute::Type(*t)).collect();
-                Attribute::List(vec![
-                    Attribute::String(ir.intern_symbol_text(variant_name)),
-                    Attribute::List(field_attrs),
-                ])
-            })
-            .collect();
-
-        ir.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
-                .attr("name", Attribute::String(name))
-                .attr("variants", Attribute::List(variants_attr))
-                .build(),
-        )
+        Self::enum_type(ir, name, variants, AttributeMap::new())
     }
 
     /// Create an `adt.enum` type with a stable source declaration identity.
@@ -925,37 +907,34 @@ impl<'db> IrLoweringCtx<'db> {
         variants: &[(Symbol, Vec<TypeRef>)],
         definition: crate::typeck::DefinitionIdentity,
     ) -> TypeRef {
-        let name = ir.intern_symbol_text(name);
-        let variants_attr: Vec<Attribute> = variants
-            .iter()
-            .map(|(variant_name, field_types)| {
-                let field_attrs: Vec<Attribute> =
-                    field_types.iter().map(|ty| Attribute::Type(*ty)).collect();
-                Attribute::List(vec![
-                    Attribute::String(ir.intern_symbol_text(variant_name)),
-                    Attribute::List(field_attrs),
-                ])
-            })
-            .collect();
+        let mut attrs = AttributeMap::new();
+        attrs.insert(
+            "tribute.definition.source",
+            Attribute::Int(definition.source as i128),
+        );
+        attrs.insert(
+            "tribute.definition.start",
+            Attribute::Int(definition.start as i128),
+        );
+        attrs.insert(
+            "tribute.definition.end",
+            Attribute::Int(definition.end as i128),
+        );
+        Self::enum_type(ir, name, variants, attrs)
+    }
 
-        ir.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("enum"))
-                .attr("name", Attribute::String(name))
-                .attr("variants", Attribute::List(variants_attr))
-                .attr(
-                    "tribute.definition.source",
-                    Attribute::Int(definition.source as i128),
-                )
-                .attr(
-                    "tribute.definition.start",
-                    Attribute::Int(definition.start as i128),
-                )
-                .attr(
-                    "tribute.definition.end",
-                    Attribute::Int(definition.end as i128),
-                )
-                .build(),
-        )
+    fn enum_type(
+        ir: &mut IrContext,
+        name: &Symbol,
+        variants: &[(Symbol, Vec<TypeRef>)],
+        attrs: AttributeMap,
+    ) -> TypeRef {
+        let name = ir.intern_symbol_text(name);
+        let variants: Vec<_> = variants
+            .iter()
+            .map(|(variant, fields)| (ir.intern_symbol_text(variant), fields.iter().copied()))
+            .collect();
+        adt::enum_type(ir, name, variants, attrs).as_type_ref()
     }
 
     /// Create an `adt.typeref` type — a reference to a named type.

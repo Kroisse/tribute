@@ -1568,12 +1568,47 @@ descriptor로만 구별된다.
   [`layout`](#runtime-layout-식별자)으로 식별한다.
 - 저수준 struct는 재귀하지 않는다. 재귀 참조는 이미 native pointer나 Wasm 추상
   reference로 끊겨 있다.
-- `adt.enum`은 `variants` 속성으로 variant별 필드를 표현한다. 두 target 모두
-  variant 객체를 자기 필드만 가진 저수준 struct로 두고, 어느 variant인지는 값의
+- 두 target 모두 [`adt.enum`](#adtenum-nominal-layout-type)의 variant 객체를 자기
+  필드만 가진 저수준 struct로 두고, 어느 variant인지는 값의
   [descriptor](runtime-types.md#variant-판별)로 판별한다. Native에서 필드는 payload의
   offset 0부터 자연 정렬로 놓인다. 한 enum의 variant는 모두 가장 큰 variant의
   payload 크기로 할당하므로, enum 타입의 값은 variant와 무관하게 하나의 정적 할당
   크기를 가진다.
+
+### `adt.enum` nominal layout type
+
+`adt.enum`은 이름 있는 nominal enum layout이다. 이름과 variant 목록을 가지며 전용
+textual 문법을 쓴다. 이름 표기 규칙은 `adt.struct`와 같다.
+
+```text
+adt.enum<Option { None(), Some(value: T) }>
+adt.enum<List { Empty(), Cons(core.i32, adt.typeref<{name = "List"}>) }>
+adt.enum<"geo::Shape" { Dot(), Rect(core.f64, core.f64 {k = 1}) }, {layout = "x"}>
+adt.enum<Never {}>
+```
+
+- Variant는 이름과 괄호로 감싼 필드 목록이다. 필드가 없어도 괄호를 쓴다. 필드는
+  `name: type` 또는 이름 없이 `type`이며, 어느 쪽이든 그 필드의 다른 속성
+  dictionary가 뒤따를 수 있다.
+- 저장 표현은 다음과 같다. Variant 하나가 `adt.enum`의 타입 매개변수 하나이며 선언
+  순서대로 놓인다. Variant는 `adt.variant` 타입이고, 그 `params`가 필드 타입, type
+  속성 `name`(문자열)이 variant 이름이다. 필드 이름이 있으면 그 필드의
+  [매개변수 속성](#타입-매개변수-속성) `name`(문자열)이다. Enum 이름은 `adt.enum`의
+  type 속성 `name`(문자열)이다.
+- Enum 이름과 모든 variant 이름은 필수이고, variant 이름은 enum 안에서 겹치지
+  않는다. 매개변수가 없으면 variant가 없는 enum이다. Variant 목록을 담는 별도 type
+  속성은 없다. Type verifier가 이 규칙을 모든 interned `adt.enum`에 적용한다.
+- Variant와 필드의 `name`, enum type 속성의 `name`은 전용 문법이 소유한다. Textual
+  form의 속성 dictionary에는 쓰지 않는다. 나머지 type 속성은 `<…>` 안 마지막
+  원소로 둔다.
+- Variant 매개변수는 [매개변수 속성](#타입-매개변수-속성)을 갖지 않는다. 전용 문법에
+  그것을 쓸 자리가 없으므로 `adt.enum`의 `param_attrs`는 type verifier가 거부한다.
+  필드의 속성은 그 variant(`adt.variant`)의 매개변수 속성이다.
+- `adt.variant`는 `adt.enum`의 매개변수로만 쓴다. 값의 타입이나 연산의 타입 속성이
+  되지 않으며, 연산은 enum 타입과 variant 이름(`tag`)으로 variant를 가리킨다.
+- Variant 필드 타입이 매개변수의 매개변수이므로 일반 타입 순회와 변환은 variant
+  필드 타입에 그대로 도달한다.
+- 재귀 참조는 같은 이름의 `adt.typeref`로 표현한다.
 
 ### `func.func_sig` function type
 

@@ -546,7 +546,7 @@ mod tests {
             r#"core.module @test {
   func.func @test_fn() -> core.i32 {
     %0 = clif.iconst {value = 42} : core.ptr
-    %1 = adt.variant_is %0 {tag = "Some", type = adt.enum<{name = "Choice", variants = [["None", []], ["Some", [core.i32]]]}>} : core.i32
+    %1 = adt.variant_is %0 {tag = "Some", type = adt.enum<Choice { None(), Some(core.i32) }>} : core.i32
     func.return %1
   }
 }"#,

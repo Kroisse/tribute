@@ -3,7 +3,7 @@ source: crates/tribute-front/tests/case_type.rs
 expression: ir_text
 ---
 core.module @test {
-  !Option = adt.enum<{name = "Option", variants = [["Some", [tribute_rt.anyref]], ["None", []]]}>
+  !Option = adt.enum<Option { Some(tribute_rt.anyref), None() }>
 
   tribute_control.func @unwrap_or(%0: adt.typeref<{name = "Option"}>, %1: core.i32) -> core.i32 convention(direct) {
       %2 = adt.variant_is %0 {tag = "Some", type = !Option} : core.i1

@@ -884,7 +884,7 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
         r#"core.module @test {
   !Child = adt.struct<Child(value: core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<{name = "Choice", variants = [["Some", [!ChildRef]]]}>
+  !Choice = adt.enum<Choice { Some(!ChildRef) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     %erased = adt.ref_cast %choice {type = tribute_rt.anyref} : tribute_rt.anyref
@@ -1220,7 +1220,7 @@ fn enum_rtti_uses_the_same_nested_managed_predicate() {
         r#"core.module @test {
   !Child = adt.struct<Child(value: core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<{name = "Choice", variants = [["None", []], ["Some", [!ChildRef, core.ptr]], ["Bytes", [core.bytes]]]}>
+  !Choice = adt.enum<Choice { None(), Some(!ChildRef, core.ptr), Bytes(core.bytes) }>
   func.func @some(%child: !ChildRef, %raw: core.ptr) -> !Choice {
     %choice = adt.variant_new %child, %raw {tag = "Some", type = !Choice} : !Choice
     func.return %choice

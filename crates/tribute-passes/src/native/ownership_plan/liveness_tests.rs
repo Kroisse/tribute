@@ -51,7 +51,7 @@ const BRANCH_LOOP: &str = r#"core.module @test {
 const ALIAS_PROJECTION: &str = r#"core.module @test {
   !Child = adt.struct<Child(value: core.i32)>
   !ChildRef = adt.typeref<{name = "Child"}>
-  !Choice = adt.enum<{name = "Choice", variants = [["Some", [!ChildRef]]]}>
+  !Choice = adt.enum<Choice { Some(!ChildRef) }>
   !ChoiceRef = adt.typeref<{name = "Choice"}>
   func.func @load(%choice: !ChoiceRef) -> !ChildRef {
     ^entry:
