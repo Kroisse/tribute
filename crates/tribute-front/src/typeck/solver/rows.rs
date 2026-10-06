@@ -920,13 +920,6 @@ impl<'db> TypeSolver<'db> {
 
             // r1 is open, r2 is closed: var1 = r2's effects minus r1's effects
             (Some(var1), None) => {
-                // Row occurs check
-                if self.row_occurs_in(var1, r2) {
-                    return Err(SolveError::RowMismatch {
-                        expected: r1,
-                        actual: r2,
-                    });
-                }
                 // Compute difference: effects in r2 but not in r1
                 // First check that all effects in r1 have matches in r2
                 let only_r2 = self.compute_effect_difference_with_unify(effects1, effects2)?;
@@ -941,8 +934,18 @@ impl<'db> TypeSolver<'db> {
                     });
                 }
 
+                // Unifying effect arguments may have bound the tail itself.
+                if self.row_subst.get(var1.id).is_some() {
+                    return self.unify_rows_inner(r1, r2);
+                }
                 // Bind var1 to remaining effects (closed)
                 let remainder = EffectRow::new(self.db, only_r2, None);
+                if self.row_occurs_in(var1, remainder) {
+                    return Err(SolveError::RowMismatch {
+                        expected: r1,
+                        actual: r2,
+                    });
+                }
                 self.row_subst.insert(var1.id, remainder);
                 Ok(())
             }
@@ -962,13 +965,6 @@ impl<'db> TypeSolver<'db> {
                     return Ok(());
                 }
 
-                // Row occurs check
-                if self.row_occurs_in(var2, r1) {
-                    return Err(SolveError::RowMismatch {
-                        expected: r1,
-                        actual: r2,
-                    });
-                }
                 // Compute difference: effects in r1 but not in r2
                 let only_r1 = self.compute_effect_difference_with_unify(effects2, effects1)?;
 
@@ -980,8 +976,18 @@ impl<'db> TypeSolver<'db> {
                         actual: r2,
                     });
                 }
+                // Unifying effect arguments may have bound the tail itself.
+                if self.row_subst.get(var2.id).is_some() {
+                    return self.unify_rows_inner(r1, r2);
+                }
                 // Bind var2 to remaining effects (closed)
                 let remainder = EffectRow::new(self.db, only_r1, None);
+                if self.row_occurs_in(var2, remainder) {
+                    return Err(SolveError::RowMismatch {
+                        expected: r1,
+                        actual: r2,
+                    });
+                }
                 self.row_subst.insert(var2.id, remainder);
                 Ok(())
             }
@@ -995,16 +1001,28 @@ impl<'db> TypeSolver<'db> {
             // r1 = {A | v1}, r2 = {B | v2}
             // Unify: v1 = {B's not in A | v3}, v2 = {A's not in B | v3}
             (Some(v1), Some(v2)) => {
-                // Row occurs check
-                if self.row_occurs_in(v1, r2) || self.row_occurs_in(v2, r1) {
+                let (only_r1, only_r2) =
+                    self.compute_effect_split_with_unify(effects1, effects2)?;
+
+                // Unifying effect arguments may have bound a tail itself.
+                if self.row_subst.get(v1.id).is_some() || self.row_subst.get(v2.id).is_some() {
+                    return self.unify_rows_inner(r1, r2);
+                }
+                // Row occurs check: each tail is bound to the other side's
+                // remaining effects, so neither may occur in them.
+                let remainders = [
+                    EffectRow::new(self.db, only_r1.clone(), None),
+                    EffectRow::new(self.db, only_r2.clone(), None),
+                ];
+                if remainders
+                    .iter()
+                    .any(|row| self.row_occurs_in(v1, *row) || self.row_occurs_in(v2, *row))
+                {
                     return Err(SolveError::RowMismatch {
                         expected: r1,
                         actual: r2,
                     });
                 }
-
-                let (only_r1, only_r2) =
-                    self.compute_effect_split_with_unify(effects1, effects2)?;
 
                 // A signature row stays the common tail when the other side
                 // adds no labels to it.

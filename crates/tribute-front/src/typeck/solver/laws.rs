@@ -88,18 +88,15 @@ fn ground_and_generalization(sharing: Sharing) -> BoxedStrategy<(TypeShape, Type
 }
 
 /// Two generalizations of one ground type sharing a small variable pool, so
-/// they unify often but not always.
-///
-/// Effect arguments hold no function types and their variables come from a
-/// separate pool, so unifying effect arguments never binds a row variable
-/// (see `open_row_tail_binding_keeps_argument_bindings`).
+/// they unify often but not always. Effect arguments may hold function types
+/// and share variables with the rest of the type, so unifying them can bind
+/// a row tail being unified.
 fn related_pair() -> BoxedStrategy<(TypeShape, TypeShape)> {
     let sharing = Sharing::Pool {
         univars: 3,
         row_vars: 2,
-        separate_effect_args: true,
     };
-    type_shape(GROUND_UNIQUE.row_functions(false))
+    type_shape(GROUND_UNIQUE.row_functions(true))
         .prop_flat_map(move |shape| {
             (
                 generalization(&shape, sharing),
@@ -428,14 +425,12 @@ fn unsettled_ambiguous_row_equality_is_reported() {
     ));
 }
 
-/// Minimal repro: binding an open row's tail to the remaining effects
-/// overwrites a binding of that tail made while unifying effect arguments.
-/// Equating `{State(fn() ->{e1} Nil) | e1}` with `{State(fn() ->{e2} Nil)}`
-/// first unifies the arguments, binding `e1` and `e2` to a fresh common tail,
-/// then rebinds `e1` to the closed empty remainder. `e2` stays open, so the
-/// solved rows differ.
+/// Binding an open row's tail to the remaining effects keeps a binding of
+/// that tail made while unifying effect arguments. Equating
+/// `{State(fn() ->{e1} Nil) | e1}` with `{State(fn() ->{e2} Nil)}` first
+/// unifies the arguments, binding `e1` and `e2` to a fresh common tail; the
+/// rows are then equated again under that binding, closing the common tail.
 #[test]
-#[ignore = "#1370: row tail rebinding discards a binding made by argument unification"]
 fn open_row_tail_binding_keeps_argument_bindings() {
     use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
     let db = salsa::DatabaseImpl::new();
