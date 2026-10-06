@@ -2499,9 +2499,13 @@ mod tests {
     }
 
     #[test]
-    fn call_arity_mismatch_too_few_args() {
-        // add expects 2 params, caller passes 1
-        let input = r#"core.module @test {
+    fn call_arity_is_checked_against_module_callees() {
+        // (case, input, fragments of the single expected diagnostic; empty
+        // when the module must pass)
+        let cases: [(&str, &str, &[&str]); 6] = [
+            (
+                "too few args: add expects 2 params, caller passes 1",
+                r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
     %2 = arith.addi %0, %1 : core.i32
     func.return %2
@@ -2511,22 +2515,12 @@ mod tests {
     %1 = func.call %0 {callee = @add} : core.i32
     func.return %1
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        validate_call_arity(&ctx, module);
-        let diagnostics = ctx.diagnostics();
-        assert_eq!(diagnostics.len(), 1, "Should detect arity mismatch");
-        assert!(diagnostics[0].message.contains("main"));
-        assert!(diagnostics[0].message.contains("add"));
-        assert!(diagnostics[0].message.contains("1 argument(s), expected 2"));
-    }
-
-    #[test]
-    fn call_arity_mismatch_too_many_args() {
-        // add expects 1 param, caller passes 3
-        let input = r#"core.module @test {
+}"#,
+                &["main", "add", "1 argument(s), expected 2"],
+            ),
+            (
+                "too many args: add expects 1 param, caller passes 3",
+                r#"core.module @test {
   func.func @add(%0: core.i32) -> core.i32 {
     func.return %0
   }
@@ -2537,19 +2531,41 @@ mod tests {
     %3 = func.call %0, %1, %2 {callee = @add} : core.i32
     func.return %3
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        validate_call_arity(&ctx, module);
-        let diagnostics = ctx.diagnostics();
-        assert_eq!(diagnostics.len(), 1, "Should detect too many args");
-        assert!(diagnostics[0].message.contains("3 argument(s), expected 1"));
-    }
-
-    #[test]
-    fn call_correct_arity_passes() {
-        let input = r#"core.module @test {
+}"#,
+                &["3 argument(s), expected 1"],
+            ),
+            (
+                "tail_call passes 1 arg to a 2-param callee",
+                r#"core.module @test {
+  func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
+    %2 = arith.addi %0, %1 : core.i32
+    func.return %2
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    func.tail_call %0 {callee = @add}
+  }
+}"#,
+                &["add", "1 argument(s), expected 2"],
+            ),
+            (
+                "args passed to a zero-param function",
+                r#"core.module @test {
+  func.func @unit() -> core.i32 {
+    %0 = arith.const {value = 0} : core.i32
+    func.return %0
+  }
+  func.func @main() -> core.i32 {
+    %0 = arith.const {value = 1} : core.i32
+    %1 = func.call %0 {callee = @unit} : core.i32
+    func.return %1
+  }
+}"#,
+                &["1 argument(s), expected 0"],
+            ),
+            (
+                "correct arity passes",
+                r#"core.module @test {
   func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
     %2 = arith.addi %0, %1 : core.i32
     func.return %2
@@ -2560,81 +2576,46 @@ mod tests {
     %2 = func.call %0, %1 {callee = @add} : core.i32
     func.return %2
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        validate_call_arity(&ctx, module);
-        assert!(!ctx.has_diagnostics(), "Correct arity should pass");
-    }
-
-    #[test]
-    fn call_unknown_callee_skipped() {
-        // extern_fn is NOT defined in this module — should be skipped
-        let input = r#"core.module @test {
+}"#,
+                &[],
+            ),
+            (
+                "callee not defined in this module is skipped",
+                r#"core.module @test {
   func.func @main() -> core.i32 {
     %0 = arith.const {value = 1} : core.i32
     %1 = func.call %0 {callee = @extern_fn} : core.i32
     func.return %1
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
+}"#,
+                &[],
+            ),
+        ];
 
-        validate_call_arity(&ctx, module);
-        assert!(!ctx.has_diagnostics(), "Unknown callee should be skipped");
-    }
+        for (case, input, fragments) in cases {
+            let mut ctx = IrContext::new();
+            let module = crate::parser::parse_test_module(&mut ctx, input);
 
-    #[test]
-    fn tail_call_arity_mismatch_detected() {
-        // add expects 2 params, tail_call passes 1
-        let input = r#"core.module @test {
-  func.func @add(%0: core.i32, %1: core.i32) -> core.i32 {
-    %2 = arith.addi %0, %1 : core.i32
-    func.return %2
-  }
-  func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    func.tail_call %0 {callee = @add}
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        validate_call_arity(&ctx, module);
-        let diagnostics = ctx.diagnostics();
-        assert_eq!(
-            diagnostics.len(),
-            1,
-            "Should detect tail_call arity mismatch"
-        );
-        assert!(diagnostics[0].message.contains("add"));
-        assert!(diagnostics[0].message.contains("1 argument(s), expected 2"));
-    }
-
-    #[test]
-    fn zero_arg_function_called_with_args_detected() {
-        let input = r#"core.module @test {
-  func.func @unit() -> core.i32 {
-    %0 = arith.const {value = 0} : core.i32
-    func.return %0
-  }
-  func.func @main() -> core.i32 {
-    %0 = arith.const {value = 1} : core.i32
-    %1 = func.call %0 {callee = @unit} : core.i32
-    func.return %1
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        validate_call_arity(&ctx, module);
-        let diagnostics = ctx.diagnostics();
-        assert!(
-            !diagnostics.is_empty(),
-            "Should detect args to zero-param function"
-        );
-        assert!(diagnostics[0].message.contains("1 argument(s), expected 0"));
+            validate_call_arity(&ctx, module);
+            let diagnostics = ctx.diagnostics();
+            if fragments.is_empty() {
+                assert!(diagnostics.is_empty(), "{case}: {:?}", &*diagnostics);
+                continue;
+            }
+            let [diagnostic] = &*diagnostics else {
+                panic!(
+                    "{case}: expected exactly one diagnostic, got {:?}",
+                    &*diagnostics
+                );
+            };
+            for fragment in fragments {
+                assert!(
+                    diagnostic.message.contains(fragment),
+                    "{case}: missing {fragment:?} in {:?}",
+                    diagnostic.message
+                );
+            }
+        }
     }
 
     #[test]
@@ -2653,44 +2634,32 @@ mod tests {
     }
 
     #[test]
-    fn cmpf_unsupported_predicate_is_rejected() {
-        let input = r#"core.module @test {
+    fn textual_operation_verifier_rejections() {
+        // (op, input, fragments of the single expected operation error)
+        let cases: [(&str, &str, &[&str]); 4] = [
+            (
+                "arith.cmpf",
+                r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
     %2 = arith.cmpf %0, %1 {predicate = "ueq"} : core.i1
     func.return %2
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        let result = validate_operation_verifiers(&ctx, module);
-        let operation_errors = operation_error_messages(&result);
-        assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
-        assert!(operation_errors[0].contains("unsupported predicate 'ueq'"));
-    }
-
-    #[test]
-    fn cmpf_missing_predicate_is_rejected() {
-        let input = r#"core.module @test {
+}"#,
+                &["unsupported predicate 'ueq'"],
+            ),
+            (
+                "arith.cmpf",
+                r#"core.module @test {
   func.func @main(%0: core.f64, %1: core.f64) -> core.i1 {
     %2 = arith.cmpf %0, %1 : core.i1
     func.return %2
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
-
-        let result = validate_operation_verifiers(&ctx, module);
-        let operation_errors = operation_error_messages(&result);
-        assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("operation verifier failed for arith.cmpf"));
-        assert!(operation_errors[0].contains("missing required attribute `predicate`"));
-    }
-
-    #[test]
-    fn scf_if_yield_arity_mismatch_is_rejected() {
-        let input = r#"core.module @test {
+}"#,
+                &["missing required attribute `predicate`"],
+            ),
+            (
+                "scf.if",
+                r#"core.module @test {
   func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
     %r = scf.if %cond : core.i32 {
       scf.yield
@@ -2699,16 +2668,44 @@ mod tests {
     }
     func.return %r
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
+}"#,
+                &["forwards 0 value(s)", "successor expects 1 input(s)"],
+            ),
+            (
+                "scf.if",
+                r#"core.module @test {
+  func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
+    %r = scf.if %cond : core.i32 {
+      %zero = arith.const {value = 0} : core.i32
+    } {
+      scf.yield %x
+    }
+    func.return %r
+  }
+}"#,
+                &["then_region must terminate with scf.yield"],
+            ),
+        ];
 
-        let result = validate_operation_verifiers(&ctx, module);
-        let operation_errors = operation_error_messages(&result);
-        assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
-        assert!(operation_errors[0].contains("forwards 0 value(s)"));
-        assert!(operation_errors[0].contains("successor expects 1 input(s)"));
+        for (op, input, fragments) in cases {
+            let mut ctx = IrContext::new();
+            let module = crate::parser::parse_test_module(&mut ctx, input);
+
+            let result = validate_operation_verifiers(&ctx, module);
+            let operation_errors = operation_error_messages(&result);
+            let [error] = operation_errors.as_slice() else {
+                panic!(
+                    "{op} {fragments:?}: expected one operation error, got {operation_errors:?}"
+                );
+            };
+            let header = format!("operation verifier failed for {op}");
+            for fragment in std::iter::once(header.as_str()).chain(fragments.iter().copied()) {
+                assert!(
+                    error.contains(fragment),
+                    "{op} {fragments:?}: missing {fragment:?} in {error}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3382,157 +3379,97 @@ mod tests {
     }
 
     #[test]
-    fn scf_if_missing_yield_terminator_is_rejected() {
-        let input = r#"core.module @test {
-  func.func @main(%cond: core.i1, %x: core.i32) -> core.i32 {
-    %r = scf.if %cond : core.i32 {
-      %zero = arith.const {value = 0} : core.i32
-    } {
-      scf.yield %x
-    }
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = crate::parser::parse_test_module(&mut ctx, input);
+    fn scf_if_malformed_structure_is_rejected() {
+        type RegionBuilder = fn(&mut IrContext, Location) -> RegionRef;
+        fn yield_region(ctx: &mut IrContext, loc: Location) -> RegionRef {
+            single_block_yield_region(ctx, loc, [])
+        }
+        fn multiblock_yield_region(ctx: &mut IrContext, loc: Location) -> RegionRef {
+            let empty_block = |ctx: &mut IrContext| {
+                ctx.create_block(BlockData {
+                    location: loc,
+                    args: vec![],
+                    ops: smallvec![],
+                    parent_region: None,
+                })
+            };
+            let first = empty_block(ctx);
+            let second = empty_block(ctx);
+            let yield_op =
+                OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield")).build(ctx);
+            let yield_op = ctx.create_op(yield_op);
+            ctx.push_op(first, yield_op);
+            ctx.create_region(RegionData {
+                location: loc,
+                blocks: smallvec![first, second],
+                parent_op: None,
+            })
+        }
 
-        let result = validate_operation_verifiers(&ctx, module);
-        let operation_errors = operation_error_messages(&result);
-        assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
-        assert!(operation_errors[0].contains("then_region must terminate with scf.yield"));
-    }
+        // (case, condition operand count, regions, expected error fragment)
+        let cases: [(&str, i64, &[RegionBuilder], &str); 3] = [
+            (
+                "two condition operands",
+                2,
+                &[yield_region, yield_region],
+                "expected 1 operand(s), found 2",
+            ),
+            (
+                "one region",
+                1,
+                &[yield_region],
+                "expected 2 region(s), found 1",
+            ),
+            (
+                "multi-block then region",
+                1,
+                &[multiblock_yield_region, yield_region],
+                "then_region expects 1 block, found 2",
+            ),
+        ];
 
-    #[test]
-    fn scf_if_condition_operand_arity_is_rejected() {
-        let mut ctx = IrContext::new();
-        let loc = test_location(&mut ctx);
-        let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+        for (case, condition_count, regions, expected) in cases {
+            let mut ctx = IrContext::new();
+            let loc = test_location(&mut ctx);
+            let i32_ty = make_i32_type(&mut ctx);
+            let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
 
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let cond_a = arith::Const::operands()
-            .value(Attribute::Int(1))
-            .results(i1_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, cond_a.op_ref());
-        let cond_b = arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(i1_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, cond_b.op_ref());
+            let entry = ctx.create_block(BlockData {
+                location: loc,
+                args: vec![],
+                ops: smallvec![],
+                parent_region: None,
+            });
+            let mut if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"));
+            for index in 0..condition_count {
+                let cond = arith::Const::operands()
+                    .value(Attribute::Int(i128::from(1 - index)))
+                    .results(i1_ty)
+                    .build(&mut ctx, loc);
+                ctx.push_op(entry, cond.op_ref());
+                if_op = if_op.operand(cond.result(&ctx));
+            }
+            for region in regions {
+                if_op = if_op.region(region(&mut ctx, loc));
+            }
+            let if_op = if_op.build(&mut ctx);
+            let if_op = ctx.create_op(if_op);
+            let module = wrap_if_in_module(&mut ctx, loc, i32_ty, entry, if_op);
 
-        let then_region = single_block_yield_region(&mut ctx, loc, []);
-        let else_region = single_block_yield_region(&mut ctx, loc, []);
-        let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
-            .operand(cond_a.result(&ctx))
-            .operand(cond_b.result(&ctx))
-            .region(then_region)
-            .region(else_region)
-            .build(&mut ctx);
-        let if_op = ctx.create_op(if_op);
-        let module = wrap_if_in_module(&mut ctx, loc, i32_ty, entry, if_op);
-
-        let result = validate_operation_verifiers(&ctx, module);
-        let operation_errors = operation_error_messages(&result);
-        assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
-        assert!(operation_errors[0].contains("expected 1 operand(s), found 2"));
-    }
-
-    #[test]
-    fn scf_if_region_count_is_rejected() {
-        let mut ctx = IrContext::new();
-        let loc = test_location(&mut ctx);
-        let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let cond = arith::Const::operands()
-            .value(Attribute::Int(1))
-            .results(i1_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, cond.op_ref());
-        let then_region = single_block_yield_region(&mut ctx, loc, []);
-        let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
-            .operand(cond.result(&ctx))
-            .region(then_region)
-            .build(&mut ctx);
-        let if_op = ctx.create_op(if_op);
-        let module = wrap_if_in_module(&mut ctx, loc, i32_ty, entry, if_op);
-
-        let result = validate_operation_verifiers(&ctx, module);
-        let operation_errors = operation_error_messages(&result);
-        assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
-        assert!(operation_errors[0].contains("expected 2 region(s), found 1"));
-    }
-
-    #[test]
-    fn scf_if_multiblock_region_is_rejected() {
-        let mut ctx = IrContext::new();
-        let loc = test_location(&mut ctx);
-        let i32_ty = make_i32_type(&mut ctx);
-        let i1_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-
-        let entry = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let cond = arith::Const::operands()
-            .value(Attribute::Int(1))
-            .results(i1_ty)
-            .build(&mut ctx, loc);
-        ctx.push_op(entry, cond.op_ref());
-
-        let then_a = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let then_b = ctx.create_block(BlockData {
-            location: loc,
-            args: vec![],
-            ops: smallvec![],
-            parent_region: None,
-        });
-        let then_yield = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("yield"))
-            .build(&mut ctx);
-        let then_yield = ctx.create_op(then_yield);
-        ctx.push_op(then_a, then_yield);
-        let then_region = ctx.create_region(RegionData {
-            location: loc,
-            blocks: smallvec![then_a, then_b],
-            parent_op: None,
-        });
-        let else_region = single_block_yield_region(&mut ctx, loc, []);
-
-        let if_op = OperationDataBuilder::new(loc, Symbol::new("scf"), Symbol::new("if"))
-            .operand(cond.result(&ctx))
-            .region(then_region)
-            .region(else_region)
-            .build(&mut ctx);
-        let if_op = ctx.create_op(if_op);
-        let module = wrap_if_in_module(&mut ctx, loc, i32_ty, entry, if_op);
-
-        let result = validate_operation_verifiers(&ctx, module);
-        let operation_errors = operation_error_messages(&result);
-        assert_eq!(operation_errors.len(), 1);
-        assert!(operation_errors[0].contains("operation verifier failed for scf.if"));
-        assert!(operation_errors[0].contains("then_region expects 1 block, found 2"));
+            let result = validate_operation_verifiers(&ctx, module);
+            let operation_errors = operation_error_messages(&result);
+            let [error] = operation_errors.as_slice() else {
+                panic!("{case}: expected one operation error, got {operation_errors:?}");
+            };
+            assert!(
+                error.contains("operation verifier failed for scf.if"),
+                "{case}: {error}"
+            );
+            assert!(
+                error.contains(expected),
+                "{case}: missing {expected:?} in {error}"
+            );
+        }
     }
 
     #[test]

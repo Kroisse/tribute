@@ -907,38 +907,134 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_rejects_misplaced_optional_entities() {
-        let not_last = parse_test_module(quote! {
-            mod test {
-                fn f() {
-                    #[region(body?)]
-                    {}
-                    #[region(tail)]
-                    {}
-                }
-            }
-        });
-        assert!(
-            not_last
-                .err()
-                .unwrap()
-                .contains("optional region must be the last region")
-        );
+    fn test_parse_rejects_malformed_modules() {
+        // (case, module, fragments the error must contain)
+        let cases: [(&str, proc_macro2::TokenStream, &[&str]); 11] = [
+            (
+                "optional region not last",
+                quote! {
+                    mod test {
+                        fn f() {
+                            #[region(body?)]
+                            {}
+                            #[region(tail)]
+                            {}
+                        }
+                    }
+                },
+                &["optional region must be the last region"],
+            ),
+            (
+                "optional successor",
+                quote! {
+                    mod test {
+                        fn f() {
+                            #[successor(dest?)]
+                            {}
+                        }
+                    }
+                },
+                &["successors cannot be optional"],
+            ),
+            (
+                "duplicate entity name",
+                quote! {
+                    mod test {
+                        fn op(a: Value<_>, a: Value<_>) {}
+                    }
+                },
+                &["duplicate entity name `a`"],
+            ),
+            (
+                "duplicate region name",
+                quote! {
+                    mod test {
+                        fn op() { #[region(body)] {} #[region(body)] {} };
+                    }
+                },
+                &["duplicate region/successor name"],
+            ),
+            (
+                "#[rest_results] on struct",
+                quote! {
+                    mod test {
+                        #[rest_results]
+                        struct Nil;
+                    }
+                },
+                &["#[rest_results] is not allowed on struct items"],
+            ),
+            (
+                "duplicate type name",
+                quote! {
+                    mod test {
+                        struct Nil;
+                        struct Nil;
+                    }
+                },
+                &["duplicate item name"],
+            ),
+            (
+                "operation and type name collision",
+                quote! {
+                    mod test {
+                        fn foo() {}
+                        struct foo;
+                    }
+                },
+                &["duplicate item name"],
+            ),
+            (
+                "duplicate operation name",
+                quote! {
+                    mod test {
+                        fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
+                        fn add(a: Value<_>) -> Value<_> {}
+                    }
+                },
+                &["duplicate item name"],
+            ),
+            (
+                "#[rest] not the last struct parameter",
+                quote! {
+                    mod test {
+                        struct Bad<#[rest] A, B>;
+                    }
+                },
+                &["must be the last parameter"],
+            ),
+            (
+                "multiple #[rest] struct parameters",
+                quote! {
+                    mod test {
+                        struct Bad<#[rest] A, #[rest] B>;
+                    }
+                },
+                &["rest", "one"],
+            ),
+            (
+                "trailing tokens after the module",
+                quote! {
+                    mod test {
+                        fn op() {}
+                    }
+                    garbage
+                },
+                &["trailing"],
+            ),
+        ];
 
-        let successor = parse_test_module(quote! {
-            mod test {
-                fn f() {
-                    #[successor(dest?)]
-                    {}
-                }
-            }
-        });
-        assert!(
-            successor
+        for (case, item, fragments) in cases {
+            let err = parse_test_module(item)
                 .err()
-                .unwrap()
-                .contains("successors cannot be optional")
-        );
+                .unwrap_or_else(|| panic!("{case}: expected a parse error"));
+            for fragment in fragments {
+                assert!(
+                    err.contains(fragment),
+                    "{case}: missing {fragment:?} in: {err}"
+                );
+            }
+        }
     }
 
     #[test]
@@ -1138,32 +1234,6 @@ mod tests {
     }
 
     #[test]
-    fn test_trailing_tokens_rejected() {
-        let result = parse_module(quote! {
-            mod test {
-                fn op() {}
-            }
-            garbage
-        });
-        let err = result.err().expect("should fail on trailing tokens");
-        assert!(err.contains("trailing"), "unexpected error: {err}");
-    }
-
-    #[test]
-    fn test_duplicate_entity_name_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn op(a: Value<_>, a: Value<_>) {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("duplicate entity name `a`"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
     fn test_trailing_comma_accepted_in_attr_params() {
         let module = parse_test_module(quote! {
             mod test {
@@ -1193,80 +1263,6 @@ mod tests {
             _ => panic!("expected operation"),
         };
         assert_eq!(op.operands.len(), 2);
-    }
-
-    #[test]
-    fn test_duplicate_region_name_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn op() { #[region(body)] {} #[region(body)] {} };
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("duplicate region/successor name"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_rest_results_on_struct_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                #[rest_results]
-                struct Nil;
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("#[rest_results] is not allowed on struct items"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_duplicate_type_name_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                struct Nil;
-                struct Nil;
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("duplicate item name"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_op_and_type_name_collision_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn foo() {}
-                struct foo;
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("duplicate item name"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_duplicate_operation_name_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                fn add(lhs: Value<_>, rhs: Value<_>) -> Value<_> {}
-                fn add(a: Value<_>) -> Value<_> {}
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("duplicate item name"),
-            "unexpected error: {err}"
-        );
     }
 
     // ================================================================
@@ -1311,33 +1307,5 @@ mod tests {
             }
             _ => panic!("expected TypeDef"),
         }
-    }
-
-    #[test]
-    fn test_parse_struct_rest_must_be_last_param() {
-        let result = parse_test_module(quote! {
-            mod test {
-                struct Bad<#[rest] A, B>;
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("must be the last parameter"),
-            "unexpected error: {err}"
-        );
-    }
-
-    #[test]
-    fn test_parse_struct_multiple_rest_rejected() {
-        let result = parse_test_module(quote! {
-            mod test {
-                struct Bad<#[rest] A, #[rest] B>;
-            }
-        });
-        let err = result.err().expect("should fail");
-        assert!(
-            err.contains("rest") && err.contains("one"),
-            "unexpected error: {err}"
-        );
     }
 }

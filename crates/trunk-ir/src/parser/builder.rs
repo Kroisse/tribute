@@ -1427,24 +1427,21 @@ core.module @test {
     // ================================================================
 
     #[test]
-    fn test_parse_undefined_operand() {
-        let input = r#"core.module @test {
+    fn test_parse_rejects_malformed_module() {
+        // (case, input, expected error message fragment)
+        for (case, input, expected) in [
+            (
+                "undefined operand",
+                r#"core.module @test {
   func.func @f() -> core.i32 {
     func.return %missing
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let err = parse_module(&mut ctx, input).unwrap_err();
-        assert!(
-            err.message.contains("undefined value '%missing'"),
-            "Expected undefined value error, got: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn test_parse_duplicate_block_label() {
-        let input = r#"core.module @test {
+}"#,
+                "undefined value '%missing'",
+            ),
+            (
+                "duplicate block label",
+                r#"core.module @test {
   func.func @f() -> core.i32 {
     ^bb0:
       %0 = arith.const {value = 1} : core.i32
@@ -1453,50 +1450,91 @@ core.module @test {
       %1 = arith.const {value = 2} : core.i32
       func.return %1
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let err = parse_module(&mut ctx, input).unwrap_err();
-        assert!(
-            err.message.contains("duplicate block label"),
-            "Expected duplicate block label error, got: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn test_parse_entry_block_arity_mismatch() {
-        let input = r#"core.module @test {
+}"#,
+                "duplicate block label",
+            ),
+            (
+                "entry block arity mismatch",
+                r#"core.module @test {
   func.func @f(%0: core.i32, %1: core.i32) -> core.i32 {
     ^bb0(%2: core.i32):
       func.return %2
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let err = parse_module(&mut ctx, input).unwrap_err();
-        assert!(
-            err.message
-                .contains("entry block has 1 args but function signature has 2 params"),
-            "Expected arity mismatch error, got: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn test_parse_result_count_mismatch() {
-        let input = r#"core.module @test {
+}"#,
+                "entry block has 1 args but function signature has 2 params",
+            ),
+            (
+                "result count mismatch",
+                r#"core.module @test {
   func.func @f() -> core.i32 {
     %0, %1 = arith.const {value = 42} : core.i32
     func.return %0
   }
-}"#;
-        let mut ctx = IrContext::new();
-        let err = parse_module(&mut ctx, input).unwrap_err();
-        assert!(
-            err.message
-                .contains("declares 2 result names but 1 result types"),
-            "Expected result count mismatch error, got: {}",
-            err.message
-        );
+}"#,
+                "declares 2 result names but 1 result types",
+            ),
+            (
+                "cross block duplicate arg name",
+                r#"core.module @test {
+  func.func @f() -> core.i32 {
+    ^entry:
+      %cond = arith.const {value = 1} : core.i1
+      scf.br [^left]
+    ^left(%x: core.i32):
+      scf.br [^right]
+    ^right(%x: core.i32):
+      func.return %x
+  }
+}"#,
+                "duplicate SSA name '%x'",
+            ),
+            (
+                "nested region block isolation",
+                r#"core.module @test {
+  func.func @f(%0: core.i32) -> core.i32 {
+    ^entry:
+      %cond = arith.const {value = 1} : core.i1
+      %r = scf.if %cond : core.i32 {
+        scf.br [^entry]
+      } {
+        scf.yield %0
+      }
+      func.return %r
+  }
+}"#,
+                "undefined block '^entry'",
+            ),
+            (
+                "undefined type alias error",
+                r#"core.module @test {
+  func.func @f(%0: !unknown) -> core.i32 {
+    func.return %0
+  }
+}"#,
+                "undefined type alias '!unknown'",
+            ),
+            (
+                "type alias rejected in non module region",
+                r#"core.module @test {
+  func.func @f() -> core.i32 {
+    !bad = core.i32
+    %0 = arith.const {value = 42} : !bad
+    func.return %0
+  }
+}"#,
+                "type aliases are only allowed in module regions",
+            ),
+        ] {
+            let mut ctx = IrContext::new();
+            let err = parse_module(&mut ctx, input)
+                .err()
+                .unwrap_or_else(|| panic!("{case}: expected a parse error"));
+            assert!(
+                err.message.contains(expected),
+                "{case}: expected {expected:?}, got: {}",
+                err.message
+            );
+        }
     }
 
     // ================================================================
@@ -1585,53 +1623,6 @@ core.module @test {
     // ================================================================
     // Scoping error tests
     // ================================================================
-
-    #[test]
-    fn test_parse_cross_block_duplicate_arg_name() {
-        // Two blocks both define %x as a block argument — should error
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    ^entry:
-      %cond = arith.const {value = 1} : core.i1
-      scf.br [^left]
-    ^left(%x: core.i32):
-      scf.br [^right]
-    ^right(%x: core.i32):
-      func.return %x
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let err = parse_module(&mut ctx, input).unwrap_err();
-        assert!(
-            err.message.contains("duplicate SSA name '%x'"),
-            "Expected duplicate SSA name error, got: {}",
-            err.message
-        );
-    }
-
-    #[test]
-    fn test_parse_nested_region_block_isolation() {
-        // Inner region must not resolve outer block labels as successors
-        let input = r#"core.module @test {
-  func.func @f(%0: core.i32) -> core.i32 {
-    ^entry:
-      %cond = arith.const {value = 1} : core.i1
-      %r = scf.if %cond : core.i32 {
-        scf.br [^entry]
-      } {
-        scf.yield %0
-      }
-      func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let err = parse_module(&mut ctx, input).unwrap_err();
-        assert!(
-            err.message.contains("undefined block '^entry'"),
-            "Expected undefined block error for outer label in nested region, got: {}",
-            err.message
-        );
-    }
 
     // ================================================================
     // Type alias tests
@@ -1976,22 +1967,6 @@ core.module @test {
     }
 
     #[test]
-    fn test_undefined_type_alias_error() {
-        let input = r#"core.module @test {
-  func.func @f(%0: !unknown) -> core.i32 {
-    func.return %0
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let err = parse_module(&mut ctx, input).unwrap_err();
-        assert!(
-            err.message.contains("undefined type alias '!unknown'"),
-            "Expected undefined type alias error, got: {}",
-            err.message,
-        );
-    }
-
-    #[test]
     fn test_type_alias_no_alias_backward_compat() {
         // Existing IR without aliases should still round-trip
         let input = r#"core.module @test {
@@ -2093,24 +2068,5 @@ core.module @test {
                 prop_assert_eq!(print_module(&parsed_ctx, parsed), printed);
             }
         }
-    }
-
-    #[test]
-    fn test_type_alias_rejected_in_non_module_region() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    !bad = core.i32
-    %0 = arith.const {value = 42} : !bad
-    func.return %0
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let err = parse_module(&mut ctx, input).unwrap_err();
-        assert!(
-            err.message
-                .contains("type aliases are only allowed in module regions"),
-            "Expected module-only error, got: {}",
-            err.message,
-        );
     }
 }

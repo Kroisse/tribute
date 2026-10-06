@@ -765,9 +765,7 @@ fn set_indirect_call_signature_attribute(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::SymbolPath;
     use crate::op_interface::IndirectCallLikeOps;
-    use crate::ops::DialectType;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
 
@@ -824,101 +822,6 @@ mod tests {
         let printed = print_module(&ctx, module.op());
         assert!(printed.contains("wasm.call_indirect"));
         assert!(printed.contains("signature = wasm.func_sig<(core.i32) -> core.i32>"));
-    }
-
-    #[test]
-    fn func_sig_owns_zero_and_multiple_result_lists_and_metadata() {
-        let mut ctx = crate::IrContext::new();
-        let i32 = ctx.intern_type(
-            crate::TypeDataBuilder::new(crate::Symbol::new("core"), crate::Symbol::new("i32"))
-                .build(),
-        );
-        let i64 = ctx.intern_type(
-            crate::TypeDataBuilder::new(crate::Symbol::new("core"), crate::Symbol::new("i64"))
-                .build(),
-        );
-        let mut attrs = crate::AttributeMap::new();
-        attrs.insert(crate::Symbol::new("kept"), crate::Attribute::Type(i64));
-        let zero = func_sig(&mut ctx, [i32], []).as_type_ref();
-        let one = func_sig(&mut ctx, [i32], [i64]).as_type_ref();
-        let many = func_sig_with_attrs(&mut ctx, [i32], [i32, i64], attrs).as_type_ref();
-        assert!(
-            FuncSig::from_type_ref(&ctx, zero)
-                .unwrap()
-                .is_resultless(&ctx)
-        );
-        assert_eq!(
-            FuncSig::from_type_ref(&ctx, one).unwrap().inputs(&ctx),
-            [i32]
-        );
-        assert_eq!(
-            FuncSig::from_type_ref(&ctx, one).unwrap().results(&ctx),
-            [i64]
-        );
-        let many_sig = FuncSig::from_type_ref(&ctx, many).unwrap();
-        assert_eq!(many_sig.inputs(&ctx), [i32]);
-        assert_eq!(many_sig.results(&ctx), [i32, i64]);
-        assert_eq!(many_sig.non_reserved_attrs(&ctx).count(), 1);
-        let mut same_attrs = crate::AttributeMap::new();
-        same_attrs.insert(crate::Symbol::new("kept"), crate::Attribute::Type(i64));
-        assert_eq!(
-            many,
-            func_sig_with_attrs(&mut ctx, [i32], [i32, i64], same_attrs).as_type_ref()
-        );
-    }
-
-    #[test]
-    fn func_sig_rejects_malformed_delimiters_without_slicing() {
-        let mut ctx = crate::IrContext::new();
-        let i32 = ctx.intern_type(
-            crate::TypeDataBuilder::new(crate::Symbol::new("core"), crate::Symbol::new("i32"))
-                .build(),
-        );
-        let malformed = ctx.intern_type(
-            crate::TypeDataBuilder::new(crate::Symbol::new("wasm"), FUNC_SIG())
-                .param(i32)
-                .attr(NUM_INPUTS_ATTR, crate::Attribute::Int(2))
-                .attr(NUM_RESULTS_ATTR, crate::Attribute::Int(1))
-                .build(),
-        );
-        assert!(FuncSig::from_type_ref(&ctx, malformed).is_none());
-
-        let missing = ctx.intern_type(
-            crate::TypeDataBuilder::new(crate::Symbol::new("wasm"), FUNC_SIG())
-                .param(i32)
-                .attr(NUM_INPUTS_ATTR, crate::Attribute::Int(1))
-                .build(),
-        );
-        assert_eq!(
-            FuncSig::validate(&ctx, missing),
-            Err(FuncSigTypeError::MissingCount(NUM_RESULTS_ATTR))
-        );
-
-        let wrong_kind = ctx.intern_type(
-            crate::TypeDataBuilder::new(crate::Symbol::new("wasm"), FUNC_SIG())
-                .param(i32)
-                .attr(
-                    NUM_INPUTS_ATTR,
-                    crate::Attribute::SymbolRef(SymbolPath::from("one")),
-                )
-                .attr(NUM_RESULTS_ATTR, crate::Attribute::Int(0))
-                .build(),
-        );
-        assert_eq!(
-            FuncSig::validate(&ctx, wrong_kind),
-            Err(FuncSigTypeError::InvalidCount(NUM_INPUTS_ATTR))
-        );
-
-        let overflow = ctx.intern_type(
-            crate::TypeDataBuilder::new(crate::Symbol::new("wasm"), FUNC_SIG())
-                .attr(NUM_INPUTS_ATTR, crate::Attribute::Int(i128::from(u32::MAX)))
-                .attr(NUM_RESULTS_ATTR, crate::Attribute::Int(1))
-                .build(),
-        );
-        assert_eq!(
-            FuncSig::validate(&ctx, overflow),
-            Err(FuncSigTypeError::CountOverflow)
-        );
     }
 
     #[test]

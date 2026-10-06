@@ -604,12 +604,66 @@ mod tests {
     }
 
     #[test]
-    fn unspecified_operations_are_unknown() {
+    fn legality_rules_follow_structural_precedence_for_one_operation() {
         let (mut ctx, loc) = test_ctx();
         let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
-        let target = ConversionTarget::new();
+        let cases = [
+            (
+                "unspecified operations are unknown",
+                ConversionTarget::new(),
+                LegalityCheck::Unknown,
+            ),
+            (
+                "dynamic operation rule precedes static operation rule",
+                ConversionTarget::new()
+                    .legal_op("test", "op")
+                    .dynamic_op("test", "op", |_, _| LegalityDecision::Illegal),
+                LegalityCheck::Illegal,
+            ),
+            (
+                "dynamic operation rule can defer to static operation rule",
+                ConversionTarget::new()
+                    .illegal_dialect("test")
+                    .legal_op("test", "op")
+                    .dynamic_op("test", "op", |_, _| LegalityDecision::Defer),
+                LegalityCheck::Legal,
+            ),
+            (
+                "operation rule precedes dynamic dialect rule",
+                ConversionTarget::new()
+                    .legal_op("test", "op")
+                    .dynamic_dialect("test", |_, _| LegalityDecision::Illegal),
+                LegalityCheck::Legal,
+            ),
+            (
+                "dynamic dialect rule can defer to static dialect rule",
+                ConversionTarget::new()
+                    .illegal_dialect("test")
+                    .dynamic_dialect("test", |_, _| LegalityDecision::Defer),
+                LegalityCheck::Illegal,
+            ),
+            (
+                "unknown dynamic fallback handles otherwise unknown operations",
+                ConversionTarget::new().dynamic_unknown(|_, _| LegalityDecision::Legal),
+                LegalityCheck::Legal,
+            ),
+            (
+                "unknown dynamic fallback does not override static rules",
+                ConversionTarget::new()
+                    .illegal_dialect("test")
+                    .dynamic_unknown(|_, _| LegalityDecision::Legal),
+                LegalityCheck::Illegal,
+            ),
+            (
+                "unknown dynamic fallback can defer to unknown",
+                ConversionTarget::new().dynamic_unknown(|_, _| LegalityDecision::Defer),
+                LegalityCheck::Unknown,
+            ),
+        ];
 
-        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Unknown);
+        for (case, target, expected) in cases {
+            assert_eq!(target.is_legal(&ctx, op), expected, "{case}");
+        }
     }
 
     #[test]
@@ -654,81 +708,6 @@ mod tests {
             dialect_then_op.is_legal(&ctx, ordinary),
             LegalityCheck::Legal
         );
-    }
-
-    #[test]
-    fn dynamic_operation_rule_precedes_static_operation_rule() {
-        let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
-        let target =
-            ConversionTarget::new()
-                .legal_op("test", "op")
-                .dynamic_op("test", "op", |_, _| LegalityDecision::Illegal);
-
-        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Illegal);
-    }
-
-    #[test]
-    fn dynamic_operation_rule_can_defer_to_static_operation_rule() {
-        let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
-        let target = ConversionTarget::new()
-            .illegal_dialect("test")
-            .legal_op("test", "op")
-            .dynamic_op("test", "op", |_, _| LegalityDecision::Defer);
-
-        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Legal);
-    }
-
-    #[test]
-    fn operation_rule_precedes_dynamic_dialect_rule() {
-        let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
-        let target = ConversionTarget::new()
-            .legal_op("test", "op")
-            .dynamic_dialect("test", |_, _| LegalityDecision::Illegal);
-
-        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Legal);
-    }
-
-    #[test]
-    fn dynamic_dialect_rule_can_defer_to_static_dialect_rule() {
-        let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
-        let target = ConversionTarget::new()
-            .illegal_dialect("test")
-            .dynamic_dialect("test", |_, _| LegalityDecision::Defer);
-
-        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Illegal);
-    }
-
-    #[test]
-    fn unknown_dynamic_fallback_handles_otherwise_unknown_operations() {
-        let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
-        let target = ConversionTarget::new().dynamic_unknown(|_, _| LegalityDecision::Legal);
-
-        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Legal);
-    }
-
-    #[test]
-    fn unknown_dynamic_fallback_does_not_override_static_rules() {
-        let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
-        let target = ConversionTarget::new()
-            .illegal_dialect("test")
-            .dynamic_unknown(|_, _| LegalityDecision::Legal);
-
-        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Illegal);
-    }
-
-    #[test]
-    fn unknown_dynamic_fallback_can_defer_to_unknown() {
-        let (mut ctx, loc) = test_ctx();
-        let op = make_op(&mut ctx, loc, Symbol::new("test"), Symbol::new("op"));
-        let target = ConversionTarget::new().dynamic_unknown(|_, _| LegalityDecision::Defer);
-
-        assert_eq!(target.is_legal(&ctx, op), LegalityCheck::Unknown);
     }
 
     #[test]
