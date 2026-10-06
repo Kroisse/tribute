@@ -5,7 +5,7 @@ use salsa_test_macros::salsa_test;
 use tribute::pipeline::compile_with_diagnostics;
 use tribute_front::SourceCst;
 
-use crate::common::assert_native_output;
+use crate::common::{assert_native_output, assert_output_on_both_targets};
 
 #[test]
 fn test_native_field_setter_and_modifier() {
@@ -75,6 +75,40 @@ fn main() ->{Io} Nil {
 }
 "#,
         "LrR\n2",
+    );
+}
+
+#[test]
+fn test_generic_struct_field_functions_on_both_targets() {
+    // A field function of a generic struct reads and rebuilds the struct's
+    // specialization, whose field layout differs from the generic one for
+    // an unboxed `Int` field (#1344).
+    assert_output_on_both_targets(
+        "field_functions_generic_box.trb",
+        r#"
+use std::io::{Io, print_line}
+
+struct Box(a) { value: a }
+
+mod inner {
+    pub struct Cell(a) { item: a }
+}
+
+fn get(b: Box(a)) -> a { b.value }
+
+fn bump(b: Box(Int)) -> Box(Int) { b.value::modify(fn(n) n + +1) }
+
+fn main() ->{Io} Nil {
+    let number = Box { value: +1 }
+    print_line(Int::to_string(number.value))
+    print_line(Int::to_string(get(bump(number))))
+    let text = Box::value::set(Box { value: "s" }, "t")
+    print_line(get(text))
+    let cell = inner::Cell::item::set(inner::Cell { item: +5 }, +6)
+    print_line(Int::to_string(cell.item))
+}
+"#,
+        "1\n2\nt\n6",
     );
 }
 
