@@ -1,5 +1,9 @@
 //! Tribute runtime dialect — boxing, unboxing, and reference counting.
 
+// === Managed reference registrations ===
+inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Intref>());
+inventory::submit!(crate::dialect::tribute_rtti::ManagedRefType::new::<Anyref>());
+
 #[trunk_ir::dialect]
 mod tribute_rt {
     // Types
