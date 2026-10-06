@@ -10,6 +10,8 @@ use trunk_ir::printer::print_module;
 use trunk_ir::types::TypeDataBuilder;
 use trunk_ir_cranelift_backend::passes::func_to_clif;
 
+use crate::test_support::assert_unchanged_on_error;
+
 /// Build the plan with the production ownership policy and a fresh cache.
 fn production_plan(
     ctx: &IrContext,
@@ -109,13 +111,12 @@ fn count(function: &FunctionOwnershipPlan, kind: ActionKind) -> usize {
 fn assert_plan_error_unchanged(ir: &str, expected: &str) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, ir);
-    let before = print_module(&ctx, module.op());
-    let error = production_plan(&ctx, module).expect_err("invalid ownership input");
+    let error =
+        assert_unchanged_on_error(&mut ctx, module, |ctx, module| production_plan(ctx, module));
     assert!(
         error.to_string().contains(expected),
         "unexpected error: {error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -458,9 +459,9 @@ fn native_evidence_lowers_managed_closure_handoff_to_into_raw() {
         .find(|action| action.kind == ActionKind::IntoRawTransfer)
         .expect("into_raw transfer");
     transfer.destination = 1;
-    let before = print_module(&ctx, module.op());
-    assert!(materialize(&mut ctx, module, &plan).is_err());
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
+        materialize(ctx, module, &plan)
+    });
 }
 
 #[test]
@@ -761,9 +762,9 @@ fn stale_grouped_into_raw_plan_fails_before_materialization() {
         .rposition(|action| action.kind == ActionKind::IntoRawTransfer)
         .unwrap();
     actions.remove(second);
-    let before = print_module(&ctx, module.op());
-    assert!(materialize(&mut ctx, module, &plan).is_err());
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
+        materialize(ctx, module, &plan)
+    });
 }
 
 #[test]
@@ -819,9 +820,9 @@ fn materialization_releases_the_exact_replaced_field_and_fails_before_mutation()
         .find(|action| action.kind == ActionKind::ReleaseReplacedField)
         .unwrap();
     action.destination = 1;
-    let before = print_module(&ctx, module.op());
-    assert!(materialize(&mut ctx, module, &stale).is_err());
-    assert_eq!(print_module(&ctx, module.op()), before);
+    assert_unchanged_on_error(&mut ctx, module, |ctx, module| {
+        materialize(ctx, module, &stale)
+    });
 }
 
 #[test]
@@ -945,9 +946,7 @@ fn compatible_cast_and_enum_projection_preserve_borrowed_ownership() {
         ctx.op_mut(projection)
             .attributes
             .insert(key.clone(), invalid);
-        let before = print_module(&ctx, module.op());
-        assert!(production_plan(&ctx, module).is_err());
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_unchanged_on_error(&mut ctx, module, |ctx, module| production_plan(ctx, module));
         ctx.op_mut(projection).attributes.insert(key, original);
     }
 }
@@ -1641,9 +1640,7 @@ fn stale_identity_unsupported_regions_and_malformed_calls_fail_unchanged() {
     ] {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, ir);
-        let before = print_module(&ctx, module.op());
-        assert!(production_plan(&ctx, module).is_err());
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_unchanged_on_error(&mut ctx, module, |ctx, module| production_plan(ctx, module));
     }
 }
 

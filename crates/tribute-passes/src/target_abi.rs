@@ -1616,6 +1616,7 @@ fn collect_ops(ctx: &IrContext, root: OpRef) -> Vec<OpRef> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_support::assert_unchanged_on_error;
     use trunk_ir::parser::parse_test_module;
     use trunk_ir::printer::print_module;
 
@@ -1921,9 +1922,7 @@ mod tests {
         ctx.op_mut(indirect)
             .attributes
             .insert("unrelated_callable_metadata", Attribute::Type(signature));
-        let before = print_module(&ctx, module.op());
-
-        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
             error
@@ -1931,7 +1930,6 @@ mod tests {
                 .contains("untagged nested func.func_sig<(...)->core.never>"),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     fn compose_promoted_root() -> (IrContext, Module) {
@@ -2373,8 +2371,7 @@ mod tests {
             .attributes
             .insert(ROOT_SOURCE_RESULT_ATTR, Attribute::Type(nil));
 
-        let before = print_module(&ctx, module.op());
-        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
             error
@@ -2382,7 +2379,6 @@ mod tests {
                 .contains("frame Dispatch operands differ from the exact terminal ABI"),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
@@ -2439,12 +2435,10 @@ mod tests {
         ] {
             let mut ctx = IrContext::new();
             let module = parse_test_module(&mut ctx, input);
-            let before = print_module(&ctx, module.op());
-
-            let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+            let error =
+                assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
             assert!(error.to_string().contains(expected), "{error}");
-            assert_eq!(print_module(&ctx, module.op()), before);
         }
     }
 
@@ -2496,12 +2490,9 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
-
-        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(error.to_string().contains("operands differ"), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
@@ -2620,12 +2611,10 @@ mod tests {
 }}"#
                 ),
             );
-            let before = print_module(&ctx, module.op());
-
-            let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+            let error =
+                assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
             assert!(error.to_string().contains(expected), "{error}");
-            assert_eq!(print_module(&ctx, module.op()), before);
         }
     }
 
@@ -2650,15 +2639,12 @@ mod tests {
         ctx.block_mut(entry).args[1]
             .attrs
             .insert("bind_name", environment_name);
-        let before = print_module(&ctx, module.op());
-
-        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
             error.to_string().contains("multiple `__env` parameters"),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
@@ -2672,15 +2658,12 @@ mod tests {
         ctx.op_mut(module.op())
             .attributes
             .insert("malformed_callable", Attribute::Type(malformed));
-        let before = print_module(&ctx, module.op());
-
-        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
             error.to_string().contains("malformed nested func.func_sig"),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
@@ -2697,9 +2680,7 @@ mod tests {
         ctx.op_mut(broken.op_ref())
             .attributes
             .insert("type", Attribute::Type(resultless));
-        let before = print_module(&ctx, module.op());
-
-        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(
             error
@@ -2707,7 +2688,6 @@ mod tests {
                 .contains("must have logical core.never result"),
             "{error}"
         );
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 
     #[test]
@@ -2740,12 +2720,10 @@ mod tests {
   }
 }"#,
         );
-        let before = print_module(&ctx, malformed.op());
-
-        let error = lower_cps_signatures_to_physical(&mut ctx, malformed).unwrap_err();
+        let error =
+            assert_unchanged_on_error(&mut ctx, malformed, lower_cps_signatures_to_physical);
 
         assert!(error.to_string().contains("function reference differs"));
-        assert_eq!(print_module(&ctx, malformed.op()), before);
     }
 
     #[test]
@@ -2757,11 +2735,8 @@ mod tests {
   func.func @broken() -> core.never attributes {tribute.calling_convention = 9} { func.unreachable }
 }"#,
         );
-        let before = print_module(&ctx, module.op());
-
-        let error = lower_cps_signatures_to_physical(&mut ctx, module).unwrap_err();
+        let error = assert_unchanged_on_error(&mut ctx, module, lower_cps_signatures_to_physical);
 
         assert!(error.to_string().contains("malformed calling-convention"));
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }

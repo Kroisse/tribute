@@ -3,6 +3,13 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
 
+use crate::test_support::assert_unchanged_on_error;
+
+/// Run the conversion without operation declarations or intrinsics.
+fn run_pre_cps(ctx: &mut IrContext, module: Module) -> Result<(), TributeControlToCpsError> {
+    tribute_control_to_cps(ctx, module, &[], &[], &mut Default::default())
+}
+
 fn parse(input: &str) -> (IrContext, Module) {
     let mut ctx = IrContext::new();
     let module = parse_test_module(&mut ctx, input);
@@ -598,12 +605,9 @@ fn malformed_pre_boundary_is_atomic() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(error.to_string().contains("func.call"));
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -669,9 +673,7 @@ fn raw_malformed_source_signature_storage_fails_before_conversion() {
   %lambda = tribute_control.lambda : tribute_control.func_sig<core.i32, {num_inputs = 2, num_results = 1, tribute.calling_convention = 0}>
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
         error
@@ -679,7 +681,6 @@ fn raw_malformed_source_signature_storage_fails_before_conversion() {
             .contains("malformed tribute_control.func_sig"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -733,12 +734,9 @@ fn malformed_lookup_inputs_fail_before_conversion_and_remain_unchanged() {
     ];
     for (input, expected) in malformed {
         let (mut ctx, module) = parse(input);
-        let before = print_module(&ctx, module.op());
-        let error = tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default())
-            .unwrap_err();
+        let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
         assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
         assert!(error.to_string().contains(expected), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
     }
 }
 
@@ -750,15 +748,12 @@ fn source_successors_fail_before_conversion_and_leave_ir_unchanged() {
   ^exit:
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
         error.to_string().contains("forbids block successors"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -777,15 +772,12 @@ fn malformed_switch_case_fails_before_conversion_and_is_atomic() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
         error.to_string().contains("scf.case requires a value"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -1901,9 +1893,7 @@ fn weaker_func_ref_adapter_is_rejected_before_mutation() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
         error
@@ -1911,7 +1901,6 @@ fn weaker_func_ref_adapter_is_rejected_before_mutation() {
             .contains("result convention must be at least as strong"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -1930,9 +1919,7 @@ fn raw_callable_convention_cast_is_rejected_before_mutation() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
         error
@@ -1940,7 +1927,6 @@ fn raw_callable_convention_cast_is_rejected_before_mutation() {
             .contains("cannot change a source-logical callable calling convention"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -1963,9 +1949,7 @@ fn func_ref_cast_cannot_hide_a_convention_change_behind_source_erasure() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
         error
@@ -1973,7 +1957,6 @@ fn func_ref_cast_cannot_hide_a_convention_change_behind_source_erasure() {
             .contains("cannot change a source-logical callable calling convention"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -1995,9 +1978,7 @@ fn direct_lambda_cast_cannot_hide_a_convention_change_behind_source_erasure() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(
         error
@@ -2005,7 +1986,6 @@ fn direct_lambda_cast_cannot_hide_a_convention_change_behind_source_erasure() {
             .contains("cannot change a source-logical callable calling convention"),
         "{error}"
     );
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
@@ -2020,12 +2000,9 @@ fn raw_pointer_managed_masquerade_is_rejected_before_mutation() {
   }
 }"#;
     let (mut ctx, module) = parse(input);
-    let before = print_module(&ctx, module.op());
-    let error =
-        tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap_err();
+    let error = assert_unchanged_on_error(&mut ctx, module, run_pre_cps);
     assert_eq!(error.boundary, PRE_CPS_BOUNDARY);
     assert!(error.to_string().contains("core.ptr cast chain"), "{error}");
-    assert_eq!(print_module(&ctx, module.op()), before);
 }
 
 #[test]
