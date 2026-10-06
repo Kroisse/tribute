@@ -757,7 +757,7 @@ mod tests {
         output
     }
 
-    fn assert_switch_rejected_unchanged(input: &str, reason: &str) {
+    fn assert_switch_rejected_unchanged(case: &str, input: &str, reason: &str) {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, input);
         let before = print_module(&ctx, module.op());
@@ -770,13 +770,21 @@ mod tests {
         )
         .expect_err("nonlowerable switch should reject the entire conversion");
 
-        assert_eq!(error.boundary(), SCF_TO_WASM_BOUNDARY);
-        assert_eq!(error.operations().len(), 1);
-        assert_eq!(error.operations()[0].legality, LegalityCheck::Illegal);
-        assert_eq!(error.operations()[0].reason.as_deref(), Some(reason));
-        assert!(error.to_string().contains("scf.switch"), "{error}");
-        assert!(error.to_string().contains(reason), "{error}");
-        assert_eq!(print_module(&ctx, module.op()), before);
+        assert_eq!(error.boundary(), SCF_TO_WASM_BOUNDARY, "{case}");
+        assert_eq!(error.operations().len(), 1, "{case}: {error}");
+        assert_eq!(
+            error.operations()[0].legality,
+            LegalityCheck::Illegal,
+            "{case}"
+        );
+        assert_eq!(
+            error.operations()[0].reason.as_deref(),
+            Some(reason),
+            "{case}"
+        );
+        assert!(error.to_string().contains("scf.switch"), "{case}: {error}");
+        assert!(error.to_string().contains(reason), "{case}: {error}");
+        assert_eq!(print_module(&ctx, module.op()), before, "{case}");
     }
 
     fn assert_no_scf_switch_wrappers(output: &str) {
@@ -897,8 +905,12 @@ mod tests {
     }
 
     #[test]
-    fn leaves_malformed_switch_unchanged() {
-        let input = r#"core.module @test {
+    fn nonlowerable_switches_are_rejected_unchanged() {
+        // (case, input, rejection reason)
+        for (case, input, reason) in [
+            (
+                "leaves malformed switch unchanged",
+                r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
       scf.default { scf.yield }
@@ -906,13 +918,12 @@ mod tests {
     }
     func.return
   }
-}"#;
-        assert_switch_rejected_unchanged(input, "malformed resultless switch shape");
-    }
-
-    #[test]
-    fn leaves_malformed_switch_arm_operands_and_entry_args_unchanged() {
-        let input = r#"core.module @test {
+}"#,
+                "malformed resultless switch shape",
+            ),
+            (
+                "leaves malformed switch arm operands and entry args unchanged",
+                r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
       scf.case %choice {value = 0} {
@@ -925,13 +936,12 @@ mod tests {
     }
     func.return
   }
-}"#;
-        assert_switch_rejected_unchanged(input, "malformed resultless switch shape");
-    }
-
-    #[test]
-    fn rejects_shape_valid_non_i32_switch_without_mutating() {
-        let input = r#"core.module @test {
+}"#,
+                "malformed resultless switch shape",
+            ),
+            (
+                "rejects shape valid non i32 switch without mutating",
+                r#"core.module @test {
   func.func @main(%cond: core.i1, %choice: core.i64) -> core.nil {
     scf.switch %choice {
       scf.case {value = 0} {
@@ -946,16 +956,12 @@ mod tests {
     }
     func.return
   }
-}"#;
-        assert_switch_rejected_unchanged(
-            input,
-            "unsupported discriminant type `core.i64`; expected `core.i32`",
-        );
-    }
-
-    #[test]
-    fn rejects_shape_valid_out_of_range_case_without_mutating() {
-        let input = r#"core.module @test {
+}"#,
+                "unsupported discriminant type `core.i64`; expected `core.i32`",
+            ),
+            (
+                "rejects shape valid out of range case without mutating",
+                r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
       scf.case {value = 2147483648} { scf.yield }
@@ -963,13 +969,12 @@ mod tests {
     }
     func.return
   }
-}"#;
-        assert_switch_rejected_unchanged(input, "case integer value is outside the i32 range");
-    }
-
-    #[test]
-    fn rejects_non_integer_case_attribute_without_mutating() {
-        let input = r#"core.module @test {
+}"#,
+                "case integer value is outside the i32 range",
+            ),
+            (
+                "rejects non integer case attribute without mutating",
+                r#"core.module @test {
   func.func @main(%choice: core.i32) -> core.nil {
     scf.switch %choice {
       scf.case {value = @not_an_integer} { scf.yield }
@@ -977,8 +982,12 @@ mod tests {
     }
     func.return
   }
-}"#;
-        assert_switch_rejected_unchanged(input, "case attribute `value` must be an integer");
+}"#,
+                "case attribute `value` must be an integer",
+            ),
+        ] {
+            assert_switch_rejected_unchanged(case, input, reason);
+        }
     }
 
     #[test]

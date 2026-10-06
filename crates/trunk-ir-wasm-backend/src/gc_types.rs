@@ -322,86 +322,25 @@ mod tests {
     }
 
     #[test]
-    fn test_marker_struct_layout() {
-        // Marker struct: { ability_id: i32, prompt_tag: i32, tr_dispatch_fn: anyref, shadowed: anyref, outer: anyref }
+    fn test_builtin_struct_field_layouts() {
         let builtins = builtin_types();
-        let marker_def = &builtins[MARKER_IDX as usize];
-
-        match marker_def {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), 5, "Marker should have 5 fields");
-                assert!(
-                    matches!(fields[0].element_type, StorageType::Val(ValType::I32)),
-                    "Field 0 (ability_id) should be i32"
-                );
-                assert!(
-                    matches!(fields[1].element_type, StorageType::Val(ValType::I32)),
-                    "Field 1 (prompt_tag) should be i32"
-                );
-                assert!(
-                    matches!(
-                        fields[2].element_type,
-                        StorageType::Val(ValType::Ref(RefType::ANYREF))
-                    ),
-                    "Field 2 (tr_dispatch_fn) should be anyref"
-                );
-                assert!(
-                    matches!(
-                        fields[3].element_type,
-                        StorageType::Val(ValType::Ref(RefType::ANYREF))
-                    ),
-                    "Field 3 (shadowed) should be anyref"
-                );
-                assert!(
-                    matches!(
-                        fields[4].element_type,
-                        StorageType::Val(ValType::Ref(RefType::ANYREF))
-                    ),
-                    "Field 4 (outer) should be anyref"
-                );
-            }
-            _ => panic!("Marker (index 4) should be a struct type"),
-        }
-    }
-
-    #[test]
-    fn test_closure_struct_layout() {
-        // ClosureStruct: { func_idx: i32, env: anyref }
-        let builtins = builtin_types();
-        let closure_def = &builtins[CLOSURE_STRUCT_IDX as usize];
-
-        match closure_def {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), CLOSURE_FIELD_COUNT);
-                // Field 0: i32 (function table index)
-                assert!(matches!(
-                    fields[0].element_type,
-                    StorageType::Val(ValType::I32)
-                ));
-                // Field 1: anyref
-                assert!(matches!(
-                    fields[1].element_type,
-                    StorageType::Val(ValType::Ref(RefType::ANYREF))
-                ));
-            }
-            _ => panic!("Expected struct type for closure"),
-        }
-    }
-
-    #[test]
-    fn test_boxed_f64_has_single_f64_field() {
-        let builtins = builtin_types();
-        let boxed_def = &builtins[BOXED_F64_IDX as usize];
-
-        match boxed_def {
-            GcTypeDef::Struct(fields) => {
-                assert_eq!(fields.len(), 1, "BoxedF64 should have 1 field");
-                assert!(
-                    matches!(fields[0].element_type, StorageType::Val(ValType::F64)),
-                    "BoxedF64 field should be f64"
-                );
-            }
-            _ => panic!("BoxedF64 should be a struct type"),
+        let i32 = StorageType::Val(ValType::I32);
+        let f64 = StorageType::Val(ValType::F64);
+        let anyref = StorageType::Val(ValType::Ref(RefType::ANYREF));
+        assert_eq!(CLOSURE_FIELD_COUNT, 2, "ClosureStruct field count");
+        let cases: [(&str, u32, &[StorageType]); 3] = [
+            // { ability_id, prompt_tag, tr_dispatch_fn, shadowed, outer }
+            ("Marker", MARKER_IDX, &[i32, i32, anyref, anyref, anyref]),
+            // { func_idx: function table index, env }
+            ("ClosureStruct", CLOSURE_STRUCT_IDX, &[i32, anyref]),
+            ("BoxedF64", BOXED_F64_IDX, &[f64]),
+        ];
+        for (name, index, expected) in cases {
+            let GcTypeDef::Struct(fields) = &builtins[index as usize] else {
+                panic!("{name} (index {index}) should be a struct type");
+            };
+            let element_types: Vec<_> = fields.iter().map(|field| field.element_type).collect();
+            assert_eq!(element_types, expected, "{name} field types");
         }
     }
 

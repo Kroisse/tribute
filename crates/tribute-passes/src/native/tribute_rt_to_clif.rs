@@ -540,107 +540,33 @@ mod tests {
     }
 
     #[test]
-    fn test_box_int_to_clif() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%0: core.i32) -> core.ptr {
-    %1 = tribute_rt.box_int %0 : core.ptr
+    fn test_box_and_unbox_to_clif() {
+        for (kind, scalar) in [
+            ("int", "core.i32"),
+            ("float", "core.f64"),
+            ("nat", "core.i32"),
+            ("bool", "core.i32"),
+        ] {
+            let boxed = run_pass(&format!(
+                r#"core.module @test {{
+  func.func @f(%0: {scalar}) -> core.ptr {{
+    %1 = tribute_rt.box_{kind} %0 : core.ptr
     func.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
-    }
+  }}
+}}"#
+            ));
+            insta::assert_snapshot!(format!("box_{kind}_to_clif"), boxed);
 
-    #[test]
-    fn test_unbox_int_to_clif() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%0: core.ptr) -> core.i32 {
-    %1 = tribute_rt.unbox_int %0 : core.i32
+            let unboxed = run_pass(&format!(
+                r#"core.module @test {{
+  func.func @f(%0: core.ptr) -> {scalar} {{
+    %1 = tribute_rt.unbox_{kind} %0 : {scalar}
     func.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
-    }
-
-    #[test]
-    fn test_box_float_to_clif() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%0: core.f64) -> core.ptr {
-    %1 = tribute_rt.box_float %0 : core.ptr
-    func.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
-    }
-
-    #[test]
-    fn test_unbox_float_to_clif() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%0: core.ptr) -> core.f64 {
-    %1 = tribute_rt.unbox_float %0 : core.f64
-    func.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
-    }
-
-    #[test]
-    fn test_box_nat_to_clif() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%0: core.i32) -> core.ptr {
-    %1 = tribute_rt.box_nat %0 : core.ptr
-    func.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
-    }
-
-    #[test]
-    fn test_unbox_nat_to_clif() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%0: core.ptr) -> core.i32 {
-    %1 = tribute_rt.unbox_nat %0 : core.i32
-    func.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
-    }
-
-    #[test]
-    fn test_box_bool_to_clif() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%0: core.i32) -> core.ptr {
-    %1 = tribute_rt.box_bool %0 : core.ptr
-    func.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
-    }
-
-    #[test]
-    fn test_unbox_bool_to_clif() {
-        let result = run_pass(
-            r#"core.module @test {
-  func.func @f(%0: core.ptr) -> core.i32 {
-    %1 = tribute_rt.unbox_bool %0 : core.i32
-    func.return %1
-  }
-}"#,
-        );
-        insta::assert_snapshot!(result);
+  }}
+}}"#
+            ));
+            insta::assert_snapshot!(format!("unbox_{kind}_to_clif"), unboxed);
+        }
     }
 
     #[test]

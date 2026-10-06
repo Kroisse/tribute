@@ -30,16 +30,16 @@ fn assert_error(
     let [error] = errors.as_slice() else {
         panic!("expected exactly one error for {text:?}, got {errors:?}");
     };
-    assert_eq!(error.phase, phase);
+    assert_eq!(error.phase, phase, "{text:?}");
     let start = text.find(part).expect("part must occur");
     assert_eq!(
         (error.inner.span.start, error.inner.span.end),
         (start, start + part.len()),
-        "span must cover {part:?}"
+        "{text:?}: span must cover {part:?}"
     );
     assert!(
         error.inner.message.contains(message),
-        "unexpected message: {}",
+        "{text:?}: unexpected message: {}",
         error.inner.message
     );
 }
@@ -82,89 +82,65 @@ fn raw_and_bare_spellings_name_the_same_binding(db: &salsa::DatabaseImpl) {
 }
 
 #[salsa_test]
-fn keyword_binding_suggests_raw_identifier(db: &salsa::DatabaseImpl) {
-    assert_error(
-        db,
-        "fn f() -> Nat {\n    let op = 1\n    1\n}\n",
-        "op",
-        CompilationPhase::Parsing,
-        "`op` is a keyword; write `r#op` to use it as a name",
-    );
-}
-
-#[salsa_test]
-fn keyword_field_suggests_raw_identifier(db: &salsa::DatabaseImpl) {
-    assert_error(
-        db,
-        "struct T { case: Nat }\n",
-        "case",
-        CompilationPhase::Parsing,
-        "`case` is a keyword; write `r#case` to use it as a name",
-    );
-}
-
-#[salsa_test]
-fn keyword_after_dot_suggests_raw_identifier(db: &salsa::DatabaseImpl) {
-    assert_error(
-        db,
-        "fn f(x: Nat) -> Nat { x.as }\n",
-        "as",
-        CompilationPhase::Parsing,
-        "`as` is a keyword; write `r#as` to use it as a name",
-    );
-}
-
-#[salsa_test]
-fn reserved_word_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_error(
-        db,
-        "fn f() -> Nat {\n    let where = 1\n    1\n}\n",
-        "where",
-        CompilationPhase::AstGeneration,
-        "`where` is reserved for future use; write `r#where` to use it as a name",
-    );
-}
-
-#[salsa_test]
-fn raw_path_keyword_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_error(
-        db,
-        "fn f() -> Nat {\n    let r#self = 1\n    1\n}\n",
-        "r#self",
-        CompilationPhase::AstGeneration,
-        "`self` cannot be a raw identifier",
-    );
-}
-
-#[salsa_test]
-fn path_keyword_binding_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_error(
-        db,
-        "fn f() -> Nat {\n    let self = 1\n    1\n}\n",
-        "self",
-        CompilationPhase::Parsing,
-        "`self` is a keyword and cannot be used as a name",
-    );
-}
-
-#[salsa_test]
-fn reserved_word_path_segment_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_error(
-        db,
-        "fn f() -> Nat { foo::where::bar }\n",
-        "where",
-        CompilationPhase::AstGeneration,
-        "`where` is reserved for future use",
-    );
-}
-
-#[salsa_test]
-fn raw_path_keyword_path_segment_is_rejected(db: &salsa::DatabaseImpl) {
-    assert_error(
-        db,
-        "fn f() -> Nat { foo::r#self::bar }\n",
-        "r#self",
-        CompilationPhase::AstGeneration,
-        "`self` cannot be a raw identifier",
-    );
+fn keyword_misuse_is_rejected(db: &salsa::DatabaseImpl) {
+    for (text, part, phase, message) in [
+        // keyword binding suggests raw identifier
+        (
+            "fn f() -> Nat {\n    let op = 1\n    1\n}\n",
+            "op",
+            CompilationPhase::Parsing,
+            "`op` is a keyword; write `r#op` to use it as a name",
+        ),
+        // keyword field suggests raw identifier
+        (
+            "struct T { case: Nat }\n",
+            "case",
+            CompilationPhase::Parsing,
+            "`case` is a keyword; write `r#case` to use it as a name",
+        ),
+        // keyword after dot suggests raw identifier
+        (
+            "fn f(x: Nat) -> Nat { x.as }\n",
+            "as",
+            CompilationPhase::Parsing,
+            "`as` is a keyword; write `r#as` to use it as a name",
+        ),
+        // reserved word is rejected
+        (
+            "fn f() -> Nat {\n    let where = 1\n    1\n}\n",
+            "where",
+            CompilationPhase::AstGeneration,
+            "`where` is reserved for future use; write `r#where` to use it as a name",
+        ),
+        // raw path keyword is rejected
+        (
+            "fn f() -> Nat {\n    let r#self = 1\n    1\n}\n",
+            "r#self",
+            CompilationPhase::AstGeneration,
+            "`self` cannot be a raw identifier",
+        ),
+        // path keyword binding is rejected
+        (
+            "fn f() -> Nat {\n    let self = 1\n    1\n}\n",
+            "self",
+            CompilationPhase::Parsing,
+            "`self` is a keyword and cannot be used as a name",
+        ),
+        // reserved word path segment is rejected
+        (
+            "fn f() -> Nat { foo::where::bar }\n",
+            "where",
+            CompilationPhase::AstGeneration,
+            "`where` is reserved for future use",
+        ),
+        // raw path keyword path segment is rejected
+        (
+            "fn f() -> Nat { foo::r#self::bar }\n",
+            "r#self",
+            CompilationPhase::AstGeneration,
+            "`self` cannot be a raw identifier",
+        ),
+    ] {
+        assert_error(db, text, part, phase, message);
+    }
 }

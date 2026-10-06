@@ -813,116 +813,70 @@ mod tests {
     }
 
     #[test]
-    fn test_translate_type_integers() {
+    fn test_translate_type() {
         let mut ctx = IrContext::new();
-        let i8_ty = make_core_type(&mut ctx, "i8");
-        let i16_ty = make_core_type(&mut ctx, "i16");
-        let i32_ty = make_core_type(&mut ctx, "i32");
-        let i64_ty = make_core_type(&mut ctx, "i64");
-
-        assert_eq!(
-            translate_type(&ctx, i8_ty, cl_types::I64).unwrap(),
-            cl_types::I8
-        );
-        assert_eq!(
-            translate_type(&ctx, i16_ty, cl_types::I64).unwrap(),
-            cl_types::I16
-        );
-        assert_eq!(
-            translate_type(&ctx, i32_ty, cl_types::I64).unwrap(),
-            cl_types::I32
-        );
-        assert_eq!(
-            translate_type(&ctx, i64_ty, cl_types::I64).unwrap(),
-            cl_types::I64
-        );
+        for (name, expected) in [
+            ("i8", Some(cl_types::I8)),
+            ("i16", Some(cl_types::I16)),
+            ("i32", Some(cl_types::I32)),
+            ("i64", Some(cl_types::I64)),
+            ("f32", Some(cl_types::F32)),
+            ("f64", Some(cl_types::F64)),
+            ("nil", None),
+        ] {
+            let ty = make_core_type(&mut ctx, name);
+            let translated = translate_type(&ctx, ty, cl_types::I64);
+            match expected {
+                Some(expected) => assert_eq!(translated.ok(), Some(expected), "core.{name}"),
+                None => assert!(translated.is_err(), "core.{name} must be unsupported"),
+            }
+        }
     }
 
     #[test]
-    fn test_translate_type_floats() {
-        let mut ctx = IrContext::new();
-        let f32_ty = make_core_type(&mut ctx, "f32");
-        let f64_ty = make_core_type(&mut ctx, "f64");
-
-        assert_eq!(
-            translate_type(&ctx, f32_ty, cl_types::I64).unwrap(),
-            cl_types::F32
-        );
-        assert_eq!(
-            translate_type(&ctx, f64_ty, cl_types::I64).unwrap(),
-            cl_types::F64
-        );
-    }
-
-    #[test]
-    fn test_translate_type_unsupported() {
-        let mut ctx = IrContext::new();
-        let nil_ty = make_core_type(&mut ctx, "nil");
-        assert!(translate_type(&ctx, nil_ty, cl_types::I64).is_err());
-    }
-
-    #[test]
-    fn test_translate_signature_params_and_return() {
-        let mut ctx = IrContext::new();
-        let i32_ty = make_core_type(&mut ctx, "i32");
-        let i64_ty = make_core_type(&mut ctx, "i64");
-
-        let func_ty = clif::func_sig(&mut ctx, [i32_ty, i32_ty], [i64_ty]).as_type_ref();
-
-        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
-        assert_eq!(sig.params.len(), 2);
-        assert_eq!(sig.params[0].value_type, cl_types::I32);
-        assert_eq!(sig.params[1].value_type, cl_types::I32);
-        assert_eq!(sig.returns.len(), 1);
-        assert_eq!(sig.returns[0].value_type, cl_types::I64);
-    }
-
-    #[test]
-    fn test_translate_signature_void_return() {
-        let mut ctx = IrContext::new();
-        let i64_ty = make_core_type(&mut ctx, "i64");
-        let nil_ty = make_core_type(&mut ctx, "nil");
-
-        let func_ty = clif::func_sig(&mut ctx, [i64_ty], [nil_ty]).as_type_ref();
-
-        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
-        assert_eq!(sig.params.len(), 1);
-        assert_eq!(sig.params[0].value_type, cl_types::I64);
-        assert_eq!(sig.returns.len(), 0);
-    }
-
-    #[test]
-    fn test_translate_signature_omits_nil_parameters_in_order() {
+    fn test_translate_signature_params_and_results() {
         let mut ctx = IrContext::new();
         let i32_ty = make_core_type(&mut ctx, "i32");
         let i64_ty = make_core_type(&mut ctx, "i64");
         let nil_ty = make_core_type(&mut ctx, "nil");
-
-        let func_ty = clif::func_sig(&mut ctx, [i32_ty, nil_ty, i64_ty], [i32_ty]).as_type_ref();
-
-        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
-        assert_eq!(
-            sig.params
-                .iter()
-                .map(|param| param.value_type)
-                .collect::<Vec<_>>(),
-            vec![cl_types::I32, cl_types::I64]
-        );
-        assert_eq!(sig.returns.len(), 1);
-        assert_eq!(sig.returns[0].value_type, cl_types::I32);
-    }
-
-    #[test]
-    fn test_translate_signature_no_params() {
-        let mut ctx = IrContext::new();
-        let i64_ty = make_core_type(&mut ctx, "i64");
-
-        let func_ty = clif::func_sig(&mut ctx, [], [i64_ty]).as_type_ref();
-
-        let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64).unwrap();
-        assert_eq!(sig.params.len(), 0);
-        assert_eq!(sig.returns.len(), 1);
-        assert_eq!(sig.returns[0].value_type, cl_types::I64);
+        // (case, inputs, results, expected params, expected returns);
+        // nil parameters and results are omitted in order.
+        let cases: [(&str, &[_], &[_], &[_], &[_]); 6] = [
+            (
+                "params and return",
+                &[i32_ty, i32_ty],
+                &[i64_ty],
+                &[cl_types::I32, cl_types::I32],
+                &[cl_types::I64],
+            ),
+            ("void return", &[i64_ty], &[nil_ty], &[cl_types::I64], &[]),
+            (
+                "nil parameter omitted in order",
+                &[i32_ty, nil_ty, i64_ty],
+                &[i32_ty],
+                &[cl_types::I32, cl_types::I64],
+                &[cl_types::I32],
+            ),
+            ("no params", &[], &[i64_ty], &[], &[cl_types::I64]),
+            ("resultless", &[], &[], &[], &[]),
+            (
+                "ordered multiple results",
+                &[i32_ty],
+                &[i64_ty, i32_ty],
+                &[cl_types::I32],
+                &[cl_types::I64, cl_types::I32],
+            ),
+        ];
+        for (case, inputs, results, params, returns) in cases {
+            let func_ty = clif::func_sig(&mut ctx, inputs.iter().copied(), results.iter().copied())
+                .as_type_ref();
+            let sig = translate_signature(&ctx, func_ty, CallConv::SystemV, cl_types::I64)
+                .unwrap_or_else(|error| panic!("{case}: {error}"));
+            let types =
+                |list: &[cl_ir::AbiParam]| list.iter().map(|p| p.value_type).collect::<Vec<_>>();
+            assert_eq!(types(&sig.params), params, "{case}");
+            assert_eq!(types(&sig.returns), returns, "{case}");
+        }
     }
 
     #[test]
@@ -943,39 +897,5 @@ mod tests {
         let sig = translate_signature(&ctx, tail, CallConv::SystemV, cl_types::I64).unwrap();
         assert_eq!(sig.call_conv, CallConv::Tail);
         assert!(translate_signature(&ctx, malformed, CallConv::SystemV, cl_types::I64).is_err());
-    }
-}
-
-#[cfg(test)]
-mod result_list_tests {
-    use super::*;
-    use trunk_ir::types::TypeData;
-
-    fn make_core_type(ctx: &mut IrContext, name: &'static str) -> TypeRef {
-        ctx.intern_type(TypeData {
-            dialect: Symbol::new("core"),
-            name: Symbol::new(name),
-            params: Default::default(),
-            attrs: Default::default(),
-        })
-    }
-
-    #[test]
-    fn translates_resultless_and_ordered_multi_result_signatures() {
-        let mut ctx = IrContext::new();
-        let i32 = make_core_type(&mut ctx, "i32");
-        let i64 = make_core_type(&mut ctx, "i64");
-        let resultless = clif::func_sig(&mut ctx, [], []).as_type_ref();
-        let multiple = clif::func_sig(&mut ctx, [i32], [i64, i32]).as_type_ref();
-        assert!(
-            translate_signature(&ctx, resultless, CallConv::SystemV, cl_types::I64)
-                .unwrap()
-                .returns
-                .is_empty()
-        );
-        let translated =
-            translate_signature(&ctx, multiple, CallConv::SystemV, cl_types::I64).unwrap();
-        assert_eq!(translated.returns[0].value_type, cl_types::I64);
-        assert_eq!(translated.returns[1].value_type, cl_types::I32);
     }
 }

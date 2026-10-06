@@ -4072,41 +4072,31 @@ mod tests {
     }
 
     #[salsa_test]
-    fn test_annotation_user_defined_type(db: &dyn salsa::Database) {
+    fn test_annotation_named_and_path_types(db: &dyn salsa::Database) {
         let checker = make_test_checker(db);
         let env = ModuleTypeEnv::new(db);
         let mut ctx = make_test_ctx(db, &env);
 
-        let ann = make_annotation(TypeAnnotationKind::Named(Symbol::new("MyType")));
-        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+        // A qualified type identity preserves the complete path.
+        let cases = [
+            (TypeAnnotationKind::Named(Symbol::new("MyType")), "MyType"),
+            (
+                TypeAnnotationKind::Path(vec![Symbol::new("std"), Symbol::new("Option")]),
+                "std::Option",
+            ),
+        ];
 
-        // Should be Named { name: "MyType", args: [] }
-        if let TypeKind::Named { name, args, .. } = ty.kind(db) {
-            assert_eq!(*name, Symbol::new("MyType"));
-            assert!(args.is_empty());
-        } else {
-            panic!("User-defined type should be Named");
-        }
-    }
-
-    #[salsa_test]
-    fn test_annotation_path(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        let ann = make_annotation(TypeAnnotationKind::Path(vec![
-            Symbol::new("std"),
-            Symbol::new("Option"),
-        ]));
-        let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
-
-        // Qualified type identity preserves the complete path.
-        if let TypeKind::Named { name, args, .. } = ty.kind(db) {
-            assert_eq!(*name, Symbol::new("std::Option"));
-            assert!(args.is_empty());
-        } else {
-            panic!("Path type should be Named");
+        for (kind, expected_name) in cases {
+            let ann = make_annotation(kind);
+            let ty = checker.annotation_to_type_with_ctx(&mut ctx, &ann);
+            let TypeKind::Named { name, args, .. } = ty.kind(db) else {
+                panic!(
+                    "{expected_name}: annotation should be Named, got {:?}",
+                    ty.kind(db)
+                );
+            };
+            assert_eq!(*name, Symbol::new(expected_name), "{expected_name}");
+            assert!(args.is_empty(), "{expected_name}: unexpected args {args:?}");
         }
     }
 
@@ -4360,172 +4350,89 @@ mod tests {
     // =========================================================================
 
     #[salsa_test]
-    fn test_extract_list_element_type_from_list(db: &dyn salsa::Database) {
+    fn test_extract_list_element_type_of_list_types(db: &dyn salsa::Database) {
         let checker = make_test_checker(db);
         let env = ModuleTypeEnv::new(db);
         let mut ctx = make_test_ctx(db, &env);
 
-        // List<Int> → Int
+        let list_of = |args| {
+            Type::new(
+                db,
+                TypeKind::Named {
+                    id: TypeDefId::builtin_list(db),
+                    name: Symbol::new("List"),
+                    args,
+                },
+            )
+        };
         let int_ty = Type::new(db, TypeKind::Int);
-        let list_ty = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![int_ty],
-            },
-        );
-
-        let elem_ty = checker.extract_list_element_type(list_ty, &mut ctx);
-        assert_eq!(elem_ty, int_ty);
-    }
-
-    #[salsa_test]
-    fn test_extract_list_element_type_from_list_string(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // List<String> → String
         let string_ty = Type::new(db, TypeKind::string(db));
-        let list_ty = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![string_ty],
-            },
-        );
+        let list_int = list_of(vec![int_ty]);
 
-        let elem_ty = checker.extract_list_element_type(list_ty, &mut ctx);
-        assert_eq!(elem_ty, string_ty);
+        let cases = [
+            ("List<Int>", list_int, int_ty),
+            ("List<String>", list_of(vec![string_ty]), string_ty),
+            (
+                "App(List, [Int])",
+                Type::new(
+                    db,
+                    TypeKind::App {
+                        ctor: list_of(vec![]),
+                        args: vec![int_ty],
+                    },
+                ),
+                int_ty,
+            ),
+            ("List<List<Int>>", list_of(vec![list_int]), list_int),
+        ];
+
+        for (name, list_ty, expected) in cases {
+            let elem_ty = checker.extract_list_element_type(list_ty, &mut ctx);
+            assert_eq!(elem_ty, expected, "{name}");
+        }
     }
 
     #[salsa_test]
-    fn test_extract_list_element_type_from_app(db: &dyn salsa::Database) {
+    fn test_extract_list_element_type_of_non_list_returns_fresh_var(db: &dyn salsa::Database) {
         let checker = make_test_checker(db);
         let env = ModuleTypeEnv::new(db);
         let mut ctx = make_test_ctx(db, &env);
 
         let int_ty = Type::new(db, TypeKind::Int);
-        let list_ctor = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![],
-            },
-        );
-        let list_ty = Type::new(
-            db,
-            TypeKind::App {
-                ctor: list_ctor,
-                args: vec![int_ty],
-            },
-        );
+        let cases = [
+            ("Int", int_ty),
+            (
+                "Option<Int>",
+                Type::new(
+                    db,
+                    TypeKind::Named {
+                        id: TypeDefId::synthetic(db, Symbol::new("Option")),
+                        name: Symbol::new("Option"),
+                        args: vec![int_ty],
+                    },
+                ),
+            ),
+            (
+                "List with no type args",
+                Type::new(
+                    db,
+                    TypeKind::Named {
+                        id: TypeDefId::builtin_list(db),
+                        name: Symbol::new("List"),
+                        args: vec![],
+                    },
+                ),
+            ),
+        ];
 
-        assert_eq!(checker.extract_list_element_type(list_ty, &mut ctx), int_ty);
-    }
-
-    #[salsa_test]
-    fn test_extract_list_element_type_non_list_returns_fresh_var(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // Int → fresh type var (not a List type)
-        let int_ty = Type::new(db, TypeKind::Int);
-
-        let elem_ty = checker.extract_list_element_type(int_ty, &mut ctx);
-
-        // Should be a fresh UniVar, not Int
-        assert!(
-            matches!(elem_ty.kind(db), TypeKind::UniVar { .. }),
-            "Expected UniVar for non-list type, got {:?}",
-            elem_ty.kind(db)
-        );
-    }
-
-    #[salsa_test]
-    fn test_extract_list_element_type_other_named_returns_fresh_var(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // Option<Int> → fresh type var (not a List type)
-        let int_ty = Type::new(db, TypeKind::Int);
-        let option_ty = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::synthetic(db, Symbol::new("Option")),
-                name: Symbol::new("Option"),
-                args: vec![int_ty],
-            },
-        );
-
-        let elem_ty = checker.extract_list_element_type(option_ty, &mut ctx);
-
-        // Should be a fresh UniVar, not Int
-        assert!(
-            matches!(elem_ty.kind(db), TypeKind::UniVar { .. }),
-            "Expected UniVar for Option type, got {:?}",
-            elem_ty.kind(db)
-        );
-    }
-
-    #[salsa_test]
-    fn test_extract_list_element_type_empty_args_returns_fresh_var(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // List with no type args → fresh type var
-        let list_ty = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![],
-            },
-        );
-
-        let elem_ty = checker.extract_list_element_type(list_ty, &mut ctx);
-
-        // Should be a fresh UniVar
-        assert!(
-            matches!(elem_ty.kind(db), TypeKind::UniVar { .. }),
-            "Expected UniVar for List with no args, got {:?}",
-            elem_ty.kind(db)
-        );
-    }
-
-    #[salsa_test]
-    fn test_extract_list_element_type_nested_list(db: &dyn salsa::Database) {
-        let checker = make_test_checker(db);
-        let env = ModuleTypeEnv::new(db);
-        let mut ctx = make_test_ctx(db, &env);
-
-        // List<List<Int>> → List<Int>
-        let int_ty = Type::new(db, TypeKind::Int);
-        let inner_list = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![int_ty],
-            },
-        );
-        let outer_list = Type::new(
-            db,
-            TypeKind::Named {
-                id: TypeDefId::builtin_list(db),
-                name: Symbol::new("List"),
-                args: vec![inner_list],
-            },
-        );
-
-        let elem_ty = checker.extract_list_element_type(outer_list, &mut ctx);
-        assert_eq!(elem_ty, inner_list);
+        for (name, ty) in cases {
+            let elem_ty = checker.extract_list_element_type(ty, &mut ctx);
+            assert!(
+                matches!(elem_ty.kind(db), TypeKind::UniVar { .. }),
+                "{name}: expected a fresh UniVar, got {:?}",
+                elem_ty.kind(db)
+            );
+        }
     }
 
     #[salsa_test]

@@ -508,38 +508,157 @@ mod tests {
     }
 
     #[test]
-    fn test_func_type_variadic() {
+    fn test_func_type_stores_inputs_and_results() {
         let mut ctx = IrContext::new();
         let i32_ty = make_i32_type(&mut ctx);
+        let nil_ty = super::core::nil(&mut ctx).as_type_ref();
+        let cases: [(&str, &[_], &[_]); 5] = [
+            ("(i32, i32) -> i32", &[i32_ty, i32_ty], &[i32_ty]),
+            ("(i32) -> i32", &[i32_ty], &[i32_ty]),
+            ("() -> nil", &[], &[nil_ty]),
+            ("() -> i32", &[], &[i32_ty]),
+            ("() -> ()", &[], &[]),
+        ];
+        for (case, inputs, results) in cases {
+            let f =
+                super::func::func_sig(&mut ctx, inputs.iter().copied(), results.iter().copied());
 
-        // func(i32, i32) -> i32  (no effect)
-        let f = super::func::func_sig(&mut ctx, [i32_ty, i32_ty], [i32_ty]);
+            assert!(
+                super::func::FuncSig::matches(&ctx, f.as_type_ref()),
+                "{case}"
+            );
+            assert_eq!(f.inputs(&ctx), inputs, "{case}");
+            assert_eq!(f.results(&ctx), results, "{case}");
+            assert_eq!(f.single_result(&ctx), results.first().copied(), "{case}");
+        }
+    }
 
-        assert!(super::func::FuncSig::matches(&ctx, f.as_type_ref()));
-        assert_eq!(f.results(&ctx), &[i32_ty]);
-        assert_eq!(f.inputs(&ctx), &[i32_ty, i32_ty]);
+    /// Shared contract of the target dialects' multi-result `func_sig`
+    /// types, checked once per dialect module.
+    macro_rules! for_each_target_func_sig_dialect {
+        ($check:ident) => {
+            $check!(clif);
+            $check!(wasm);
+        };
     }
 
     #[test]
-    fn test_func_type_single_param() {
-        let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx);
+    fn target_func_sigs_own_zero_and_multiple_result_lists_and_metadata() {
+        macro_rules! check {
+            ($dialect:ident) => {{
+                use super::$dialect::{FuncSig, func_sig, func_sig_with_attrs};
+                let dialect = stringify!($dialect);
+                let mut ctx = IrContext::new();
+                let i32 = make_i32_type(&mut ctx);
+                let i64 = ctx.intern_type(TypeDataBuilder::new("core", "i64").build());
+                let kept = || {
+                    let mut attrs = crate::AttributeMap::new();
+                    attrs.insert(Symbol::new("kept"), Attribute::Type(i64));
+                    attrs
+                };
+                let zero = func_sig(&mut ctx, [i32], []).as_type_ref();
+                let one = func_sig(&mut ctx, [i32], [i64]).as_type_ref();
+                let many = func_sig_with_attrs(&mut ctx, [i32], [i32, i64], kept()).as_type_ref();
 
-        let f = super::func::func_sig(&mut ctx, [i32_ty], [i32_ty]);
-
-        assert_eq!(f.single_result(&ctx), Some(i32_ty));
-        assert_eq!(f.inputs(&ctx), &[i32_ty]);
+                let zero_sig = FuncSig::from_type_ref(&ctx, zero).expect(dialect);
+                assert!(zero_sig.is_resultless(&ctx), "{dialect}");
+                let one_sig = FuncSig::from_type_ref(&ctx, one).expect(dialect);
+                assert_eq!(one_sig.inputs(&ctx), [i32], "{dialect}");
+                assert_eq!(one_sig.results(&ctx), [i64], "{dialect}");
+                assert_ne!(
+                    one,
+                    super::func::func_sig(&mut ctx, [i32], [i64]).as_type_ref(),
+                    "{dialect}"
+                );
+                let many_sig = FuncSig::from_type_ref(&ctx, many).expect(dialect);
+                assert_eq!(many_sig.inputs(&ctx), [i32], "{dialect}");
+                assert_eq!(many_sig.results(&ctx), [i32, i64], "{dialect}");
+                assert_eq!(many_sig.non_reserved_attrs(&ctx).count(), 1, "{dialect}");
+                assert_eq!(
+                    many,
+                    func_sig_with_attrs(&mut ctx, [i32], [i32, i64], kept()).as_type_ref(),
+                    "{dialect}"
+                );
+            }};
+        }
+        for_each_target_func_sig_dialect!(check);
     }
 
     #[test]
-    fn test_func_type_no_params() {
-        let mut ctx = IrContext::new();
-        let nil_ty = super::core::nil(&mut ctx);
+    fn target_func_sigs_reject_malformed_delimiters_without_slicing() {
+        macro_rules! check {
+            ($dialect:ident) => {{
+                use super::$dialect::{
+                    FUNC_SIG, FuncSig, FuncSigTypeError, NUM_INPUTS_ATTR, NUM_RESULTS_ATTR,
+                };
+                let dialect = stringify!($dialect);
+                let mut ctx = IrContext::new();
+                let i32 = make_i32_type(&mut ctx);
+                let sig =
+                    |ctx: &mut IrContext, params: &[_], counts: &[(&'static str, Attribute)]| {
+                        let mut builder = TypeDataBuilder::new(Symbol::new(dialect), FUNC_SIG());
+                        for &param in params {
+                            builder = builder.param(param);
+                        }
+                        for (name, value) in counts {
+                            builder = builder.attr(*name, value.clone());
+                        }
+                        ctx.intern_type(builder.build())
+                    };
 
-        let f = super::func::func_sig(&mut ctx, [], [nil_ty.as_type_ref()]);
+                let malformed = sig(
+                    &mut ctx,
+                    &[i32],
+                    &[
+                        (NUM_INPUTS_ATTR, Attribute::Int(2)),
+                        (NUM_RESULTS_ATTR, Attribute::Int(1)),
+                    ],
+                );
+                assert!(
+                    FuncSig::from_type_ref(&ctx, malformed).is_none(),
+                    "{dialect}"
+                );
 
-        assert_eq!(f.results(&ctx), &[nil_ty.as_type_ref()]);
-        assert!(f.inputs(&ctx).is_empty());
+                let missing = sig(&mut ctx, &[i32], &[(NUM_INPUTS_ATTR, Attribute::Int(1))]);
+                assert_eq!(
+                    FuncSig::validate(&ctx, missing),
+                    Err(FuncSigTypeError::MissingCount(NUM_RESULTS_ATTR)),
+                    "{dialect}"
+                );
+
+                let wrong_kind = sig(
+                    &mut ctx,
+                    &[i32],
+                    &[
+                        (
+                            NUM_INPUTS_ATTR,
+                            Attribute::SymbolRef(SymbolPath::from("one")),
+                        ),
+                        (NUM_RESULTS_ATTR, Attribute::Int(0)),
+                    ],
+                );
+                assert_eq!(
+                    FuncSig::validate(&ctx, wrong_kind),
+                    Err(FuncSigTypeError::InvalidCount(NUM_INPUTS_ATTR)),
+                    "{dialect}"
+                );
+
+                let overflow = sig(
+                    &mut ctx,
+                    &[],
+                    &[
+                        (NUM_INPUTS_ATTR, Attribute::Int(i128::from(u32::MAX))),
+                        (NUM_RESULTS_ATTR, Attribute::Int(1)),
+                    ],
+                );
+                assert_eq!(
+                    FuncSig::validate(&ctx, overflow),
+                    Err(FuncSigTypeError::CountOverflow),
+                    "{dialect}"
+                );
+            }};
+        }
+        for_each_target_func_sig_dialect!(check);
     }
 
     #[test]
@@ -575,23 +694,6 @@ mod tests {
         assert!(one_input.results(&ctx).is_empty());
         assert!(one_result.inputs(&ctx).is_empty());
         assert_eq!(one_result.results(&ctx), [i32_ty]);
-    }
-
-    #[test]
-    fn test_func_type_zero_input_zero_result() {
-        let mut ctx = IrContext::new();
-        let function = super::func::func_sig(&mut ctx, [], []);
-        assert!(function.inputs(&ctx).is_empty());
-        assert!(function.results(&ctx).is_empty());
-    }
-
-    #[test]
-    fn test_func_type_inputs_zero_one_result() {
-        let mut ctx = IrContext::new();
-        let i32_ty = make_i32_type(&mut ctx);
-        let function = super::func::func_sig(&mut ctx, [], [i32_ty]);
-        assert!(function.inputs(&ctx).is_empty());
-        assert_eq!(function.results(&ctx), [i32_ty]);
     }
 
     #[test]

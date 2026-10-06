@@ -477,200 +477,93 @@ mod tests {
     // ========================================================================
 
     #[test]
-    fn test_extract_single_param() {
+    fn test_extract_type_args_from_instantiation() {
         let db = TestDb::default();
-        // ∀a. a → a
-        let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let scheme_body = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![bv0],
-                result: bv0,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let scheme = make_scheme(&db, 1, scheme_body);
-
-        let int = Type::new(&db, TypeKind::Int);
-        let concrete = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![int],
-                result: int,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-
-        let result = extract_type_args(&db, scheme, concrete);
-        assert_eq!(result, Some(vec![int]));
-    }
-
-    #[test]
-    fn test_extract_multiple_params() {
-        let db = TestDb::default();
-        // ∀a,b. (a, b) → a
+        let func = |params, result| {
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params,
+                    result,
+                    effect: pure_effect(&db),
+                    minimum_convention: crate::ast::CallingConvention::Direct,
+                },
+            )
+        };
+        let named = |name: &str, args| {
+            Type::new(
+                &db,
+                TypeKind::Named {
+                    id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new(name)),
+                    name: trunk_ir::Symbol::new(name),
+                    args,
+                },
+            )
+        };
         let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
         let bv1 = Type::new(&db, TypeKind::BoundVar { index: 1 });
-        let scheme_body = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![bv0, bv1],
-                result: bv0,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let scheme = make_scheme(&db, 2, scheme_body);
-
         let int = Type::new(&db, TypeKind::Int);
         let float = Type::new(&db, TypeKind::Float);
-        let concrete = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![int, float],
-                result: int,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let text = named("Text", vec![]);
 
-        let result = extract_type_args(&db, scheme, concrete);
-        assert_eq!(result, Some(vec![int, float]));
-    }
+        // (name, scheme parameter count, scheme body, concrete type, expected)
+        let cases = [
+            (
+                "∀a. a → a",
+                1,
+                func(vec![bv0], bv0),
+                func(vec![int], int),
+                Some(vec![int]),
+            ),
+            (
+                "∀a,b. (a, b) → a",
+                2,
+                func(vec![bv0, bv1], bv0),
+                func(vec![int, float], int),
+                Some(vec![int, float]),
+            ),
+            (
+                "∀a. (a, a) → a",
+                1,
+                func(vec![bv0, bv0], bv0),
+                func(vec![int, int], int),
+                Some(vec![int]),
+            ),
+            (
+                "∀a. (a, a) → a with inconsistent (Int, Text) → Int",
+                1,
+                func(vec![bv0, bv0], bv0),
+                func(vec![int, text], int),
+                None,
+            ),
+            (
+                "∀a. Option(a) → a",
+                1,
+                func(vec![named("Option", vec![bv0])], bv0),
+                func(vec![named("Option", vec![int])], int),
+                Some(vec![int]),
+            ),
+            (
+                "∀a,b. (fn(a) → b, a) → b",
+                2,
+                func(vec![func(vec![bv0], bv1), bv0], bv1),
+                func(vec![func(vec![int], bool_ty), int], bool_ty),
+                Some(vec![int, bool_ty]),
+            ),
+            (
+                "monomorphic Int → Int",
+                0,
+                func(vec![int], int),
+                func(vec![int], int),
+                None,
+            ),
+        ];
 
-    #[test]
-    fn test_extract_same_param_twice() {
-        let db = TestDb::default();
-        // ∀a. (a, a) → a
-        let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let scheme_body = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![bv0, bv0],
-                result: bv0,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let scheme = make_scheme(&db, 1, scheme_body);
-
-        let int = Type::new(&db, TypeKind::Int);
-        let concrete = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![int, int],
-                result: int,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-
-        let result = extract_type_args(&db, scheme, concrete);
-        assert_eq!(result, Some(vec![int]));
-    }
-
-    #[test]
-    fn test_extract_consistency_mismatch() {
-        let db = TestDb::default();
-        // ∀a. (a, a) → a with (Int, Text) → Int — inconsistent
-        let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let scheme_body = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![bv0, bv0],
-                result: bv0,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let scheme = make_scheme(&db, 1, scheme_body);
-
-        let int = Type::new(&db, TypeKind::Int);
-        let text = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Text")),
-                name: trunk_ir::Symbol::new("Text"),
-                args: vec![],
-            },
-        );
-        let concrete = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![int, text],
-                result: int,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-
-        assert_eq!(extract_type_args(&db, scheme, concrete), None);
-    }
-
-    #[test]
-    fn test_extract_nested_named() {
-        let db = TestDb::default();
-        // ∀a. Option(a) → a
-        let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let option_bv = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option")),
-                name: trunk_ir::Symbol::new("Option"),
-                args: vec![bv0],
-            },
-        );
-        let scheme_body = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![option_bv],
-                result: bv0,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let scheme = make_scheme(&db, 1, scheme_body);
-
-        let int = Type::new(&db, TypeKind::Int);
-        let option_int = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, trunk_ir::Symbol::new("Option")),
-                name: trunk_ir::Symbol::new("Option"),
-                args: vec![int],
-            },
-        );
-        let concrete = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![option_int],
-                result: int,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-
-        let result = extract_type_args(&db, scheme, concrete);
-        assert_eq!(result, Some(vec![int]));
-    }
-
-    #[test]
-    fn test_extract_monomorphic_returns_none() {
-        let db = TestDb::default();
-        let int = Type::new(&db, TypeKind::Int);
-        let body = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![int],
-                result: int,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let scheme = make_scheme(&db, 0, body);
-        assert_eq!(extract_type_args(&db, scheme, body), None);
+        for (name, num_params, body, concrete, expected) in cases {
+            let scheme = make_scheme(&db, num_params, body);
+            assert_eq!(extract_type_args(&db, scheme, concrete), expected, "{name}");
+        }
     }
 
     // ========================================================================
@@ -722,175 +615,86 @@ mod tests {
     }
 
     #[test]
-    fn test_collect_type_retains_concrete_specialization() {
-        let db = TestDb::default();
-        let module = nominal_module();
-        let index = NominalIndex::new(&db, &module);
-        let int = Type::new(&db, TypeKind::Int);
-        let option_id = nominal_id(&index, &db, "Option");
-        let option_int = Type::new(
-            &db,
-            TypeKind::Named {
-                id: option_id,
-                name: trunk_ir::Symbol::new("Option"),
-                args: vec![int],
-            },
-        );
-
-        let mut result = HashMap::default();
-        collect_from_type(&db, option_int, &index, &mut result);
-
-        assert_eq!(result.len(), 1);
-        let option_insts = result.get(&option_id).unwrap();
-        assert!(option_insts.contains(&vec![int]));
-    }
-
-    #[test]
-    fn test_collect_type_skips_bound_var_specialization() {
+    fn test_collect_type_instantiations() {
         let db = TestDb::default();
         let module = nominal_module();
         let index = NominalIndex::new(&db, &module);
         let option_id = nominal_id(&index, &db, "Option");
-        let option_bound = Type::new(
-            &db,
-            TypeKind::Named {
-                id: option_id,
-                name: trunk_ir::Symbol::new("Option"),
-                args: vec![Type::new(&db, TypeKind::BoundVar { index: 0 })],
-            },
-        );
-
-        let mut result = HashMap::default();
-        collect_from_type(&db, option_bound, &index, &mut result);
-
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_collect_type_skips_local_bound_var_specialization() {
-        let db = TestDb::default();
-        let module = nominal_module();
-        let index = NominalIndex::new(&db, &module);
-        let option_id = nominal_id(&index, &db, "Option");
-        let option_bound = Type::new(
-            &db,
-            TypeKind::Named {
-                id: option_id,
-                name: trunk_ir::Symbol::new("Option"),
-                args: vec![Type::new(
-                    &db,
-                    TypeKind::LocalBoundVar {
-                        scope: NodeId::from_raw(0),
-                        index: 0,
-                    },
-                )],
-            },
-        );
-
-        let mut result = HashMap::default();
-        collect_from_type(&db, option_bound, &index, &mut result);
-
-        assert!(result.is_empty());
-    }
-
-    #[test]
-    fn test_collect_type_retains_concrete_child_below_skipped_parent() {
-        let db = TestDb::default();
-        let module = nominal_module();
-        let index = NominalIndex::new(&db, &module);
         let result_id = nominal_id(&index, &db, "Result");
-        let option_id = nominal_id(&index, &db, "Option");
-        let int = Type::new(&db, TypeKind::Int);
-        let option_int = Type::new(
-            &db,
-            TypeKind::Named {
-                id: option_id,
-                name: trunk_ir::Symbol::new("Option"),
-                args: vec![int],
-            },
-        );
-        let result_bound_option_int = Type::new(
-            &db,
-            TypeKind::Named {
-                id: result_id,
-                name: trunk_ir::Symbol::new("Result"),
-                args: vec![Type::new(&db, TypeKind::BoundVar { index: 0 }), option_int],
-            },
-        );
-
-        let mut result = HashMap::default();
-        collect_from_type(&db, result_bound_option_int, &index, &mut result);
-
-        assert!(!result.contains_key(&result_id));
-        assert_eq!(
-            result[&option_id],
-            [vec![int]].into_iter().collect::<HashSet<_>>()
-        );
-    }
-
-    #[test]
-    fn test_collect_type_nested() {
-        let db = TestDb::default();
-        let module = nominal_module();
-        let index = NominalIndex::new(&db, &module);
-        let int = Type::new(&db, TypeKind::Int);
-        let option_id = nominal_id(&index, &db, "Option");
         let list_id = nominal_id(&index, &db, "List");
-        let option_int = Type::new(
-            &db,
-            TypeKind::Named {
-                id: option_id,
-                name: trunk_ir::Symbol::new("Option"),
-                args: vec![int],
-            },
-        );
-        let list_option_int = Type::new(
-            &db,
-            TypeKind::Named {
-                id: list_id,
-                name: trunk_ir::Symbol::new("List"),
-                args: vec![option_int],
-            },
-        );
-
-        let mut result = HashMap::default();
-        collect_from_type(&db, list_option_int, &index, &mut result);
-
-        assert_eq!(result.len(), 2);
-        assert!(result[&option_id].contains(&vec![int]));
-        assert!(result[&list_id].contains(&vec![option_int]));
-    }
-
-    #[test]
-    fn test_collect_type_in_func_params() {
-        let db = TestDb::default();
-        let module = nominal_module();
-        let index = NominalIndex::new(&db, &module);
-        let int = Type::new(&db, TypeKind::Int);
         let pair_id = nominal_id(&index, &db, "Pair");
-        let pair_int_int = Type::new(
+        let named = |id, args| {
+            Type::new(
+                &db,
+                TypeKind::Named {
+                    id,
+                    name: id.qualified(&db).clone(),
+                    args,
+                },
+            )
+        };
+        let int = Type::new(&db, TypeKind::Int);
+        let bound = Type::new(&db, TypeKind::BoundVar { index: 0 });
+        let local_bound = Type::new(
             &db,
-            TypeKind::Named {
-                id: pair_id,
-                name: trunk_ir::Symbol::new("Pair"),
-                args: vec![int, int],
+            TypeKind::LocalBoundVar {
+                scope: NodeId::from_raw(0),
+                index: 0,
             },
         );
-        let func_ty = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![pair_int_int],
-                result: int,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
+        let option_int = named(option_id, vec![int]);
+        let pair_int_int = named(pair_id, vec![int, int]);
 
-        let mut result = HashMap::default();
-        collect_from_type(&db, func_ty, &index, &mut result);
+        // (name, type, expected instantiations by declaration)
+        let cases = [
+            (
+                "concrete Option(Int)",
+                option_int,
+                vec![(option_id, vec![vec![int]])],
+            ),
+            ("Option(BoundVar)", named(option_id, vec![bound]), vec![]),
+            (
+                "Option(LocalBoundVar)",
+                named(option_id, vec![local_bound]),
+                vec![],
+            ),
+            (
+                "concrete child below skipped Result(BoundVar, Option(Int))",
+                named(result_id, vec![bound, option_int]),
+                vec![(option_id, vec![vec![int]])],
+            ),
+            (
+                "nested List(Option(Int))",
+                named(list_id, vec![option_int]),
+                vec![
+                    (option_id, vec![vec![int]]),
+                    (list_id, vec![vec![option_int]]),
+                ],
+            ),
+            (
+                "fn(Pair(Int, Int)) -> Int",
+                Type::new(
+                    &db,
+                    TypeKind::Func {
+                        params: vec![pair_int_int],
+                        result: int,
+                        effect: pure_effect(&db),
+                        minimum_convention: crate::ast::CallingConvention::Direct,
+                    },
+                ),
+                vec![(pair_id, vec![vec![int, int]])],
+            ),
+        ];
 
-        assert_eq!(result.len(), 1);
-        assert!(result[&pair_id].contains(&vec![int, int]));
+        for (name, ty, expected) in cases {
+            let mut result = HashMap::default();
+            collect_from_type(&db, ty, &index, &mut result);
+            let expected = expected
+                .into_iter()
+                .map(|(id, args)| (id, args.into_iter().collect::<HashSet<_>>()))
+                .collect::<HashMap<_, _>>();
+            assert_eq!(result, expected, "{name}");
+        }
     }
 
     #[test]
@@ -924,55 +728,4 @@ mod tests {
     // ========================================================================
     // extract_type_args tests (continued)
     // ========================================================================
-
-    #[test]
-    fn test_extract_func_type_arg() {
-        let db = TestDb::default();
-        // ∀a,b. fn(a) → b  (the whole thing is a function type with a function-typed param)
-        let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let bv1 = Type::new(&db, TypeKind::BoundVar { index: 1 });
-        let fn_param = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![bv0],
-                result: bv1,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let scheme_body = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![fn_param, bv0],
-                result: bv1,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let scheme = make_scheme(&db, 2, scheme_body);
-
-        let int = Type::new(&db, TypeKind::Int);
-        let bool_ty = Type::new(&db, TypeKind::Bool);
-        let fn_concrete = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![int],
-                result: bool_ty,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-        let concrete = Type::new(
-            &db,
-            TypeKind::Func {
-                params: vec![fn_concrete, int],
-                result: bool_ty,
-                effect: pure_effect(&db),
-                minimum_convention: crate::ast::CallingConvention::Direct,
-            },
-        );
-
-        let result = extract_type_args(&db, scheme, concrete);
-        assert_eq!(result, Some(vec![int, bool_ty]));
-    }
 }

@@ -73,91 +73,48 @@ mod tests {
     }
 
     #[test]
-    fn test_box_int_round_trip() {
+    fn test_single_value_ops_round_trip() {
         let mut ctx = IrContext::new();
         let loc = dummy_location();
         let i32_ty = make_i32_type(&mut ctx);
         let ptr_ty = make_ptr_type(&mut ctx);
+        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
+        let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
+        let name_attr = ctx.string_attr("Box");
+        let managed_ty = ctx.intern_type(
+            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
+                .attr("name", name_attr)
+                .build(),
+        );
 
-        // Create a value to box
-        let c = trunk_ir::dialect::arith::Const::operands()
-            .value(Attribute::Int(42))
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-        let val = c.result(&ctx);
+        // Build `op` over a fresh operand of `operand_ty`, then check that
+        // `from_op` matches it and that its operand accessor and result type
+        // round-trip.
+        macro_rules! check {
+            ($op:ident, $accessor:ident, $operand_ty:expr, $result_ty:expr) => {{
+                let name = stringify!($op);
+                let value = trunk_ir::dialect::arith::Const::operands()
+                    .value(Attribute::Int(0))
+                    .results($operand_ty)
+                    .build(&mut ctx, loc)
+                    .result(&ctx);
+                let op = super::$op::operands(value)
+                    .results($result_ty)
+                    .build(&mut ctx, loc);
+                let round_trip = super::$op::from_op(&ctx, op.op_ref())
+                    .unwrap_or_else(|_| panic!("{name}: from_op must match"));
+                assert_eq!(round_trip.op_ref(), op.op_ref(), "{name}");
+                assert_eq!(op.$accessor(&ctx), value, "{name}");
+                assert_eq!(ctx.value_ty(op.result(&ctx)), $result_ty, "{name}");
+            }};
+        }
 
-        // Create tribute_rt.box_int
-        let op = super::BoxInt::operands(val)
-            .results(ptr_ty)
-            .build(&mut ctx, loc);
-
-        // Verify from_op round-trip
-        let op2 =
-            super::BoxInt::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.box_int");
-        assert_eq!(op.op_ref(), op2.op_ref());
-
-        // Verify operand
-        assert_eq!(op.value(&ctx), val);
-
-        // Verify result type
-        let result = op.result(&ctx);
-        assert_eq!(ctx.value_ty(result), ptr_ty);
-    }
-
-    #[test]
-    fn test_unbox_int_round_trip() {
-        let mut ctx = IrContext::new();
-        let loc = dummy_location();
-        let i32_ty = make_i32_type(&mut ctx);
-
-        // Create a boxed value
-        let c = trunk_ir::dialect::mem::Null::operands().build(&mut ctx, loc);
-        let boxed_val = c.result(&ctx);
-
-        // Create tribute_rt.unbox_int
-        let op = super::UnboxInt::operands(boxed_val)
-            .results(i32_ty)
-            .build(&mut ctx, loc);
-
-        // Verify from_op round-trip
-        let op2 =
-            super::UnboxInt::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.unbox_int");
-        assert_eq!(op.op_ref(), op2.op_ref());
-
-        // Verify operand
-        assert_eq!(op.value(&ctx), boxed_val);
-
-        // Verify result type
-        let result = op.result(&ctx);
-        assert_eq!(ctx.value_ty(result), i32_ty);
-    }
-
-    #[test]
-    fn test_retain_round_trip() {
-        let mut ctx = IrContext::new();
-        let loc = dummy_location();
-        let ptr_ty = make_ptr_type(&mut ctx);
-
-        // Create a ptr value
-        let c = trunk_ir::dialect::mem::Null::operands().build(&mut ctx, loc);
-        let ptr_val = c.result(&ctx);
-
-        // Create tribute_rt.retain
-        let op = super::Retain::operands(ptr_val)
-            .results(ptr_ty)
-            .build(&mut ctx, loc);
-
-        // Verify from_op round-trip
-        let op2 =
-            super::Retain::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.retain");
-        assert_eq!(op.op_ref(), op2.op_ref());
-
-        // Verify operand
-        assert_eq!(op.ptr(&ctx), ptr_val);
-
-        // Verify result type
-        let result = op.result(&ctx);
-        assert_eq!(ctx.value_ty(result), ptr_ty);
+        check!(BoxInt, value, i32_ty, ptr_ty);
+        check!(UnboxInt, value, ptr_ty, i32_ty);
+        check!(BoxFloat, value, f64_ty, ptr_ty);
+        check!(BoxBool, value, bool_ty, ptr_ty);
+        check!(Retain, ptr, ptr_ty, ptr_ty);
+        check!(IntoRaw, value, managed_ty, ptr_ty);
     }
 
     #[test]
@@ -184,79 +141,6 @@ mod tests {
 
         // Verify alloc_size attribute
         assert_eq!(op.alloc_size(&ctx), 16u64);
-    }
-
-    #[test]
-    fn test_into_raw_round_trip() {
-        let mut ctx = IrContext::new();
-        let loc = dummy_location();
-        let name_attr = ctx.string_attr("Box");
-        let managed_ty = ctx.intern_type(
-            TypeDataBuilder::new(Symbol::new("adt"), Symbol::new("typeref"))
-                .attr("name", name_attr)
-                .build(),
-        );
-        let ptr_ty = make_ptr_type(&mut ctx);
-        let value = trunk_ir::dialect::arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(managed_ty)
-            .build(&mut ctx, loc)
-            .result(&ctx);
-
-        let op = super::IntoRaw::operands(value)
-            .results(ptr_ty)
-            .build(&mut ctx, loc);
-        let round_trip =
-            super::IntoRaw::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.into_raw");
-
-        assert_eq!(round_trip.op_ref(), op.op_ref());
-        assert_eq!(op.value(&ctx), value);
-        assert_eq!(ctx.value_ty(op.result(&ctx)), ptr_ty);
-    }
-
-    #[test]
-    fn test_box_float_round_trip() {
-        let mut ctx = IrContext::new();
-        let loc = dummy_location();
-        let f64_ty = ctx.intern_type(TypeDataBuilder::new("core", "f64").build());
-        let ptr_ty = make_ptr_type(&mut ctx);
-
-        let c = trunk_ir::dialect::arith::Const::operands()
-            .value(Attribute::Int(0))
-            .results(f64_ty)
-            .build(&mut ctx, loc);
-        let val = c.result(&ctx);
-
-        let op = super::BoxFloat::operands(val)
-            .results(ptr_ty)
-            .build(&mut ctx, loc);
-        let op2 =
-            super::BoxFloat::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.box_float");
-        assert_eq!(op.op_ref(), op2.op_ref());
-        assert_eq!(op.value(&ctx), val);
-        assert_eq!(ctx.value_ty(op.result(&ctx)), ptr_ty);
-    }
-
-    #[test]
-    fn test_box_bool_round_trip() {
-        let mut ctx = IrContext::new();
-        let loc = dummy_location();
-        let bool_ty = ctx.intern_type(TypeDataBuilder::new("core", "i1").build());
-        let ptr_ty = make_ptr_type(&mut ctx);
-
-        let c = trunk_ir::dialect::arith::Const::operands()
-            .value(Attribute::Int(1))
-            .results(bool_ty)
-            .build(&mut ctx, loc);
-        let val = c.result(&ctx);
-
-        let op = super::BoxBool::operands(val)
-            .results(ptr_ty)
-            .build(&mut ctx, loc);
-        let op2 =
-            super::BoxBool::from_op(&ctx, op.op_ref()).expect("should match tribute_rt.box_bool");
-        assert_eq!(op.op_ref(), op2.op_ref());
-        assert_eq!(op.value(&ctx), val);
     }
 
     #[test]

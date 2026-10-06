@@ -386,69 +386,65 @@ mod tests {
     }
 
     #[test]
-    fn test_type_rewrite_map_keeps_builtin_and_source_list_distinct() {
+    fn test_type_rewrite_map_keeps_same_spelled_types_distinct() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let builtin_id = TypeDefId::builtin_list(&db);
-        let source_id =
-            TypeDefId::source(&db, Symbol::new("List"), crate::ast::NodeId::from_raw(1));
-        let mut instantiations = HashMap::default();
-        instantiations.insert(builtin_id, [vec![int]].into_iter().collect::<HashSet<_>>());
-        instantiations.insert(source_id, [vec![int]].into_iter().collect::<HashSet<_>>());
+        let source = |name: &str, node| {
+            TypeDefId::source(&db, Symbol::new(name), crate::ast::NodeId::from_raw(node))
+        };
+        let cases = [
+            (
+                "builtin and source List",
+                [
+                    (TypeDefId::builtin_list(&db), "BuiltinList$Int"),
+                    (source("List", 1), "List$Int"),
+                ],
+            ),
+            (
+                "same-spelled source types",
+                [
+                    (source("A::Thing", 1), "A::Thing$Int"),
+                    (source("B::Thing", 2), "B::Thing$Int"),
+                ],
+            ),
+        ];
+        for (name, ids) in cases {
+            let instantiations = ids
+                .iter()
+                .map(|(id, _)| (*id, [vec![int]].into_iter().collect::<HashSet<_>>()))
+                .collect::<HashMap<_, _>>();
 
-        let map = build_type_rewrite_map(&db, &instantiations);
+            let map = build_type_rewrite_map(&db, &instantiations);
 
-        assert_eq!(map.len(), 2);
-        assert_eq!(map[&builtin_id][0].1.to_string(), "BuiltinList$Int");
-        assert_eq!(map[&source_id][0].1.to_string(), "List$Int");
+            assert_eq!(map.len(), 2, "{name}");
+            for (id, mangled) in ids {
+                assert_eq!(map[&id][0].1.to_string(), mangled, "{name}");
+            }
+        }
     }
 
     #[test]
-    fn test_type_rewrite_map_keeps_same_spelled_source_types_distinct() {
+    fn test_rewrite_type_without_map_entry_is_unchanged() {
         let db = TestDb::default();
         let int = Type::new(&db, TypeKind::Int);
-        let a_id = TypeDefId::source(
-            &db,
-            Symbol::new("A::Thing"),
-            crate::ast::NodeId::from_raw(1),
-        );
-        let b_id = TypeDefId::source(
-            &db,
-            Symbol::new("B::Thing"),
-            crate::ast::NodeId::from_raw(2),
-        );
-        let mut instantiations = HashMap::default();
-        instantiations.insert(a_id, [vec![int]].into_iter().collect::<HashSet<_>>());
-        instantiations.insert(b_id, [vec![int]].into_iter().collect::<HashSet<_>>());
-
-        let map = build_type_rewrite_map(&db, &instantiations);
-
-        assert_eq!(map.len(), 2);
-        assert_eq!(map[&a_id][0].1.to_string(), "A::Thing$Int");
-        assert_eq!(map[&b_id][0].1.to_string(), "B::Thing$Int");
-    }
-
-    #[test]
-    fn test_rewrite_type_leaves_primitives() {
-        let db = TestDb::default();
-        let int = Type::new(&db, TypeKind::Int);
+        let named = |name: &str, args| {
+            Type::new(
+                &db,
+                TypeKind::Named {
+                    id: crate::ast::TypeDefId::synthetic(&db, Symbol::new(name)),
+                    name: Symbol::new(name),
+                    args,
+                },
+            )
+        };
         let map = TypeRewriteMap::default();
-        assert_eq!(rewrite_type(&db, int, &map), int);
-    }
-
-    #[test]
-    fn test_rewrite_type_named_no_args_unchanged() {
-        let db = TestDb::default();
-        let text = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Text")),
-                name: Symbol::new("Text"),
-                args: vec![],
-            },
-        );
-        let map = TypeRewriteMap::default();
-        assert_eq!(rewrite_type(&db, text, &map), text);
+        for (name, ty) in [
+            ("primitive Int", int),
+            ("Text without args", named("Text", vec![])),
+            ("Unknown(Int) not in map", named("Unknown", vec![int])),
+        ] {
+            assert_eq!(rewrite_type(&db, ty, &map), ty, "{name}");
+        }
     }
 
     #[test]
@@ -488,25 +484,6 @@ mod tests {
             },
             other => panic!("expected Func, got {:?}", other),
         }
-    }
-
-    #[test]
-    fn test_rewrite_type_not_in_map_preserves_args() {
-        let db = TestDb::default();
-        let int = Type::new(&db, TypeKind::Int);
-        let unknown = Type::new(
-            &db,
-            TypeKind::Named {
-                id: crate::ast::TypeDefId::synthetic(&db, Symbol::new("Unknown")),
-                name: Symbol::new("Unknown"),
-                args: vec![int],
-            },
-        );
-        let map = TypeRewriteMap::default(); // empty
-
-        let result = rewrite_type(&db, unknown, &map);
-        // Should be unchanged
-        assert_eq!(result, unknown);
     }
 
     /// Regression: outer generic with nested generic args must still be

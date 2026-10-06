@@ -87,104 +87,48 @@ pub fn derive_module_name_from_path(uri_str: &str) -> Symbol {
 mod tests {
     use super::*;
 
-    mod path_to_uri {
-        use super::*;
-
-        #[test]
-        fn absolute_path() {
-            let uri = path_to_uri(Path::new("/home/user/project/main.trb"));
-            assert_eq!(uri.as_str(), "file:///home/user/project/main.trb");
-        }
-
-        #[test]
-        fn relative_path() {
-            let uri = path_to_uri(Path::new("src/main.trb"));
-            assert_eq!(uri.as_str(), "file:///src/main.trb");
-        }
-
-        #[test]
-        fn nested_directory() {
-            let uri = path_to_uri(Path::new("/a/b/c/d/e.trb"));
-            assert_eq!(uri.as_str(), "file:///a/b/c/d/e.trb");
+    #[test]
+    fn path_to_uri_prefixes_file_scheme() {
+        for (path, expected) in [
+            (
+                "/home/user/project/main.trb",
+                "file:///home/user/project/main.trb",
+            ),
+            ("src/main.trb", "file:///src/main.trb"),
+            ("/a/b/c/d/e.trb", "file:///a/b/c/d/e.trb"),
+        ] {
+            let uri = path_to_uri(Path::new(path));
+            assert_eq!(uri.as_str(), expected, "{path}");
         }
     }
 
-    mod derive_module_name_from_path {
-        use super::*;
-
-        #[test]
-        fn file_uri_with_extension() {
-            let name = derive_module_name_from_path("file:///home/user/project/foo.trb");
-            assert_eq!(name, Symbol::new("foo"));
-        }
-
-        #[test]
-        fn file_uri_without_extension() {
-            let name = derive_module_name_from_path("file:///home/user/project/bar");
-            assert_eq!(name, Symbol::new("bar"));
-        }
-
-        #[test]
-        fn file_uri_nested_path() {
-            let name = derive_module_name_from_path("file:///a/b/c/module.trb");
-            assert_eq!(name, Symbol::new("module"));
-        }
-
-        #[test]
-        fn plain_path_string() {
-            let name = derive_module_name_from_path("/home/user/test.trb");
-            assert_eq!(name, Symbol::new("test"));
-        }
-
-        #[test]
-        fn fallback_to_main_for_empty() {
-            let name = derive_module_name_from_path("");
-            assert_eq!(name, Symbol::new("main"));
-        }
-
-        #[test]
-        fn module_name_with_dots() {
-            let name = derive_module_name_from_path("file:///project/my.module.trb");
-            assert_eq!(name, Symbol::new("my.module"));
+    #[test]
+    fn derive_module_name_from_path_uses_file_stem() {
+        for (path, expected) in [
+            ("file:///home/user/project/foo.trb", "foo"),
+            ("file:///home/user/project/bar", "bar"),
+            ("file:///a/b/c/module.trb", "module"),
+            ("/home/user/test.trb", "test"),
+            ("", "main"),
+            ("file:///project/my.module.trb", "my.module"),
+        ] {
+            let name = derive_module_name_from_path(path);
+            assert_eq!(name, Symbol::new(expected), "{path:?}");
         }
     }
 
-    mod chunk_from_byte {
-        use super::*;
-
-        #[test]
-        fn beginning_of_rope() {
-            let rope = Rope::from_str("hello world");
-            let chunk = chunk_from_byte(&rope, 0);
-            assert!(chunk.starts_with(b"hello"));
-        }
-
-        #[test]
-        fn middle_of_rope() {
-            let rope = Rope::from_str("hello world");
-            let chunk = chunk_from_byte(&rope, 6);
-            assert!(chunk.starts_with(b"world"));
-        }
-
-        #[test]
-        fn beyond_rope_length() {
-            let rope = Rope::from_str("hello");
-            let chunk = chunk_from_byte(&rope, 100);
-            assert_eq!(chunk, b"");
-        }
-
-        #[test]
-        fn exact_end_of_rope() {
-            let rope = Rope::from_str("hello");
-            let chunk = chunk_from_byte(&rope, 5);
-            assert_eq!(chunk, b"");
-        }
-
-        #[test]
-        fn empty_rope() {
-            let rope = Rope::from_str("");
-            let chunk = chunk_from_byte(&rope, 0);
-            assert_eq!(chunk, b"");
+    #[test]
+    fn chunk_from_byte_returns_rest_of_chunk() {
+        for (text, byte, expected) in [
+            ("hello world", 0, &b"hello world"[..]),
+            ("hello world", 6, b"world"),
+            ("hello", 100, b""),
+            ("hello", 5, b""),
+            ("", 0, b""),
+        ] {
+            let rope = Rope::from_str(text);
+            let chunk = chunk_from_byte(&rope, byte);
+            assert_eq!(chunk, expected, "{text:?} at byte {byte}");
         }
     }
 }
