@@ -202,7 +202,7 @@ pub fn monomorphize_functions<'db>(
         extra_types.push(op.result);
     }
     for step in metadata.evidence_plans.values().flatten() {
-        step.for_each_instance(&mut |instance| extra_types.extend(instance.args.iter().copied()));
+        step.for_each_instance(|instance| extra_types.extend(instance.args.iter().copied()));
     }
     let nominal_index = nominal_index::NominalIndex::new(db, &module);
     let seeds =
@@ -296,7 +296,7 @@ pub fn monomorphize_functions<'db>(
             op.result = rewrite_ty(op.result);
         }
         for step in metadata.evidence_plans.values_mut().flatten() {
-            *step = step.map_types(&mut |ty| rewrite_ty(ty));
+            *step = step.map_types(rewrite_ty);
         }
         rewrite::rewrite_types_in_module(db, &mut module, &type_rewrite_map);
 
@@ -446,7 +446,7 @@ fn specialize_metadata<'db>(
     for (id, plan) in plans {
         let plan = plan
             .into_iter()
-            .map(|step| step.map_types(&mut |ty| substitute_type(db, ty, type_args)))
+            .map(|step| step.map_types(|ty| substitute_type(db, ty, type_args)))
             .collect();
         metadata
             .evidence_plans

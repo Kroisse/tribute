@@ -292,20 +292,30 @@ pub enum EvidenceStep<'db> {
 
 impl<'db> EvidenceStep<'db> {
     /// Call `visit` with each ability instance the plan step names.
-    pub fn for_each_instance(&self, visit: &mut impl FnMut(&crate::ast::Effect<'db>)) {
+    pub fn for_each_instance(&self, mut visit: impl FnMut(&crate::ast::Effect<'db>)) {
+        self.visit_instances(&mut visit);
+    }
+
+    // The recursion passes one `&mut dyn` down: a generic parameter would
+    // grow by a reference at each level of `Tails`.
+    fn visit_instances(&self, visit: &mut dyn FnMut(&crate::ast::Effect<'db>)) {
         match self {
             Self::Mask(instance) | Self::Dup(instance) | Self::Push(instance) => visit(instance),
             Self::Select(_) => {}
             Self::Tails(plans) => {
                 for step in plans.iter().flatten() {
-                    step.for_each_instance(visit);
+                    step.visit_instances(visit);
                 }
             }
         }
     }
 
     /// Apply `map` to the type arguments of each instance.
-    pub fn map_types(&self, map: &mut impl FnMut(Type<'db>) -> Type<'db>) -> Self {
+    pub fn map_types(&self, mut map: impl FnMut(Type<'db>) -> Type<'db>) -> Self {
+        self.map_instance_types(&mut map)
+    }
+
+    fn map_instance_types(&self, map: &mut dyn FnMut(Type<'db>) -> Type<'db>) -> Self {
         let mut instance = |instance: &crate::ast::Effect<'db>| crate::ast::Effect {
             ability_id: instance.ability_id,
             args: instance.args.iter().map(|ty| map(*ty)).collect(),
@@ -318,7 +328,11 @@ impl<'db> EvidenceStep<'db> {
             Self::Tails(plans) => Self::Tails(
                 plans
                     .iter()
-                    .map(|plan| plan.iter().map(|step| step.map_types(map)).collect())
+                    .map(|plan| {
+                        plan.iter()
+                            .map(|step| step.map_instance_types(map))
+                            .collect()
+                    })
                     .collect(),
             ),
         }
