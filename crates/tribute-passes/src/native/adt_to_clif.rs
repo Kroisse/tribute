@@ -45,7 +45,7 @@ use trunk_ir_cranelift_backend::passes::arith_to_clif::finalize_cmp;
 /// The `type_converter` parameter converts result types and determines field
 /// sizes for enum layout computation. Struct field offsets come from the
 /// `mem.struct` layout alone.
-pub fn lower(
+fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,

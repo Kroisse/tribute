@@ -31,7 +31,7 @@ const BYTES_OFFSET: u32 = 8;
 const MESSAGE_OFFSET: u32 = 16;
 
 /// Lower every `tribute_io` operation and add the required runtime declarations.
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     ensure_runtime_declarations(ctx, module);
     let read_line_result_ty = find_read_line_result_type(ctx);
 

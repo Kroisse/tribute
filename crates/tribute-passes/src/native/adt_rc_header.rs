@@ -39,7 +39,7 @@ const ALLOC_FN: &str = "__tribute_alloc";
 ///
 /// Each header stores the RTTI index its `tribute_rtti.layout` declares. As
 /// the last reader of those declarations, this pass erases them.
-pub fn lower(
+fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,

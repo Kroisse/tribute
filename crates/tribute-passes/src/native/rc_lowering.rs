@@ -66,7 +66,7 @@ use trunk_ir::SymbolPath;
 
 /// Lower all `tribute_rt.retain` and `tribute_rt.release` operations to
 /// inline `clif.*` operations.
-pub fn lower_rc(ctx: &mut IrContext, module: Module) {
+fn lower_rc(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };

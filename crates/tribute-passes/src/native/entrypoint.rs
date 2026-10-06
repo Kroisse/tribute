@@ -21,7 +21,7 @@ use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 /// 1. Ensures `__tribute_init` (and optionally `__asan_init`) declarations exist
 /// 2. Calls them at the start of `main`
 /// 3. Retypes `main` to `() -> i32` and makes each `func.return` return 0
-pub fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: bool) {
+fn generate_native_entrypoint(ctx: &mut IrContext, module: Module, sanitize: bool) {
     let Some(first_block) = module.first_block(ctx) else {
         return;
     };

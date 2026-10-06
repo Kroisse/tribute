@@ -34,11 +34,9 @@ use std::ops::ControlFlow;
 use tribute_ir::dialect::adt;
 use tribute_ir::dialect::adt::layout::get_struct_fields;
 use tribute_ir::dialect::{tribute_rt, tribute_rtti};
-use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{arith, core, mem};
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::pass::{Pass, PassRunResult};
 use trunk_ir::refs::{OpRef, TypeRef};
 use trunk_ir::rewrite::{
     Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
@@ -48,41 +46,10 @@ use trunk_ir::walk::{WalkAction, walk_op};
 
 use super::ownership_plan::NativeOwnershipPlan;
 
-/// PassManager-friendly `struct_to_mem`. It takes over the ownership plan,
-/// whose last use is the release judgment of a layout without a declaration.
-pub struct StructToMem {
-    plan: NativeOwnershipPlan,
-}
-
-impl StructToMem {
-    pub fn new(plan: NativeOwnershipPlan) -> Self {
-        Self { plan }
-    }
-}
-
-impl Pass for StructToMem {
-    type Target = core::Module;
-
-    fn name(&self) -> &'static str {
-        "struct-to-mem"
-    }
-
-    fn run(
-        &mut self,
-        ctx: &mut IrContext,
-        target: core::Module,
-        _analyses: &mut AnalysisCache,
-    ) -> PassRunResult {
-        let (type_converter, _) = super::type_converter::native_type_converter(ctx);
-        lower(ctx, target.into(), &self.plan, &type_converter);
-        Ok(())
-    }
-}
-
 /// Replace the `adt.struct` layout of every struct field access in `module`
 /// with its `mem.struct`, and every variant test with a comparison of the
 /// variant's descriptor number.
-pub fn lower(
+pub(crate) fn lower(
     ctx: &mut IrContext,
     module: Module,
     plan: &NativeOwnershipPlan,

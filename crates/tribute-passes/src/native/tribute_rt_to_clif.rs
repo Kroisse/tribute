@@ -136,7 +136,7 @@ fn box_value(
 ///
 /// This is a partial lowering: only box/unbox operations are converted.
 /// `retain`/`release` ops pass through (handled by a future RC lowering pass).
-pub fn lower(
+fn lower(
     ctx: &mut IrContext,
     module: Module,
     type_converter: TypeConverter,

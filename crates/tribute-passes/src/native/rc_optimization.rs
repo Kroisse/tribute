@@ -15,7 +15,7 @@ use trunk_ir::rewrite::helpers::erase_op;
 use trunk_ir::{BlockRef, OpRef, RegionRef, ValueRef};
 
 /// Eliminate provably redundant retain/release pairs in `module`.
-pub fn eliminate_paired_rc(ctx: &mut IrContext, module: Module) {
+fn eliminate_paired_rc(ctx: &mut IrContext, module: Module) {
     let Some(body) = module.body(ctx) else {
         return;
     };

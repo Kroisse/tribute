@@ -121,7 +121,11 @@ impl std::error::Error for RttiError {}
 ///
 /// Each layout receives the index `RTTI_USER_START` plus its position in the
 /// plan, which keeps the plan's allocation order.
-pub fn declare_rtti_layouts(ctx: &mut IrContext, module: Module, rtti_types: &[RttiTypePlan]) {
+pub(crate) fn declare_rtti_layouts(
+    ctx: &mut IrContext,
+    module: Module,
+    rtti_types: &[RttiTypePlan],
+) {
     let Some(module_block) = module.first_block(ctx) else {
         return;
     };
@@ -175,7 +179,7 @@ fn validate_declarations(
 /// Generate a release function for every declared RTTI layout and every used
 /// primitive slot, the RTTI table that maps each index to its release
 /// function, and `__tribute_deep_release`, which dispatches through it.
-pub fn generate_rtti(
+pub(crate) fn generate_rtti(
     ctx: &mut IrContext,
     module: Module,
     type_converter: &TypeConverter,

@@ -115,7 +115,7 @@ fn walk_ops_in_region(
 }
 
 /// Analyze a module to collect all string/bytes constants.
-pub fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
+fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
     let mut collector = ConstCollector::new();
 
     if let Some(body) = module.body(ctx) {
@@ -156,7 +156,7 @@ pub fn analyze_consts(ctx: &IrContext, module: Module) -> NativeConstAnalysis {
 ///
 /// `adt.string_const("hello")` becomes the above bytes lowering +
 /// `adt.variant_new(type=String, tag=Leaf, %bytes_payload)`
-pub fn lower(
+fn lower(
     ctx: &mut IrContext,
     module: Module,
     analysis: &NativeConstAnalysis,

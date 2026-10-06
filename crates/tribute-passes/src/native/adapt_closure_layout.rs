@@ -26,7 +26,7 @@ use crate::closure_lower::is_closure_struct_type_ref;
 
 /// Rewrite semantic closure allocations and their RTTI declaration to the
 /// native closure layout.
-pub fn lower(ctx: &mut IrContext, module: Module) {
+pub(crate) fn lower(ctx: &mut IrContext, module: Module) {
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(ClosureStructAdaptPattern)
         .apply_partial(ctx, module);

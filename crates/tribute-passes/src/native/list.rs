@@ -17,7 +17,7 @@ use trunk_ir::smallvec::smallvec;
 use trunk_ir::types::{AttributeMap, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
-pub fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
+fn lower(ctx: &mut IrContext, module: Module) -> Result<(), ConversionError> {
     lower_observations(ctx, module);
     PatternApplicator::new(TypeConverter::new())
         .add_pattern(EmptyPattern)
