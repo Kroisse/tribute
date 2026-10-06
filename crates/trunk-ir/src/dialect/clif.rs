@@ -115,7 +115,7 @@ mod clif {
     /// case matches. Cases may be sparse and need not start at 0. Successors
     /// take no block arguments.
     #[verify]
-    fn switch<T: IntegerLike>(cases: Attr<[u64]>, index: Value<T>) {
+    fn switch(cases: Attr<[u64]>, index: Value<impl IntegerLike>) {
         #[successor(default)]
         {}
         #[successors(targets)]

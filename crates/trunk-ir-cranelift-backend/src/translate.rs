@@ -760,7 +760,7 @@ mod tests {
         );
         let float_index = branch_error("core.f64", branch, "");
         assert!(
-            float_index.contains("operand #0 `index`: expected T: IntegerLike, found core.f64"),
+            float_index.contains("operand #0 `index`: expected IntegerLike, found core.f64"),
             "{float_index}"
         );
     }
