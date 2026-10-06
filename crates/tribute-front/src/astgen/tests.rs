@@ -2526,51 +2526,64 @@ fn test_as_pattern() {
     );
 }
 
-#[test]
-fn test_truncate_token_preview_short() {
-    assert_eq!(truncate_token_preview("hello").to_string(), "hello");
+/// A string mixing ASCII, multibyte characters, and the line breaks and
+/// whitespace the preview handles specially.
+fn preview_input() -> impl proptest::strategy::Strategy<Value = String> {
+    proptest::string::string_regex("[a-z0-9 \t\r\n가-힣\u{1F600}-\u{1F64F}\u{00E9}\u{0301}]{0,48}")
+        .expect("valid preview regex")
 }
 
-#[test]
-fn test_truncate_token_preview_exact_20() {
-    let s = "12345678901234567890"; // exactly 20 chars
-    assert_eq!(truncate_token_preview(s).to_string(), s);
-}
+proptest::proptest! {
+    /// The preview is the first line of the trimmed token, cut after 20
+    /// characters with an ellipsis, on any Unicode input.
+    #[test]
+    fn truncate_token_preview_cuts_first_trimmed_line(text in preview_input()) {
+        let preview = truncate_token_preview(&text).to_string();
+        let trimmed = text.trim();
+        let first_line = trimmed.split(['\n', '\r']).next().unwrap_or("");
 
-#[test]
-fn test_truncate_token_preview_over_20() {
-    let s = "123456789012345678901"; // 21 chars
-    assert_eq!(
-        truncate_token_preview(s).to_string(),
-        "12345678901234567890..."
-    );
+        proptest::prop_assert!(!preview.contains(['\n', '\r']), "{preview:?}");
+        let (shown, cut) = match preview.strip_suffix("...") {
+            Some(shown) if first_line.chars().count() > 20 => (shown, true),
+            _ => (preview.as_str(), false),
+        };
+        // The shown text is a prefix of the first line, ending on a char
+        // boundary since it is a `str`.
+        proptest::prop_assert!(first_line.starts_with(shown), "{preview:?} of {text:?}");
+        if cut {
+            proptest::prop_assert_eq!(shown.chars().count(), 20);
+        } else {
+            proptest::prop_assert_eq!(shown, first_line);
+        }
+        proptest::prop_assert!(preview.chars().count() <= 23);
+    }
+
+    /// A token that fits on one line within 20 characters is shown whole,
+    /// apart from surrounding whitespace.
+    #[test]
+    fn truncate_token_preview_keeps_short_lines(
+        text in "[ \t]{0,3}[a-z가-힣]{0,20}[ \t]{0,3}",
+    ) {
+        proptest::prop_assert_eq!(truncate_token_preview(&text).to_string(), text.trim());
+    }
 }
 
 #[test]
 fn test_truncate_token_preview_multiline() {
     assert_eq!(
-        truncate_token_preview("first line\nsecond line").to_string(),
+        truncate_token_preview("  first line\nsecond line").to_string(),
         "first line"
     );
 }
 
 #[test]
-fn test_truncate_token_preview_trims_whitespace() {
-    assert_eq!(truncate_token_preview("  hello  ").to_string(), "hello");
-}
-
-#[test]
 fn test_truncate_token_preview_multibyte_chars() {
-    // 21 Korean characters — must not panic on multibyte boundary
+    // 21 Korean characters: the cut falls after the 20th, not at byte 20.
     let s = "가나다라마바사아자차카타파하거너더러머버서";
-    let result = truncate_token_preview(s).to_string();
-    assert!(result.ends_with("..."));
-    assert_eq!(result, "가나다라마바사아자차카타파하거너더러머버...");
-}
-
-#[test]
-fn test_truncate_token_preview_empty() {
-    assert_eq!(truncate_token_preview("").to_string(), "");
+    assert_eq!(
+        truncate_token_preview(s).to_string(),
+        "가나다라마바사아자차카타파하거너더러머버..."
+    );
 }
 
 // =============================================================================

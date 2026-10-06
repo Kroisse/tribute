@@ -798,6 +798,7 @@ mod tests {
     use crate::ast::SpanMap;
     use crate::resolve;
     use crate::typeck;
+    use tribute_core::diagnostic::{CompilationPhase, Diagnostic};
 
     /// Salsa input wrapper so that generated modules can be passed into
     /// `#[salsa::tracked]` helper functions (which require Salsa struct params).
@@ -806,16 +807,40 @@ mod tests {
         module: Module<UnresolvedName>,
     }
 
+    /// Tracked wrapper: name resolution only, so its diagnostics can be
+    /// collected through the accumulator.
+    #[salsa::tracked]
+    fn run_resolve(db: &dyn salsa::Database, input: PropTestInput) {
+        let module = input.module(db);
+        let _resolved = resolve::resolve_module(db, module, SpanMap::default());
+    }
+
     /// Tracked wrapper: resolve → typecheck pipeline.
     ///
     /// Running inside a tracked function provides the accumulator context
-    /// that the type checker needs to report diagnostics.
+    /// that the type checker needs to report diagnostics. Returns a
+    /// database-independent rendering of the typed module and function
+    /// schemes so that runs in separate databases can be compared.
     #[salsa::tracked]
-    fn run_resolve_and_typecheck(db: &dyn salsa::Database, input: PropTestInput) {
+    fn run_resolve_and_typecheck(db: &dyn salsa::Database, input: PropTestInput) -> String {
         let module = input.module(db);
         let span_map = SpanMap::default();
         let resolved = resolve::resolve_module(db, module, span_map.clone());
-        let _output = typeck::typecheck_module(db, &resolved, span_map);
+        let output = typeck::typecheck_module(db, &resolved, span_map);
+        format!("{:#?}\n{:#?}", output.module(db), output.function_types(db))
+    }
+
+    /// Run the typecheck pipeline in a fresh database, returning the
+    /// rendered result and every accumulated diagnostic.
+    fn typecheck_in_fresh_db(module: Module<UnresolvedName>) -> (String, Vec<Diagnostic>) {
+        let db = salsa::DatabaseImpl::new();
+        let input = PropTestInput::new(&db, module);
+        let rendered = run_resolve_and_typecheck(&db, input).clone();
+        let diagnostics = run_resolve_and_typecheck::accumulated::<Diagnostic>(&db, input)
+            .into_iter()
+            .cloned()
+            .collect();
+        (rendered, diagnostics)
     }
 
     proptest! {
@@ -909,27 +934,49 @@ mod tests {
     proptest! {
         #![proptest_config(ProptestConfig::with_cases(64))]
 
-        /// Name resolution does not panic on generated ASTs.
+        /// Name resolution reports nothing on generated ASTs.
         ///
-        /// All variables are bound by enclosing `let` bindings, so resolve
-        /// should succeed without errors.
+        /// Every variable is bound by an enclosing `let`, lambda parameter,
+        /// or function parameter, and every callee name is a declared
+        /// function (checked by `all_vars_in_scope`), so resolution must
+        /// succeed without diagnostics of any kind.
         #[test]
-        fn resolve_does_not_panic(module in parsed_module()) {
-            let db = salsa::DatabaseImpl::new();
-            let _resolved = resolve::resolve_module(&db, &module, SpanMap::default());
-        }
-
-        /// Type checking does not panic on generated ASTs.
-        ///
-        /// Type errors (e.g. `bool + int`) are expected and collected as
-        /// diagnostics — the key property is that the pipeline never panics.
-        /// Runs inside a `#[salsa::tracked]` wrapper to provide the
-        /// accumulator context required by the type checker.
-        #[test]
-        fn typecheck_does_not_panic(module in parsed_module()) {
+        fn resolve_reports_no_diagnostics(module in parsed_module()) {
             let db = salsa::DatabaseImpl::new();
             let input = PropTestInput::new(&db, module);
-            run_resolve_and_typecheck(&db, input);
+            run_resolve(&db, input);
+            let diagnostics = run_resolve::accumulated::<Diagnostic>(&db, input);
+            prop_assert!(diagnostics.is_empty(), "unexpected diagnostics: {:?}", diagnostics);
+        }
+
+        /// Type checking does not panic on generated ASTs, and every
+        /// diagnostic it reports is a type error rather than a resolution
+        /// error.
+        ///
+        /// Type errors (e.g. calling a literal) are expected; the key
+        /// properties are that the pipeline never panics and that name
+        /// resolution stays clean.
+        #[test]
+        fn typecheck_does_not_panic(module in parsed_module()) {
+            let (_, diagnostics) = typecheck_in_fresh_db(module);
+            for diagnostic in &diagnostics {
+                prop_assert_eq!(
+                    &diagnostic.phase,
+                    &CompilationPhase::TypeChecking,
+                    "{:?}",
+                    diagnostic
+                );
+            }
+        }
+
+        /// Type checking the same module in two fresh databases yields the
+        /// same typed module, function schemes, and diagnostics in the same
+        /// order.
+        #[test]
+        fn typecheck_is_deterministic(module in parsed_module()) {
+            let first = typecheck_in_fresh_db(module.clone());
+            let second = typecheck_in_fresh_db(module);
+            prop_assert_eq!(first, second);
         }
     }
 }

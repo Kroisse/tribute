@@ -1154,6 +1154,9 @@ fn print_module_op(
 }
 
 #[cfg(test)]
+mod prop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::Symbol;
@@ -1991,33 +1994,11 @@ core.module @test {
         assert_eq!(output, print_module(&reparsed_ctx, reparsed));
     }
 
-    #[test]
-    fn test_write_escaped_bytes_ascii() {
-        let mut buf = String::new();
-        write_escaped_bytes(&mut buf, b"hello").unwrap();
-        assert_eq!(buf, "hello");
-    }
-
+    /// Documents the escape spellings; `prop_tests` checks that they round-trip.
     #[test]
     fn test_write_escaped_bytes_escapes() {
         let mut buf = String::new();
-        write_escaped_bytes(&mut buf, b"a\n\t\r\0\\\"b").unwrap();
-        assert_eq!(buf, r#"a\n\t\r\0\\\"b"#);
-    }
-
-    #[test]
-    fn test_write_escaped_bytes_non_ascii() {
-        let mut buf = String::new();
-        write_escaped_bytes(&mut buf, &[0x00, 0x7f, 0x80, 0xff]).unwrap();
-        assert_eq!(buf, r"\0\x7f\x80\xff");
-    }
-
-    #[test]
-    fn test_print_bytes_attribute() {
-        let ctx = IrContext::new();
-        let attr = Attribute::Bytes(smallvec::smallvec![104, 101, 108, 108, 111]);
-        let mut buf = String::new();
-        write_attribute(&ctx, &mut buf, &attr).unwrap();
-        assert_eq!(buf, r#"b"hello""#);
+        write_escaped_bytes(&mut buf, b"a\n\t\r\0\\\"b\x7f\x80\xff").unwrap();
+        assert_eq!(buf, r#"a\n\t\r\0\\\"b\x7f\x80\xff"#);
     }
 }
