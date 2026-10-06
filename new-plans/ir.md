@@ -22,6 +22,8 @@ High-level
   tribute   unresolved or source-level frontend constructs
   tribute_control
             Tribute-specific source-logical callables and direct-style control
+  ability_v2
+            direct-style handler scopes and ability operation invocations
   ability   evidence and handler dispatch semantics
   effect    target-independent effect ABI
   closure   closure construction and decomposition
@@ -53,6 +55,7 @@ operations.
 | 경계 | `ConversionTarget` mode | 필수 적법성 |
 | ---- | ---- | ---- |
 | `tribute-control-pre-cps` | frontend 적합성 검사에는 full, 변환 중에는 partial | `tribute_control.*`은 `core.module`, `core.never`와 일반 `core` 값 type, `scf`, `arith`, `adt`, `list`, `tribute_rt`, `tribute_io`와 공존할 수 있다. `func.*`, `closure.*`, `func.func_sig`, `ability.*`, `effect.*`는 illegal이다. |
+| `tribute-abilities-elaborated` | `elaborate_abilities` 뒤 full | `tribute-control-pre-cps`와 같되 `tribute_control.handle`, `handler`, `perform`, `resume`, `yield`가 illegal이고 `ability_v2.*`가 legal이다. |
 | `tribute-control-post-cps` | shared CPS 변환 뒤 partial | `tribute_control` dialect의 모든 operation과 type이 illegal이다. Shared `func.*`, `closure.*`, `func.func_sig`, `ability.*`, `effect.*`, 일반 dialect는 이후 pass를 위해 공존할 수 있다. |
 | `tribute-backend-ready-native` | 목표 최종 코드 생성 계약 | Native 최종 코드 생성 경계는 남아 있는 논리적 제어 표현을 거부하고 대상 연산/타입 및 물리적 함수 호출 규약을 검증해야 한다. |
 | `tribute-backend-ready-wasm` | 목표 최종 코드 생성 계약 | Wasm 최종 코드 생성 경계는 같은 계약을 강제해야 한다. `verify_wasm_backend_ready`는 별개의 부분 검증이다. |
@@ -1110,6 +1113,137 @@ arbitrary module attributes. Consequently, parsing printed IR conservatively
 drops well-known type metadata. A backend may still process byte constants, but
 must reject `adt.string_const` when `tribute.type.string` is absent rather
 than scanning types for a plausible replacement.
+
+### 해석된 직접형 ability (`ability_v2`)
+
+`ability_v2`는 ability 선언의 해석을 끝낸 직접형 제어를 담는다. Handler arm과
+completion은 `tribute_control.lambda` helper가 되고, operation 호출은 kind별
+operation이 된다. Continuation과 evidence 값은 아직 없으며 callable,
+callable type, `resume_token`은 `tribute_control`의 것을 그대로 쓴다.
+`ability_v2`가 소유하는 것은 아래 여섯 operation뿐이다.
+
+| Operation | 용도 |
+| ---- | ---- |
+| `ability_v2.scope` | helper 묶음을 설치하고 body 구간을 정한다 |
+| `ability_v2.yield` | scope body를 끝내고 값을 completion helper에 넘긴다 |
+| `ability_v2.call_target` | `fn` operation 호출 |
+| `ability_v2.invoke` | 결과를 돌려받는 general `op` 호출 |
+| `ability_v2.abort` | `op -> Never` 호출 |
+| `ability_v2.resume` | resumptive helper가 받은 token 소비 |
+
+`elaborate_abilities`가 `tribute-control-pre-cps` 경계의 IR을 이 형태로 바꾼다.
+
+| 입력 | 출력 |
+| ---- | ---- |
+| `tribute_control.perform {operation_kind = "fn"}` | `call_target` |
+| `tribute_control.perform {operation_kind = "op"}`, 결과가 `Never`가 아님 | `invoke` |
+| `tribute_control.perform {operation_kind = "op"}`, 결과가 `Never` | `abort` |
+| `tribute_control.handler` | 같은 block argument를 parameter로 받는 helper lambda |
+| `tribute_control.handle`의 completion region | completion helper lambda |
+| `tribute_control.handle` | `scope`. Body region은 그대로 옮긴다 |
+| body와 completion의 `tribute_control.yield` | 각각 `ability_v2.yield`와 helper의 `tribute_control.return` |
+| handler body의 `tribute_control.resume` | `ability_v2.resume` |
+
+Helper의 convention은 handler arm과 completion이 타입 검사된 row에서 일반
+lambda와 같은 규칙으로 계산한다. Helper capture는 arm이 쓰는 바깥 SSA 값이며
+lambda capture 규칙을 따른다. 이 pass는 continuation을 만들지 않고, operation
+kind를 다시 분류하지 않으며, 선언을 다시 조회하는 마지막 단계다. 이후 단계는
+`scope`의 `handlers`와 호출 operation의 속성만 읽는다.
+
+`tribute-abilities-elaborated` 경계는 `tribute-control-pre-cps`와 같은 dialect를
+허용하되 `tribute_control.handle`, `handler`, `perform`, `resume`, `yield`를 거부하고
+`ability_v2.*`를 허용한다. `ability.*`, `effect.*`, `func.*`, `closure.*`는 여전히
+illegal이다. `tribute_control_to_cps`는 이 경계의 IR을 입력으로 받는다.
+
+#### `ability_v2.scope`
+
+```text
+%answer = ability_v2.scope %completion, %h0, %h1 {
+  handlers = [
+    {ability_ref = !State, op_name = "get", kind = "op", operation_result_type = core.i32},
+    {ability_ref = !State, op_name = "set", kind = "op", operation_result_type = core.nil}
+  ]
+} : AnswerType {
+  ...
+  ability_v2.yield %body_value
+}
+```
+
+- **피연산자:** completion helper 하나 뒤에 `handlers` 원소마다 helper 하나가 같은
+  순서로 온다. 모두 `tribute_control.lambda`의 결과이며 이 scope 외의 use가 없다.
+- **결과:** scope의 answer `R` 하나.
+- **속성:** `handlers`는 필수다. 원소는 `ability_ref`(exact `core.ability_ref`),
+  `op_name`, `kind`(`fn` 또는 `op`), `operation_result_type` 넷만 가진
+  dictionary이며 `(ability_ref, op_name)`이 중복되지 않는다. 선택적
+  [`evidence_plan`](#evidence-선택-속성)은 `tribute_control.handle`의 것을 그대로
+  옮기며 `mask`만 담는다.
+- **영역:** argument 없는 block 하나인 `body`. 종결자는 `ability_v2.yield`다.
+- **Helper 계약:** `M`은 body가 yield하는 값의 type, `I`는 binding의
+  `operation_result_type`이다.
+
+  | Binding | Helper type |
+  | ---- | ---- |
+  | completion | `(M) -> R`, convention 제한 없음 |
+  | `kind = "fn"` | `(P...) -> I`, `Direct` 또는 `EvidenceDirect`, token 없음 |
+  | `kind = "op"`, `I`가 `Never`가 아님 | `(P..., resume_token<I, R>) -> R`, `Cps` |
+  | `kind = "op"`, `I`가 `Never` | `(P...) -> R`, `Cps`, token 없음 |
+
+- **의미:** body evidence는 바깥 evidence에 `evidence_plan`을 적용한 뒤 처리하는
+  instance마다 새 handler를 쌓은 것이다. Helper와 completion은 scope를 설치한
+  층의 바깥 evidence로 실행하며, operation을 수행한 지점의 evidence는 받지 않는다
+  ([cps-effects.md](cps-effects.md#row-directed-evidence)). Body가 yield하면
+  completion helper가 그 값으로 scope answer를 만든다. Resume하지 않고 끝난
+  general helper의 결과는 scope answer가 되며 completion을 건너뛴다.
+- **위치:** source `handle` expression.
+
+Completion을 body 안의 호출로 두지 않는 것은 completion이 바깥 evidence에서
+실행되어야 하기 때문이다. Body 끝에서 호출하면 그 호출의 선택이 설치된 handler를
+걷어 내야 하는데, source 선택에는 그런 원소가 없다.
+
+#### `ability_v2.yield`
+
+```text
+ability_v2.yield %value
+```
+
+- `ability_v2.scope` body의 직접 종결자 위치에만 온다. 중첩된 `scf` region이나
+  helper 안에서는 invalid이다. Value type이 completion helper의 입력이다.
+- `resume_token`은 yield할 수 없다.
+
+#### `ability_v2.call_target`, `invoke`, `abort`
+
+```text
+%i = ability_v2.call_target %arg... {ability_ref = !State, op_name = "get"} : I
+%i = ability_v2.invoke %arg... {ability_ref = !State, op_name = "get"} : I
+%n = ability_v2.abort %arg... {ability_ref = !Exn, op_name = "throw"} : core.never
+```
+
+- **속성:** `ability_ref`(exact `core.ability_ref`)와 `op_name`.
+- **결과:** 하나. `abort`만 `core.never`를 결과로 가지며 `call_target`과 `invoke`의
+  결과는 `core.never`가 아니다.
+- **종결자:** 셋 다 아니다. `abort`도 `tribute_control.perform`처럼 `core.never`
+  결과를 둔 비종결자이므로 `scf` region의 종결 규칙을 바꾸지 않는다.
+- **의미:** 가장 위의 handler가 operation을 처리한다
+  ([cps-effects.md](cps-effects.md#evidence-lookup)). `call_target`의 handler
+  결과는 그대로 결과가 되고, `invoke`는 handler가 resume하면 그 값을 결과로
+  계속한다. `abort`는 계속하지 않는다.
+- **둘러싼 callable:** `call_target`은 `EvidenceDirect` 이상, `invoke`와 `abort`는
+  `Cps`인 callable 안에만 온다.
+- **위치:** source ability-operation call.
+
+#### `ability_v2.resume`
+
+```text
+%answer = ability_v2.resume %token, %value : AnswerType
+```
+
+- `tribute_control.resume`과 같은 operand, 결과, `evidence_plan` 계약을 가진다.
+- Token은 resumptive helper의 마지막 parameter에서 시작하는 single static
+  ownership path로만 도달한다. Helper 안의 lambda가 capture할 수 있으며
+  affine 검사는 [`tribute_control.handler`](#tribute_controlhandler)와 같다.
+- Helper 본문의 resume과 helper 안 lambda의 resume은
+  [cps-effects.md](cps-effects.md#row-directed-evidence)의 arm 본문 resume과
+  arm 안 lambda의 resume 규칙을 각각 따른다.
 
 ## Mid-Level Dialects
 

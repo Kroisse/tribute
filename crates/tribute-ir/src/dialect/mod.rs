@@ -1,6 +1,7 @@
 //! Tribute language-specific dialect definitions.
 
 pub mod ability;
+pub mod ability_v2;
 pub mod adt;
 pub mod closure;
 pub mod effect;

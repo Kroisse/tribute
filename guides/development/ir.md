@@ -22,13 +22,13 @@ Dialects are split across two crates:
   Language-agnostic dialects (core, func, scf, arith, mem, cf, clif,
   wasm)
 - **tribute-ir** (`crates/tribute-ir/src/dialect/`):
-  Tribute-specific dialects (tribute_control, ability, effect, closure, adt,
-  list, tribute_io, tribute_rt)
+  Tribute-specific dialects (tribute_control, ability_v2, ability, effect,
+  closure, adt, list, tribute_io, tribute_rt)
 
 Dialect levels (high → low):
 
-- **High-level**: tribute_control, ability, effect, closure, adt, list,
-  tribute_io, tribute_rt — Tribute language concepts
+- **High-level**: tribute_control, ability_v2, ability, effect, closure, adt,
+  list, tribute_io, tribute_rt — Tribute language concepts
 - **Mid-level**: func, scf, arith, mem — structured operations
 - **Low-level**: cf, wasm, clif — target-specific
 

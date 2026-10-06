@@ -154,6 +154,27 @@ builder를 재사용하되 `tribute_control` 전용 graph pattern은
 Root `main` delimiter와 external ABI 조합 책임은
 [implementation.md](implementation.md#직접형-제어-소유권)을 따른다.
 
+### Ability 해석
+
+`elaborate_abilities`는 CPS legalization 전에 `handle`, `handler`, `perform`,
+`resume`을 [`ability_v2`](ir.md#해석된-직접형-ability-ability_v2)로 해석한다.
+Handler arm과 completion은 helper lambda가 되고, perform은 `operation_kind`와
+결과 type에 따라 `call_target`, `invoke`, `abort`로 나뉜다. 이 해석은 continuation을
+만들지 않으므로 그 결과에 직접형 최적화를 적용할 수 있다. 같은 함수 안에서 scope
+body가 그 scope의 operation을 호출하면 helper 호출로 바꾸는 것이 그 예다.
+
+`tribute_control_to_cps`는 해석된 operation을 아래 규칙에 따라 바꾼다. 이 문서의
+`perform`, `handle`, handler arm, `resume`에 관한 규칙은 각각 대응하는 해석된
+operation에 그대로 적용된다.
+
+| 해석된 operation | CPS legalization |
+| ---- | ---- |
+| `call_target` | `operation_kind = "fn"`인 perform과 같이 `ability.call` |
+| `invoke` | `operation_kind = "op"`인 perform과 같이 suffix를 capture한 `ability.perform` |
+| `abort` | `op -> Never` perform과 같이 zero-capture reject continuation |
+| `scope` | handle과 같은 delimiter. Helper는 handler arm, completion helper는 `do` arm으로 쓴다 |
+| `resume` | handler arm의 `resume`과 같다 |
+
 ### 논리적 CPS 적법화
 
 Shared conversion은 실행 가능한 region 하나를
@@ -659,6 +680,7 @@ Callable/control과 effect 관련 pass의 순서는 다음과 같다:
 
 ```text
 ast_to_ir (tribute_control callable/control + ordinary value IR)
+→ elaborate_abilities
 → tribute_control_to_cps
 → lower_closure_lambda
 → lower_ability_perform
