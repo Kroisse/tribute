@@ -648,3 +648,193 @@ mod tests {
         mangle_name(&db, &base, &[ty]);
     }
 }
+
+/// Laws of specialization mangling, checked on generated type arguments.
+#[cfg(test)]
+mod laws {
+    use proptest::prelude::*;
+    use rustc_hash::FxHashMap as HashMap;
+
+    use super::*;
+    use crate::typeck::prop::{ROW_VAR_BASE, RowShape, TypeGen, TypeShape, type_shape};
+
+    /// Resolved type arguments: no unification variables, `App`, or
+    /// `Continuation`, which mangling rejects.
+    const ARGS: TypeGen = TypeGen::GROUND
+        .bound_vars(2)
+        .row_vars(3)
+        .error(true)
+        .conventions(true);
+
+    fn args() -> BoxedStrategy<Vec<TypeShape>> {
+        proptest::collection::vec(type_shape(ARGS), 0..=3).boxed()
+    }
+
+    /// Argument lists with a related second list: the same list, the list
+    /// with its row variables renamed bijectively or merged into one, or an
+    /// independent list.
+    fn arg_pairs() -> BoxedStrategy<(Vec<TypeShape>, Vec<TypeShape>)> {
+        args()
+            .prop_flat_map(|left| {
+                let renamed = |rename: fn(u64) -> u64| {
+                    let left = left.clone();
+                    Just(
+                        left.iter()
+                            .map(|ty| ty.rename_row_vars(&rename))
+                            .collect::<Vec<_>>(),
+                    )
+                };
+                let right = prop_oneof![
+                    Just(left.clone()),
+                    renamed(|var| var + 100),
+                    renamed(|var| ROW_VAR_BASE + (var - ROW_VAR_BASE + 1) % 3),
+                    renamed(|_| ROW_VAR_BASE),
+                    args(),
+                ];
+                (Just(left), right)
+            })
+            .boxed()
+    }
+
+    /// Whether the lists are equal up to a bijective renaming of row
+    /// variables across the whole list.
+    fn equal_up_to_row_renaming(left: &[TypeShape], right: &[TypeShape]) -> bool {
+        #[derive(Default)]
+        struct Renaming {
+            forward: HashMap<u64, u64>,
+            backward: HashMap<u64, u64>,
+        }
+
+        impl Renaming {
+            fn rows(&mut self, left: &RowShape, right: &RowShape) -> bool {
+                left.effects.len() == right.effects.len()
+                    && left
+                        .effects
+                        .iter()
+                        .zip(&right.effects)
+                        .all(|(l, r)| l.ability == r.ability && self.lists(&l.args, &r.args))
+                    && match (left.rest, right.rest) {
+                        (None, None) => true,
+                        (Some(l), Some(r)) => {
+                            *self.forward.entry(l).or_insert(r) == r
+                                && *self.backward.entry(r).or_insert(l) == l
+                        }
+                        _ => false,
+                    }
+            }
+
+            fn lists(&mut self, left: &[TypeShape], right: &[TypeShape]) -> bool {
+                left.len() == right.len() && left.iter().zip(right).all(|(l, r)| self.types(l, r))
+            }
+
+            fn types(&mut self, left: &TypeShape, right: &TypeShape) -> bool {
+                match (left, right) {
+                    (
+                        TypeShape::Named {
+                            nominal: l,
+                            args: la,
+                        },
+                        TypeShape::Named {
+                            nominal: r,
+                            args: ra,
+                        },
+                    ) => l == r && self.lists(la, ra),
+                    (
+                        TypeShape::Func {
+                            params: lp,
+                            result: lr,
+                            effect: le,
+                            convention: lc,
+                        },
+                        TypeShape::Func {
+                            params: rp,
+                            result: rr,
+                            effect: re,
+                            convention: rc,
+                        },
+                    ) => lc == rc && self.lists(lp, rp) && self.rows(le, re) && self.types(lr, rr),
+                    (TypeShape::Tuple(l), TypeShape::Tuple(r)) => self.lists(l, r),
+                    (left, right) => left == right,
+                }
+            }
+        }
+
+        Renaming::default().lists(left, right)
+    }
+
+    fn mangle(db: &dyn salsa::Database, args: &[TypeShape]) -> String {
+        let args: Vec<_> = args.iter().map(|ty| ty.build(db)).collect();
+        mangle_name(db, &Symbol::new("f"), &args).to_string()
+    }
+
+    proptest! {
+        /// Mangling is injective on type arguments up to row-variable
+        /// renaming: two lists get the same name exactly when they differ
+        /// only by a consistent renaming of row variables.
+        #[test]
+        fn mangle_is_injective_up_to_row_renaming((left, right) in arg_pairs()) {
+            let db = salsa::DatabaseImpl::new();
+            prop_assert_eq!(
+                mangle(&db, &left) == mangle(&db, &right),
+                equal_up_to_row_renaming(&left, &right),
+                "{} / {}",
+                mangle(&db, &left),
+                mangle(&db, &right),
+            );
+        }
+
+        /// The name depends only on the types, not on the database that
+        /// interned them, and extends the base name.
+        #[test]
+        fn mangle_is_deterministic(args in args()) {
+            let (first, second) = (salsa::DatabaseImpl::new(), salsa::DatabaseImpl::new());
+            let name = mangle(&first, &args);
+            prop_assert_eq!(&name, &mangle(&second, &args));
+            if args.is_empty() {
+                prop_assert_eq!(name, "f");
+            } else {
+                prop_assert!(name.starts_with("f$"));
+            }
+        }
+    }
+
+    /// Minimal repro: a source type named `Fn` (accepted by the frontend as
+    /// `struct Fn(a) { value: a }`) mangles like a function type's prefix,
+    /// so a function type taking `Fn(Int)` and `Bool` and one taking
+    /// `fn(Int) -> Bool` get the same name.
+    #[test]
+    #[ignore = "#1373: mangling collides for a source type named `Fn` (or `Tup`)"]
+    fn source_type_named_fn_mangles_distinctly() {
+        let db = salsa::DatabaseImpl::new();
+        let int = Type::new(&db, TypeKind::Int);
+        let bool_ty = Type::new(&db, TypeKind::Bool);
+        let nat = Type::new(&db, TypeKind::Nat);
+        let func = |params, result| {
+            Type::new(
+                &db,
+                TypeKind::Func {
+                    params,
+                    result,
+                    effect: EffectRow::pure(&db),
+                    minimum_convention: CallingConvention::Direct,
+                },
+            )
+        };
+        let name = Symbol::new("Fn");
+        let user_fn = Type::new(
+            &db,
+            TypeKind::Named {
+                id: TypeDefId::source(&db, name.clone(), crate::ast::NodeId::from_raw(1)),
+                name,
+                args: vec![int],
+            },
+        );
+        let takes_struct = func(vec![user_fn, bool_ty], nat);
+        let takes_func = func(vec![func(vec![int], bool_ty)], nat);
+        let base = Symbol::new("identity");
+        assert_ne!(
+            mangle_name(&db, &base, &[takes_struct]),
+            mangle_name(&db, &base, &[takes_func])
+        );
+    }
+}

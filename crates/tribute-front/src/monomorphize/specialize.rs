@@ -747,19 +747,6 @@ mod tests {
     }
 
     #[test]
-    fn test_subst_type_replaces_only_bound_vars() {
-        let db = TestDb::default();
-        let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });
-        let int = Type::new(&db, TypeKind::Int);
-        for (name, ty, args, expected) in [
-            ("BoundVar(0) with [Int]", bv0, &[int][..], int),
-            ("concrete Int with []", int, &[], int),
-        ] {
-            assert_eq!(subst_type(&db, ty, args), expected, "{name}");
-        }
-    }
-
-    #[test]
     fn test_substitute_expr_var() {
         let db = TestDb::default();
         let bv0 = Type::new(&db, TypeKind::BoundVar { index: 0 });

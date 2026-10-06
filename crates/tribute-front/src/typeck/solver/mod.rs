@@ -522,6 +522,9 @@ impl<'db> TypeSolver<'db> {
 }
 
 #[cfg(test)]
+mod laws;
+
+#[cfg(test)]
 mod tests;
 
 #[cfg(test)]
