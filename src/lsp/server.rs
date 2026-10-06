@@ -2142,6 +2142,38 @@ mod tests {
     }
 
     #[test]
+    #[allow(clippy::mutable_key_type)] // Uri has interior mutability but it's fine for LSP
+    fn test_rename_on_field_declaration_covers_name_only() {
+        let mut harness = TestHarness::new();
+        let uri = test_uri("rename_field_decl_msg");
+        harness.open_document(&uri, "struct Point { x: Int, y: Int }");
+
+        let position_params = |character| TextDocumentPositionParams {
+            text_document: lsp_types::TextDocumentIdentifier { uri: uri.clone() },
+            position: lsp_types::Position { line: 0, character },
+        };
+
+        // On the name `x`: the range is the name alone.
+        let result = harness.request::<PrepareRenameRequest>(position_params(15));
+        let Some(PrepareRenameResponse::RangeWithPlaceholder { range, placeholder }) = result
+        else {
+            panic!("expected a rename range on the field name");
+        };
+        assert_eq!(placeholder, "x");
+        assert_eq!((range.start.character, range.end.character), (15, 16));
+
+        // On the type annotation `Int`: not renamable.
+        let result = harness.request::<PrepareRenameRequest>(position_params(18));
+        assert!(result.is_none(), "annotation must not select the field");
+        let result = harness.request::<Rename>(RenameParams {
+            text_document_position: position_params(18),
+            new_name: "px".to_string(),
+            work_done_progress_params: Default::default(),
+        });
+        assert!(result.is_none(), "annotation must not be renamed");
+    }
+
+    #[test]
     fn test_code_action_via_message() {
         let mut harness = TestHarness::new();
         let uri = test_uri("code_action_msg");

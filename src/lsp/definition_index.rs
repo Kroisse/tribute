@@ -464,8 +464,13 @@ impl<'db> AstDefinitionIndex<'db> {
         }
 
         // Fall back to definition
-        if let Some(def) = self.definition_at_position(db, offset) {
-            return Some((def, def.span));
+        // Only the name is renamable, not the rest of the declaration
+        // (a field's type annotation, for instance).
+        if let Some(def) = self.definition_at_position(db, offset)
+            && def.name_span.start <= offset
+            && offset < def.name_span.end
+        {
+            return Some((def, def.name_span));
         }
 
         None
