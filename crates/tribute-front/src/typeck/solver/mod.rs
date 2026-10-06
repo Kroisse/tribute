@@ -256,12 +256,13 @@ impl<'db> TypeSolver<'db> {
                         {
                             Ok(false)
                         } else {
-                            self.unify_types(expected, actual)
-                                .map(|()| true)
-                                .map_err(|error| LocatedSolveError {
-                                    error,
-                                    origin: Some(*origin),
-                                })
+                            let outer = self.current_origin.replace(*origin);
+                            let result = self.unify_types(expected, actual);
+                            self.current_origin = outer;
+                            result.map(|()| true).map_err(|error| LocatedSolveError {
+                                error,
+                                origin: Some(*origin),
+                            })
                         }
                     }
                     Constraint::TypeJoin {

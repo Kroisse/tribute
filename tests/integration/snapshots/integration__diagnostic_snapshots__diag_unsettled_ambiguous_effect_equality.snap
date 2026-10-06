@@ -1,0 +1,10 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "type error at call site in function 'caller': ambiguous effect: cannot match `{Throw(_)}` with `{Throw(Bool), Throw(Int)}`, more than one instance could correspond; annotate the effect's type arguments"
+  span:
+    start: 261
+    end: 270
+  severity: Error
+  phase: TypeChecking

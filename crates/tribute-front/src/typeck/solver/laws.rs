@@ -368,14 +368,11 @@ fn row_of<'db>(db: &'db dyn salsa::Database, ty: Type<'db>) -> EffectRow<'db> {
     )
 }
 
-/// Minimal repro: closed-row equality depends on effect order when the other
-/// row holds several candidates for one effect. `Console` has no candidate
-/// in `{State(?1), State(?2)}`, so the rows cannot be equal. Listing
-/// `Console` first reports `RowMismatch`; listing `State(Int)` first finds
-/// it ambiguous and defers the equation as a `RowUnion` that never settles,
-/// so solving (and finalizing) succeeds.
+/// Closed-row equality does not depend on effect order when the other row
+/// holds several candidates for one effect. `Console` has no candidate in
+/// `{State(?1), State(?2)}`, so the rows cannot be equal, even though
+/// `State(Int)` is ambiguous between the two.
 #[test]
-#[ignore = "#1371: closed-row equality outcome depends on effect order under ambiguity"]
 fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
     use crate::typeck::prop::{EffectShape, Prim};
     let db = salsa::DatabaseImpl::new();
@@ -404,6 +401,31 @@ fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
     })
     .collect();
     assert_eq!(outcomes, [false, false]);
+}
+
+/// An equality deferred for ambiguity that no type decides is reported once
+/// relations settle. `State(?1)` could match either instance, and no `?1`
+/// makes `{State(?1)}` equal to `{State(Int), State(Bool)}`.
+#[test]
+fn unsettled_ambiguous_row_equality_is_reported() {
+    use crate::typeck::prop::{EffectShape, Prim};
+    let db = salsa::DatabaseImpl::new();
+    let state = |arg| EffectShape {
+        ability: 1,
+        args: vec![arg],
+    };
+    let one = RowShape::closed(vec![state(TypeShape::UniVar(1))]).build(&db);
+    let two = RowShape::closed(vec![
+        state(TypeShape::Prim(Prim::Int)),
+        state(TypeShape::Prim(Prim::Bool)),
+    ])
+    .build(&db);
+    let (mut solver, result) = solve_rows(&db, one, two);
+    assert!(result.is_ok() && solver.finalize_relations().is_ok());
+    assert!(matches!(
+        solver.unsettled_ambiguity().map(|failure| failure.error),
+        Some(SolveError::AmbiguousEffect { .. })
+    ));
 }
 
 /// Minimal repro: binding an open row's tail to the remaining effects

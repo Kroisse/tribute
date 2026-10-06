@@ -192,7 +192,18 @@ fn foo() ->{State(Int), State(String)} Nil
 
 // Error: 동일한 ability 중복
 fn bar() ->{State(Int), State(Int)} Nil
+
+// Error: a = Int이면 같은 instance가 된다
+fn baz(x: a) ->{State(a), State(Int)} Nil
+
+// Error: a = b이면 같은 instance가 된다
+fn qux(x: a, y: b) ->{State(a), State(b)} Nil
 ```
+
+선언 row에 같은 ability를 여러 번 쓰려면 어떤 타입 인자 대입으로도 그 instance들이
+같아지지 않아야 한다. 같아질 수 있으면 호출자가 그런 타입 인자를 고른 순간 row는
+instance 하나로 합쳐지고, 본문이 따로 다루던 두 instance가 한 handler를 공유한다.
+그러면 같은 함수가 타입 인자에 따라 다르게 동작하므로 선언에서 거부한다.
 
 **이유**: Tribute는 한 ability instance의 여러 occurrence나 handler 인스턴스를
 구별하는 의미론을 정의하지 않는다. Row는 instance의 집합이며, operation은 자기
@@ -383,7 +394,13 @@ Row 단일화는 시그니처 row 변수를 별칭의 대표로 유지한다. �
 
 Effect 집합 equality는 양방향 후보 검사를 끝낸 뒤에 확정된 타입 치환을 적용한다.
 한쪽 순회에서 먼저 찾은 대응의 치환으로 다른 쪽의 모호성을 없애서는 안 되며,
-입력 row나 label의 순서를 바꾸어도 같은 제약을 보존해야 한다.
+입력 row나 label의 순서를 바꾸어도 같은 제약을 보존해야 한다. 그래서 모든 label의
+후보를 양방향으로 센 뒤에 결과를 정한다. 상대 row에 후보가 하나도 없는 label이
+있으면, 다른 label이 모호하더라도 두 row는 같지 않다. 이후의 타입 치환은 후보를
+줄일 뿐 늘리지 않으므로 이 불일치는 확정이다. 후보가 없는 label이 없고 모호한
+label만 있을 때에만 equality를 미룬다. 함수 검사가 끝날 때까지 어떤 타입도 그
+모호성을 정하지 않으면 그 equality는 오류이다. 해를 탐색해 고르지 않으며, 사용자가
+effect의 타입 인자를 적어 대응을 정한다.
 
 Named row variables have declaration-scoped identity: repeated names share an
 identity and distinct names do not. Multiple row names denote their union.

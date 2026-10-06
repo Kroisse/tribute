@@ -550,6 +550,53 @@ fn test() ->{abilities::Throw(Int), abilities::Throw(Int)} Nil {
     insta::assert_yaml_snapshot!(result.diagnostics);
 }
 
+/// Instances that a type argument can make equal would merge into one
+/// instance and one handler, so the annotation is rejected.
+#[salsa_test]
+fn diag_effects_that_type_arguments_can_merge(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn distinct() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+    Nil
+}
+
+fn merge(x: a) ->{abilities::Throw(a), abilities::Throw(Int)} Nil {
+    Nil
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
+/// No type for `a` makes `{Throw(a)}` equal to `{Throw(Int), Throw(Bool)}`,
+/// but either instance could match `Throw(a)`, so the equality never
+/// settles. It is reported once the function is checked.
+#[salsa_test]
+fn diag_unsettled_ambiguous_effect_equality(db: &salsa::DatabaseImpl) {
+    let source = SourceCst::from_source_str(
+        db,
+        "test.trb",
+        r#"
+fn one() ->{abilities::Throw(a)} Nil {
+    Nil
+}
+
+fn take(f: fn() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil) ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+    f()
+}
+
+fn caller() ->{abilities::Throw(Int), abilities::Throw(Bool)} Nil {
+    take(one)
+}
+"#,
+    );
+    let result = compile_with_diagnostics(db, source);
+    insta::assert_yaml_snapshot!(result.diagnostics);
+}
+
 #[salsa_test]
 fn diag_residual_effect_rejected_at_handler_boundary(db: &salsa::DatabaseImpl) {
     let source = SourceCst::from_source_str(

@@ -224,21 +224,23 @@ fn effect_row_display_is_canonical(db: &salsa::DatabaseImpl) {
     );
     let open = EffectRow::new(db, effects, Some(EffectVar { id: 777 }));
     assert_eq!(open.to_string(), "{Console, State(_10), State(_2), e}");
-    for error in [
-        SolveError::RowMismatch {
-            expected: pure,
-            actual: open,
-        },
-        SolveError::AmbiguousEffect {
-            expected: pure,
-            actual: open,
-        },
-    ] {
-        assert_eq!(
-            error.to_string(),
-            "effect mismatch: expected `{}`, found `{Console, State(_10), State(_2), e}`"
-        );
-    }
+    let mismatch = SolveError::RowMismatch {
+        expected: pure,
+        actual: open,
+    };
+    assert_eq!(
+        mismatch.to_string(),
+        "effect mismatch: expected `{}`, found `{Console, State(_10), State(_2), e}`"
+    );
+    let ambiguous = SolveError::AmbiguousEffect {
+        expected: pure,
+        actual: open,
+    };
+    assert_eq!(
+        ambiguous.to_string(),
+        "ambiguous effect: cannot match `{Console, State(_10), State(_2), e}` with `{}`, \
+         more than one instance could correspond; annotate the effect's type arguments"
+    );
 }
 
 #[salsa_test]

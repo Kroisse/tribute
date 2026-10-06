@@ -1,0 +1,15 @@
+---
+source: tests/integration/diagnostic_snapshots.rs
+expression: result.diagnostics
+---
+- message: "function 'merge' declares `Throw` more than once with arguments that can be the same type"
+  span:
+    start: 121
+    end: 142
+  severity: Error
+  labels:
+    - span:
+        start: 100
+        end: 119
+      message: first matching effect annotation is here
+  phase: TypeChecking

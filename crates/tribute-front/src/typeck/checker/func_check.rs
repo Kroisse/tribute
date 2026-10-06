@@ -224,6 +224,16 @@ impl<'db> TypeChecker<'db> {
             // finalized type, whichever alias the solver chose for them.
             solver.make_row_representatives(scheme.effect_params(self.db()).iter().copied());
         }
+        // No later type can decide an effect equality left ambiguous here.
+        if !solve_failed && let Some(error) = solver.unsettled_ambiguity() {
+            solve_failed = true;
+            self.report_solve_error(
+                diagnostic_func_id,
+                &diagnostic_func_name,
+                diagnostic_effects.as_deref(),
+                error,
+            );
+        }
 
         // 5. Apply substitution and generalization
         let type_subst = solver.type_subst();
@@ -975,19 +985,36 @@ impl<'db> TypeChecker<'db> {
         func_id: FuncDefId<'db>,
         resolved_declared: crate::ast::EffectRow<'db>,
     ) -> bool {
-        let Some(duplicate) = self
-            .effect_annotation_origins
-            .get(&func_id)
-            .and_then(|origins| origins.find_duplicate(self.db(), resolved_declared))
-        else {
+        let Some(origins) = self.effect_annotation_origins.get(&func_id) else {
             return false;
         };
-        Diagnostic::builder(
-            format!(
+        let (duplicate, message) = if let Some(duplicate) =
+            origins.find_duplicate(self.db(), resolved_declared)
+        {
+            let message = format!(
                 "function '{}' declares duplicate effect: {}",
                 func.name,
                 duplicate.effects.iter().format(", "),
-            ),
+            );
+            (duplicate, message)
+        } else if let Some(duplicate) =
+            origins.find_overlap(self.db(), resolved_declared, |a, b| {
+                TypeSolver::effects_may_coincide(self.db(), a, b)
+            })
+        {
+            // Type arguments that make the instances equal would merge them
+            // into one instance and one handler.
+            let message = format!(
+                "function '{}' declares `{}` more than once with arguments that can be the same type",
+                func.name,
+                duplicate.effects[0].ability_id.name(self.db()),
+            );
+            (duplicate, message)
+        } else {
+            return false;
+        };
+        Diagnostic::builder(
+            message,
             self.get_span(duplicate.duplicate_annotation_id),
             DiagnosticSeverity::Error,
             CompilationPhase::TypeChecking,
