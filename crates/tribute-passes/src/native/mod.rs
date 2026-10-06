@@ -9,6 +9,7 @@
 //! - `type_converter`: Native type converter for IR-level type transformations
 //! - `adt_rc_header`: Lower `adt.struct_new` to clif alloc + RC header init + field stores
 //! - `struct_to_mem`: Lower the `adt.struct` layout of field accesses to `mem.struct`
+//! - `descriptor_to_clif`: Lower `tribute_rtti.descriptor` to a read of the RC header
 //! - `tribute_rt_to_clif`: Lower `tribute_rt.box_*`/`unbox_*` to clif alloc + load/store
 //! - `rc_optimization`: Eliminate redundant local retain/release pairs
 //! - `rc_lowering`: Lower `tribute_rt.retain`/`release` to inline `clif.*` ops
@@ -18,6 +19,7 @@ pub mod adt_rc_header;
 pub mod adt_to_clif;
 pub mod const_to_native;
 pub mod descriptor_records;
+pub mod descriptor_to_clif;
 pub mod entrypoint;
 pub mod evidence;
 pub mod intrinsic_to_native;

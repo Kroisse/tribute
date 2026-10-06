@@ -42,9 +42,58 @@ mod tribute_rtti {
 
     /// The runtime type descriptor number of the allocation `ref` points to.
     ///
-    /// `ref` is a managed reference, or the `core.ptr` it becomes under
-    /// native type conversion. Reading a null reference is undefined.
-    fn descriptor(r#ref: Value<_>) -> Value<I32> {}
+    /// Reading a null reference is undefined.
+    fn descriptor(r#ref: Value<impl ManagedRef>) -> Value<I32> {}
+}
+
+/// A managed reference: a value that points to an allocation carrying a
+/// runtime type descriptor. Unmanaged pointers and scalars are not.
+///
+/// A type is a managed reference when its definition registers a
+/// [`ManagedRefType`].
+pub struct ManagedRef;
+
+/// Marks one type as a managed reference, registered via
+/// `inventory::submit!` at the type's definition site.
+pub struct ManagedRefType {
+    dialect: &'static str,
+    type_name: &'static str,
+}
+
+impl ManagedRefType {
+    /// Registration for the type wrapped by `T`.
+    pub const fn new<T: trunk_ir::ops::DialectType>() -> Self {
+        Self::named(T::DIALECT_NAME, T::TYPE_NAME)
+    }
+
+    /// Registration for a type that has no wrapper.
+    pub const fn named(dialect: &'static str, type_name: &'static str) -> Self {
+        Self { dialect, type_name }
+    }
+}
+
+inventory::collect!(ManagedRefType);
+
+impl trunk_ir::type_constraint::TypeConstraint for ManagedRef {
+    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
+        &trunk_ir::type_constraint::ConstraintDesc {
+            name: "ManagedRef",
+            exact: false,
+            projections: &[],
+            matches: Self::matches,
+            project: |_, _, _| None,
+            fixed: None,
+        };
+}
+
+impl ManagedRef {
+    pub fn matches(ctx: &IrContext, ty: TypeRef) -> bool {
+        let data = ctx.get_type(ty);
+        inventory::iter::<ManagedRefType>().any(|registered| {
+            data.dialect == trunk_ir::Symbol::new(registered.dialect)
+                && data.name == trunk_ir::Symbol::new(registered.type_name)
+        })
+    }
 }
 
 /// How the runtime reads one field of an allocation.
@@ -304,6 +353,31 @@ mod tests {
     use trunk_ir::op_def::OpDef;
     use trunk_ir::ops::DialectOp;
     use trunk_ir::parser::parse_test_module;
+
+    #[test]
+    fn managed_references_are_the_types_registered_at_their_definitions() {
+        let mut ctx = IrContext::new();
+        parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !point = adt.struct<Point(x: core.i32)>
+  !point_ref = adt.typeref<{name = "Point"}>
+  !any = tribute_rt.anyref
+  !small = tribute_rt.intref
+  !raw = core.ptr
+  !int = tribute_rt.int
+  !bytes = core.bytes
+}"#,
+        );
+        let alias = |name| ctx.type_alias_by_text(name).expect("fixture alias");
+
+        for name in ["point", "point_ref", "any", "small"] {
+            assert!(ManagedRef::matches(&ctx, alias(name)), "{name}");
+        }
+        for name in ["raw", "int", "bytes"] {
+            assert!(!ManagedRef::matches(&ctx, alias(name)), "{name}");
+        }
+    }
 
     #[test]
     fn layout_decodes_struct_and_variant_field_kinds() {
