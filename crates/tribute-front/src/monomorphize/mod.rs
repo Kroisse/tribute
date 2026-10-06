@@ -14,7 +14,7 @@ use rustc_hash::FxHashSet as HashSet;
 use trunk_ir::Symbol;
 
 use crate::ast::{CtorId, Decl, EffectRow, FuncDefId, Module, NodeId, Type, TypeScheme, TypedRef};
-use crate::typeck::subst::substitute_bound_vars;
+use crate::typeck::subst::{BoundVarOutOfBounds, substitute_bound_vars, substitute_effect_row};
 use crate::typeck::{
     EvidenceStep, InstantiatedHandlerOperation, InstantiatedPerformOperation, LambdaSignature,
 };
@@ -511,7 +511,7 @@ fn substitute_row<'db>(
     row: EffectRow<'db>,
     type_args: &[Type<'db>],
 ) -> EffectRow<'db> {
-    crate::typeck::subst::substitute_effect_row(db, row, type_args).unwrap_or_else(|(index, max)| {
+    substitute_effect_row(db, row, type_args).unwrap_or_else(|BoundVarOutOfBounds { index, max }| {
         panic!("BoundVar index out of range in specialization metadata: index={index}, subst.len()={max}")
     })
 }

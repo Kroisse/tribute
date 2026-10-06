@@ -16,6 +16,15 @@ pub enum SubstResult<'db> {
     OutOfBounds { index: u32, max: usize },
 }
 
+/// A BoundVar index past the substitution arguments.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoundVarOutOfBounds {
+    /// The out-of-range BoundVar index.
+    pub index: u32,
+    /// The number of substitution arguments.
+    pub max: usize,
+}
+
 impl<'db> SubstResult<'db> {
     /// Returns the substituted type, or calls the fallback function if out of bounds.
     pub fn unwrap_or_else(self, fallback: impl FnOnce(u32, usize) -> Type<'db>) -> Type<'db> {
@@ -94,7 +103,9 @@ pub fn substitute_bound_vars<'db>(
             };
             let new_effect = match substitute_effect_row(db, *effect, subst) {
                 Ok(row) => row,
-                Err((index, max)) => return SubstResult::OutOfBounds { index, max },
+                Err(BoundVarOutOfBounds { index, max }) => {
+                    return SubstResult::OutOfBounds { index, max };
+                }
             };
             SubstResult::Ok(Type::new(
                 db,
@@ -151,7 +162,9 @@ pub fn substitute_bound_vars<'db>(
             };
             let new_effect = match substitute_effect_row(db, *effect, subst) {
                 Ok(row) => row,
-                Err((index, max)) => return SubstResult::OutOfBounds { index, max },
+                Err(BoundVarOutOfBounds { index, max }) => {
+                    return SubstResult::OutOfBounds { index, max };
+                }
             };
             SubstResult::Ok(Type::new(
                 db,
@@ -169,13 +182,12 @@ pub fn substitute_bound_vars<'db>(
 
 /// Substitute BoundVars within an effect row.
 ///
-/// Returns the out-of-range index and `subst.len()` if a BoundVar index
-/// exceeds `subst.len()`.
+/// Returns [`BoundVarOutOfBounds`] if a BoundVar index exceeds `subst.len()`.
 pub fn substitute_effect_row<'db>(
     db: &'db dyn salsa::Database,
     row: EffectRow<'db>,
     subst: &[Type<'db>],
-) -> Result<EffectRow<'db>, (u32, usize)> {
+) -> Result<EffectRow<'db>, BoundVarOutOfBounds> {
     let effects = row.effects(db);
     let mut changed = false;
 
@@ -185,7 +197,9 @@ pub fn substitute_effect_row<'db>(
         for arg in &effect.args {
             match substitute_bound_vars(db, *arg, subst) {
                 SubstResult::Ok(ty) => new_args.push(ty),
-                SubstResult::OutOfBounds { index, max } => return Err((index, max)),
+                SubstResult::OutOfBounds { index, max } => {
+                    return Err(BoundVarOutOfBounds { index, max });
+                }
             }
         }
         if new_args != effect.args {
