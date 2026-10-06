@@ -281,7 +281,11 @@ impl<'db> TypeSolver<'db> {
     fn settle_row_unions_inner(&mut self) -> Result<(), LocatedSolveError<'db>> {
         let mut first_error = None;
         for (union, origin) in std::mem::take(&mut self.pending_row_unions) {
-            match self.solve_row_union(&union) {
+            // A union deferred again keeps the origin of its constraint.
+            let outer = std::mem::replace(&mut self.current_origin, origin);
+            let solved = self.solve_row_union(&union);
+            self.current_origin = outer;
+            match solved {
                 Ok(true) => {}
                 Ok(false) => self.pending_row_unions.push((union, origin)),
                 Err(error) => {
@@ -797,12 +801,39 @@ impl<'db> TypeSolver<'db> {
                     result: right,
                 };
                 if !self.pending_row_unions.iter().any(|(old, _)| *old == union) {
-                    self.pending_row_unions.push((union, None));
+                    self.pending_row_unions.push((union, self.current_origin));
                 }
                 Ok(())
             }
             result => result,
         }
+    }
+
+    /// The first effect equality that stayed ambiguous after every relation
+    /// settled.
+    ///
+    /// A union whose rows are all closed settles as soon as one instance
+    /// matches each label, so one still pending is an equality deferred for
+    /// ambiguity that no later type decided.
+    pub(crate) fn unsettled_ambiguity(&self) -> Option<LocatedSolveError<'db>> {
+        self.pending_row_unions.iter().find_map(|(union, origin)| {
+            let result = self.normalize_row(union.result);
+            let [source] = union.sources.as_slice() else {
+                return None;
+            };
+            let source = self.normalize_row(*source);
+            (result.rest(self.db).is_none() && source.rest(self.db).is_none()).then(|| {
+                LocatedSolveError {
+                    // The equality's left row is the expected side, as in
+                    // `unify_rows`.
+                    error: SolveError::AmbiguousEffect {
+                        expected: source,
+                        actual: result,
+                    },
+                    origin: *origin,
+                }
+            })
+        })
     }
 
     /// Whether equating the rows must wait for a pending union.

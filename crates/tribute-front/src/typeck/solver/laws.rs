@@ -403,6 +403,31 @@ fn row_equality_with_ambiguous_candidates_ignores_effect_order() {
     assert_eq!(outcomes, [false, false]);
 }
 
+/// An equality deferred for ambiguity that no type decides is reported once
+/// relations settle. `State(?1)` could match either instance, and no `?1`
+/// makes `{State(?1)}` equal to `{State(Int), State(Bool)}`.
+#[test]
+fn unsettled_ambiguous_row_equality_is_reported() {
+    use crate::typeck::prop::{EffectShape, Prim};
+    let db = salsa::DatabaseImpl::new();
+    let state = |arg| EffectShape {
+        ability: 1,
+        args: vec![arg],
+    };
+    let one = RowShape::closed(vec![state(TypeShape::UniVar(1))]).build(&db);
+    let two = RowShape::closed(vec![
+        state(TypeShape::Prim(Prim::Int)),
+        state(TypeShape::Prim(Prim::Bool)),
+    ])
+    .build(&db);
+    let (mut solver, result) = solve_rows(&db, one, two);
+    assert!(result.is_ok() && solver.finalize_relations().is_ok());
+    assert!(matches!(
+        solver.unsettled_ambiguity().map(|failure| failure.error),
+        Some(SolveError::AmbiguousEffect { .. })
+    ));
+}
+
 /// Minimal repro: binding an open row's tail to the remaining effects
 /// overwrites a binding of that tail made while unifying effect arguments.
 /// Equating `{State(fn() ->{e1} Nil) | e1}` with `{State(fn() ->{e2} Nil)}`

@@ -217,6 +217,25 @@ impl<'db> TypeSolver<'db> {
             .any(|effect| effect.args.iter().any(|arg| self.occurs_in(var, *arg)))
     }
 
+    /// Whether some substitution of the effects' type variables makes them
+    /// the same instance. Unlike [`Self::types_unifiable`], the arguments
+    /// share one substitution, so `S(a, a)` and `S(Int, Bool)` do not
+    /// coincide.
+    pub(crate) fn effects_may_coincide(
+        db: &'db dyn salsa::Database,
+        a: &crate::ast::Effect<'db>,
+        b: &crate::ast::Effect<'db>,
+    ) -> bool {
+        if a.ability_id != b.ability_id || a.args.len() != b.args.len() {
+            return false;
+        }
+        let mut solver = Self::new(db);
+        a.args
+            .iter()
+            .zip(&b.args)
+            .all(|(x, y)| solver.unify_types(*x, *y).is_ok())
+    }
+
     /// Check if two types can be unified without modifying substitution.
     ///
     /// This is a quick check that doesn't perform actual unification.

@@ -584,29 +584,46 @@ impl EffectAnnotationOrigins {
         db: &'db dyn salsa::Database,
         row: EffectRow<'db>,
     ) -> Option<DuplicateEffectAnnotations<'db>> {
-        use rustc_hash::FxHashMap as HashMap;
+        self.find_overlap(db, row, |a, b| a == b)
+    }
 
+    /// Find the first annotated effect that `overlaps` an earlier one and
+    /// recover both annotation origins. The reported effects are the earlier
+    /// effect and every later one that overlaps it.
+    pub fn find_overlap<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        row: EffectRow<'db>,
+        mut overlaps: impl FnMut(&Effect<'db>, &Effect<'db>) -> bool,
+    ) -> Option<DuplicateEffectAnnotations<'db>> {
         let effects = row.effects(db);
         // Solving an open row may append inferred effects after the concrete
         // annotations. Only the prefix produced by the source conversion has
         // annotation origins and can represent duplicate annotations.
-        let annotated_effects = &effects[..effects.len().min(self.concrete.len())];
+        let annotated = effects.iter().zip(&self.concrete);
 
-        let mut first_origins = HashMap::<Effect<'db>, NodeId>::default();
-        for (effect, &annotation_id) in annotated_effects.iter().zip(&self.concrete) {
-            if let Some(&first_annotation_id) = first_origins.get(effect) {
-                let duplicates = annotated_effects
-                    .iter()
-                    .filter(|candidate| *candidate == effect)
-                    .cloned()
-                    .collect();
-                return Some(DuplicateEffectAnnotations {
-                    effects: duplicates,
-                    first_annotation_id,
-                    duplicate_annotation_id: annotation_id,
-                });
-            }
-            first_origins.insert(effect.clone(), annotation_id);
+        for (index, (later, &annotation_id)) in annotated.clone().enumerate() {
+            let Some((first, &first_annotation_id)) = annotated
+                .clone()
+                .take(index)
+                .find(|(first, _)| overlaps(first, later))
+            else {
+                continue;
+            };
+            let effects = std::iter::once(first.clone())
+                .chain(
+                    annotated
+                        .clone()
+                        .skip(index)
+                        .filter(|(candidate, _)| overlaps(first, candidate))
+                        .map(|(candidate, _)| candidate.clone()),
+                )
+                .collect();
+            return Some(DuplicateEffectAnnotations {
+                effects,
+                first_annotation_id,
+                duplicate_annotation_id: annotation_id,
+            });
         }
 
         None

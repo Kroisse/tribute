@@ -52,10 +52,16 @@ impl std::fmt::Display for SolveError<'_> {
                     ty
                 )
             }
-            Self::RowMismatch { expected, actual } | Self::AmbiguousEffect { expected, actual } => {
+            Self::RowMismatch { expected, actual } => {
                 write!(
                     f,
                     "effect mismatch: expected `{expected}`, found `{actual}`"
+                )
+            }
+            Self::AmbiguousEffect { expected, actual } => {
+                write!(
+                    f,
+                    "ambiguous effect: cannot match `{actual}` with `{expected}`, more than one instance could correspond; annotate the effect's type arguments"
                 )
             }
             Self::EffectArgArityMismatch {
