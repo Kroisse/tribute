@@ -21,7 +21,7 @@ mod cf {
     /// matches. A case is a value of the discriminant's type. Successors
     /// receive no arguments.
     #[verify]
-    fn switch<T: IntegerLike>(cases: Attr<[i64]>, discriminant: Value<T>) {
+    fn switch(cases: Attr<[i64]>, discriminant: Value<impl IntegerLike>) {
         #[successor(default)]
         {}
         #[successors(targets)]
