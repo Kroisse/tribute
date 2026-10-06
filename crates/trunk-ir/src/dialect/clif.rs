@@ -95,17 +95,15 @@ mod clif {
         {}
     }
 
-    /// A multi-way branch on an integer `index`.
+    /// A branch through a jump table, like Cranelift's `br_table`.
     ///
-    /// Control transfers to the `targets` successor at the position where
-    /// `cases` holds the value of `index`, or to `default` when no case
-    /// matches. Case values are compared as integers of the index's width.
-    /// Successors take no block arguments.
-    #[verify]
-    fn br_table(cases: Attr<[i64]>, index: Value<_>) {
+    /// `index` is an unsigned 32-bit position in `table`. Control transfers
+    /// to the successor at that position, or to `default` when the index is
+    /// out of bounds. Successors take no block arguments.
+    fn br_table(index: Value<_>) {
         #[successor(default)]
         {}
-        #[successors(targets)]
+        #[successors(table)]
         {}
     }
 
@@ -396,22 +394,6 @@ fn reloc_ops(ctx: &crate::IrContext, op: crate::OpRef) -> impl Iterator<Item = c
         .into_iter()
         .flat_map(|region| ctx.region(region).blocks.iter())
         .flat_map(|&block| ctx.block(block).ops.iter().copied())
-}
-
-impl crate::ops::Verify for BrTable {
-    /// Every case has one target, and no case value repeats.
-    fn verify(self, ctx: &crate::IrContext) -> Result<(), String> {
-        let cases = self.cases(ctx).count();
-        let targets = self.targets(ctx).count();
-        if cases != targets {
-            return Err(format!("{cases} case(s) but {targets} target(s)"));
-        }
-        let mut seen = HashSet::default();
-        match self.cases(ctx).find(|&case| !seen.insert(case)) {
-            Some(case) => Err(format!("duplicate case {case}")),
-            None => Ok(()),
-        }
-    }
 }
 
 impl crate::ops::Verify for Data {
@@ -717,16 +699,15 @@ mod tests {
 #[cfg(test)]
 mod br_table_tests {
     use super::*;
-    use crate::op_def::OpDef;
     use crate::parser::parse_test_module;
     use crate::printer::print_module;
 
-    fn module(branch: &str) -> String {
+    fn module(table: &str) -> String {
         format!(
             r#"core.module @test {{
-  clif.func {{sym_name = "select", type = clif.func_sig<(core.i64) -> ()>}} {{
-    ^entry(%index: core.i64):
-      clif.br_table %index {branch}
+  clif.func {{sym_name = "select", type = clif.func_sig<(core.i32) -> ()>}} {{
+    ^entry(%index: core.i32):
+      clif.br_table %index {table}
     ^default:
       clif.return
     ^first:
@@ -738,72 +719,37 @@ mod br_table_tests {
         )
     }
 
-    /// The violations of the `clif.br_table` in [`module`], one per line.
-    fn violations(branch: &str) -> String {
-        let mut ctx = crate::IrContext::new();
-        let module = parse_test_module(&mut ctx, &module(branch));
-        let mut violations = String::new();
-        let _ = crate::walk::walk_op::<()>(&ctx, module.op(), &mut |op| {
-            if BrTable::matches(&ctx, op) {
-                let found = OpDef::of(&ctx, op)
-                    .expect("clif.br_table is registered")
-                    .verify(&ctx, op);
-                violations = found.iter().format("\n").to_string();
-            }
-            std::ops::ControlFlow::Continue(crate::walk::WalkAction::Advance)
-        });
-        violations
-    }
-
     #[test]
-    fn br_table_round_trips_with_its_cases_and_targets() {
+    fn br_table_round_trips_with_its_default_and_table() {
         let mut ctx = crate::IrContext::new();
-        let parsed = parse_test_module(
-            &mut ctx,
-            &module("[^default, ^first, ^second] {cases = [0, 5]}"),
-        );
+        let parsed = parse_test_module(&mut ctx, &module("[^default, ^first, ^second]"));
         let printed = print_module(&ctx, parsed.op());
         assert!(
-            printed.contains("clif.br_table %0 [^bb1, ^bb2, ^bb3] {cases = [0, 5]}"),
+            printed.contains("clif.br_table %0 [^bb1, ^bb2, ^bb3]"),
             "{printed}"
         );
         let mut reparsed_ctx = crate::IrContext::new();
         let reparsed = parse_test_module(&mut reparsed_ctx, &printed);
         assert_eq!(print_module(&reparsed_ctx, reparsed.op()), printed);
-        assert_eq!(
-            violations("[^default, ^first, ^second] {cases = [0, 5]}"),
-            ""
-        );
-        assert_eq!(violations("[^default] {cases = []}"), "");
     }
 
     #[test]
-    fn br_table_builder_takes_the_default_then_the_targets() {
+    fn br_table_builder_takes_the_default_then_the_table() {
         let mut ctx = crate::IrContext::new();
-        let parsed = parse_test_module(&mut ctx, &module("[^default] {cases = []}"));
+        let parsed = parse_test_module(&mut ctx, &module("[^default]"));
         let func = Func::from_op(&ctx, parsed.ops(&ctx)[0]).unwrap();
         let blocks = ctx.region(func.body(&ctx)).blocks.clone();
         let index = ctx.block_args(blocks[0])[0];
         let location = ctx.op(func.op_ref()).location;
 
         let branch = BrTable::operands(index)
-            .cases([3, 9])
             .successors(blocks[1], [blocks[2], blocks[3]])
             .build(&mut ctx, location);
 
         assert_eq!(branch.default(&ctx), blocks[1]);
         assert_eq!(
-            branch.targets(&ctx).collect::<Vec<_>>(),
+            branch.table(&ctx).collect::<Vec<_>>(),
             [blocks[2], blocks[3]]
         );
-        assert_eq!(branch.cases(&ctx).collect::<Vec<_>>(), [3, 9]);
-    }
-
-    #[test]
-    fn br_table_requires_one_target_per_distinct_case() {
-        let mismatch = violations("[^default, ^first] {cases = [0, 5]}");
-        assert!(mismatch.contains("2 case(s) but 1 target(s)"), "{mismatch}");
-        let duplicate = violations("[^default, ^first, ^second] {cases = [5, 5]}");
-        assert!(duplicate.contains("duplicate case 5"), "{duplicate}");
     }
 }

@@ -704,7 +704,7 @@ mod tests {
         assert!(!object.is_empty());
     }
 
-    fn br_table_error(index_ty: &str, cases: &str, target_params: &str) -> String {
+    fn br_table_error(index_ty: &str, target_params: &str) -> String {
         let mut ctx = IrContext::new();
         let module = parse_test_module(
             &mut ctx,
@@ -712,7 +712,7 @@ mod tests {
                 r#"core.module @test {{
   clif.func {{sym_name = "select", type = clif.func_sig<({index_ty}) -> ()>}} {{
     ^entry(%index: {index_ty}):
-      clif.br_table %index [^default, ^target] {{cases = {cases}}}
+      clif.br_table %index [^default, ^target]
     ^default:
       clif.return
     ^target{target_params}:
@@ -727,19 +727,17 @@ mod tests {
     }
 
     #[test]
-    fn br_table_rejects_what_the_index_cannot_select() {
-        let too_wide = br_table_error("core.i8", "[256]", "");
+    fn br_table_requires_an_i32_index_and_parameterless_successors() {
+        let wide_index = br_table_error("core.i64", "");
         assert!(
-            too_wide.contains("case 256 does not fit the 8-bit index"),
-            "{too_wide}"
+            wide_index.contains("index has type i64, not i32"),
+            "{wide_index}"
         );
-        let parameters = br_table_error("core.i32", "[1]", "(%value: core.i32)");
+        let parameters = br_table_error("core.i32", "(%value: core.i32)");
         assert!(
             parameters.contains("a successor block has parameters"),
             "{parameters}"
         );
-        let float_index = br_table_error("core.f64", "[1]", "");
-        assert!(float_index.contains("not an integer"), "{float_index}");
     }
 
     #[test]

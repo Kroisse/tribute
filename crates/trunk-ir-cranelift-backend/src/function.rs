@@ -298,14 +298,16 @@ impl<'a> FunctionTranslator<'a> {
             .collect()
     }
 
-    /// A `clif.br_table` successor receives no arguments.
-    fn require_no_block_params(&self, block: cl_ir::Block) -> CompilationResult<()> {
-        if self.builder.block_params(block).is_empty() {
-            return Ok(());
+    /// The jump table entry for a `clif.br_table` successor, which receives
+    /// no arguments.
+    fn jump_table_entry(&mut self, ir_block: BlockRef) -> CompilationResult<cl_ir::BlockCall> {
+        let block = self.lookup_block(ir_block)?;
+        if !self.builder.block_params(block).is_empty() {
+            return Err(CompilationError::codegen(
+                "clif.br_table: a successor block has parameters",
+            ));
         }
-        Err(CompilationError::codegen(
-            "clif.br_table: a successor block has parameters",
-        ))
+        Ok(self.builder.func.dfg.block_call(block, &[]))
     }
 
     pub(crate) fn lookup_block(&self, ir_block: BlockRef) -> CompilationResult<cl_ir::Block> {
@@ -467,31 +469,20 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(br_table) = clif::BrTable::from_op(ctx, op) {
             let index = self.lookup(br_table.index(ctx))?;
             let index_ty = self.builder.func.dfg.value_type(index);
-            if !index_ty.is_int() {
+            if index_ty != cl_types::I32 {
                 return Err(CompilationError::codegen(format!(
-                    "clif.br_table: index has type {index_ty}, not an integer"
+                    "clif.br_table: index has type {index_ty}, not i32"
                 )));
             }
-            let bits = index_ty.bits();
-            let mut switch = cranelift_frontend::Switch::new();
-            for (case, target) in br_table.cases(ctx).zip(br_table.targets(ctx)) {
-                let entry = case_entry(case, bits).ok_or_else(|| {
-                    CompilationError::codegen(format!(
-                        "clif.br_table: case {case} does not fit the {bits}-bit index"
-                    ))
-                })?;
-                if switch.entries().contains_key(&entry) {
-                    return Err(CompilationError::codegen(format!(
-                        "clif.br_table: case {case} repeats an earlier case as a {bits}-bit integer"
-                    )));
-                }
-                let target = self.lookup_block(target)?;
-                self.require_no_block_params(target)?;
-                switch.set_entry(entry, target);
-            }
-            let default = self.lookup_block(br_table.default(ctx))?;
-            self.require_no_block_params(default)?;
-            switch.emit(&mut self.builder, index, default);
+            let default = self.jump_table_entry(br_table.default(ctx))?;
+            let table = br_table
+                .table(ctx)
+                .map(|block| self.jump_table_entry(block))
+                .collect::<CompilationResult<Vec<_>>>()?;
+            let jump_table = self
+                .builder
+                .create_jump_table(cl_ir::JumpTableData::new(default, &table));
+            self.builder.ins().br_table(index, jump_table);
             return Ok(());
         }
 
@@ -785,18 +776,6 @@ impl<'a> FunctionTranslator<'a> {
     }
 }
 
-/// The unsigned `bits`-wide pattern of a `clif.br_table` case, if the case is
-/// a signed or unsigned integer of that width.
-fn case_entry(case: i64, bits: u32) -> Option<u128> {
-    if bits >= 64 {
-        return Some(u128::from(case as u64));
-    }
-    let unsigned = 0..1i64 << bits;
-    let signed = -(1i64 << (bits - 1))..0;
-    (unsigned.contains(&case) || signed.contains(&case))
-        .then(|| u128::from(case as u64 & ((1u64 << bits) - 1)))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -810,18 +789,6 @@ mod tests {
             params: Default::default(),
             attrs: Default::default(),
         })
-    }
-
-    #[test]
-    fn case_entries_are_the_bit_patterns_of_the_index_width() {
-        assert_eq!(case_entry(0, 8), Some(0));
-        assert_eq!(case_entry(255, 8), Some(255));
-        assert_eq!(case_entry(-1, 8), Some(255));
-        assert_eq!(case_entry(-128, 8), Some(128));
-        assert_eq!(case_entry(256, 8), None);
-        assert_eq!(case_entry(-129, 8), None);
-        assert_eq!(case_entry(-1, 32), Some(u128::from(u32::MAX)));
-        assert_eq!(case_entry(-1, 64), Some(u128::from(u64::MAX)));
     }
 
     #[test]

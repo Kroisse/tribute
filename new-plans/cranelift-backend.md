@@ -143,27 +143,23 @@ Cranelift IR과 1:1 대응하는 저수준 연산. 전체 연산 목록은 [ir.m
 - **스택 할당**: stack_slot으로 로컬 메모리 할당 가능
 - **함수 포인터**: funcref 대신 symbol_addr로 함수 주소 획득
 
-### `clif.br_table` 다중 분기
+### `clif.br_table` jump table 분기
 
-`clif.br_table`은 정수 `index` 하나로 여러 블록 중 하나로 분기한다.
+`clif.br_table`은 Cranelift의 `br_table` 명령과 같은 의미를 가진다.
 
 ```text
-clif.br_table %index [^default, ^a, ^b, ^c] {cases = [0, 1, 5]}
+clif.br_table %index [^default, ^entry0, ^entry1, ^entry2]
 ```
 
-- Successor는 `default`가 먼저이고, 그 뒤로 `cases`의 값마다 하나씩 같은 순서로
-  온다. `cases`의 길이와 대상 successor의 수는 같다.
-- `index`가 `cases`의 한 값과 같으면 그 위치의 successor로, 어느 값과도 같지
-  않으면 `default`로 분기한다.
-- Case 값은 `index`와 같은 폭의 정수로 비교한다. 그 폭의 부호 있는 정수나 부호
-  없는 정수로 표현할 수 없는 값은 거부한다. 같은 폭에서 같은 비트열이 되는 두
-  값은 중복이다.
-- Case 값은 서로 달라야 하고, 연속이거나 0에서 시작할 필요가 없다.
+- Successor는 `default`가 먼저이고, 그 뒤가 0번부터의 table 항목이다.
+- `index`는 부호 없는 32비트 정수다. Table 범위 안이면 그 위치의 successor로,
+  범위를 벗어나면 `default`로 분기한다.
 - Successor는 block argument를 받지 않는다. 값을 넘겨야 하는 분기는
   `clif.jump`로 끝나는 블록을 거친다.
 
-Jump table과 비교 탐색 중 무엇을 방출할지는 backend가 case 값의 분포를 보고
-정한다. Operation은 그 선택을 표현하지 않는다.
+연속이 아닌 값이나 0에서 시작하지 않는 값에 대한 분기는 이 operation이 표현하지
+않는다. 그런 분기를 table 위치로 바꾸거나 비교 분기로 푸는 것은 `clif.*`로
+내리는 lowering의 책임이다.
 
 ### `clif.func_sig` 네이티브 호출 계약
 
