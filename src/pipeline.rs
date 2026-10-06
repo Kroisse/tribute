@@ -262,6 +262,9 @@ use trunk_ir_wasm_backend::{
 /// The prelude source code, embedded at compile time.
 const PRELUDE_SOURCE: &str = include_str!("../lib/std/prelude.trb");
 
+/// The URI the prelude source is registered under.
+const PRELUDE_URI: &str = "prelude:///std/prelude";
+
 /// Parse the prelude source.
 ///
 /// This is the first stage of prelude processing, shared by all prelude-related functions.
@@ -332,8 +335,7 @@ fn prelude_module(db: &dyn salsa::Database) -> Option<ast_typeck::TypeCheckOutpu
 
 /// Create a SourceCst for the prelude.
 fn create_prelude_source(db: &dyn salsa::Database) -> Option<crate::SourceCst> {
-    let uri = fluent_uri::Uri::parse_from("prelude:///std/prelude".to_owned())
-        .expect("valid prelude URI");
+    let uri = fluent_uri::Uri::parse_from(PRELUDE_URI.to_owned()).expect("valid prelude URI");
     let text: Rope = PRELUDE_SOURCE.into();
     let mut parser = Parser::new();
     parser
@@ -670,6 +672,7 @@ fn merge_and_lower_to_ir_with<'db, M>(
             evidence_plans: typed.expression_types(db).evidence_plans.clone(),
             well_known_types: *typed.well_known_types(db),
             compiler_intrinsics,
+            merged_sources: vec![PRELUDE_URI.to_owned()],
         },
         db,
         &mut ir,
@@ -4157,21 +4160,15 @@ fn main() -> String { "hello" }
             .expect("String IR metadata");
         let string_data = ctx.get_type(string_ty);
 
+        let Some(trunk_ir::Attribute::Location(definition)) =
+            string_data.attrs.get("tribute.definition")
+        else {
+            panic!("String IR type records its definition location");
+        };
+        assert_eq!(ctx.paths().get(definition.path), PRELUDE_URI);
         assert_eq!(
-            string_data.attrs.get("tribute.definition.source"),
-            Some(&trunk_ir::Attribute::Int(
-                canonical.definition.source as i128
-            ))
-        );
-        assert_eq!(
-            string_data.attrs.get("tribute.definition.start"),
-            Some(&trunk_ir::Attribute::Int(
-                canonical.definition.start as i128
-            ))
-        );
-        assert_eq!(
-            string_data.attrs.get("tribute.definition.end"),
-            Some(&trunk_ir::Attribute::Int(canonical.definition.end as i128))
+            (definition.span.start, definition.span.end),
+            (canonical.definition.start, canonical.definition.end)
         );
 
         let user_lookalike = ctx.types().iter().find_map(|(ty, data)| {

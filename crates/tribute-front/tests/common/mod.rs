@@ -122,6 +122,7 @@ fn run_ast_pipeline_inner(db: &dyn salsa::Database, source: SourceCst) -> String
         evidence_plans: result.evidence_plans,
         well_known_types: result.well_known_types,
         compiler_intrinsics,
+        merged_sources: Vec::new(),
     }
     .lower_to_ir(db, &mut ir, source.uri(db).as_str());
     let validation = tribute_ir::dialect::tribute_control::validate(
