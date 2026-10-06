@@ -26,4 +26,5 @@ winnow.workspace = true
 [dev-dependencies]
 insta.workspace = true
 proptest.workspace = true
+proptest-state-machine.workspace = true
 salsa-test-macros = { workspace = true }

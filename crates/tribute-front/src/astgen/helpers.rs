@@ -34,7 +34,9 @@ pub(crate) fn truncate_token_preview(text: &str) -> impl std::fmt::Display + '_ 
     }
 
     let trimmed = text.trim();
-    let first_line = trimmed.lines().next().unwrap_or(trimmed);
+    // A lone carriage return also ends the line, so no line break reaches
+    // the diagnostic.
+    let first_line = trimmed.split(['\n', '\r']).next().unwrap_or(trimmed);
     TruncatedToken(first_line)
 }
 

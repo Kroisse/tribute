@@ -1002,30 +1002,15 @@ pub unsafe extern "C" fn __tribute_evidence_lookup_tr(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::collections::BTreeMap;
+    use proptest::prelude::*;
+    use proptest::sample::Index;
+    use proptest::strategy::Union;
+    use proptest_state_machine::{ReferenceStateMachine, StateMachineTest, prop_state_machine};
 
     fn scripted_read(events: impl IntoIterator<Item = ReadByte>) -> *mut NativeReadLineResult {
         let mut events = events.into_iter();
         read_line_with(|| events.next().expect("read script exhausted"))
-    }
-
-    fn buffered_scripted_read(
-        buffer: &mut StdinBuffer,
-        input: &[u8],
-        offset: &mut usize,
-        refill_count: &mut usize,
-    ) -> *mut NativeReadLineResult {
-        read_line_with(|| {
-            buffer.read_byte(|destination| {
-                *refill_count += 1;
-                if *offset == input.len() {
-                    return ReadChunk::EndOfFile;
-                }
-                let length = destination.len().min(input.len() - *offset);
-                destination[..length].copy_from_slice(&input[*offset..*offset + length]);
-                *offset += length;
-                ReadChunk::Bytes(length)
-            })
-        })
     }
 
     unsafe fn bytes_contents(bytes: *const TributeBytes) -> Vec<u8> {
@@ -1121,122 +1106,245 @@ mod tests {
         ) -> u32 = __tribute_bytes_range_equal;
     }
 
-    #[test]
-    fn test_bytes_range_equal() {
-        let left_data = b"prefix-middle-suffix";
-        let equal_data = b"other-middle-tail";
-        let unequal_data = b"other-mXddle-tail";
-        let left = TributeBytes {
-            ptr: left_data.as_ptr(),
-            len: left_data.len() as u64,
-        };
-        let equal = TributeBytes {
-            ptr: equal_data.as_ptr(),
-            len: equal_data.len() as u64,
-        };
-        let unequal = TributeBytes {
-            ptr: unequal_data.as_ptr(),
-            len: unequal_data.len() as u64,
-        };
-        let empty = TributeBytes {
-            ptr: core::ptr::null(),
-            len: 0,
-        };
-
-        unsafe {
-            assert_eq!(__tribute_bytes_range_equal(&left, 7, &equal, 6, 6), 1);
-            assert_eq!(__tribute_bytes_range_equal(&left, 7, &unequal, 6, 6), 0);
-            assert_eq!(__tribute_bytes_range_equal(&empty, 0, &empty, 0, 0), 1);
-            assert_eq!(__tribute_bytes_range_equal(&left, 18, &equal, 0, 6), 0);
+    fn bytes_view(data: &[u8]) -> TributeBytes {
+        // Empty runtime payloads carry a null pointer.
+        TributeBytes {
+            ptr: if data.is_empty() {
+                core::ptr::null()
+            } else {
+                data.as_ptr()
+            },
+            len: data.len() as u64,
         }
     }
 
-    #[test]
-    fn test_write_all_retries_short_writes_and_interrupts() {
-        let mut results = [Ok(2), Err(libc::EINTR), Ok(3)].into_iter();
-        let mut attempts = Vec::new();
+    /// Range starts and lengths: mostly in bounds, sometimes near `u32::MAX`
+    /// so that the end computation would overflow 32 bits.
+    fn range_bound() -> impl Strategy<Value = u32> {
+        prop_oneof![9 => 0u32..14, 1 => (u32::MAX - 14)..=u32::MAX]
+    }
 
-        let completed = write_all_with(b"hello", |remaining| {
-            attempts.push(remaining.to_vec());
-            results.next().expect("write script exhausted")
+    proptest! {
+        /// A range comparison is `1` exactly when both ranges lie within
+        /// their payloads and hold the same bytes, and `0` otherwise.
+        #[test]
+        fn prop_bytes_range_equal_matches_slices(
+            left in prop::collection::vec(0u8..2, 0..12),
+            right in prop::collection::vec(0u8..2, 0..12),
+            left_start in range_bound(),
+            right_start in range_bound(),
+            len in range_bound(),
+        ) {
+            let range = |data: &[u8], start: u32| {
+                let start = start as usize;
+                let end = start.checked_add(len as usize)?;
+                data.get(start..end).map(<[u8]>::to_vec)
+            };
+            let expected = match (range(&left, left_start), range(&right, right_start)) {
+                (Some(l), Some(r)) => u32::from(l == r),
+                _ => 0,
+            };
+            let left_bytes = bytes_view(&left);
+            let right_bytes = bytes_view(&right);
+            let actual = unsafe {
+                __tribute_bytes_range_equal(&left_bytes, left_start, &right_bytes, right_start, len)
+            };
+            prop_assert_eq!(actual, expected);
+        }
+    }
+
+    /// One scripted outcome of a `write` call.
+    #[derive(Clone, Debug)]
+    enum WriteStep {
+        /// Write between one byte and everything that remains.
+        Partial(Index),
+        Zero,
+        Interrupted,
+        Fail(i32),
+        /// Report more bytes than were offered.
+        Overlong(usize),
+    }
+
+    fn write_step() -> impl Strategy<Value = WriteStep> {
+        prop_oneof![
+            4 => any::<Index>().prop_map(WriteStep::Partial),
+            1 => Just(WriteStep::Zero),
+            2 => Just(WriteStep::Interrupted),
+            1 => (1i32..200)
+                .prop_filter("EINTR is retried", |code| *code != libc::EINTR)
+                .prop_map(WriteStep::Fail),
+            1 => (1usize..4).prop_map(WriteStep::Overlong),
+        ]
+    }
+
+    proptest! {
+        /// `write_all_with` offers the unwritten suffix on every attempt,
+        /// retries `EINTR`, and fails on a zero, overlong, or failed write.
+        /// A script that runs out writes everything that remains.
+        #[test]
+        fn prop_write_all_follows_write_script(
+            data in prop::collection::vec(any::<u8>(), 0..24),
+            script in prop::collection::vec(write_step(), 0..12),
+        ) {
+            let outcome = |step: Option<&WriteStep>, remaining: usize| match step {
+                None => Ok(remaining),
+                Some(WriteStep::Partial(index)) => Ok(index.index(remaining) + 1),
+                Some(WriteStep::Zero) => Ok(0),
+                Some(WriteStep::Interrupted) => Err(libc::EINTR),
+                Some(WriteStep::Fail(code)) => Err(*code),
+                Some(WriteStep::Overlong(extra)) => Ok(remaining + extra),
+            };
+
+            // Reference model.
+            let mut offset = 0;
+            let mut expected_attempts = Vec::new();
+            let mut steps = script.iter();
+            let expected = loop {
+                if offset == data.len() {
+                    break true;
+                }
+                expected_attempts.push(data[offset..].to_vec());
+                let step = steps.next();
+                match step {
+                    Some(WriteStep::Interrupted) => {}
+                    Some(WriteStep::Zero | WriteStep::Fail(_) | WriteStep::Overlong(_)) => {
+                        break false;
+                    }
+                    None | Some(WriteStep::Partial(_)) => {
+                        let Ok(written) = outcome(step, data.len() - offset) else {
+                            unreachable!("successful steps write bytes");
+                        };
+                        offset += written;
+                    }
+                }
+            };
+
+            let mut attempts = Vec::new();
+            let mut steps = script.iter();
+            let completed = write_all_with(&data, |remaining| {
+                attempts.push(remaining.to_vec());
+                outcome(steps.next(), remaining.len())
+            });
+
+            prop_assert_eq!(completed, expected);
+            prop_assert_eq!(attempts, expected_attempts);
+        }
+    }
+
+    /// The line contents the read-line property feeds: valid text, text with
+    /// interior carriage returns, or arbitrary bytes (usually invalid UTF-8).
+    fn input_line() -> impl Strategy<Value = Vec<u8>> {
+        prop_oneof![
+            "[^\r\n]{0,6}".prop_map(String::into_bytes),
+            "[a-c\r]{0,4}[a-c]".prop_map(String::into_bytes),
+            prop::collection::vec(any::<u8>().prop_filter("line break", |b| *b != b'\n'), 0..6),
+        ]
+    }
+
+    /// How a line ends in the input stream.
+    #[derive(Clone, Copy, Debug)]
+    enum LineEnd {
+        Lf,
+        CrLf,
+    }
+
+    #[derive(Debug, PartialEq)]
+    enum ReadOutcome {
+        Line(Vec<u8>),
+        InvalidEncoding,
+        EndOfFile,
+    }
+
+    /// Read one line through `buffer`, refilling it from `input` in chunks of
+    /// the scripted sizes. A zero-sized chunk reports an interrupted read.
+    fn chunked_read(
+        buffer: &mut StdinBuffer,
+        input: &[u8],
+        offset: &mut usize,
+        chunks: &[usize],
+        next_chunk: &mut usize,
+    ) -> Result<ReadOutcome, TestCaseError> {
+        let result = read_line_with(|| {
+            buffer.read_byte(|destination| {
+                if *offset == input.len() {
+                    return ReadChunk::EndOfFile;
+                }
+                let size = chunks[*next_chunk % chunks.len()];
+                *next_chunk += 1;
+                if size == 0 {
+                    return ReadChunk::Interrupted;
+                }
+                let length = size.min(input.len() - *offset).min(destination.len());
+                destination[..length].copy_from_slice(&input[*offset..*offset + length]);
+                *offset += length;
+                ReadChunk::Bytes(length)
+            })
         });
-
-        assert!(completed);
-        assert_eq!(attempts, [b"hello".as_slice(), b"llo", b"llo"]);
+        let result_ref = unsafe { &*result };
+        let outcome = match result_ref.tag {
+            IO_READ_LINE => ReadOutcome::Line(unsafe { bytes_contents(result_ref.bytes) }),
+            IO_READ_INVALID_ENCODING => ReadOutcome::InvalidEncoding,
+            IO_READ_END_OF_FILE => ReadOutcome::EndOfFile,
+            tag => {
+                unsafe { dealloc_test_read_result(result) };
+                return Err(TestCaseError::fail(format!("unexpected read tag {tag}")));
+            }
+        };
+        unsafe { dealloc_test_read_result(result) };
+        Ok(outcome)
     }
 
-    #[test]
-    fn test_write_all_stops_on_zero_or_other_error() {
-        assert!(!write_all_with(b"hello", |_| Ok(0)));
-        assert!(!write_all_with(b"hello", |_| Err(libc::EIO)));
-    }
+    proptest! {
+        /// Lines separated by LF or CRLF, with an optional unterminated last
+        /// line, read back one by one regardless of how reads chunk the
+        /// input; one trailing CR is stripped from terminated lines, invalid
+        /// UTF-8 is reported per line, and the end of input reads as EOF.
+        #[test]
+        fn prop_read_line_round_trips_chunked_input(
+            lines in prop::collection::vec(
+                (input_line(), prop_oneof![Just(LineEnd::Lf), Just(LineEnd::CrLf)]),
+                0..6,
+            ),
+            unterminated in prop::option::of(input_line()),
+            chunks in prop::collection::vec(0usize..8, 1..6)
+                .prop_filter("some chunk must make progress", |c| c.iter().any(|&s| s > 0)),
+        ) {
+            let classify = |line: Vec<u8>| match core::str::from_utf8(&line) {
+                Ok(_) => ReadOutcome::Line(line),
+                Err(_) => ReadOutcome::InvalidEncoding,
+            };
+            let mut input = Vec::new();
+            let mut expected = Vec::new();
+            for (line, end) in &lines {
+                input.extend_from_slice(line);
+                let mut content = line.clone();
+                if let LineEnd::CrLf = end {
+                    input.push(b'\r');
+                    content.push(b'\r');
+                }
+                input.push(b'\n');
+                if content.last() == Some(&b'\r') {
+                    content.pop();
+                }
+                expected.push(classify(content));
+            }
+            if let Some(line) = unterminated.filter(|line| !line.is_empty()) {
+                input.extend_from_slice(&line);
+                expected.push(classify(line));
+            }
+            expected.push(ReadOutcome::EndOfFile);
+            // A read past the end reports EOF again.
+            expected.push(ReadOutcome::EndOfFile);
 
-    #[test]
-    fn test_read_line_strips_lf_and_crlf() {
-        for input in [b"hello\n".as_slice(), b"hello\r\n".as_slice()] {
-            let result = scripted_read(input.iter().copied().map(ReadByte::Byte));
-            let result_ref = unsafe { &*result };
-            assert_eq!(result_ref.tag, IO_READ_LINE);
-            assert_eq!(unsafe { bytes_contents(result_ref.bytes) }, b"hello");
-            unsafe { dealloc_test_read_result(result) };
+            let mut buffer = StdinBuffer::new();
+            let mut offset = 0;
+            let mut next_chunk = 0;
+            for expected in expected {
+                let actual =
+                    chunked_read(&mut buffer, &input, &mut offset, &chunks, &mut next_chunk)?;
+                prop_assert_eq!(actual, expected);
+            }
         }
-    }
-
-    #[test]
-    fn test_stdin_buffer_preserves_bytes_between_lines() {
-        let mut buffer = StdinBuffer::new();
-        let mut offset = 0;
-        let mut refill_count = 0;
-
-        let first = buffered_scripted_read(
-            &mut buffer,
-            b"first\nsecond\n",
-            &mut offset,
-            &mut refill_count,
-        );
-        assert_eq!(unsafe { bytes_contents((*first).bytes) }, b"first");
-        unsafe { dealloc_test_read_result(first) };
-
-        let second = buffered_scripted_read(
-            &mut buffer,
-            b"first\nsecond\n",
-            &mut offset,
-            &mut refill_count,
-        );
-        assert_eq!(unsafe { bytes_contents((*second).bytes) }, b"second");
-        unsafe { dealloc_test_read_result(second) };
-
-        assert_eq!(refill_count, 1, "second line should use buffered bytes");
-    }
-
-    #[test]
-    fn test_read_line_preserves_empty_and_partial_lines() {
-        let empty = scripted_read([ReadByte::Byte(b'\n')]);
-        assert_eq!(unsafe { &*empty }.tag, IO_READ_LINE);
-        assert_eq!(unsafe { bytes_contents((*empty).bytes) }, b"");
-        unsafe { dealloc_test_read_result(empty) };
-
-        let partial = scripted_read(
-            b"partial"
-                .iter()
-                .copied()
-                .map(ReadByte::Byte)
-                .chain([ReadByte::EndOfFile]),
-        );
-        assert_eq!(unsafe { &*partial }.tag, IO_READ_LINE);
-        assert_eq!(unsafe { bytes_contents((*partial).bytes) }, b"partial");
-        unsafe { dealloc_test_read_result(partial) };
-    }
-
-    #[test]
-    fn test_read_line_distinguishes_eof_and_invalid_encoding() {
-        let eof = scripted_read([ReadByte::EndOfFile]);
-        assert_eq!(unsafe { &*eof }.tag, IO_READ_END_OF_FILE);
-        unsafe { dealloc_test_read_result(eof) };
-
-        let invalid = scripted_read([ReadByte::Byte(0xff), ReadByte::Byte(b'\n')]);
-        assert_eq!(unsafe { &*invalid }.tag, IO_READ_INVALID_ENCODING);
-        unsafe { dealloc_test_read_result(invalid) };
     }
 
     #[test]
@@ -1315,260 +1423,352 @@ mod tests {
         let _ = unsafe { Box::from_raw(ev) };
     }
 
-    #[test]
-    fn test_evidence_extend_single() {
-        unsafe {
-            let ev = __tribute_evidence_empty();
-            let ev2 = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
+    /// Ability ids the evidence state machine draws from. The same ids serve
+    /// as row-tail slots, as the runtime does not distinguish them.
+    const EVIDENCE_IDS: core::ops::RangeInclusive<i32> = -2..=3;
 
-            let ev2_ref = &*ev2;
-            assert_eq!(ev2_ref.markers.len(), 1);
-            assert_eq!(ev2_ref.markers[0].ability_id, 10);
-            assert_eq!(ev2_ref.markers[0].prompt_tag, 1);
-            assert!(ev2_ref.markers[0].tr_dispatch_fn.is_null());
+    /// A transition of the evidence state machine. Each one derives a new
+    /// evidence from members of the pool, named by their pool indices, and
+    /// appends it to the pool.
+    #[derive(Clone, Debug)]
+    enum EvidenceAction {
+        Extend {
+            base: usize,
+            ability: i32,
+            prompt_tag: i32,
+            tr: usize,
+            outer: usize,
+        },
+        WithTail {
+            base: usize,
+            slot: i32,
+            tail: usize,
+        },
+        Mask {
+            base: usize,
+            ability: i32,
+        },
+        Dup {
+            base: usize,
+            ability: i32,
+        },
+        Push {
+            base: usize,
+            source: usize,
+            ability: i32,
+        },
+    }
 
-            // Original evidence is unchanged (persistent)
-            let ev_ref = &*ev;
-            assert!(ev_ref.markers.is_empty());
+    /// A handler of the reference model. `outer` indexes the evidence pool.
+    #[derive(Clone, Copy, Debug, PartialEq)]
+    struct ModelMarker {
+        prompt_tag: i32,
+        tr: usize,
+        outer: usize,
+    }
 
-            let _ = Box::from_raw(ev);
-            let _ = Box::from_raw(ev2);
+    /// Each ability's handler stack, bottom first. Stacks are never empty.
+    type ModelEvidence = BTreeMap<i32, Vec<ModelMarker>>;
+
+    /// The reference model: the handler stacks of every evidence in the pool,
+    /// in creation order. Evidences are persistent, so a model never changes
+    /// once it is in the pool.
+    struct EvidenceModel;
+
+    impl ReferenceStateMachine for EvidenceModel {
+        type State = Vec<ModelEvidence>;
+        type Transition = EvidenceAction;
+
+        fn init_state() -> BoxedStrategy<Self::State> {
+            Just(vec![ModelEvidence::new()]).boxed()
+        }
+
+        fn transitions(state: &Self::State) -> BoxedStrategy<Self::Transition> {
+            let pool = 0..state.len();
+            let mut choices = vec![
+                (
+                    4,
+                    (
+                        pool.clone(),
+                        EVIDENCE_IDS,
+                        0i32..100,
+                        0usize..3,
+                        pool.clone(),
+                    )
+                        .prop_map(
+                            |(base, ability, prompt_tag, tr, outer)| EvidenceAction::Extend {
+                                base,
+                                ability,
+                                prompt_tag,
+                                tr: tr * 0x10,
+                                outer,
+                            },
+                        )
+                        .boxed(),
+                ),
+                (
+                    1,
+                    (pool.clone(), EVIDENCE_IDS, pool.clone())
+                        .prop_map(|(base, slot, tail)| EvidenceAction::WithTail {
+                            base,
+                            slot,
+                            tail,
+                        })
+                        .boxed(),
+                ),
+            ];
+            // Mask, dup, and push need an ability present in an evidence.
+            let present: Vec<(usize, i32)> = state
+                .iter()
+                .enumerate()
+                .flat_map(|(index, model)| model.keys().map(move |&ability| (index, ability)))
+                .collect();
+            if !present.is_empty() {
+                let present = prop::sample::select(present);
+                choices.push((
+                    3,
+                    present
+                        .clone()
+                        .prop_map(|(base, ability)| EvidenceAction::Mask { base, ability })
+                        .boxed(),
+                ));
+                choices.push((
+                    1,
+                    present
+                        .clone()
+                        .prop_map(|(base, ability)| EvidenceAction::Dup { base, ability })
+                        .boxed(),
+                ));
+                choices.push((
+                    1,
+                    (pool, present)
+                        .prop_map(|(base, (source, ability))| EvidenceAction::Push {
+                            base,
+                            source,
+                            ability,
+                        })
+                        .boxed(),
+                ));
+            }
+            Union::new_weighted(choices).boxed()
+        }
+
+        /// Shrinking may drop earlier transitions, so every pool index must
+        /// still exist and every masked, duplicated, or pushed ability must
+        /// still be present.
+        fn preconditions(state: &Self::State, action: &Self::Transition) -> bool {
+            let exists = |index: usize| index < state.len();
+            let present = |index: usize, ability: i32| {
+                state
+                    .get(index)
+                    .is_some_and(|model| model.contains_key(&ability))
+            };
+            match *action {
+                EvidenceAction::Extend { base, outer, .. } => exists(base) && exists(outer),
+                EvidenceAction::WithTail { base, tail, .. } => exists(base) && exists(tail),
+                EvidenceAction::Mask { base, ability } | EvidenceAction::Dup { base, ability } => {
+                    present(base, ability)
+                }
+                EvidenceAction::Push {
+                    base,
+                    source,
+                    ability,
+                } => exists(base) && present(source, ability),
+            }
+        }
+
+        fn apply(mut state: Self::State, action: &Self::Transition) -> Self::State {
+            let model = match *action {
+                EvidenceAction::Extend {
+                    base,
+                    ability,
+                    prompt_tag,
+                    tr,
+                    outer,
+                } => {
+                    let mut model = state[base].clone();
+                    model.entry(ability).or_default().push(ModelMarker {
+                        prompt_tag,
+                        tr,
+                        outer,
+                    });
+                    model
+                }
+                EvidenceAction::WithTail { base, slot, tail } => {
+                    let mut model = state[base].clone();
+                    model.entry(slot).or_default().push(ModelMarker {
+                        prompt_tag: 0,
+                        tr: 0,
+                        outer: tail,
+                    });
+                    model
+                }
+                EvidenceAction::Mask { base, ability } => {
+                    let mut model = state[base].clone();
+                    let stack = model.get_mut(&ability).expect("present ability");
+                    stack.pop();
+                    if stack.is_empty() {
+                        model.remove(&ability);
+                    }
+                    model
+                }
+                EvidenceAction::Dup { base, ability } => {
+                    let mut model = state[base].clone();
+                    let stack = model.get_mut(&ability).expect("present ability");
+                    stack.push(*stack.last().expect("non-empty stack"));
+                    model
+                }
+                EvidenceAction::Push {
+                    base,
+                    source,
+                    ability,
+                } => {
+                    let top = *state[source][&ability].last().expect("non-empty stack");
+                    let mut model = state[base].clone();
+                    model.entry(ability).or_default().push(top);
+                    model
+                }
+            };
+            state.push(model);
+            state
         }
     }
 
-    #[test]
-    fn test_evidence_extend_sorted() {
-        unsafe {
-            let ev = __tribute_evidence_empty();
-            // Insert in reverse order: 30, 10, 20
-            let ev = __tribute_evidence_extend(ev, 30, 3, core::ptr::null(), ev);
-            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
-            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null(), ev);
+    /// The real evidence pool. It owns every evidence the machine creates.
+    /// Markers point into other evidences, so all of them are freed together
+    /// when the pool drops, including when a check panics.
+    struct EvidencePool(Vec<*mut Evidence>);
 
-            let ev_ref = &*ev;
-            assert_eq!(ev_ref.markers.len(), 3);
-            // Should be sorted by ability_id
-            assert_eq!(ev_ref.markers[0].ability_id, 10);
-            assert_eq!(ev_ref.markers[1].ability_id, 20);
-            assert_eq!(ev_ref.markers[2].ability_id, 30);
-
-            // Note: we leak intermediate evidences in this test; acceptable for testing
-            let _ = Box::from_raw(ev);
-        }
-    }
-
-    #[test]
-    fn test_evidence_lookup_found() {
-        unsafe {
-            let ev = __tribute_evidence_empty();
-            let ev = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
-            let ev = __tribute_evidence_extend(ev, 20, 2, core::ptr::null(), ev);
-
-            let prompt_tag = __tribute_evidence_lookup(ev, 20);
-            assert_eq!(prompt_tag, 2);
-
-            let _ = Box::from_raw(ev);
-        }
-    }
-
-    #[test]
-    fn test_evidence_lookup_dispatch_pointers() {
-        unsafe {
-            let tr = 0x10usize as *const u8;
-            let empty = __tribute_evidence_empty();
-            let ev = __tribute_evidence_extend(empty, 10, 1, tr, empty);
-
-            assert_eq!(__tribute_evidence_lookup_tr(ev, 10), tr);
-
-            let _ = Box::from_raw(empty);
-            let _ = Box::from_raw(ev);
-        }
-    }
-
-    #[test]
-    fn test_evidence_extend_shadows_nested_same_ability_handler() {
-        unsafe {
-            let outer_tr = 0x10usize as *const u8;
-            let inner_tr = 0x30usize as *const u8;
-
-            let ev = __tribute_evidence_empty();
-            let outer = __tribute_evidence_extend(ev, 10, 1, outer_tr, ev);
-            let inner = __tribute_evidence_extend(outer, 10, 2, inner_tr, outer);
-
-            let inner_ref = &*inner;
-            assert_eq!(inner_ref.markers.len(), 1);
-            assert_eq!(inner_ref.markers[0].ability_id, 10);
-            assert_eq!(inner_ref.markers[0].prompt_tag, 2);
-            assert_eq!(inner_ref.markers[0].tr_dispatch_fn, inner_tr);
-
-            let outer_ref = &*outer;
-            assert_eq!(outer_ref.markers[0].prompt_tag, 1);
-            assert_eq!(outer_ref.markers[0].tr_dispatch_fn, outer_tr);
-            assert!(outer_ref.markers[0].shadowed.is_null());
-            assert_eq!(*inner_ref.markers[0].shadowed, outer_ref.markers[0]);
-
-            let _ = Box::from_raw(ev);
-            let _ = Box::from_raw(outer);
-            let _ = Box::from_raw(inner);
-        }
-    }
-
-    #[test]
-    fn test_evidence_mask_exposes_shadowed_handler() {
-        unsafe {
-            let outer_tr = 0x10usize as *const u8;
-
-            let ev = __tribute_evidence_empty();
-            let other = __tribute_evidence_extend(ev, 20, 9, core::ptr::null(), ev);
-            let outer = __tribute_evidence_extend(other, 10, 1, outer_tr, other);
-            let middle = __tribute_evidence_extend(outer, 10, 2, core::ptr::null(), outer);
-            let inner = __tribute_evidence_extend(middle, 10, 3, core::ptr::null(), middle);
-
-            let once = __tribute_evidence_mask(inner, 10);
-            assert_eq!(markers(once).len(), 2);
-            assert_eq!(__tribute_evidence_lookup(once, 10), 2);
-            assert_eq!(__tribute_evidence_lookup(once, 20), 9);
-
-            let twice = __tribute_evidence_mask(once, 10);
-            assert_eq!(__tribute_evidence_lookup(twice, 10), 1);
-            assert_eq!(__tribute_evidence_lookup_tr(twice, 10), outer_tr);
-            assert!(markers(twice)[0].shadowed.is_null());
-
-            // The masked evidence is unchanged (persistent).
-            assert_eq!(__tribute_evidence_lookup(inner, 10), 3);
-            assert_eq!(__tribute_evidence_lookup(once, 10), 2);
-
-            for ev in [ev, other, outer, middle, inner, once, twice] {
-                let _ = Box::from_raw(ev);
+    impl Drop for EvidencePool {
+        fn drop(&mut self) {
+            for &ev in &self.0 {
+                let _ = unsafe { Box::from_raw(ev) };
             }
         }
     }
 
-    #[test]
-    fn test_evidence_outer_returns_the_evidence_a_handler_was_installed_on() {
-        unsafe {
-            let ev = __tribute_evidence_empty();
-            let other = __tribute_evidence_extend(ev, 20, 9, core::ptr::null(), ev);
-            // The handler of 10 is installed on `other`, after a selection
-            // produced the evidence it extends.
-            let masked = __tribute_evidence_mask(other, 20);
-            let inner = __tribute_evidence_extend(masked, 10, 1, core::ptr::null(), other);
+    /// The real evidence at `pool[index]` must hold exactly the stacks of
+    /// `models[index]`, sorted by ability id, and every query must agree.
+    fn check_evidence(pool: &[*mut Evidence], models: &[ModelEvidence], index: usize) {
+        let ev = pool[index].cast_const();
+        let model = &models[index];
+        let pool_index = |outer: *const Evidence| {
+            pool.iter()
+                .position(|&candidate| candidate.cast_const() == outer)
+        };
 
-            assert_eq!(__tribute_evidence_outer(inner, 10), other.cast_const());
-            assert_eq!(__tribute_evidence_outer(other, 20), ev.cast_const());
-            // A copy keeps the evidence of the handler it copies.
-            let dup = __tribute_evidence_dup(inner, 10);
-            assert_eq!(__tribute_evidence_outer(dup, 10), other.cast_const());
+        let slots = unsafe { markers(ev) };
+        let ids: Vec<i32> = slots.iter().map(|marker| marker.ability_id).collect();
+        let expected_ids: Vec<i32> = model.keys().copied().collect();
+        assert_eq!(ids, expected_ids, "evidence {index} slots");
 
-            for ev in [ev, other, masked, inner, dup] {
-                let _ = Box::from_raw(ev);
+        for slot in slots {
+            let mut stack = Vec::new();
+            let mut current: *const Marker = slot;
+            while !current.is_null() {
+                let marker = unsafe { &*current };
+                assert_eq!(marker.ability_id, slot.ability_id);
+                stack.push(ModelMarker {
+                    prompt_tag: marker.prompt_tag,
+                    tr: marker.tr_dispatch_fn.addr(),
+                    outer: pool_index(marker.outer).unwrap_or(usize::MAX),
+                });
+                current = marker.shadowed;
+            }
+            stack.reverse();
+            assert_eq!(&stack, &model[&slot.ability_id], "evidence {index} stack");
+        }
+
+        for id in EVIDENCE_IDS {
+            let top = model.get(&id).and_then(|stack| stack.last());
+            let expected_tail = top.map_or(index, |top| top.outer);
+            assert_eq!(
+                unsafe { __tribute_evidence_tail(ev, id) },
+                pool[expected_tail].cast_const()
+            );
+            if let Some(top) = top {
+                assert_eq!(unsafe { __tribute_evidence_lookup(ev, id) }, top.prompt_tag);
+                assert_eq!(
+                    unsafe { __tribute_evidence_lookup_tr(ev, id) }.addr(),
+                    top.tr
+                );
+                assert_eq!(
+                    unsafe { __tribute_evidence_outer(ev, id) },
+                    pool[top.outer].cast_const()
+                );
             }
         }
     }
 
-    #[test]
-    fn test_evidence_tail_is_the_attached_evidence_or_the_evidence_itself() {
-        unsafe {
-            let ev = __tribute_evidence_empty();
-            let state = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
-            let first = __tribute_evidence_mask(state, 10);
-            let attached = __tribute_evidence_with_tail(state, -1, first);
-            let both = __tribute_evidence_with_tail(attached, -2, state);
+    /// Runs evidence operations against [`EvidenceModel`].
+    struct EvidenceMachine;
 
-            assert_eq!(__tribute_evidence_tail(both, -1), first.cast_const());
-            assert_eq!(__tribute_evidence_tail(both, -2), state.cast_const());
-            // The handlers of the evidence itself are unchanged.
-            assert_eq!(__tribute_evidence_lookup(both, 10), 1);
-            // Without the slot, every row tail shares the evidence.
-            assert_eq!(__tribute_evidence_tail(attached, -2), attached.cast_const());
-            // A selection keeps the slots.
-            let masked = __tribute_evidence_mask(both, 10);
-            assert_eq!(__tribute_evidence_tail(masked, -1), first.cast_const());
-            // A callee's slot replaces the one its caller received.
-            let nested = __tribute_evidence_with_tail(both, -1, state);
-            assert_eq!(__tribute_evidence_tail(nested, -1), state.cast_const());
+    impl StateMachineTest for EvidenceMachine {
+        type SystemUnderTest = EvidencePool;
+        type Reference = EvidenceModel;
 
-            for ev in [ev, state, first, attached, both, masked, nested] {
-                let _ = Box::from_raw(ev);
+        fn init_test(_models: &Vec<ModelEvidence>) -> Self::SystemUnderTest {
+            EvidencePool(vec![__tribute_evidence_empty()])
+        }
+
+        fn apply(
+            mut pool: Self::SystemUnderTest,
+            _models: &Vec<ModelEvidence>,
+            action: EvidenceAction,
+        ) -> Self::SystemUnderTest {
+            let evs = &pool.0;
+            let ev = match action {
+                EvidenceAction::Extend {
+                    base,
+                    ability,
+                    prompt_tag,
+                    tr,
+                    outer,
+                } => unsafe {
+                    __tribute_evidence_extend(
+                        evs[base],
+                        ability,
+                        prompt_tag,
+                        core::ptr::without_provenance(tr),
+                        evs[outer],
+                    )
+                },
+                EvidenceAction::WithTail { base, slot, tail } => unsafe {
+                    __tribute_evidence_with_tail(evs[base], slot, evs[tail])
+                },
+                EvidenceAction::Mask { base, ability } => unsafe {
+                    __tribute_evidence_mask(evs[base], ability)
+                },
+                EvidenceAction::Dup { base, ability } => unsafe {
+                    __tribute_evidence_dup(evs[base], ability)
+                },
+                EvidenceAction::Push {
+                    base,
+                    source,
+                    ability,
+                } => unsafe { __tribute_evidence_push(evs[base], evs[source], ability) },
+            };
+            pool.0.push(ev);
+            pool
+        }
+
+        /// Re-checks every evidence after each step, so a step that changed
+        /// an existing evidence fails persistence.
+        fn check_invariants(pool: &Self::SystemUnderTest, models: &Vec<ModelEvidence>) {
+            assert_eq!(pool.0.len(), models.len());
+            for index in 0..pool.0.len() {
+                check_evidence(&pool.0, models, index);
             }
         }
     }
 
-    #[test]
-    fn test_evidence_push_stacks_the_top_handler_of_another_evidence() {
-        unsafe {
-            let tr = 0x10usize as *const u8;
-
-            let ev = __tribute_evidence_empty();
-            let outer = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
-            let inner = __tribute_evidence_extend(outer, 10, 2, tr, outer);
-
-            // Onto an evidence without the ability.
-            let fresh = __tribute_evidence_push(ev, inner, 10);
-            assert_eq!(__tribute_evidence_lookup(fresh, 10), 2);
-            assert_eq!(__tribute_evidence_lookup_tr(fresh, 10), tr);
-            assert_eq!(__tribute_evidence_outer(fresh, 10), outer.cast_const());
-            let bare = __tribute_evidence_mask(fresh, 10);
-            assert!(markers(bare).is_empty());
-
-            // Onto an evidence that holds a handler of the ability.
-            let stacked = __tribute_evidence_push(outer, inner, 10);
-            assert_eq!(__tribute_evidence_lookup(stacked, 10), 2);
-            let beneath = __tribute_evidence_mask(stacked, 10);
-            assert_eq!(__tribute_evidence_lookup(beneath, 10), 1);
-
-            for ev in [ev, outer, inner, fresh, bare, stacked, beneath] {
-                let _ = Box::from_raw(ev);
-            }
-        }
-    }
-
-    #[test]
-    fn test_evidence_mask_removes_unshadowed_ability() {
-        unsafe {
-            let ev = __tribute_evidence_empty();
-            let one = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
-            let two = __tribute_evidence_extend(one, 20, 2, core::ptr::null(), one);
-            let three = __tribute_evidence_extend(two, 30, 3, core::ptr::null(), two);
-
-            let masked = __tribute_evidence_mask(three, 20);
-            let masked_ref = &*masked;
-            assert_eq!(masked_ref.markers.len(), 2);
-            assert_eq!(masked_ref.markers[0].ability_id, 10);
-            assert_eq!(masked_ref.markers[1].ability_id, 30);
-            assert_eq!(markers(three).len(), 3);
-
-            for ev in [ev, one, two, three, masked] {
-                let _ = Box::from_raw(ev);
-            }
-        }
-    }
-
-    #[test]
-    fn test_evidence_dup_pushes_a_copy_of_the_top_handler() {
-        unsafe {
-            let tr = 0x10usize as *const u8;
-
-            let ev = __tribute_evidence_empty();
-            let outer = __tribute_evidence_extend(ev, 10, 1, core::ptr::null(), ev);
-            let inner = __tribute_evidence_extend(outer, 10, 2, tr, outer);
-
-            let dup = __tribute_evidence_dup(inner, 10);
-            assert_eq!(markers(dup).len(), 1);
-            assert_eq!(__tribute_evidence_lookup(dup, 10), 2);
-            assert_eq!(__tribute_evidence_lookup_tr(dup, 10), tr);
-
-            // One mask undoes the dup; the next exposes the outer handler.
-            let once = __tribute_evidence_mask(dup, 10);
-            assert_eq!(markers(once), markers(inner));
-            let twice = __tribute_evidence_mask(once, 10);
-            assert_eq!(__tribute_evidence_lookup(twice, 10), 1);
-            let thrice = __tribute_evidence_mask(twice, 10);
-            assert!(markers(thrice).is_empty());
-
-            for ev in [ev, outer, inner, dup, once, twice, thrice] {
-                let _ = Box::from_raw(ev);
-            }
-        }
+    prop_state_machine! {
+        /// Evidence operations behave like persistent per-ability handler
+        /// stacks: extend, `with_tail`, `push`, and `dup` push a handler,
+        /// `mask` pops one (dropping the slot when it empties), queries read
+        /// the top handler, a row tail is the top handler's `outer` or the
+        /// evidence itself, and no operation changes an existing evidence.
+        #[test]
+        fn prop_evidence_matches_handler_stack_model(sequential 1..40 => EvidenceMachine);
     }
 }

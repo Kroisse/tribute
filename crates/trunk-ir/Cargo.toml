@@ -43,5 +43,6 @@ string_cache_codegen.workspace = true
 litrs.workspace = true
 insta.workspace = true
 proptest.workspace = true
+proptest-state-machine.workspace = true
 salsa.workspace = true
 trybuild.workspace = true

@@ -2036,32 +2036,63 @@ core.module @test {
         assert_roundtrip(&ctx, module_op);
     }
 
-    #[test]
-    fn test_roundtrip_bytes_const_with_escapes() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.bytes {
-    %0 = test.bytes_const {value = b"a\nb\t\0\\\""} : core.bytes
-    func.return %0
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module_op =
-            parse_module(&mut ctx, input).expect("should parse bytes_const with escapes");
-        assert_roundtrip(&ctx, module_op);
-    }
+    /// Printing a module whose operation holds arbitrary bytes, string, and
+    /// symbol reference attributes, then parsing it, recovers every value.
+    mod escaped_attribute_roundtrip {
+        use proptest::prelude::*;
 
-    #[test]
-    fn test_roundtrip_bytes_const_with_non_ascii() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.bytes {
-    %0 = test.bytes_const {value = b"\x80\xff\x00"} : core.bytes
-    func.return %0
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module_op =
-            parse_module(&mut ctx, input).expect("should parse bytes_const with non-ASCII hex");
-        assert_roundtrip(&ctx, module_op);
+        use super::*;
+
+        fn text() -> impl Strategy<Value = String> {
+            let special = prop::sample::select(vec![
+                '"', '\\', '\n', '\t', '\0', '\x01', '\u{85}', ':', '@', ' ', 'é', '😀',
+            ]);
+            prop_oneof![
+                prop::collection::vec(prop_oneof![special, any::<char>()], 0..8)
+                    .prop_map(|chars| chars.into_iter().collect()),
+                "[A-Za-z0-9_]{1,6}",
+            ]
+        }
+
+        proptest! {
+            #[test]
+            fn module_attributes_round_trip(
+                bytes in prop::collection::vec(any::<u8>(), 0..24),
+                string in text(),
+                callee in prop::collection::vec(text(), 1..3),
+            ) {
+                let mut ctx = IrContext::new();
+                let loc = test_location(&mut ctx);
+                let i32_ty = make_i32_type(&mut ctx);
+                let callee = SymbolPath::new(callee.iter().map(String::as_str));
+                let string_attr = ctx.string_attr(&string);
+                let data = OperationDataBuilder::new(loc, Symbol::new("test"), Symbol::new("make"))
+                    .attr("bytes", Attribute::Bytes(bytes.as_slice().into()))
+                    .attr("text", string_attr)
+                    .attr("callee", Attribute::SymbolRef(callee.clone()))
+                    .result(i32_ty)
+                    .build(&mut ctx);
+                let op = ctx.create_op(data);
+                let module_op = wrap_in_module(&mut ctx, loc, vec![op]);
+
+                let printed = print_module(&ctx, module_op);
+                let mut parsed_ctx = IrContext::new();
+                let parsed = parse_module(&mut parsed_ctx, &printed).map_err(|e| {
+                    TestCaseError::fail(format!("parse failed: {}\n{printed}", e.message))
+                })?;
+                let body = parsed_ctx.op_region(parsed, 0).expect("module body");
+                let block = parsed_ctx.region(body).blocks[0];
+                let parsed_op = parsed_ctx.block(block).ops[0];
+                let attrs = &parsed_ctx.op(parsed_op).attributes;
+                prop_assert_eq!(
+                    attrs.get("bytes"),
+                    Some(&Attribute::Bytes(bytes.as_slice().into()))
+                );
+                prop_assert_eq!(attrs.get_str(&parsed_ctx, "text"), Some(string.as_str()));
+                prop_assert_eq!(attrs.get_symbol_ref("callee"), Some(&callee));
+                prop_assert_eq!(print_module(&parsed_ctx, parsed), printed);
+            }
+        }
     }
 
     #[test]

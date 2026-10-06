@@ -1120,6 +1120,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "proptest-state-machine"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1675727965d66ff6f335e7d398e477184da08f4bed22f1a7f0dbf2f077f56f2e"
+dependencies = [
+ "proptest",
+]
+
+[[package]]
 name = "quick-error"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1823,6 +1832,7 @@ dependencies = [
  "insta",
  "itertools 0.14.0",
  "proptest",
+ "proptest-state-machine",
  "ropey",
  "rustc-hash",
  "salsa",
@@ -1879,6 +1889,8 @@ version = "0.1.0"
 dependencies = [
  "itoa",
  "libc",
+ "proptest",
+ "proptest-state-machine",
  "smallvec",
  "tribute-rc",
  "zmij",
@@ -1906,6 +1918,7 @@ dependencies = [
  "malloc_size_of",
  "parking_lot",
  "proptest",
+ "proptest-state-machine",
  "rustc-hash",
  "salsa",
  "serde",
@@ -1954,6 +1967,8 @@ version = "0.1.0"
 dependencies = [
  "derive_more",
  "itertools 0.14.0",
+ "proptest",
+ "proptest-state-machine",
  "rustc-hash",
  "tempfile",
  "tracing",

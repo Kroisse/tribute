@@ -732,64 +732,6 @@ mod canonicalize_tests {
     }
 
     #[test]
-    fn int_const_fold_wraps_at_i32_width() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = 2147483647} : core.i32
-    %b = arith.const {value = 1} : core.i32
-    %r = arith.addi %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
-        assert_eq!(return_value_int_const(&ctx, module), Some(i32::MIN as i128));
-    }
-
-    #[test]
-    fn int_const_fold_wraps_at_i64_width() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i64 {
-    %a = arith.const {value = 9223372036854775807} : core.i64
-    %b = arith.const {value = 1} : core.i64
-    %r = arith.addi %a, %b : core.i64
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
-        assert_eq!(return_value_int_const(&ctx, module), Some(i64::MIN as i128));
-    }
-
-    #[test]
-    fn int_const_fold_accepts_nonstandard_width() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i7 {
-    %a = arith.const {value = 60} : core.i7
-    %b = arith.const {value = 10} : core.i7
-    %r = arith.addi %a, %b : core.i7
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "addi"), 0);
-        // 60 + 10 = 70, which exceeds i7::MAX (63), wraps to -58.
-        assert_eq!(return_value_int_const(&ctx, module), Some(-58));
-    }
-
-    #[test]
     fn int_const_fold_skips_widths_above_128() {
         let input = r#"core.module @test {
   func.func @f() -> core.i129 {
@@ -842,70 +784,9 @@ mod canonicalize_tests {
         assert_eq!(count_ops(&ctx, module, "arith", "addi"), 1);
     }
 
-    #[test]
-    fn wrap_signed_to_width_matches_two_complement_semantics() {
-        assert_eq!(
-            wrap_signed_to_width(i32::MAX as i128 + 1, 32),
-            i32::MIN as i128
-        );
-        assert_eq!(
-            wrap_signed_to_width(i32::MIN as i128 - 1, 32),
-            i32::MAX as i128
-        );
-        assert_eq!(
-            wrap_signed_to_width(i64::MAX as i128 + 1, 64),
-            i64::MIN as i128
-        );
-        assert_eq!(wrap_signed_to_width(0, 32), 0);
-        assert_eq!(wrap_signed_to_width(-1, 32), -1);
-        assert_eq!(wrap_signed_to_width(0, 1), 0);
-        assert_eq!(wrap_signed_to_width(1, 1), -1);
-        assert_eq!(wrap_signed_to_width(-1, 1), -1);
-        assert_eq!(wrap_signed_to_width(2, 1), 0);
-    }
-
     // ---------------------------------------------------------------------
     // div/rem folds
     // ---------------------------------------------------------------------
-
-    #[test]
-    fn int_const_fold_divsi() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = 10} : core.i32
-    %b = arith.const {value = 4} : core.i32
-    %r = arith.divsi %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(count_ops(&ctx, module, "arith", "divsi"), 0);
-        // Truncation toward zero: 10 / 4 == 2.
-        assert_eq!(return_value_int_const(&ctx, module), Some(2));
-    }
-
-    #[test]
-    fn int_const_fold_divsi_negative_lhs() {
-        // Rust signed integer division truncates toward zero: -10 / 4 == -2.
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = -10} : core.i32
-    %b = arith.const {value = 4} : core.i32
-    %r = arith.divsi %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(return_value_int_const(&ctx, module), Some(-2));
-    }
 
     #[test]
     fn int_const_fold_divsi_div_by_zero_left_alone() {
@@ -946,152 +827,6 @@ mod canonicalize_tests {
         assert_eq!(count_ops(&ctx, module, "arith", "divsi"), 1);
     }
 
-    #[test]
-    fn int_const_fold_divui_treats_operands_as_unsigned() {
-        // i32 stored value -1 == u32 0xFFFFFFFF == 4294967295 unsigned.
-        // 4294967295 / 2 == 2147483647 (== i32::MAX, top bit clear).
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = -1} : core.i32
-    %b = arith.const {value = 2} : core.i32
-    %r = arith.divui %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(return_value_int_const(&ctx, module), Some(i32::MAX as i128));
-    }
-
-    #[test]
-    fn int_const_fold_divui_div_by_zero_left_alone() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = 5} : core.i32
-    %b = arith.const {value = 0} : core.i32
-    %r = arith.divui %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "divui"), 1);
-    }
-
-    #[test]
-    fn int_const_fold_remsi_negative_lhs() {
-        // Rust signed remainder truncates toward zero: -7 % 2 == -1.
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = -7} : core.i32
-    %b = arith.const {value = 2} : core.i32
-    %r = arith.remsi %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(return_value_int_const(&ctx, module), Some(-1));
-    }
-
-    #[test]
-    fn int_const_fold_remsi_rem_by_zero_left_alone() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = 5} : core.i32
-    %b = arith.const {value = 0} : core.i32
-    %r = arith.remsi %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "remsi"), 1);
-    }
-
-    #[test]
-    fn int_const_fold_remsi_int_min_rem_neg_one_left_alone() {
-        // INT_MIN % -1 also traps on Cranelift `srem` / WASM `i32.rem_s`.
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = -2147483648} : core.i32
-    %b = arith.const {value = -1} : core.i32
-    %r = arith.remsi %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "remsi"), 1);
-    }
-
-    #[test]
-    fn int_const_fold_remui_treats_operands_as_unsigned() {
-        // i32 stored value -1 == u32 4294967295. 4294967295 % 3 == 0.
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = -1} : core.i32
-    %b = arith.const {value = 3} : core.i32
-    %r = arith.remui %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(return_value_int_const(&ctx, module), Some(0));
-    }
-
-    #[test]
-    fn int_const_fold_remui_rem_by_zero_left_alone() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = 5} : core.i32
-    %b = arith.const {value = 0} : core.i32
-    %r = arith.remui %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert_eq!(result.total_changes, 0);
-        assert_eq!(count_ops(&ctx, module, "arith", "remui"), 1);
-    }
-
-    #[test]
-    fn is_signed_overflow_at_width_corners() {
-        // i32::MIN / -1 — overflow.
-        assert!(is_signed_overflow_at_width(i32::MIN as i128, -1, 32));
-        // i64::MIN / -1 — overflow.
-        assert!(is_signed_overflow_at_width(i64::MIN as i128, -1, 64));
-        // i128::MIN / -1 — overflow at width 128.
-        assert!(is_signed_overflow_at_width(i128::MIN, -1, 128));
-        // Just above MIN: not overflow.
-        assert!(!is_signed_overflow_at_width(i32::MIN as i128 + 1, -1, 32));
-        // Divisor not -1: never overflow.
-        assert!(!is_signed_overflow_at_width(i32::MIN as i128, 1, 32));
-        assert!(!is_signed_overflow_at_width(0, -1, 32));
-    }
-
     // ---------- arith.and ----------
 
     #[test]
@@ -1127,25 +862,6 @@ mod canonicalize_tests {
         let result = run_arith_patterns(&mut ctx, module);
         assert!(result.total_changes >= 1);
         assert_eq!(count_ops(&ctx, module, "arith", "and"), 0);
-    }
-
-    #[test]
-    fn int_const_fold_and() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = 12} : core.i32
-    %b = arith.const {value = 10} : core.i32
-    %r = arith.and %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        // 0b1100 & 0b1010 == 0b1000 == 8.
-        assert_eq!(return_value_int_const(&ctx, module), Some(8));
     }
 
     // ---------- arith.or ----------
@@ -1185,25 +901,6 @@ mod canonicalize_tests {
         assert_eq!(return_value_int_const(&ctx, module), Some(-1));
     }
 
-    #[test]
-    fn int_const_fold_or() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = 12} : core.i32
-    %b = arith.const {value = 10} : core.i32
-    %r = arith.or %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        // 0b1100 | 0b1010 == 0b1110 == 14.
-        assert_eq!(return_value_int_const(&ctx, module), Some(14));
-    }
-
     // ---------- arith.xor ----------
 
     #[test]
@@ -1224,45 +921,6 @@ mod canonicalize_tests {
     }
 
     #[test]
-    fn int_const_fold_xor() {
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = 12} : core.i32
-    %b = arith.const {value = 10} : core.i32
-    %r = arith.xor %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        // 0b1100 ^ 0b1010 == 0b0110 == 6.
-        assert_eq!(return_value_int_const(&ctx, module), Some(6));
-    }
-
-    #[test]
-    fn int_const_fold_xor_negative_signed() {
-        // -1 ^ 0xFF = -256 at i32 width: -1 is 0xFFFFFFFF (all ones),
-        // 0xFF is 255, XOR is 0xFFFFFF00 which is -256 as i32.
-        let input = r#"core.module @test {
-  func.func @f() -> core.i32 {
-    %a = arith.const {value = -1} : core.i32
-    %b = arith.const {value = 255} : core.i32
-    %r = arith.xor %a, %b : core.i32
-    func.return %r
-  }
-}"#;
-        let mut ctx = IrContext::new();
-        let module = parse_test_module(&mut ctx, input);
-
-        let result = run_arith_patterns(&mut ctx, module);
-        assert!(result.total_changes >= 1);
-        assert_eq!(return_value_int_const(&ctx, module), Some(-256));
-    }
-
-    #[test]
     fn bitwise_fold_does_not_match_when_operands_are_not_const() {
         let input = r#"core.module @test {
   func.func @f(%x: core.i32, %y: core.i32) -> core.i32 {
@@ -1280,6 +938,198 @@ mod canonicalize_tests {
         assert_eq!(count_ops(&ctx, module, "arith", "and"), 1);
         assert_eq!(count_ops(&ctx, module, "arith", "or"), 1);
         assert_eq!(count_ops(&ctx, module, "arith", "xor"), 1);
+    }
+
+    // ---------------------------------------------------------------------
+    // Constant-fold properties
+    // ---------------------------------------------------------------------
+
+    mod const_fold_props {
+        use super::*;
+        use proptest::prelude::*;
+
+        /// Binary integer operations with a constant fold.
+        const BINARY_OPS: [&str; 10] = [
+            "addi", "subi", "muli", "divsi", "divui", "remsi", "remui", "and", "or", "xor",
+        ];
+
+        /// Native Rust integer widths, so the expected value comes straight
+        /// from the matching `iN`/`uN` operation.
+        const NATIVE_WIDTHS: [u32; 5] = [8, 16, 32, 64, 128];
+
+        /// Fold `op const(a), const(b)` at `core.i{width}`. Returns the folded
+        /// constant, or `None` when the operation was left unchanged.
+        fn fold_binary(
+            op: &str,
+            width: u32,
+            a: i128,
+            b: i128,
+        ) -> Result<Option<i128>, TestCaseError> {
+            let input = format!(
+                "core.module @test {{
+  func.func @f() -> core.i{width} {{
+    %a = arith.const {{value = {a}}} : core.i{width}
+    %b = arith.const {{value = {b}}} : core.i{width}
+    %r = arith.{op} %a, %b : core.i{width}
+    func.return %r
+  }}
+}}"
+            );
+            let mut ctx = IrContext::new();
+            let module = parse_test_module(&mut ctx, &input);
+            let result = run_arith_patterns(&mut ctx, module);
+            let remaining = count_ops(&ctx, module, "arith", op);
+            if result.total_changes == 0 {
+                prop_assert_eq!(remaining, 1);
+                return Ok(None);
+            }
+            prop_assert_eq!(remaining, 0);
+            let folded = return_value_int_const(&ctx, module);
+            prop_assert!(folded.is_some(), "{op} folded to a non-constant");
+            Ok(folded)
+        }
+
+        /// The fold's contract at a native width: two's-complement wrapping
+        /// for `+ - * & | ^`, and `checked_*` for division and remainder, whose
+        /// `None` (zero divisor, signed `MIN / -1`) means "left unchanged".
+        fn expected_native(op: &str, width: u32, a: i128, b: i128) -> Option<i128> {
+            macro_rules! at {
+                ($s:ty, $u:ty) => {{
+                    let (a, b) = (a as $s, b as $s);
+                    let (ua, ub) = (a as $u, b as $u);
+                    match op {
+                        "addi" => Some(a.wrapping_add(b) as i128),
+                        "subi" => Some(a.wrapping_sub(b) as i128),
+                        "muli" => Some(a.wrapping_mul(b) as i128),
+                        "divsi" => a.checked_div(b).map(|r| r as i128),
+                        "remsi" => a.checked_rem(b).map(|r| r as i128),
+                        "divui" => ua.checked_div(ub).map(|r| r as $s as i128),
+                        "remui" => ua.checked_rem(ub).map(|r| r as $s as i128),
+                        "and" => Some((a & b) as i128),
+                        "or" => Some((a | b) as i128),
+                        "xor" => Some((a ^ b) as i128),
+                        _ => unreachable!("unknown op {op}"),
+                    }
+                }};
+            }
+            match width {
+                8 => at!(i8, u8),
+                16 => at!(i16, u16),
+                32 => at!(i32, u32),
+                64 => at!(i64, u64),
+                128 => at!(i128, u128),
+                _ => unreachable!("not a native width: {width}"),
+            }
+        }
+
+        /// Reference two's-complement wrap: keep the low `width` bits and
+        /// fill the high bits with the sign bit.
+        fn reference_wrap(value: i128, width: u32) -> i128 {
+            if width == 128 {
+                return value;
+            }
+            let mask = (1u128 << width) - 1;
+            let low = (value as u128) & mask;
+            if low >> (width - 1) & 1 == 1 {
+                (low | !mask) as i128
+            } else {
+                low as i128
+            }
+        }
+
+        /// Raw values biased toward the corners where wrapping and the
+        /// division bailouts happen.
+        fn raw_value() -> impl Strategy<Value = i128> {
+            prop_oneof![
+                3 => any::<i128>(),
+                2 => -3i128..=3,
+                1 => prop_oneof![
+                    Just(i128::MIN),
+                    Just(i128::MAX),
+                    Just(i64::MIN as i128),
+                    Just(i64::MAX as i128),
+                    Just(i32::MIN as i128),
+                    Just(i32::MAX as i128),
+                    Just(i16::MIN as i128),
+                    Just(i8::MIN as i128),
+                    Just(i8::MAX as i128),
+                ],
+            ]
+        }
+
+        proptest! {
+            /// Folding a constant binary operation at a native width yields
+            /// exactly Rust's result for that width, and the trapping
+            /// division/remainder cases are left unchanged.
+            #[test]
+            fn binary_fold_matches_rust_at_native_widths(
+                op in prop::sample::select(&BINARY_OPS[..]),
+                width in prop::sample::select(&NATIVE_WIDTHS[..]),
+                a in raw_value(),
+                b in raw_value(),
+            ) {
+                // Constants are stored sign-extended at their width.
+                let (a, b) = (reference_wrap(a, width), reference_wrap(b, width));
+                let folded = fold_binary(op, width, a, b)?;
+                prop_assert_eq!(folded, expected_native(op, width, a, b));
+            }
+
+            /// At any width in `1..=128`, including `i1` and non-native
+            /// widths, the fold agrees with the i128 operation wrapped back
+            /// to the width.
+            #[test]
+            fn binary_fold_wraps_at_any_width(
+                op in prop::sample::select(&BINARY_OPS[..]),
+                width in 1u32..=128,
+                a in raw_value(),
+                b in raw_value(),
+            ) {
+                let (a, b) = (reference_wrap(a, width), reference_wrap(b, width));
+                let unsigned = |v: i128| {
+                    if width == 128 { v as u128 } else { (v as u128) & ((1u128 << width) - 1) }
+                };
+                let min = reference_wrap(1i128 << (width - 1), width);
+                let signed_trap = b == 0 || (a == min && b == -1);
+                let expected = match op {
+                    "addi" => Some(a.wrapping_add(b)),
+                    "subi" => Some(a.wrapping_sub(b)),
+                    "muli" => Some(a.wrapping_mul(b)),
+                    "divsi" => (!signed_trap).then(|| a.wrapping_div(b)),
+                    "remsi" => (!signed_trap).then(|| a.wrapping_rem(b)),
+                    "divui" => (unsigned(b) != 0).then(|| (unsigned(a) / unsigned(b)) as i128),
+                    "remui" => (unsigned(b) != 0).then(|| (unsigned(a) % unsigned(b)) as i128),
+                    "and" => Some(a & b),
+                    "or" => Some(a | b),
+                    "xor" => Some(a ^ b),
+                    _ => unreachable!("unknown op {op}"),
+                }
+                .map(|r| reference_wrap(r, width));
+                prop_assert_eq!(fold_binary(op, width, a, b)?, expected);
+            }
+
+            /// `MIN / -1` and `MIN % -1` are never folded at any width, while
+            /// the neighbouring `(MIN + 1) / -1` is.
+            #[test]
+            fn signed_div_rem_overflow_corner_is_left_alone(
+                op in prop::sample::select(&["divsi", "remsi"][..]),
+                width in 1u32..=128,
+            ) {
+                let min = reference_wrap(1i128 << (width - 1), width);
+                prop_assert_eq!(fold_binary(op, width, min, -1)?, None);
+                prop_assert!(is_signed_overflow_at_width(min, -1, width));
+                prop_assert!(fold_binary(op, width, min + 1, -1)?.is_some());
+                prop_assert!(!is_signed_overflow_at_width(min + 1, -1, width));
+            }
+
+            /// `wrap_signed_to_width` agrees with the mask-based reference wrap.
+            #[test]
+            fn wrap_signed_to_width_matches_reference(
+                value in raw_value(),
+                width in 1u32..=128,
+            ) {
+                prop_assert_eq!(wrap_signed_to_width(value, width), reference_wrap(value, width));
+            }
+        }
     }
 }
 

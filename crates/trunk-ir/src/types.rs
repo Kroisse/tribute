@@ -1127,6 +1127,9 @@ impl Default for StringPool {
 }
 
 #[cfg(test)]
+mod prop_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::IrContext;
@@ -1309,60 +1312,6 @@ mod tests {
     }
 
     #[test]
-    fn attribute_map_accepts_string_and_symbol_keys_without_interning_misses() {
-        fn get_by_symbol<'a>(attrs: &'a AttributeMap, key: &Symbol) -> Option<&'a Attribute> {
-            attrs.get(key)
-        }
-
-        let mut attrs = AttributeMap::new();
-        let answer = Symbol::new("answer");
-        attrs.insert(answer.clone(), Attribute::Int(42));
-
-        assert_eq!(attrs.get("answer"), Some(&Attribute::Int(42)));
-        assert_eq!(attrs.get(&answer), Some(&Attribute::Int(42)));
-        assert_eq!(get_by_symbol(&attrs, &answer), Some(&Attribute::Int(42)));
-        assert!(attrs.contains_key("answer"));
-        assert_eq!(
-            attrs.keys().cloned().collect::<Vec<_>>(),
-            vec![answer.clone()]
-        );
-
-        let missing = "__trunk_ir_attribute_map_missing_key__";
-        assert_eq!(attrs.get(missing), None);
-        assert!(!attrs.contains_key(missing));
-
-        assert_eq!(attrs.remove(answer), Some(Attribute::Int(42)));
-        assert!(attrs.is_empty());
-    }
-
-    #[test]
-    fn attribute_map_is_ordered_by_key_regardless_of_insertion_order() {
-        use std::hash::{BuildHasher, RandomState};
-
-        let entries = [
-            (Symbol::new("zeta"), Attribute::Int(1)),
-            (Symbol::new("alpha"), Attribute::Int(2)),
-            (Symbol::new("mid"), Attribute::Int(3)),
-        ];
-        let forward: AttributeMap = entries.iter().cloned().collect();
-        let mut backward = AttributeMap::new();
-        for (key, value) in entries.iter().rev().cloned() {
-            assert_eq!(backward.insert(key, value), None);
-        }
-
-        assert_eq!(forward, backward);
-        let hasher = RandomState::new();
-        assert_eq!(hasher.hash_one(&forward), hasher.hash_one(&backward));
-        let keys = |map: &AttributeMap| map.keys().map(|key| key.to_string()).collect::<Vec<_>>();
-        assert_eq!(keys(&forward), ["alpha", "mid", "zeta"]);
-        assert_eq!(keys(&backward), ["alpha", "mid", "zeta"]);
-        assert_eq!(
-            format!("{forward:?}"),
-            r#"{Symbol("alpha"): Int(2), Symbol("mid"): Int(3), Symbol("zeta"): Int(1)}"#
-        );
-    }
-
-    #[test]
     fn attribute_map_starts_at_exactly_the_entries_it_holds() {
         let mut attrs = AttributeMap::new();
         attrs.insert("only", Attribute::Unit);
@@ -1379,149 +1328,5 @@ mod tests {
             .collect();
         assert_eq!(repeated.len(), 1);
         assert!(repeated.0.capacity() <= 4);
-    }
-
-    #[test]
-    fn attribute_map_later_entries_replace_earlier_ones() {
-        let key = Symbol::new("key");
-        let mut attrs = AttributeMap::new();
-        assert_eq!(attrs.insert(key.clone(), Attribute::Int(1)), None);
-        assert_eq!(
-            attrs.insert(key.clone(), Attribute::Int(2)),
-            Some(Attribute::Int(1))
-        );
-        assert_eq!(attrs.len(), 1);
-        assert_eq!(attrs.get(&key), Some(&Attribute::Int(2)));
-
-        let collected: AttributeMap = [
-            (key.clone(), Attribute::Int(1)),
-            (Symbol::new("other"), Attribute::Unit),
-            (key.clone(), Attribute::Int(3)),
-        ]
-        .into_iter()
-        .collect();
-        assert_eq!(collected.len(), 2);
-        assert_eq!(collected.get(&key), Some(&Attribute::Int(3)));
-
-        let mut extended = collected;
-        extended.extend([(key.clone(), Attribute::Int(4))]);
-        assert_eq!(extended.get(key), Some(&Attribute::Int(4)));
-        assert_eq!(extended.len(), 2);
-    }
-
-    #[test]
-    fn attribute_map_typed_getters_handle_absence_and_integer_range() {
-        let mut ctx = IrContext::new();
-        let mut attrs = AttributeMap::new();
-        attrs.insert("count", Attribute::Int(i64::MAX as i128));
-        attrs.insert("byte", Attribute::Int(u8::MAX as i128));
-        attrs.insert("enabled", Attribute::Bool(true));
-        attrs.insert("name", ctx.string_attr("tribute"));
-        attrs.insert("symbol_name", Symbol::new("tribute"));
-
-        assert_eq!(attrs.get_i64("count"), Ok(Some(i64::MAX)));
-        assert_eq!(attrs.get_i128("count"), Some(i64::MAX as i128));
-        assert_eq!(attrs.get_u8("byte"), Ok(Some(u8::MAX)));
-        assert_eq!(attrs.get_bool("enabled"), Some(true));
-        assert_eq!(attrs.get_str(&ctx, "name"), Some("tribute"));
-        assert_eq!(attrs.get_i32("missing"), Ok(None));
-        assert_eq!(
-            attrs.get_i32("count"),
-            Err(IntegerOutOfRange {
-                value: i64::MAX as i128,
-                target: "i32",
-            })
-        );
-        assert_eq!(
-            attrs.get_u8("count"),
-            Err(IntegerOutOfRange {
-                value: i64::MAX as i128,
-                target: "u8",
-            })
-        );
-        assert_eq!(attrs.get_u32("enabled"), Ok(None));
-
-        assert_eq!(attrs.get_str(&ctx, "name"), Some("tribute"));
-        assert_eq!(attrs.get_str(&ctx, "symbol_name"), None);
-    }
-
-    #[test]
-    fn type_interner_dedup() {
-        let mut interner = TypeInterner::new();
-        let data = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build();
-        let r1 = interner.intern(data.clone());
-        let r2 = interner.intern(data);
-        assert_eq!(r1, r2, "same TypeData must yield same TypeRef");
-    }
-
-    #[test]
-    fn type_interner_distinct() {
-        let mut interner = TypeInterner::new();
-        let i32_data = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i32")).build();
-        let i64_data = TypeDataBuilder::new(Symbol::new("core"), Symbol::new("i64")).build();
-        let r1 = interner.intern(i32_data);
-        let r2 = interner.intern(i64_data);
-        assert_ne!(r1, r2, "different TypeData must yield different TypeRef");
-    }
-
-    #[test]
-    fn type_interner_with_params() {
-        let mut ctx = IrContext::new();
-        let i32_ref = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-        let tup = crate::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]);
-        let r1 = tup.as_type_ref();
-        // Interning the same tuple again should return the same ref
-        let r2 = crate::dialect::core::tuple(&mut ctx, [i32_ref, i32_ref]).as_type_ref();
-        assert_eq!(r1, r2);
-
-        let data = ctx.get_type(r1);
-        assert_eq!(data.params.len(), 2);
-        assert_eq!(data.params[0], i32_ref);
-    }
-
-    #[test]
-    fn type_interner_keeps_identities_across_index_growth() {
-        let mut interner = TypeInterner::new();
-        let data = |index: usize| {
-            TypeDataBuilder::new("test", "numbered")
-                .attr("index", Attribute::Int(index as i128))
-                .build()
-        };
-        let refs: Vec<_> = (0..1000)
-            .map(|index| interner.intern(data(index)))
-            .collect();
-        for (index, &r) in refs.iter().enumerate() {
-            assert_eq!(interner.lookup(&data(index)), Some(r));
-            assert_eq!(interner.intern(data(index)), r);
-            assert_eq!(interner.get(r), &data(index));
-        }
-        assert_eq!(interner.iter().count(), refs.len());
-        assert_eq!(interner.lookup(&data(1000)), None);
-    }
-
-    #[test]
-    fn path_interner_looks_up_borrowed_strings() {
-        let mut interner = PathInterner::new();
-        let r = interner.intern("file:///a.trb");
-        assert_eq!(interner.lookup("file:///a.trb"), Some(r));
-        assert_eq!(interner.lookup("file:///b.trb"), None);
-    }
-
-    #[test]
-    fn path_interner_dedup() {
-        let mut interner = PathInterner::new();
-        let r1 = interner.intern("file:///test.trb");
-        let r2 = interner.intern("file:///test.trb");
-        assert_eq!(r1, r2, "same path must yield same PathRef");
-    }
-
-    #[test]
-    fn path_interner_distinct() {
-        let mut interner = PathInterner::new();
-        let r1 = interner.intern("file:///a.trb");
-        let r2 = interner.intern("file:///b.trb");
-        assert_ne!(r1, r2);
-        assert_eq!(interner.get(r1), "file:///a.trb");
-        assert_eq!(interner.get(r2), "file:///b.trb");
     }
 }
