@@ -121,24 +121,39 @@ fn attach_evidence_plan<'db>(
     };
     let steps: Vec<_> = plan
         .iter()
-        .map(|step| {
-            let instance = step.instance();
-            let ability_ref =
-                ctx.ability_ref_type(ir, instance.ability_id.qualified(ctx.db), &instance.args);
-            match step {
-                crate::typeck::EvidenceStep::Mask(_) => {
-                    tribute_control::EvidenceStep::Mask(ability_ref)
-                }
-                crate::typeck::EvidenceStep::Dup(_) => {
-                    tribute_control::EvidenceStep::Dup(ability_ref)
-                }
-            }
-        })
+        .map(|step| lower_evidence_step(ctx, ir, step))
         .collect();
     if let Some(plan) = tribute_control::EvidenceStep::plan_attribute(steps) {
         ir.op_mut(op)
             .attributes
             .insert(tribute_control::EVIDENCE_PLAN_ATTR, plan);
+    }
+}
+
+fn lower_evidence_step<'db>(
+    ctx: &IrLoweringCtx<'db>,
+    ir: &mut IrContext,
+    step: &crate::typeck::EvidenceStep<'db>,
+) -> tribute_control::EvidenceStep {
+    use crate::typeck::EvidenceStep;
+    let mut ability_ref = |instance: &crate::ast::Effect<'db>| {
+        ctx.ability_ref_type(ir, instance.ability_id.qualified(ctx.db), &instance.args)
+    };
+    match step {
+        EvidenceStep::Mask(instance) => tribute_control::EvidenceStep::Mask(ability_ref(instance)),
+        EvidenceStep::Dup(instance) => tribute_control::EvidenceStep::Dup(ability_ref(instance)),
+        EvidenceStep::Push(instance) => tribute_control::EvidenceStep::Push(ability_ref(instance)),
+        EvidenceStep::Select(index) => tribute_control::EvidenceStep::Select(*index),
+        EvidenceStep::Tails(plans) => tribute_control::EvidenceStep::Tails(
+            plans
+                .iter()
+                .map(|plan| {
+                    plan.iter()
+                        .map(|step| lower_evidence_step(ctx, ir, step))
+                        .collect()
+                })
+                .collect(),
+        ),
     }
 }
 

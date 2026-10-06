@@ -17,6 +17,7 @@ use crate::effect_dispatch;
 use trunk_ir::SymbolPath;
 use trunk_ir::analysis::AnalysisCache;
 use trunk_ir::context::IrContext;
+use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::func;
 use trunk_ir::ops::DialectOp;
@@ -27,7 +28,7 @@ use trunk_ir::rewrite::{
     ConversionError, ConversionTarget, Module, PatternApplicator, PatternRewriter, RewritePattern,
     TypeConverter,
 };
-use trunk_ir::types::{Location, TypeDataBuilder};
+use trunk_ir::types::{Attribute, Location, TypeDataBuilder};
 use trunk_ir::walk::{WalkAction, walk_op};
 
 /// Lower evidence operations for the native backend.
@@ -103,6 +104,13 @@ fn declare_evidence_runtime(ctx: &mut IrContext, module: Module) {
         (evidence_abi::DUP, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::OUTER, &[ptr_ty, i32_ty][..], ptr_ty),
         (evidence_abi::LOOKUP_TR, &[ptr_ty, i32_ty][..], ptr_ty),
+        (evidence_abi::TAIL, &[ptr_ty, i32_ty][..], ptr_ty),
+        (
+            evidence_abi::WITH_TAIL,
+            &[ptr_ty, i32_ty, ptr_ty][..],
+            ptr_ty,
+        ),
+        (evidence_abi::PUSH, &[ptr_ty, ptr_ty, i32_ty][..], ptr_ty),
     ] {
         if module.ops(ctx).iter().copied().any(|op| {
             func::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == name)
@@ -148,6 +156,9 @@ fn native_effect_abi_target() -> ConversionTarget {
         .illegal_op("effect", "mask")
         .illegal_op("effect", "dup")
         .illegal_op("effect", "outer")
+        .illegal_op("effect", "tail")
+        .illegal_op("effect", "with_tail")
+        .illegal_op("effect", "push")
         .illegal_op("effect", "dispatch_tail")
         .illegal_op("effect", "dispatch_cps")
 }
@@ -160,6 +171,7 @@ fn lower_effect_abi_to_native(
         .with_target(native_effect_abi_target())
         .add_pattern(LowerEffectExtendToNative)
         .add_pattern(LowerEffectStackOpToNative)
+        .add_pattern(LowerEffectTailOpToNative)
         .add_pattern(LowerEffectDispatchTailToNative)
         .add_pattern(LowerEffectDispatchCpsToNative)
         .apply_partial_conversion(ctx, func_op, "native-evidence-effect-abi")?;
@@ -337,6 +349,57 @@ impl RewritePattern for LowerEffectStackOpToNative {
         let ptr_ty = core_ptr_type(ctx);
         let ability_id = effect_dispatch::insert_ability_id(ctx, loc, ability_ref, rewriter);
         let call = func::Call::operands([evidence, ability_id])
+            .callee(SymbolPath::from(helper))
+            .results([ptr_ty])
+            .build(ctx, loc);
+        rewriter.insert_op(call.op_ref());
+        replace_with_runtime_call_result(ctx, op, call, rewriter);
+        true
+    }
+}
+
+/// `effect.tail` / `effect.with_tail` / `effect.push` → the runtime call of
+/// the same name.
+struct LowerEffectTailOpToNative;
+
+impl RewritePattern for LowerEffectTailOpToNative {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let loc = ctx.op(op).location;
+        let ptr_ty = core_ptr_type(ctx);
+        let i32_ty = core_i32_type(ctx);
+        let mut slot = |ctx: &mut IrContext, index: u32| {
+            let slot = arith::Const::operands()
+                .value(Attribute::Int(i128::from(ability::tail_slot_id(index))))
+                .results(i32_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(slot.op_ref());
+            slot.result(ctx)
+        };
+        let (helper, operands) = if let Ok(tail) = effect::Tail::from_op(ctx, op) {
+            let slot = slot(ctx, tail.index(ctx));
+            (evidence_abi::TAIL, vec![tail.evidence(ctx), slot])
+        } else if let Ok(with_tail) = effect::WithTail::from_op(ctx, op) {
+            let slot = slot(ctx, with_tail.index(ctx));
+            (
+                evidence_abi::WITH_TAIL,
+                vec![with_tail.evidence(ctx), slot, with_tail.tail(ctx)],
+            )
+        } else if let Ok(push) = effect::Push::from_op(ctx, op) {
+            let ability_id =
+                effect_dispatch::insert_ability_id(ctx, loc, push.ability_ref(ctx), rewriter);
+            (
+                evidence_abi::PUSH,
+                vec![push.evidence(ctx), push.source(ctx), ability_id],
+            )
+        } else {
+            return false;
+        };
+        let call = func::Call::operands(operands)
             .callee(SymbolPath::from(helper))
             .results([ptr_ty])
             .build(ctx, loc);
@@ -574,7 +637,7 @@ mod tests {
             "core.module @test { func.func @user() -> core.i32 }",
         );
         prepare_native_evidence_runtime(&mut ctx, module);
-        assert_eq!(module.ops(&ctx).len(), 8);
+        assert_eq!(module.ops(&ctx).len(), 11);
         for (name, params, result) in [
             (evidence_abi::EMPTY, &[][..], "core.ptr"),
             (
@@ -601,6 +664,21 @@ mod tests {
             (
                 evidence_abi::LOOKUP_TR,
                 &["core.ptr", "core.i32"][..],
+                "core.ptr",
+            ),
+            (
+                evidence_abi::TAIL,
+                &["core.ptr", "core.i32"][..],
+                "core.ptr",
+            ),
+            (
+                evidence_abi::WITH_TAIL,
+                &["core.ptr", "core.i32", "core.ptr"][..],
+                "core.ptr",
+            ),
+            (
+                evidence_abi::PUSH,
+                &["core.ptr", "core.ptr", "core.i32"][..],
                 "core.ptr",
             ),
         ] {
@@ -740,6 +818,62 @@ mod tests {
             ctx.op_operands(calls[0].op_ref())[0],
             entry_arg(&ctx, select, 0)
         );
+        let ir_text = print_module(&ctx, module.op());
+        assert!(!ir_text.contains("effect."), "{ir_text}");
+    }
+
+    #[test]
+    fn row_tail_operations_call_the_runtime_with_the_tail_slot() {
+        let mut ctx = IrContext::new();
+        let module = parse_test_module(
+            &mut ctx,
+            r#"core.module @test {
+  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
+  !evidence = core.array<!marker, {layout = "evidence"}>
+  func.func @select(%ev: !evidence) -> !evidence {
+    %tail = effect.tail %ev {index = 1} : !evidence
+    %pushed = effect.push %tail, %ev {ability_ref = core.ability_ref<{name = "State"}>} : !evidence
+    %attached = effect.with_tail %ev, %pushed {index = 0} : !evidence
+    func.return %attached
+  }
+}"#,
+        );
+
+        lower_evidence_to_native(&mut ctx, module);
+
+        let select = func_by_name_recursive(&ctx, module, "select");
+        let entry = ctx.region(select.body(&ctx)).blocks[0];
+        let calls: Vec<_> = ctx
+            .block(entry)
+            .ops
+            .iter()
+            .filter_map(|&op| func::Call::from_op(&ctx, op).ok())
+            .collect();
+        let callees: Vec<_> = calls.iter().map(|call| call.callee(&ctx)).collect();
+        assert_eq!(
+            callees,
+            [
+                Symbol::new(evidence_abi::TAIL),
+                Symbol::new(evidence_abi::PUSH),
+                Symbol::new(evidence_abi::WITH_TAIL)
+            ]
+        );
+        let constant = |value: ValueRef| match ctx.value_def(value) {
+            trunk_ir::refs::ValueDef::OpResult(op, _) => arith::Const::from_op(&ctx, op)
+                .expect("the slot is a constant")
+                .value(&ctx)
+                .clone(),
+            def => panic!("the slot is not an operation result: {def:?}"),
+        };
+        let ev = entry_arg(&ctx, select, 0);
+        let tail = ctx.op_operands(calls[0].op_ref());
+        assert_eq!(tail[0], ev);
+        assert_eq!(constant(tail[1]), Attribute::Int(-2));
+        let push = ctx.op_operands(calls[1].op_ref());
+        assert_eq!(push[1], ev);
+        let with_tail = ctx.op_operands(calls[2].op_ref());
+        assert_eq!(with_tail[0], ev);
+        assert_eq!(constant(with_tail[1]), Attribute::Int(-1));
         let ir_text = print_module(&ctx, module.op());
         assert!(!ir_text.contains("effect."), "{ir_text}");
     }
