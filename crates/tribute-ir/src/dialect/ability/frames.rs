@@ -345,15 +345,11 @@ fn verify_arm(
                          into the handle answer"
                     ));
                 }
-            } else if rest.iter().any(|&input| {
-                closure_signature(ctx, input).is_some_and(|(_, signature)| {
-                    matches!(signature.inputs(ctx), [_, frame, _] if *frame == exit)
-                })
-            }) {
-                return Err(format!(
-                    "{role} returns core.never and must not take a resumption"
-                ));
             }
+            // A `core.never` arm takes only the operation arguments. Its
+            // inputs are not checked for resumptions: a `Cps` function
+            // argument has the same type as a resumption, so only the
+            // operation's parameter list could tell them apart.
         }
     }
     Ok(())
@@ -475,6 +471,17 @@ mod tests {
     }
 
     #[test]
+    fn never_arm_accepts_cps_function_arguments() {
+        // `!op_arm`'s last inputs have the type of a resumption, as a `Cps`
+        // function argument of the operation would.
+        let text = module(
+            ARMS,
+            &handle(&[binding("op", "get", "core.never")], ", %get", ""),
+        );
+        assert_eq!(errors(&text), "");
+    }
+
+    #[test]
     fn exit_value_must_match_the_frame_answer() {
         let text = module(", %value: core.nil", "    ability.exit %exit, %value");
         assert!(!errors(&text).is_empty());
@@ -546,11 +553,6 @@ mod tests {
                 "resumptive arm without tokens",
                 module(ARMS, &handle(&[binding("op", "fail", "core.i32")], ", %fail", "")),
                 "must end with two resumptions",
-            ),
-            (
-                "never arm with tokens",
-                module(ARMS, &handle(&[binding("op", "get", "core.never")], ", %get", "")),
-                "must not take a resumption",
             ),
             (
                 "non-mask handle selection",
