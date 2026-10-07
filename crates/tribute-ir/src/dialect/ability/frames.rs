@@ -150,6 +150,29 @@ fn closure_signature(ctx: &IrContext, ty: TypeRef) -> Option<(CallingConvention,
     Some((convention, func::FuncSig::from_type_ref(ctx, *function)?))
 }
 
+/// A `closure.closure` of the `Cps` convention that returns `core.never`:
+/// a continuation, completion, or `op` handler arm.
+pub struct CpsClosure;
+
+impl trunk_ir::type_constraint::TypeConstraint for CpsClosure {
+    const DESC: &'static trunk_ir::type_constraint::ConstraintDesc =
+        &trunk_ir::type_constraint::ConstraintDesc {
+            name: "CpsClosure",
+            exact: false,
+            projections: &[],
+            matches: is_cps_closure,
+            project: |_, _, _| None,
+            fixed: None,
+        };
+}
+
+fn is_cps_closure(ctx: &IrContext, ty: TypeRef) -> bool {
+    closure_signature(ctx, ty).is_some_and(|(convention, signature)| {
+        convention == CallingConvention::Cps
+            && matches!(signature.results(ctx), [result] if is_never(ctx, *result))
+    })
+}
+
 /// Check that `value` is a `Cps` closure `(Evidence, frame, rest...) -> core.never`
 /// and return the inputs after the frame.
 fn cps_closure_rest<'a>(
@@ -339,17 +362,16 @@ fn verify_arm(
 /// Whether `ty` is `ResumeExact<input, R>`: a `Cps` closure
 /// `(Evidence, frame, input) -> core.never`.
 fn is_resume_exact(ctx: &IrContext, ty: TypeRef, frame: TypeRef, input: TypeRef) -> bool {
-    closure_signature(ctx, ty).is_some_and(|(convention, signature)| {
-        convention == CallingConvention::Cps
-            && matches!(signature.results(ctx), [result] if is_never(ctx, *result))
-            && matches!(
+    is_cps_closure(ctx, ty)
+        && closure_signature(ctx, ty).is_some_and(|(_, signature)| {
+            matches!(
                 signature.inputs(ctx),
                 [evidence, input_frame, value]
                     if is_evidence_type_ref(ctx, *evidence)
                         && *input_frame == frame
                         && *value == input
             )
-    })
+        })
 }
 
 #[cfg(test)]
@@ -486,7 +508,7 @@ mod tests {
             (
                 "direct continuation",
                 direct_continuation,
-                "continuation must use the cps convention",
+                "operand #2 `continuation`: expected CpsClosure",
             ),
             (
                 "duplicate binding",
@@ -636,7 +658,7 @@ mod tests {
             (
                 "non-closure fn arm",
                 one("fn", "core.i32", ", %value"),
-                "must be a closure with a calling convention",
+                "`arms`: expected closure.closure",
             ),
             (
                 "returning cps arm",

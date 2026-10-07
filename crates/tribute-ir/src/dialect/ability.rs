@@ -2,8 +2,9 @@
 
 mod frames;
 
-pub use frames::{HandlerBinding, OperationKind};
+pub use frames::{CpsClosure, HandlerBinding, OperationKind};
 
+use super::closure::Closure;
 use super::tribute_control::EvidenceStep;
 
 #[trunk_ir::dialect]
@@ -83,7 +84,7 @@ mod ability {
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         evidence: Value<Evidence>,
         outer: Value<F>,
-        continuation: Value<_>,
+        continuation: Value<CpsClosure>,
     ) -> Value<impl Frame> {
     }
 
@@ -101,8 +102,8 @@ mod ability {
         evidence_plan: Option<Attr<[EvidenceStep]>>,
         evidence: Value<Evidence>,
         exit: Value<F>,
-        completion: Value<_>,
-        arms: Variadic<_>,
+        completion: Value<CpsClosure>,
+        arms: Variadic<Closure>,
     ) {
         #[region(body)]
         {}
