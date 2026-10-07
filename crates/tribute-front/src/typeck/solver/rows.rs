@@ -922,17 +922,19 @@ impl<'db> TypeSolver<'db> {
             (Some(var1), None) => {
                 // Compute difference: effects in r2 but not in r1
                 // First check that all effects in r1 have matches in r2
-                let only_r2 = self.compute_effect_difference_with_unify(effects1, effects2)?;
+                let mut pairs = Vec::new();
+                let only_r2 = self.compute_effect_difference(effects1, effects2, &mut pairs)?;
 
                 // r1's effects must all be in r2
                 // (if any effect from r1 is in only_r2, it means no match was found)
-                let missing = self.compute_effect_difference_with_unify(effects2, effects1)?;
+                let missing = self.compute_effect_difference(effects2, effects1, &mut pairs)?;
                 if !missing.is_empty() {
                     return Err(SolveError::RowMismatch {
                         expected: r1,
                         actual: r2,
                     });
                 }
+                self.unify_effect_args(pairs)?;
 
                 // Unifying effect arguments may have bound the tail itself.
                 if self.row_subst.get(var1.id).is_some() {
@@ -966,16 +968,18 @@ impl<'db> TypeSolver<'db> {
                 }
 
                 // Compute difference: effects in r1 but not in r2
-                let only_r1 = self.compute_effect_difference_with_unify(effects2, effects1)?;
+                let mut pairs = Vec::new();
+                let only_r1 = self.compute_effect_difference(effects2, effects1, &mut pairs)?;
 
                 // r2's effects must all be in r1
-                let missing = self.compute_effect_difference_with_unify(effects1, effects2)?;
+                let missing = self.compute_effect_difference(effects1, effects2, &mut pairs)?;
                 if !missing.is_empty() {
                     return Err(SolveError::RowMismatch {
                         expected: r1,
                         actual: r2,
                     });
                 }
+                self.unify_effect_args(pairs)?;
                 // Unifying effect arguments may have bound the tail itself.
                 if self.row_subst.get(var2.id).is_some() {
                     return self.unify_rows_inner(r1, r2);
@@ -1146,13 +1150,17 @@ impl<'db> TypeSolver<'db> {
         Ok(())
     }
 
-    /// Compute effect difference with unification support.
+    /// Compute the effects of `list2` that have no candidate in `list1`.
     ///
-    /// Returns matched effects and unmatched effects from list2.
-    pub(super) fn compute_effect_difference_with_unify(
-        &mut self,
+    /// The arguments of an effect matched with its single candidate are
+    /// added to `pairs` rather than unified here: a substitution made for one
+    /// effect must not decide the candidates of another, so the caller
+    /// unifies them once every effect has been matched.
+    pub(super) fn compute_effect_difference(
+        &self,
         list1: &[crate::ast::Effect<'db>],
         list2: &[crate::ast::Effect<'db>],
+        pairs: &mut Vec<(Type<'db>, Type<'db>)>,
     ) -> Result<Vec<crate::ast::Effect<'db>>, SolveError<'db>> {
         let mut only_list2 = Vec::new();
         for e2 in list2 {
@@ -1191,11 +1199,7 @@ impl<'db> TypeSolver<'db> {
                 }
             }
             match candidates.as_slice() {
-                [e1] => {
-                    for (a, b) in e1.args.iter().zip(&e2.args) {
-                        self.unify_types(*a, *b)?;
-                    }
-                }
+                [e1] => pairs.extend(e1.args.iter().copied().zip(e2.args.iter().copied())),
                 [] => {
                     if !only_list2.contains(&e2) {
                         only_list2.push(e2);
@@ -1220,8 +1224,20 @@ impl<'db> TypeSolver<'db> {
         list1: &[crate::ast::Effect<'db>],
         list2: &[crate::ast::Effect<'db>],
     ) -> Result<(Vec<crate::ast::Effect<'db>>, Vec<crate::ast::Effect<'db>>), SolveError<'db>> {
-        let only_list1 = self.compute_effect_difference_with_unify(list2, list1)?;
-        let only_list2 = self.compute_effect_difference_with_unify(list1, list2)?;
+        let mut pairs = Vec::new();
+        let only_list1 = self.compute_effect_difference(list2, list1, &mut pairs)?;
+        let only_list2 = self.compute_effect_difference(list1, list2, &mut pairs)?;
+        self.unify_effect_args(pairs)?;
         Ok((only_list1, only_list2))
+    }
+
+    fn unify_effect_args(
+        &mut self,
+        pairs: Vec<(Type<'db>, Type<'db>)>,
+    ) -> Result<(), SolveError<'db>> {
+        for (a, b) in pairs {
+            self.unify_types(a, b)?;
+        }
+        Ok(())
     }
 }

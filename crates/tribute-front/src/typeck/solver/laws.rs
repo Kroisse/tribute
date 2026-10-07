@@ -531,3 +531,42 @@ fn open_rows_reject_a_cycle_through_both_tails() {
     let (_, result) = solve_rows(&db, left, right);
     assert!(result.is_err());
 }
+
+/// Matching the effects of two open rows does not depend on effect order
+/// when one variable occurs in several effects. In `{State(?1), Choice(?1) | e2}`
+/// against `{State(Int), Choice(Bool) | e1}` each effect has one candidate,
+/// and the two matches disagree on `?1`. Unifying `State` first must not
+/// leave `Choice(Bool)` without a candidate, nor the reverse.
+#[test]
+fn open_row_matching_ignores_effect_order() {
+    use crate::typeck::prop::{EffectShape, Prim, ROW_VAR_BASE};
+    let db = salsa::DatabaseImpl::new();
+    let effect = |ability, arg| EffectShape {
+        ability,
+        args: vec![arg],
+    };
+    let state = effect(1, TypeShape::Prim(Prim::Int));
+    let choice = effect(2, TypeShape::Prim(Prim::Bool));
+    let shared = RowShape {
+        effects: vec![
+            effect(1, TypeShape::UniVar(1)),
+            effect(2, TypeShape::UniVar(1)),
+        ],
+        rest: Some(ROW_VAR_BASE + 1),
+    }
+    .build(&db);
+    for effects in [vec![state.clone(), choice.clone()], vec![choice, state]] {
+        let row = RowShape {
+            effects,
+            rest: Some(ROW_VAR_BASE),
+        }
+        .build(&db);
+        for (left, right) in [(row, shared), (shared, row)] {
+            let (_, result) = solve_rows(&db, left, right);
+            assert!(
+                matches!(result, Err(SolveError::TypeMismatch { .. })),
+                "{result:?}"
+            );
+        }
+    }
+}
