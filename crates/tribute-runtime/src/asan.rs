@@ -192,19 +192,20 @@ impl core::fmt::Write for BufWriter<'_> {
     }
 }
 
-/// Write a formatted report to stderr and abort.
-fn report(args: core::fmt::Arguments<'_>) -> ! {
+/// Format a report into a stack buffer (no_std compatible), truncating it to
+/// the buffer.
+fn format_report<'a>(buf: &'a mut [u8; 256], args: core::fmt::Arguments<'_>) -> &'a [u8] {
     use core::fmt::Write;
 
-    // Use a stack buffer for formatting (no_std compatible)
-    let mut buf = [0u8; 256];
-    let mut w = BufWriter {
-        buf: &mut buf,
-        pos: 0,
-    };
+    let mut w = BufWriter { buf, pos: 0 };
     let _ = w.write_fmt(args);
-    let len = w.pos;
-    write_stderr(&buf[..len]);
+    &w.buf[..w.pos]
+}
+
+/// Write a formatted report to stderr and abort.
+fn report(args: core::fmt::Arguments<'_>) -> ! {
+    let mut buf = [0u8; 256];
+    write_stderr(format_report(&mut buf, args));
 
     unsafe extern "C" {
         fn abort() -> !;
@@ -212,17 +213,25 @@ fn report(args: core::fmt::Arguments<'_>) -> ! {
     unsafe { abort() }
 }
 
+impl Access {
+    /// The report name of an invalid access.
+    fn error(self) -> Option<&'static str> {
+        match self {
+            Access::Valid => None,
+            Access::HeapBufferOverflow => Some("heap-buffer-overflow"),
+            Access::HeapUseAfterFree => Some("heap-use-after-free"),
+        }
+    }
+}
+
 /// Check one access made by compiled code and abort with a report if it
 /// touches a red zone or freed memory.
 fn check_access(addr: usize, size: usize, kind: &str) {
-    let error = match classify(addr, size) {
-        Access::Valid => return,
-        Access::HeapBufferOverflow => "heap-buffer-overflow",
-        Access::HeapUseAfterFree => "heap-use-after-free",
-    };
-    report(format_args!(
-        "==ERROR: TributeASan: {error} on address {addr:#x}\n  {kind} of size {size}\n"
-    ));
+    if let Some(error) = classify(addr, size).error() {
+        report(format_args!(
+            "==ERROR: TributeASan: {error} on address {addr:#x}\n  {kind} of size {size}\n"
+        ));
+    }
 }
 
 /// Write an error message to stderr using raw syscall (no_std compatible).
@@ -562,5 +571,49 @@ mod tests {
         }
 
         ASAN_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_asan_valid_accesses_return_from_the_checks() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        ASAN_ENABLED.store(true, Ordering::SeqCst);
+        unsafe { reset_quarantine() };
+
+        unsafe {
+            let live = alloc(16);
+            __tribute_asan_store(live, 16);
+            __tribute_asan_load(live.add(8), 8);
+            dealloc(live, 16);
+        }
+
+        ASAN_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_asan_reports_name_the_violation_and_fit_the_buffer() {
+        assert_eq!(Access::Valid.error(), None);
+        assert_eq!(
+            Access::HeapBufferOverflow.error(),
+            Some("heap-buffer-overflow")
+        );
+        assert_eq!(
+            Access::HeapUseAfterFree.error(),
+            Some("heap-use-after-free")
+        );
+
+        let mut buf = [0u8; 256];
+        let report = format_report(
+            &mut buf,
+            format_args!("{} on address {:#x}\n  READ of size {}\n", "name", 0x10, 8),
+        );
+        assert_eq!(report, b"name on address 0x10\n  READ of size 8\n");
+
+        let mut buf = [0u8; 256];
+        let long = [b'x'; 300];
+        let report = format_report(
+            &mut buf,
+            format_args!("{}", core::str::from_utf8(&long).unwrap()),
+        );
+        assert_eq!(report.len(), 256);
     }
 }
