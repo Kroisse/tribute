@@ -10,7 +10,9 @@
 //!   are checked at deallocation time for corruption.
 //! - **Use-after-free**: Freed memory is filled with poison bytes and kept in a
 //!   quarantine queue before actual deallocation.
-//! - **Double-free**: Detected through the region table.
+//! - **Double-free**: A second free of a quarantined block is reported as a
+//!   double free, and a free of any address without a live block, including a
+//!   block that already left the quarantine, as a free of unallocated memory.
 //! - **Invalid access at the access site**: Compiled code calls
 //!   [`__tribute_asan_load`] or [`__tribute_asan_store`] before each memory
 //!   access; the region table classifies the address range.
@@ -132,6 +134,21 @@ static REGIONS: RegionState = RegionState {
 
 unsafe fn regions() -> &'static mut BTreeMap<usize, Region> {
     unsafe { &mut *REGIONS.table.get() }
+}
+
+/// Mark the live block at `base` freed, or name why it cannot be freed.
+///
+/// A block that already left the quarantine has no entry any more, so a second
+/// free of it is reported as a free of memory that is not allocated.
+fn mark_freed(base: usize) -> Result<(), &'static str> {
+    match unsafe { regions() }.get_mut(&base) {
+        Some(region) if region.freed => Err("attempting double-free"),
+        Some(region) => {
+            region.freed = true;
+            Ok(())
+        }
+        None => Err("attempting free of memory that is not allocated"),
+    }
 }
 
 /// What an access of `size` bytes at `addr` touches.
@@ -356,14 +373,11 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
 
     let base = unsafe { ptr.sub(REDZONE_SIZE) };
 
-    if let Some(region) = unsafe { regions() }.get_mut(&(base as usize)) {
-        if region.freed {
-            report(format_args!(
-                "==ERROR: TributeASan: attempting double-free on address {:#x}\n",
-                ptr as usize
-            ));
-        }
-        region.freed = true;
+    if let Err(error) = mark_freed(base as usize) {
+        report(format_args!(
+            "==ERROR: TributeASan: {error} on address {:#x}\n",
+            ptr as usize
+        ));
     }
 
     // Check red zone integrity
@@ -615,5 +629,35 @@ mod tests {
             format_args!("{}", core::str::from_utf8(&long).unwrap()),
         );
         assert_eq!(report.len(), 256);
+    }
+
+    #[test]
+    fn test_asan_rejects_a_second_or_unknown_free() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        ASAN_ENABLED.store(true, Ordering::SeqCst);
+        unsafe { reset_quarantine() };
+
+        unsafe {
+            let ptr = alloc(16);
+            let base = ptr as usize - REDZONE_SIZE;
+            dealloc(ptr, 16);
+            assert_eq!(mark_freed(base), Err("attempting double-free"));
+
+            // Once the block leaves the quarantine its entry is gone.
+            for _ in 0..(QUARANTINE_MAX / 1024 + 2) {
+                dealloc(alloc(1024), 1024);
+            }
+            assert_eq!(
+                mark_freed(base),
+                Err("attempting free of memory that is not allocated")
+            );
+            let local = 0u64;
+            assert_eq!(
+                mark_freed(&raw const local as usize),
+                Err("attempting free of memory that is not allocated")
+            );
+        }
+
+        ASAN_ENABLED.store(false, Ordering::SeqCst);
     }
 }
