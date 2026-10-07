@@ -587,7 +587,8 @@ open tail만 다시 붙인다. 따라서 문맥이 없는 local lambda가
 새로운 open tail을 본문 효과의 무조건적인 기본값으로 만들지 않는다. 반환되거나
 escaping 값에 저장되거나 open-effect consumer에 전달되어 open callable contract를
 받은 람다와, 본문에서 effect를 수행한 람다의 convention은 이 결과에서 그대로
-계산한다.
+계산한다. `let`으로 묶인 람다의 본문이 `Cps` 제어를 요구할 때의 강화는
+[implementation.md](implementation.md)의 worker convention 규칙을 따른다.
 
 #### 함수 적용 (Infer)
 
