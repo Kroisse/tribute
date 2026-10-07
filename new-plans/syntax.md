@@ -1056,7 +1056,9 @@ CaseExpr ::= 'case' Expression '{' CaseArm+ '}'
 CaseArm ::= Pattern ('&&' Expression)? '->' Expression
 ```
 
-`&&` 뒤 첫 `->` 앞까지 전체가 `Bool` guard 식이다. 따라서
+`&&`부터 case arm의 최상위 `->` 구분자 앞까지 전체가 `Bool` guard 식이다.
+괄호나 중괄호 안의 `->`(예: lambda 반환 타입 `fn(x: Int) -> Bool { .. }`)는
+guard를 끝내지 않는다. 따라서
 `Some(x) && x > 0 && x < 10 -> ..`의 guard는 `x > 0 && x < 10`이다. 같은
 패턴에 guard를 여러 줄로 잇는 문법은 없으며, 필요하면 `&&`로 조건을 합치거나
 arm을 나눈다. guard가 거짓이면 다음 arm으로 넘어가고, guard가 있는 arm은
