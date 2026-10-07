@@ -2265,7 +2265,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
     let body = ctx.op_region(reject, 0).unwrap();
     let body = ctx.region(body).blocks[0];
     assert!(func::Unreachable::matches(&ctx, ctx.block(body).ops[0]));
-    crate::lower_ability_perform::lower_ability_perform(&mut ctx, module);
+    crate::lower_ability_call::lower_ability_call(&mut ctx, module);
     let printed = print_module(&ctx, module.op());
     assert!(!printed.contains("ability.perform"), "{printed}");
     assert!(printed.contains("effect.dispatch_cps"), "{printed}");

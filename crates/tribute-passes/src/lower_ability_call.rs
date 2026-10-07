@@ -34,7 +34,7 @@ use tribute_ir::dialect::ability;
 use tribute_ir::dialect::effect;
 use tribute_ir::dialect::tribute_rt;
 
-/// Cached common type references used by the perform lowering pattern.
+/// Cached common type references used by the call lowering pattern.
 #[derive(Clone, Copy)]
 struct CommonTypes {
     anyref: TypeRef,
@@ -52,21 +52,21 @@ impl CommonTypes {
 ///
 /// Residual ability operations are allowed here and rejected at the final
 /// `ability-lowered` boundary.
-pub(crate) fn lower_ability_perform<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
+pub(crate) fn lower_ability_call<S: RewriteScope>(ctx: &mut IrContext, scope: S) {
     let types = CommonTypes::new(ctx);
     let applicator =
         PatternApplicator::new(TypeConverter::new()).add_pattern(LowerCallPattern { types });
     applicator.apply_partial(ctx, scope);
 }
 
-/// PassManager-friendly wrapper for [`lower_ability_perform`].
-pub struct LowerAbilityPerform;
+/// PassManager-friendly wrapper for [`lower_ability_call`].
+pub struct LowerAbilityCall;
 
-impl Pass for LowerAbilityPerform {
+impl Pass for LowerAbilityCall {
     type Target = func::Func;
 
     fn name(&self) -> &'static str {
-        "lower-ability-perform"
+        "lower-ability-call"
     }
 
     fn run(
@@ -75,7 +75,7 @@ impl Pass for LowerAbilityPerform {
         target: func::Func,
         _analyses: &mut AnalysisCache,
     ) -> PassRunResult {
-        lower_ability_perform(ctx, target);
+        lower_ability_call(ctx, target);
         Ok(())
     }
 }
@@ -220,7 +220,7 @@ mod tests {
             ),
         );
 
-        lower_ability_perform(&mut ctx, module);
+        lower_ability_call(&mut ctx, module);
 
         let ir_text = print_module(&ctx, module.op());
         assert!(!ir_text.contains("ability.call"), "{ir_text}");
@@ -261,7 +261,7 @@ mod tests {
                 ),
             );
             let before = print_module(&ctx, module.op());
-            lower_ability_perform(&mut ctx, module);
+            lower_ability_call(&mut ctx, module);
             assert_eq!(print_module(&ctx, module.op()), before);
             assert!(crate::lower_handle_dispatch::lower_handle_dispatch(&mut ctx, module).is_err());
         }
@@ -284,7 +284,7 @@ mod tests {
             ),
         );
 
-        lower_ability_perform(&mut ctx, module);
+        lower_ability_call(&mut ctx, module);
 
         let ir = print_module(&ctx, module.op());
         assert!(!ir.contains("ability.call"), "{ir}");
