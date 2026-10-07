@@ -85,6 +85,9 @@ struct CallableInfo {
     convention: CallingConvention,
     source_result: TypeRef,
     source_params: Vec<TypeRef>,
+    /// Whether the callable keeps a platform `abi`, so no proper tail
+    /// transfer may target it.
+    platform: bool,
 }
 
 struct Converter<'a> {
@@ -176,6 +179,23 @@ struct Flow {
     preserve_scf_yield: bool,
     /// Set in the body of a resumptive handler arm, outside its lambdas.
     arm: Option<ArmResume>,
+    /// Set in the arms of a structured operation in tail position that a
+    /// source `become` leaves.
+    tail_join: Option<Box<TailJoin>>,
+}
+
+/// The continuation of a structured operation in tail position. Only casts
+/// and the enclosing terminator follow such an operation, so each arm runs
+/// them itself instead of yielding to a join: a `become` in an arm then
+/// transfers the callable's own frame, and the operation ends its block.
+#[derive(Clone)]
+struct TailJoin {
+    structured: OpRef,
+    ops: OpList,
+    start: usize,
+    /// The join of the structured operation around this one, whose arm the
+    /// continuation ends with.
+    outer: Option<Box<TailJoin>>,
 }
 
 impl<'a> Converter<'a> {
@@ -242,6 +262,33 @@ impl<'a> Converter<'a> {
             let dialect = self.ctx.op(source).dialect.clone();
             let name = self.ctx.op(source).name.clone();
             if dialect == "scf" && name == "yield" {
+                if let Some(join) = &flow.tail_join
+                    && self.ctx.op(source).parent_block.and_then(|block| {
+                        self.ctx
+                            .block(block)
+                            .parent_region
+                            .and_then(|region| self.ctx.region(region).parent_op)
+                    }) == Some(join.structured)
+                {
+                    let join = join.clone();
+                    let values = self.ctx.op_operands(source).to_vec();
+                    let result = self.ctx.op_result(join.structured, 0);
+                    let [value] = values.as_slice() else {
+                        return Err(self.malformed_source(
+                            source,
+                            "a tail-position structured arm yields exactly one value",
+                        ));
+                    };
+                    let value = mapping.get(value).copied().unwrap_or(*value);
+                    mapping.insert(result, value);
+                    // The arm still holds the callable's evidence and frame,
+                    // possibly as the arguments of a suffix continuation.
+                    let rest_flow = Flow {
+                        tail_join: join.outer.clone(),
+                        ..flow.clone()
+                    };
+                    return self.convert_sequence(join.ops, join.start, block, mapping, &rest_flow);
+                }
                 if flow.preserve_scf_yield {
                     let cloned = self.clone_plain_op(source, mapping)?;
                     self.ctx.push_op(block, cloned);
@@ -317,6 +364,14 @@ impl<'a> Converter<'a> {
                     }
                     index += 1;
                 }
+                "tail_call" => {
+                    self.lower_tail_call(source, block, mapping, flow)?;
+                    return Ok(());
+                }
+                "tail_call_indirect" => {
+                    self.lower_tail_call_indirect(source, block, mapping, flow)?;
+                    return Ok(());
+                }
                 "perform" => {
                     let kind = self
                         .ctx
@@ -380,6 +435,7 @@ fn collect_callable_graph(
                     convention: convert_convention(convention),
                     source_result: callable.result(ctx),
                     source_params: callable.inputs(ctx).to_vec(),
+                    platform: ctx.op(op).attributes.contains_key(Symbol::new("abi")),
                 },
             )
         })

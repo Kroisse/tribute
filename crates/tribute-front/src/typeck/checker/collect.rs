@@ -327,6 +327,7 @@ impl<'db> TypeChecker<'db> {
         // Register the extern function with its FuncDefId
         let func_id = self.func_def_id(&func.name);
         self.env.register_function(func_id, scheme);
+        self.env.register_extern_function(func_id);
 
         // Register as UFCS method candidate if function has parameters
         if !func.params.is_empty() {

@@ -280,6 +280,25 @@ fn verify_final_handle_dispatch_types(ctx: &IrContext, module: Module) -> Vec<Bo
     failures
 }
 
+/// The result of the `func.func` whose body directly holds `op`, if a
+/// structured operation is all that lies between them.
+fn enclosing_func_result(ctx: &IrContext, op: OpRef) -> Option<TypeRef> {
+    let mut current = op;
+    loop {
+        let block = ctx.op(current).parent_block?;
+        let region = ctx.block(block).parent_region?;
+        let owner = ctx.region(region).parent_op?;
+        if let Ok(function) = func::Func::from_op(ctx, owner) {
+            let ty = function.r#type(ctx);
+            return func::FuncSig::from_type_ref(ctx, ty)?.single_result(ctx);
+        }
+        if ctx.op(owner).dialect != "scf" {
+            return None;
+        }
+        current = owner;
+    }
+}
+
 fn verify_physical_callable_graph(
     ctx: &IrContext,
     module: Module,
@@ -335,10 +354,11 @@ fn verify_physical_callable_graph(
                 return;
             };
             let function = func::FuncSig::from_type_ref(ctx, *func_ty);
+            let is_cps = op_convention == Some(CallingConvention::Cps as i64);
             let valid_never = function
                 .and_then(|function| function.single_result(ctx))
                 .is_some_and(|result| type_is(ctx, result, "core", "never"));
-            if !valid_never {
+            if is_cps && !valid_never {
                 failures.push(BoundaryFailure {
                     op: Some(op),
                     location: Some(data.location),
@@ -361,24 +381,33 @@ fn verify_physical_callable_graph(
                     message: "func.tail_call operands do not match the target signature".into(),
                 });
             }
-            if *convention != Some(CallingConvention::Cps as i64)
-                || op_convention != Some(CallingConvention::Cps as i64)
-            {
+            if is_cps && *convention != op_convention {
                 failures.push(BoundaryFailure {
                     op: Some(op),
                     location: Some(data.location),
                     message: "func.tail_call must preserve exact Cps metadata".into(),
                 });
+            } else if !is_cps {
+                // A source `become` between value-returning callables keeps
+                // the target's convention and returns the target's result as
+                // the caller's.
+                if *convention != op_convention {
+                    failures.push(BoundaryFailure {
+                        op: Some(op),
+                        location: Some(data.location),
+                        message: "func.tail_call metadata does not match its target".into(),
+                    });
+                }
+                let caller_result = enclosing_func_result(ctx, op);
+                let target_result = function.and_then(|function| function.single_result(ctx));
+                if caller_result.is_some() && caller_result != target_result {
+                    failures.push(BoundaryFailure {
+                        op: Some(op),
+                        location: Some(data.location),
+                        message: "func.tail_call target result differs from the caller's".into(),
+                    });
+                }
             }
-        } else if data.dialect == "func"
-            && data.name == "tail_call_indirect"
-            && op_convention != Some(CallingConvention::Cps as i64)
-        {
-            failures.push(BoundaryFailure {
-                op: Some(op),
-                location: Some(data.location),
-                message: "func.tail_call_indirect must carry exact Cps metadata".into(),
-            });
         } else if data.dialect == "func" && data.name == "call" {
             let callee = data.attributes.get_symbol_ref("callee");
             if let Some(callee) = callee {

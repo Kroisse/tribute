@@ -107,8 +107,11 @@ impl<'db> TypeChecker<'db> {
 
         ctx.effect_contract = declared_effect;
         ctx.evidence.enter_callable(declared_effect);
+        self.check_become_sites(&func.body);
         // 3. Check body against expected return type
+        ctx.push_callable_result(Some(expected_return));
         let body = self.check_expr_with_ctx(&mut ctx, &func.body, Mode::Check(expected_return));
+        ctx.pop_callable_result();
         let mut reported_undeclared = false;
 
         if let Some(declared) = declared_effect {
@@ -152,6 +155,7 @@ impl<'db> TypeChecker<'db> {
         let body_effect_row = ctx.current_effect();
         // Take deferred methods for post-solve resolution
         let deferred_methods = ctx.take_deferred_methods();
+        let become_method_operands = ctx.take_become_method_operands();
         let evidence = std::mem::take(&mut ctx.evidence);
         let next_row_var = ctx.next_row_var();
         // Drop ctx now to release the borrow of self.env
@@ -196,6 +200,11 @@ impl<'db> TypeChecker<'db> {
             func.id,
             &mut func_instances,
         );
+        for operand in become_method_operands {
+            if let Some((callee, _)) = deferred_resolutions.get(&operand) {
+                self.check_become_callee(operand, *callee);
+            }
+        }
         if let Err(error) = solver.finalize_relations() {
             solve_failed = true;
             self.report_solve_error(

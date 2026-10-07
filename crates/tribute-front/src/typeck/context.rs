@@ -7,6 +7,7 @@
 //! For function-level type inference, see `FunctionInferenceContext` in `func_context.rs`.
 
 use rustc_hash::FxHashMap as HashMap;
+use rustc_hash::FxHashSet as HashSet;
 
 use trunk_ir::Symbol;
 
@@ -144,6 +145,10 @@ pub struct ModuleTypeEnv<'db> {
     /// Function signatures (polymorphic).
     function_types: HashMap<FuncDefId<'db>, TypeScheme<'db>>,
 
+    /// Functions declared `extern`. They use a foreign calling convention, so
+    /// `become` cannot transfer a frame to them.
+    extern_functions: HashSet<FuncDefId<'db>>,
+
     /// Constructor types.
     constructor_types: HashMap<CtorId<'db>, TypeScheme<'db>>,
 
@@ -216,6 +221,7 @@ impl<'db> ModuleTypeEnv<'db> {
         Self {
             db,
             function_types: HashMap::default(),
+            extern_functions: HashSet::default(),
             constructor_types: HashMap::default(),
             type_defs,
             struct_fields: HashMap::default(),
@@ -240,6 +246,16 @@ impl<'db> ModuleTypeEnv<'db> {
     /// Register a function's type scheme.
     pub fn register_function(&mut self, id: FuncDefId<'db>, scheme: TypeScheme<'db>) {
         self.function_types.insert(id, scheme);
+    }
+
+    /// Mark a registered function as declared `extern`.
+    pub fn register_extern_function(&mut self, id: FuncDefId<'db>) {
+        self.extern_functions.insert(id);
+    }
+
+    /// Whether a function was declared `extern`.
+    pub fn is_extern_function(&self, id: FuncDefId<'db>) -> bool {
+        self.extern_functions.contains(&id)
     }
 
     /// Register a method for UFCS resolution.
@@ -523,6 +539,8 @@ impl<'db> ModuleTypeEnv<'db> {
         for (id, scheme) in exports.function_types(self.db) {
             self.function_types.insert(*id, *scheme);
         }
+        self.extern_functions
+            .extend(exports.extern_functions(self.db).iter().copied());
         for (id, scheme) in exports.constructor_types(self.db) {
             self.constructor_types.insert(*id, *scheme);
         }
@@ -729,6 +747,16 @@ impl<'db> ModuleTypeEnv<'db> {
                     ability_origin_rank(a.origin(self.db))
                         .cmp(&ability_origin_rank(b.origin(self.db)))
                 })
+        });
+        result
+    }
+
+    /// Export the `extern` functions sorted by fully qualified name.
+    pub fn export_extern_functions(&self) -> Vec<FuncDefId<'db>> {
+        let mut result: Vec<_> = self.extern_functions.iter().copied().collect();
+        result.sort_by(|a, b| {
+            a.qualified(self.db)
+                .with_str(|a| b.qualified(self.db).with_str(|b| a.cmp(b)))
         });
         result
     }

@@ -1247,6 +1247,10 @@ impl<'db> Resolver<'db> {
                 ExprKind::Resume { arg, local_id }
             }
 
+            ExprKind::Become { call } => ExprKind::Become {
+                call: self.resolve_expr(call),
+            },
+
             ExprKind::Tuple(exprs) => {
                 let exprs = exprs.iter().map(|e| self.resolve_expr(e)).collect();
                 ExprKind::Tuple(exprs)

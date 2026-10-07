@@ -232,9 +232,13 @@ continue after its enclosing structured region. It is not a generic
 terminator marker: `scf.yield`, `scf.break`, and `scf.continue` transfer within
 structured control flow and do not satisfy it. Dialects register only their
 verified callable exits, including ordinary `func.return`, proper tail
-transfers, and unreachable control flow. The typed model and its dynamic query
-are fallible. An unregistered operation, malformed registered operation, or
-query error is never evidence that a region is terminal.
+transfers, and unreachable control flow. An arm of a result-producing
+`scf.if` may end with a verified `CallableExit` instead of `scf.yield`; such
+an arm produces no value and the operation's results come from its yielding
+arms. Source `become` ends a tail-position arm this way. The typed model and
+its dynamic query are fallible. An unregistered operation, malformed
+registered operation, or query error is never evidence that a region is
+terminal.
 
 Structured-to-CFG lowering may use `CallableExit` only after preserving its
 own structural rules: the region must have one block, the exit must be that
@@ -720,9 +724,9 @@ tribute_control.tail_call %arg0, ... {callee = @f}
   [`evidence_plan`](#evidence-선택-속성)을 가진다. 결과와 region은 없는
   terminator이며 `CallableExit`를 등록한다.
 - **위치 규칙:** `tribute_control.func` 또는 `lambda` body를 끝낼 수 있고, 꼬리
-  위치에 있는 structured control operation의 arm을 `scf.yield` 대신 끝낼 수 있다.
-  그 arm은 terminal region이며 operation의 결과는 `scf.yield`로 끝나는 arm만 낸다.
-  꼬리 위치인 structured operation은 결과가 감싼 region의 terminator로 곧바로
+  위치에 있는 결과 하나인 `scf.if`의 arm을 `scf.yield` 대신 끝낼 수 있다. 그
+  arm은 terminal region이며 operation의 결과는 `scf.yield`로 끝나는 arm만 낸다.
+  꼬리 위치인 `scf.if`는 결과가 감싼 region의 terminator로 곧바로
   이어지는 operation이다(callable body의 `return`, 또는 다시 꼬리 위치인 바깥
   arm의 `scf.yield`). `tribute_control.handle` body와 handler region 안에서는
   invalid다.

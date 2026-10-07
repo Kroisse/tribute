@@ -72,6 +72,19 @@ Cps`, callee effect row는 caller row에 포함) 조합은 다음 셋이다:
   `Done<R>`로 proper tail transfer한다. 값을 반환하는 callee는 `Cps` callable을 다시
   부를 수 없으므로 이 조합이 더하는 stack 깊이는 callee 한 번의 실행으로 제한된다.
 
+꼬리 위치 structured arm 안의 `become`은 그 operation을 terminal로 만든다. 값을 내는
+arm(`scf.yield`)은 operation 뒤에 남은 suffix(감싼 callable의 `return` 또는 바깥 꼬리
+arm의 `scf.yield`)를 arm 안으로 복제해 이어 legalize하고, tail call로 끝나는 arm은
+그대로 callable을 떠난다. 그래서 legalized operation은 `core.never` 결과를 가지며 그
+뒤에 operation이 남지 않는다. Suffix에 넘길 evidence와 `ContinuationFrame<R>`는
+arm이 감싼 callable의 것을 그대로 쓴다.
+
+`Direct`/`EvidenceDirect` callable을 값으로 쓰려고 만드는 `func_ref` adapter는
+target이 platform `abi`를 유지하지 않고 target 결과가 adapter 결과와 같으면
+target을 `func.tail_call`로 부른다. 이 경우 callable value를 통한 `become`은
+adapter frame을 남기지 않는다. Platform `abi` target의 adapter는 일반 호출 뒤
+반환하므로 adapter frame 하나가 남는다.
+
 `become`이 아닌 `Direct`/`EvidenceDirect` 호출은 꼬리 위치에 있어도 legalization이
 `func.call`과 `func.call_indirect`로 만든다. Target lowering은 최적화로 이 호출을
 `func.tail_call`/`func.tail_call_indirect`로 바꿀 수 있다. 조건은 호출 결과가 곧바로

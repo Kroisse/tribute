@@ -28,6 +28,7 @@ impl Converter<'_> {
             answer_type: flow.answer_type,
             preserve_scf_yield: false,
             arm: flow.arm.clone(),
+            tail_join: flow.tail_join.clone(),
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.clone(),
@@ -449,6 +450,7 @@ impl Converter<'_> {
             answer_type: handle_answer,
             preserve_scf_yield: false,
             arm,
+            tail_join: None,
         };
         self.convert_sequence(
             self.ctx.block(source_block).ops.clone(),
@@ -555,6 +557,7 @@ impl Converter<'_> {
             answer_type: handle_answer,
             preserve_scf_yield: false,
             arm: flow.arm.clone(),
+            tail_join: flow.tail_join.clone(),
         };
         // Inside the body, an enclosing arm's evidence is the evidence this
         // handle is installed on. A handle that handles nothing installs no

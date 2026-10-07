@@ -191,6 +191,116 @@ impl Converter<'_> {
         })
     }
 
+    /// Whether a source `become` in `op`'s regions leaves the enclosing
+    /// callable. A lambda's tail calls leave the lambda.
+    fn contains_tail_call(&self, op: OpRef) -> bool {
+        self.ctx.op_regions(op).any(|region| {
+            self.ctx.region(region).blocks.iter().copied().any(|block| {
+                self.ctx.block(block).ops.iter().copied().any(|child| {
+                    tribute_control::TailCall::matches(self.ctx, child)
+                        || tribute_control::TailCallIndirect::matches(self.ctx, child)
+                        || (!tribute_control::Lambda::matches(self.ctx, child)
+                            && self.contains_tail_call(child))
+                })
+            })
+        })
+    }
+
+    /// The tail join of a structured operation that a `become` in its arms
+    /// leaves. Pre-CPS validation placed such an operation where only casts
+    /// and the block's `return` or `scf.yield` follow it.
+    fn tail_join(
+        &self,
+        source: OpRef,
+        rest: Rest<'_>,
+        flow: &Flow,
+    ) -> Result<Option<TailJoin>, TributeControlToCpsError> {
+        if !self.contains_tail_call(source) {
+            return Ok(None);
+        }
+        let following = &rest.ops[rest.start..];
+        let in_tail_position = self.ctx.op_results(source).len() == 1
+            && following.split_last().is_some_and(|(&terminator, casts)| {
+                (tribute_control::Return::matches(self.ctx, terminator)
+                    || scf::Yield::matches(self.ctx, terminator))
+                    && casts
+                        .iter()
+                        .all(|&cast| core::UnrealizedConversionCast::matches(self.ctx, cast))
+            });
+        if !in_tail_position {
+            return Err(self.malformed_source(
+                source,
+                "a structured operation containing a tail call must be in tail position",
+            ));
+        }
+        Ok(Some(TailJoin {
+            structured: source,
+            ops: OpList::from(rest.ops),
+            start: rest.start,
+            outer: flow.tail_join.clone(),
+        }))
+    }
+
+    /// Lower an `scf.if` whose arms each end the callable: by a tail call, or
+    /// by running the tail join's continuation in place of their yield.
+    fn lower_tail_structured_if(
+        &mut self,
+        source: OpRef,
+        join: TailJoin,
+        block: BlockRef,
+        mapping: &HashMap<ValueRef, ValueRef>,
+        flow: &Flow,
+    ) -> Result<(), TributeControlToCpsError> {
+        let location = self.ctx.op(source).location;
+        let source_regions = self
+            .ctx
+            .op_regions(source)
+            .collect::<trunk_ir::RegionList>();
+        let mut converted_regions = trunk_ir::RegionList::new();
+        for source_region in source_regions {
+            let [source_block] = self.ctx.region(source_region).blocks.as_slice() else {
+                return Err(TributeControlToCpsError::post_op(
+                    source,
+                    location,
+                    "effectful scf.if regions must contain one block",
+                ));
+            };
+            let source_block = *source_block;
+            let converted_block = self.make_block(self.ctx.block(source_block).location, &[]);
+            let mut branch_mapping = mapping.clone();
+            let branch_flow = Flow {
+                preserve_scf_yield: false,
+                tail_join: Some(Box::new(join.clone())),
+                ..flow.clone()
+            };
+            self.convert_sequence(
+                self.ctx.block(source_block).ops.clone(),
+                0,
+                converted_block,
+                &mut branch_mapping,
+                &branch_flow,
+            )?;
+            converted_regions.push(self.single_block_region(location, converted_block));
+        }
+        let [then_region, else_region] = converted_regions.as_slice() else {
+            return Err(TributeControlToCpsError::post_op(
+                source,
+                location,
+                "scf.if requires exactly two regions",
+            ));
+        };
+        let condition = self.ctx.op_operands(source)[0];
+        let condition = mapping.get(&condition).copied().unwrap_or(condition);
+        let never = self.never_type();
+        let lowered = scf::If::operands(condition)
+            .results(never)
+            .regions(*then_region, *else_region)
+            .build(self.ctx, location);
+        self.copy_extra_attrs(source, lowered.op_ref(), &[]);
+        self.ctx.push_op(block, lowered.op_ref());
+        Ok(())
+    }
+
     pub(super) fn lower_structured_if(
         &mut self,
         source: OpRef,
@@ -199,6 +309,9 @@ impl Converter<'_> {
         mapping: &mut HashMap<ValueRef, ValueRef>,
         flow: &Flow,
     ) -> Result<(), TributeControlToCpsError> {
+        if let Some(join) = self.tail_join(source, rest, flow)? {
+            return self.lower_tail_structured_if(source, join, block, mapping, flow);
+        }
         let result_types = self.ctx.op_result_types(source).to_vec();
         let is_cps = flow.convention == CallingConvention::Cps;
         if is_cps && result_types.len() > 1 {

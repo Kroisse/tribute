@@ -143,6 +143,10 @@ pub enum ExprKind<V> {
         local_id: Option<LocalId>,
     },
 
+    /// Proper tail call: `become f(args)`. The operand must be a call in tail
+    /// position; typechecking enforces both.
+    Become { call: Expr<V> },
+
     // === Compound Expressions ===
     /// Tuple expression: `(a, b, c)`
     Tuple(Vec<Expr<V>>),

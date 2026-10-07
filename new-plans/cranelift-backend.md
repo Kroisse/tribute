@@ -292,6 +292,11 @@ callable(정의, lambda, `func_ref` adapter)의 physical signature에도
 ([rc.md](rc.md#proper-tail-ownership-transfer)). 이 선택은 경계가 소유하며 호출
 지점의 형상에서 추론하지 않는다.
 
+경계 이후 target lowering이 내부 callable을 부르려고 만드는 간접 호출(예:
+tail-resumptive handler의 dispatch closure 호출)도 같은 `tail` signature와
+`consumed` parameter 계약을 쓴다. 호출 signature와 target 정의의 규약이 다르면
+machine 호출이 잘못된 register와 stack 배치를 쓴다.
+
 외부 경계는 platform 규약을 유지한다. `abi` 속성이 있는 함수와 exported `main`이
 여기에 해당하며, 이 함수로는 proper tail transfer를 하지 않는다. 소스 `extern`
 함수가 `become`의 피연산자가 될 수 없는 이유다. Root entry bridge는 platform

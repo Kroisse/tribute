@@ -131,8 +131,18 @@ pub(crate) fn lower_tail_dispatch(
     let (function, env) = insert_closure_parts(ctx, loc, dispatch_closure, rewriter);
     let result_ty = ctx.op_result_types(op)[0];
     let args = [evidence, env, op_idx, payload];
-    let parameters = args.map(|value| ctx.value_ty(value));
-    let signature = func::func_sig(ctx, parameters, [result_ty]).as_type_ref();
+    // The dispatch closure is a module-internal EvidenceDirect callable, so
+    // it has the internal `tail` machine convention and parameter contract.
+    let contract = physical_parameter_attrs(ctx, CallingConvention::EvidenceDirect);
+    let parameters = args.map(|value| (ctx.value_ty(value), contract.clone()));
+    let signature = func::func_sig_with_param_attrs(
+        ctx,
+        parameters,
+        [(result_ty, AttributeMap::new())],
+        AttributeMap::new(),
+    )
+    .with_call_conv(ctx, func::CallConv::Tail)
+    .as_type_ref();
     let call = func::CallIndirect::operands(function, args)
         .signature(signature)
         .build(ctx, loc);
