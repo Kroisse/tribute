@@ -1,7 +1,7 @@
-extern "C" fn __tribute_print_nat(value: Nat) -> Nil
+use std::io::{Io, print_line}
 
 enum Inner {
-    Value(Nat)
+    Value(Int)
     Empty
 }
 
@@ -11,23 +11,23 @@ enum Outer {
 }
 
 ability Ask {
-    op ask() -> Nat
+    op ask() -> Int
 }
 
 ability Keep {
-    op keep(value: Inner) -> Nat
+    op keep(value: Inner) -> Int
 }
 
-fn read(inner: Inner) -> Nat {
+fn read(inner: Inner) -> Int {
     case inner {
         Value(value) -> value
-        Empty -> 0
+        Empty -> +0
     }
 }
 
 // The projection is read after the operation resumes, so it lives in the
 // continuation across the handler.
-fn across_resume(outer: Outer) ->{Ask} Nat {
+fn across_resume(outer: Outer) ->{Ask} Int {
     case outer {
         Wrapped(inner) -> Ask::ask() + read(inner)
         Missing -> Ask::ask()
@@ -35,21 +35,21 @@ fn across_resume(outer: Outer) ->{Ask} Nat {
 }
 
 // The projection is handed to the handler and read again after it resumes.
-fn through_operation(outer: Outer) ->{Keep} Nat {
+fn through_operation(outer: Outer) ->{Keep} Int {
     case outer {
         Wrapped(inner) -> Keep::keep(inner) + read(inner)
-        Missing -> 0
+        Missing -> +0
     }
 }
 
-fn resumed(outer: Outer) -> Nat {
+fn resumed(outer: Outer) -> Int {
     handle across_resume(outer) {
         do result { result }
-        op Ask::ask() { resume 5 }
+        op Ask::ask() { resume +5 }
     }
 }
 
-fn kept(outer: Outer) -> Nat {
+fn kept(outer: Outer) -> Int {
     handle through_operation(outer) {
         do result { result }
         op Keep::keep(value) { resume read(value) }
@@ -57,14 +57,14 @@ fn kept(outer: Outer) -> Nat {
 }
 
 // The handler drops the continuation that still holds the projection.
-fn aborted(outer: Outer) -> Nat {
+fn aborted(outer: Outer) -> Int {
     handle through_operation(outer) {
         do result { result }
-        op Keep::keep(value) { read(value) + 100 }
+        op Keep::keep(value) { read(value) + +100 }
     }
 }
 
-fn main() -> Nil {
-    let outer = Wrapped(Value(10))
-    __tribute_print_nat(resumed(outer) + kept(outer) + aborted(outer) + resumed(Missing))
+fn main() ->{Io} Nil {
+    let outer = Wrapped(Value(+10))
+    print_line(Int::to_string(resumed(outer) + kept(outer) + aborted(outer) + resumed(Missing)))
 }
