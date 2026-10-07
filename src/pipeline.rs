@@ -1400,7 +1400,7 @@ fn native_lowering_passes(
         rc_lowering::RcLowering,
         rc_optimization::EliminatePairedRc,
         rtti::GenerateRtti,
-        sanitize_access::InstrumentMemoryAccesses,
+        sanitize_access::{DeclareAccessChecks, InstrumentMemoryAccesses},
         tribute_rt_to_clif::TributeRtToClif,
     };
 
@@ -1467,7 +1467,9 @@ fn native_lowering_passes(
     // A sanitized build checks every access, including the refcount accesses
     // RC lowering just produced.
     if sanitize {
-        pm.add_pass(InstrumentMemoryAccesses);
+        pm.add_pass(DeclareAccessChecks);
+        pm.nest::<trunk_ir::dialect::clif::Func>()
+            .add_pass(InstrumentMemoryAccesses);
     }
 
     pm

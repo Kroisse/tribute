@@ -8,8 +8,10 @@
 //! ## Pipeline Position
 //!
 //! Runs last in native lowering, after RC lowering has produced the refcount
-//! accesses, and only for a sanitized build. Each access is rewritten in
-//! place; the pass reads no provenance, ownership or liveness.
+//! accesses, and only for a sanitized build. [`DeclareAccessChecks`] declares
+//! the runtime checks in the module, and [`InstrumentMemoryAccesses`] rewrites
+//! each `clif.func` with a pattern that reads no provenance, ownership or
+//! liveness.
 //!
 //! ```text
 //! %v = clif.load %p {offset = 8} : core.i32
@@ -21,15 +23,17 @@
 //! %v = clif.load %p {offset = 8} : core.i32
 //! ```
 
+use std::ops::ControlFlow;
+
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::{clif, core};
 use trunk_ir::ops::{DialectOp, DialectType};
-use trunk_ir::rewrite::Module;
-use trunk_ir::types::{Attribute, Location};
-use trunk_ir::{
-    BlockRef, OpList, OpRef, OperationDataBuilder, RegionList, Symbol, SymbolPath, TypeRef,
-    ValueRef,
+use trunk_ir::rewrite::{
+    Module, PatternApplicator, PatternRewriter, RewritePattern, TypeConverter,
 };
+use trunk_ir::types::{Attribute, Location};
+use trunk_ir::walk::{WalkAction, walk_op};
+use trunk_ir::{OpRef, OperationDataBuilder, Symbol, SymbolPath, TypeRef, ValueRef};
 
 /// Runtime check for a read; see `tribute-runtime`'s `asan` module.
 const LOAD_CHECK_FN: &str = "__tribute_asan_load";
@@ -89,36 +93,95 @@ fn access_width(ctx: &IrContext, ty: TypeRef) -> Result<i64, String> {
     Err(format!("memory access of type {ty} has no known width"))
 }
 
-fn insert_check(ctx: &mut IrContext, block: BlockRef, op: OpRef, access: &Access, width: i64) {
-    let loc = ctx.op(op).location;
-    let i64_ty = ctx.intern_type(trunk_ir::TypeDataBuilder::new("core", "i64").build());
-    let ptr_ty = core::ptr(ctx).as_type_ref();
-    let nil_ty = core::nil(ctx).as_type_ref();
+/// Whether the operation right before `op` is already its check, which makes
+/// the rewrite idempotent.
+fn is_checked(ctx: &IrContext, op: OpRef, access: &Access) -> bool {
+    let Some(block) = ctx.op(op).parent_block else {
+        return false;
+    };
+    let ops = &ctx.block(block).ops;
+    let previous = ops
+        .iter()
+        .position(|&other| other == op)
+        .and_then(|position| position.checked_sub(1))
+        .map(|position| ops[position]);
+    previous
+        .and_then(|previous| clif::Call::from_op(ctx, previous).ok())
+        .is_some_and(|call| *call.callee(ctx) == access.check)
+}
 
-    let addr = if access.offset == 0 {
-        access.addr
-    } else {
-        let offset = clif::Iconst::operands()
-            .value(i64::from(access.offset))
+/// Puts a runtime check before each memory access.
+struct CheckMemoryAccess;
+
+impl RewritePattern for CheckMemoryAccess {
+    fn match_and_rewrite(
+        &self,
+        ctx: &mut IrContext,
+        op: OpRef,
+        rewriter: &mut PatternRewriter<'_>,
+    ) -> bool {
+        let Some(access) = access_of(ctx, op) else {
+            return false;
+        };
+        // The pass rejects an access of unknown width before it rewrites.
+        let Ok(width) = access_width(ctx, access.ty) else {
+            return false;
+        };
+        if width == 0 || is_checked(ctx, op, &access) {
+            return false;
+        }
+        let loc = ctx.op(op).location;
+        let i64_ty = ctx.intern_type(trunk_ir::TypeDataBuilder::new("core", "i64").build());
+        let ptr_ty = core::ptr(ctx).as_type_ref();
+        let nil_ty = core::nil(ctx).as_type_ref();
+
+        let addr = if access.offset == 0 {
+            access.addr
+        } else {
+            let offset = clif::Iconst::operands()
+                .value(i64::from(access.offset))
+                .results(i64_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(offset.op_ref());
+            let addr = clif::Iadd::operands(access.addr, offset.result(ctx))
+                .results(ptr_ty)
+                .build(ctx, loc);
+            rewriter.insert_op(addr.op_ref());
+            addr.result(ctx)
+        };
+        let width = clif::Iconst::operands()
+            .value(width)
             .results(i64_ty)
             .build(ctx, loc);
-        ctx.insert_op_before(block, op, offset.op_ref());
-        let addr = clif::Iadd::operands(access.addr, offset.result(ctx))
-            .results(ptr_ty)
+        rewriter.insert_op(width.op_ref());
+        let check = clif::Call::operands([addr, width.result(ctx)])
+            .callee(SymbolPath::from(access.check))
+            .results([nil_ty])
             .build(ctx, loc);
-        ctx.insert_op_before(block, op, addr.op_ref());
-        addr.result(ctx)
-    };
-    let width = clif::Iconst::operands()
-        .value(width)
-        .results(i64_ty)
-        .build(ctx, loc);
-    ctx.insert_op_before(block, op, width.op_ref());
-    let call = clif::Call::operands([addr, width.result(ctx)])
-        .callee(SymbolPath::from(access.check))
-        .results([nil_ty])
-        .build(ctx, loc);
-    ctx.insert_op_before(block, op, call.op_ref());
+        rewriter.insert_op(check.op_ref());
+        true
+    }
+
+    fn name(&self) -> &'static str {
+        "CheckMemoryAccess"
+    }
+}
+
+/// Insert an access check before every memory access of `function`.
+fn instrument_function(ctx: &mut IrContext, function: clif::Func) -> Result<(), String> {
+    let unsupported = walk_op(ctx, function.op_ref(), &mut |op| match access_of(ctx, op)
+        .map(|access| access_width(ctx, access.ty))
+    {
+        Some(Err(error)) => ControlFlow::Break(error),
+        _ => ControlFlow::Continue(WalkAction::Advance),
+    });
+    if let ControlFlow::Break(error) = unsupported {
+        return Err(error);
+    }
+    PatternApplicator::new(TypeConverter::new())
+        .add_pattern(CheckMemoryAccess)
+        .apply_partial(ctx, function);
+    Ok(())
 }
 
 fn declare_check(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
@@ -134,58 +197,49 @@ fn declare_check(ctx: &mut IrContext, loc: Location, name: &str) -> OpRef {
     ctx.create_op(data)
 }
 
-/// Insert an access check before every memory access of every defined
-/// `clif.func` in `module`.
-pub fn instrument_accesses(ctx: &mut IrContext, module: Module) -> Result<(), String> {
+/// Declare the runtime checks `module` does not declare yet.
+fn declare_checks(ctx: &mut IrContext, module: Module) {
     let Some(first_block) = module.first_block(ctx) else {
-        return Ok(());
+        return;
     };
-    let module_ops: OpList = ctx.block(first_block).ops.clone();
-    let mut declared = [LOAD_CHECK_FN, STORE_CHECK_FN].map(|name| (name, false));
-    for &op in &module_ops {
-        let Ok(function) = clif::Func::from_op(ctx, op) else {
-            continue;
-        };
-        for (name, found) in &mut declared {
-            *found |= function.sym_name(ctx) == *name;
-        }
-        let regions: RegionList = ctx.op_regions(op).collect();
-        for region in regions {
-            for block in ctx.region(region).blocks.clone() {
-                let ops: OpList = ctx.block(block).ops.clone();
-                for op in ops {
-                    let Some(access) = access_of(ctx, op) else {
-                        continue;
-                    };
-                    let width = access_width(ctx, access.ty)?;
-                    if width != 0 {
-                        insert_check(ctx, block, op, &access, width);
-                    }
-                }
-            }
-        }
-    }
-    let Some(&first_op) = module_ops.first() else {
-        return Ok(());
+    let Some(&first_op) = ctx.block(first_block).ops.first() else {
+        return;
     };
     let loc = ctx.op(first_op).location;
-    for (name, found) in declared {
-        if !found {
+    for name in [LOAD_CHECK_FN, STORE_CHECK_FN] {
+        let declared = ctx.block(first_block).ops.iter().any(|&op| {
+            clif::Func::from_op(ctx, op).is_ok_and(|function| function.sym_name(ctx) == name)
+        });
+        if !declared {
             let declaration = declare_check(ctx, loc, name);
             ctx.insert_op_before(first_block, first_op, declaration);
         }
     }
-    Ok(())
 }
 
-/// Pass form of the access-check instrumentation.
-pub struct InstrumentMemoryAccesses;
+/// Declare the runtime checks and instrument every `clif.func` of `module`.
+pub fn instrument_accesses(ctx: &mut IrContext, module: Module) -> Result<(), String> {
+    declare_checks(ctx, module);
+    let mut functions = Vec::new();
+    let _ = walk_op::<()>(ctx, module.op(), &mut |op| {
+        if let Ok(function) = clif::Func::from_op(ctx, op) {
+            functions.push(function);
+        }
+        ControlFlow::Continue(WalkAction::Advance)
+    });
+    functions
+        .into_iter()
+        .try_for_each(|function| instrument_function(ctx, function))
+}
 
-impl trunk_ir::pass::Pass for InstrumentMemoryAccesses {
+/// Declares the runtime access checks in the module.
+pub struct DeclareAccessChecks;
+
+impl trunk_ir::pass::Pass for DeclareAccessChecks {
     type Target = core::Module;
 
     fn name(&self) -> &'static str {
-        "sanitize-memory-accesses"
+        "sanitize-declare-access-checks"
     }
 
     fn run(
@@ -194,7 +248,28 @@ impl trunk_ir::pass::Pass for InstrumentMemoryAccesses {
         target: core::Module,
         _analyses: &mut trunk_ir::analysis::AnalysisCache,
     ) -> trunk_ir::pass::PassRunResult {
-        instrument_accesses(ctx, target.into()).map_err(Into::into)
+        declare_checks(ctx, target.into());
+        Ok(())
+    }
+}
+
+/// Checks every memory access of one `clif.func`.
+pub struct InstrumentMemoryAccesses;
+
+impl trunk_ir::pass::Pass for InstrumentMemoryAccesses {
+    type Target = clif::Func;
+
+    fn name(&self) -> &'static str {
+        "sanitize-memory-accesses"
+    }
+
+    fn run(
+        &mut self,
+        ctx: &mut IrContext,
+        target: clif::Func,
+        _analyses: &mut trunk_ir::analysis::AnalysisCache,
+    ) -> trunk_ir::pass::PassRunResult {
+        instrument_function(ctx, target).map_err(Into::into)
     }
 }
 
@@ -241,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn existing_declarations_are_not_repeated() {
+    fn instrumenting_twice_changes_nothing() {
         let once = run_pass(
             r#"core.module @test {
   clif.func @f(%p: core.ptr) -> core.i64 {
@@ -253,8 +328,7 @@ mod tests {
         let mut ctx = IrContext::new();
         let module = parse_test_module(&mut ctx, &once);
         instrument_accesses(&mut ctx, module).expect("instrumentation");
-        let twice = print_module(&ctx, module.op());
-        assert_eq!(twice.matches("sym_name = \"__tribute_asan_").count(), 2);
+        assert_eq!(print_module(&ctx, module.op()), once);
     }
 
     #[test]
