@@ -20,7 +20,7 @@
 use alloc::collections::{BTreeMap, VecDeque};
 use core::alloc::Layout;
 use core::cell::UnsafeCell;
-use core::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use core::sync::atomic::{AtomicBool, Ordering};
 
 /// Red zone size in bytes placed before and after each allocation.
 const REDZONE_SIZE: usize = 32;
@@ -47,62 +47,15 @@ pub fn is_enabled() -> bool {
 }
 
 // =============================================================================
-// Quarantine
+// Shared state
 // =============================================================================
 
 struct QuarantineEntry {
-    /// Pointer to the base of the allocation (start of left red zone).
-    base: *mut u8,
+    /// Address of the base of the allocation (start of left red zone).
+    base: usize,
     /// Total allocation size including both red zones.
     total_size: usize,
 }
-
-/// Global quarantine state.
-///
-/// Safety: Tribute programs are single-threaded (fibers on one OS thread),
-/// so mutable static access is safe as long as we don't re-enter from a
-/// signal handler (which we avoid).
-///
-/// We use `UnsafeCell` to avoid `static mut` (denied in Rust 2024 edition).
-struct QuarantineState {
-    queue: UnsafeCell<Option<VecDeque<QuarantineEntry>>>,
-}
-
-unsafe impl Sync for QuarantineState {}
-
-static QUARANTINE: QuarantineState = QuarantineState {
-    queue: UnsafeCell::new(None),
-};
-static QUARANTINE_TOTAL: AtomicUsize = AtomicUsize::new(0);
-
-unsafe fn quarantine() -> &'static mut VecDeque<QuarantineEntry> {
-    unsafe { (*QUARANTINE.queue.get()).get_or_insert_with(VecDeque::new) }
-}
-
-/// Push an entry into the quarantine. If the quarantine exceeds its size
-/// limit, the oldest entries are actually freed.
-unsafe fn quarantine_push(base: *mut u8, total_size: usize) {
-    let q = unsafe { quarantine() };
-    q.push_back(QuarantineEntry { base, total_size });
-    QUARANTINE_TOTAL.fetch_add(total_size, Ordering::Relaxed);
-
-    // Evict oldest entries when over budget
-    while QUARANTINE_TOTAL.load(Ordering::Relaxed) > QUARANTINE_MAX {
-        if let Some(old) = q.pop_front() {
-            unsafe { regions() }.remove(&(old.base as usize));
-            if let Ok(layout) = Layout::from_size_align(old.total_size, ALLOC_ALIGN) {
-                unsafe { alloc::alloc::dealloc(old.base, layout) };
-            }
-            QUARANTINE_TOTAL.fetch_sub(old.total_size, Ordering::Relaxed);
-        } else {
-            break;
-        }
-    }
-}
-
-// =============================================================================
-// Region table
-// =============================================================================
 
 /// One block this allocator handed out: both red zones and the payload.
 #[derive(Clone, Copy)]
@@ -119,21 +72,82 @@ impl Region {
     }
 }
 
-/// Live and quarantined blocks by base address (start of the left red zone).
-///
-/// Safety: see [`QuarantineState`].
-struct RegionState {
-    table: UnsafeCell<BTreeMap<usize, Region>>,
+/// Everything the sanitizer records about the heap.
+struct State {
+    /// Live and quarantined blocks by base address.
+    regions: BTreeMap<usize, Region>,
+    /// Freed blocks, oldest first, kept until the budget is exceeded.
+    quarantine: VecDeque<QuarantineEntry>,
+    /// Total bytes held in `quarantine`.
+    quarantine_total: usize,
 }
 
-unsafe impl Sync for RegionState {}
+/// The sanitizer state behind a spin lock.
+///
+/// Compiled code may allocate, free and access memory from several threads,
+/// and a free evicts quarantine entries that the region table also names, so
+/// one lock covers both. The runtime has no `std` in an aborting build, hence
+/// the spin lock; every critical section is a few table operations.
+struct StateLock {
+    locked: AtomicBool,
+    state: UnsafeCell<State>,
+}
 
-static REGIONS: RegionState = RegionState {
-    table: UnsafeCell::new(BTreeMap::new()),
+// Safety: `state` is only reached through `with_state`, which holds `locked`.
+unsafe impl Sync for StateLock {}
+
+static STATE: StateLock = StateLock {
+    locked: AtomicBool::new(false),
+    state: UnsafeCell::new(State {
+        regions: BTreeMap::new(),
+        quarantine: VecDeque::new(),
+        quarantine_total: 0,
+    }),
 };
 
-unsafe fn regions() -> &'static mut BTreeMap<usize, Region> {
-    unsafe { &mut *REGIONS.table.get() }
+/// Run `f` with exclusive access to the sanitizer state.
+///
+/// `f` must not report: a report aborts while the lock is held, which is
+/// harmless, but it must not call back into `with_state`.
+fn with_state<R>(f: impl FnOnce(&mut State) -> R) -> R {
+    struct Unlock;
+    impl Drop for Unlock {
+        fn drop(&mut self) {
+            STATE.locked.store(false, Ordering::Release);
+        }
+    }
+
+    while STATE
+        .locked
+        .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+        .is_err()
+    {
+        core::hint::spin_loop();
+    }
+    let _unlock = Unlock;
+    f(unsafe { &mut *STATE.state.get() })
+}
+
+impl State {
+    /// Push a freed block into the quarantine. If the quarantine exceeds its
+    /// size limit, the oldest entries are actually freed and forgotten.
+    fn quarantine_push(&mut self, base: usize, total_size: usize) {
+        self.quarantine
+            .push_back(QuarantineEntry { base, total_size });
+        self.quarantine_total += total_size;
+
+        // Evict oldest entries when over budget
+        while self.quarantine_total > QUARANTINE_MAX {
+            let Some(old) = self.quarantine.pop_front() else {
+                break;
+            };
+            self.regions.remove(&old.base);
+            if let Ok(layout) = Layout::from_size_align(old.total_size, ALLOC_ALIGN) {
+                unsafe { alloc::alloc::dealloc(old.base as *mut u8, layout) };
+            }
+            self.quarantine_total -= old.total_size;
+        }
+    }
 }
 
 /// Mark the live block at `base` freed, or name why it cannot be freed.
@@ -141,14 +155,14 @@ unsafe fn regions() -> &'static mut BTreeMap<usize, Region> {
 /// A block that already left the quarantine has no entry any more, so a second
 /// free of it is reported as a free of memory that is not allocated.
 fn mark_freed(base: usize) -> Result<(), &'static str> {
-    match unsafe { regions() }.get_mut(&base) {
+    with_state(|state| match state.regions.get_mut(&base) {
         Some(region) if region.freed => Err("attempting double-free"),
         Some(region) => {
             region.freed = true;
             Ok(())
         }
         None => Err("attempting free of memory that is not allocated"),
-    }
+    })
 }
 
 /// What an access of `size` bytes at `addr` touches.
@@ -172,7 +186,14 @@ pub(crate) fn classify(addr: usize, size: usize) -> Access {
     }
     // The last block that starts before the access ends is the only one the
     // access can overlap, since blocks are disjoint.
-    let Some((&base, &region)) = (unsafe { regions() }).range(..end).next_back() else {
+    let found = with_state(|state| {
+        state
+            .regions
+            .range(..end)
+            .next_back()
+            .map(|(&base, &region)| (base, region))
+    });
+    let Some((base, region)) = found else {
         return Access::Valid;
     };
     if base + region.total() <= addr {
@@ -301,9 +322,7 @@ unsafe fn check_redzone(ptr: *const u8, len: usize, side: &str) {
 pub extern "C" fn __asan_init() {
     ASAN_ENABLED.store(true, Ordering::SeqCst);
     // Pre-allocate the quarantine to avoid allocation during dealloc
-    unsafe {
-        *QUARANTINE.queue.get() = Some(VecDeque::with_capacity(64));
-    }
+    with_state(|state| state.quarantine.reserve(64));
 }
 
 /// ASan-instrumented allocation.
@@ -339,13 +358,15 @@ pub unsafe fn alloc(size: usize) -> *mut u8 {
     // Fill right red zone
     unsafe { core::ptr::write_bytes(payload.add(size), MAGIC_REDZONE, REDZONE_SIZE) };
 
-    unsafe { regions() }.insert(
-        base as usize,
-        Region {
-            payload: size,
-            freed: false,
-        },
-    );
+    with_state(|state| {
+        state.regions.insert(
+            base as usize,
+            Region {
+                payload: size,
+                freed: false,
+            },
+        )
+    });
 
     payload
 }
@@ -389,7 +410,7 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
     unsafe { core::ptr::write_bytes(base, MAGIC_FREED, total) };
 
     // Move to quarantine instead of immediately freeing
-    unsafe { quarantine_push(base, total) };
+    with_state(|state| state.quarantine_push(base as usize, total));
 }
 
 /// Check a read of `size` bytes at `addr` before compiled code performs it.
@@ -414,16 +435,18 @@ mod tests {
 
     /// Mutex to serialize tests that mutate global ASan state.
     ///
-    /// Tests modify `ASAN_ENABLED`, `QUARANTINE`, and `QUARANTINE_TOTAL` which
-    /// are process-wide globals. Without serialization, parallel test execution
-    /// causes data races.
+    /// Tests modify `ASAN_ENABLED` and reset the shared sanitizer state, which
+    /// are process-wide globals. Without serialization, one test would observe
+    /// another's blocks.
     static TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
     /// Reset quarantine state for test isolation.
     unsafe fn reset_quarantine() {
-        unsafe { regions() }.clear();
-        unsafe { *QUARANTINE.queue.get() = Some(VecDeque::new()) };
-        QUARANTINE_TOTAL.store(0, Ordering::Relaxed);
+        with_state(|state| {
+            state.regions.clear();
+            state.quarantine.clear();
+            state.quarantine_total = 0;
+        });
     }
 
     #[test]
@@ -523,7 +546,7 @@ mod tests {
 
             // Quarantine should have evicted some entries
             assert!(
-                QUARANTINE_TOTAL.load(Ordering::Relaxed)
+                with_state(|state| state.quarantine_total)
                     <= QUARANTINE_MAX + alloc_size + 2 * REDZONE_SIZE
             );
         }
@@ -578,11 +601,12 @@ mod tests {
         unsafe {
             let first = alloc(1024);
             dealloc(first, 1024);
-            assert!(regions().contains_key(&(first as usize - REDZONE_SIZE)));
+            let base = first as usize - REDZONE_SIZE;
+            assert!(with_state(|state| state.regions.contains_key(&base)));
             for _ in 0..(QUARANTINE_MAX / 1024 + 2) {
                 dealloc(alloc(1024), 1024);
             }
-            assert_eq!(regions().len(), quarantine().len());
+            with_state(|state| assert_eq!(state.regions.len(), state.quarantine.len()));
         }
 
         ASAN_ENABLED.store(false, Ordering::SeqCst);
@@ -658,6 +682,44 @@ mod tests {
                 Err("attempting free of memory that is not allocated")
             );
         }
+
+        ASAN_ENABLED.store(false, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn test_asan_state_is_consistent_under_concurrent_use() {
+        let _lock = TEST_MUTEX.lock().unwrap();
+        ASAN_ENABLED.store(true, Ordering::SeqCst);
+        unsafe { reset_quarantine() };
+
+        const THREADS: usize = 8;
+        const ROUNDS: usize = 2000;
+        std::thread::scope(|scope| {
+            for thread in 0..THREADS {
+                scope.spawn(move || {
+                    for round in 0..ROUNDS {
+                        let size = 8 + (thread + round) % 64;
+                        unsafe {
+                            let ptr = alloc(size);
+                            assert_eq!(classify(ptr as usize, size), Access::Valid);
+                            assert_eq!(
+                                classify(ptr as usize + size, 1),
+                                Access::HeapBufferOverflow
+                            );
+                            dealloc(ptr, size);
+                        }
+                    }
+                });
+            }
+        });
+
+        // Every block was freed, so the table holds exactly the quarantine.
+        with_state(|state| {
+            assert!(state.regions.values().all(|region| region.freed));
+            assert_eq!(state.regions.len(), state.quarantine.len());
+            let held: usize = state.quarantine.iter().map(|entry| entry.total_size).sum();
+            assert_eq!(held, state.quarantine_total);
+        });
 
         ASAN_ENABLED.store(false, Ordering::SeqCst);
     }
