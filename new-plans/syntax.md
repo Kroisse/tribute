@@ -21,7 +21,7 @@ A?          선택적 (0개 또는 1개)
 ### Keywords
 
 ```text
-fn op do let const struct enum ability mod pub use extern case handle resume if as
+fn op do let const struct enum ability mod pub use extern case handle resume become if as
 True False Nil
 pkg super self
 ```
@@ -36,15 +36,6 @@ type where in
 ```
 
 **Note:** 대부분의 제어 흐름은 algebraic effect로 처리하므로 예약어를 최소화함
-
-### Contextual Keywords
-
-```text
-become
-```
-
-`become`은 [Tail Call](#tail-call-become) 구문의 시작에서만 키워드로 읽고 그 밖에서는
-식별자로 남는다.
 
 ### 키워드 규칙
 
@@ -963,9 +954,6 @@ fn is_odd(n: Int) -> Bool {
     }
 }
 ```
-
-`become`은 contextual keyword다. 같은 줄에서 바로 뒤에 식이 올 때만 키워드로 읽으며,
-그 밖에서는 식별자다.
 
 `become`이 없는 호출은 꼬리 위치에 있어도 일반 호출이다. 컴파일러는 표시 없는 호출을
 꼬리 이전으로 바꾸지 않으므로 stack 사용량은 소스에 적힌 대로 정해진다.
