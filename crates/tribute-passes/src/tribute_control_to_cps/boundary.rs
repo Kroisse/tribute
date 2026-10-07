@@ -40,7 +40,7 @@ impl TributeControlToCpsError {
 
     /// A failure of the post-CPS boundary at `location` that no single
     /// operation carries.
-    pub(super) fn post_at(location: Location, message: impl Into<String>) -> Self {
+    pub(crate) fn post_at(location: Location, message: impl Into<String>) -> Self {
         Self::one(POST_CPS_BOUNDARY, None, Some(location), message)
     }
 

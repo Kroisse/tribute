@@ -3,6 +3,89 @@
 
 use super::*;
 
+/// The operations that replace one abstract frame operation.
+pub(crate) struct FrameExpansion {
+    /// Operations to place where the frame operation was, in order.
+    pub(crate) body: Vec<OpRef>,
+    /// Module-level helper functions the expansion defines.
+    pub(crate) helpers: Vec<OpRef>,
+    /// The frame value that replaces the result of `ability.suffix_frame`.
+    pub(crate) frame: Option<ValueRef>,
+}
+
+/// Expands abstract frame operations over the frame layouts of a module with
+/// the builders `tribute_control_to_cps` uses for its own frames.
+pub(crate) struct FrameExpander {
+    frames: HashMap<TypeRef, FrameTypes>,
+    helper_index: u32,
+}
+
+impl FrameExpander {
+    pub(crate) fn new(frames: HashMap<TypeRef, FrameTypes>, helper_index: u32) -> Self {
+        Self {
+            frames,
+            helper_index,
+        }
+    }
+
+    pub(crate) fn suffix_frame(
+        &mut self,
+        ctx: &mut IrContext,
+        module_block: BlockRef,
+        op: ability::SuffixFrame,
+    ) -> Result<FrameExpansion, TributeControlToCpsError> {
+        self.expand(ctx, module_block, op.op_ref(), |converter, scratch| {
+            converter.expand_suffix_frame(scratch, op).map(Some)
+        })
+    }
+
+    pub(crate) fn exit(
+        &mut self,
+        ctx: &mut IrContext,
+        module_block: BlockRef,
+        op: ability::Exit,
+    ) -> Result<FrameExpansion, TributeControlToCpsError> {
+        self.expand(ctx, module_block, op.op_ref(), |converter, scratch| {
+            converter.expand_exit(scratch, op).map(|()| None)
+        })
+    }
+
+    fn expand(
+        &mut self,
+        ctx: &mut IrContext,
+        module_block: BlockRef,
+        op: OpRef,
+        build: impl FnOnce(
+            &mut Converter<'_>,
+            BlockRef,
+        ) -> Result<Option<ValueRef>, TributeControlToCpsError>,
+    ) -> Result<FrameExpansion, TributeControlToCpsError> {
+        let location = ctx.op(op).location;
+        let known = ctx.block(module_block).ops.len();
+        let mut converter = Converter::new(ctx, module_block, HashMap::default());
+        converter.frames = std::mem::take(&mut self.frames);
+        converter.helper_index = self.helper_index;
+        let scratch = converter.make_block(location, &[]);
+        let frame = build(&mut converter, scratch);
+        self.frames = std::mem::take(&mut converter.frames);
+        self.helper_index = converter.helper_index;
+        let frame = frame?;
+        let body = ctx.block(scratch).ops.to_vec();
+        for built in &body {
+            ctx.remove_op_from_block(scratch, *built);
+        }
+        let helpers = ctx.block(module_block).ops[known..].to_vec();
+        for helper in &helpers {
+            ctx.remove_op_from_block(module_block, *helper);
+        }
+        Ok(FrameExpansion {
+            body,
+            helpers,
+            frame,
+        })
+    }
+}
+
 impl Converter<'_> {
     /// Emit a final CPS tail transfer from the callee's exact typed closure
     /// contract. This must not reconstruct a signature from physical operands:
@@ -337,7 +420,7 @@ impl Converter<'_> {
 
     /// Expand `ability.suffix_frame` into the frame the suffix is entered
     /// through, pushing the operations to `block`.
-    pub(super) fn expand_suffix_frame(
+    fn expand_suffix_frame(
         &mut self,
         block: BlockRef,
         frame_op: ability::SuffixFrame,
@@ -377,7 +460,7 @@ impl Converter<'_> {
     }
 
     /// Expand `ability.exit` into the transfer to the frame's `Done<R>`.
-    pub(super) fn expand_exit(
+    fn expand_exit(
         &mut self,
         block: BlockRef,
         exit: ability::Exit,

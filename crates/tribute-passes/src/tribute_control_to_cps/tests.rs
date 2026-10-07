@@ -3,6 +3,7 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
 
+use crate::lower_continuation_frames::lower_continuation_frames;
 use crate::test_support::assert_unchanged_on_error;
 
 /// Run the conversion without operation declarations or intrinsics.

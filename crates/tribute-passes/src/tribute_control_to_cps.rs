@@ -38,14 +38,13 @@ mod boundary;
 mod callable;
 mod frame;
 mod handle;
-mod lower_frames;
 mod structured;
 #[cfg(test)]
 mod tests;
 mod types;
 
 pub use boundary::*;
-pub(crate) use lower_frames::lower_continuation_frames;
+pub(crate) use frame::FrameExpander;
 
 /// Carry a source call's, resume's, or handle's evidence selection to the
 /// operation that passes its evidence. The selection is copied unchanged.
@@ -110,14 +109,14 @@ struct Converter<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct FrameTypes {
+pub(crate) struct FrameTypes {
     /// `ability.frame<R>`, the type frame values have until
     /// `lower_continuation_frames` selects their layout.
-    abstract_frame: TypeRef,
-    reference: TypeRef,
-    layout: TypeRef,
-    done: TypeRef,
-    dispatch: TypeRef,
+    pub(crate) abstract_frame: TypeRef,
+    pub(crate) reference: TypeRef,
+    pub(crate) layout: TypeRef,
+    pub(crate) done: TypeRef,
+    pub(crate) dispatch: TypeRef,
 }
 
 /// The static description of one `handle`, shared by every layer that
