@@ -397,7 +397,9 @@ pub(super) fn lower_module<'db>(
     );
     prescan_struct_accessor_signatures(&mut ctx, ir, &ast.decls);
     prescan_source_functions(&mut ctx, &ast.decls);
-    if plan_local_callables(
+    // A strengthened function can strengthen the lambdas that call it, so
+    // plan again until the conventions the plans were made with are final.
+    while plan_local_callables(
         &mut ctx,
         ir,
         &ast.decls,
