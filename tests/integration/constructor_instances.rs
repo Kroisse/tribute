@@ -6,7 +6,6 @@ use tribute_front::{
     SourceCst,
     ast::{Decl, ExprKind, PatternKind, Stmt, Type, TypeKind},
 };
-use trunk_ir::Symbol;
 
 #[salsa_test]
 fn enum_constructor_instances_survive_conversion_and_specialization(db: &salsa::DatabaseImpl) {
@@ -41,9 +40,7 @@ fn main() -> Nil {
                 .decls
                 .iter()
                 .find_map(|decl| match decl {
-                    Decl::Function(function) if function.name == Symbol::new(name) => {
-                        Some(function)
-                    }
+                    Decl::Function(function) if function.name == name => Some(function),
                     _ => None,
                 })
                 .unwrap();
@@ -107,9 +104,7 @@ fn let_variant_pattern_preserves_its_constrained_constructor(db: &salsa::Databas
             .decls
             .iter()
             .find_map(|decl| match decl {
-                Decl::Function(function) if function.name == Symbol::new("unpack") => {
-                    Some(function)
-                }
+                Decl::Function(function) if function.name == "unpack" => Some(function),
                 _ => None,
             })
             .unwrap();

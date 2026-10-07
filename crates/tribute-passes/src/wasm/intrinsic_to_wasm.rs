@@ -8,7 +8,6 @@
 
 use std::rc::Rc;
 
-use trunk_ir::Symbol;
 use trunk_ir::context::{BlockArgData, BlockData, IrContext, RegionData};
 use trunk_ir::dialect::core;
 use trunk_ir::dialect::wasm as wasm_dialect;
@@ -105,7 +104,7 @@ pub fn lower(ctx: &mut IrContext, module: Module) {
 fn calls_c_helper(ctx: &IrContext, symbols: &SymbolTable, op: OpRef, helper: &'static str) -> bool {
     wasm_dialect::Call::from_op(ctx, op).is_ok_and(|call| {
         super::runtime_bindings::c_helper(ctx, symbols, call.callee(ctx))
-            .is_some_and(|name| name == Symbol::new(helper))
+            .is_some_and(|name| name == helper)
     })
 }
 

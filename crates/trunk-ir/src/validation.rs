@@ -544,7 +544,7 @@ fn typed_callee_signature(
 ) -> Option<crate::dialect::func::FuncSig> {
     let ty = ctx.value_ty(value);
     let data = ctx.get_type(ty);
-    let ty = if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
+    let ty = if data.dialect == "closure" && data.name == "closure" {
         let [ty] = data.params.as_slice() else {
             return None;
         };
@@ -1074,18 +1074,18 @@ fn validate_region_branch_terminator_interface(
 /// structured `core.never` region without an `scf.yield`.
 pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
     let data = ctx.op(op);
-    (data.dialect == Symbol::new("func")
+    (data.dialect == "func"
         && matches!(
             data.name.with_str(|name| name.to_owned()).as_str(),
             "tail_call" | "tail_call_indirect" | "unreachable"
         ))
-        || (data.dialect == Symbol::new("ability")
+        || (data.dialect == "ability"
             && matches!(
                 data.name.with_str(|name| name.to_owned()).as_str(),
                 "perform" | "handle_dispatch"
             ))
-        || (data.dialect == Symbol::new("effect") && data.name == Symbol::new("dispatch_cps"))
-        || (data.dialect == Symbol::new("scf")
+        || (data.dialect == "effect" && data.name == "dispatch_cps")
+        || (data.dialect == "scf"
             && matches!(
                 data.name.with_str(|name| name.to_owned()).as_str(),
                 "if" | "switch"
@@ -1094,7 +1094,7 @@ pub fn is_proper_tail_terminator(ctx: &IrContext, op: OpRef) -> bool {
 
 fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
-    if data.dialect != Symbol::new("scf") || data.name != Symbol::new("if") {
+    if data.dialect != "scf" || data.name != "if" {
         return;
     }
 
@@ -1123,11 +1123,11 @@ fn validate_scf_if_structure(ctx: &IrContext, op: OpRef, errors: &mut Vec<Valida
         };
 
         let yield_data = ctx.op(yield_op);
-        if yield_data.dialect != Symbol::new("scf") || yield_data.name != Symbol::new("yield") {
+        if yield_data.dialect != "scf" || yield_data.name != "yield" {
             let never_result = match ctx.op_result_types(op) {
                 [ty] => {
                     let ty = ctx.get_type(*ty);
-                    ty.dialect == Symbol::new("core") && ty.name == Symbol::new("never")
+                    ty.dialect == "core" && ty.name == "never"
                 }
                 _ => false,
             };
@@ -3146,9 +3146,7 @@ mod tests {
             .unwrap();
         let stray_continue = *continues
             .iter()
-            .find(|&&op| {
-                direct_owner(op).is_some_and(|owner| ctx.op(owner).dialect == Symbol::new("func"))
-            })
+            .find(|&&op| direct_owner(op).is_some_and(|owner| ctx.op(owner).dialect == "func"))
             .unwrap();
         assert!(
             RegionBranchTerminatorOps::get(&ctx, continue_op)
@@ -3193,8 +3191,8 @@ mod tests {
             .iter()
             .find(|&&op| {
                 direct_owner(op).is_some_and(|owner| {
-                    ctx.op(owner).dialect == Symbol::new("scf")
-                        && ctx.op(owner).name == Symbol::new("loop")
+                    ctx.op(owner).dialect == "scf"
+                        && ctx.op(owner).name == "loop"
                         && ctx.op_results(owner).is_empty()
                 })
             })
@@ -3208,9 +3206,7 @@ mod tests {
         );
         let stray_break = *breaks
             .iter()
-            .find(|&&op| {
-                direct_owner(op).is_some_and(|owner| ctx.op(owner).dialect == Symbol::new("func"))
-            })
+            .find(|&&op| direct_owner(op).is_some_and(|owner| ctx.op(owner).dialect == "func"))
             .unwrap();
         assert!(
             RegionBranchTerminatorOps::get(&ctx, stray_break)

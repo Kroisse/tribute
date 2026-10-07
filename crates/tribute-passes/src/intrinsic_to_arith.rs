@@ -423,10 +423,8 @@ fn exact_signature(
     }
     let operand = ctx.get_type(*left);
     let result = ctx.get_type(result);
-    let operand_is_i32 =
-        operand.dialect == Symbol::new("core") && operand.name == Symbol::new("i32");
-    let operand_is_f64 =
-        operand.dialect == Symbol::new("core") && operand.name == Symbol::new("f64");
+    let operand_is_i32 = operand.dialect == "core" && operand.name == "i32";
+    let operand_is_f64 = operand.dialect == "core" && operand.name == "f64";
     match mapping {
         ArithMapping::BinaryOp(_) => {
             result.dialect == operand.dialect
@@ -440,16 +438,8 @@ fn exact_signature(
                     operand_is_i32
                 }
         }
-        ArithMapping::CmpI(_) => {
-            operand_is_i32
-                && result.dialect == Symbol::new("core")
-                && result.name == Symbol::new("i1")
-        }
-        ArithMapping::CmpF(_) => {
-            operand_is_f64
-                && result.dialect == Symbol::new("core")
-                && result.name == Symbol::new("i1")
-        }
+        ArithMapping::CmpI(_) => operand_is_i32 && result.dialect == "core" && result.name == "i1",
+        ArithMapping::CmpF(_) => operand_is_f64 && result.dialect == "core" && result.name == "i1",
     }
 }
 

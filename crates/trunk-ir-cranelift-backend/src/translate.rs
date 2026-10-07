@@ -381,7 +381,7 @@ fn collect_clif_funcs_from_region(ctx: &IrContext, region: RegionRef, funcs: &mu
                 funcs.push(op);
             } else {
                 let op_data = ctx.op(op);
-                if op_data.dialect == Symbol::new("core") && op_data.name == Symbol::new("module") {
+                if op_data.dialect == "core" && op_data.name == "module" {
                     for nested_region in ctx.op_regions(op) {
                         collect_clif_funcs_from_region(ctx, nested_region, funcs);
                     }

@@ -19,7 +19,7 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
     let node = metadata
         .function_instances
         .iter()
-        .find(|(_, instance)| instance.function.qualified(db) == Symbol::new(target))
+        .find(|(_, instance)| instance.function.qualified(db) == target)
         .unwrap()
         .0;
     if damage == 0 {
@@ -36,14 +36,14 @@ fn prepare_damaged(db: &dyn salsa::Database, source: SourceCst, damage: u8) -> b
             7 => {
                 let (_, handler) = handlers
                     .iter_mut()
-                    .find(|(_, operation)| operation.ability.qualified(db) == Symbol::new("Writer"))
+                    .find(|(_, operation)| operation.ability.qualified(db) == "Writer")
                     .unwrap();
                 handler.ability_args[0] = Type::new(db, TypeKind::BoundVar { index: 999 });
             }
             8 => {
                 let (_, perform) = performs
                     .iter_mut()
-                    .find(|(_, operation)| operation.ability.qualified(db) == Symbol::new("Writer"))
+                    .find(|(_, operation)| operation.ability.qualified(db) == "Writer")
                     .unwrap();
                 perform.ability_args[0] = Type::new(db, TypeKind::BoundVar { index: 999 });
             }
@@ -148,7 +148,7 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
         .expression_types(db)
         .function_instances
         .iter()
-        .find(|(_, instance)| instance.function.qualified(db) == Symbol::new("hidden"))
+        .find(|(_, instance)| instance.function.qualified(db) == "hidden")
         .unwrap()
         .1
         .clone();
@@ -159,16 +159,14 @@ fn effect_only_nominal_instance_matches_handlers_and_performs(db: &salsa::Databa
         .handler_operations(db)
         .iter()
         .filter(|(_, operation)| {
-            operation.ability.qualified(db) == Symbol::new("Writer")
-                && operation.ability_args == vec![argument]
+            operation.ability.qualified(db) == "Writer" && operation.ability_args == vec![argument]
         })
         .collect();
     let performs: Vec<_> = prepared
         .perform_operations(db)
         .iter()
         .filter(|(_, operation)| {
-            operation.ability.qualified(db) == Symbol::new("Writer")
-                && operation.ability_args == vec![argument]
+            operation.ability.qualified(db) == "Writer" && operation.ability_args == vec![argument]
         })
         .collect();
     assert!(!handlers.is_empty());

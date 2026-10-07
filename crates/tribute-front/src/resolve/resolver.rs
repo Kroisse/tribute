@@ -1383,7 +1383,7 @@ impl<'db> Resolver<'db> {
     /// Resolve ability reference in a handler arm.
     /// Skips "_" placeholder (unqualified ops) without emitting diagnostics.
     fn resolve_handler_ability(&mut self, ability: &UnresolvedName) -> ResolvedRef<'db> {
-        if ability.qualified == Symbol::new("_") {
+        if ability.qualified == "_" {
             ResolvedRef::local(LocalId::UNRESOLVED, ability.qualified.clone())
         } else {
             self.resolve_name(ability)

@@ -87,7 +87,7 @@ pub(super) fn validate<'db>(
     let mut queue: Vec<_> = functions
         .iter()
         .filter(|(id, func)| {
-            *id.qualified(db) == Symbol::new("main")
+            *id.qualified(db) == "main"
                 || (func.is_pub
                     && schemes
                         .get(id.qualified(db))

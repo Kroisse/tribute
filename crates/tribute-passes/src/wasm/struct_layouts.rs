@@ -14,7 +14,6 @@
 
 use tribute_ir::dialect::adt::layout::{get_enum_variants, get_struct_fields};
 use trunk_ir::StringRef;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::wasm_gc;
 use trunk_ir::refs::TypeRef;
@@ -88,14 +87,14 @@ fn described_struct(ctx: &mut IrContext, fields: impl IntoIterator<Item = TypeRe
 /// type.
 fn field_type(ctx: &mut IrContext, ty: TypeRef) -> TypeRef {
     let data = ctx.get_type(ty);
-    if data.dialect == Symbol::new("core") && data.name == Symbol::new("i1") {
+    if data.dialect == "core" && data.name == "i1" {
         return intern(ctx, "core", "i32");
     }
-    if data.dialect == Symbol::new("adt") {
-        if data.name == Symbol::new("typeref") {
+    if data.dialect == "adt" {
+        if data.name == "typeref" {
             return intern(ctx, "wasm", "structref");
         }
-        if data.name == Symbol::new("enum") {
+        if data.name == "enum" {
             return intern(ctx, "wasm", "anyref");
         }
     }

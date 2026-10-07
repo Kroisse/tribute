@@ -144,7 +144,7 @@ fn resolve_wasm_callee(
 
 fn is_nil(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("nil")
+    data.dialect == "core" && data.name == "nil"
 }
 
 /// `core.nil` occupies a logical result slot but has no physical Wasm value.
@@ -179,15 +179,15 @@ fn is_wasm_physical_result_assignable(
 ) -> bool {
     let produced_data = ctx.get_type(produced);
     let received_data = ctx.get_type(received);
-    (produced_data.dialect == Symbol::new("wasm")
-        && produced_data.name == Symbol::new("arrayref")
-        && received_data.dialect == Symbol::new("core")
-        && received_data.name == Symbol::new("array")
+    (produced_data.dialect == "wasm"
+        && produced_data.name == "arrayref"
+        && received_data.dialect == "core"
+        && received_data.name == "array"
         && crate::emit::helpers::builtin_layout_type_idx(ctx, received).is_none())
-        || (produced_data.dialect == Symbol::new("core")
-            && produced_data.name == Symbol::new("i32")
-            && received_data.dialect == Symbol::new("core")
-            && received_data.name == Symbol::new("i1"))
+        || (produced_data.dialect == "core"
+            && produced_data.name == "i32"
+            && received_data.dialect == "core"
+            && received_data.name == "i1")
         || crate::assignability::is_wasm_physical_argument_assignable(ctx, produced, received)
 }
 
@@ -379,8 +379,7 @@ fn is_allowed_dialect(ctx: &IrContext, op: OpRef, depth: usize) -> bool {
     }
 
     // Allow core.module only at the top level (depth 0)
-    if depth == 0 && op_data.dialect == Symbol::new("core") && op_data.name == Symbol::new("module")
-    {
+    if depth == 0 && op_data.dialect == "core" && op_data.name == "module" {
         return true;
     }
 

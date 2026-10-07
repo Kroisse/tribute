@@ -28,7 +28,6 @@
 //! reference types. Most conversions between pointer types are no-ops.
 
 use tribute_ir::dialect::tribute_rt;
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::clif;
 use trunk_ir::dialect::core;
@@ -234,38 +233,36 @@ fn materialize_result_noop(
 /// Helper: Check if a type is an ADT type that maps to ptr in the native backend.
 fn is_adt_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    if data.dialect != Symbol::new("adt") {
+    if data.dialect != "adt" {
         return false;
     }
     // struct, enum, typeref, variant instance
-    data.name == Symbol::new("typeref")
-        || data.name == Symbol::new("struct")
-        || data.name == Symbol::new("enum")
+    matches!(data.name.as_str(), "typeref" | "struct" | "enum")
         || data.attrs.get_bool("is_variant") == Some(true)
 }
 
 /// Helper: Check if a type is closure.closure.
 fn is_closure_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure")
+    data.dialect == "closure" && data.name == "closure"
 }
 
 /// Helper: Check if a type is func.func_sig.
 fn is_func_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig")
+    data.dialect == "func" && data.name == "func_sig"
 }
 
 /// Helper: Check if a type is core.array.
 fn is_array_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("array")
+    data.dialect == "core" && data.name == "array"
 }
 
 /// Helper: Check if a type is core.bytes.
 fn is_bytes_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("bytes")
+    data.dialect == "core" && data.name == "bytes"
 }
 
 impl NativeTypeRefs {

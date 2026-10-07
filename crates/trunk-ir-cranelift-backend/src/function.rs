@@ -21,7 +21,7 @@ use crate::{CompilationError, CompilationResult};
 
 pub(crate) fn is_nil_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let ty = ctx.get_type(ty);
-    ty.dialect == Symbol::new("core") && ty.name == Symbol::new("nil") && ty.params.is_empty()
+    ty.dialect == "core" && ty.name == "nil" && ty.params.is_empty()
 }
 
 /// Parse a condition symbol into a Cranelift integer condition code.
@@ -333,7 +333,7 @@ impl<'a> FunctionTranslator<'a> {
             let result_ty = ctx.op_result_types(op)[0];
             // Nil constants have no runtime representation — skip emission.
             let td = ctx.get_type(result_ty);
-            if td.dialect == Symbol::new("core") && td.name == Symbol::new("nil") {
+            if td.dialect == "core" && td.name == "nil" {
                 return Ok(());
             }
             let ty = translate_type(ctx, result_ty, self.ptr_ty)?;
@@ -533,7 +533,7 @@ impl<'a> FunctionTranslator<'a> {
         if let Ok(load) = clif::Load::from_op(ctx, op) {
             let result_ty = ctx.op_result_types(op)[0];
             let td = ctx.get_type(result_ty);
-            if td.dialect == Symbol::new("core") && td.name == Symbol::new("nil") {
+            if td.dialect == "core" && td.name == "nil" {
                 return Ok(());
             }
             let operands = ctx.op_operands(op);

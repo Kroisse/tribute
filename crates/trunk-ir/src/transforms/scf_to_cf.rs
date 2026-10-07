@@ -43,7 +43,6 @@ use crate::pass::{Pass, pass_fn};
 use crate::refs::{BlockRef, OpRef, RegionRef, TypeRef, ValueRef};
 use crate::rewrite::Module;
 use crate::rewrite::helpers::{inline_region_blocks, split_block};
-use crate::symbol::Symbol;
 use crate::types::{Attribute, Location};
 use crate::walk::{WalkAction, walk_op};
 
@@ -150,11 +149,11 @@ fn transform_block(ctx: &mut IrContext, block: BlockRef, plan: &ScfToCfPlan) {
 /// Check if an op is an scf control-flow op (if/loop/switch).
 fn is_scf_control_flow(ctx: &IrContext, op: OpRef) -> bool {
     let d = ctx.op(op).dialect.clone();
-    if d != Symbol::new("scf") {
+    if d != "scf" {
         return false;
     }
     let n = ctx.op(op).name.clone();
-    n == Symbol::new("if") || n == Symbol::new("loop") || n == Symbol::new("switch")
+    matches!(n.as_str(), "if" | "loop" | "switch")
 }
 
 /// Lower a terminal `scf.if : core.never` without creating a merge block.
@@ -1280,7 +1279,7 @@ mod tests {
             .flat_map(|&block| ctx.block_args(block))
             .any(|&arg| {
                 let ty = ctx.get_type(ctx.value_ty(arg));
-                ty.dialect == Symbol::new("core") && ty.name == Symbol::new("never")
+                ty.dialect == "core" && ty.name == "never"
             });
         assert!(
             !has_non_entry_never_arg,
@@ -1724,10 +1723,10 @@ mod tests {
         assert!(!names.iter().any(|name| name.starts_with("scf.")));
         assert_eq!(count_blocks(&ctx, body), 4);
         assert!(
-            ctx.block(continuation).ops.iter().any(|&op| {
-                ctx.op(op).dialect == Symbol::new("func")
-                    && ctx.op(op).name == Symbol::new("return")
-            }),
+            ctx.block(continuation)
+                .ops
+                .iter()
+                .any(|&op| { ctx.op(op).dialect == "func" && ctx.op(op).name == "return" }),
             "ordinary switch continuation must remain in its merge block"
         );
         assert_eq!(
@@ -1777,10 +1776,10 @@ mod tests {
             "nonterminal multiblock switch must be fully lowered: {names:?}"
         );
         assert!(
-            ctx.block(continuation).ops.iter().any(|&op| {
-                ctx.op(op).dialect == Symbol::new("func")
-                    && ctx.op(op).name == Symbol::new("return")
-            }),
+            ctx.block(continuation)
+                .ops
+                .iter()
+                .any(|&op| { ctx.op(op).dialect == "func" && ctx.op(op).name == "return" }),
             "ordinary switch continuation must remain in its merge block"
         );
         assert_eq!(
@@ -1964,10 +1963,10 @@ mod tests {
         let exit = *blocks
             .iter()
             .find(|&&block| {
-                ctx.block(block).ops.iter().any(|&op| {
-                    ctx.op(op).dialect == Symbol::new("func")
-                        && ctx.op(op).name == Symbol::new("return")
-                })
+                ctx.block(block)
+                    .ops
+                    .iter()
+                    .any(|&op| ctx.op(op).dialect == "func" && ctx.op(op).name == "return")
             })
             .unwrap();
         assert!(ctx.block_args(exit).is_empty());
@@ -2489,9 +2488,7 @@ mod tests {
         let merge_ops = &ctx.block(*merge).ops;
         let add_op = merge_ops
             .iter()
-            .find(|&&op| {
-                ctx.op(op).dialect == Symbol::new("arith") && ctx.op(op).name == Symbol::new("addi")
-            })
+            .find(|&&op| ctx.op(op).dialect == "arith" && ctx.op(op).name == "addi")
             .unwrap();
         let operands = ctx.op_operands(*add_op);
         assert_eq!(operands[0], merge_args[0]);

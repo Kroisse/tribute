@@ -250,7 +250,7 @@ pub(crate) fn convert_builtin_layouts(ctx: &mut IrContext, module: trunk_ir::rew
             return Some(bytes);
         }
         let data = ctx.get_type(ty);
-        if data.dialect != Symbol::new("tribute_rt") {
+        if data.dialect != "tribute_rt" {
             return None;
         }
         data.name.with_str(|name| match name {

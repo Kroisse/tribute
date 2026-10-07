@@ -292,7 +292,7 @@ impl trunk_ir::attr_kind::AttrKind for EvidenceStep {
 
 fn is_ability_ref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("ability_ref")
+    data.dialect == "core" && data.name == "ability_ref"
 }
 
 /// Check the shape of an operation's `evidence_plan`. Whether the selection
@@ -887,7 +887,7 @@ fn parse_func<'a>(
     if has_duplicate_convention_attr(&attributes)
         || attributes
             .iter()
-            .any(|(key, _)| *key == "sym_name" || *key == "type")
+            .any(|(key, _)| matches!(key.as_ref(), "sym_name" | "type"))
     {
         return Err(winnow::error::ErrMode::Backtrack(
             winnow::error::ContextError::new(),
@@ -1187,7 +1187,7 @@ fn push_type_error(errors: &mut Vec<ValidationError>, message: impl Into<String>
 
 fn is_control_op(ctx: &IrContext, op: OpRef, name: &str) -> bool {
     let data = ctx.op(op);
-    data.dialect == Symbol::new("tribute_control") && data.name == Symbol::new(name)
+    data.dialect == "tribute_control" && data.name == name
 }
 
 fn parent_op(ctx: &IrContext, op: OpRef) -> Option<OpRef> {
@@ -1203,16 +1203,13 @@ fn parent_region(ctx: &IrContext, op: OpRef) -> Option<RegionRef> {
 
 fn is_never(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("never")
+    data.dialect == "core" && data.name == "never"
 }
 
 fn is_unresolved_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    let unresolved_name = data.name == Symbol::new("var")
-        || data.name == Symbol::new("infer")
-        || data.name == Symbol::new("unresolved");
-    (data.dialect == Symbol::new("type") || data.dialect == Symbol::new("tribute"))
-        && unresolved_name
+    let unresolved_name = matches!(data.name.as_str(), "var" | "infer" | "unresolved");
+    (matches!(data.dialect.as_str(), "type" | "tribute")) && unresolved_name
 }
 
 fn contains_unresolved_type(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<TypeRef>) -> bool {
@@ -1239,8 +1236,8 @@ fn contains_forbidden_logical_component(
         return true;
     }
     let data = ctx.get_type(ty);
-    let forbidden = (data.dialect == Symbol::new("func") && data.name == Symbol::new("func_sig"))
-        || (data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure"))
+    let forbidden = (data.dialect == "func" && data.name == "func_sig")
+        || (data.dialect == "closure" && data.name == "closure")
         || ResumeToken::matches(ctx, ty)
         || is_unresolved_type(ctx, ty)
         || data
@@ -1254,10 +1251,10 @@ fn contains_forbidden_logical_component(
 
 fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
     for (ty, data) in ctx.types().iter() {
-        if data.dialect != Symbol::new("tribute_control") {
+        if data.dialect != "tribute_control" {
             continue;
         }
-        if data.name == Symbol::new("func_sig") {
+        if data.name == "func_sig" {
             if let Err(error) = FuncSig::validate(ctx, ty) {
                 push_type_error(
                     errors,
@@ -1275,7 +1272,7 @@ fn validate_control_types(ctx: &IrContext, errors: &mut Vec<ValidationError>) {
                     );
                 }
             }
-        } else if data.name == Symbol::new("resume_token") {
+        } else if data.name == "resume_token" {
             if data.params.len() != 2 {
                 push_type_error(
                     errors,
@@ -1381,7 +1378,7 @@ fn terminator(
         return None;
     };
     let data = ctx.op(op);
-    if data.dialect != Symbol::new(dialect) || data.name != Symbol::new(name) {
+    if data.dialect != dialect || data.name != name {
         push_op_error(
             ctx,
             owner,
@@ -1862,7 +1859,7 @@ fn validate_yield(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>)
 
 fn validate_local_operation(ctx: &IrContext, op: OpRef, errors: &mut Vec<ValidationError>) {
     let data = ctx.op(op);
-    if data.dialect != Symbol::new("tribute_control") {
+    if data.dialect != "tribute_control" {
         return;
     }
     let name = data.name.with_str(|name| name.to_owned());
@@ -2130,7 +2127,7 @@ fn declaration_map<'a>(
 
 fn is_adt_typeref(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("adt") && data.name == Symbol::new("typeref")
+    data.dialect == "adt" && data.name == "typeref"
 }
 
 fn contains_adt_typeref(ctx: &IrContext, ty: TypeRef, visiting: &mut HashSet<TypeRef>) -> bool {
@@ -2185,9 +2182,7 @@ fn canonical_nominal_layouts(
             }
             continue;
         }
-        if data.dialect != Symbol::new("adt")
-            || !(data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
-        {
+        if data.dialect != "adt" || !(matches!(data.name.as_str(), "struct" | "enum")) {
             continue;
         }
         let Some(name) = data.attrs.get_string_ref("name") else {
@@ -2215,8 +2210,8 @@ fn canonical_nominal_layouts(
             .types()
             .iter()
             .filter_map(|(ty, data)| {
-                (data.dialect == Symbol::new("adt")
-                    && (data.name == Symbol::new("struct") || data.name == Symbol::new("enum"))
+                (data.dialect == "adt"
+                    && (matches!(data.name.as_str(), "struct" | "enum"))
                     && data.attrs.get_string_ref("name") == Some(name))
                 .then_some(ty)
             })
@@ -2238,7 +2233,7 @@ fn canonical_nominal_layouts(
 
 fn is_core_ptr(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
+    data.dialect == "core" && data.name == "ptr"
 }
 
 fn collect_attribute_types(ctx: &IrContext, attribute: &Attribute, types: &mut HashSet<TypeRef>) {
@@ -2352,7 +2347,7 @@ fn validate_managed_reference_boundaries(
 
     walk_region_ops(ctx, body, &mut |op| {
         let data = ctx.op(op);
-        if data.dialect == Symbol::new("adt") && data.name == Symbol::new("ref_null") {
+        if data.dialect == "adt" && data.name == "ref_null" {
             let ([], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
@@ -2370,7 +2365,7 @@ fn validate_managed_reference_boundaries(
                 );
             }
         }
-        if data.dialect == Symbol::new("adt") && data.name == Symbol::new("ref_cast") {
+        if data.dialect == "adt" && data.name == "ref_cast" {
             let ([operand], [result], Some(declared)) = (
                 ctx.op_operands(op),
                 ctx.op_result_types(op),
@@ -3772,7 +3767,7 @@ mod tests {
         let body = fixture.module.body(ctx).expect("module body");
         walk_region_ops(ctx, body, &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == Symbol::new("tribute_control") {
+            if data.dialect == "tribute_control" {
                 names.insert(data.name.clone());
                 assert_eq!(data.location.span, Span::new(7, 19));
             }
@@ -4130,10 +4125,7 @@ mod tests {
         let never = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| {
-                (data.dialect == Symbol::new("core") && data.name == Symbol::new("never"))
-                    .then_some(ty)
-            })
+            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "never").then_some(ty))
             .expect("core.never");
         assert!(!contains_unresolved_type(
             &ctx,
@@ -4240,18 +4232,15 @@ mod tests {
         let i32_ty = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| {
-                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
-                    .then_some(ty)
-            })
+            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
             .unwrap();
         let i32_value = module
             .ops(&ctx)
             .iter()
             .copied()
             .find(|op| {
-                ctx.op(*op).dialect == Symbol::new("arith")
-                    && ctx.op(*op).name == Symbol::new("const")
+                ctx.op(*op).dialect == "arith"
+                    && ctx.op(*op).name == "const"
                     && ctx.op_result_types(*op) == [i32_ty]
             })
             .map(|op| ctx.op_result(op, 0))
@@ -4642,17 +4631,14 @@ mod tests {
         let i32_ty = ctx
             .types()
             .iter()
-            .find_map(|(ty, data)| {
-                (data.dialect == Symbol::new("core") && data.name == Symbol::new("i32"))
-                    .then_some(ty)
-            })
+            .find_map(|(ty, data)| (data.dialect == "core" && data.name == "i32").then_some(ty))
             .expect("core.i32");
         let ability_ref = ctx
             .types()
             .iter()
             .find_map(|(ty, data)| {
-                (data.dialect == Symbol::new("core")
-                    && data.name == Symbol::new("ability_ref")
+                (data.dialect == "core"
+                    && data.name == "ability_ref"
                     && data.attrs.get_str(&ctx, "name") == Some("State"))
                 .then_some(ty)
             })
@@ -4942,10 +4928,9 @@ mod tests {
         let mut switch = None;
         walk_region_ops(&ctx, module.body(&ctx).unwrap(), &mut |op| {
             let data = ctx.op(op);
-            if data.dialect == Symbol::new("tribute_control") && data.name == Symbol::new("lambda")
-            {
+            if data.dialect == "tribute_control" && data.name == "lambda" {
                 branch_lambda.get_or_insert(op);
-            } else if data.dialect == Symbol::new("scf") && data.name == Symbol::new("switch") {
+            } else if data.dialect == "scf" && data.name == "switch" {
                 switch = Some(op);
             }
         });

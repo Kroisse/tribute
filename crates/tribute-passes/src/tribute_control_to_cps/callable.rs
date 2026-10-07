@@ -260,7 +260,7 @@ impl Converter<'_> {
                     )
                     .attr("type", Attribute::Type(physical_type));
             for (key, value) in self.convert_attrs(&self.ctx.op(source).attributes.clone()) {
-                if key != Symbol::new("sym_name") && key != Symbol::new("type") {
+                if !matches!(key.as_str(), "sym_name" | "type") {
                     builder = builder.attr(key, value);
                 }
             }

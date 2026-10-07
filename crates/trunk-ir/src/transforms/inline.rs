@@ -828,8 +828,7 @@ mod mechanics {
             if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
                 has_call = true;
             }
-            if ctx.op(op).dialect == Symbol::new("arith") && ctx.op(op).name == Symbol::new("const")
-            {
+            if ctx.op(op).dialect == "arith" && ctx.op(op).name == "const" {
                 has_const = true;
             }
             ControlFlow::Continue(WalkAction::Advance)
@@ -1475,8 +1474,7 @@ mod pass {
             if func::Call::matches(ctx, op) || func::TailCall::matches(ctx, op) {
                 has_call = true;
             }
-            if ctx.op(op).dialect == Symbol::new("arith") && ctx.op(op).name == Symbol::new("addi")
-            {
+            if ctx.op(op).dialect == "arith" && ctx.op(op).name == "addi" {
                 has_add = true;
             }
             ControlFlow::Continue(WalkAction::Advance)

@@ -254,10 +254,10 @@ fn build_aliases(
             let output_managed = is_managed_value(ctx, *output, managed_layouts);
             let input_data = ctx.get_type(ctx.value_ty(*input));
             let output_data = ctx.get_type(ctx.value_ty(*output));
-            if input_data.dialect == Symbol::new("core")
-                && input_data.name == Symbol::new("ptr")
-                && output_data.dialect == Symbol::new("adt")
-                && output_data.name == Symbol::new("typeref")
+            if input_data.dialect == "core"
+                && input_data.name == "ptr"
+                && output_data.dialect == "adt"
+                && output_data.name == "typeref"
             {
                 return Err(OwnershipPlanError::new(format!(
                     "raw pointer alias {op:?} masquerades as managed adt.typeref: {} -> {}",
@@ -329,12 +329,12 @@ pub(super) fn is_internal_closure_layout(
 
 pub(super) fn is_core_ptr_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("ptr")
+    data.dialect == "core" && data.name == "ptr"
 }
 
 fn is_core_i32_type(ctx: &IrContext, ty: TypeRef) -> bool {
     let data = ctx.get_type(ty);
-    data.dialect == Symbol::new("core") && data.name == Symbol::new("i32")
+    data.dialect == "core" && data.name == "i32"
 }
 
 pub(super) fn root_value(aliases: &HashMap<ValueRef, ValueRef>, value: ValueRef) -> ValueRef {
@@ -421,8 +421,7 @@ fn validate_projection_contract(
     };
     let source_ty = ctx.value_ty(source);
     let source_data = ctx.get_type(source_ty);
-    let raw_source =
-        source_data.dialect == Symbol::new("core") && source_data.name == Symbol::new("ptr");
+    let raw_source = source_data.dialect == "core" && source_data.name == "ptr";
     let result_managed = is_managed_value(ctx, result, managed_layouts);
     if (!raw_source && !types_compatible(ctx, source_ty, layout, managed_layouts))
         || (result_managed

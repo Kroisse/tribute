@@ -12,7 +12,6 @@
 
 use tracing::warn;
 
-use trunk_ir::Symbol;
 use trunk_ir::context::IrContext;
 use trunk_ir::dialect::arith;
 use trunk_ir::dialect::core::{self, FloatLike, IntegerLike};
@@ -163,7 +162,7 @@ impl RewritePattern for ArithBinOpPattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.dialect != Symbol::new("arith") {
+        if data.dialect != "arith" {
             return false;
         }
 
@@ -184,12 +183,12 @@ impl RewritePattern for ArithBinOpPattern {
         if is_narrow(ctx, result_ty)
             && ["divsi", "divui", "remsi", "remui"]
                 .into_iter()
-                .any(|reads_upper| name == Symbol::new(reads_upper))
+                .any(|reads_upper| name == reads_upper)
         {
             return false;
         }
 
-        let new_op = if name == Symbol::new("addi") {
+        let new_op = if name == "addi" {
             match suffix {
                 // `wasm.i32_add` is declared on `core.i32` and infers that
                 // result. Narrower integers have no defined wrap-around
@@ -205,7 +204,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("addf") {
+        } else if name == "addf" {
             match suffix {
                 "f32" => wasm_dialect::F32Add::operands(lhs, rhs)
                     .results(result_ty)
@@ -217,7 +216,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("subi") {
+        } else if name == "subi" {
             match suffix {
                 "i32" => wasm_dialect::I32Sub::operands(lhs, rhs)
                     .results(result_ty)
@@ -229,7 +228,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("subf") {
+        } else if name == "subf" {
             match suffix {
                 "f32" => wasm_dialect::F32Sub::operands(lhs, rhs)
                     .results(result_ty)
@@ -241,7 +240,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("muli") {
+        } else if name == "muli" {
             match suffix {
                 "i32" => wasm_dialect::I32Mul::operands(lhs, rhs)
                     .results(result_ty)
@@ -253,7 +252,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("mulf") {
+        } else if name == "mulf" {
             match suffix {
                 "f32" => wasm_dialect::F32Mul::operands(lhs, rhs)
                     .results(result_ty)
@@ -265,7 +264,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("divsi") {
+        } else if name == "divsi" {
             match suffix {
                 "i32" => wasm_dialect::I32DivS::operands(lhs, rhs)
                     .results(result_ty)
@@ -277,7 +276,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("divui") {
+        } else if name == "divui" {
             match suffix {
                 "i32" => wasm_dialect::I32DivU::operands(lhs, rhs)
                     .results(result_ty)
@@ -289,7 +288,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("divf") {
+        } else if name == "divf" {
             match suffix {
                 "f32" => wasm_dialect::F32Div::operands(lhs, rhs)
                     .results(result_ty)
@@ -301,7 +300,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("remsi") {
+        } else if name == "remsi" {
             match suffix {
                 "i32" => wasm_dialect::I32RemS::operands(lhs, rhs)
                     .results(result_ty)
@@ -313,7 +312,7 @@ impl RewritePattern for ArithBinOpPattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("remui") {
+        } else if name == "remui" {
             match suffix {
                 "i32" => wasm_dialect::I32RemU::operands(lhs, rhs)
                     .results(result_ty)
@@ -613,17 +612,12 @@ impl RewritePattern for ArithBitwisePattern {
         rewriter: &mut PatternRewriter<'_>,
     ) -> bool {
         let data = ctx.op(op);
-        if data.dialect != Symbol::new("arith") {
+        if data.dialect != "arith" {
             return false;
         }
 
         let name = data.name.clone();
-        let is_bitwise = name == Symbol::new("and")
-            || name == Symbol::new("or")
-            || name == Symbol::new("xor")
-            || name == Symbol::new("shl")
-            || name == Symbol::new("shr")
-            || name == Symbol::new("shru");
+        let is_bitwise = matches!(name.as_str(), "and" | "or" | "xor" | "shl" | "shr" | "shru");
 
         if !is_bitwise {
             return false;
@@ -639,8 +633,7 @@ impl RewritePattern for ArithBitwisePattern {
         };
         // A right shift moves the unspecified upper bits of a narrow integer
         // into the result.
-        if is_narrow(ctx, result_ty) && (name == Symbol::new("shr") || name == Symbol::new("shru"))
-        {
+        if is_narrow(ctx, result_ty) && (matches!(name.as_str(), "shr" | "shru")) {
             return false;
         }
         let Some(suffix) = type_suffix(ctx, result_ty) else {
@@ -648,7 +641,7 @@ impl RewritePattern for ArithBitwisePattern {
         };
         let loc = ctx.op(op).location;
 
-        let new_op = if name == Symbol::new("and") {
+        let new_op = if name == "and" {
             match suffix {
                 "i64" => wasm_dialect::I64And::operands(lhs, rhs)
                     .results(result_ty)
@@ -660,7 +653,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("or") {
+        } else if name == "or" {
             match suffix {
                 "i64" => wasm_dialect::I64Or::operands(lhs, rhs)
                     .results(result_ty)
@@ -672,7 +665,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("xor") {
+        } else if name == "xor" {
             match suffix {
                 "i64" => wasm_dialect::I64Xor::operands(lhs, rhs)
                     .results(result_ty)
@@ -684,7 +677,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("shl") {
+        } else if name == "shl" {
             match suffix {
                 "i64" => wasm_dialect::I64Shl::operands(lhs, rhs)
                     .results(result_ty)
@@ -696,7 +689,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("shr") {
+        } else if name == "shr" {
             match suffix {
                 "i64" => wasm_dialect::I64ShrS::operands(lhs, rhs)
                     .results(result_ty)
@@ -708,7 +701,7 @@ impl RewritePattern for ArithBitwisePattern {
                     .op_ref(),
                 _ => return false,
             }
-        } else if name == Symbol::new("shru") {
+        } else if name == "shru" {
             match suffix {
                 "i64" => wasm_dialect::I64ShrU::operands(lhs, rhs)
                     .results(result_ty)

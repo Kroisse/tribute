@@ -224,7 +224,7 @@ pub fn lower_cps_signatures_to_physical(
             .map(|(name, value)| (name.clone(), value.clone()))
             .collect();
         for (name, value) in op_attributes {
-            if func::Func::matches(converter.ctx, op) && name == Symbol::new("type") {
+            if func::Func::matches(converter.ctx, op) && name == "type" {
                 continue;
             }
             let converted = converter.convert_attribute(value)?;
@@ -825,8 +825,7 @@ fn validate_root_continuation_frame(
     phase: ContractPhase,
 ) -> Result<RootFrameContract, TargetAbiError> {
     let reference_data = ctx.get_type(frame);
-    if reference_data.dialect != Symbol::new("adt") || reference_data.name != Symbol::new("typeref")
-    {
+    if reference_data.dialect != "adt" || reference_data.name != "typeref" {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame must be an exact nominal adt.typeref",
         ));
@@ -857,7 +856,7 @@ fn validate_root_continuation_frame(
             "target root bridge: worker frame layout must contain done then dispatch",
         ));
     };
-    if *done_name != Symbol::new("done") || *dispatch_name != Symbol::new("dispatch") {
+    if *done_name != "done" || *dispatch_name != "dispatch" {
         return Err(TargetAbiError::new(
             "target root bridge: worker frame field roles must be exact Done then Dispatch",
         ));
@@ -1492,7 +1491,7 @@ impl<'a> PhysicalTypeConverter<'a> {
             return Ok(converted);
         }
         let data = self.ctx.get_type(ty).clone();
-        if data.dialect == Symbol::new("closure") && data.name == Symbol::new("closure") {
+        if data.dialect == "closure" && data.name == "closure" {
             let [function] = data.params.as_slice() else {
                 return Err(TargetAbiError::new(
                     "target ABI: closure type must contain one callable",
@@ -1633,8 +1632,7 @@ mod tests {
     }
 
     fn is_worker_call(ctx: &IrContext, op: OpRef) -> bool {
-        func::Call::from_op(ctx, op)
-            .is_ok_and(|call| call.callee(ctx) == Symbol::new(ROOT_MAIN_SYMBOL))
+        func::Call::from_op(ctx, op).is_ok_and(|call| call.callee(ctx) == ROOT_MAIN_SYMBOL)
     }
 
     fn dispatch_fixture(answer_name: &str, frame_name: &str) -> (IrContext, Module, OpRef) {

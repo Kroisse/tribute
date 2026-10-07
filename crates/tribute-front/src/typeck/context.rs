@@ -1025,7 +1025,7 @@ mod tests {
         let functions: Vec<_> = env
             .export_function_types_with_ids()
             .into_iter()
-            .filter(|(id, _)| id.name(db) == Symbol::new("same"))
+            .filter(|(id, _)| id.name(db) == "same")
             .map(|(id, _)| id.qualified(db))
             .collect();
         assert_eq!(
@@ -1040,7 +1040,7 @@ mod tests {
         let constructors: Vec<_> = env
             .export_constructor_types()
             .into_iter()
-            .filter(|(id, _)| id.name(db) == Symbol::new("same"))
+            .filter(|(id, _)| id.name(db) == "same")
             .map(|(id, _)| id.qualified(db))
             .collect();
         assert_eq!(
@@ -1075,7 +1075,7 @@ mod tests {
         ];
         let ability_keys = |ids: Vec<AbilityId<'_>>| {
             ids.into_iter()
-                .filter(|id| id.name(db) == Symbol::new("Audit"))
+                .filter(|id| id.name(db) == "Audit")
                 .map(|id| (id.qualified(db).clone(), id.origin(db)))
                 .collect::<Vec<_>>()
         };
@@ -1590,7 +1590,7 @@ mod tests {
         );
         for decl in &module.decls {
             if let crate::ast::Decl::Function(func) = decl
-                && func.name == Symbol::new("main")
+                && func.name == "main"
             {
                 assert!(
                     !has_method_call(&func.body),
