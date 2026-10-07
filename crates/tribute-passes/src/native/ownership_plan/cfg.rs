@@ -18,6 +18,7 @@ pub(super) struct ValidatedFlatCfg {
     blocks: BlockList,
     terminators: HashMap<BlockRef, OpRef>,
     successors: HashMap<BlockRef, BlockList>,
+    predecessors: HashMap<BlockRef, BlockList>,
     branches: HashMap<OpRef, Vec<ValueTransfer>>,
 }
 
@@ -42,6 +43,7 @@ impl ValidatedFlatCfg {
 
         let mut terminators = HashMap::default();
         let mut successors = HashMap::default();
+        let mut predecessors: HashMap<BlockRef, BlockList> = HashMap::default();
         let mut branches = HashMap::default();
         for &block in &blocks {
             let ops = &ctx.block(block).ops;
@@ -107,6 +109,12 @@ impl ValidatedFlatCfg {
                 return Err(OwnershipPlanError::new("unsupported native CFG terminator"));
             }
 
+            for &successor in &block_successors {
+                let incoming = predecessors.entry(successor).or_default();
+                if !incoming.contains(&block) {
+                    incoming.push(block);
+                }
+            }
             terminators.insert(block, terminator);
             successors.insert(block, block_successors);
         }
@@ -115,6 +123,7 @@ impl ValidatedFlatCfg {
             blocks,
             terminators,
             successors,
+            predecessors,
             branches,
         })
     }
@@ -139,6 +148,11 @@ impl ValidatedFlatCfg {
 
     pub(super) fn successors(&self, block: BlockRef) -> &[BlockRef] {
         &self.successors[&block]
+    }
+
+    /// The distinct blocks that branch to `block`.
+    pub(super) fn predecessors(&self, block: BlockRef) -> &[BlockRef] {
+        self.predecessors.get(&block).map_or(&[], |blocks| blocks)
     }
 
     pub(super) fn branch_transfers(

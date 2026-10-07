@@ -2616,6 +2616,71 @@ fn main() -> Nil {
     );
 }
 
+#[test]
+fn test_native_value_unused_on_some_paths_is_released_once() {
+    let source = format!(
+        "{}\n{}",
+        common::PRINT_EXTERNS,
+        r#"
+enum Inner {
+    Value(Nat)
+    Empty
+}
+
+enum Flag {
+    Yes
+    No
+}
+
+fn read(inner: Inner) -> Nat {
+    case inner {
+        Value(value) -> value
+        Empty -> 0
+    }
+}
+
+fn one_arm(flag: Flag, inner: Inner) -> Nat {
+    case flag {
+        Yes -> read(inner)
+        No -> 0
+    }
+}
+
+fn nested(outer: Flag, flag: Flag, inner: Inner) -> Nat {
+    case outer {
+        Yes -> case flag {
+            Yes -> read(inner)
+            No -> 1
+        }
+        No -> 2
+    }
+}
+
+fn main() -> Nil {
+    __tribute_print_nat(one_arm(Yes, Value(7)))
+    __tribute_print_nat(one_arm(No, Value(7)))
+    __tribute_print_nat(one_arm(Yes, Empty))
+    __tribute_print_nat(nested(Yes, Yes, Value(5)))
+    __tribute_print_nat(nested(Yes, No, Value(5)))
+    __tribute_print_nat(nested(No, Yes, Value(5)))
+}
+"#
+    );
+    // The paths that do not read `inner` release it; the sanitizer run guards
+    // the paths that do against a second release.
+    for output in [
+        compile_and_run_native("value_unused_on_some_paths.trb", &source),
+        compile_and_run_native_asan("value_unused_on_some_paths_asan.trb", &source),
+    ] {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "stderr: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            "7\n0\n0\n5\n1\n2"
+        );
+    }
+}
+
 // =========================================================================
 // String::empty() and Bytes::empty() tests
 // =========================================================================
