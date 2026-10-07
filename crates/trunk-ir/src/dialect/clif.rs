@@ -9,6 +9,8 @@ use crate::types::{Attribute, AttributeMap, TypeDataBuilder};
 use itertools::Itertools;
 use rustc_hash::FxHashSet as HashSet;
 
+crate::register_isolated_op!(Func);
+
 #[trunk_ir::dialect]
 mod clif {
     // Module
