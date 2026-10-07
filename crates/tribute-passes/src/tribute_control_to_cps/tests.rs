@@ -3,11 +3,13 @@ use trunk_ir::ops::DialectType;
 use trunk_ir::parser::parse_test_module;
 use trunk_ir::printer::print_module;
 
+use crate::lower_continuation_frames::lower_continuation_frames;
 use crate::test_support::assert_unchanged_on_error;
 
 /// Run the conversion without operation declarations or intrinsics.
 fn run_pre_cps(ctx: &mut IrContext, module: Module) -> Result<(), TributeControlToCpsError> {
-    tribute_control_to_cps(ctx, module, &[], &[], &mut Default::default())
+    tribute_control_to_cps(ctx, module, &[], &[], &mut Default::default())?;
+    lower_continuation_frames(ctx, module)
 }
 
 fn parse(input: &str) -> (IrContext, Module) {
@@ -214,6 +216,7 @@ fn textual_callable_graph_converts_and_reparses() {
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     verify_tribute_control_post_cps(&ctx, module, &mut Default::default()).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(!printed.contains("tribute_control.func "));
@@ -277,6 +280,7 @@ fn textual_direct_evidence_and_cps_transfers_preserve_exact_abis() {
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("func.call "));
     assert!(printed.contains("func.call_indirect"));
@@ -426,6 +430,7 @@ fn nested_textual_module_converts_its_callable_graph_atomically() {
 }"#;
     let (mut ctx, module) = parse(input);
     tribute_control_to_cps(&mut ctx, module, &[], &[], &mut Default::default()).unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     let printed = print_module(&ctx, module.op());
     assert!(printed.contains("core.module @inner"));
     assert!(printed.contains("func.func @nested"));
@@ -2155,6 +2160,7 @@ fn op_to_never_uses_a_typed_zero_capture_reject_continuation() {
         &mut Default::default(),
     )
     .unwrap();
+    lower_continuation_frames(&mut ctx, module).unwrap();
     let mut perform = None;
     fn find_perform(ctx: &IrContext, op: OpRef, found: &mut Option<ability::Perform>) {
         if let Ok(candidate) = ability::Perform::from_op(ctx, op) {

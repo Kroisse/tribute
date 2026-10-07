@@ -41,7 +41,8 @@
 //!     │
 //!     ▼ global DCE (artifact compiles only: unreachable source-logical
 //!     │             functions skip CPS legalization)
-//!     ▼ tribute_control_to_cps → lower_closure_lambda → intrinsic/list/io lowering
+//!     ▼ tribute_control_to_cps → lower_continuation_frames →
+//!       lower_closure_lambda → intrinsic/list/io lowering
 //! Module (CPS callable contracts and explicit evidence)
 //!     │
 //!     ▼ lower_ability_perform (CPS tail-call)
@@ -853,6 +854,7 @@ fn structural_pass_pipeline(
         tribute_passes::tribute_control_to_cps::TributeControlToCps::new(operation_declarations)
             .with_compiler_intrinsics(compiler_intrinsics),
     )
+    .add_pass(tribute_passes::lower_continuation_frames::LowerContinuationFrames)
     .add_pass(tribute_passes::lower_closure_lambda::LowerClosureLambda)
     .add_pass(tribute_passes::intrinsic_to_arith::LowerIntrinsicToArith)
     .add_pass(tribute_passes::list_intrinsics::LowerListIntrinsics)

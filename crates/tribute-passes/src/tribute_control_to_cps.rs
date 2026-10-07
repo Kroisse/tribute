@@ -34,6 +34,7 @@ use trunk_ir::symbol_table::{SymbolTable, qualified_name};
 use trunk_ir::types::{Attribute, AttributeMap, Location, StringRef, TypeDataBuilder};
 use trunk_ir::{OperationDataBuilder, Symbol, SymbolPath};
 
+mod adapters;
 mod boundary;
 mod callable;
 mod frame;
@@ -43,6 +44,7 @@ mod structured;
 mod tests;
 mod types;
 
+pub(crate) use adapters::*;
 pub use boundary::*;
 
 /// Carry a source call's, resume's, or handle's evidence selection to the
@@ -108,11 +110,16 @@ struct Converter<'a> {
 }
 
 #[derive(Clone, Copy)]
-struct FrameTypes {
-    reference: TypeRef,
-    layout: TypeRef,
-    done: TypeRef,
-    dispatch: TypeRef,
+pub(crate) struct FrameTypes {
+    /// The answer type `R` of the frame.
+    pub(crate) answer: TypeRef,
+    /// `ability.frame<R>`, the type frame values have until
+    /// `lower_continuation_frames` selects their layout.
+    pub(crate) abstract_frame: TypeRef,
+    pub(crate) reference: TypeRef,
+    pub(crate) layout: TypeRef,
+    pub(crate) done: TypeRef,
+    pub(crate) dispatch: TypeRef,
 }
 
 /// The static description of one `handle`, shared by every layer that
@@ -135,11 +142,18 @@ struct HandleLayer {
     passthrough_resume_factory: Symbol,
 }
 
+/// The frame types a suffix layer builds around: its own and the frame
+/// around it.
+#[derive(Clone, Copy)]
+pub(crate) struct LayerFrames {
+    pub(crate) value: FrameTypes,
+    pub(crate) boundary: FrameTypes,
+}
+
 /// A call, resume, or structured suffix layer of a continuation.
 #[derive(Clone)]
-struct SuffixLayer {
+pub(crate) struct SuffixLayer {
     value_type: TypeRef,
-    boundary: TypeRef,
     /// Builds the dispatcher that rebuilds this layer when it is resumed.
     dispatch_factory: Symbol,
     /// The `evidence_plan` that selects the evidence of the computation the
@@ -238,31 +252,15 @@ impl<'a> Converter<'a> {
     fn fresh_helper(&mut self, prefix: &str) -> Symbol {
         let index = self.helper_index;
         self.helper_index += 1;
-        Symbol::new(&format!("__tribute_{prefix}_{index}"))
+        helper_symbol(prefix, index)
     }
 
     fn make_block(&mut self, location: Location, types: &[TypeRef]) -> BlockRef {
-        self.ctx.create_block(BlockData {
-            location,
-            args: types
-                .iter()
-                .copied()
-                .map(|ty| BlockArgData {
-                    ty,
-                    attrs: AttributeMap::new(),
-                })
-                .collect(),
-            ops: Default::default(),
-            parent_region: None,
-        })
+        make_block(self.ctx, location, types)
     }
 
     fn single_block_region(&mut self, location: Location, block: BlockRef) -> RegionRef {
-        self.ctx.create_region(RegionData {
-            location,
-            blocks: trunk_ir::smallvec::smallvec![block],
-            parent_op: None,
-        })
+        single_block_region(self.ctx, location, block)
     }
 
     fn current_evidence(

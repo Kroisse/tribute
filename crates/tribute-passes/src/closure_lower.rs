@@ -600,6 +600,17 @@ pub(crate) fn substitute_module_types(
     module: Module,
     substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
 ) {
+    substitute_module_types_keeping_casts(ctx, module, substitute);
+    erase_identity_casts(ctx, module);
+}
+
+/// [`substitute_module_types`] without removing the casts the replacement
+/// turns into identities.
+pub(crate) fn substitute_module_types_keeping_casts(
+    ctx: &mut IrContext,
+    module: Module,
+    substitute: impl FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>,
+) {
     let ops = collect_ops(ctx, module.op());
     let aliases = ctx.type_aliases().to_vec();
     let mut physicalizer = TypeSubstitution::new(ctx, substitute);
@@ -675,7 +686,6 @@ pub(crate) fn substitute_module_types(
     for (block, index, attrs) in block_attribute_updates {
         ctx.block_mut(block).args[index].attrs = attrs;
     }
-    erase_identity_casts(ctx, module);
 }
 
 /// Remove unrealized casts whose source already has the declared type.
@@ -692,7 +702,7 @@ fn erase_identity_casts(ctx: &mut IrContext, module: Module) {
     }
 }
 
-struct TypeSubstitution<'a, F> {
+pub(crate) struct TypeSubstitution<'a, F> {
     ctx: &'a mut IrContext,
     substitute: F,
     cache: HashMap<TypeRef, TypeRef>,
@@ -700,7 +710,7 @@ struct TypeSubstitution<'a, F> {
 }
 
 impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<'a, F> {
-    fn new(ctx: &'a mut IrContext, substitute: F) -> Self {
+    pub(crate) fn new(ctx: &'a mut IrContext, substitute: F) -> Self {
         Self {
             ctx,
             substitute,
@@ -709,7 +719,7 @@ impl<'a, F: FnMut(&mut IrContext, TypeRef) -> Option<TypeRef>> TypeSubstitution<
         }
     }
 
-    fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
+    pub(crate) fn convert_type(&mut self, ty: TypeRef) -> TypeRef {
         if let Some(&converted) = self.cache.get(&ty) {
             return converted;
         }

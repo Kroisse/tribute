@@ -22,19 +22,25 @@ impl Converter<'_> {
 
     pub(super) fn resumption_type(&mut self, input: TypeRef, answer: TypeRef) -> TypeRef {
         let evidence = self.evidence_type();
-        let frame = self.frame_types(answer).reference;
+        let frame = self.frame_type(answer);
         cps_resume_exact_type(self.ctx, evidence, input, frame)
     }
 
     pub(super) fn completion_type(&mut self, value: TypeRef, answer: TypeRef) -> TypeRef {
         let evidence = self.evidence_type();
-        let frame = self.frame_types(answer).reference;
+        let frame = self.frame_type(answer);
         cps_completion_type(self.ctx, evidence, value, frame)
     }
 
     pub(super) fn i32_type(&mut self) -> TypeRef {
         self.ctx
             .intern_type(TypeDataBuilder::new("core", "i32").build())
+    }
+
+    /// The opaque `ability.frame<R>` that callables, completions, and
+    /// resumptions take in the frame position.
+    pub(super) fn frame_type(&mut self, answer: TypeRef) -> TypeRef {
+        self.frame_types(answer).abstract_frame
     }
 
     pub(super) fn frame_types(&mut self, answer: TypeRef) -> FrameTypes {
@@ -54,11 +60,18 @@ impl Converter<'_> {
         let evidence = self.evidence_type();
         let anyref = self.anyref_type();
         let i32 = self.i32_type();
+        let abstract_frame = ability::frame(self.ctx, answer).as_type_ref();
         let dispatch = tribute_core::calling_convention::cps_dispatch_type(
-            self.ctx, evidence, reference, anyref, i32,
+            self.ctx,
+            evidence,
+            abstract_frame,
+            anyref,
+            i32,
         );
         let layout = continuation_frame::layout_type(self.ctx, name, answer, done, dispatch);
         let frame = FrameTypes {
+            answer,
+            abstract_frame,
             reference,
             layout,
             done,
@@ -189,7 +202,7 @@ impl Converter<'_> {
             .map(|(param, attrs)| (self.convert_type(param), self.convert_attr_map(&attrs)))
             .collect();
         let evidence = (self.evidence_type(), AttributeMap::new());
-        let frame = (self.frame_types(result).reference, AttributeMap::new());
+        let frame = (self.frame_type(result), AttributeMap::new());
         let abi = CallableAbi::new(convention, params, (result, result_attrs));
         let params = abi.lowered_params(evidence, frame);
         let result = if convention == CallingConvention::Cps {

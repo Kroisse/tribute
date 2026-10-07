@@ -10,7 +10,7 @@ use trunk_ir::types::{Attribute, AttributeMap, StringRef};
 
 use super::{Frame, Handle, SuffixFrame, is_evidence_type_ref};
 use crate::dialect::tribute_control::{
-    CALLING_CONVENTION_ATTR, CallingConvention, verify_evidence_plan,
+    CALLING_CONVENTION_ATTR, CallingConvention, EvidencePlanSite, verify_evidence_plan,
 };
 
 /// Declared kind of a handled operation.
@@ -213,7 +213,7 @@ fn frame_result(ctx: &IrContext, ty: TypeRef) -> Option<TypeRef> {
 impl trunk_ir::ops::Verify for SuffixFrame {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
         let op = self.op_ref();
-        verify_evidence_plan(ctx, op, false)?;
+        verify_evidence_plan(ctx, op, EvidencePlanSite::Legalized)?;
         let outer = ctx.value_ty(self.outer(ctx));
         let value_type = frame_result(ctx, self.result_ty(ctx))
             .ok_or("ability.suffix_frame must produce an ability.frame")?;
@@ -236,7 +236,7 @@ impl trunk_ir::ops::Verify for SuffixFrame {
 impl trunk_ir::ops::Verify for Handle {
     fn verify(self, ctx: &IrContext) -> Result<(), String> {
         let op = self.op_ref();
-        verify_evidence_plan(ctx, op, true)?;
+        verify_evidence_plan(ctx, op, EvidencePlanSite::Handle)?;
         let Some(Attribute::List(items)) = ctx.op(op).attributes.get("handlers") else {
             return Err("ability.handle requires a handlers list".into());
         };
@@ -468,6 +468,15 @@ mod tests {
         let (reparsed, reparsed_module) = parse(&printed);
         assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
         assert_eq!(errors(&valid_handle()), "");
+    }
+
+    #[test]
+    fn suffix_frame_may_select_the_evidence_a_handle_was_installed_on() {
+        let text = module(
+            ", %k: !completion",
+            "    %frame = ability.suffix_frame %ev, %exit, %k {evidence_plan = [{outer = !state}]} : !frame_nil\n    func.unreachable",
+        );
+        assert_eq!(errors(&text), "");
     }
 
     #[test]
