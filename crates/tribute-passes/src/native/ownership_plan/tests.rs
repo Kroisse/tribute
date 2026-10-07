@@ -1073,6 +1073,12 @@ fn borrowed_projection_proper_tail_transfer_acquires_before_the_owner_dies() {
         moves_owner,
         ActionAnchor::Before(moves_tail)
     ));
+    assert!(has_action(
+        moves,
+        ActionKind::TailTransfer,
+        moves_child,
+        ActionAnchor::Before(moves_tail)
+    ));
     assert_eq!(count(moves, ActionKind::TailTransfer), 2);
     assert_eq!(count(moves, ActionKind::FinalRelease), 0);
 
