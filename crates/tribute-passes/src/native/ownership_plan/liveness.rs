@@ -48,8 +48,9 @@ impl NativeManagedLiveness {
     /// Select liveness for the field-borrow policy without recomputing it.
     pub fn view(&self, elide_proven_field_borrows: bool) -> &BlockLiveness {
         if elide_proven_field_borrows {
-            self.owner_extended
-                .get_or_init(|| compute_liveness(&self.facts, self.facts.projection_owners()))
+            self.owner_extended.get_or_init(|| {
+                compute_liveness(&self.facts, self.facts.borrowable_projection_owners())
+            })
         } else {
             self.conservative
                 .get_or_init(|| compute_liveness(&self.facts, &HashMap::default()))

@@ -219,16 +219,17 @@ The RC implementation is divided into four stages:
 변경하지 않으며 `func_to_clif`와 native type erasure보다 먼저 실행한다.
 
 이 단계의 policy-neutral 사실 계산은 같은 경계의 fallible 분석이 소유한다.
-Module 범위 분석이 function 정의와 검증된 managed nominal layout을, function
-범위 분석이 flat CFG, managed 값, exact alias root, managed projection-owner
-관계와 liveness 입력을 제공한다. 이 사실은 `NativeOwnershipPlanOptions`와
+Module 범위 분석이 function 정의, 검증된 managed nominal layout과
+`adt.struct_set`이 쓰는 layout을, function 범위 분석이 flat CFG, managed 값,
+exact alias root, managed projection-owner 관계, 그중 borrow할 수 있는
+projection과 liveness 입력을 제공한다. 이 사실은 `NativeOwnershipPlanOptions`와
 무관하며 borrow elision과 entry ownership 정책은 사실을 소비하는 planner와
 action planner가 적용한다.
 
 Block별 `defs`, `live_in`, `live_out`은 function ownership facts에 의존하는
 `NativeManagedLiveness` 분석의 두 view가 제공한다. 보수적 view는 managed
-value의 일반 use만 반영하고, owner-extended view는 검증된 managed projection
-borrow의 use를 owner의 use로도 반영한다. `elide_proven_field_borrows`만 view를
+value의 일반 use만 반영하고, owner-extended view는 borrow할 수 있는 managed
+projection의 use를 owner의 use로도 반영한다. `elide_proven_field_borrows`만 view를
 선택하며 borrowed-parameter 정책은 선택에 관여하지 않는다. 각 view의 고정점은
 최초 질의 때만 계산되어 사용하지 않는 고정점 계산을 피하고, action planner는
 선택된 결과를 그대로 소비한다. 런타임 정책 값은 분석 캐시의 identity에
@@ -327,33 +328,34 @@ into control flow and atomic operations by RC lowering.
   and every parameter `release`; this keeps acquisition and release decisions
   under one ownership proof instead of matching generated releases afterward.
 - **Temporary field borrows:** Typed planning은 `adt.struct_get` 또는
-  `adt.variant_get`의 exact declared managed field를 temporary borrow로 분류할 수
-  있다. 변환된 `clif.load` result type이나 address provenance를 ownership
-  evidence로 사용하지 않는다.
+  `adt.variant_get`이 읽은 exact declared managed field를 그 projection의 owner에서
+  파생된 temporary borrow로 분류할 수 있다. Owner는 projection operand의 typed alias
+  root이다. 변환된 `clif.load` result type, address provenance, `core.ptr` operand는
+  ownership evidence가 아니다.
 
-  The load address must resolve directly to an RC-managed owner, optionally
-  through transparent unrealized pointer casts and address calculations. The
-  resolved owner must be an RC-managed value tracked by RC liveness; a raw
-  `core.ptr` derived from `__tribute_alloc` is not sufficient ownership proof.
-  The owner definition must dominate the field load, the field load must
-  dominate every use of its result, and every result use must remain in the
-  same function region. The only initially accepted uses are further field
-  loads through the temporary, pointer comparisons, and stores that use it
-  solely as the destination address. Unrealized pointer casts are transparent
-  only when every use of the cast result satisfies these same rules. Returning
-  or storing the temporary or an alias as a value, passing either to any call
-  or branch, forwarding either as a block argument, capture by a nested region,
-  or any unknown operation prevents elision.
+  파생 borrow는 자신의 ownership unit을 갖지 않는다. 대신 다음 불변식이 성립해야
+  한다: 파생 값의 모든 사용이 끝날 때까지 그 값에 도달하는 owned root가 살아 있고,
+  root에서 파생 값까지의 field 경로가 그동안 바뀌지 않는다.
 
-  The owner's lifetime must also be extended through every accepted use of the
-  temporary. RC liveness therefore treats those uses as uses of the owner before
-  insertion. A temporary is rejected when its uses occur in sibling dominator
-  subtrees, after a join not dominated by its load, on a loop-carried path, or
-  anywhere else that does not establish one dominated, non-escaping lifetime.
-  Nested field loads are considered independently and are eligible only when
-  each loaded owner's lifetime is proven by the same rules. Missing CFG edges,
-  unreachable blocks, malformed regions, or any analysis uncertainty preserve
-  the original retain/release operations.
+  - Nested projection의 owner가 다시 파생 borrow이면 owner 관계를 따라 올라가 만나는
+    첫 owned 값이 root이다. Liveness는 파생 값의 모든 사용을 root의 사용으로도 세므로
+    root의 final release는 마지막 파생 사용 뒤에 온다. 이 규칙은 block 경계와 loop를
+    포함한 CFG 전체의 liveness fixed point에 그대로 적용된다.
+  - 파생 값이 현재 함수의 동적 범위를 벗어나거나 독립된 unit이 필요한 사용에서는 그
+    사용 직전에 unit을 획득한다. `func.return`, block argument로의 전달, proper-tail
+    transfer, aggregate field로의 저장, consumed 매개변수로의 ordinary call이 여기에
+    해당한다. Retained 매개변수로의 ordinary call은 callee가 스스로 unit을 획득하고
+    caller의 root가 호출 동안 살아 있으므로 caller-side 획득이 없다.
+  - Module 안의 어떤 `adt.struct_set`이든 쓰는 layout은 교체 가능한 layout이다.
+    교체 가능한 layout에서 읽은 projection은 borrow하지 않고 projection 직후 자신의
+    unit을 획득한다. 교체는 이전 field 값의 unit을 release하므로, 이 unit 없이는
+    같은 함수의 뒤따르는 쓰기나 호출된 함수의 쓰기가 파생 값을 해제할 수 있다. 쓰는
+    쪽은 cast와 closure environment를 거쳐 같은 객체에 도달할 수 있으므로 판정은
+    특정 SSA 값이 아니라 layout의 nominal identity로 한다.
+
+  이 최적화를 끈 기준 동작은 모든 managed projection이 projection 직후 자신의 unit을
+  획득하는 것이다. Exact typed projection 계약을 만족하지 않는 IR은 borrow로도 기준
+  동작으로도 계획하지 않고 ownership planning 오류로 거부한다.
 - **Constant propagation (planned):** Elide RC for compile-time-known lifetimes
 
 The paired-elimination, borrowed-parameter, and temporary-borrow policies are

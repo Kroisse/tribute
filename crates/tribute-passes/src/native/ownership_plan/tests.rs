@@ -879,6 +879,76 @@ fn borrowed_load_return_acquires_a_transfer_unit() {
     assert_eq!(count(function, ActionKind::FinalRelease), 0);
 }
 
+/// The projection each `@read*` fixture function loads from its box.
+fn box_child_projection(
+    ctx: &IrContext,
+    plan: &NativeOwnershipPlan,
+    name: &'static str,
+) -> (OpRef, ValueRef) {
+    let function = plan.function(&Symbol::new(name)).unwrap();
+    let body = ctx.op_region(function.operation(), 0).unwrap();
+    let entry = ctx.region(body).blocks[0];
+    let get = ctx.block(entry).ops[0];
+    assert!(adt::StructGet::matches(ctx, get));
+    (get, ctx.op_result(get, 0))
+}
+
+#[test]
+fn projection_of_a_written_layout_keeps_its_own_unit() {
+    let (mut ctx, module, plan) = build(
+        r#"core.module @test {
+  !Child = adt.struct<Child(value: core.i32)>
+  !ChildRef = adt.typeref<{name = "Child"}>
+  !Box = adt.struct<Box(child: !ChildRef)>
+  !BoxRef = adt.typeref<{name = "Box"}>
+  !Pair = adt.struct<Pair(child: !ChildRef)>
+  !PairRef = adt.typeref<{name = "Pair"}>
+  func.func @read_then_replace(%owner: !BoxRef, %new: !ChildRef) -> !ChildRef {
+    %old = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+    adt.struct_set %owner, %new {field = 0, type = !Box}
+    func.return %old
+  }
+  func.func @read_only(%owner: !BoxRef) -> !ChildRef {
+    %child = adt.struct_get %owner {field = 0, type = !Box} : !ChildRef
+    func.return %child
+  }
+  func.func @read_unwritten(%owner: !PairRef) -> !ChildRef {
+    %child = adt.struct_get %owner {field = 0, type = !Pair} : !ChildRef
+    func.return %child
+  }
+}"#,
+    );
+    // A writer in the same function, or anywhere else in the module, releases
+    // the previous field value, so neither reader of `Box` may borrow it.
+    for name in ["read_then_replace", "read_only"] {
+        let function = plan.function(&Symbol::new(name)).unwrap();
+        let (get, child) = box_child_projection(&ctx, &plan, name);
+        assert_eq!(count(function, ActionKind::BorrowLoad), 0, "{name}");
+        assert!(
+            function.actions().iter().any(|action| {
+                action.kind == ActionKind::CopyAcquire
+                    && action.value == child
+                    && action.anchor == ActionAnchor::After(get)
+            }),
+            "{name}"
+        );
+    }
+    let unwritten = plan.function(&Symbol::new("read_unwritten")).unwrap();
+    assert_eq!(count(unwritten, ActionKind::BorrowLoad), 1);
+
+    let (get, old) = box_child_projection(&ctx, &plan, "read_then_replace");
+    materialize(&mut ctx, module, &plan).expect("typed RC materialization");
+    let block = ctx.op(get).parent_block.unwrap();
+    let ops = &ctx.block(block).ops;
+    let position = |found: &dyn Fn(OpRef) -> bool| ops.iter().position(|&op| found(op)).unwrap();
+    let acquire = position(&|op| {
+        tribute_ir::dialect::tribute_rt::Retain::matches(&ctx, op) && ctx.op_operands(op) == [old]
+    });
+    let replaced_release =
+        position(&|op| tribute_ir::dialect::tribute_rt::Release::matches(&ctx, op));
+    assert!(position(&|op| op == get) < acquire && acquire < replaced_release);
+}
+
 #[test]
 fn enum_release_leaves_the_size_to_the_descriptor() {
     let (mut ctx, module, plan) = build(
