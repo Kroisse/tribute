@@ -599,4 +599,163 @@ mod tests {
         );
         assert!(lower_continuation_frames(&mut ctx, module).is_err());
     }
+
+    const TYPES: &str = r#"  !marker = adt.struct<_Marker(ability_id: core.i32, prompt_tag: core.i32, tr_dispatch_fn: core.ptr, shadowed: core.ptr, outer: core.ptr), {layout = "evidence_marker"}>
+  !ev = core.array<!marker, {layout = "evidence"}>
+  !state = core.ability_ref<{name = "State"}>
+  !frame = ability.frame<core.i32>
+  !resume = closure.closure<func.func_sig<(!ev, !frame, core.i32) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>
+  !nested = ability.frame<!resume>"#;
+
+    /// Parse a module over `TYPES` whose `@run` has `params` and `body`, and
+    /// register the layouts of `!frame` and `!nested` as the CPS pass does.
+    fn frame_module(params: &str, body: &str) -> (IrContext, Module) {
+        let (mut ctx, module) = parse(&format!(
+            "core.module @m {{\n{TYPES}\n  func.func @run(%ev: !ev{params}) -> core.never {{\n{body}\n  }}\n}}"
+        ));
+        let evidence = ability::evidence_adt_type_ref(&mut ctx);
+        let anyref = tribute_rt::anyref(&mut ctx).as_type_ref();
+        let i32_type =
+            ctx.intern_type(trunk_ir::types::TypeDataBuilder::new("core", "i32").build());
+        let inner = ability::frame(&mut ctx, i32_type).as_type_ref();
+        let resume = tribute_core::calling_convention::cps_resume_exact_type(
+            &mut ctx, evidence, i32_type, inner,
+        );
+        for (index, answer) in [i32_type, resume].into_iter().enumerate() {
+            let name = format!("{}{index}", continuation_frame::NAME_PREFIX);
+            let frame = ability::frame(&mut ctx, answer).as_type_ref();
+            let done = tribute_core::calling_convention::cps_done_type(&mut ctx, answer);
+            let dispatch = tribute_core::calling_convention::cps_dispatch_type(
+                &mut ctx, evidence, frame, anyref, i32_type,
+            );
+            let name_ref = ctx.intern_str(&name);
+            let layout =
+                continuation_frame::layout_type(&mut ctx, name_ref, answer, done, dispatch);
+            ctx.register_type_alias(Symbol::new(&name), layout);
+        }
+        (ctx, module)
+    }
+
+    fn lowered(params: &str, body: &str) -> String {
+        let (mut ctx, module) = frame_module(params, body);
+        lower_continuation_frames(&mut ctx, module).expect("the frames lower");
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!printed.contains("ability.frame"), "{printed}");
+        printed
+    }
+
+    #[test]
+    fn a_perform_dispatches_through_the_frame_with_a_one_shot_resumption() {
+        let printed = lowered(
+            ", %f: !frame, %k: !resume, %arg: core.i32",
+            r#"    ability.perform %ev, %f, %k, %arg {ability_ref = !state, op_name = "set"}"#,
+        );
+        assert!(!printed.contains("ability.perform"), "{printed}");
+        assert_eq!(
+            printed.matches("effect.dispatch_cps").count(),
+            1,
+            "{printed}"
+        );
+        assert!(printed.contains("answer_type = core.i32"), "{printed}");
+        assert!(printed.contains("__tribute_one_shot_state_0"), "{printed}");
+        // The wrapper marks the state consumed before it enters the raw
+        // resumption, and traps when it is already consumed.
+        assert_eq!(printed.matches("adt.struct_set").count(), 1, "{printed}");
+        assert_eq!(printed.matches("func.unreachable").count(), 1, "{printed}");
+        assert_eq!(
+            printed.matches("func.tail_call_indirect").count(),
+            1,
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn an_abort_dispatches_with_a_resumption_that_captures_nothing() {
+        let (mut ctx, module) = frame_module(
+            ", %f: !frame, %arg: core.i32",
+            r#"    ability.abort %ev, %f, %arg {ability_ref = !state, op_name = "fail"}"#,
+        );
+        lower_continuation_frames(&mut ctx, module).unwrap();
+        let printed = trunk_ir::printer::print_module(&ctx, module.op());
+        assert!(!printed.contains("ability.abort"), "{printed}");
+        assert!(!printed.contains("one_shot_state"), "{printed}");
+        let mut dispatches = Vec::new();
+        let _ = walk_op::<()>(&ctx, module.op(), &mut |op| {
+            dispatches.extend(effect::DispatchCps::from_op(&ctx, op).ok());
+            ControlFlow::Continue(WalkAction::Advance)
+        });
+        let [dispatch] = dispatches[..] else {
+            panic!("expected one effect.dispatch_cps: {printed}");
+        };
+        let trunk_ir::ValueDef::OpResult(reject, _) = ctx.value_def(dispatch.resume(&ctx)) else {
+            panic!("the resumption is built in place: {printed}");
+        };
+        assert!(ctx.op_operands(reject).is_empty(), "{printed}");
+        let body = ctx.region(ctx.op_region(reject, 0).unwrap()).blocks[0];
+        assert!(func::Unreachable::matches(&ctx, ctx.block(body).ops[0]));
+    }
+
+    #[test]
+    fn a_frame_whose_answer_mentions_a_frame_lowers_both() {
+        let printed = lowered(
+            ", %outer: !nested, %k: !resume",
+            "    ability.exit %outer, %k",
+        );
+        assert!(!printed.contains("ability.exit"), "{printed}");
+        assert_eq!(
+            printed.matches("func.tail_call_indirect").count(),
+            1,
+            "{printed}"
+        );
+        // The outer layout is named by its answer after the inner frame in
+        // it became a reference to the inner layout.
+        assert!(
+            printed.contains(&format!("{}1", continuation_frame::NAME_PREFIX)),
+            "{printed}"
+        );
+    }
+
+    #[test]
+    fn frame_operations_over_an_unregistered_frame_are_rejected() {
+        const OTHER: &str = "ability.frame<core.i64>";
+        let cases = [
+            (
+                format!(", %f: {OTHER}, %v: core.i64"),
+                "    ability.exit %f, %v".to_string(),
+            ),
+            (
+                format!(", %f: {OTHER}, %arg: core.i32"),
+                r#"    ability.abort %ev, %f, %arg {ability_ref = !state, op_name = "fail"}"#
+                    .to_string(),
+            ),
+        ];
+        for (params, body) in cases {
+            let (mut ctx, module) = frame_module(&params, &body);
+            assert!(
+                lower_continuation_frames(&mut ctx, module).is_err(),
+                "{body}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_perform_without_an_exact_resumption_is_rejected() {
+        let (mut ctx, module) = frame_module(
+            ", %f: !frame, %k: core.i32",
+            r#"    ability.perform %ev, %f, %k {ability_ref = !state, op_name = "get"}"#,
+        );
+        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+    }
+
+    #[test]
+    fn a_handle_with_fewer_handlers_than_arms_is_rejected() {
+        let (mut ctx, module) = frame_module(
+            ", %exit: !frame, %done: !resume",
+            r#"    ability.handle %ev, %exit, %done, %done {handlers = []} {
+      ^body(%inner: !ev, %frame: !frame):
+        func.unreachable
+    }"#,
+        );
+        assert!(lower_continuation_frames(&mut ctx, module).is_err());
+    }
 }

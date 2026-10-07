@@ -487,6 +487,56 @@ mod tests {
     }
 
     #[test]
+    fn perform_takes_the_frame_and_an_exact_resumption() {
+        let perform = |params: &str, resumption: &str| {
+            module(
+                params,
+                &format!(
+                    r#"    ability.perform %ev, %exit, {resumption}, %arg {{ability_ref = !state, op_name = "set"}}"#
+                ),
+            )
+        };
+        let valid = perform(", %k: !resume, %arg: core.i32", "%k");
+        let (ctx, parsed) = parse(&valid);
+        let printed = print_module(&ctx, parsed.op());
+        let (reparsed, reparsed_module) = parse(&printed);
+        assert_eq!(printed, print_module(&reparsed, reparsed_module.op()));
+        assert_eq!(errors(&valid), "");
+
+        const NEVER: &str = "closure.closure<func.func_sig<(!ev, !frame_i32, core.never) -> core.never>, {tribute.calling_convention = 2, tribute.closure_environment_index = 0}>";
+        let cases = [
+            (
+                "resumption into another frame",
+                perform(", %other: !frame_nil, %k: !resume, %arg: core.i32", "%k")
+                    .replace("%ev, %exit, %k", "%ev, %other, %k"),
+                "must take the evidence and the frame of the answer first",
+            ),
+            (
+                "direct resumption",
+                perform(", %k: !fn_arm, %arg: core.i32", "%k"),
+                "`resumption`: expected CpsClosure",
+            ),
+            (
+                "resumption of an operation that returns never",
+                perform(&format!(", %k: {NEVER}, %arg: core.i32"), "%k"),
+                "must take one operation result",
+            ),
+            (
+                "resumption with resume tokens",
+                perform(", %k: !op_arm, %arg: core.i32", "%k"),
+                "must take one operation result",
+            ),
+        ];
+        for (name, text, expected) in cases {
+            let error = errors(&text);
+            assert!(
+                error.contains(expected),
+                "{name}: expected {expected:?}, got {error:?}"
+            );
+        }
+    }
+
+    #[test]
     fn suffix_frame_may_select_the_evidence_a_handle_was_installed_on() {
         let text = module(
             ", %k: !completion",
