@@ -371,14 +371,15 @@ pub unsafe fn dealloc(ptr: *mut u8, size: usize) {
         unsafe { abort() }
     };
 
-    let base = unsafe { ptr.sub(REDZONE_SIZE) };
-
-    if let Err(error) = mark_freed(base as usize) {
+    // `ptr` may not point into a block of this allocator, so its base is
+    // looked up as an integer before any pointer is derived from it.
+    if let Err(error) = mark_freed((ptr as usize).wrapping_sub(REDZONE_SIZE)) {
         report(format_args!(
             "==ERROR: TributeASan: {error} on address {:#x}\n",
             ptr as usize
         ));
     }
+    let base = unsafe { ptr.sub(REDZONE_SIZE) };
 
     // Check red zone integrity
     unsafe { check_redzone(base, REDZONE_SIZE, "left") };
