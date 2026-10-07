@@ -3,38 +3,58 @@
 
 use super::*;
 
+impl FrameState {
+    pub(super) fn fresh_helper(&mut self, prefix: &str) -> Symbol {
+        let index = self.helper_index;
+        self.helper_index += 1;
+        helper_symbol(prefix, index)
+    }
+
+    /// The opaque `ability.frame<R>` that callables, completions, and
+    /// resumptions take in the frame position.
+    pub(super) fn frame_type(&mut self, ctx: &mut IrContext, answer: TypeRef) -> TypeRef {
+        self.frame_types(ctx, answer);
+        ability::frame(ctx, answer).as_type_ref()
+    }
+
+    /// The layout `lower_continuation_frames` gives `ability.frame<R>`,
+    /// registered on first use.
+    pub(super) fn frame_types(&mut self, ctx: &mut IrContext, answer: TypeRef) -> FrameTypes {
+        if let Some(frame) = self.layouts.get(&answer).copied() {
+            return frame;
+        }
+        // Number frames in order of first use. A `TypeRef` is an interner
+        // index, which changes with the types interned before this pass.
+        let name_text = format!("{}{}", continuation_frame::NAME_PREFIX, self.layouts.len());
+        let name = ctx.intern_str(&name_text);
+        let reference = continuation_frame::ref_type(ctx, name, answer);
+        let done = cps_done_type(ctx, answer);
+        let evidence = ability::evidence_adt_type_ref(ctx);
+        let anyref = tribute_rt::anyref(ctx).as_type_ref();
+        let i32 = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
+        let abstract_frame = ability::frame(ctx, answer).as_type_ref();
+        let dispatch = tribute_core::calling_convention::cps_dispatch_type(
+            ctx,
+            evidence,
+            abstract_frame,
+            anyref,
+            i32,
+        );
+        let layout = continuation_frame::layout_type(ctx, name, answer, done, dispatch);
+        let frame = FrameTypes {
+            answer,
+            reference,
+            layout,
+            done,
+            dispatch,
+        };
+        self.layouts.insert(answer, frame);
+        self.layout_aliases.push((Symbol::new(&name_text), layout));
+        frame
+    }
+}
+
 impl Converter<'_> {
-    pub(super) fn emit_cps_tail_call_indirect(
-        &mut self,
-        block: BlockRef,
-        location: Location,
-        callee: ValueRef,
-        args: impl IntoIterator<Item = ValueRef>,
-    ) -> Result<OpRef, TributeControlToCpsError> {
-        emit_cps_tail_call_indirect(self.ctx, block, location, callee, args)
-    }
-
-    pub(super) fn unpack_frame(
-        &mut self,
-        block: BlockRef,
-        location: Location,
-        answer: TypeRef,
-        frame_value: ValueRef,
-    ) -> (ValueRef, ValueRef) {
-        let frame = self.frame_types(answer);
-        unpack_frame(self.ctx, block, location, &frame, frame_value)
-    }
-
-    pub(super) fn closure_over(
-        &mut self,
-        location: Location,
-        region: RegionRef,
-        closure_type: TypeRef,
-        convention: CallingConvention,
-    ) -> closure::Lambda {
-        closure_over(self.ctx, location, region, closure_type, convention)
-    }
-
     /// Build the frame a suffix continuation is entered through. `plan` is
     /// the `evidence_plan` that selects the evidence of the computation the
     /// frame is passed to.
@@ -66,7 +86,7 @@ impl Converter<'_> {
             self.ctx.push_op(block, typed.op_ref());
             typed.result(self.ctx)
         };
-        let frame_type = self.frame_type(value_type);
+        let frame_type = self.frames.frame_type(self.ctx, value_type);
         let frame = ability::SuffixFrame::operands(evidence, outer, suffix)
             .results(frame_type)
             .build(self.ctx, location);
@@ -117,7 +137,7 @@ impl Converter<'_> {
                     "zero-result suffix has no verified ContinuationFrame",
                 )
             })?;
-            self.emit_cps_tail_call_indirect(block, location, void_exit, [evidence, frame])?;
+            emit_cps_tail_call_indirect(self.ctx, block, location, void_exit, [evidence, frame])?;
             return Ok(());
         }
         let exit_k = flow.exit_k.ok_or_else(|| {
@@ -126,8 +146,15 @@ impl Converter<'_> {
                 "structured region has no verified exit continuation",
             )
         })?;
-        let (done, _) = self.unpack_frame(block, location, flow.answer_type, exit_k);
-        self.emit_cps_tail_call_indirect(block, location, done, std::iter::empty::<ValueRef>())?;
+        let frame = self.frames.frame_types(self.ctx, flow.answer_type);
+        let (done, _) = unpack_frame(self.ctx, block, location, &frame, exit_k);
+        emit_cps_tail_call_indirect(
+            self.ctx,
+            block,
+            location,
+            done,
+            std::iter::empty::<ValueRef>(),
+        )?;
         Ok(())
     }
 
@@ -139,8 +166,8 @@ impl Converter<'_> {
         location: Location,
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(flow.answer_type);
-        let block = self.make_block(location, &[evidence_type, frame_type]);
+        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type]);
         let mut suffix_mapping = mapping.clone();
         let suffix_flow = Flow {
             evidence: Some(self.ctx.block_args(block)[0]),
@@ -156,11 +183,17 @@ impl Converter<'_> {
             &mut suffix_mapping,
             &suffix_flow,
         )?;
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let never = self.never_type();
         let function = func::func_sig(self.ctx, [evidence_type, frame_type], [never]).as_type_ref();
         let closure_type = self.generated_continuation_type(function);
-        let lambda = self.closure_over(location, region, closure_type, CallingConvention::Cps);
+        let lambda = closure_over(
+            self.ctx,
+            location,
+            region,
+            closure_type,
+            CallingConvention::Cps,
+        );
         Ok(lambda.result(self.ctx))
     }
 
@@ -175,8 +208,12 @@ impl Converter<'_> {
     ) -> Result<ValueRef, TributeControlToCpsError> {
         let result_type = self.convert_type(result_type);
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(flow.answer_type);
-        let block = self.make_block(location, &[evidence_type, frame_type, result_type]);
+        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let block = make_block(
+            self.ctx,
+            location,
+            &[evidence_type, frame_type, result_type],
+        );
         let mut body_mapping = mapping.clone();
         body_mapping.insert(source_result, self.ctx.block_args(block)[2]);
         let suffix_flow = Flow {
@@ -192,9 +229,15 @@ impl Converter<'_> {
             &mut body_mapping,
             &suffix_flow,
         )?;
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let closure_ty = self.completion_type(result_type, flow.answer_type);
-        let lambda = self.closure_over(location, region, closure_ty, CallingConvention::Cps);
+        let lambda = closure_over(
+            self.ctx,
+            location,
+            region,
+            closure_ty,
+            CallingConvention::Cps,
+        );
         Ok(lambda.result(self.ctx))
     }
 

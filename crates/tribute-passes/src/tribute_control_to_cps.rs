@@ -93,8 +93,14 @@ struct Converter<'a> {
     /// Callables by root-qualified name across the whole module tree.
     funcs: HashMap<SymbolPath, CallableInfo>,
     converted_types: HashMap<TypeRef, TypeRef>,
-    frames: HashMap<TypeRef, FrameTypes>,
-    frame_layout_aliases: Vec<(Symbol, TypeRef)>,
+    frames: FrameState,
+}
+
+/// The frame layouts and helper names one conversion has allocated.
+#[derive(Default)]
+struct FrameState {
+    layouts: HashMap<TypeRef, FrameTypes>,
+    layout_aliases: Vec<(Symbol, TypeRef)>,
     helper_index: u32,
 }
 
@@ -102,9 +108,6 @@ struct Converter<'a> {
 pub(crate) struct FrameTypes {
     /// The answer type `R` of the frame.
     pub(crate) answer: TypeRef,
-    /// `ability.frame<R>`, the type frame values have until
-    /// `lower_continuation_frames` selects their layout.
-    pub(crate) abstract_frame: TypeRef,
     pub(crate) reference: TypeRef,
     pub(crate) layout: TypeRef,
     pub(crate) done: TypeRef,
@@ -186,9 +189,7 @@ impl<'a> Converter<'a> {
             module_block,
             funcs,
             converted_types: HashMap::default(),
-            frames: HashMap::default(),
-            frame_layout_aliases: Vec::new(),
-            helper_index: 0,
+            frames: FrameState::default(),
         }
     }
 
@@ -207,20 +208,6 @@ impl<'a> Converter<'a> {
             Some(self.ctx.op(source).location),
             message,
         )
-    }
-
-    fn fresh_helper(&mut self, prefix: &str) -> Symbol {
-        let index = self.helper_index;
-        self.helper_index += 1;
-        helper_symbol(prefix, index)
-    }
-
-    fn make_block(&mut self, location: Location, types: &[TypeRef]) -> BlockRef {
-        make_block(self.ctx, location, types)
-    }
-
-    fn single_block_region(&mut self, location: Location, block: BlockRef) -> RegionRef {
-        single_block_region(self.ctx, location, block)
     }
 
     fn current_evidence(
@@ -482,7 +469,7 @@ pub fn tribute_control_to_cps(
                 .iter()
                 .map(|(name, ty)| (name.clone(), converter.convert_type(*ty))),
         );
-        converted_aliases.extend(converter.frame_layout_aliases.iter().cloned());
+        converted_aliases.extend(converter.frames.layout_aliases.iter().cloned());
     }
     let new_region = ctx.create_region(RegionData {
         location: ctx.region(source_region).location,

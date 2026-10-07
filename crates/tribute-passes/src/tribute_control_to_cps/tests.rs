@@ -79,8 +79,14 @@ fn frame_names_do_not_depend_on_type_interning_order() {
         });
         let mut converter = Converter::new(&mut ctx, block, HashMap::default());
         answers.map(|answer| {
-            let frame = converter.frame_types(answer);
-            assert_eq!(converter.frame_types(answer).reference, frame.reference);
+            let frame = converter.frames.frame_types(converter.ctx, answer);
+            assert_eq!(
+                converter
+                    .frames
+                    .frame_types(converter.ctx, answer)
+                    .reference,
+                frame.reference
+            );
             tribute_ir::dialect::adt::nominal_name(converter.ctx, frame.reference)
                 .expect("frame reference is nominal")
                 .to_owned()
@@ -1635,16 +1641,10 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
         .results(raw_type)
         .build(&mut ctx, location);
     let before = ctx.block(module_block).ops.clone();
-    let mut converter = Converter::new(&mut ctx, module_block, HashMap::default());
-
-    let error = converter
-        .emit_cps_tail_call_indirect(
-            module_block,
-            location,
-            raw.result(converter.ctx),
-            std::iter::empty(),
-        )
-        .unwrap_err();
+    let callee = raw.result(&ctx);
+    let error =
+        emit_cps_tail_call_indirect(&mut ctx, module_block, location, callee, std::iter::empty())
+            .unwrap_err();
 
     assert!(
         error
@@ -1652,10 +1652,7 @@ fn cps_indirect_tail_without_a_provenance_bearing_closure_fails_before_insertion
             .contains("no exact provenance-bearing closure contract"),
         "{error}"
     );
-    assert_eq!(
-        converter.ctx.block(module_block).ops.as_slice(),
-        before.as_slice()
-    );
+    assert_eq!(ctx.block(module_block).ops.as_slice(), before.as_slice());
 }
 
 #[test]

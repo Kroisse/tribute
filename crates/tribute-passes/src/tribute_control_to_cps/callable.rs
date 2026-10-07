@@ -23,14 +23,14 @@ impl Converter<'_> {
             .map(|ty| self.convert_type(ty))
             .collect();
         let evidence = self.evidence_type();
-        let frame = self.frame_type(result);
+        let frame = self.frames.frame_type(self.ctx, result);
         let abi = CallableAbi::new(convention, source_param_types, result);
         let params = abi.lowered_params(evidence, frame);
         let body_source = self.ctx.op_region(source, 0).ok_or_else(|| {
             self.malformed_source(source, "tribute_control.lambda requires a body region")
         })?;
         let entry_source = self.ctx.region(body_source).blocks[0];
-        let block = self.make_block(location, &params);
+        let block = make_block(self.ctx, location, &params);
         let mut body_mapping = mapping.clone();
         let offset = abi.source_param_offset();
         for (old, new) in self
@@ -65,7 +65,7 @@ impl Converter<'_> {
             &mut body_mapping,
             &flow,
         )?;
-        let body = self.single_block_region(location, block);
+        let body = single_block_region(self.ctx, location, block);
         let captures: Vec<_> = self
             .ctx
             .op_operands(source)
@@ -127,8 +127,6 @@ impl Converter<'_> {
             .current_func(target_symbol)
             .expect("pre-CPS validation resolved func_ref target in this module");
         let result_logical_ty = self.ctx.op_result_types(source)[0];
-        let result_callable = tribute_control::FuncSig::from_type_ref(self.ctx, result_logical_ty)
-            .expect("pre-CPS validation checked func_ref result type");
         let result_convention = tribute_control::func_sig_convention(self.ctx, result_logical_ty)
             .map(convert_convention)
             .expect("pre-CPS validation checked func_ref convention");
@@ -137,7 +135,6 @@ impl Converter<'_> {
                 || result_convention.needs_continuation_frame(),
             "pre-CPS validation rejects a weaker func_ref result convention"
         );
-        let result = self.convert_type(result_callable.result(self.ctx));
         // The adapter is the closure's callable with the environment
         // interposed, so both share parameter attributes and metadata.
         let closure_ty = self.convert_type(result_logical_ty);
@@ -155,7 +152,7 @@ impl Converter<'_> {
         });
         let physical_params = adapter.inputs(self.ctx).to_vec();
         let adapter_ty = adapter.as_type_ref();
-        let block = self.make_block(location, &physical_params);
+        let block = make_block(self.ctx, location, &physical_params);
         let args = self.ctx.block_args(block).to_vec();
         let evidence_offset = usize::from(result_convention.needs_evidence());
         // The environment is interposed immediately after optional evidence,
@@ -187,16 +184,16 @@ impl Converter<'_> {
             set_calling_convention(self.ctx, call.op_ref(), target.convention);
             self.ctx.push_op(block, call.op_ref());
             if result_convention == CallingConvention::Cps {
-                let frame = args[frame_offset];
-                let (done_k, _) = self.unpack_frame(block, location, result, frame);
-                self.emit_cps_tail_call_indirect(block, location, done_k, [call.result(self.ctx)])?;
+                let exit = ability::Exit::operands(args[frame_offset], call.result(self.ctx))
+                    .build(self.ctx, location);
+                self.ctx.push_op(block, exit.op_ref());
             } else {
                 let ret = func::Return::operands([call.result(self.ctx)]).build(self.ctx, location);
                 self.ctx.push_op(block, ret.op_ref());
             }
         }
-        let region = self.single_block_region(location, block);
-        let adapter_symbol = self.fresh_helper("func_ref_adapter");
+        let region = single_block_region(self.ctx, location, block);
+        let adapter_symbol = self.frames.fresh_helper("func_ref_adapter");
         let adapter = func::Func::operands()
             .sym_name(self.ctx.intern_symbol_text(&adapter_symbol))
             .r#type(adapter_ty)
@@ -286,9 +283,9 @@ impl Converter<'_> {
             .collect();
         let abi = CallableAbi::new(info.convention, source_params, source_result);
         let evidence_ty = self.evidence_type();
-        let frame_ty = self.frame_type(source_result);
+        let frame_ty = self.frames.frame_type(self.ctx, source_result);
         let params = abi.lowered_params(evidence_ty, frame_ty);
-        let block = self.make_block(location, &params);
+        let block = make_block(self.ctx, location, &params);
         let mut mapping = HashMap::default();
         for (old, new) in self.ctx.block_args(source_block).to_vec().into_iter().zip(
             self.ctx.block_args(block)[abi.source_param_offset()..]
@@ -322,7 +319,7 @@ impl Converter<'_> {
             &mut mapping,
             &flow,
         )?;
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let function = func::Func::operands()
             .sym_name(self.ctx.intern_symbol_text(&symbol))
             .r#type(physical_type)
@@ -426,7 +423,7 @@ impl Converter<'_> {
                     .iter()
                     .map(|arg| mapping.get(arg).copied().unwrap_or(*arg)),
             );
-            let transfer = self.emit_cps_tail_call_indirect(block, location, callee, args)?;
+            let transfer = emit_cps_tail_call_indirect(self.ctx, block, location, callee, args)?;
             carry_evidence_plan(self.ctx, source, transfer);
             return Ok(ControlFlow::Break(()));
         }

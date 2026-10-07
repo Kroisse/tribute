@@ -15,8 +15,8 @@ impl Converter<'_> {
         let source_arg = self.ctx.block_args(source_block)[0];
         let arg_type = self.convert_type(self.ctx.value_ty(source_arg));
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(flow.answer_type);
-        let block = self.make_block(location, &[evidence_type, frame_type, arg_type]);
+        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type, arg_type]);
         let mut body_mapping = mapping.clone();
         body_mapping.insert(source_arg, self.ctx.block_args(block)[2]);
         let completion_flow = Flow {
@@ -36,9 +36,15 @@ impl Converter<'_> {
             &mut body_mapping,
             &completion_flow,
         )?;
-        let body = self.single_block_region(location, block);
+        let body = single_block_region(self.ctx, location, block);
         let closure_type = self.completion_type(arg_type, flow.answer_type);
-        let lambda = self.closure_over(location, body, closure_type, CallingConvention::Cps);
+        let lambda = closure_over(
+            self.ctx,
+            location,
+            body,
+            closure_type,
+            CallingConvention::Cps,
+        );
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -53,8 +59,8 @@ impl Converter<'_> {
     ) -> Result<(OpRef, ValueRef), TributeControlToCpsError> {
         let input_type = self.convert_type(input_type);
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(flow.answer_type);
-        let block = self.make_block(location, &[evidence_type, frame_type, input_type]);
+        let frame_type = self.frames.frame_type(self.ctx, flow.answer_type);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type, input_type]);
         let resume_evidence = self.ctx.block_args(block)[0];
         let resume_frame = self.ctx.block_args(block)[1];
         let resume_input = self.ctx.block_args(block)[2];
@@ -74,9 +80,15 @@ impl Converter<'_> {
             &mut body_mapping,
             &suffix_flow,
         )?;
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let closure_type = self.resumption_type(input_type, flow.answer_type);
-        let lambda = self.closure_over(location, region, closure_type, CallingConvention::Cps);
+        let lambda = closure_over(
+            self.ctx,
+            location,
+            region,
+            closure_type,
+            CallingConvention::Cps,
+        );
         Ok((lambda.op_ref(), lambda.result(self.ctx)))
     }
 
@@ -90,7 +102,7 @@ impl Converter<'_> {
         let i1_type = self
             .ctx
             .intern_type(TypeDataBuilder::new("core", "i1").build());
-        let state_name = self.fresh_helper("one_shot_state");
+        let state_name = self.frames.fresh_helper("one_shot_state");
         let state_name = self.ctx.intern_symbol_text(&state_name);
         let state_type = adt::struct_type(
             self.ctx,
@@ -109,12 +121,12 @@ impl Converter<'_> {
             .build(self.ctx, location);
 
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(answer_type);
+        let frame_type = self.frames.frame_type(self.ctx, answer_type);
         let anyref = self.anyref_type();
         // The dispatcher ABI is existential only at this boundary. Keep the
         // captured continuation exact, recover this operation's declared input,
         // then transfer in proper tail position.
-        let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type, anyref]);
         let args = self.ctx.block_args(block).to_vec();
         let input = if type_is(self.ctx, input_type, "core", "nil") {
             // Nil has no physical payload: its exact resumption receives the
@@ -145,12 +157,12 @@ impl Converter<'_> {
             .build(self.ctx, location);
         self.ctx.push_op(block, consumed.op_ref());
 
-        let reject_block = self.make_block(location, &[]);
+        let reject_block = make_block(self.ctx, location, &[]);
         let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(reject_block, unreachable.op_ref());
-        let reject_region = self.single_block_region(location, reject_block);
+        let reject_region = single_block_region(self.ctx, location, reject_block);
 
-        let enter_block = self.make_block(location, &[]);
+        let enter_block = make_block(self.ctx, location, &[]);
         let consumed_true = arith::Const::operands()
             .value(Attribute::Int(1))
             .results(i1_type)
@@ -161,13 +173,14 @@ impl Converter<'_> {
             .field(0)
             .build(self.ctx, location);
         self.ctx.push_op(enter_block, mark.op_ref());
-        self.emit_cps_tail_call_indirect(
+        emit_cps_tail_call_indirect(
+            self.ctx,
             enter_block,
             location,
             raw_continuation,
             [args[0], args[1], input],
         )?;
-        let enter_region = self.single_block_region(location, enter_block);
+        let enter_region = single_block_region(self.ctx, location, enter_block);
 
         let never = self.never_type();
         let guard = scf::If::operands(consumed.result(self.ctx))
@@ -175,14 +188,20 @@ impl Converter<'_> {
             .regions(reject_region, enter_region)
             .build(self.ctx, location);
         self.ctx.push_op(block, guard.op_ref());
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let closure_type = tribute_core::calling_convention::cps_resume_type(
             self.ctx,
             evidence_type,
             frame_type,
             anyref,
         );
-        let wrapper = self.closure_over(location, region, closure_type, CallingConvention::Cps);
+        let wrapper = closure_over(
+            self.ctx,
+            location,
+            region,
+            closure_type,
+            CallingConvention::Cps,
+        );
         Ok((
             vec![not_consumed.op_ref(), state.op_ref(), wrapper.op_ref()],
             wrapper.result(self.ctx),
@@ -195,12 +214,12 @@ impl Converter<'_> {
         location: Location,
     ) -> (OpRef, ValueRef) {
         let evidence_type = self.evidence_type();
-        let frame_type = self.frame_type(answer_type);
+        let frame_type = self.frames.frame_type(self.ctx, answer_type);
         let anyref = self.anyref_type();
-        let block = self.make_block(location, &[evidence_type, frame_type, anyref]);
+        let block = make_block(self.ctx, location, &[evidence_type, frame_type, anyref]);
         let unreachable = func::Unreachable::operands().build(self.ctx, location);
         self.ctx.push_op(block, unreachable.op_ref());
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let closure_type = cps_resume_type(self.ctx, evidence_type, frame_type, anyref);
         let lambda = closure::Lambda::operands(std::iter::empty::<ValueRef>())
             .results(closure_type)
@@ -272,7 +291,8 @@ impl Converter<'_> {
         })?;
         // The frame's dispatcher is the dispatcher of the nearest
         // handle layer as it is installed now.
-        let (_, dispatch) = self.unpack_frame(block, location, flow.answer_type, frame);
+        let frame_types = self.frames.frame_types(self.ctx, flow.answer_type);
+        let (_, dispatch) = unpack_frame(self.ctx, block, location, &frame_types, frame);
         let perform = ability::Perform::operands(evidence, dispatch, continuation, args)
             .ability_ref(ability_ref)
             .op_name(op_name)
@@ -330,7 +350,8 @@ impl Converter<'_> {
         let value = mapping.get(&value_source).copied().unwrap_or(value_source);
         let resume_frame =
             self.push_suffix_frame(source, rest, block, mapping, flow, plan.clone())?;
-        let transfer = self.emit_cps_tail_call_indirect(
+        let transfer = emit_cps_tail_call_indirect(
+            self.ctx,
             block,
             location,
             token,
@@ -395,14 +416,14 @@ impl Converter<'_> {
         // resumes from a lambda.
         let mut params = vec![evidence_type];
         if general {
-            params.push(self.frame_type(handle_answer));
+            params.push(self.frames.frame_type(self.ctx, handle_answer));
         }
         let source_offset = params.len();
         params.extend_from_slice(&converted_args);
         if has_resume_token {
             params.push(*converted_args.last().expect("resumptive arm has a token"));
         }
-        let block = self.make_block(location, &params);
+        let block = make_block(self.ctx, location, &params);
         let block_args = self.ctx.block_args(block).to_vec();
         let mut mapping = outer_mapping.clone();
         for (old, new) in source_args
@@ -436,7 +457,7 @@ impl Converter<'_> {
             &mut mapping,
             &flow,
         )?;
-        let region = self.single_block_region(location, block);
+        let region = single_block_region(self.ctx, location, block);
         let result = if convention == CallingConvention::Cps {
             self.never_type()
         } else {
@@ -444,7 +465,7 @@ impl Converter<'_> {
         };
         let function = func::func_sig(self.ctx, params, [result]).as_type_ref();
         let closure_type = physical_closure_type(self.ctx, function, convention);
-        let lambda = self.closure_over(location, region, closure_type, convention);
+        let lambda = closure_over(self.ctx, location, region, closure_type, convention);
         let binding = ability::HandlerBinding {
             ability_ref,
             op_name,
@@ -520,8 +541,8 @@ impl Converter<'_> {
         let outer_evidence = self.current_evidence(source, flow)?;
 
         let evidence_type = self.evidence_type();
-        let body_frame_type = self.frame_type(completion_input);
-        let body_block = self.make_block(location, &[evidence_type, body_frame_type]);
+        let body_frame_type = self.frames.frame_type(self.ctx, completion_input);
+        let body_block = make_block(self.ctx, location, &[evidence_type, body_frame_type]);
         let extended_evidence = self.ctx.block_args(body_block)[0];
         let body_frame = self.ctx.block_args(body_block)[1];
         let mut body_mapping = mapping.clone();
@@ -573,7 +594,7 @@ impl Converter<'_> {
             &mut body_mapping,
             &body_flow,
         )?;
-        let body_region = self.single_block_region(location, body_block);
+        let body_region = single_block_region(self.ctx, location, body_block);
         let handle = ability::Handle::operands(outer_evidence, handle_frame, completion_k, arms)
             .handlers(handlers)
             .regions(body_region)

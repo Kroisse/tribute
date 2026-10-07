@@ -146,14 +146,7 @@ pub(crate) fn pack_frame(
         .results(frame.reference)
         .build(ctx, location);
     ctx.push_op(block, packed.op_ref());
-    if frame.abstract_frame == frame.reference {
-        return packed.result(ctx);
-    }
-    let opaque = core::UnrealizedConversionCast::operands(packed.result(ctx))
-        .results(frame.abstract_frame)
-        .build(ctx, location);
-    ctx.push_op(block, opaque.op_ref());
-    opaque.result(ctx)
+    packed.result(ctx)
 }
 
 pub(crate) fn build_done_adapter(
@@ -199,11 +192,7 @@ pub(crate) fn build_suffix_rebound(
     let LayerFrames { value, boundary } = *frames;
     let evidence_type = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
-    let block = make_block(
-        ctx,
-        location,
-        &[evidence_type, boundary.abstract_frame, anyref],
-    );
+    let block = make_block(ctx, location, &[evidence_type, boundary.reference, anyref]);
     let args = ctx.block_args(block).to_vec();
     let (done_op, done) =
         build_done_adapter(ctx, value_type, completion, args[0], args[1], location)?;
@@ -232,7 +221,7 @@ pub(crate) fn finish_rebound(
     let evidence_type = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
     let region = single_block_region(ctx, location, block);
-    let resume_type = cps_resume_type(ctx, evidence_type, boundary.abstract_frame, anyref);
+    let resume_type = cps_resume_type(ctx, evidence_type, boundary.reference, anyref);
     let resume = closure_over(ctx, location, region, resume_type, CallingConvention::Cps);
     (resume.op_ref(), resume.result(ctx))
 }
@@ -250,13 +239,12 @@ pub(crate) fn build_dispatch_adapter_factory(
     let evidence_type = ability::evidence_adt_type_ref(ctx);
     let anyref = tribute_rt::anyref(ctx).as_type_ref();
     let i32_type = ctx.intern_type(TypeDataBuilder::new("core", "i32").build());
-    let completion_type =
-        cps_completion_type(ctx, evidence_type, value.answer, boundary.abstract_frame);
+    let completion_type = cps_completion_type(ctx, evidence_type, value.answer, boundary.reference);
     let factory_type =
         func::func_sig(ctx, [completion_type, boundary.dispatch], [value.dispatch]).as_type_ref();
     let factory_block = make_block(ctx, location, &[completion_type, boundary.dispatch]);
     let factory_args = ctx.block_args(factory_block).to_vec();
-    let resume_type = cps_resume_type(ctx, evidence_type, value.abstract_frame, anyref);
+    let resume_type = cps_resume_type(ctx, evidence_type, value.reference, anyref);
     let dispatch_block = make_block(
         ctx,
         location,

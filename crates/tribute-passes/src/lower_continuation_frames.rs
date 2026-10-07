@@ -155,7 +155,7 @@ impl ExpandFrameOperations {
             build_dispatch_adapter_factory(ctx, location, symbol.clone(), &frames, plan).ok()?;
         let evidence_type = ctx.value_ty(evidence);
         let completion_type =
-            cps_completion_type(ctx, evidence_type, value.answer, boundary.abstract_frame);
+            cps_completion_type(ctx, evidence_type, value.answer, boundary.reference);
         let completion = core::UnrealizedConversionCast::operands(continuation)
             .results(completion_type)
             .build(ctx, location);
@@ -389,7 +389,6 @@ fn frame_types(
             answer,
             FrameTypes {
                 answer,
-                abstract_frame: reference,
                 reference,
                 layout,
                 done,
